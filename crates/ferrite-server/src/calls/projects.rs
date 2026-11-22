@@ -199,7 +199,7 @@ impl Server {
 
     /// The saved machines a command can ask instead (`--machine`), each by
     /// its name; one turned off is left out, since it is never asked.
-    pub(super) fn machines(&self) -> Result<Value, ApiError> {
+    pub(crate) fn machines(&self) -> Result<Value, ApiError> {
         let settings = Settings::load(&self.settings_dir).map_err(failed)?;
         let machines: Vec<Value> = settings
             .machines

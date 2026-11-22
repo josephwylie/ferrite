@@ -8,6 +8,8 @@ fn started(n: u64, title: Option<&str>) -> Started {
         request: format!("delegate:here:1:{n}"),
         title: title.map(str::to_string),
         task: "Fix the tests".into(),
+        provider: Provider::Claude,
+        model: None,
     }
 }
 

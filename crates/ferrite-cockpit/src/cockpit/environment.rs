@@ -299,6 +299,29 @@ impl CockpitView {
         )
     }
 
+    /// Settings › Labs: what is still being tried on the machine, each off
+    /// until turned on there (T3 Code's Labs › Beta, scoped to its server).
+    pub(super) fn labs_groups(&self, cx: &Context<Self>) -> Vec<settings::Group> {
+        let applies = settings::fact("Applies to", self.machine_place(cx));
+        let group = settings::Group::new(Some("Beta"));
+        let Some(defaults) = self.shown_defaults(cx) else {
+            return vec![group.rows([applies, self.defaults_unread(cx)])];
+        };
+        vec![group.rows(
+            std::iter::once(applies)
+                .chain(self.defaults_unsaved(cx))
+                .chain([settings::toggle(
+                    "settings-linked-machines",
+                    "Linked machines",
+                    "Let agents here work on your other machines, and theirs here. Turn it on \
+                     for each machine, then link them in Connections. While off, nothing new \
+                     starts over a link; running tasks finish.",
+                    defaults.linked_machines,
+                    self.default_change(cx, |d, v| d.linked_machines = v),
+                )]),
+        )]
+    }
+
     /// Ask the machine's CLIs their versions.
     pub(super) fn probe_cli_versions(&mut self, cx: &mut Context<Self>) {
         match self.cockpit.update(cx, |cockpit, _| cockpit.cli(CliAction::Versions)) {

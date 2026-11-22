@@ -20,17 +20,20 @@ pub enum PageKey {
     Notifications,
     Server,
     Connections,
+    /// What is still being tried, off until turned on (T3 Code's Labs).
+    Labs,
     About,
 }
 
 impl PageKey {
-    pub const ALL: [PageKey; 7] = [
+    pub const ALL: [PageKey; 8] = [
         PageKey::NewThreads,
         PageKey::Permissions,
         PageKey::Behaviour,
         PageKey::Notifications,
         PageKey::Server,
         PageKey::Connections,
+        PageKey::Labs,
         PageKey::About,
     ];
 
@@ -42,6 +45,7 @@ impl PageKey {
             PageKey::Notifications => "Notifications",
             PageKey::Server => "Server",
             PageKey::Connections => "Connections",
+            PageKey::Labs => "Labs",
             PageKey::About => "About",
         }
     }
@@ -55,6 +59,7 @@ impl PageKey {
             PageKey::Notifications => "settings-page-notifications",
             PageKey::Server => "settings-page-server",
             PageKey::Connections => "settings-page-connections",
+            PageKey::Labs => "settings-page-labs",
             PageKey::About => "settings-page-about",
         }
     }

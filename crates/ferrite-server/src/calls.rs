@@ -241,9 +241,15 @@ impl Server {
                 .and_then(|project| self.close_project(project)),
             Method::WorktreeCreate(params) => self.create_worktree(params),
             Method::WorktreeRemove(params) => self.remove_worktree(&params.path),
-            Method::MachineList(_) => self.machines(),
+            Method::MachineList(params) => match self.api_machine_list(caller_id, &id, &params) {
+                Some(result) => result,
+                None => return,
+            },
             Method::IdentityGet(_) => Ok(json!({ "server_id": self.id })),
-            Method::ProviderList(_) => Ok(self.providers()),
+            Method::ProviderList(params) => match self.api_provider_list(caller_id, &id, params) {
+                Some(result) => result,
+                None => return,
+            },
             Method::EventsSubscribe(params) => {
                 self.api
                     .subscribe(&self.engine, caller_id, id, params.threads);
@@ -634,7 +640,7 @@ impl Server {
     /// (T3 Code's `orchestrator_capabilities`): each provider's models and
     /// their efforts, the modes a Thread may be capped at, and the mode
     /// its settings start one at, which no cap broadens.
-    fn providers(&self) -> Value {
+    pub(crate) fn providers(&self) -> Value {
         let defaults = self.defaults.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let providers: Vec<Value> = Provider::ALL
             .into_iter()

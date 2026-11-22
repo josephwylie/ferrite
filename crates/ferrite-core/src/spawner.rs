@@ -38,6 +38,9 @@ pub struct SessionDefaults {
     pub placeholder_suggestions: bool,
     /// How readily agents are offered `show_visual` (Settings).
     pub visuals: crate::visual::Level,
+    /// Settings › Labs › Linked machines: Sessions started while it is on
+    /// are offered the Delegate tools (`api::tools`).
+    pub linked_machines: bool,
 }
 
 impl SessionDefaults {
@@ -51,6 +54,7 @@ impl SessionDefaults {
             codex_effort: settings.codex_effort.clone(),
             placeholder_suggestions: settings.placeholder_suggestions,
             visuals: settings.visuals,
+            linked_machines: settings.labs.linked_machines,
         }
     }
 
@@ -307,7 +311,7 @@ impl Spawn {
         let api_tools = self
             .api_tools
             .as_ref()
-            .map(|tools| tools.for_thread(request.thread, request.owner));
+            .map(|tools| tools.for_thread(request.thread, request.owner, defaults.linked_machines));
         let instructions = match request.owner {
             Some(crate::ThreadOwner::Factory(project)) => Some(crate::factory::briefing(*project)),
             _ => None,
@@ -482,7 +486,8 @@ mod tests {
     use crate::providers::{applied, SettingAck};
 
     /// A Worker's and a Coordinator's Session are bound to their Factory
-    /// tools; an ordinary Thread's is offered only the PR watch.
+    /// tools; an ordinary Thread's is offered the PR watch, and the
+    /// Delegate tools while Linked machines is on.
     #[test]
     fn an_owned_threads_session_gets_its_factory_tools() {
         let (heard, _hear) = mpsc::channel();
@@ -524,6 +529,15 @@ mod tests {
         let ordinary = ordinary.api_tools.expect("every Thread watches PRs");
         assert!(ordinary.offers("watch_pull_request"));
         assert!(!ordinary.offers("report_outcome"));
+        assert!(!ordinary.offers("delegate_task"), "Linked machines is off");
+
+        // Turned on, a Session started after offers the Delegate tools.
+        served.defaults.lock().unwrap().linked_machines = true;
+        let SessionConfig::Codex(linked) = served.config(request(Provider::Codex, None)) else {
+            panic!("a Codex config");
+        };
+        let linked = linked.api_tools.unwrap();
+        assert!(linked.offers("delegate_task") && linked.offers("machine_list"));
     }
 
     /// A Coordinator's Session is told its briefing as its own

@@ -414,7 +414,7 @@ fn samples() -> Vec<Request> {
         request(Method::WorktreeRemove(WorktreeRemoveParams {
             path: PathBuf::from("/work/.worktrees/app/hp-billing-t-0001"),
         })),
-        request(Method::MachineList(Empty {})),
+        request(Method::MachineList(MachineListParams::default())),
         request(Method::IdentityGet(Empty {})),
         request(Method::EventsSubscribe(EventsSubscribeParams {
             threads: vec![thread(), ThreadId::new(14)],
@@ -636,7 +636,7 @@ fn samples() -> Vec<Request> {
         })),
         request(Method::WindowFocus(Empty {})),
         request(Method::ThreadStop(ThreadParams { thread: thread() })),
-        request(Method::ProviderList(Empty {})),
+        request(Method::ProviderList(ProviderListParams::default())),
         request(Method::AgentResult(ThreadParams { thread: thread() })),
         request(Method::PrWatch(PrWatchParams {
             pr: PrParams {
@@ -655,11 +655,12 @@ fn samples() -> Vec<Request> {
             thread: Some(ThreadId::new(14)),
             machine: "pc".into(),
             task: "Fix the flaky login test.".into(),
-            checkout: "/home/me/app".into(),
+            checkout: Some("/home/me/app".into()),
             project: Some("p-1".into()),
             title: Some("Login test".into()),
             provider: Some(crate::store::Provider::Codex),
             request: Some("k-1".into()),
+            ..DelegateStartParams::default()
         })),
         request(Method::DelegateGet(DelegateParams {
             thread: Some(ThreadId::new(14)),
@@ -707,6 +708,28 @@ fn thread_start() -> ThreadStartParams {
 /// Requests a later parameter changed, frozen beside the operations' own.
 fn later_samples() -> Vec<(&'static str, Request)> {
     vec![
+        (
+            "delegate_start_by_repository",
+            request(Method::DelegateStart(DelegateStartParams {
+                machine: "pc".into(),
+                task: "Fix the flaky login test.".into(),
+                provider: Some(crate::store::Provider::Claude),
+                model: Some("opus".into()),
+                effort: Some("high".into()),
+                mode: Some(crate::runtime_mode::RuntimeMode::AutoAcceptEdits),
+                ..DelegateStartParams::default()
+            })),
+        ),
+        (
+            "machine_list_reach",
+            request(Method::MachineList(MachineListParams { reach: true })),
+        ),
+        (
+            "provider_list_machine",
+            request(Method::ProviderList(ProviderListParams {
+                machine: Some("pc".into()),
+            })),
+        ),
         (
             "task_start_pr",
             request(Method::TaskStart(TaskStartParams {
@@ -1015,10 +1038,12 @@ fn answers_refusals_and_events_keep_their_shape() {
         label: "billing".into(),
         focused: false,
         thread_count: 2,
+        directory: PathBuf::from("/work/app"),
         worktree: Some(ProjectCheckout {
             repo_key: PathBuf::from("/work/app"),
             checkout_path: PathBuf::from("/work/app"),
             is_linked_worktree: false,
+            repository: Some("github.com/acme/app".into()),
         }),
     };
     assert_eq!(
@@ -1028,10 +1053,12 @@ fn answers_refusals_and_events_keep_their_shape() {
             "label": "billing",
             "focused": false,
             "thread_count": 2,
+            "directory": "/work/app",
             "worktree": {
                 "repo_key": "/work/app",
                 "checkout_path": "/work/app",
                 "is_linked_worktree": false,
+                "repository": "github.com/acme/app",
             },
         })
     );
@@ -2061,7 +2088,7 @@ fn a_delegate_is_started_on_a_machine_and_named_by_its_id() {
         Ok(Method::DelegateStart(DelegateStartParams {
             machine: "pc".into(),
             task: "Fix the test.".into(),
-            checkout: "srv/app".into(),
+            checkout: Some("srv/app".into()),
             title: Some("Test".into()),
             ..DelegateStartParams::default()
         }))

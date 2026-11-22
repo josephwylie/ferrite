@@ -289,6 +289,8 @@ fn a_parked_threads_delegates_read_back_and_a_fork_follows_none() {
         request: "delegate:here:1:a".into(),
         title: None,
         task: "Fix the tests".into(),
+        provider: crate::store::Provider::Claude,
+        model: None,
     });
     store.set_delegates(id, delegates.clone(), None).unwrap();
     assert_eq!(store.peek(id).unwrap().delegates, delegates);

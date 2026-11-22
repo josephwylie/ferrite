@@ -10,8 +10,14 @@
 //! sets the workers by the record: one follower thread per open Delegate,
 //! one stopper per owed stop, and a wake for those ended untold. So a
 //! restarted Server picks every one up again from the logs alone.
+//!
+//! What a start runs there is worked out first (`start`), and what an
+//! agent asks of the linked machines themselves is asked off the pump
+//! (`reach`).
 
 mod follow;
+mod reach;
+mod start;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,6 +31,7 @@ use ferrite_core::api::schema::{
     AgentWaitParams, DelegateCancelParams, DelegateListParams, DelegateParams,
     DelegateStartParams, ThreadParams, ThreadStartParams,
 };
+use ferrite_core::settings::Settings;
 use ferrite_core::api::{ApiError, CallerId, Code, Method, Outcome};
 use ferrite_core::delegate::{self, Cancel, Delegate, DelegateId, Delegates, Started};
 use ferrite_core::runtime_mode::RuntimeMode;
@@ -32,11 +39,16 @@ use ferrite_core::wake::Wake;
 use ferrite_core::{Attention, DelegatedFrom, ThreadId};
 
 use self::follow::{Ask, Follow, Heard, Then};
-use super::peers::{Peer, PeerFailure, Peers, WAIT_PIECE};
+use self::start::{Place, Runs};
+use super::peers::{self, Peer, PeerFailure, Peers, WAIT_PIECE};
 use super::Server;
 
 /// A Delegate, by its parent here and its id there.
 type Key = (ThreadId, DelegateId);
+
+/// Why nothing acts on another machine from here, in T3 Code's words.
+const OFF_HERE: &str = "Linked machines is off on this machine, so no tool can act on another \
+                        machine. The user can turn it on in Settings → Labs.";
 
 /// The Server's Delegates at work: their followers and stoppers, and the
 /// starts still out.
@@ -49,6 +61,8 @@ pub(super) struct Delegation {
     tell: Sender<Report>,
     heard: Receiver<Report>,
     launches: Vec<Launch>,
+    /// What callers asked of the linked machines, answered off the pump.
+    asked: Vec<reach::Asked>,
     /// Stops owed for parked Threads' Delegates, as their logs say.
     parked: BTreeMap<Key, Delegate>,
     /// The open Threads that had Delegates on the last pass.
@@ -80,11 +94,11 @@ enum Report {
 struct Launch {
     parent: ThreadId,
     request: String,
-    machine: String,
     title: Option<String>,
     task: String,
+    runs: Runs,
     callers: Vec<(CallerId, String)>,
-    answer: Receiver<Result<(Peer, ThreadId), PeerFailure>>,
+    answer: Receiver<Result<(Peer, ThreadId), ApiError>>,
 }
 
 impl Delegation {
@@ -103,6 +117,7 @@ impl Delegation {
             tell,
             heard,
             launches: Vec::new(),
+            asked: Vec::new(),
             parked: BTreeMap::new(),
             open: BTreeSet::new(),
             scanned: false,
@@ -128,7 +143,31 @@ impl Server {
             self.hear_report(report);
         }
         self.hear_launches();
+        self.hear_asked();
         self.reconcile_delegates();
+    }
+
+    /// Settings › Labs › Linked machines is on here, and `machine`, if
+    /// named, is a machine saved here and turned on: in T3 Code's words
+    /// when not.
+    pub(super) fn linked(&self, machine: Option<&str>) -> Result<(), ApiError> {
+        let settings = Settings::load(&self.settings_dir)
+            .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
+        if !settings.labs.linked_machines {
+            return Err(ApiError::new(Code::LinkedMachinesOff, OFF_HERE));
+        }
+        let Some(name) = machine else { return Ok(()) };
+        match peers::saved_machine(&settings.machines, name) {
+            None => Err(ApiError::new(
+                Code::InvalidRequest,
+                format!("This machine is not linked to `{name}`. machine_list lists the linked ones."),
+            )),
+            Some(saved) if !saved.enabled => Err(ApiError::new(
+                Code::InvalidRequest,
+                format!("`{name}` is turned off here. The user turns it on in Settings → Connections."),
+            )),
+            Some(_) => Ok(()),
+        }
     }
 
     /// `delegate.start`: start a Thread on a saved machine for an open
@@ -146,16 +185,8 @@ impl Server {
             Ok(parent) => parent,
             Err(error) => return Some(Err(error)),
         };
-        match self.takes_delegates() {
-            Ok(true) => {}
-            Ok(false) => {
-                return Some(Err(ApiError::new(
-                    Code::LinkedMachinesOff,
-                    "this machine starts no Thread on another: turn on Settings › Labs › \
-                     Linked machines here",
-                )))
-            }
-            Err(error) => return Some(Err(error)),
+        if let Err(refused) = self.linked(Some(&params.machine)) {
+            return Some(Err(refused));
         }
         let key = params
             .request
@@ -177,16 +208,33 @@ impl Server {
             return None;
         }
         let view = self.engine.thread(parent).expect("open");
-        let provider = view.provider();
         let defaults = self.defaults.lock().map(|defaults| defaults.clone()).unwrap_or_default();
         // The parent's own reach caps the Delegate's (G-A6).
-        let mode = RuntimeMode::of_thread(
-            provider,
+        let reach = RuntimeMode::of_thread(
+            view.provider(),
             view.permission_mode(),
             view.sandbox(),
             &defaults,
             self.engine.cap(parent).map(|(_, cap)| cap),
         );
+        let inherited = Runs {
+            provider: view.provider(),
+            model: view.model().map(str::to_string),
+            effort: view.effort().map(str::to_string),
+        };
+        let repository = view
+            .workspace()
+            .and_then(|workspace| ferrite_core::workspace::repository_key(workspace.cwd()));
+        let machine = params.machine.clone();
+        let chosen = start::mode(params.mode, reach).and_then(|mode| {
+            let runs = start::runs(&inherited, params.provider, params.model, params.effort, &machine)?;
+            let place = Place::of(params.checkout, params.project, repository, &machine)?;
+            Ok((mode, runs, place))
+        });
+        let (mode, runs, place) = match chosen {
+            Ok(chosen) => chosen,
+            Err(refused) => return Some(Err(refused)),
+        };
         let delegated_from = DelegatedFrom {
             server: self.id.clone(),
             label: this_computer(),
@@ -195,16 +243,17 @@ impl Server {
                 .title()
                 .map_or_else(|| format!("Thread {parent}"), str::to_string),
         };
+        // Its `cwd` and `project` are where `place` puts it there.
         let start = ThreadStartParams {
-            cwd: params.checkout,
-            provider: Some(params.provider.unwrap_or(provider)),
+            cwd: Default::default(),
+            provider: Some(runs.provider),
             worktree: false,
             title: params.title.clone(),
             focus: false,
-            args: Vec::new(),
+            args: runs.args(),
             branch: None,
             base: None,
-            project: params.project,
+            project: None,
             ready: false,
             timeout_ms: None,
             resume: None,
@@ -218,18 +267,17 @@ impl Server {
         };
         let (tell, answer) = mpsc::channel();
         let peers = Arc::clone(&self.delegation.peers);
-        let machine = params.machine.clone();
         std::thread::spawn(move || {
             ferrite_core::spawn::serve_the_operator();
-            let _ = tell.send(launch(&peers, &machine, start));
+            let _ = tell.send(start::launch(&peers, &machine, place, start));
         });
         self.api.owe(caller, id);
         self.delegation.launches.push(Launch {
             parent,
             request,
-            machine: params.machine,
             title: params.title,
             task: params.task,
+            runs,
             callers: vec![(caller, id.to_string())],
             answer,
         });
@@ -376,13 +424,10 @@ impl Server {
                     continue;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    Err(PeerFailure::Unreachable("the start ended with no answer".into()))
+                    Err(ApiError::new(Code::Failed, "the start ended with no answer"))
                 }
             };
-            let answer = match launched {
-                Ok((peer, thread)) => self.record_launch(&launch, peer, thread),
-                Err(failure) => Err(refusal(&failure, &launch.machine)),
-            };
+            let answer = launched.and_then(|(peer, thread)| self.record_launch(&launch, peer, thread));
             for (caller, id) in launch.callers {
                 self.api.reply(caller, id, answer.clone());
             }
@@ -404,6 +449,8 @@ impl Server {
                 request: launch.request.clone(),
                 title: launch.title.clone(),
                 task: launch.task.clone(),
+                provider: launch.runs.provider,
+                model: launch.runs.model.clone(),
             });
             if !open {
                 delegates.stop_with_parent();
@@ -571,24 +618,6 @@ fn this_computer() -> String {
         .unwrap_or_else(|_| "another machine".into())
 }
 
-/// Start the Thread there: its Server, and its id there. A repeated key
-/// names the Thread the first start made, parked since or not.
-fn launch(peers: &Peers, machine: &str, start: ThreadStartParams) -> Result<(Peer, ThreadId), PeerFailure> {
-    let peer = peers.identify(machine)?;
-    let thread = match peers.call(&peer.server, Method::ThreadStart(start)) {
-        Ok(answer) => serde_json::from_value(answer["thread"]["thread"].clone()).map_err(|error| {
-            PeerFailure::Unsupported(format!("a thread.start answer this Server cannot read: {error}"))
-        })?,
-        Err(PeerFailure::Refused(ApiError {
-            code: Code::ThreadParked,
-            thread: Some(thread),
-            ..
-        })) => thread,
-        Err(failure) => return Err(failure),
-    };
-    Ok((peer, thread))
-}
-
 /// Follow one Delegate there until it ends or is cancelled here.
 fn follow_one(
     peers: &Peers,
@@ -738,8 +767,10 @@ fn nap(long: Duration, cancelled: &AtomicBool) {
 /// A failed call there, in words.
 fn words(failure: &PeerFailure, machine: &str) -> String {
     match failure {
-        PeerFailure::Unreachable(said) => format!("{machine} could not be reached: {said}"),
-        PeerFailure::SignIn => format!("{machine} needs you to sign in, from a Ferrite window"),
+        PeerFailure::Unreachable(said) => format!("{machine} did not answer: {said}"),
+        PeerFailure::SignIn => {
+            format!("{machine} needs a sign-in: the user signs in to it from a Ferrite window.")
+        }
         PeerFailure::NoFerrited => format!("{machine} has no ferrited"),
         PeerFailure::Unsupported(said) | PeerFailure::Final(said) => format!("{machine}: {said}"),
         PeerFailure::OtherServer { expected, answered } => format!(
@@ -747,6 +778,10 @@ fn words(failure: &PeerFailure, machine: &str) -> String {
             answered.as_str(),
             expected.as_str()
         ),
+        PeerFailure::Refused(ApiError {
+            code: Code::LinkedMachinesOff,
+            ..
+        }) => format!("{machine} has Linked machines turned off. Turn it on in its Settings → Labs."),
         PeerFailure::Refused(refusal) => format!("{machine}: {}", refusal.message),
     }
 }

@@ -372,6 +372,8 @@ pub struct ProjectInfo {
     pub focused: bool,
     /// Its open Threads.
     pub thread_count: usize,
+    /// Its first directory, where its Threads work.
+    pub directory: PathBuf,
     /// The git checkout its first directory is; `None` outside git.
     pub worktree: Option<ProjectCheckout>,
 }
@@ -383,6 +385,11 @@ pub struct ProjectCheckout {
     pub checkout_path: PathBuf,
     /// The directory is a linked worktree, not the main checkout.
     pub is_linked_worktree: bool,
+    /// Which repository it is on every machine, `host/owner/name` of its
+    /// primary remote (`workspace::repository_key`, T3 Code's repository
+    /// identity); absent with no remote on a host.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
 }
 
 /// Every Project, as `project.list` answers. Each open Thread's Project is
@@ -406,11 +413,13 @@ pub fn project_infos(engine: &Engine) -> Vec<ProjectInfo> {
             label: project.title.clone(),
             focused: focused == Some(project.id),
             thread_count: threads.get(&project.id).copied().unwrap_or(0),
+            directory: project.root.clone(),
             worktree: crate::workspace::checkout_of(&project.root).map(|checkout| {
                 ProjectCheckout {
                     repo_key: checkout.repo,
                     checkout_path: project.root.clone(),
                     is_linked_worktree: checkout.linked,
+                    repository: crate::workspace::repository_key(&project.root),
                 }
             }),
         })

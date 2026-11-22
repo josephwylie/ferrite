@@ -534,7 +534,7 @@ fn a_new_comment_wakes_the_agent() {
 #[test]
 fn the_agents_own_tool_watches_its_pr() {
     let world = world("prw-tool");
-    let tools = world.harness.tools.for_thread(world.thread, None);
+    let tools = world.harness.tools.for_thread(world.thread, None, false);
     let watch = |main: bool| {
         let (told, said) = mpsc::channel();
         let pr = serde_json::json!({ "url": URL });

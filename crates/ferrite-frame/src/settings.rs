@@ -205,6 +205,7 @@ fn body(
                         PageKey::Notifications,
                         PageKey::Server,
                         PageKey::Connections,
+                        PageKey::Labs,
                     ]
                     .map(|key| nav_row(key, cx)),
                 ),

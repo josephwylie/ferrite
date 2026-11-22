@@ -106,10 +106,7 @@ impl Peers {
     /// answers as.
     pub fn identify(&self, name: &str) -> Result<Peer, PeerFailure> {
         let saved = self.saved()?;
-        let machine = saved
-            .iter()
-            .find(|machine| machine.name == name)
-            .or_else(|| saved.iter().find(|machine| machine.target == name))
+        let machine = saved_machine(&saved, name)
             .ok_or_else(|| PeerFailure::Final(format!("no saved machine `{name}`")))?;
         if !machine.enabled {
             return Err(turned_off(machine));
@@ -217,6 +214,14 @@ impl Peers {
         })?;
         Ok(Connection::new(tunnel))
     }
+}
+
+/// The saved machine `name` names: by its name, else its target.
+pub fn saved_machine<'a>(saved: &'a [Machine], name: &str) -> Option<&'a Machine> {
+    saved
+        .iter()
+        .find(|machine| machine.name == name)
+        .or_else(|| saved.iter().find(|machine| machine.target == name))
 }
 
 fn turned_off(machine: &Machine) -> PeerFailure {

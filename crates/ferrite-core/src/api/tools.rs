@@ -1,6 +1,8 @@
 //! The API as a Thread's own tools: every Thread's PR watch
 //! ([`PR_TOOLS`], T3 Code's `watch_pull_request` and
-//! `unwatch_pull_request`), an owned Thread's `report_*` (a Worker's) and
+//! `unwatch_pull_request`), every Thread's Delegate tools while Settings ›
+//! Labs › Linked machines is on (`delegation`, T3's `delegate_task` and the
+//! rest), an owned Thread's `report_*` (a Worker's) and
 //! `proposal_raise` (a Coordinator's), one per operation whose callers are
 //! that Thread's kind (`schema::Callers`), and a Coordinator's Factory
 //! reads ([`COORDINATOR_READS`]). As Ferrite's own tools they are
@@ -12,7 +14,7 @@
 //! Thread resumed from before they were offered keeps its old tools.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -21,6 +23,10 @@ use super::schema::{Callers, Operation};
 use super::{CallerId, Heard, Method, Request};
 use crate::link;
 use crate::{ThreadId, ThreadOwner};
+
+mod delegation;
+
+pub use delegation::{NOT_LISTED, NO_MACHINE};
 
 /// How long a call waits on the Server's answer.
 const ANSWER: Duration = Duration::from_secs(30);
@@ -73,8 +79,14 @@ impl Tools {
         Self(heard)
     }
 
-    /// The tools of `thread`, which `owner` owns, if anyone does.
-    pub fn for_thread(&self, thread: ThreadId, owner: Option<&ThreadOwner>) -> ThreadTools {
+    /// The tools of `thread`, which `owner` owns, if anyone does; with
+    /// `delegation`, the Delegate tools too (Linked machines is on).
+    pub fn for_thread(
+        &self,
+        thread: ThreadId,
+        owner: Option<&ThreadOwner>,
+        delegation: bool,
+    ) -> ThreadTools {
         ThreadTools {
             heard: self.0.clone(),
             thread,
@@ -82,6 +94,7 @@ impl Tools {
                 ThreadOwner::Task(_) => Callers::Worker,
                 ThreadOwner::Factory(_) => Callers::Coordinator,
             }),
+            delegation,
         }
     }
 }
@@ -93,6 +106,9 @@ pub struct ThreadTools {
     thread: ThreadId,
     /// An owned Thread's kind; `None` for the operator's own.
     callers: Option<Callers>,
+    /// The Delegate tools are offered: Linked machines was on when its
+    /// Session started.
+    delegation: bool,
 }
 
 /// One tool, as a provider is told of it.
@@ -143,12 +159,17 @@ impl ThreadTools {
                 input_schema: input_schema(operation),
             })
             .chain(pr)
+            .chain(self.delegation.then(delegation::definitions).into_iter().flatten())
             .collect()
     }
 
     /// Whether `tool` (its name inside Ferrite's server) is one of these.
     pub fn offers(&self, tool: &str) -> bool {
-        self.operation(tool).is_some()
+        self.delegates(tool) || self.operation(tool).is_some()
+    }
+
+    fn delegates(&self, tool: &str) -> bool {
+        self.delegation && delegation::NAMES.contains(&tool)
     }
 
     fn operation(&self, tool: &str) -> Option<&'static Operation> {
@@ -164,7 +185,8 @@ impl ThreadTools {
 
     /// Ask the Server, off this thread, and `respond` with its answer.
     /// `main`: Main made the call, not a subagent, whose PR its parent
-    /// owns (T3 Code refuses a subagent's watch).
+    /// owns (T3 Code refuses a subagent's watch). A subagent's Delegate
+    /// tools act for its Thread, as T3's do.
     pub fn call(
         &self,
         tool: &str,
@@ -172,6 +194,15 @@ impl ThreadTools {
         main: bool,
         respond: impl FnOnce(Answer) + Send + 'static,
     ) {
+        if self.delegates(tool) {
+            let (heard, thread) = (self.heard.clone(), self.thread);
+            let (tool, arguments) = (tool.to_string(), arguments.clone());
+            std::thread::spawn(move || {
+                let ask = |method| ask(&heard, thread, method);
+                respond(delegation::call(&tool, &arguments, thread, &ask))
+            });
+            return;
+        }
         let Some(operation) = self.operation(tool) else {
             return respond(refused(format!("Ferrite offers no tool {tool}")));
         };
@@ -187,24 +218,54 @@ impl ThreadTools {
             Ok(request) => request,
             Err(error) => return respond(refused(error.to_string())),
         };
-        let caller: CallerId = NEXT_CALLER.fetch_add(1, Ordering::Relaxed);
-        let (answers, answer) = mpsc::channel();
-        let asked = [
-            Heard::Joined(caller, answers),
-            Heard::Request(caller, request),
-            Heard::Hungup(caller),
-        ]
-        .into_iter()
-        .all(|heard| self.heard.send(link::Heard::Api(heard)).is_ok());
-        if !asked {
-            return respond(refused("the Ferrite Server is not running".into()));
-        }
+        let answer = match send(&self.heard, request) {
+            Ok(answer) => answer,
+            Err(refusal) => return respond(refused(refusal)),
+        };
         std::thread::spawn(move || {
             respond(match answer.recv_timeout(ANSWER) {
                 Ok(line) => answered(&line),
-                Err(_) => refused("the Ferrite Server did not answer".into()),
+                Err(_) => refused(UNANSWERED.into()),
             })
         });
+    }
+}
+
+const UNANSWERED: &str = "the Ferrite Server did not answer";
+
+/// Put `request` to the Server as a caller of its own: where its one
+/// answer line comes.
+fn send(heard: &Sender<link::Heard>, request: Request) -> Result<Receiver<Vec<u8>>, String> {
+    let caller: CallerId = NEXT_CALLER.fetch_add(1, Ordering::Relaxed);
+    let (answers, answer) = mpsc::channel();
+    let asked = [
+        Heard::Joined(caller, answers),
+        Heard::Request(caller, request),
+        Heard::Hungup(caller),
+    ]
+    .into_iter()
+    .all(|told| heard.send(link::Heard::Api(told)).is_ok());
+    match asked {
+        true => Ok(answer),
+        false => Err("the Ferrite Server is not running".into()),
+    }
+}
+
+/// Ask the Server `method` from `thread` and wait for its `result`, or
+/// the words of its refusal.
+fn ask(heard: &Sender<link::Heard>, thread: ThreadId, method: Method) -> Result<Value, String> {
+    let request = Request {
+        id: "1".into(),
+        method,
+        caller: Some(thread),
+    };
+    let line = send(heard, request)?
+        .recv_timeout(ANSWER)
+        .map_err(|_| UNANSWERED.to_string())?;
+    let mut value: Value = serde_json::from_slice(&line).unwrap_or_default();
+    match value.get("error") {
+        Some(_) => Err(answered(&line).text),
+        None => Ok(value["result"].take()),
     }
 }
 
@@ -314,7 +375,7 @@ mod tests {
 
     fn tools(owner: ThreadOwner) -> (ThreadTools, mpsc::Receiver<link::Heard>) {
         let (heard, hear) = mpsc::channel();
-        (Tools::new(heard).for_thread(ThreadId::new(7), Some(&owner)), hear)
+        (Tools::new(heard).for_thread(ThreadId::new(7), Some(&owner), false), hear)
     }
 
     #[test]
@@ -425,7 +486,7 @@ mod tests {
     #[test]
     fn a_subagents_watch_is_refused_without_asking() {
         let (heard, hear) = mpsc::channel();
-        let tools = Tools::new(heard).for_thread(ThreadId::new(7), None);
+        let tools = Tools::new(heard).for_thread(ThreadId::new(7), None, false);
         let definitions = tools.definitions();
         let names: Vec<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, ["watch_pull_request", "unwatch_pull_request"]);

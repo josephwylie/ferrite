@@ -33,7 +33,7 @@ and `agent.result`. Peers is the Server's client of a saved machine.
   - Each Delegate also carries:
     - the launch key `delegate:<parent ServerId>:<parent thread>:<key>`
       (G-A9);
-    - its title and task;
+    - its title and task, and the provider and model it runs there;
     - T3's status: `starting`, `running`, `waiting`, `completed`,
       `failed`, `cancelled` or `interrupted`;
     - its result, and the `problem` holding it up;
@@ -47,8 +47,23 @@ and `agent.result`. Peers is the Server's client of a saved machine.
   - the key as its `request`;
   - the parent's reach as its `mode` (G-A6): what its provider announced,
     else this machine's default, and never more than the parent's own
-    cap;
+    cap. A narrower `mode` may be asked; a broader one is refused
+    `widens_cap` in T3's words ("Child runtime mode … is broader than
+    parent mode …");
+  - the model and effort as the CLI's own arguments (`--model`/`--effort`,
+    `-m`/`-c model_reasoning_effort=`). As T3 does, a Delegate on its
+    parent's provider inherits the parent's model, and on that model its
+    effort; another provider inherits neither and must name its model;
   - `delegated_from`.
+
+  Where it works there, when the start names no `checkout`, is T3's
+  linked-environment project: the Project there named by `project`, else
+  the one Project there whose repository is the parent's. A repository
+  is its primary remote as `host/owner/name` (`workspace::repository_key`,
+  T3's `normalizeGitRemoteUrl` and `pickPrimaryRemote`), so the two
+  machines may spell the remote differently. `project.list` says each
+  Project's `directory` and `repository`. None, several, or a parent with
+  no repository is refused in T3's words before anything starts there.
 
   A repeated key answers with the first Thread, parked or not. The
   Delegate is recorded once the peer answers, and a record that fails
@@ -103,10 +118,29 @@ and `agent.result`. Peers is the Server's client of a saved machine.
   - Nested Delegates stop depth first: a Delegate's own `thread.stop`
     there stops its Delegates.
 - **The API** is `delegate.start`, `delegate.get`, `delegate.list` and
-  `delegate.cancel` (ADR 0027), with the CLI's `ferrite delegate …`. The
-  agent tools (`delegate_task`, `task_status`, `task_cancel`) call them.
+  `delegate.cancel` (ADR 0027), with the CLI's `ferrite delegate …`.
   An ended Delegate that its parent's agent reads is told: no wake carries
   it again (T3's `task_status`).
+- **The agent tools are T3's.** Every Thread's agent gets
+  `orchestrator_capabilities`, `delegate_task`, `task_status`,
+  `task_cancel` and `machine_list` (T3's `t3_environment_links`), with
+  T3's descriptions, parameters and answer shapes. They are Ferrite's own
+  pre-allowed tools (`api::tools`, the mechanism PR watch uses): each call
+  is one or two API requests from the Session's Thread, translated
+  between T3's names and the API's in `api/tools/delegation`.
+  - They are offered while this machine's Settings › Labs › Linked
+    machines is on when the Session starts, as T3 hides them while links
+    are off. The gate is the machine's own (`ServerDefaults`, T3's
+    `serverScoped`), so Settings on a machine sets that machine's.
+  - A subagent's call acts for its Thread, as T3's does.
+  - `delegate_task` answers T3's task with its `next` (do not poll; end
+    the turn). `machine_list` asks every machine at once and gives each
+    3 s (T3's list probe): `reachable`, `unreachable` or `sign_in`.
+    `orchestrator_capabilities` with a `machineId` is that machine's own
+    `provider.list`.
+  - Refusals are the Server's words, T3's where T3 has them: Linked
+    machines off here or there, a machine not linked, one that did not
+    answer, one that needs a sign-in.
 
 ## Operator decisions
 
@@ -145,12 +179,16 @@ Nothing here fences the link itself, and T3 does not either.
   is recorded once its Thread there exists.
 - **A machine, not an environment.** "On pc" and "the linked machine"
   stand for T3's "in {label}" and "the linked environment".
-- **Not yet here.** These come with the agent tools:
-  - picking the peer Project whose repository matches the parent's;
-  - refusing a fresh worktree;
-  - the tool's `mode: wait`;
-  - the model and effort, which `thread.start` does not take yet.
-
-  `delegate.start` takes the `checkout` (and `project`) as given.
+- **The tools take only what Ferrite carries out.** A parameter Ferrite
+  cannot honour is not in the schema, never taken and dropped:
+  - `isolation` (a fresh worktree there), `mode: wait` and `timeoutMs`,
+    `interactionMode`, `driverKind` and `search`;
+  - a delegated task always names `target.machineId`: a child on this
+    machine is a Thread of its own, not a Delegate;
+  - the model and effort are not checked against the machine's catalog
+    before the start; its CLI refuses a model it does not know.
+- **A repository key is read, not asked.** T3 resolves ssh aliases
+  (`ssh -G`) and `insteadOf` rewrites; Ferrite reads git's config file
+  without running git, so a remote spelled through one keys as written.
 - **No re-stop for a stop already under way.** A stop owed again while
   one is out is covered by that one (T3 looks once more).
