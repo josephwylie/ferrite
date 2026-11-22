@@ -134,8 +134,7 @@ impl CockpitWindow {
         let panel = self.cockpit.update(cx, |view, cx| view.successor_panel(cx));
         let until = cx.background_executor().now() + LANDING_WAIT;
         let view = cx.new(|cx| {
-            CockpitView::new_with_panel(core, provider, prefs, panel, cx)
-                .with_machines(machines, cx)
+            CockpitView::new_with_panel(core, provider, prefs, panel, Some(machines), cx)
                 .with_needs_you(needs_you, cx)
                 .with_landing(open, until)
         });

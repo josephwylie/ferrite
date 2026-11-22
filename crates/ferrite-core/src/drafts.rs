@@ -2,7 +2,9 @@
 //! Pane closing and a restart, so a Thread comes back with its line, quotes,
 //! files and review comments as they were left, and a new Thread's first
 //! prompt comes back on the Project, workspace and provider it was aimed at.
-//! Kept in one small versioned file beside `settings.json`.
+//! Kept in one small versioned file beside `settings.json`, which every
+//! machine's window shares: a Thread's draft is under its `SavedThread`, so
+//! Thread 3 here and Thread 3 on a machine keep their own (ADR 0045).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -14,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::draft::DraftBinding;
 use crate::draft_content::DraftContent;
 use crate::roster::DraftId;
-use crate::ThreadId;
+use crate::{MachineKey, SavedThread, ThreadId};
 
 /// A new Thread's first prompt, before it has a Thread: the choices it is
 /// aimed at and what is written.
@@ -24,11 +26,11 @@ pub struct FreshDraft {
     pub content: DraftContent,
 }
 
-/// Every unsent draft: each Thread's, and each new Pane's by its `DraftId`.
-/// A draft with nothing written has no entry.
+/// Every unsent draft: each Thread's, whichever machine it is on, and each
+/// new Pane's by its `DraftId`. A draft with nothing written has no entry.
 #[derive(Debug, Default, PartialEq)]
 pub struct Drafts {
-    threads: BTreeMap<ThreadId, DraftContent>,
+    threads: BTreeMap<SavedThread, DraftContent>,
     fresh: BTreeMap<DraftId, FreshDraft>,
 }
 
@@ -36,6 +38,20 @@ pub struct Drafts {
 #[derive(Serialize, Deserialize)]
 struct Stored {
     version: u32,
+    threads: Vec<StoredThread>,
+    fresh: Vec<FreshDraft>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredThread {
+    thread: SavedThread,
+    content: DraftContent,
+}
+
+/// The second version, from before Threads were saved with their machine:
+/// each draft under its bare id.
+#[derive(Deserialize)]
+struct Version2 {
     threads: BTreeMap<ThreadId, DraftContent>,
     fresh: Vec<FreshDraft>,
 }
@@ -43,11 +59,14 @@ struct Stored {
 impl Drafts {
     /// The file's name under the store directory.
     pub const FILE: &'static str = "drafts.json";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
 
     /// Read `<dir>/drafts.json`. A missing or unreadable file is no drafts:
     /// they are conveniences, and a damaged file is replaced at the next
-    /// save, never worth refusing to start for. The first version stored one
+    /// save, never worth refusing to start for. A draft saved under a bare
+    /// id, before Threads were saved with their machine, is this
+    /// computer's: most were, and a wrong one is only a draft on another
+    /// Thread, which the operator can clear. The first version stored one
     /// string per Thread; those are imported here, the only place that text
     /// is split into parts, and the file is rewritten in the current
     /// version.
@@ -56,31 +75,47 @@ impl Drafts {
             return Self::default();
         };
         if let Ok(stored) = serde_json::from_slice::<Stored>(&bytes) {
-            return Self {
-                threads: stored.threads,
-                // Ids are minted per launch: the roster knows nothing of
-                // these until `take_fresh` hands them back to be reopened.
-                fresh: stored
-                    .fresh
-                    .into_iter()
-                    .enumerate()
-                    .map(|(at, draft)| (DraftId::new(at as u64), draft))
-                    .collect(),
-            };
+            let threads = stored
+                .threads
+                .into_iter()
+                .map(|stored| (stored.thread, stored.content));
+            return Self::with(threads, stored.fresh);
+        }
+        if let Ok(stored) = serde_json::from_slice::<Version2>(&bytes) {
+            let threads = stored
+                .threads
+                .into_iter()
+                .map(|(thread, content)| (this_computers(thread), content));
+            return Self::with(threads, stored.fresh);
         }
         let Ok(legacy) = serde_json::from_slice::<BTreeMap<ThreadId, String>>(&bytes) else {
             return Self::default();
         };
-        let imported = Self {
-            threads: legacy
+        let imported = Self::with(
+            legacy
                 .into_iter()
-                .map(|(thread, text)| (thread, DraftContent::from_prompt(text)))
-                .filter(|(_, content)| !content.is_empty())
-                .collect(),
-            fresh: BTreeMap::new(),
-        };
+                .map(|(thread, text)| (this_computers(thread), DraftContent::from_prompt(text)))
+                .filter(|(_, content)| !content.is_empty()),
+            Vec::new(),
+        );
         let _ = imported.save(dir);
         imported
+    }
+
+    fn with(
+        threads: impl IntoIterator<Item = (SavedThread, DraftContent)>,
+        fresh: Vec<FreshDraft>,
+    ) -> Self {
+        Self {
+            threads: threads.into_iter().collect(),
+            // Ids are minted per launch: the roster knows nothing of these
+            // until `take_fresh` hands them back to be reopened.
+            fresh: fresh
+                .into_iter()
+                .enumerate()
+                .map(|(at, draft)| (DraftId::new(at as u64), draft))
+                .collect(),
+        }
     }
 
     /// Write `<dir>/drafts.json`, creating `dir` if needed, so that a crash
@@ -89,7 +124,14 @@ impl Drafts {
         fs::create_dir_all(dir)?;
         let stored = Stored {
             version: Self::VERSION,
-            threads: self.threads.clone(),
+            threads: self
+                .threads
+                .iter()
+                .map(|(thread, content)| StoredThread {
+                    thread: thread.clone(),
+                    content: content.clone(),
+                })
+                .collect(),
             fresh: self.fresh.values().cloned().collect(),
         };
         crate::store::replace_file(
@@ -98,13 +140,13 @@ impl Drafts {
         )
     }
 
-    pub fn thread(&self, thread: ThreadId) -> Option<&DraftContent> {
-        self.threads.get(&thread)
+    pub fn thread(&self, thread: &SavedThread) -> Option<&DraftContent> {
+        self.threads.get(thread)
     }
 
     /// Keep `content` as the Thread's draft; nothing written is no draft.
     /// Says whether anything changed, so a caller saves only then.
-    pub fn keep_thread(&mut self, thread: ThreadId, content: DraftContent) -> bool {
+    pub fn keep_thread(&mut self, thread: SavedThread, content: DraftContent) -> bool {
         if content.is_empty() {
             return self.threads.remove(&thread).is_some();
         }
@@ -137,7 +179,7 @@ impl Drafts {
     /// The first send made a Thread of `draft`: what the Composer still
     /// holds (typing done while the Thread started) moves to the Thread in
     /// the one step, so a save sees it under exactly one key.
-    pub fn promote(&mut self, draft: DraftId, thread: ThreadId, content: DraftContent) -> bool {
+    pub fn promote(&mut self, draft: DraftId, thread: SavedThread, content: DraftContent) -> bool {
         let left = self.fresh.remove(&draft).is_some();
         self.keep_thread(thread, content) || left
     }
@@ -146,6 +188,15 @@ impl Drafts {
     /// reopened; each is kept again under its Pane's new id.
     pub fn take_fresh(&mut self) -> Vec<FreshDraft> {
         std::mem::take(&mut self.fresh).into_values().collect()
+    }
+}
+
+/// A Thread saved under its bare id, from before Threads were saved with
+/// their machine.
+fn this_computers(thread: ThreadId) -> SavedThread {
+    SavedThread {
+        machine: MachineKey(None),
+        thread,
     }
 }
 
@@ -160,6 +211,17 @@ mod tests {
 
     fn scratch(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("ferrite-drafts-{name}-{}", std::process::id()))
+    }
+
+    fn here(thread: u64) -> SavedThread {
+        this_computers(ThreadId::new(thread))
+    }
+
+    fn on_box(thread: u64) -> SavedThread {
+        SavedThread {
+            machine: MachineKey(Some("me@box".into())),
+            thread: ThreadId::new(thread),
+        }
     }
 
     fn words(text: &str) -> DraftContent {
@@ -189,10 +251,10 @@ mod tests {
     #[test]
     fn a_draft_outlives_a_restart_and_a_send_forgets_it() {
         let dir = scratch("restart");
-        let (first, second) = (ThreadId::new(1), ThreadId::new(2));
+        let (first, second) = (here(1), here(2));
         let mut drafts = Drafts::default();
-        assert!(drafts.keep_thread(first, everything()));
-        assert!(drafts.keep_thread(second, words("another")));
+        assert!(drafts.keep_thread(first.clone(), everything()));
+        assert!(drafts.keep_thread(second.clone(), words("another")));
         assert!(
             !drafts.keep_thread(second, words("another")),
             "unchanged: nothing to save"
@@ -201,9 +263,9 @@ mod tests {
 
         let mut restarted = Drafts::load(&dir);
         assert_eq!(restarted, drafts);
-        assert_eq!(restarted.thread(first), Some(&everything()));
-        assert!(restarted.keep_thread(first, DraftContent::default()));
-        assert_eq!(restarted.thread(first), None);
+        assert_eq!(restarted.thread(&first), Some(&everything()));
+        assert!(restarted.keep_thread(first.clone(), DraftContent::default()));
+        assert_eq!(restarted.thread(&first), None);
         assert!(
             !restarted.keep_thread(first, DraftContent::default()),
             "nothing to forget"
@@ -244,9 +306,8 @@ mod tests {
 
         let mut drafts = Drafts::default();
         drafts.keep_fresh(DraftId::new(4), &fresh[0].binding, everything());
-        let thread = ThreadId::new(9);
-        assert!(drafts.promote(DraftId::new(4), thread, words("typed during startup")));
-        assert_eq!(drafts.thread(thread), Some(&words("typed during startup")));
+        assert!(drafts.promote(DraftId::new(4), here(9), words("typed during startup")));
+        assert_eq!(drafts.thread(&here(9)), Some(&words("typed during startup")));
         assert!(drafts.take_fresh().is_empty());
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -263,14 +324,51 @@ mod tests {
         )
         .unwrap();
         let drafts = Drafts::load(&dir);
-        let imported = drafts.thread(ThreadId::new(1)).unwrap();
+        let imported = drafts.thread(&here(1)).unwrap();
         assert_eq!(imported.replies, vec![Reply::new("quoted", "why")]);
         assert_eq!(imported.text, "body");
-        assert_eq!(drafts.thread(ThreadId::new(2)), Some(&words("plain")));
+        assert_eq!(drafts.thread(&here(2)), Some(&words("plain")));
 
         let rewritten = fs::read_to_string(dir.join(Drafts::FILE)).unwrap();
-        assert!(rewritten.contains("\"version\":2"));
+        assert!(rewritten.contains("\"version\":3"));
         assert_eq!(Drafts::load(&dir), drafts);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Thread 3 here and Thread 3 on a machine are two Threads, each with
+    /// its own draft, across a restart too.
+    #[test]
+    fn a_draft_keeps_two_machines_threads_apart() {
+        let dir = scratch("machines");
+        let mut drafts = Drafts::default();
+        assert!(drafts.keep_thread(here(3), words("mine")));
+        assert!(drafts.keep_thread(on_box(3), words("the box's")));
+        drafts.save(&dir).unwrap();
+        let written = fs::read_to_string(dir.join(Drafts::FILE)).unwrap();
+        assert!(written.contains(r#"{"machine":"me@box","thread":3}"#), "{written}");
+
+        let mut restarted = Drafts::load(&dir);
+        assert_eq!(restarted.thread(&here(3)), Some(&words("mine")));
+        assert_eq!(restarted.thread(&on_box(3)), Some(&words("the box's")));
+        assert!(restarted.keep_thread(on_box(3), DraftContent::default()));
+        assert_eq!(restarted.thread(&here(3)), Some(&words("mine")));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A draft saved under its bare id, before Threads were saved with their
+    /// machine, is this computer's Thread's.
+    #[test]
+    fn a_draft_saved_before_machines_reads_as_this_computers() {
+        let dir = scratch("version2");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(Drafts::FILE),
+            r#"{"version":2,"threads":{"3":{"text":"left here","files":[],"replies":[],"review":[],"annotations":[],"chips":[]}},"fresh":[]}"#,
+        )
+        .unwrap();
+        let drafts = Drafts::load(&dir);
+        assert_eq!(drafts.thread(&here(3)), Some(&words("left here")));
+        assert_eq!(drafts.thread(&on_box(3)), None);
         fs::remove_dir_all(&dir).unwrap();
     }
 

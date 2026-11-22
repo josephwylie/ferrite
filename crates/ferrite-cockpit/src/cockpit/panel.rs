@@ -335,7 +335,7 @@ impl CockpitView {
             SurfaceId::Terminal(number) => {
                 self.terminals.update(cx, |terminals, cx| terminals.end(thread, *number, cx))
             }
-            SurfaceId::SideChat(tab) => self.close_side_tab(thread.thread(), *tab, cx),
+            SurfaceId::SideChat(tab) => self.close_side_tab(thread, *tab, cx),
             SurfaceId::File(path) => self.close_preview_of(thread.thread(), path, cx),
             SurfaceId::Browser => self.close_preview_of(thread.thread(), std::path::Path::new(preview::BROWSER_PATH), cx),
             SurfaceId::Overview

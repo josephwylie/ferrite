@@ -240,7 +240,7 @@ fn a_citation_keeps_its_comment_and_source_across_a_restart(cx: &mut TestAppCont
 
     let saved = Drafts::load(&dir);
     assert_eq!(
-        saved.thread(thread).map(|draft| draft.replies.clone()),
+        saved.thread(&super::drafts::saved_here(thread)).map(|draft| draft.replies.clone()),
         Some(before.clone())
     );
     let (core, _fake) = cockpit("cite-restart-again", 1);

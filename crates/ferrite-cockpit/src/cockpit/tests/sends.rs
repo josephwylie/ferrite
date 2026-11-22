@@ -222,10 +222,7 @@ fn an_admitted_send_clears_the_draft_and_goes_once(cx: &mut TestAppContext) {
         1,
         "the request appears once: {sent:?}"
     );
-    assert!(view.read_with(cx, |view, _| view
-        .held_sends
-        .count(view.panes[0].thread().unwrap())
-        == 0));
+    assert_eq!(held_count(&view, view.read_with(cx, |view, _| view.panes[0].thread().unwrap()), cx), 0);
 }
 
 #[gpui::test]
@@ -250,6 +247,31 @@ fn a_refused_draft_sends_once_after_the_cause_is_fixed(cx: &mut TestAppContext) 
     );
 }
 
+/// Thread 3 here and Thread 3 on a machine are two Threads: a draft held
+/// for one is handed back to it alone.
+#[gpui::test]
+fn a_held_send_keeps_two_machines_threads_apart(cx: &mut TestAppContext) {
+    use ferrite_core::draft_content::DraftContent;
+    let (view, _fake, cx) = staged("send-two-machines", None, cx);
+    view.update(cx, |view, cx| {
+        let thread = view.panes[0].thread().unwrap();
+        let here = view.cockpit.read(cx).thread_key(thread);
+        let there = ferrite_core::ThreadKey::fixture(u32::MAX, thread.get());
+        let draft = view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.take_draft(cx));
+        let (prompt, whole) = (draft.prompt().to_string(), draft.content().clone());
+        view.hold_queued(there, draft);
+        assert_eq!((view.held_sends.count(here), view.held_sends.count(there)), (0, 1));
+        assert_eq!(
+            view.recovered_content(here, prompt.clone()),
+            DraftContent::from_prompt(prompt.clone()),
+            "the Thread here gets only the text"
+        );
+        assert_eq!(view.recovered_content(there, prompt), whole);
+    });
+}
+
 #[gpui::test]
 fn an_unconfirmed_send_returns_the_draft_and_names_the_request(cx: &mut TestAppContext) {
     let (view, fake, cx) = staged("send-unconfirmed", None, cx);
@@ -259,6 +281,7 @@ fn an_unconfirmed_send_returns_the_draft_and_names_the_request(cx: &mut TestAppC
             .composer
             .update(cx, |composer, cx| composer.take_draft(cx));
         let admission = ferrite_core::cockpit::Admission::Unconfirmed("no reply".into());
+        let thread = view.cockpit.read(cx).thread_key(thread);
         assert!(!view.settle_send(0, thread, draft, admission, cx));
     });
     tick(cx);
@@ -342,7 +365,7 @@ fn held_count(
     thread: ThreadId,
     cx: &mut gpui::VisualTestContext,
 ) -> usize {
-    view.read_with(cx, |view, _| view.held_sends.count(thread))
+    view.read_with(cx, |view, cx| view.held_sends.count(view.cockpit.read(cx).thread_key(thread)))
 }
 
 #[gpui::test]

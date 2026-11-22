@@ -294,7 +294,7 @@ impl CockpitView {
         if let Some(project) = self.head_project(thread, cx) {
             crumbs.extend([project, separator()]);
         }
-        let parent = self.side_chat.read(cx).owner_of(thread);
+        let parent = self.side_chat.read(cx).owner_of(self.cockpit.read(cx).thread_key(thread)).map(|parent| parent.thread());
         if let Some(parent) = parent {
             crumbs.extend([self.head_parent(parent, cx), separator()]);
         }

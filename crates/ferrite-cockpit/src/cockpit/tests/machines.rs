@@ -162,7 +162,7 @@ fn machine_window(
     machines: Entity<Machines>,
 ) -> (Entity<gpui::component::Root>, &mut gpui::VisualTestContext) {
     cx.add_window_view(|window, cx| {
-        let view = cx.new(|cx| CockpitView::new(core, cx).with_machines(machines, cx));
+        let view = cx.new(|cx| CockpitView::new_with_machines(core, Provider::Claude, Preferences::ephemeral(), Some(machines), cx));
         gpui::component::Root::new(
             cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
             window,
@@ -381,7 +381,7 @@ fn a_machine_off_screen_heads_its_rows_with_its_connection(cx: &mut TestAppConte
     let (core, _fake) = cockpit("machines-listed", 1);
     let machines = cx.new(|_| machines("listed", None));
     let (view, cx) = add_cockpit_window(cx, |_, cx| {
-        CockpitView::new(core, cx).with_machines(machines, cx)
+        CockpitView::new_with_machines(core, Provider::Claude, Preferences::ephemeral(), Some(machines), cx)
     });
     tick(cx);
     assert!(
@@ -471,7 +471,7 @@ fn a_window_with_only_this_computer_lists_no_machines(cx: &mut TestAppContext) {
         )
     });
     let (_view, cx) =
-        add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx).with_machines(alone, cx));
+        add_cockpit_window(cx, |_, cx| CockpitView::new_with_machines(core, Provider::Claude, Preferences::ephemeral(), Some(alone), cx));
     tick(cx);
     assert!(debug_bounds(cx, "nav-machine-0".into()).is_none());
 }
@@ -662,7 +662,7 @@ fn machine_window_saving_to<'a>(
     prefs.dir = dir.to_path_buf();
     cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| {
-            CockpitView::new_with_settings(core, Provider::Claude, prefs, cx).with_machines(machines, cx)
+            CockpitView::new_with_machines(core, Provider::Claude, prefs, Some(machines), cx)
         });
         gpui::component::Root::new(
             cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
@@ -740,6 +740,145 @@ fn coming_home_from_a_machine_saves_its_files_tabs_as_its_own(cx: &mut TestAppCo
     assert_eq!(saved_files(&dir), expected);
 }
 
+/// drafts.json as `(machine, thread, text)`, sorted.
+fn saved_drafts(dir: &std::path::Path) -> Vec<(Option<String>, u64, String)> {
+    let drafts: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("drafts.json")).unwrap()).unwrap();
+    let mut saved: Vec<_> = drafts["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|draft| {
+            let thread = &draft["thread"];
+            (
+                thread["machine"].as_str().map(str::to_string),
+                thread["thread"].as_u64().unwrap(),
+                draft["content"]["text"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    saved.sort();
+    saved
+}
+
+/// drafts.json in `dir` holding `drafts`, as `(machine, thread, text)`:
+/// what earlier visits left.
+fn seed_saved_drafts(dir: &std::path::Path, drafts: &[(Option<&str>, u64, &str)]) {
+    let mut saved = ferrite_core::drafts::Drafts::default();
+    for (machine, thread, text) in drafts {
+        let thread = ferrite_core::SavedThread {
+            machine: ferrite_core::MachineKey(machine.map(str::to_string)),
+            thread: ThreadId::new(*thread),
+        };
+        saved.keep_thread(thread, ferrite_core::draft_content::DraftContent::from_prompt(text.to_string()));
+    }
+    saved.save(dir).unwrap();
+}
+
+/// `machine_window`, its drafts.json in `dir`.
+fn machine_window_drafting_in<'a>(
+    cx: &'a mut TestAppContext,
+    core: Cockpit,
+    machines: Entity<Machines>,
+    dir: &std::path::Path,
+) -> (Entity<gpui::component::Root>, &'a mut gpui::VisualTestContext) {
+    let mut prefs = Preferences::ephemeral();
+    prefs.dir = dir.to_path_buf();
+    cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| {
+            CockpitView::new_with_machines(core, Provider::Claude, prefs, Some(machines), cx)
+        });
+        gpui::component::Root::new(
+            cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
+            window,
+            cx,
+        )
+    })
+}
+
+/// `view`'s first Pane's Composer takes `text`, as typing would leave it.
+fn draft_on_first_pane(view: &Entity<CockpitView>, text: &str, cx: &mut gpui::VisualTestContext) {
+    view.update(cx, |view, cx| {
+        let composer = view.panes[0].composer.clone();
+        let content = ferrite_core::draft_content::DraftContent::from_prompt(text.to_string());
+        composer.update(cx, |composer, cx| composer.load(content, cx));
+    });
+}
+
+/// This computer's Thread and box's Thread of the same number each have
+/// a draft, and box has one on a Thread only it has. Going to box (which
+/// has not answered yet) and back saves this computer's draft as this
+/// computer's, and box's stay box's, whichever view saves last.
+#[gpui::test]
+fn going_to_a_machine_and_back_keeps_each_machines_drafts(cx: &mut TestAppContext) {
+    let (core, _fake, _checkout) = bound_cockpit("machines-drafts-there", Provider::Claude);
+    let thread = core.known_threads().into_iter().next().unwrap();
+    let dir = scratch("machines-drafts-there-prefs");
+    seed_saved_drafts(
+        &dir,
+        &[(None, thread.get(), "here"), (Some("me@box"), thread.get(), "there"), (Some("me@box"), 7, "box only")],
+    );
+    let machines = cx.new(|_| machines("drafts-there", None));
+    let (root, cx) = machine_window_drafting_in(cx, core, machines, &dir);
+    let home = shown(&root, cx);
+    assert_eq!(composer_text(&home, cx), "here", "this computer's Thread opens with its own draft");
+    draft_on_first_pane(&home, "here, and more", cx);
+    home.update(cx, |view, cx| view.save_drafts(cx));
+    let expected = [
+        (None, thread.get(), "here, and more".to_string()),
+        (Some("me@box".to_string()), thread.get(), "there".to_string()),
+        (Some("me@box".to_string()), 7, "box only".to_string()),
+    ];
+    assert_eq!(saved_drafts(&dir), expected);
+
+    home.update(cx, |_, cx| cx.emit(GoToMachine { index: Some(1), open: None }));
+    tick(cx);
+    let on_box = shown(&root, cx);
+    assert_ne!(on_box.entity_id(), home.entity_id());
+    on_box.update(cx, |view, cx| view.save_drafts(cx));
+    assert_eq!(saved_drafts(&dir), expected, "on box");
+    home.update(cx, |view, cx| view.save_drafts(cx));
+    assert_eq!(saved_drafts(&dir), expected, "the view left saves late");
+
+    on_box.update(cx, |_, cx| cx.emit(GoToMachine { index: Some(0), open: None }));
+    tick(cx);
+    shown(&root, cx).update(cx, |view, cx| view.save_drafts(cx));
+    assert_eq!(saved_drafts(&dir), expected, "back home");
+    on_box.update(cx, |view, cx| view.save_drafts(cx));
+    assert_eq!(saved_drafts(&dir), expected, "box's view saves late");
+}
+
+/// The other way: on box, whose Thread shares its number with this
+/// computer's, with a draft typed there. Coming home saves box's draft
+/// as box's, not over this computer's draft of the same Thread number.
+#[gpui::test]
+fn coming_home_from_a_machine_saves_its_drafts_as_its_own(cx: &mut TestAppContext) {
+    let (core, _fake, _checkout) = bound_cockpit("machines-drafts-back", Provider::Claude);
+    let thread = core.known_threads().into_iter().next().unwrap();
+    let dir = scratch("machines-drafts-back-prefs");
+    seed_saved_drafts(&dir, &[(None, thread.get(), "here"), (Some("me@box"), thread.get(), "there")]);
+    let machines = cx.new(|_| machines("drafts-back", Some("me@box")));
+    let (root, cx) = machine_window_drafting_in(cx, core, machines, &dir);
+    let on_box = shown(&root, cx);
+    assert_eq!(composer_text(&on_box, cx), "there", "box's Thread opens with box's draft");
+    draft_on_first_pane(&on_box, "there, and more", cx);
+    on_box.update(cx, |view, cx| view.save_drafts(cx));
+    let expected = [
+        (None, thread.get(), "here".to_string()),
+        (Some("me@box".to_string()), thread.get(), "there, and more".to_string()),
+    ];
+    assert_eq!(saved_drafts(&dir), expected);
+
+    on_box.update(cx, |_, cx| cx.emit(GoToMachine { index: Some(0), open: None }));
+    tick(cx);
+    let home = shown(&root, cx);
+    assert_ne!(home.entity_id(), on_box.entity_id());
+    home.update(cx, |view, cx| view.save_drafts(cx));
+    assert_eq!(saved_drafts(&dir), expected, "home");
+    on_box.update(cx, |view, cx| view.save_drafts(cx));
+    assert_eq!(saved_drafts(&dir), expected, "the view left saves late");
+}
+
 /// A machine with no `ferrited` says so, and while it is away its board,
 /// its tree and the keyboard are held: the root keeps the keys, so no
 /// Composer or answer reaches it.
@@ -750,7 +889,7 @@ fn a_machine_without_ferrited_says_so_and_takes_no_input(cx: &mut TestAppContext
         .update(cx, |machines, _| machines.cockpit())
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| {
-        CockpitView::new(core, cx).with_machines(machines, cx)
+        CockpitView::new_with_machines(core, Provider::Claude, Preferences::ephemeral(), Some(machines), cx)
     });
     until(cx, |cx| {
         view.read_with(cx, |view, cx| {
@@ -1447,7 +1586,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         .update(cx, |machines, _| machines.cockpit())
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| {
-        CockpitView::new(core, cx).with_machines(machines, cx)
+        CockpitView::new_with_machines(core, Provider::Claude, Preferences::ephemeral(), Some(machines), cx)
     });
     until(cx, |cx| {
         view.read_with(cx, |view, cx| {
@@ -1621,7 +1760,7 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
         .update(cx, |machines, _| machines.cockpit())
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| {
-        CockpitView::new(core, cx).with_machines(machines, cx)
+        CockpitView::new_with_machines(core, Provider::Claude, Preferences::ephemeral(), Some(machines), cx)
     });
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     until(cx, |cx| {

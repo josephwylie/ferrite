@@ -6,16 +6,33 @@
 //! as it builds a Thread's row.
 
 use super::*;
+use ferrite_core::ThreadKey;
 
 /// The Threads the titler is naming right now: their cards draw the title
 /// at `NAV_CARD_RETITLING_OPACITY` until its answer lands.
 #[derive(Default)]
-pub(super) struct Titling(std::collections::HashSet<ThreadId>);
+pub(super) struct Titling(std::collections::HashSet<ThreadKey>);
 
 impl Titling {
     /// Whether the titler is naming `thread`.
-    pub(super) fn naming(&self, thread: ThreadId) -> bool {
+    pub(super) fn naming(&self, thread: ThreadKey) -> bool {
         self.0.contains(&thread)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Thread 3 here and Thread 3 on a machine are two Threads: naming one
+    /// is not naming the other.
+    #[test]
+    fn a_title_being_written_keeps_two_machines_threads_apart() {
+        let (here, there) = (ThreadKey::fixture(0, 3), ThreadKey::fixture(1, 3));
+        let mut titling = Titling::default();
+        titling.0.insert(here);
+        assert!(titling.naming(here));
+        assert!(!titling.naming(there));
     }
 }
 
@@ -24,14 +41,14 @@ impl CockpitView {
     /// arrives — unless the operator has named the Thread meanwhile, or
     /// turned auto-titles off. No titler configured (tests, the demo)
     /// means the prompt-derived name stands.
-    pub(super) fn start_titling(&mut self, thread: ThreadId, prompt: String, cx: &mut Context<Self>) {
+    pub(super) fn start_titling(&mut self, thread: ThreadKey, prompt: String, cx: &mut Context<Self>) {
         if !self.prefs.settings.auto_title || !self.prefs.titler {
             return;
         }
         let Some(provider) = self
             .cockpit
             .read(cx)
-            .thread(thread)
+            .thread(thread.thread())
             .filter(|open| open.title().is_none())
             .map(|open| open.provider())
         else {
@@ -66,7 +83,7 @@ impl CockpitView {
     /// The titler's answer lands only on a Thread still untitled: an
     /// operator's rename in the meantime wins, and a parked Thread keeps
     /// its prompt-derived name.
-    pub(super) fn adopt_title(&mut self, thread: ThreadId, title: Option<String>, cx: &mut Context<Self>) {
+    pub(super) fn adopt_title(&mut self, thread: ThreadKey, title: Option<String>, cx: &mut Context<Self>) {
         if self.titling.0.remove(&thread) {
             self.notify_part(parts::Part::Nav, cx);
         }
@@ -76,13 +93,13 @@ impl CockpitView {
         if self
             .cockpit
             .read(cx)
-            .thread(thread)
+            .thread(thread.thread())
             .is_none_or(|open| open.title().is_some())
         {
             return;
         }
-        if self.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(thread, &title).is_ok()) {
-            self.facts.renamed(self.cockpit.read(cx), thread);
+        if self.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(thread.thread(), &title).is_ok()) {
+            self.facts.renamed(self.cockpit.read(cx), thread.thread());
             self.refresh_names();
             cx.notify();
         }

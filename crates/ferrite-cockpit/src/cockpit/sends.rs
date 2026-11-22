@@ -10,6 +10,7 @@
 use super::*;
 use ferrite_core::cockpit::Admission;
 use ferrite_core::draft_content::DraftContent;
+use ferrite_core::ThreadKey;
 use ferrite_pane::composer::SentDraft;
 use std::collections::HashMap;
 
@@ -18,7 +19,7 @@ const NAMED_CHARS: usize = 48;
 
 /// The drafts each Thread's Engine is holding for its Session, oldest first.
 #[derive(Default)]
-pub(crate) struct HeldSends(HashMap<ThreadId, Vec<Held>>);
+pub(crate) struct HeldSends(HashMap<ThreadKey, Vec<Held>>);
 
 struct Held {
     draft: SentDraft,
@@ -32,7 +33,7 @@ struct Held {
 
 impl HeldSends {
     #[cfg(test)]
-    pub(crate) fn count(&self, thread: ThreadId) -> usize {
+    pub(crate) fn count(&self, thread: ThreadKey) -> usize {
         self.0.get(&thread).map_or(0, Vec::len)
     }
 }
@@ -43,7 +44,7 @@ impl CockpitView {
     pub(super) fn settle_send(
         &mut self,
         index: usize,
-        thread: ThreadId,
+        thread: ThreadKey,
         draft: SentDraft,
         admission: Admission,
         cx: &mut Context<Self>,
@@ -51,7 +52,7 @@ impl CockpitView {
         match admission {
             Admission::Delivered => true,
             Admission::Held => {
-                let listed = self.cockpit.read(cx).thread(thread).is_some_and(|view| {
+                let listed = self.cockpit.read(cx).thread(thread.thread()).is_some_and(|view| {
                     view.queue()
                         .iter()
                         .any(|queued| queued.text.trim() == draft.prompt().trim())
@@ -70,7 +71,7 @@ impl CockpitView {
             Admission::Unconfirmed(reason) => {
                 let named = named(draft.line());
                 self.cockpit.update(cx, |cockpit, _| cockpit.say(
-                    thread,
+                    thread.thread(),
                     format!(
                         "\"{named}\" may or may not have been sent ({reason}). It is back in the composer: check the transcript before sending it again."
                     ),
@@ -98,7 +99,7 @@ impl CockpitView {
 
     /// Keep `draft` under `thread` while its prompt waits in the Thread's
     /// queue, so taking the prompt back to edit gives the draft back whole.
-    pub(super) fn hold_queued(&mut self, thread: ThreadId, draft: SentDraft) {
+    pub(super) fn hold_queued(&mut self, thread: ThreadKey, draft: SentDraft) {
         self.held_sends.0.entry(thread).or_default().push(Held {
             draft,
             listed: true,
@@ -109,7 +110,7 @@ impl CockpitView {
     /// `prompt`, handed back to edit, as typed parts: the draft it was sent
     /// from while this window still holds it, else its text split into
     /// parts.
-    pub(super) fn recovered_content(&mut self, thread: ThreadId, prompt: String) -> DraftContent {
+    pub(super) fn recovered_content(&mut self, thread: ThreadKey, prompt: String) -> DraftContent {
         match self.held_draft(thread, &prompt) {
             Some(draft) => draft.content().clone(),
             None => DraftContent::from_prompt(prompt),
@@ -118,7 +119,7 @@ impl CockpitView {
 
     /// The draft `thread` held, when `prompt` is that prompt handed back by
     /// a Session that never started.
-    fn held_draft(&mut self, thread: ThreadId, prompt: &str) -> Option<SentDraft> {
+    fn held_draft(&mut self, thread: ThreadKey, prompt: &str) -> Option<SentDraft> {
         let held = self.held_sends.0.get_mut(&thread)?;
         let at = held
             .iter()
@@ -137,8 +138,8 @@ impl CockpitView {
     pub(super) fn settle_held_sends(&mut self, cx: &gpui::App) {
         let cockpit = self.cockpit.read(cx);
         self.held_sends.0.retain(|&thread, held| {
-            let Some(view) = cockpit.thread(thread) else {
-                if cockpit.peek(thread).is_err() {
+            let Some(view) = cockpit.thread(thread.thread()) else {
+                if cockpit.peek(thread.thread()).is_err() {
                     return false;
                 }
                 held.iter_mut().for_each(|held| held.lost = true);
@@ -158,7 +159,7 @@ impl CockpitView {
     }
 
     /// The drafts `thread` lost when it closed with a prompt held.
-    pub(super) fn lost_sends(&mut self, thread: ThreadId) -> Vec<SentDraft> {
+    pub(super) fn lost_sends(&mut self, thread: ThreadKey) -> Vec<SentDraft> {
         let Some(held) = self.held_sends.0.get_mut(&thread) else {
             return Vec::new();
         };

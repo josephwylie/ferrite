@@ -437,10 +437,10 @@ impl CockpitView {
                     if let SurfaceId::SideChat(tab) = surface {
                         let mut row = Row::new(
                             Item::SideChats,
-                            self.side_chat.read(cx).title(thread, *tab).to_string(),
+                            self.side_chat.read(cx).title(self.cockpit.read(cx).thread_key(thread), *tab).to_string(),
                             icons::MESSAGES_SQUARE,
                         );
-                        if self.side_chat_running(thread, *tab, cx) {
+                        if self.side_chat_running(self.cockpit.read(cx).thread_key(thread), *tab, cx) {
                             row.meta = Some("Running".to_string());
                         }
                         row.action = Some(Action::Surface(surface.clone()));

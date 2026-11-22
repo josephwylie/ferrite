@@ -41,18 +41,19 @@ and a window that holds every machine at once.
   it, `None` for this computer. It moved into core from `ferrite-cockpit`,
   where it named the machines alerts come from (ADR 0017). A Thread saved
   before this change is a bare id, and it reads as this computer's: most
-  were, and a wrong one is harmless, a pin passed over until it is
-  unpinned. Pins (`Settings::pinned_threads`) are saved this way, and a
-  pin made while the window is on a machine names that machine. A
-  Delegate on a
+  were, and a wrong one is only a draft or a pin on another Thread, which
+  the operator can clear. Pins (`Settings::pinned_threads`) are saved this
+  way, and a pin made while the window is on a machine names that machine.
+  So are the drafts, whose one `drafts.json` every machine's window
+  shares. A Delegate on a
   linked machine will save its child the same way (ADR 0047, to come).
   Its design called the type `ThreadRef`; there is one name,
   `SavedThread`.
 - **The shape: one `Cockpit` holds one Server per machine.** The window
   keeps its one `Cockpit`. Inside it, a private per-machine holder keeps
   what one link means today: the link, the bridge, the mirrors, the shared
-  state, the parked rows, the logs, the registry, the drafts and what the
-  Server was told. The Cockpit keeps it in `BTreeMap<MachineId, _>`. What
+  state, the parked rows, the logs, the registry and what the Server was
+  told. The Cockpit keeps it in `BTreeMap<MachineId, _>`. What
   exists once per window stays on the Cockpit, keyed by `ThreadKey`: the
   Roster, `composing`, `visible_subjects`, `Drawn` and `window_active`.
   The Cockpit's public API takes `ThreadKey` only, and one private
@@ -93,10 +94,11 @@ Each lands green and proves something.
    chats, sends, titling, the PR watch, background work and the Facts.
    Where a group meets state still keyed by a bare id, it converts at
    that call with core's `Cockpit::thread_key(id)` and the key's
-   `thread()`; there is no seam on the root. A file a group saves moves
-   to `SavedThread`s: the Panel's `panel.json` keeps every machine's
-   Panels, the window holds those of the machine it is on, and writes
-   the others back as it read them.
+   `thread()`; there is no seam on the root, so five changes in parallel
+   do not each add one. A file a group saves moves to `SavedThread`s: the
+   Panel's `panel.json` keeps every machine's Panels, the window holds
+   those of the machine it is on, and writes the others back as it read
+   them.
 3. **P3** `refactor(cockpit): the nav, board and menus speak ThreadKey`:
    `NavKey`, `NavEvent`, the nav's and the board's `MenuTarget`s,
    `ThreadRow`, `Arrivals` and the nav's picks. Saved pins become
@@ -111,7 +113,7 @@ Each lands green and proves something.
    split inside core only, with the `ThreadId` API and the single attach
    kept. In parallel with P2 and P3.
 5. **P5** `refactor(core): the Cockpit's API takes only ThreadKey`, after
-   P2 to P4. The seam and its assert go, and the window-wide
+   P2 to P4. Those conversions go, and the window-wide
    `on_machine()` becomes a question about a key's machine at every site.
 6. **P6** `feat(cockpit): the window holds every machine at once`. The
    window swap goes (`CockpitWindow::go_to`, `GoToMachine`, landing,

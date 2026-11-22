@@ -90,7 +90,7 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
         keys_refused,
     };
     let mut driver = Driver::open(cx, |cx| {
-        CockpitView::new_with_settings(core, provider, prefs, cx).with_machines(machines, cx)
+        CockpitView::new_with_machines(core, provider, prefs, Some(machines), cx)
     });
     eprintln!(
         "ferrite --headless: pid {}, on the server of {}",
