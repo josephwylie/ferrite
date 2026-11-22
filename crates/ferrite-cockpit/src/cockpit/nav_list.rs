@@ -12,6 +12,7 @@ use crate::machines::{Connection, MachineRow};
 use crate::nav::NavMachine;
 use crate::nav::flip::{self, Update};
 use crate::nav::{list, NavItem, Shelf, SHELVES};
+use ferrite_ui::components::ContextPress;
 use ferrite_ui::motion::{fold_body, Reveal, FOLD};
 use std::time::Instant;
 
@@ -633,13 +634,11 @@ impl NavView {
                 }),
             )
             .when_some(held, |heading, machine| {
-                heading.on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |_, event: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        cx.emit(NavEvent::Menu(MenuTarget::Machine(machine), MenuAt::Point(event.position)));
-                    }),
-                )
+                let nav = cx.entity().downgrade();
+                heading.context_press(move |at, _, cx| {
+                    let menu = NavEvent::Menu(MenuTarget::Machine(machine), MenuAt::Point(at));
+                    let _ = nav.update(cx, |_, cx| cx.emit(menu));
+                })
             })
             .into_any_element()
     }
