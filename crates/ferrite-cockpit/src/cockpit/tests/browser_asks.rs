@@ -236,3 +236,46 @@ fn an_asks_answer_is_an_arrival() {
     let error = answer.expect_err("a silent Server's ask fails");
     assert!(error.to_string().contains("did not answer in time"), "{error}");
 }
+
+/// Keys typed on a page faster than the Server answers each one all reach
+/// the page, in the order typed.
+#[gpui::test]
+fn a_burst_of_keys_all_reach_the_page_in_order(cx: &mut TestAppContext) {
+    use ferrite_pane::visual::web::fake::Call;
+    use ferrite_pane::visual::web::Input;
+    let (core, thread, _) = silenceable_browser("asks-burst");
+    bind_production_keys(cx);
+    let engine = std::rc::Rc::new(FakeEngine::new());
+    engine.clean_browser_pages(true);
+    cx.update(|cx| Visuals::install(engine.clone(), cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    view.update(cx, |view, cx| view.open_browser(thread, cx));
+    step(cx, "the first page loads", |cx| engine.live_views() == 1 && loaded(&view, thread, "http://localhost:5173/start", cx));
+    let page = cx.debug_bounds("browser-preview").unwrap().center();
+    cx.simulate_click(page, gpui::Modifiers::none());
+    step(cx, "the click settles", |cx| !shown(&view, thread, cx).0.tabs.iter().any(|tab| tab.protected));
+
+    let typed = "packaged annotation feedback";
+    cx.update(|window, cx| {
+        for character in typed.chars() {
+            let mut key = gpui::Keystroke::parse(if character == ' ' { "space" } else { "a" }).unwrap();
+            key.key = character.to_string();
+            key.key_char = Some(character.to_string());
+            window.dispatch_keystroke(key.clone(), cx);
+            window.dispatch_event(gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke: key }), cx);
+        }
+    });
+    let reached = || -> String {
+        engine
+            .journal()
+            .iter()
+            .filter_map(|call| match call {
+                Call::Input(Input::Key { key, down: true, .. }) => Some(key.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    step(cx, "the keys settle", |cx| !reached().is_empty() && !shown(&view, thread, cx).0.tabs.iter().any(|tab| tab.protected));
+    assert_eq!(reached(), typed);
+}

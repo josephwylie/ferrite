@@ -557,6 +557,18 @@ impl CockpitView {
                     .pages
                     .get(&document.tab)
                     .filter(|_| browser.owner == Some(owner));
+                #[cfg(feature = "browser-smoke")]
+                ferrite_pane::visual::hold_trace::record(serde_json::json!({
+                    "kind": "input",
+                    "sequence": sequence,
+                    "input": format!("{input:?}").chars().take(60).collect::<String>(),
+                    "answer": answer.as_ref().map_err(|error| error.to_string()).ok(),
+                    "refused": answer.as_ref().err().map(|error| error.to_string()),
+                    "page": page.is_some(),
+                    "document": page.map(|page| page.document.get() == document),
+                    "generation": page.map(|page| generation == Some(page.native.state().document_generation)),
+                    "valid": page.map(|page| page.manual.borrow().valid(sequence)),
+                }));
                 let settled = match answer {
                     Ok(revision) => match page {
                         // The page went while the Server answered: its input
