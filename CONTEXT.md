@@ -238,6 +238,8 @@ Ferrite's own record that a Thread's Main finished for good: its turn ended
 and no Subagent or background task (a shell, a monitor) is still working,
 and no Delegate is open or still to wake it, so the operator is wanted
 back. Unread
+and no PR watch holds it (checks still running, or waiting for the merge),
+so the operator is wanted back. Unread
 until it is **seen** — its Thread on screen while the window has focus —
 or opened from the Inbox; shown there, by a toast, a chime, the
 Thread's done mark, and a system notification
@@ -260,7 +262,8 @@ Project's badge, for the open Threads awaiting the operator. Pending
 Decisions come first, oldest request first, then the Thread that came
 back latest: a Thread done with its work returns at the top, and nothing
 else moves a card. Threads executing Main, Subagent, background or
-queued work sit on the Working shelf, the latest to start first; Snoozed and
+queued work, or held by a PR watch, sit on the Working shelf, the latest to
+start first; Snoozed and
 Parked Threads on their own shelves; the shelves fold to a head and count
 at the foot of the list. The rest stay in Inbox until sent back to work or
 Parked. Reading or dismissing a Notice changes presentation, never queue
@@ -277,13 +280,20 @@ comments or reviews, conflicts, and once when the PR merges or closes,
 unless the agent merged or closed it itself. The Server reads it every two
 minutes with its own `gh` account and keeps the watch on the Thread, so it
 outlives windows and restarts. Stopping the agent or parking the Thread
-ends it. A fork watches nothing.
+ends it. A fork watches nothing. While the PR's checks run, or until it
+merges when the agent asked so, the watch holds its Thread working; the
+operator stops one from the details card's eye, the PR's menu or the
+palette, and starts one from the last two.
 _Avoid_: subscription, PR monitor.
 
 **Server wake**
 A prompt the Server sends a Thread's agent on its own: a PR watch's news,
 or a Delegate's result. It is never the operator's prompt: the log keeps it as a wake, and a
 window draws it as a short notice. It waits while a Decision is pending or a
+A prompt the Server sends a Thread's agent on its own, such as a PR watch's
+news. It is never the operator's prompt: the log keeps it as a wake, and a
+window draws it as a one-line notice row with its summary, which opens to
+its whole text. It waits while a Decision is pending or a
 turn runs, and starts an ended Session.
 _Avoid_: notification (a toast), message.
 

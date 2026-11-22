@@ -353,7 +353,7 @@ pub fn prompt_title(transcript: &Transcript) -> Option<String> {
         .blocks()
         .iter()
         .find_map(|block| match &block.body {
-            Body::Prompt(text) => Some(crate::engine::title_from_prompt(text)),
+            Body::Prompt(text) if block.wake.is_none() => Some(crate::engine::title_from_prompt(text)),
             _ => None,
         })
 }

@@ -37,6 +37,10 @@ impl CockpitView {
         let answer = self
             .cockpit
             .update(cx, |cockpit, _| cockpit.watch_pr(thread, &url, watching));
+        // An Engine in this process has already answered: the card reads it
+        // now, as it does after any act of the window's own.
+        self.facts.acted(self.cockpit.read(cx), thread);
+        cx.notify();
         cx.spawn(async move |this, cx| {
             if let Err(error) = beside::answered(answer, cx).await {
                 this.update(cx, |view, cx| {

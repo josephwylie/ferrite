@@ -66,6 +66,17 @@ from T3 and why.
   end it, as in T3. A rate limit pauses the watch. A lost connection is
   tried again without counting. Any other failed read counts, and eight
   in a row give up with T3's give-up wake.
+- **A watch that holds is background work.** `ActivityView::background_work`
+  counts it, so the Thread sits on the Working shelf, its Notice waits
+  until the watch lets go, and the background line lists `Watching pull
+  request #N` (T3's `monitor` task), `Waiting` while it holds. A Session's
+  rest (`settled`) does not count it: the watch is the Server's, so it
+  keeps no Session and holds back no restart.
+- **A wake draws as T3's notification row.** Its Block's `WakeNote` makes
+  the transcript draw a work row (its summary, an eye, or the alert for a
+  failure) that opens to the whole text, where a prompt draws a bubble. It
+  opens a turn as a prompt does, and is never the Thread's title, the
+  prompt `Copy prompt` reads, or one `Retry` sends again.
 - **The window hears a watch through the Thread's digest.** `Digest`
   carries `Watching`: each PR watched, by URL and number, whether it holds
   the Thread working (T3's `awaited`: `until: merged`, or checks still

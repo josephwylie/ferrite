@@ -2306,10 +2306,17 @@ impl<'a> ActivityView<'a> {
             .filter(|key| self.activity.agents[*key].working())
             .count()
     }
-    /// Whether work runs behind Main: a Subagent, or a background task (a
-    /// shell, a monitor) of Main's transcript. The Notice waits for it,
-    /// and the nav counts it as working.
+    /// Whether work goes on behind Main: what runs behind it
+    /// ([`Self::running_behind`]), or a PR watch that holds the Thread (T3's
+    /// awaited watch task, ADR 0046). The Notice waits for it, and the nav
+    /// counts it as working.
     pub fn background_work(self) -> bool {
+        self.running_behind() || self.activity.watching.holds()
+    }
+    /// Whether something runs behind Main: a Subagent, or a background task
+    /// (a shell, a monitor) of Main's transcript. Unlike a watch, this cuts
+    /// off if its Session goes.
+    pub fn running_behind(self) -> bool {
         self.working_descendants() > 0
             || self.main().transcript().progress().working_background() > 0
     }

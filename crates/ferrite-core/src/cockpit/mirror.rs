@@ -803,8 +803,8 @@ impl<'a> ThreadView<'a> {
         }
     }
 
-    /// Whether work runs behind Main: its Subagents, or its transcript's
-    /// background tasks.
+    /// Whether work goes on behind Main: its Subagents, its transcript's
+    /// background tasks, or a PR watch that holds the Thread.
     pub fn background_work(&self) -> bool {
         match self.stand_in {
             Some(held) => held.digest.background_work,

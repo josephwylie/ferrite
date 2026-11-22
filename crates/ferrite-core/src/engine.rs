@@ -1074,8 +1074,8 @@ impl Thread {
         self.activity.activity.set_watching(watching)
     }
 
-    /// Whether work runs behind Main: its Subagents, or its transcript's
-    /// background tasks.
+    /// Whether work goes on behind Main: its Subagents, its transcript's
+    /// background tasks, or a PR watch that holds the Thread.
     fn background_work(&self) -> bool {
         self.activity.view().background_work()
     }
@@ -1083,7 +1083,8 @@ impl Thread {
     /// At rest: no turn, no starting or replacement Session, no change
     /// waiting on the provider, no working Subagent or background task, no
     /// Decision and nothing in the provider's queue. What a Session may be
-    /// replaced at without cutting anything off.
+    /// replaced at without cutting anything off: a PR watch is the
+    /// Server's, so it goes on whatever the Session does.
     fn settled(&self) -> bool {
         let view = self.activity.view();
         !self
@@ -1094,7 +1095,7 @@ impl Thread {
             && self.tuning.is_none()
             && !self.busy()
             && !view.main_operator_turn()
-            && !self.background_work()
+            && !view.running_behind()
             && view.decisions().is_empty()
             && !self.native_queue.pending()
     }
@@ -5788,8 +5789,8 @@ impl<'a> ThreadView<'a> {
         self.state.busy()
     }
 
-    /// Whether work runs behind Main: its Subagents, or its transcript's
-    /// background tasks.
+    /// Whether work goes on behind Main: its Subagents, its transcript's
+    /// background tasks, or a PR watch that holds the Thread.
     pub fn background_work(&self) -> bool {
         self.state.background_work()
     }

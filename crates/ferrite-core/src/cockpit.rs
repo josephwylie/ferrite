@@ -2750,7 +2750,9 @@ impl Cockpit {
         if let Err(error) = self.in_process().set_pr_watch(thread, fact) {
             crate::log!("thread {thread}: a fixture watch was not saved: {error}");
         }
-        self.settle();
+        // The digest it sends is left for the window's pump, which reads
+        // the watch from it as a window of the Server does.
+        self.receive();
     }
 
     pub fn fixture_backdate_notices(&mut self, thread: ThreadId, at: std::time::SystemTime) {

@@ -59,3 +59,62 @@ fn the_eye_shows_while_the_pr_is_watched_and_its_press_stops_the_watch(cx: &mut 
         "the press only stopped the watch: the PR did not open"
     );
 }
+
+/// A watch is background work (T3's `Watching pull request #N`): while it
+/// holds, the Thread is on the Working shelf and its line waits on it;
+/// once every check finished it still runs, holding nothing, unless it
+/// waits for the merge.
+#[gpui::test]
+fn a_watch_holds_the_thread_working_while_checks_run_or_until_merged(cx: &mut TestAppContext) {
+    use ferrite_core::pr_watch::Until;
+    let (core, _fake) = cockpit("pr-watch-working", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let watch = |fact: &WatchFact, cx: &mut gpui::VisualTestContext| {
+        let fact = fact.clone();
+        view.update(cx, |view, cx| {
+            view.cockpit
+                .update(cx, |cockpit, _| cockpit.fixture_pr_watch(thread, fact))
+        });
+        tick(cx);
+    };
+    let seen = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            (
+                view.nav_state(cx).working.iter().any(|row| row.key.thread() == thread),
+                view.background_work_title(0, cx),
+            )
+        })
+    };
+    assert_eq!(seen(cx), (false, None), "the premise: at rest");
+
+    let target = Target::of_url("https://github.com/o/r/pull/48").unwrap();
+    let mut fact = WatchFact::default();
+    fact.watch(target.clone(), None, Some(true), 0);
+    watch(&fact, cx);
+    assert_eq!(
+        seen(cx),
+        (true, Some("Waiting \u{b7} Watching pull request #48".into())),
+        "checks run on the head"
+    );
+
+    let mut cursor = fact.on[0].cursor.clone();
+    cursor.checks_pending = false;
+    fact.advance("o/r", 48, 0, cursor);
+    watch(&fact, cx);
+    assert_eq!(
+        seen(cx),
+        (false, Some("Running \u{b7} Watching pull request #48".into())),
+        "every check finished: the watch goes on, holding nothing"
+    );
+
+    fact.watch(target, Some(Until::Merged), None, 0);
+    watch(&fact, cx);
+    assert!(seen(cx).0, "until merged, it holds whatever the checks say");
+
+    fact.end("o/r", 48, None, None);
+    watch(&fact, cx);
+    assert_eq!(seen(cx), (false, None), "an ended watch is no work");
+}
