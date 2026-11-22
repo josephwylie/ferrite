@@ -215,6 +215,55 @@ fn a_pin_made_on_a_machine_saves_that_machine(cx: &mut TestAppContext) {
     });
 }
 
+/// A pin names the machine its Thread was reached on when the window
+/// attached there (F-A8), not the one selected when it is read: through a
+/// trip to box and back, this computer's pin and box's pin of a Thread of
+/// the same number stay each machine's, each lists only on its own
+/// machine, and unpinning one leaves the other.
+#[gpui::test]
+fn a_trip_to_a_machine_and_back_keeps_each_machines_pins(cx: &mut TestAppContext) {
+    let (core, _fake, _) = bound_cockpit("machines-pins", Provider::Claude);
+    let mine = core.known_threads().into_iter().next().unwrap();
+    let number = mine.thread().get();
+    let machines = cx.new(|_| machines("pins", None));
+    let (root, cx) = machine_window(cx, core, machines);
+    let pins = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            let saved = serde_json::to_value(&view.prefs.settings).unwrap()["pinned_threads"].clone();
+            (saved, view.pins(cx))
+        })
+    };
+    let home = shown(&root, cx);
+    home.update(cx, |view, cx| view.set_pinned(mine, true, cx));
+    assert_eq!(pins(&home, cx), (serde_json::json!([{ "machine": null, "thread": number }]), vec![mine]));
+
+    home.update(cx, |_, cx| cx.emit(GoToMachine { index: Some(1), open: None }));
+    tick(cx);
+    let on_box = shown(&root, cx);
+    assert_ne!(on_box.entity_id(), home.entity_id());
+    let theirs = on_box.read_with(cx, |view, cx| view.cockpit.read(cx).key(mine.thread()));
+    assert_eq!(pins(&on_box, cx).1, [], "this computer's pin is not box's Thread");
+    on_box.update(cx, |view, cx| view.set_pinned(theirs, true, cx));
+    let both = serde_json::json!([
+        { "machine": null, "thread": number },
+        { "machine": "me@box", "thread": number },
+    ]);
+    assert_eq!(pins(&on_box, cx), (both.clone(), vec![theirs]), "box's pin, saved as box's");
+
+    on_box.update(cx, |_, cx| cx.emit(GoToMachine { index: Some(0), open: None }));
+    tick(cx);
+    let back = shown(&root, cx);
+    assert_ne!(back.entity_id(), on_box.entity_id());
+    let mine = back.read_with(cx, |view, cx| view.cockpit.read(cx).key(mine.thread()));
+    assert_eq!(pins(&back, cx), (both, vec![mine]), "home lists only its own pin");
+    back.update(cx, |view, cx| view.set_pinned(mine, false, cx));
+    assert_eq!(
+        pins(&back, cx),
+        (serde_json::json!([{ "machine": "me@box", "thread": number }]), vec![]),
+        "unpinning here leaves box's pin"
+    );
+}
+
 #[gpui::test]
 fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut TestAppContext) {
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
