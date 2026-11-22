@@ -706,7 +706,7 @@ mod tests {
     }
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 45] = [
+    const REFRESH_ICONS: [&str; 46] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
