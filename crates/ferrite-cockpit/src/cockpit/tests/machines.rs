@@ -194,6 +194,24 @@ fn escape_closes_settings_on_an_empty_remote_workspace(cx: &mut TestAppContext) 
     view.read_with(cx, |view, _| assert!(view.panes.is_empty()));
 }
 
+/// A pin made while the window is on a machine is saved as that machine's
+/// Thread: ids are per Store, so box's Thread 1 is not this computer's.
+#[gpui::test]
+fn a_pin_made_on_a_machine_saves_that_machine(cx: &mut TestAppContext) {
+    let machines = cx.new(|_| machines("pin-on-box", Some("me@box")));
+    let core = machines.update(cx, |machines, _| machines.cockpit()).unwrap();
+    let (root, cx) = machine_window(cx, core, machines);
+    tick(cx);
+    let view = shown(&root, cx);
+    view.update(cx, |view, cx| view.set_pinned(ThreadId::new(1), true, cx));
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            serde_json::to_value(&view.prefs.settings).unwrap()["pinned_threads"],
+            serde_json::json!([{ "machine": "me@box", "thread": 1 }])
+        );
+    });
+}
+
 #[gpui::test]
 fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut TestAppContext) {
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
