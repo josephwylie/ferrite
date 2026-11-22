@@ -186,6 +186,13 @@ pub trait Spawner {
 
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>>;
 
+    /// The operator's effort for `provider`, as it stands now: what a live
+    /// Session is set to when its Thread's choice is cleared. `None` is the
+    /// provider's own.
+    fn default_effort(&self, _provider: Provider) -> Option<String> {
+        None
+    }
+
     /// A ready adapter completes synchronously; production overrides this
     /// to start off-thread. Only readiness, never queue admission, is success.
     fn start(&mut self, request: SpawnRequest) -> io::Result<SessionLifecycle> {
@@ -4224,8 +4231,11 @@ impl Engine {
             .and_then(SessionLifecycle::session_mut)
         {
             Some(session) => {
+                let wanted = effort
+                    .clone()
+                    .or_else(|| self.spawner.default_effort(state.provider));
                 let ack = session
-                    .set_effort(effort.as_deref())
+                    .set_effort(wanted.as_deref())
                     .map_err(ProvisionError::Tune)?;
                 self.await_tuning(thread, Tune::Effort(effort), ack)
             }
@@ -4288,7 +4298,13 @@ impl Engine {
                 // Put back, unanswered: the header still names the old.
                 let _ = match change {
                     Tune::Model(_) => session.set_model(state.model.as_deref()),
-                    Tune::Effort(_) => session.set_effort(state.effort.as_deref()),
+                    Tune::Effort(_) => session.set_effort(
+                        state
+                            .effort
+                            .clone()
+                            .or_else(|| self.spawner.default_effort(state.provider))
+                            .as_deref(),
+                    ),
                 };
             }
             return Err(ProvisionError::Store(error));

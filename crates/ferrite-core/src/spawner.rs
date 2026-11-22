@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::engine::{Preparation, RssSampler, SpawnRequest, Spawner};
 use crate::providers::{
-    ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, ResumeRefused, Session, SettingAck,
+    ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, ResumeRefused, Session,
 };
 use crate::session::SessionLifecycle;
 use crate::settings::Settings;
@@ -207,8 +207,12 @@ impl Spawner for Spawn {
 
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
         self.config(request)
-            .spawn(self.defaults.clone())
+            .spawn()
             .map(|session| session as Box<dyn Session>)
+    }
+
+    fn default_effort(&self, provider: Provider) -> Option<String> {
+        self.defaults.lock().ok()?.effort_for(provider)
     }
 
     fn start(&mut self, request: SpawnRequest) -> io::Result<SessionLifecycle> {
@@ -223,10 +227,9 @@ impl Spawner for Spawn {
         request: SpawnRequest,
     ) -> io::Result<SessionLifecycle> {
         let config = self.config(request);
-        let defaults = self.defaults.clone();
         SessionLifecycle::background(move || {
             prepare()?;
-            config.spawn(defaults)
+            config.spawn()
         })
     }
 }
@@ -240,8 +243,8 @@ enum SessionConfig {
 }
 
 impl SessionConfig {
-    fn spawn(self, defaults: Arc<Mutex<SessionDefaults>>) -> io::Result<Box<dyn Session + Send>> {
-        let (provider, inner): (Provider, Box<dyn Session + Send>) = match self {
+    fn spawn(self) -> io::Result<Box<dyn Session + Send>> {
+        match self {
             SessionConfig::Claude(config) => {
                 let resuming = config.resume.is_some();
                 let mut session = ClaudeSession::spawn(config)
@@ -249,136 +252,15 @@ impl SessionConfig {
                 // Before the operator can type `@`: a fresh CLI answers its
                 // first file search from no index.
                 session.warm_file_index();
-                (Provider::Claude, Box::new(session))
+                Ok(Box::new(session))
             }
             SessionConfig::Codex(config) => {
                 let resuming = config.resume.is_some();
                 let session = CodexSession::spawn(config)
                     .map_err(|e| ResumeRefused::error(resuming, e.to_string()))?;
-                (Provider::Codex, Box::new(session))
+                Ok(Box::new(session))
             }
-        };
-        Ok(Box::new(SessionWithDefaults {
-            inner,
-            provider,
-            defaults,
-        }))
-    }
-}
-
-/// A ready production Session resolves a cleared Thread effort against the
-/// current Settings. Startup and delivery remain owned by the headless core;
-/// this adapter adds only the app's provider-specific defaults.
-struct SessionWithDefaults {
-    inner: Box<dyn Session + Send>,
-    provider: Provider,
-    defaults: Arc<Mutex<SessionDefaults>>,
-}
-
-impl Session for SessionWithDefaults {
-    fn supports_control(&self, kind: crate::ControlKind) -> bool {
-        self.inner.supports_control(kind)
-    }
-
-    fn control(&mut self, action: crate::SessionControl) -> io::Result<()> {
-        self.inner.control(action)
-    }
-
-    fn permission_modes(&self) -> Vec<crate::PermissionModeChoice> {
-        self.inner.permission_modes()
-    }
-
-    fn sandbox(&self) -> Option<String> {
-        self.inner.sandbox()
-    }
-
-    fn set_model(&mut self, model: Option<&str>) -> io::Result<SettingAck> {
-        self.inner.set_model(model)
-    }
-
-    fn search_files(
-        &mut self,
-        query: &str,
-        reply: crate::providers::FileSearchReply,
-    ) -> io::Result<()> {
-        self.inner.search_files(query, reply)
-    }
-    fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
-        self.inner.enqueue(client_id, text)
-    }
-    fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
-        self.inner.cancel_queued(id)
-    }
-    fn steers(&self) -> bool {
-        self.inner.steers()
-    }
-    fn queue_folds(&self) -> bool {
-        self.inner.queue_folds()
-    }
-
-    fn set_suggestions_enabled(&mut self, enabled: bool) -> io::Result<()> {
-        self.inner.set_suggestions_enabled(enabled)
-    }
-    fn take_suggestion(&mut self) -> Option<String> {
-        self.inner.take_suggestion()
-    }
-
-    fn events(&self) -> &std::sync::mpsc::Receiver<crate::SessionEvent> {
-        self.inner.events()
-    }
-
-    fn send(&mut self, text: &str) -> io::Result<()> {
-        self.inner.send(text)
-    }
-
-    fn send_as(&mut self, id: &str, text: &str) -> io::Result<()> {
-        self.inner.send_as(id, text)
-    }
-
-    fn rewind(
-        &mut self,
-        request: crate::providers::RewindRequest,
-    ) -> io::Result<crate::providers::RewindAck> {
-        self.inner.rewind(request)
-    }
-
-    fn fork(
-        &mut self,
-        request: crate::providers::ForkRequest,
-    ) -> io::Result<crate::providers::ForkAck> {
-        self.inner.fork(request)
-    }
-
-    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
-        let effort = match effort {
-            Some(effort) => Some(effort.to_string()),
-            None => self
-                .defaults
-                .lock()
-                .map_err(|_| io::Error::other("Session defaults are unavailable"))?
-                .effort_for(self.provider),
-        };
-        self.inner.set_effort(effort.as_deref())
-    }
-
-    fn interrupt(&mut self) -> io::Result<()> {
-        self.inner.interrupt()
-    }
-
-    fn stop_subagent(&mut self, key: &crate::activity::AgentKey) -> io::Result<()> {
-        self.inner.stop_subagent(key)
-    }
-
-    fn respond_to_decision(&mut self, id: &str, answer: crate::DecisionAnswer) -> io::Result<()> {
-        self.inner.respond_to_decision(id, answer)
-    }
-
-    fn set_name(&mut self, name: &str) -> io::Result<()> {
-        self.inner.set_name(name)
-    }
-
-    fn pid(&self) -> Option<u32> {
-        self.inner.pid()
+        }
     }
 }
 
@@ -585,7 +467,7 @@ pub fn rss_bytes(pid: u32) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::applied;
+    use crate::providers::{applied, SettingAck};
 
     /// A Worker's and a Coordinator's Session are bound to their Factory
     /// tools; an ordinary Thread's is offered none.
@@ -761,8 +643,7 @@ mod tests {
     struct NativeCalls {
         spawns: usize,
         model: Option<String>,
-        controls: Vec<crate::SessionControl>,
-        stopped: Vec<crate::activity::AgentKey>,
+        efforts: Vec<Option<String>>,
     }
 
     struct NativeProvider {
@@ -810,78 +691,81 @@ mod tests {
             self.calls.lock().unwrap().model = model.map(str::to_owned);
             Ok(applied())
         }
-        fn supports_control(&self, kind: crate::ControlKind) -> bool {
-            kind != crate::ControlKind::LoginMcp
-        }
-        fn permission_modes(&self) -> Vec<crate::PermissionModeChoice> {
-            vec![crate::PermissionModeChoice {
-                value: "native-mode".into(),
-                label: "Provider mode".into(),
-            }]
-        }
-        fn control(&mut self, action: crate::SessionControl) -> io::Result<()> {
-            if matches!(action, crate::SessionControl::LoginMcp { .. }) {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "native login refused",
-                ));
-            }
-            self.calls.lock().unwrap().controls.push(action);
-            Ok(())
-        }
-        fn stop_subagent(&mut self, key: &crate::activity::AgentKey) -> io::Result<()> {
-            self.calls.lock().unwrap().stopped.push(key.clone());
-            Ok(())
+        fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
+            self.calls
+                .lock()
+                .unwrap()
+                .efforts
+                .push(effort.map(str::to_owned));
+            Ok(applied())
         }
     }
 
-    struct WrappedNative(Arc<Mutex<NativeCalls>>);
-    impl Spawner for WrappedNative {
-        fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
+    /// Native Sessions, and the operator's effort for every provider.
+    struct Native {
+        calls: Arc<Mutex<NativeCalls>>,
+        effort: Option<String>,
+    }
+    impl Native {
+        fn new(calls: Arc<Mutex<NativeCalls>>) -> Box<Self> {
+            Box::new(Self {
+                calls,
+                effort: None,
+            })
+        }
+    }
+    impl Spawner for Native {
+        fn default_effort(&self, _: Provider) -> Option<String> {
+            self.effort.clone()
+        }
+        fn spawn(&mut self, _: SpawnRequest) -> io::Result<Box<dyn Session>> {
             let (sender, events) = mpsc::channel();
-            self.0.lock().unwrap().spawns += 1;
+            self.calls.lock().unwrap().spawns += 1;
             sender
                 .send(crate::SessionEvent::Init {
                     session_id: "same-native-conversation".into(),
                     model: "initial".into(),
                 })
                 .unwrap();
-            Ok(Box::new(SessionWithDefaults {
-                inner: Box::new(NativeProvider {
-                    calls: self.0.clone(),
-                    events,
-                    sender,
-                }),
-                provider: request.provider,
-                defaults: Arc::new(Mutex::new(SessionDefaults::default())),
+            Ok(Box::new(NativeProvider {
+                calls: self.calls.clone(),
+                events,
+                sender,
             }))
         }
     }
 
-    #[test]
-    fn production_wrapper_changes_model_without_replacing_the_conversation() {
+    fn native_cockpit(
+        name: &str,
+        provider: Provider,
+        spawner: Box<Native>,
+    ) -> (crate::cockpit::Cockpit, ThreadId, PathBuf) {
         use crate::{cockpit::Cockpit, store::Store, workspace::WorkspaceChoice};
+        let path = std::env::temp_dir().join(format!(
+            "ferrite-native-{name}-{}-{provider:?}",
+            std::process::id()
+        ));
+        let mut cockpit = Cockpit::new(Store::open(path.join("store")).unwrap(), spawner);
+        let thread = cockpit
+            .open(
+                provider,
+                WorkspaceChoice::Main {
+                    checkout: path.clone(),
+                },
+            )
+            .unwrap();
+        cockpit.pump();
+        let _ = cockpit.send(thread, "first turn".into());
+        cockpit.pump();
+        (cockpit, thread, path)
+    }
+
+    #[test]
+    fn a_model_choice_tunes_the_native_conversation_in_place() {
         for provider in [Provider::Claude, Provider::Codex] {
-            let path = std::env::temp_dir().join(format!(
-                "ferrite-wrapped-model-{}-{provider:?}",
-                std::process::id()
-            ));
             let calls = Arc::new(Mutex::new(NativeCalls::default()));
-            let mut cockpit = Cockpit::new(
-                Store::open(path.join("store")).unwrap(),
-                Box::new(WrappedNative(calls.clone())),
-            );
-            let thread = cockpit
-                .open(
-                    provider,
-                    WorkspaceChoice::Main {
-                        checkout: path.clone(),
-                    },
-                )
-                .unwrap();
-            cockpit.pump();
-            let _ = cockpit.send(thread, "first turn".into());
-            cockpit.pump();
+            let (mut cockpit, thread, path) =
+                native_cockpit("model", provider, Native::new(calls.clone()));
             cockpit.set_model(thread, Some("selected".into())).unwrap();
             assert_eq!(
                 calls.lock().unwrap().spawns,
@@ -920,146 +804,48 @@ mod tests {
         }
     }
 
+    /// A cleared effort sets a live Session to the operator's, as the
+    /// spawner says it is now.
     #[test]
-    fn production_wrapper_exposes_native_modes_and_routes_controls() {
-        use crate::{ControlKind as K, SessionControl as C};
-        let calls = Arc::new(Mutex::new(NativeCalls::default()));
-        let (sender, events) = mpsc::channel();
-        let mut session: Box<dyn Session> = Box::new(SessionWithDefaults {
-            inner: Box::new(NativeProvider {
-                calls: calls.clone(),
-                events,
-                sender,
-            }),
-            provider: Provider::Claude,
-            defaults: Arc::new(Mutex::new(SessionDefaults::default())),
-        });
-        for kind in [
-            K::RefreshContext,
-            K::RefreshMcp,
-            K::ReconnectMcp,
-            K::ReloadMcp,
-            K::StopTask,
-            K::BackgroundTasks,
-            K::SetPermissionMode,
-        ] {
-            assert!(
-                session.supports_control(kind),
-                "native capability {kind:?} was lost"
-            );
-        }
-        assert!(!session.supports_control(K::LoginMcp));
-        assert_eq!(
-            session.permission_modes(),
-            vec![crate::PermissionModeChoice {
-                value: "native-mode".into(),
-                label: "Provider mode".into()
-            }]
-        );
-        let actions = vec![
-            C::RefreshContext,
-            C::RefreshMcp,
-            C::ReconnectMcp {
-                server: "server:exact/id".into(),
-            },
-            C::ReloadMcp,
-            C::StopTask {
-                id: "task:exact/id".into(),
-            },
-            C::BackgroundTasks,
-            C::SetPermissionMode {
-                mode: "native-mode".into(),
-            },
-        ];
-        for action in &actions {
-            session.control(action.clone()).unwrap();
-        }
-        assert_eq!(calls.lock().unwrap().controls, actions);
-        let error = session
-            .control(C::LoginMcp {
-                server: "refused".into(),
-            })
-            .unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
-        assert_eq!(error.to_string(), "native login refused");
-    }
-
-    /// The operator's `Stop` on a subagent reaches the provider through
-    /// the production Session, not the trait's refusal.
-    #[test]
-    fn production_wrapper_stops_a_subagent() {
-        let calls = Arc::new(Mutex::new(NativeCalls::default()));
-        let (sender, events) = mpsc::channel();
-        let mut session: Box<dyn Session> = Box::new(SessionWithDefaults {
-            inner: Box::new(NativeProvider {
-                calls: calls.clone(),
-                events,
-                sender,
-            }),
-            provider: Provider::Claude,
-            defaults: Arc::new(Mutex::new(SessionDefaults::default())),
-        });
-        let key = crate::activity::AgentKey::from_stored("toolu_reviewer".into());
-        session.stop_subagent(&key).unwrap();
-        assert_eq!(calls.lock().unwrap().stopped, [key]);
-    }
-
-    #[test]
-    fn default_effort_reads_current_settings_for_the_ready_sessions_provider() {
-        use std::sync::mpsc::{channel, Receiver};
-        struct Recording {
-            events: Receiver<crate::SessionEvent>,
-            efforts: Arc<Mutex<Vec<Option<String>>>>,
-        }
-        impl Session for Recording {
-            fn events(&self) -> &Receiver<crate::SessionEvent> {
-                &self.events
-            }
-            fn send(&mut self, _: &str) -> io::Result<()> {
-                Ok(())
-            }
-            fn interrupt(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-            fn respond_to_decision(&mut self, _: &str, _: crate::DecisionAnswer) -> io::Result<()> {
-                Ok(())
-            }
-            fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
-                self.efforts.lock().unwrap().push(effort.map(str::to_owned));
-                Ok(applied())
-            }
-        }
+    fn a_cleared_effort_is_the_operators_default() {
         for provider in [Provider::Claude, Provider::Codex] {
-            let (_, events) = channel();
-            let efforts = Arc::new(Mutex::new(Vec::new()));
-            let defaults = Arc::new(Mutex::new(SessionDefaults {
-                claude_effort: Some("high".into()),
-                codex_effort: Some("low".into()),
-                ..Default::default()
-            }));
-            let mut session = SessionWithDefaults {
-                inner: Box::new(Recording {
-                    events,
-                    efforts: efforts.clone(),
-                }),
-                provider,
-                defaults: defaults.clone(),
-            };
-            session.set_effort(Some("max")).unwrap();
-            session.set_effort(None).unwrap();
-            let expected = if provider == Provider::Claude {
-                "high"
-            } else {
-                "low"
-            };
+            let calls = Arc::new(Mutex::new(NativeCalls::default()));
+            let spawner = Box::new(Native {
+                calls: calls.clone(),
+                effort: Some("high".into()),
+            });
+            let (mut cockpit, thread, path) = native_cockpit("effort", provider, spawner);
+            cockpit.set_effort(thread, Some("max".into())).unwrap();
+            cockpit.set_effort(thread, None).unwrap();
             assert_eq!(
-                *efforts.lock().unwrap(),
-                [Some("max".into()), Some(expected.into())]
+                calls.lock().unwrap().efforts,
+                [Some("max".into()), Some("high".into())]
             );
-            *defaults.lock().unwrap() = SessionDefaults::default();
-            session.set_effort(None).unwrap();
-            assert_eq!(efforts.lock().unwrap().last(), Some(&None));
+            drop(cockpit);
+            std::fs::remove_dir_all(path).unwrap();
         }
+    }
+
+    /// The spawner's default effort is each provider's in Settings as they
+    /// are when it is asked, not when it was made.
+    #[test]
+    fn the_default_effort_reads_current_settings() {
+        let defaults = Arc::new(Mutex::new(SessionDefaults {
+            claude_effort: Some("high".into()),
+            codex_effort: Some("low".into()),
+            ..Default::default()
+        }));
+        let spawn = Spawn::new(defaults.clone(), None);
+        assert_eq!(
+            spawn.default_effort(Provider::Claude).as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            spawn.default_effort(Provider::Codex).as_deref(),
+            Some("low")
+        );
+        *defaults.lock().unwrap() = SessionDefaults::default();
+        assert_eq!(spawn.default_effort(Provider::Claude), None);
     }
 
     /// The Thread's effort wins; the Settings default fills in only when
