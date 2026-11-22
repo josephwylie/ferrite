@@ -502,7 +502,7 @@ impl CockpitView {
         let on_control = self.panel_control_focused(window, cx);
         let focused = self.panel.focus.focused(window);
         if let Some(PanelControl::FileTab(path)) = focused {
-            self.close_file_tab(thread.thread(), &path, window, cx);
+            self.close_file_tab(thread, &path, window, cx);
             return true;
         }
         let closing = match focused {
@@ -533,8 +533,7 @@ impl CockpitView {
 
     /// Close `path`'s file tab: the keyboard goes to the file that takes
     /// its place, else back to the Panel's own tab.
-    fn close_file_tab(&mut self, thread: ThreadId, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        let thread = self.cockpit.read(cx).thread_key(thread);
+    fn close_file_tab(&mut self, thread: ThreadKey, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
         let Some(at) = self.files.read(cx).tab_index(thread, path) else {
             return;
         };
@@ -564,7 +563,7 @@ impl CockpitView {
                 self.close_surface(thread, &id, cx);
                 self.focus_after_close(thread, window, cx);
             }
-            Some(PanelControl::FileTab(path)) => self.close_file_tab(thread.thread(), &path, window, cx),
+            Some(PanelControl::FileTab(path)) => self.close_file_tab(thread, &path, window, cx),
             _ => {}
         }
     }
@@ -592,15 +591,15 @@ impl CockpitView {
                 else {
                     return;
                 };
-                MenuTarget::SurfaceTab { thread: thread.thread(), at }
+                MenuTarget::SurfaceTab { thread, at }
             }
-            PanelControl::Plus => return self.toggle_door(super::strip::plus_door(thread.thread()), cx),
+            PanelControl::Plus => return self.toggle_door(super::strip::plus_door(thread), cx),
             PanelControl::PrNumber => MenuTarget::PrLink(thread),
             PanelControl::PrMore => {
-                let Some(number) = self.pr_snapshot(thread.thread(), cx).map(|pr| pr.number) else {
+                let Some(number) = self.pr_snapshot(thread, cx).map(|pr| pr.number) else {
                     return;
                 };
-                let target = super::pr_read::PrTarget::thread(thread.thread(), number);
+                let target = super::pr_read::PrTarget::thread(thread, number);
                 return self.toggle_door(super::pull_request::pr_more_door(target), cx);
             }
             _ => return,

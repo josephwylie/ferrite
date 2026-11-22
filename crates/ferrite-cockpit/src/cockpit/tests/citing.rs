@@ -234,7 +234,7 @@ fn a_citation_keeps_its_comment_and_source_across_a_restart(cx: &mut TestAppCont
     tick(cx);
     let before = replies(&view, cx);
     let source = before[0].source.expect("cited from a message");
-    assert_eq!(source.thread, thread);
+    assert_eq!(source.thread, thread.thread());
     view.update(cx, |view, cx| view.save_drafts(cx));
     drop(view);
 
@@ -297,7 +297,7 @@ fn go_to_source_returns_to_the_message_or_says_it_is_gone(cx: &mut TestAppContex
 
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     let gone = Source {
-        thread,
+        thread: thread.thread(),
         block: serde_json::from_str("999999").unwrap(),
     };
     view.update(cx, |view, cx| {
@@ -502,7 +502,7 @@ fn a_sent_quote_offers_go_to_source(cx: &mut TestAppContext) {
         "the sent quote is drawn"
     );
     let kept = ferrite_core::cited_sources::CitedSources::load(&dir);
-    let saved = ferrite_core::SavedThread { machine: ferrite_core::MachineKey(None), thread };
+    let saved = ferrite_core::SavedThread { machine: ferrite_core::MachineKey(None), thread: thread.thread() };
     assert_eq!(kept.of(&saved).map(|sources| sources.len()), Some(1));
 
     let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
@@ -518,7 +518,7 @@ fn a_sent_quote_says_when_its_source_is_gone(cx: &mut TestAppContext) {
     let (view, sent, cx) = conversation_sent("cite-sent-gone", cx, PARAGRAPHS);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     let gone = Source {
-        thread,
+        thread: thread.thread(),
         block: serde_json::from_str("999999").unwrap(),
     };
     view.update(cx, |view, cx| {
@@ -574,7 +574,7 @@ fn a_source_that_arrives_later_is_no_longer_unavailable(cx: &mut TestAppContext)
     let later: ferrite_core::transcript::BlockId =
         serde_json::from_str(&(id + 20).to_string()).unwrap();
     let reply = ferrite_core::replies::Reply::new("a passage to come", "").cited_from(Source {
-        thread,
+        thread: thread.thread(),
         block: later,
     });
     view.update(cx, |view, cx| {

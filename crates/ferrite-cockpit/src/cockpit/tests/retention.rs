@@ -256,7 +256,7 @@ fn path_scopes_follow_live_transcripts_not_every_history_generation(cx: &mut Tes
     tick(cx);
     assert_eq!(cx.opened_url(), None, "not handed to the system");
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).active_path(view.cockpit.read(cx).thread_key(view.panes[0].thread().unwrap()))),
+        view.read_with(cx, |view, cx| view.files.read(cx).active_path(view.panes[0].thread().unwrap())),
         Some(file),
         "the transcript's ⌘-click opened its reader"
     );

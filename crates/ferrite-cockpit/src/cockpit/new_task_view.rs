@@ -258,7 +258,7 @@ impl CockpitView {
             return None;
         }
         let process = match workflow
-            .and_then(|id| self.cockpit.read(cx).factory().workflow(id))
+            .and_then(|id| self.cockpit.read(cx).factory().reading().workflow(id))
             .and_then(|workflow| workflow.latest())
         {
             Some(latest) => format!("{} \u{b7} version {}", latest.definition.name, latest.version),

@@ -29,7 +29,7 @@ impl CockpitView {
         };
         if self.details_inline(pane) {
             self.panes[pane].details.reset_pages();
-            self.apply_surface(self.cockpit.read(cx).thread_key(thread), surfaces::SurfaceAction::ToggleDetails);
+            self.apply_surface(thread, surfaces::SurfaceAction::ToggleDetails);
             cx.notify();
             return;
         }
@@ -59,7 +59,7 @@ impl CockpitView {
     /// card held it, and stays where the press put it otherwise.
     pub(super) fn close_details(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -86,8 +86,8 @@ impl CockpitView {
         })
     }
 
-    pub(super) fn details_lane_width(&self, index: usize, cx: &gpui::App) -> f32 {
-        if self.details_inline(index) && self.details_inline_open(index, cx) {
+    pub(super) fn details_lane_width(&self, index: usize) -> f32 {
+        if self.details_inline(index) && self.details_inline_open(index) {
             let width = self.panes[index]
                 .details
                 .canvas
@@ -129,7 +129,7 @@ impl CockpitView {
             pane.details.fit_width.set(Some(fit));
         }
         let focused = self.focused(cx);
-        let stale: Vec<ThreadId> = self
+        let stale: Vec<ThreadKey> = self
             .panes
             .iter()
             .enumerate()
@@ -141,7 +141,7 @@ impl CockpitView {
         }
     }
 
-    fn focused_details(&self, cx: &gpui::App) -> Option<(ThreadId, usize)> {
+    fn focused_details(&self, cx: &gpui::App) -> Option<(ThreadKey, usize)> {
         let index = self.focused(cx);
         let thread = self.panes.get(index)?.thread()?;
         Some((thread, index))
@@ -150,17 +150,17 @@ impl CockpitView {
     pub(super) fn details_open(&self, cx: &gpui::App) -> bool {
         self.focused_details(cx).is_some_and(|(_, index)| {
             if self.details_inline(index) {
-                self.details_inline_open(index, cx)
+                self.details_inline_open(index)
             } else {
                 self.panes[index].details.is_open()
             }
         })
     }
 
-    fn details_inline_open(&self, index: usize, cx: &gpui::App) -> bool {
+    fn details_inline_open(&self, index: usize) -> bool {
         self.panes[index]
             .thread()
-            .and_then(|thread| self.panel.surfaces.get(self.cockpit.read(cx).thread_key(thread)))
+            .and_then(|thread| self.panel.surfaces.get(thread))
             .is_none_or(|state| state.details_inline_open)
     }
 
@@ -193,7 +193,7 @@ impl CockpitView {
             pane.details.set_open(false);
         }
         let standing = if inline {
-            if self.details_inline_open(index, cx) {
+            if self.details_inline_open(index) {
                 Standing::Open
             } else {
                 Standing::Hidden
@@ -256,7 +256,7 @@ impl CockpitView {
             .min_h_0()
             .child(
                 div()
-                    .id(("details-body", thread.get() as usize))
+                    .id(("details-body", thread.thread().get() as usize))
                     .debug_selector(|| "details-body".into())
                     .flex()
                     .flex_col()
@@ -272,7 +272,7 @@ impl CockpitView {
                 ferrite_ui::components::scrollbar_bar("details-scrollbar", &scroll),
             ));
         let card = ferrite_ui::menu::float()
-            .id(("details-card", thread.get() as usize))
+            .id(("details-card", thread.thread().get() as usize))
             .debug_selector(|| "details-card".into())
             .key_context("ThreadDetails")
             .track_focus(&pane.details.focus)
@@ -324,7 +324,7 @@ impl CockpitView {
             }
             _ if inline => card.into_any_element(),
             _ => motion::dialog_in_casting(
-                ("details-card-in", thread.get() as usize),
+                ("details-card-in", thread.thread().get() as usize),
                 card,
                 ferrite_ui::components::float_shadow,
                 DETAILS_ORIGIN,

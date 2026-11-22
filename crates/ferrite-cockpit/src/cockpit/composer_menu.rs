@@ -23,7 +23,7 @@ struct Open {
 /// A Thread's Session searching its files for the `@` menu.
 struct PendingFileSearch {
     pane: PaneIdentity,
-    thread: ThreadId,
+    thread: ThreadKey,
     generation: u64,
     request_id: u64,
     query: String,
@@ -93,7 +93,7 @@ pub(super) enum Listed {
 
 /// A Thread's Session asked to search its files.
 pub(super) struct FileSearch {
-    pub(super) thread: ThreadId,
+    pub(super) thread: ThreadKey,
     pub(super) generation: u64,
     pub(super) reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
 }
@@ -350,7 +350,7 @@ impl ComposerMenuView {
     }
 
     /// The Thread whose Session is searching files for the `@` menu.
-    pub(super) fn searching(&self) -> Option<ThreadId> {
+    pub(super) fn searching(&self) -> Option<ThreadKey> {
         self.pending_files.as_ref().map(|pending| pending.thread)
     }
 
@@ -762,7 +762,7 @@ impl CockpitView {
                         let provider = draft.binding.provider().provider;
                         let cwd = draft
                             .binding
-                            .resolve(self.cockpit.read(cx).registry(), !self.on_machine(cx))
+                            .resolve(self.cockpit.read(cx).registry().reading(), !self.elsewhere(self.on_screen(cx), cx))
                             .ok()?
                             .source_root()
                             .to_path_buf();
@@ -779,7 +779,7 @@ impl CockpitView {
                         let provider = draft.binding.provider().provider;
                         let cwd = draft
                             .binding
-                            .resolve(self.cockpit.read(cx).registry(), !self.on_machine(cx))
+                            .resolve(self.cockpit.read(cx).registry().reading(), !self.elsewhere(self.on_screen(cx), cx))
                             .ok()
                             .map(|workspace| workspace.source_root().to_path_buf());
                         match cwd {
@@ -818,7 +818,7 @@ impl CockpitView {
                     filter,
                     root,
                     search,
-                    on_machine: self.on_machine(cx),
+                    on_machine: self.elsewhere(self.on_screen(cx), cx),
                 }
             }
         };
@@ -853,7 +853,7 @@ impl CockpitView {
         };
         let focused = self.panes.get(self.focused(cx)).map(|pane| pane.identity);
         let generation = self.cockpit.read(cx).thread(thread).map(|open| open.generation());
-        let on_machine = self.on_machine(cx);
+        let on_machine = self.elsewhere(thread.machine(), cx);
         menu.update(cx, |menu, cx| menu.poll_files(focused, generation, on_machine, cx));
     }
 

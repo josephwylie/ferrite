@@ -21,7 +21,7 @@ use ferrite_core::settings::Settings;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::transcript::{Body, ToolState};
 use ferrite_core::workspace::registry::ProjectId;
-use ferrite_core::ThreadId;
+use ferrite_core::ThreadKey;
 use gpui::{
     Context, Focusable as _, Modifiers, MouseButton, MouseMoveEvent, PlatformInput, Point, Window,
 };
@@ -145,7 +145,7 @@ impl Live {
         self.key("enter");
     }
 
-    fn scroll_bottom(&mut self, thread: ThreadId) {
+    fn scroll_bottom(&mut self, thread: ThreadKey) {
         self.act(|view, _, cx| {
             if let Some(index) = view.pane_for(thread) {
                 view.scroll_transcript_to_bottom(index, cx);
@@ -155,7 +155,7 @@ impl Live {
 
     /// What `thread` said, row by row, as the log keeps it: the evidence
     /// behind each shot's rows.
-    fn dump(&mut self, thread: ThreadId, label: &str) {
+    fn dump(&mut self, thread: ThreadKey, label: &str) {
         let lines = self.read(|view, cx| {
             let Some(open) = view.cockpit.read(cx).thread(thread) else {
                 return vec!["(not open)".to_string()];
@@ -208,14 +208,14 @@ impl Live {
             }
             lines
         });
-        self.note(format!("---- {label}: thread {thread}"));
+        self.note(format!("---- {label}: thread {}", thread.thread()));
         for line in lines {
             self.note(format!("     {line}"));
         }
     }
 }
 
-fn waiting(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> bool {
+fn waiting(view: &CockpitView, thread: ThreadKey, cx: &gpui::App) -> bool {
     view.cockpit.read(cx).thread(thread).is_some_and(|open| {
         open.pending_decisions()
             .iter()
@@ -223,7 +223,7 @@ fn waiting(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> bool {
     })
 }
 
-fn turns(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> usize {
+fn turns(view: &CockpitView, thread: ThreadKey, cx: &gpui::App) -> usize {
     view.cockpit
         .read(cx)
         .thread(thread)
@@ -231,12 +231,12 @@ fn turns(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> usize {
         .unwrap_or(0)
 }
 
-fn busy(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> bool {
+fn busy(view: &CockpitView, thread: ThreadKey, cx: &gpui::App) -> bool {
     view.cockpit.read(cx).thread(thread).is_some_and(|open| open.busy())
 }
 
 /// A tool call still running, and how far its test count got.
-fn running_tool(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> Option<Option<(u32, u32)>> {
+fn running_tool(view: &CockpitView, thread: ThreadKey, cx: &gpui::App) -> Option<Option<(u32, u32)>> {
     let open = view.cockpit.read(cx).thread(thread)?;
     open.transcript()
         .blocks()
@@ -291,7 +291,8 @@ pub fn capture(output: String) {
     core.set_suggestions_enabled(false);
     let project = core
         .register_project(&repo)
-        .expect("register the throwaway repo");
+        .expect("register the throwaway repo")
+        .project();
 
     let cx = crate::headless::app(ferrite_ui::keymap::bindings(
         ferrite_ui::keymap::PLATFORM,
@@ -376,12 +377,12 @@ fn aim_draft(
     });
 }
 
-fn focused_thread(live: &mut Live) -> Option<ThreadId> {
+fn focused_thread(live: &mut Live) -> Option<ThreadKey> {
     live.read(|view, cx| view.focused_thread(cx))
 }
 
 /// The tool a standing request of `thread` asks for, if one stands.
-fn asking(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> Option<String> {
+fn asking(view: &CockpitView, thread: ThreadKey, cx: &gpui::App) -> Option<String> {
     view.cockpit.read(cx).thread(thread).and_then(|open| {
         open.pending_decisions()
             .iter()
@@ -390,7 +391,7 @@ fn asking(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> Option<String
     })
 }
 
-fn mode(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> Option<String> {
+fn mode(view: &CockpitView, thread: ThreadKey, cx: &gpui::App) -> Option<String> {
     view.cockpit
         .read(cx)
         .thread(thread)
@@ -399,7 +400,7 @@ fn mode(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> Option<String> 
 
 /// Waits until `thread` asks something or its turn `turn` is over; true
 /// when it asks.
-fn asks_or_ends(live: &mut Live, what: &str, thread: ThreadId, turn: usize, secs: u64) -> bool {
+fn asks_or_ends(live: &mut Live, what: &str, thread: ThreadKey, turn: usize, secs: u64) -> bool {
     live.wait(what, secs, &move |view, cx| {
         waiting(view, thread, cx) || (turns(view, thread, cx) >= turn && !busy(view, thread, cx))
     });
@@ -408,7 +409,7 @@ fn asks_or_ends(live: &mut Live, what: &str, thread: ThreadId, turn: usize, secs
 
 /// Waits for `thread`'s running call to stream a test count past a fifth
 /// of its total, and shoots it. False when the call settled first.
-fn shoot_running_suite(live: &mut Live, thread: ThreadId, turn: usize, name: &str) -> bool {
+fn shoot_running_suite(live: &mut Live, thread: ThreadKey, turn: usize, name: &str) -> bool {
     // A known total a fifth done, or (Codex lost the announcement) a count
     // of a few dozen; a request or the turn's end stops the wait.
     let counting = move |view: &CockpitView, cx: &gpui::App| {
@@ -433,7 +434,7 @@ fn shoot_running_suite(live: &mut Live, thread: ThreadId, turn: usize, name: &st
 
 /// The pointer on the first laid-out target naming `path` in `thread`'s
 /// transcript: the real hover the card opens on. False when none is drawn.
-fn hover_path(live: &mut Live, thread: ThreadId, path: &str) -> Option<Point<gpui::Pixels>> {
+fn hover_path(live: &mut Live, thread: ThreadKey, path: &str) -> Option<Point<gpui::Pixels>> {
     let path = PathBuf::from(path);
     let anchor = live.driver.read(|view, cx| {
         let index = view.pane_for(thread)?;
@@ -473,7 +474,7 @@ fn rest_pointer(live: &mut Live) {
 }
 
 /// Focus `thread`'s Pane and its Composer, as a click on it would.
-fn focus_thread(live: &mut Live, thread: ThreadId) {
+fn focus_thread(live: &mut Live, thread: ThreadKey) {
     live.act(move |view, window, cx| {
         if let Some(index) = view.pane_for(thread) {
             view.cockpit.update(cx, |cockpit, _| cockpit.focus_thread(thread));
@@ -492,7 +493,7 @@ fn scenario(
     codex_model: &str,
     codex_effort: &str,
     wants: &dyn Fn(&str) -> bool,
-) -> Option<ThreadId> {
+) -> Option<ThreadKey> {
     // ---- launch on an empty store
     live.shot("empty");
 
@@ -722,7 +723,7 @@ fn scenario(
         live.shot(&format!("codex-toast-{round}"));
         live.dump(codex, "codex asking");
         // The toast's `1 allow`, clicked.
-        let selector = format!("toast-allow-{}", codex.get());
+        let selector = format!("toast-allow-{}", codex.thread().get());
         if !live.click(&selector, Modifiers::default()) {
             focus_thread(live, codex);
             live.key("1");
@@ -747,7 +748,7 @@ fn scenario(
         codex_turns += 1;
         if asks_or_ends(live, "codex asks to write (toast)", codex, codex_turns, 240) {
             live.shot("codex-toast-deny");
-            let selector = format!("toast-deny-{}", codex.get());
+            let selector = format!("toast-deny-{}", codex.thread().get());
             if !live.click(&selector, Modifiers::default()) {
                 focus_thread(live, codex);
                 live.key("3");

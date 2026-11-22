@@ -254,7 +254,7 @@ fn the_project_card_closes_with_its_project(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
-    view.update(cx, |view, cx| view.open_project_editor(project, cx));
+    view.update(cx, |view, cx| view.open_project_editor(project.project(), cx));
     tick(cx);
     assert_eq!(up(&view, cx), (false, true), "the card is up");
     view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.remove_project(project).unwrap()));
@@ -268,12 +268,12 @@ pub(super) fn factory_window<'a>(
     name: &str,
 ) -> (Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
     let (mut core, _fake) = cockpit(name, 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     core.fixture_live_factory();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    view.update(cx, |view, cx| view.open_factory(project, cx));
+    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
     tick(cx);
     (view, cx)
 }

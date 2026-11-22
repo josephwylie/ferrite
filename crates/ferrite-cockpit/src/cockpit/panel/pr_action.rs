@@ -144,7 +144,7 @@ impl PrActions {
     /// The targets of `thread`'s repository with an action in flight.
     fn pending_of(
         &self,
-        thread: ferrite_core::ThreadId,
+        thread: ferrite_core::ThreadKey,
     ) -> Vec<(PrTarget, Stage, String, PrAction)> {
         self.0
             .iter()
@@ -329,7 +329,7 @@ impl CockpitView {
     /// `settled` has its PR read back.
     pub(in crate::cockpit) fn advance_pr_actions(
         &mut self,
-        thread: ferrite_core::ThreadId,
+        thread: ferrite_core::ThreadKey,
         settled: bool,
         cx: &mut Context<Self>,
     ) {
@@ -354,7 +354,7 @@ impl CockpitView {
     #[cfg(feature = "visual-reference")]
     pub(crate) fn fixture_pr_merge_running(
         &mut self,
-        thread: ferrite_core::ThreadId,
+        thread: ferrite_core::ThreadKey,
         number: u64,
         cx: &mut Context<Self>,
     ) {
@@ -370,7 +370,7 @@ impl CockpitView {
     #[cfg(feature = "visual-reference")]
     pub(crate) fn fixture_pr_merge_failed(
         &mut self,
-        thread: ferrite_core::ThreadId,
+        thread: ferrite_core::ThreadKey,
         number: u64,
         cx: &mut Context<Self>,
     ) {
@@ -386,7 +386,7 @@ impl CockpitView {
     #[cfg(feature = "visual-reference")]
     pub(crate) fn fixture_pr_merge_done(
         &mut self,
-        thread: ferrite_core::ThreadId,
+        thread: ferrite_core::ThreadKey,
         number: u64,
         cx: &mut Context<Self>,
     ) {
@@ -451,7 +451,7 @@ impl PullRequestView {
     /// and its PR is to be read back (the targets returned).
     fn advance(
         &mut self,
-        thread: ferrite_core::ThreadId,
+        thread: ferrite_core::ThreadKey,
         open: Option<&ThreadView>,
         settled: bool,
         cx: &mut Context<Self>,

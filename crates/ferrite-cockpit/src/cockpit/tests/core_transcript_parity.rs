@@ -232,7 +232,7 @@ fn edits_fold_and_an_edits_diff_waits_to_be_opened(cx: &mut TestAppContext) {
     open_folds(&view, cx);
     assert!(cx.debug_bounds("transcript-banner").is_none(), "no banner");
     assert!(cx.debug_bounds("tool-group-edit-1").is_some(), "one group");
-    let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
+    let runs = view.read_with(cx, |view, _| view.selection.registered(thread.thread()));
     assert!(
         !runs
             .iter()
@@ -245,7 +245,7 @@ fn edits_fold_and_an_edits_diff_waits_to_be_opened(cx: &mut TestAppContext) {
         cx.notify();
     });
     tick(cx);
-    let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
+    let runs = view.read_with(cx, |view, _| view.selection.registered(thread.thread()));
     assert!(
         runs.iter().any(|(_, _, _, text)| text == "new two"),
         "the opened edit shows its diff"
@@ -345,7 +345,7 @@ fn a_long_edit_diff_caps_and_folds(cx: &mut TestAppContext) {
         cx.debug_bounds("diff-omitted").is_some(),
         "the cap names what it left out"
     );
-    let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
+    let runs = view.read_with(cx, |view, _| view.selection.registered(thread.thread()));
     let shown = |text: &str| runs.iter().any(|(_, _, _, run)| run == text);
     assert!(shown("old 0") && shown("new 0"), "both sides of a change");
     assert!(

@@ -20,7 +20,7 @@ fn two_prs<'a>(
     name: &str,
     b: Option<&str>,
     cx: &'a mut TestAppContext,
-) -> (Entity<CockpitView>, [ThreadId; 2], &'a mut gpui::VisualTestContext) {
+) -> (Entity<CockpitView>, [ThreadKey; 2], &'a mut gpui::VisualTestContext) {
     let (core, _fake) = cockpit(name, 2);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -40,7 +40,7 @@ fn two_prs<'a>(
     });
     tick(cx);
     view.update(cx, |view, cx| {
-        if view.panel_open(view.cockpit.read(cx).thread_key(a)) {
+        if view.panel_open(a) {
             view.toggle_panel_now(cx);
         }
     });
@@ -55,8 +55,8 @@ fn press(selector: String, button: MouseButton, modifiers: gpui::Modifiers, cx: 
     tick(cx);
 }
 
-fn badge(thread: ThreadId) -> String {
-    format!("nav-card-pr-{}", thread.get())
+fn badge(thread: ThreadKey) -> String {
+    format!("nav-card-pr-{}", thread.thread().get())
 }
 
 fn clipboard(cx: &mut gpui::VisualTestContext) -> Option<String> {
@@ -74,7 +74,7 @@ fn another_threads_pr_badge_shows_that_threads_pr(cx: &mut TestAppContext) {
     press(badge(b), MouseButton::Left, gpui::Modifiers::none(), cx);
 
     assert_eq!(view.read_with(cx, |view, cx| view.focused_thread(cx)), Some(b));
-    let shown = view.read_with(cx, |view, cx| view.panel.surfaces.get(view.cockpit.read(cx).thread_key(b)).map(|s| (s.open, s.active.clone())));
+    let shown = view.read_with(cx, |view, _| view.panel.surfaces.get(b).map(|s| (s.open, s.active.clone())));
     assert_eq!(shown, Some((true, Some(SurfaceId::PullRequest(202)))));
     assert!(cx.debug_bounds("pr-header").is_some(), "its native detail is drawn");
     assert_eq!(cx.opened_url(), None, "nothing left Ferrite");
@@ -89,7 +89,7 @@ fn the_badges_menu_copies_the_pr_and_the_row_copies_the_thread(cx: &mut TestAppC
 
     press(badge(b), MouseButton::Right, gpui::Modifiers::none(), cx);
     let labels: Vec<String> = view.read_with(cx, |view, cx| {
-        view.context_rows(MenuTarget::PrLink(keyed(view, b, cx)), cx)
+        view.context_rows(MenuTarget::PrLink(b), cx)
             .into_iter()
             .flatten()
             .map(|(item, _)| item.label.to_string())
@@ -104,9 +104,9 @@ fn the_badges_menu_copies_the_pr_and_the_row_copies_the_thread(cx: &mut TestAppC
     tick(cx);
     assert_eq!(clipboard(cx).as_deref(), Some(REPO_B), "B's forge URL");
 
-    press(format!("nav-thread-{}", a.get()), MouseButton::Right, gpui::Modifiers::none(), cx);
+    press(format!("nav-thread-{}", a.thread().get()), MouseButton::Right, gpui::Modifiers::none(), cx);
     let labels: Vec<String> = view.read_with(cx, |view, cx| {
-        view.context_rows(MenuTarget::Thread(keyed(view, a, cx)), cx)
+        view.context_rows(MenuTarget::Thread(a), cx)
             .into_iter()
             .flatten()
             .map(|(item, _)| item.label.to_string())
@@ -135,7 +135,7 @@ fn a_command_press_on_the_badge_opens_the_forge_in_the_system_browser(cx: &mut T
 #[gpui::test]
 fn a_pr_without_an_address_says_why_on_its_rows(cx: &mut TestAppContext) {
     let (view, [_, b], cx) = two_prs("link-pr-badge-no-url", None, cx);
-    let rows = view.read_with(cx, |view, cx| view.context_rows(MenuTarget::PrLink(keyed(view, b, cx)), cx));
+    let rows = view.read_with(cx, |view, cx| view.context_rows(MenuTarget::PrLink(b), cx));
     let disabled: Vec<(String, bool)> = rows
         .into_iter()
         .flatten()

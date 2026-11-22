@@ -29,8 +29,8 @@ fn streaming() -> SessionEvent {
     }
 }
 
-fn ids(rows: &[nav::ThreadRow]) -> Vec<ThreadId> {
-    rows.iter().map(|row| row.key.thread()).collect()
+fn ids(rows: &[nav::ThreadRow]) -> Vec<ThreadKey> {
+    rows.iter().map(|row| row.key).collect()
 }
 
 /// A shell that outlives Main's turn keeps the Thread working: on the
@@ -71,7 +71,7 @@ fn a_thread_whose_shell_outlives_its_turn_works_until_the_shell_ends(cx: &mut Te
                 .read(cx)
                 .notifications()
                 .notices()
-                .any(|notice| notice.thread == last),
+                .any(|notice| notice.thread == last.thread()),
             "a running shell is no finish"
         );
     });
@@ -97,7 +97,7 @@ fn a_thread_whose_shell_outlives_its_turn_works_until_the_shell_ends(cx: &mut Te
             .read(cx)
             .notifications()
             .notices()
-            .any(|notice| notice.thread == last));
+            .any(|notice| notice.thread == last.thread()));
     });
 }
 
@@ -196,6 +196,6 @@ fn a_window_that_starts_watching_mid_subagent_sees_the_thread_working(cx: &mut T
     view.read_with(cx, |view, cx| {
         let state = view.nav_state(cx);
         assert!(state.working.is_empty());
-        assert_eq!(state.active[0].key.thread(), threads[1], "done goes to the top");
+        assert_eq!(state.active[0].key.thread(), threads[1].thread(), "done goes to the top");
     });
 }

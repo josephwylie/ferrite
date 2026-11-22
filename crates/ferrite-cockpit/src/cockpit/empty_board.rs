@@ -78,9 +78,9 @@ pub(crate) enum EmptyBoardEvent {
     /// A way to start: the action its row dispatches.
     Run(Box<dyn gpui::Action>),
     /// A recent Thread a Pane shows: focus it.
-    Focus(ThreadId),
+    Focus(ThreadKey),
     /// A recent Thread no Pane shows: bring it back.
-    Revive(ThreadId),
+    Revive(ThreadKey),
 }
 
 /// The empty board: its selected row and its list's focus.
@@ -312,17 +312,17 @@ impl Render for EmptyBoardView {
 
         let any_recent = !recent.is_empty();
         let recent_rows = recent.into_iter().map(|RecentRow { row, age, open }| {
-            let thread = row.key.thread();
+            let thread = row.key;
             home_row(
-                ("empty-board-recent", thread.get() as usize),
+                ("empty-board-recent", thread.thread().get() as usize),
                 nav::mark(row.status, false),
                 div().text_color(rgb(INK_STRONG)).child(row.name.clone()),
                 div()
                     .children(row.project.clone())
                     .children(age.filter(|age| !age.is_empty())),
             )
-            .debug_selector(move || format!("empty-board-recent-{}", thread.get()))
-            .hover_row(format!("empty-board-recent-{}", thread.get()))
+            .debug_selector(move || format!("empty-board-recent-{}", thread.thread().get()))
+            .hover_row(format!("empty-board-recent-{}", thread.thread().get()))
             .press_row()
             .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                 cx.emit(if open {
@@ -426,23 +426,23 @@ impl CockpitView {
         ));
 
         let now = ferrite_core::clock::system_time();
-        let mut recent: Vec<ThreadId> = self.cockpit.read(cx).threads();
+        let mut recent: Vec<ThreadKey> = self.cockpit.read(cx).threads();
         let side_chat = self.side_chat.read(cx);
-        recent.retain(|thread| !side_chat.owns(self.cockpit.read(cx).thread_key(*thread)));
+        recent.retain(|thread| !side_chat.owns(*thread));
         for thread in self.parked_threads(cx) {
             if !recent.contains(&thread) {
                 recent.push(thread);
             }
         }
-        recent.sort_by_key(|thread| std::cmp::Reverse(self.last_used(*thread, cx)));
+        recent.sort_by_key(|thread| std::cmp::Reverse(self.last_used(*thread)));
         recent.truncate(ferrite_ui::theme::EMPTY_RECENT_MAX);
         let recent = recent
             .into_iter()
             .map(|thread| RecentRow {
-                row: self.thread_row(self.cockpit.read(cx).thread_key(thread), cx),
+                row: self.thread_row(thread, cx),
                 age: self
                     .facts
-                    .last_used(self.cockpit.read(cx).thread_key(thread))
+                    .last_used(thread)
                     .map(|at| crate::facts::since_label(at, now)),
                 open: self.pane_for(thread).is_some(),
             })
@@ -506,8 +506,8 @@ impl CockpitView {
     /// An empty Thread's hero: its Project's word, settled, so a word and
     /// not a switcher, or the scratch wording for a Thread with no Project.
     /// None while the Thread's facts are unknown.
-    pub(super) fn thread_hero(&self, thread: ThreadId, cx: &gpui::App) -> Option<pane::Hero> {
-        Some(match self.facts.get(self.cockpit.read(cx).thread_key(thread))?.project_label.clone() {
+    pub(super) fn thread_hero(&self, thread: ThreadKey) -> Option<pane::Hero> {
+        Some(match self.facts.get(thread)?.project_label.clone() {
             Some(project) => pane::Hero::Project(pane::hero_project(project, false).into_any_element()),
             None => pane::Hero::Scratch,
         })

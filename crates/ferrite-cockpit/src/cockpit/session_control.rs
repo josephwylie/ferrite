@@ -12,11 +12,11 @@ use super::*;
 /// Why the last control was refused, and the Session that refused it: a
 /// Thread and its generation, so a restarted Session says nothing of it.
 #[derive(Default)]
-pub(super) struct SessionControlError(Option<(ThreadId, u64, String)>);
+pub(super) struct SessionControlError(Option<(ThreadKey, u64, String)>);
 
 impl SessionControlError {
     /// Why `thread`'s Session `generation` refused the last control.
-    pub(super) fn of(&self, thread: ThreadId, generation: u64) -> Option<&str> {
+    pub(super) fn of(&self, thread: ThreadKey, generation: u64) -> Option<&str> {
         self.0
             .as_ref()
             .filter(|(shown, shown_generation, _)| *shown == thread && *shown_generation == generation)
@@ -29,7 +29,7 @@ impl CockpitView {
     /// and keep why it was refused.
     pub(super) fn run_session_control(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         generation: u64,
         action: ferrite_core::SessionControl,
         cx: &mut gpui::App,

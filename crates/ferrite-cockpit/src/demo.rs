@@ -22,7 +22,7 @@ use ferrite_core::store::Provider;
 use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{
     ContextCategory, ContextDetails, ContextItem, ControlKind, Decision, DecisionAnswer, McpServer,
-    McpStatus, PermissionModeChoice, SessionControl, SessionEvent, ThreadId, TurnOutcome,
+    McpStatus, PermissionModeChoice, SessionControl, SessionEvent, ThreadKey, TurnOutcome,
     UsageDetails, UsageScope,
 };
 
@@ -1144,15 +1144,15 @@ pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider) {
 /// the whole tree. Each slot takes the newest parked Thread of the Provider
 /// it is owed — newest, because that is what the operator was last looking
 /// at — and opens a new one only when the store has none.
-pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> Vec<ThreadId> {
+pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> Vec<ThreadKey> {
     // Keep a fixture run scoped to its launch directory.
     let project = cockpit.register_project(&here()).ok();
     let mut parked = cockpit.parked().unwrap_or_default();
     parked.reverse();
     // Only this Project's parked Threads come back into the fixture.
-    let mut pool: Vec<ThreadId> = parked
+    let mut pool: Vec<ThreadKey> = parked
         .into_iter()
-        .filter(|thread| project.is_none() || cockpit.project_id(*thread) == project)
+        .filter(|thread| project.is_none() || cockpit.project_of(*thread) == project)
         .collect();
     let mut shown = Vec::new();
     while shown.len() < wanted {
@@ -1168,7 +1168,9 @@ pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> 
                 let thread = pool.remove(at);
                 match cockpit.revive(thread) {
                     Ok(()) => shown.push(thread),
-                    Err(e) => ferrite_core::log!("thread {thread} could not be revived: {e:?}"),
+                    Err(e) => {
+                        ferrite_core::log!("thread {} could not be revived: {e:?}", thread.thread())
+                    }
                 }
             }
             None => match cockpit.open(want, WorkspaceChoice::Main { checkout: here() }) {

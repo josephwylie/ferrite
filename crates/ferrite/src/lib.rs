@@ -27,7 +27,7 @@ use ferrite_core::settings::Settings;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::window_frame;
-use ferrite_core::ThreadId;
+use ferrite_core::ThreadKey;
 
 use cockpit::CockpitView;
 use ferrite_core::spawner::{self, ProcessRss, SessionDefaults};
@@ -329,7 +329,7 @@ pub fn launch() {
             }
             for thread in adopted {
                 if let Err(e) = core.revive(thread) {
-                    ferrite_core::log!("imported thread {thread} would not open: {e}");
+                    ferrite_core::log!("imported thread {} would not open: {e}", thread.thread());
                 }
             }
             // The Server restores the Threads that were open; an empty
@@ -494,7 +494,7 @@ pub fn launch() {
 /// moment import returns, so it opens like any parked one. A refusal is the
 /// operator's to read: the file is named and the provider's own words are
 /// shown, and the run carries on without it.
-fn adopt(cockpit: &mut Cockpit, paths: &[String]) -> (Vec<ThreadId>, Vec<String>) {
+fn adopt(cockpit: &mut Cockpit, paths: &[String]) -> (Vec<ThreadKey>, Vec<String>) {
     let mut adopted = Vec::new();
     let mut refused = Vec::new();
     for path in paths {
@@ -521,7 +521,7 @@ fn dock_launch_dir(cockpit: &Cockpit) -> std::path::PathBuf {
         .filter_map(|thread| cockpit.peek(*thread).ok())
         .filter_map(|meta| {
             meta.project_id
-                .and_then(|id| cockpit.registry().project(id))
+                .and_then(|id| cockpit.registry().reading().project(id))
                 .map(|project| project.root.clone())
                 .or_else(|| {
                     meta.workspace.map(|binding| match binding {

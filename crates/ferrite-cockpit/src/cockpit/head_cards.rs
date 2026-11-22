@@ -120,7 +120,7 @@ impl PlanCard {
 /// workflow that owns it, each row with a log opening it among the
 /// Thread's other browser tabs.
 pub(super) fn checks_card(
-    thread: ThreadId,
+    thread: ThreadKey,
     pr: &PullRequest,
     cx: &mut Context<CockpitView>,
 ) -> Stateful<Div> {
@@ -139,7 +139,7 @@ pub(super) fn checks_card(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.browser_action(view.cockpit.read(cx).thread_key(thread), ferrite_core::browser::Action::Open { url: url.clone() }, cx);
+                    view.browser_action(thread, ferrite_core::browser::Action::Open { url: url.clone() }, cx);
                     view.close_popup(cx);
                 }),
             ),

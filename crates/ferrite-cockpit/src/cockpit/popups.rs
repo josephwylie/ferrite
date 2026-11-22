@@ -20,9 +20,9 @@ pub(super) enum Popup {
     ContextMenu(ContextMenu),
     /// The permission mode menu.
     Mode(ModeMenu),
-    Plan(ThreadId),
-    Checks(ThreadId),
-    Session { thread: ThreadId, generation: u64 },
+    Plan(ThreadKey),
+    Checks(ThreadKey),
+    Session { thread: ThreadKey, generation: u64 },
     /// The model picker, with the mode menu its footer opens inside it.
     ModelPicker(ModelPicker),
     /// A draft's Project or Workspace menu.
@@ -394,7 +394,7 @@ impl CockpitView {
                 picker.mode = None;
             }
         }
-        let on = |thread: ThreadId, generation: Option<u64>| {
+        let on = |thread: ThreadKey, generation: Option<u64>| {
             self.focused_thread(cx) == Some(thread)
                 && !self.sheet_up(cx)
                 && self.cockpit.read(cx).thread(thread).is_some_and(|open| {
@@ -425,7 +425,7 @@ impl CockpitView {
                         .is_some_and(|open| open.transcript().todos().is_some())
             }
             Some(Popup::Checks(thread)) => {
-                on(*thread, None) && self.facts.pr(self.cockpit.read(cx).thread_key(*thread)).is_some_and(|pr| pr.checks.is_some())
+                on(*thread, None) && self.facts.pr(*thread).is_some_and(|pr| pr.checks.is_some())
             }
             Some(Popup::Session { thread, generation }) => on(*thread, Some(*generation)),
             Some(Popup::Band(menu)) => {

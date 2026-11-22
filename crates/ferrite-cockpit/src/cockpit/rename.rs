@@ -14,10 +14,10 @@ use gpui::App;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RenameTarget {
     /// A Thread, renamed from its nav row.
-    Thread(ThreadId),
+    Thread(ThreadKey),
     /// A Thread, renamed from the view head (`view_head`): the same title,
     /// a different editor site, so the two never draw one editor twice.
-    ViewTitle(ThreadId),
+    ViewTitle(ThreadKey),
 }
 
 /// The rename in flight, if any: what is being renamed, and the one-line
@@ -58,7 +58,7 @@ impl Rename {
     /// Close the field, with the Thread and the title it asks for: none
     /// for a blank line, which is not a rename to an empty title but a
     /// rename the operator abandoned.
-    pub(super) fn take(&mut self, cx: &mut App) -> Option<(ThreadId, String)> {
+    pub(super) fn take(&mut self, cx: &mut App) -> Option<(ThreadKey, String)> {
         let (target, editor) = self.open.take()?;
         let title = editor.update(cx, |line, cx| line.take(cx));
         let (RenameTarget::Thread(thread) | RenameTarget::ViewTitle(thread)) = target;

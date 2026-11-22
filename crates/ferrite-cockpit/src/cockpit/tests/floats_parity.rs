@@ -402,7 +402,7 @@ fn cmd_i_walks_the_list_requests_first(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    let stream = |thread: ThreadId, cx: &mut gpui::VisualTestContext| {
+    let stream = |thread: ThreadKey, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             view.cockpit
                 .read(cx)
@@ -444,6 +444,10 @@ fn cmd_i_walks_the_list_requests_first(cx: &mut TestAppContext) {
         "in the nav: {list:?} / {column:?}"
     );
     let rows = view.read_with(cx, |view, cx| view.needs_you_rows(cx));
+    let keys: Vec<ThreadKey> = view.read_with(cx, |view, cx| {
+        let notices = view.cockpit.read(cx).notifications();
+        rows.iter().map(|row| notices.key(row.thread)).collect()
+    });
     assert_eq!(rows.len(), 6, "idle open Thread is also in Inbox");
     assert!(rows[0].request() && rows[1].request(), "requests first");
     assert_eq!(
@@ -453,17 +457,17 @@ fn cmd_i_walks_the_list_requests_first(cx: &mut TestAppContext) {
     let cursor = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| view.nav_view.read(cx).cursor.as_ref().map(|cursor| cursor.item))
     };
-    assert_eq!(cursor(cx), Some(nav::NavItem::Thread(keyed_in(&view, rows[0].thread, cx))));
+    assert_eq!(cursor(cx), Some(nav::NavItem::Thread(keys[0])));
     cx.simulate_keystrokes("up");
     tick(cx);
     assert_eq!(
         cursor(cx),
-        Some(nav::NavItem::Thread(keyed_in(&view, rows[0].thread, cx))),
+        Some(nav::NavItem::Thread(keys[0])),
         "↑ stops at the top"
     );
     cx.simulate_keystrokes("down");
     tick(cx);
-    assert_eq!(cursor(cx), Some(nav::NavItem::Thread(keyed_in(&view, rows[1].thread, cx))));
+    assert_eq!(cursor(cx), Some(nav::NavItem::Thread(keys[1])));
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert!(!view.read_with(cx, |view, cx| view.nav_view.read(cx).keys_held));
@@ -494,7 +498,7 @@ fn a_toasts_quick_answers_answer_the_request_and_leave(cx: &mut TestAppContext) 
         .unwrap();
     tick(cx);
     ring(cx);
-    let allow: &'static str = format!("toast-allow-{}", off.get()).leak();
+    let allow: &'static str = format!("toast-allow-{}", off.thread().get()).leak();
     let button = cx.debug_bounds(allow).expect("`1 allow`");
     cx.simulate_click(button.center(), gpui::Modifiers::none());
     tick(cx);
@@ -510,7 +514,7 @@ fn a_toasts_quick_answers_answer_the_request_and_leave(cx: &mut TestAppContext) 
         .unwrap();
     tick(cx);
     ring(cx);
-    let deny: &'static str = format!("toast-deny-{}", off.get()).leak();
+    let deny: &'static str = format!("toast-deny-{}", off.thread().get()).leak();
     let button = cx.debug_bounds(deny).expect("`3 deny`");
     cx.simulate_click(button.center(), gpui::Modifiers::none());
     tick(cx);
@@ -604,7 +608,7 @@ fn palette_states<'a>(
 ) -> (
     Entity<CockpitView>,
     ProjectId,
-    Vec<ThreadId>,
+    Vec<ThreadKey>,
     &'a mut gpui::VisualTestContext,
 ) {
     let (mut core, fake) = cockpit(name, 0);
@@ -630,11 +634,11 @@ fn palette_states<'a>(
         .send(bash("perm_3", "cargo test"))
         .unwrap();
     tick(cx);
-    (view, project, threads, cx)
+    (view, project.project(), threads, cx)
 }
 
 /// The Threads the open palette shows, in order.
-fn palette_threads(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<ThreadId> {
+fn palette_threads(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<ThreadKey> {
     view.read_with(cx, |view, cx| {
         let palette = view.floats.palette.as_ref().unwrap().read(cx);
         palette

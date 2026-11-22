@@ -401,20 +401,24 @@ impl Surfaces {
     }
 
     /// Hold the Panels of the machine the window is on, `here`, each by the
-    /// key `key` gives its Thread there. The Panels held before are put
+    /// key `resolve` finds its Thread under. The Panels held before are put
     /// away as the window leaving their machine puts them (`leave`).
-    pub(crate) fn hold(&mut self, here: MachineKey, key: impl Fn(ThreadId) -> ThreadKey) {
+    pub(crate) fn hold(
+        &mut self,
+        here: MachineKey,
+        resolve: impl Fn(&SavedThread) -> Option<ThreadKey>,
+    ) {
         self.leave();
         self.here = here;
-        let held: Vec<SavedThread> = self
+        let held: Vec<(SavedThread, ThreadKey)> = self
             .elsewhere
             .keys()
             .filter(|saved| saved.machine == self.here)
-            .cloned()
+            .filter_map(|saved| Some((saved.clone(), resolve(saved)?)))
             .collect();
-        for saved in held {
+        for (saved, key) in held {
             let surfaces = self.elsewhere.remove(&saved).unwrap();
-            self.threads.insert(key(saved.thread), surfaces);
+            self.threads.insert(key, surfaces);
         }
     }
 
@@ -874,7 +878,7 @@ mod tests {
     /// `dir`'s Panels, as a window on this computer holds them.
     fn held(dir: &Path) -> Surfaces {
         let mut surfaces = Surfaces::load(dir, |_| true).unwrap();
-        surfaces.hold(MachineKey(None), here);
+        surfaces.hold(MachineKey(None), |saved| Some(here(saved.thread)));
         surfaces
     }
 
@@ -965,7 +969,7 @@ mod tests {
         surfaces.save(&dir).unwrap();
 
         let mut loaded = Surfaces::load(&dir, |id| *id != file("deleted")).unwrap();
-        loaded.hold(MachineKey(None), here);
+        loaded.hold(MachineKey(None), |saved| Some(here(saved.thread)));
         let panel = loaded.get(kept).unwrap();
         assert_eq!(panel.tabs, [SurfaceId::Overview, file("a"), file("c")]);
         assert_eq!(panel.active, Some(file("c")), "the nearest tab left");
@@ -1022,8 +1026,8 @@ mod tests {
         surfaces.save(&dir).unwrap();
 
         let mut on_box = Surfaces::load(&dir, |_| true).unwrap();
-        on_box.hold(MachineKey(Some("me@box".into())), |thread| {
-            ThreadKey::fixture(1, thread.get())
+        on_box.hold(MachineKey(Some("me@box".into())), |saved| {
+            Some(ThreadKey::fixture(1, saved.thread.get()))
         });
         let panel = on_box.get(boxes).expect("box's Panel, as box left it");
         assert_eq!(panel.tabs, [SurfaceId::Files]);

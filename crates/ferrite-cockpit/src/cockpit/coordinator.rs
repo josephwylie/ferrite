@@ -484,8 +484,8 @@ impl CockpitView {
                 .into_iter()
                 .map(|proposal| ProposalCard {
                     id: proposal.id.clone(),
-                    title: proposal.title(board),
-                    lines: proposal.lines(board),
+                    title: proposal.title(board.reading()),
+                    lines: proposal.lines(board.reading()),
                     action: proposal.action(),
                     status: proposal.status,
                     task: proposal
@@ -539,9 +539,10 @@ impl CockpitView {
     }
 
     /// The shown Project's Coordinator's Thread, once started.
-    pub(crate) fn coordinator_thread(&self, cx: &gpui::App) -> Option<ThreadId> {
+    pub(crate) fn coordinator_thread(&self, cx: &gpui::App) -> Option<ThreadKey> {
         let project = self.factory_project()?;
-        self.cockpit.read(cx).factory().coordinator(project)?.thread
+        let board = self.cockpit.read(cx).factory();
+        Some(board.key(board.coordinator(project)?.thread?))
     }
 
     /// Its Pane in this window, once started.
@@ -550,7 +551,7 @@ impl CockpitView {
     }
 
     /// The Coordinator drawn on its surface, which streams whole.
-    pub(super) fn coordinator_drawn(&self, cx: &gpui::App) -> Option<ThreadId> {
+    pub(super) fn coordinator_drawn(&self, cx: &gpui::App) -> Option<ThreadKey> {
         let view = self.factory()?.read(cx);
         (view.surface == super::workflows::Surface::Coordinator)
             .then(|| self.coordinator_thread(cx))

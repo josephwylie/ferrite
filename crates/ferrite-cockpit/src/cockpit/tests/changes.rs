@@ -14,7 +14,7 @@ fn git(repo: &std::path::Path, args: &[&str]) {
 fn window<'a>(
     name: &str,
     cx: &'a mut TestAppContext,
-) -> (Entity<CockpitView>, ThreadId, &'a mut gpui::VisualTestContext) {
+) -> (Entity<CockpitView>, ThreadKey, &'a mut gpui::VisualTestContext) {
     let (view, _fake, _repo, thread, cx) = window_with_agent(name, cx);
     (view, thread, cx)
 }
@@ -22,7 +22,7 @@ fn window<'a>(
 fn window_with_agent<'a>(
     name: &str,
     cx: &'a mut TestAppContext,
-) -> (Entity<CockpitView>, Fake, std::path::PathBuf, ThreadId, &'a mut gpui::VisualTestContext) {
+) -> (Entity<CockpitView>, Fake, std::path::PathBuf, ThreadKey, &'a mut gpui::VisualTestContext) {
     let base = scratch(name);
     let repo = repo_in(&base);
     std::fs::write(repo.join("a.rs"), "one\ntwo\n").unwrap();
@@ -44,7 +44,7 @@ fn window_with_agent<'a>(
 }
 
 /// Press the door and wait for the read to land.
-fn opened(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
+fn opened(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| view.run_opener(thread, Opener::Changes, cx));
     wait_for_changes(view, thread, cx, |changes, diff| changes.files_read(diff).is_some());
 }
@@ -240,7 +240,7 @@ fn typed_into_the_filter(typed: &str, cx: &mut gpui::VisualTestContext) {
     tick(cx);
 }
 
-fn filter_text(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> String {
+fn filter_text(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) -> String {
     let field = view.read_with(cx, |view, cx| view.changes.read(cx).filter(Diff::Changes(thread)).unwrap());
     field.read_with(cx, |field, _| field.text().to_string())
 }
@@ -289,7 +289,7 @@ fn a_sheet_closing_after_the_filter_went_gives_the_composer_the_keys(cx: &mut Te
     typed_into_the_filter("b", cx);
     cx.simulate_keystrokes("cmd-,");
     tick(cx);
-    view.update(cx, |view, cx| view.upsert_surface(view.cockpit.read(cx).thread_key(thread), crate::cockpit::surfaces::SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.upsert_surface(thread, crate::cockpit::surfaces::SurfaceId::Overview, cx));
     tick(cx);
     assert!(cx.debug_bounds("changes-filter").is_none(), "the filter is not drawn");
     cx.simulate_keystrokes("escape");
@@ -396,7 +396,7 @@ fn repo_of(name: &str) -> std::path::PathBuf {
 }
 
 /// Wait until the Changes read lands again after `press`.
-fn reread(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
+fn reread(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) {
     wait_for_changes(view, thread, cx, |changes, diff| changes.files_read(diff).is_some());
 }
 
@@ -404,7 +404,7 @@ const READ_LOST_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn wait_for_changes(
     view: &Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     cx: &mut gpui::VisualTestContext,
     ready: impl Fn(&crate::cockpit::tools::ChangesView, Diff) -> bool,
 ) {
@@ -512,7 +512,7 @@ fn window_of_files<'a>(
     name: &str,
     files: usize,
     cx: &'a mut TestAppContext,
-) -> (Entity<CockpitView>, ThreadId, &'a mut gpui::VisualTestContext) {
+) -> (Entity<CockpitView>, ThreadKey, &'a mut gpui::VisualTestContext) {
     let base = scratch(name);
     let repo = repo_in(&base);
     let body = |file: usize, edited: bool| -> String {

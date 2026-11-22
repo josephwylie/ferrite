@@ -20,7 +20,7 @@ fn closing_a_pane_parks_the_thread_rather_than_losing_it(cx: &mut TestAppContext
         assert!(!view
             .needs_you_rows(cx)
             .iter()
-            .any(|row| row.thread == closed));
+            .any(|row| row.thread == closed.thread()));
         assert_eq!(view.panes.len(), 1, "the Pane is gone");
         assert!(
             view.cockpit.read(cx).thread(closed).is_none(),
@@ -56,7 +56,7 @@ fn reopening_brings_a_parked_thread_back_with_its_history(cx: &mut TestAppContex
         assert!(view
             .needs_you_rows(cx)
             .iter()
-            .any(|row| row.thread == closed));
+            .any(|row| row.thread == closed.thread()));
         assert_eq!(view.panes.len(), 2, "the Pane is back");
         assert!(
             view.panes.iter().any(|pane| pane.thread() == Some(closed)),
@@ -92,7 +92,7 @@ fn reopening_revives_the_thread_parked_most_recently(cx: &mut TestAppContext) {
         assert_eq!(
             view.panes[0].thread().unwrap(),
             a,
-            "cmd-o must revive the just-parked {a}, not the newest-created {b}"
+            "cmd-o must revive the just-parked {a:?}, not the newest-created {b:?}"
         );
     });
 }
@@ -172,7 +172,7 @@ fn reopening_falls_back_to_creation_order_for_threads_parked_before_launch(
         assert_eq!(
             view.panes[0].thread().unwrap(),
             a,
-            "the just-parked {a} outranks the newer-created {b}"
+            "the just-parked {a:?} outranks the newer-created {b:?}"
         );
     });
 

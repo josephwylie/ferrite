@@ -15,7 +15,7 @@ fn what_is_seen_is_told_once_and_no_notice_act_waits() {
     waits::start();
     core.fixture_task_alert(ServerMessage::Notices {
         revision: u64::MAX,
-        notices: vec![super::machines::box_request(thread, 1)],
+        notices: vec![super::machines::box_request(thread.thread(), 1)],
     });
     for _ in 0..5 {
         core.set_window_active(false);

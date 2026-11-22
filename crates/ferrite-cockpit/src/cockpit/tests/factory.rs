@@ -9,7 +9,7 @@ fn task(
     id: &str,
     project: ProjectId,
     status: Status,
-    worker: Option<ThreadId>,
+    worker: Option<ThreadKey>,
     result: Option<&str>,
     reason: Option<&str>,
 ) -> Task {
@@ -21,7 +21,7 @@ fn task(
         "status": status,
         "agent": {"provider": "claude", "model": "claude-opus-4"},
         "branch": format!("factory/{id}"),
-        "worker": worker,
+        "worker": worker.map(ThreadKey::thread),
         "result": result,
         "reason": reason,
         "activity": [
@@ -49,12 +49,12 @@ fn click(cx: &mut gpui::VisualTestContext, selector: &str) {
 #[gpui::test]
 fn the_factory_button_lists_each_project_and_a_fresh_one_is_empty(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("factory-entry", 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     assert!(
-        !shows(cx, &format!("nav-factory-{}", project.get())),
+        !shows(cx, &format!("nav-factory-{}", project.project().get())),
         "no row in the list"
     );
     assert!(!shows(cx, "nav-factory-attention"), "nothing needs you");
@@ -93,14 +93,14 @@ fn the_factory_button_lists_each_project_and_a_fresh_one_is_empty(cx: &mut TestA
 #[gpui::test]
 fn the_board_lays_cards_in_their_columns(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("factory-columns", 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     core.fixture_factory(Board {
         workflows: Vec::new(),
         tasks: vec![
-            task("t-1", project, Status::Working, None, None, None),
+            task("t-1", project.project(), Status::Working, None, None, None),
             task(
                 "t-2",
-                project,
+                project.project(),
                 Status::NeedsHuman,
                 None,
                 None,
@@ -108,7 +108,7 @@ fn the_board_lays_cards_in_their_columns(cx: &mut TestAppContext) {
             ),
             task(
                 "t-3",
-                project,
+                project.project(),
                 Status::Completed,
                 None,
                 Some("Fixed it"),
@@ -116,7 +116,7 @@ fn the_board_lays_cards_in_their_columns(cx: &mut TestAppContext) {
             ),
             task(
                 "t-4",
-                project,
+                project.project(),
                 Status::Stopped,
                 None,
                 None,
@@ -130,8 +130,8 @@ fn the_board_lays_cards_in_their_columns(cx: &mut TestAppContext) {
     tick(cx);
     assert!(shows(cx, "nav-factory-attention"), "one needs you");
     view.update(cx, |view, cx| {
-        assert_eq!(view.cockpit.read(cx).factory().needs_you(project), 1);
-        view.open_factory(project, cx);
+        assert_eq!(view.cockpit.read(cx).factory().needs_you(project.project()), 1);
+        view.open_factory(project.project(), cx);
     });
     tick(cx);
     for column in [
@@ -167,7 +167,7 @@ fn the_board_lays_cards_in_their_columns(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("factory-panel", 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     let worker = core
         .fixture_open_owned(
             Provider::Claude,
@@ -179,7 +179,7 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
         workflows: Vec::new(),
         tasks: vec![task(
             "t-1",
-            project,
+            project.project(),
             Status::Working,
             Some(worker),
             None,
@@ -226,7 +226,7 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
         view.update(cx, |view, cx| {
             view.cockpit.update(cx, |cockpit, _| cockpit.fixture_factory(Board {
                 workflows: Vec::new(),
-                tasks: vec![task("t-1", project, status, Some(worker), None, None)],
+                tasks: vec![task("t-1", project.project(), status, Some(worker), None, None)],
                 ..Default::default()
             }));
             view.open_task("t-1", cx);
@@ -243,12 +243,12 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
 #[gpui::test]
 fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("factory-alert", 2);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     core.fixture_factory(Board {
         workflows: Vec::new(),
         tasks: vec![task(
             "t-1",
-            project,
+            project.project(),
             Status::NeedsHuman,
             None,
             None,
@@ -277,7 +277,7 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
         view.focus_thread(watched, cx);
         view.cockpit
             .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::TaskAlert {
-                project,
+                project: project.project(),
                 task: "t-1".into(),
                 status: Status::NeedsHuman,
                 title: "Task t-1".into(),
@@ -312,12 +312,12 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
 #[gpui::test]
 fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("factory-alert-leaves", 2);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     let needs_human = |status, result| Board {
         workflows: Vec::new(),
         tasks: vec![task(
             "t-1",
-            project,
+            project.project(),
             status,
             None,
             result,
@@ -339,7 +339,7 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
     let alert = |view: &mut CockpitView, cx: &mut Context<CockpitView>| {
         view.cockpit
             .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::TaskAlert {
-                project,
+                project: project.project(),
                 task: "t-1".into(),
                 status: Status::NeedsHuman,
                 title: "Task needs you: Task t-1".into(),
@@ -372,7 +372,7 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
             workflows: Vec::new(),
             tasks: vec![task(
                 "t-1",
-                project,
+                project.project(),
                 Status::NeedsHuman,
                 None,
                 None,
@@ -420,7 +420,7 @@ fn an_empty_projects_factory_opens_from_the_nav(cx: &mut TestAppContext) {
     view.update_in(cx, |view, window, cx| {
         view.run_menu_verb(
             MenuTarget::NavFilter,
-            MenuVerb::FilterProject(Some(empty)),
+            MenuVerb::FilterProject(Some(empty.project())),
             window,
             cx,
         )
@@ -434,7 +434,7 @@ fn an_empty_projects_factory_opens_from_the_nav(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| {
         assert_eq!(
             view.factory_project(),
-            Some(empty)
+            Some(empty).map(|key| key.project())
         );
     });
 }
@@ -444,7 +444,7 @@ fn an_empty_projects_factory_opens_from_the_nav(cx: &mut TestAppContext) {
 #[gpui::test]
 fn focusing_a_worker_by_id_opens_its_tasks_worker_tab(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("factory-focus-worker", 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     let worker = core
         .fixture_open_owned(
             Provider::Claude,
@@ -456,7 +456,7 @@ fn focusing_a_worker_by_id_opens_its_tasks_worker_tab(cx: &mut TestAppContext) {
         workflows: Vec::new(),
         tasks: vec![task(
             "t-1",
-            project,
+            project.project(),
             Status::Working,
             Some(worker),
             None,
@@ -470,7 +470,7 @@ fn focusing_a_worker_by_id_opens_its_tasks_worker_tab(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.cockpit
             .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
-                thread: worker,
+                thread: worker.thread(),
                 fork_of: None,
             }));
         cx.notify();

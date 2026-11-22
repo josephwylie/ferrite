@@ -301,7 +301,7 @@ fn the_toolbar_chips_open_their_pickers_with_and_without_a_session(cx: &mut Test
             .debug_bounds("composer-footer")
             .expect("the Solo box draws its footer");
         let chip = |name: &str, cx: &mut gpui::VisualTestContext| {
-            let chip = debug_bounds(cx, format!("{name}-{}", thread.get()))
+            let chip = debug_bounds(cx, format!("{name}-{}", thread.thread().get()))
                 .unwrap_or_else(|| panic!("the {name} chip (live: {live})"));
             assert!(toolbar.contains(&chip.center()), "{name} rides the footer");
             chip
@@ -379,8 +379,8 @@ fn the_send_circle_stays_inside_a_narrow_box(cx: &mut TestAppContext) {
                 && send.right() <= field.right() - px(ferrite_ui::theme::COMPOSER_ROW_PAD - 0.5),
             "at {width}px send stands inside the box: {send:?} / {field:?}"
         );
-        let mode = debug_bounds(cx, format!("mode-picker-{}", thread.get())).expect("mode");
-        let model = debug_bounds(cx, format!("model-picker-{}", thread.get())).expect("model");
+        let mode = debug_bounds(cx, format!("mode-picker-{}", thread.thread().get())).expect("mode");
+        let model = debug_bounds(cx, format!("model-picker-{}", thread.thread().get())).expect("model");
         assert!(
             model.right() <= mode.left(),
             "at {width}px the model never runs under the mode: {mode:?} / {model:?}"
@@ -410,8 +410,8 @@ fn the_model_gives_way_before_the_permission_mode(cx: &mut TestAppContext) {
     }
     cx.simulate_resize(gpui::size(px(1600.), px(800.)));
     tick(cx);
-    let roomy = debug_bounds(cx, format!("mode-picker-{}", thread.get())).expect("mode");
-    let roomy_model = debug_bounds(cx, format!("model-picker-{}", thread.get())).expect("model");
+    let roomy = debug_bounds(cx, format!("mode-picker-{}", thread.thread().get())).expect("mode");
+    let roomy_model = debug_bounds(cx, format!("model-picker-{}", thread.thread().get())).expect("model");
     // Narrow until the model has had to give some of its label. Its env
     // words now stand over the box (`env_strip`), so the footer is roomy
     // and the model starts to cut only in a narrow window.
@@ -420,12 +420,12 @@ fn the_model_gives_way_before_the_permission_mode(cx: &mut TestAppContext) {
         width -= 20.;
         cx.simulate_resize(gpui::size(px(width), px(800.)));
         tick(cx);
-        let model = debug_bounds(cx, format!("model-picker-{}", thread.get())).expect("model");
+        let model = debug_bounds(cx, format!("model-picker-{}", thread.thread().get())).expect("model");
         if model.size.width < roomy_model.size.width - px(1.) || width < 500. {
             break;
         }
     }
-    let mode = debug_bounds(cx, format!("mode-picker-{}", thread.get())).unwrap();
+    let mode = debug_bounds(cx, format!("mode-picker-{}", thread.thread().get())).unwrap();
     assert!(width >= 500., "the model chip gave way at some width");
     assert!(
         (mode.size.width - roomy.size.width).abs() <= px(1.),
@@ -614,7 +614,7 @@ fn the_model_chip_leads_with_its_providers_mark(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let chip = debug_bounds(cx, format!("model-picker-{}", thread.get())).expect("the chip");
+    let chip = debug_bounds(cx, format!("model-picker-{}", thread.thread().get())).expect("the chip");
     let mark = debug_bounds(
         cx,
         format!("model-chip-{:?}-mark", PaneIdentity::Thread(thread)),
@@ -661,7 +661,7 @@ fn effort_opens_the_picker_on_its_reasoning_column(cx: &mut TestAppContext) {
         view.close_popup(cx);
     });
     tick(cx);
-    let chip = debug_bounds(cx, format!("model-picker-{}", thread.get())).expect("the chip");
+    let chip = debug_bounds(cx, format!("model-picker-{}", thread.thread().get())).expect("the chip");
     cx.simulate_click(chip.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(column(&view, cx).0, Column::List, "the chip opens on the list");

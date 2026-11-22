@@ -18,7 +18,7 @@ impl Scenario {
     pub fn step(
         &mut self,
         view: &Entity<CockpitView>,
-        thread: ferrite_core::ThreadId,
+        thread: ferrite_core::ThreadKey,
         window: &mut Window,
         cx: &mut App,
         output: &Path,
@@ -69,7 +69,7 @@ impl Scenario {
                         return Ok(false);
                     };
                     // The fixture's top-left white margin contains no control.
-                    let Some(viewport) = view.read(cx).browser_smoke_viewport(view.read(cx).cockpit.read(cx).thread_key(thread)) else {
+                    let Some(viewport) = view.read(cx).browser_smoke_viewport(thread) else {
                         trace(view, thread, window, cx, Tick::NotLaidOut, id, &state);
                         return Ok(false);
                     };
@@ -194,7 +194,7 @@ enum Tick {
 /// active tab as the Server's state has it.
 fn trace(
     view: &Entity<CockpitView>,
-    thread: ferrite_core::ThreadId,
+    thread: ferrite_core::ThreadKey,
     window: &Window,
     cx: &App,
     tick: Tick,
@@ -203,7 +203,7 @@ fn trace(
 ) {
     let tab = state.tabs.iter().find(|tab| Some(tab.id) == state.active);
     let view = view.read(cx);
-    let hold = view.browser_smoke_hold(view.cockpit.read(cx).thread_key(thread), cx);
+    let hold = view.browser_smoke_hold(thread, cx);
     hold_trace::record(serde_json::json!({
         "kind": "tick",
         "ui": ui,

@@ -26,8 +26,8 @@ fn startup_starts_on_the_last_project_worked_in() {
         .unwrap();
     assert_ne!(first, second);
 
-    assert_eq!(core.project_id(older), Some(first));
-    assert_eq!(startup_project(&core), Some(first));
+    assert_eq!(core.project_of(older), Some(first));
+    assert_eq!(startup_project(&core), Some(first).map(|key| key.project()));
 }
 
 #[gpui::test]
@@ -75,7 +75,7 @@ fn a_launch_that_opens_nothing_still_lists_the_parked_threads(cx: &mut TestAppCo
             "nothing revived: the launch is a draft"
         );
         assert_eq!(
-            view.facts.parked().iter().map(|key| key.thread()).collect::<Vec<_>>(),
+            view.facts.parked().to_vec(),
             vec![parked],
             "and the parked Thread has its row"
         );

@@ -270,7 +270,7 @@ impl CockpitView {
     fn archive_inputs(&self, query: &str, cx: &gpui::App) -> Option<ArchiveInputs> {
         let project = self.factory_project()?;
         let view = self.factory()?.read(cx);
-        let board = self.cockpit.read(cx).factory();
+        let board = self.cockpit.read(cx).factory().reading();
         let found = board
             .archive(project, query)
             .map(|task| ArchivedRow {
@@ -320,13 +320,12 @@ impl CockpitView {
     /// its Thread reopened with nothing running and drawn without a
     /// Composer (G4). `None` goes back to the list; a Thread this window
     /// reopened is parked again.
-    pub(crate) fn read_worker(&mut self, thread: Option<ThreadId>, cx: &mut Context<Self>) {
-        let thread = thread.map(|thread| self.cockpit.read(cx).thread_key(thread));
+    pub(crate) fn read_worker(&mut self, thread: Option<ThreadKey>, cx: &mut Context<Self>) {
         let was = self.factory().map(|view| view.read(cx).archive.clone()).and_then(|archive| {
             archive.update(cx, |archive, _| archive.reading.take())
         });
         if let Some((was, true)) = was.filter(|(was, _)| Some(*was) != thread) {
-            if let Err(error) = self.cockpit.update(cx, |cockpit, _| cockpit.park(was.thread())) {
+            if let Err(error) = self.cockpit.update(cx, |cockpit, _| cockpit.park(was)) {
                 ferrite_core::log!("factory: an earlier Worker could not be parked again: {error}");
             }
             let focused = self.cockpit.read(cx).roster().focused();
@@ -341,8 +340,8 @@ impl CockpitView {
         if let Some(thread) = thread {
             let reopened = match was {
                 Some((same, reopened)) if same == thread => Ok(reopened),
-                _ if self.cockpit.read(cx).thread(thread.thread()).is_some() => Ok(false),
-                _ => self.cockpit.update(cx, |cockpit, _| cockpit.revive(thread.thread()).map(|()| true)),
+                _ if self.cockpit.read(cx).thread(thread).is_some() => Ok(false),
+                _ => self.cockpit.update(cx, |cockpit, _| cockpit.revive(thread).map(|()| true)),
             };
             // Reopening it moves the roster's focus before this window has
             // its Pane: that is not the operator leaving the board.
@@ -369,11 +368,13 @@ impl CockpitView {
     }
 
     /// The earlier Worker being read, if it is one of `task`'s.
-    pub(super) fn worker_reading(&self, task: &Task, cx: &gpui::App) -> Option<ThreadId> {
+    pub(super) fn worker_reading(&self, task: &Task, cx: &gpui::App) -> Option<ThreadKey> {
         let (thread, _) = self.factory()?.read(cx).archive.read(cx).reading?;
-        let cockpit = self.cockpit.read(cx);
-        let worker = |worker: &ThreadId| cockpit.thread_key(*worker) == thread;
-        task.every_worker().iter().any(worker).then_some(thread.thread())
+        let board = self.cockpit.read(cx).factory();
+        task.every_worker()
+            .into_iter()
+            .any(|worker| board.key(worker) == thread)
+            .then_some(thread)
     }
 
     /// The earlier Worker's transcript, to read: no Composer, nothing to
@@ -458,12 +459,17 @@ impl CockpitView {
     /// no Worker Pane in this window (a completed one, its Workers parked).
     pub(super) fn worker_history(&self, task: &Task, cx: &mut Context<Self>) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
-        let threads = task.every_worker();
+        let board = self.cockpit.read(cx).factory();
+        let threads: Vec<ThreadKey> = task
+            .every_worker()
+            .into_iter()
+            .map(|worker| board.key(worker))
+            .collect();
         if threads.is_empty() {
             return None;
         }
-        let step_of = |thread: ThreadId| {
-            let step = task.workers.iter().find(|each| each.thread == thread)?;
+        let step_of = |thread: ThreadKey| {
+            let step = task.workers.iter().find(|each| each.thread == thread.thread())?;
             let run = task.workflow.as_ref()?;
             run.definition
                 .step(&step.step)
@@ -509,7 +515,7 @@ impl CockpitView {
                         div()
                             .text_size(px(FS_META))
                             .text_color(rgb(INK_SUBTLE))
-                            .child(SharedString::from(format!("Thread {}", thread.get()))),
+                            .child(SharedString::from(format!("Thread {}", thread.thread().get()))),
                     ),
             );
         }

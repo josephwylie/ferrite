@@ -204,7 +204,7 @@ fn a_pin_made_on_a_machine_saves_that_machine(cx: &mut TestAppContext) {
     tick(cx);
     let view = shown(&root, cx);
     view.update(cx, |view, cx| {
-        let key = keyed(view, ThreadId::new(1), cx);
+        let key = view.cockpit.read(cx).key(ThreadId::new(1));
         view.set_pinned(key, true, cx)
     });
     view.read_with(cx, |view, _| {
@@ -225,6 +225,7 @@ fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut Test
         dir.join("box"), Box::new(OnBox(Default::default())),
     ).unwrap();
     let mut core = Cockpit::attach(Attach {
+        saved_as: Some(ferrite_core::MachineKey(Some("me@box".into()))),
         browser: false,
         driven: false,
         store: dir.join("window/threads"),
@@ -245,17 +246,17 @@ fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut Test
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.on_machine(cx));
+        assert!(view.elsewhere(view.on_screen(cx), cx));
         assert!(view.opener_unavailable(thread, crate::cockpit::panel::Opener::Files, cx).is_none());
         assert!(view.opener_unavailable(thread, crate::cockpit::panel::Opener::Terminal, cx).is_none());
         assert!(view.opener_unavailable(thread, crate::cockpit::panel::Opener::Changes, cx).is_none());
     });
     cx.simulate_keystrokes("cmd-shift-f");
     tick(cx);
-    view.read_with(cx, |view, cx| assert_eq!(view.active_surface(view.cockpit.read(cx).thread_key(thread)), Some(SurfaceId::Files)));
+    view.read_with(cx, |view, _| assert_eq!(view.active_surface(thread), Some(SurfaceId::Files)));
     cx.simulate_keystrokes("cmd-j");
     tick(cx);
-    view.read_with(cx, |view, cx| assert!(matches!(view.active_surface(view.cockpit.read(cx).thread_key(thread)), Some(SurfaceId::Terminal(_)))));
+    view.read_with(cx, |view, _| assert!(matches!(view.active_surface(thread), Some(SurfaceId::Terminal(_)))));
     assert!(cx.debug_bounds("terminal-failed").is_some(), "a fake SSH bridge cannot start a local shell");
 }
 
@@ -296,6 +297,7 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
     ));
     let attach = |name: &str| {
         let mut core = Cockpit::attach(Attach {
+            saved_as: Some(ferrite_core::MachineKey(Some("me@box".into()))),
             browser: false,
             driven: false,
             store: dir.join(name).join("threads"),
@@ -441,7 +443,7 @@ fn removing_the_selected_connection_confirms_then_returns_to_this_computer(
     let local = shown(&root, cx);
     assert_ne!(local.entity_id(), remote.entity_id());
     local.read_with(cx, |view, cx| {
-        assert!(view.cockpit.read(cx).machine().is_none());
+        assert!(view.bridge_on_screen(cx).is_none());
         assert!(view.prefs.settings.machines.is_empty());
         assert!(!view.machines.as_ref().unwrap().read(cx).listed());
     });
@@ -497,7 +499,7 @@ fn going_to_a_machine_that_needs_a_sign_in_says_so_and_holds_still(cx: &mut Test
     assert_ne!(on_box.entity_id(), first.entity_id(), "built afresh");
     on_box.read_with(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.read(cx).machine().map(|bridge| bridge.name()),
+            view.bridge_on_screen(cx).map(|bridge| bridge.name()),
             Some("box")
         );
         assert!(view.panes.is_empty(), "no draft before the machine answers");
@@ -540,7 +542,7 @@ fn going_to_a_machine_that_needs_a_sign_in_says_so_and_holds_still(cx: &mut Test
     let home = shown(cx);
     assert_ne!(home.entity_id(), on_box.entity_id(), "built afresh again");
     home.read_with(cx, |view, cx| {
-        assert!(view.cockpit.read(cx).machine().is_none(), "this computer");
+        assert!(view.bridge_on_screen(cx).is_none(), "this computer");
         assert!(view.machine_rows(cx).unwrap()[0].selected);
         assert_eq!(
             view.server_bands.detached(),
@@ -580,16 +582,16 @@ fn switching_machines_transfers_unsaved_panel_state_and_retires_the_previous_wri
         view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
         view.pump(cx);
         view.flush_panel_persistence(cx);
-        view.apply_surface(view.cockpit.read(cx).thread_key(thread), SurfaceAction::Open(SurfaceId::Browser));
-        view.apply_surface(view.cockpit.read(cx).thread_key(thread), SurfaceAction::Open(SurfaceId::Changes));
+        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Browser));
+        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Changes));
         cx.emit(GoToMachine { index: Some(1), open: None });
         thread
     });
     cx.run_until_parked();
     let successor = shown(&root, cx);
     assert_ne!(successor.entity_id(), first.entity_id());
-    successor.read_with(cx, |view, cx| {
-        let on_box = view.cockpit.read(cx).thread_key(thread);
+    successor.read_with(cx, |view, _| {
+        let on_box = thread;
         assert!(
             view.panel.surfaces.get(on_box).is_none(),
             "box's Thread of the same number is another Thread, with no Panel yet"
@@ -598,14 +600,14 @@ fn switching_machines_transfers_unsaved_panel_state_and_retires_the_previous_wri
     std::fs::remove_file(&dir).unwrap();
     successor.update(cx, |view, cx| view.flush_panel_persistence(cx));
     first.update(cx, |view, cx| {
-        view.apply_surface(view.cockpit.read(cx).thread_key(thread), SurfaceAction::Open(SurfaceId::Overview));
+        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Overview));
         view.pump(cx);
         view.flush_panel_persistence(cx);
     });
-    let state = Surfaces::saved_in(&dir, thread).expect("this computer's Panel, saved by the successor");
+    let state = Surfaces::saved_in(&dir, thread.thread()).expect("this computer's Panel, saved by the successor");
     assert_eq!(state.active, Some(SurfaceId::Changes));
     assert!(!state.tabs.contains(&SurfaceId::Browser), "live resources end with their owner");
-    assert_eq!(saved_files(&dir), [(None, thread.get(), vec!["lib.rs".to_string()])]);
+    assert_eq!(saved_files(&dir), [(None, thread.thread().get(), vec!["lib.rs".to_string()])]);
 }
 
 /// files.json as `(machine, thread, file names)`, sorted.
@@ -682,7 +684,7 @@ fn going_to_a_machine_and_back_keeps_each_machines_files_tabs(cx: &mut TestAppCo
     let (core, _fake, checkout) = bound_cockpit("machines-files-there", Provider::Claude);
     let thread = core.known_threads().into_iter().next().unwrap();
     let dir = scratch("machines-files-there-prefs");
-    seed_saved_files(&dir, &[(Some("me@box"), thread.get(), "box-only-1.rs"), (Some("me@box"), 7, "box-only-7.rs")]);
+    seed_saved_files(&dir, &[(Some("me@box"), thread.thread().get(), "box-only-1.rs"), (Some("me@box"), 7, "box-only-7.rs")]);
     let machines = cx.new(|_| machines("files-there", None));
     let (root, cx) = machine_window_saving_to(cx, core, machines, &dir);
     let home = shown(&root, cx);
@@ -692,8 +694,8 @@ fn going_to_a_machine_and_back_keeps_each_machines_files_tabs(cx: &mut TestAppCo
         view.flush_panel_persistence(cx);
     });
     let expected = [
-        (None, thread.get(), vec!["lib.rs".to_string(), "README.md".to_string()]),
-        (Some("me@box".to_string()), thread.get(), vec!["box-only-1.rs".to_string()]),
+        (None, thread.thread().get(), vec!["lib.rs".to_string(), "README.md".to_string()]),
+        (Some("me@box".to_string()), thread.thread().get(), vec!["box-only-1.rs".to_string()]),
         (Some("me@box".to_string()), 7, vec!["box-only-7.rs".to_string()]),
     ];
     assert_eq!(saved_files(&dir), expected);
@@ -719,7 +721,7 @@ fn coming_home_from_a_machine_saves_its_files_tabs_as_its_own(cx: &mut TestAppCo
     let (core, _fake, checkout) = bound_cockpit("machines-files-back", Provider::Claude);
     let thread = core.known_threads().into_iter().next().unwrap();
     let dir = scratch("machines-files-back-prefs");
-    seed_saved_files(&dir, &[(None, thread.get(), "here-1.rs")]);
+    seed_saved_files(&dir, &[(None, thread.thread().get(), "here-1.rs")]);
     let machines = cx.new(|_| machines("files-back", Some("me@box")));
     let (root, cx) = machine_window_saving_to(cx, core, machines, &dir);
     let on_box = shown(&root, cx);
@@ -728,8 +730,8 @@ fn coming_home_from_a_machine_saves_its_files_tabs_as_its_own(cx: &mut TestAppCo
         view.flush_panel_persistence(cx);
     });
     let expected = [
-        (None, thread.get(), vec!["here-1.rs".to_string()]),
-        (Some("me@box".to_string()), thread.get(), vec!["lib.rs".to_string()]),
+        (None, thread.thread().get(), vec!["here-1.rs".to_string()]),
+        (Some("me@box".to_string()), thread.thread().get(), vec!["lib.rs".to_string()]),
     ];
     assert_eq!(saved_files(&dir), expected);
 
@@ -817,7 +819,7 @@ fn going_to_a_machine_and_back_keeps_each_machines_drafts(cx: &mut TestAppContex
     let dir = scratch("machines-drafts-there-prefs");
     seed_saved_drafts(
         &dir,
-        &[(None, thread.get(), "here"), (Some("me@box"), thread.get(), "there"), (Some("me@box"), 7, "box only")],
+        &[(None, thread.thread().get(), "here"), (Some("me@box"), thread.thread().get(), "there"), (Some("me@box"), 7, "box only")],
     );
     let machines = cx.new(|_| machines("drafts-there", None));
     let (root, cx) = machine_window_drafting_in(cx, core, machines, &dir);
@@ -826,8 +828,8 @@ fn going_to_a_machine_and_back_keeps_each_machines_drafts(cx: &mut TestAppContex
     draft_on_first_pane(&home, "here, and more", cx);
     home.update(cx, |view, cx| view.save_drafts(cx));
     let expected = [
-        (None, thread.get(), "here, and more".to_string()),
-        (Some("me@box".to_string()), thread.get(), "there".to_string()),
+        (None, thread.thread().get(), "here, and more".to_string()),
+        (Some("me@box".to_string()), thread.thread().get(), "there".to_string()),
         (Some("me@box".to_string()), 7, "box only".to_string()),
     ];
     assert_eq!(saved_drafts(&dir), expected);
@@ -857,7 +859,7 @@ fn coming_home_from_a_machine_saves_its_drafts_as_its_own(cx: &mut TestAppContex
     let (core, _fake, _checkout) = bound_cockpit("machines-drafts-back", Provider::Claude);
     let thread = core.known_threads().into_iter().next().unwrap();
     let dir = scratch("machines-drafts-back-prefs");
-    seed_saved_drafts(&dir, &[(None, thread.get(), "here"), (Some("me@box"), thread.get(), "there")]);
+    seed_saved_drafts(&dir, &[(None, thread.thread().get(), "here"), (Some("me@box"), thread.thread().get(), "there")]);
     let machines = cx.new(|_| machines("drafts-back", Some("me@box")));
     let (root, cx) = machine_window_drafting_in(cx, core, machines, &dir);
     let on_box = shown(&root, cx);
@@ -865,8 +867,8 @@ fn coming_home_from_a_machine_saves_its_drafts_as_its_own(cx: &mut TestAppContex
     draft_on_first_pane(&on_box, "there, and more", cx);
     on_box.update(cx, |view, cx| view.save_drafts(cx));
     let expected = [
-        (None, thread.get(), "here".to_string()),
-        (Some("me@box".to_string()), thread.get(), "there, and more".to_string()),
+        (None, thread.thread().get(), "here".to_string()),
+        (Some("me@box".to_string()), thread.thread().get(), "there, and more".to_string()),
     ];
     assert_eq!(saved_drafts(&dir), expected);
 
@@ -921,13 +923,13 @@ fn seed_cited_sources(dir: &std::path::Path, kept: &[(Option<&str>, u64, &str, u
 /// Pane, as the operator does: the quote in its Composer, a line, ↵.
 fn send_cited(
     view: &Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     quote: &str,
     block: u64,
     cx: &mut gpui::VisualTestContext,
 ) {
     let source = ferrite_core::replies::Source {
-        thread,
+        thread: thread.thread(),
         block: serde_json::from_str(&block.to_string()).unwrap(),
     };
     view.update(cx, |view, cx| {
@@ -956,8 +958,8 @@ fn going_to_a_machine_and_back_keeps_each_machines_cited_sources(cx: &mut TestAp
     seed_cited_sources(
         &dir,
         &[
-            (None, thread.get(), "here before", 3),
-            (Some("me@box"), thread.get(), "box's", 11),
+            (None, thread.thread().get(), "here before", 3),
+            (Some("me@box"), thread.thread().get(), "box's", 11),
             (Some("me@box"), 7, "box only", 17),
         ],
     );
@@ -967,8 +969,8 @@ fn going_to_a_machine_and_back_keeps_each_machines_cited_sources(cx: &mut TestAp
     let home = shown(&root, cx);
     send_cited(&home, thread, "alpha", 5, cx);
     let expected = [
-        (None, thread.get(), vec![("alpha".to_string(), 5), ("here before".to_string(), 3)]),
-        (Some("me@box".to_string()), thread.get(), vec![("box's".to_string(), 11)]),
+        (None, thread.thread().get(), vec![("alpha".to_string(), 5), ("here before".to_string(), 3)]),
+        (Some("me@box".to_string()), thread.thread().get(), vec![("box's".to_string(), 11)]),
         (Some("me@box".to_string()), 7, vec![("box only".to_string(), 17)]),
     ];
     assert_eq!(saved_cited_sources(&dir), expected);
@@ -1006,15 +1008,15 @@ fn coming_home_from_a_machine_keeps_its_cited_sources_as_its_own(cx: &mut TestAp
         .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     let dir = scratch("machines-cited-back-prefs");
-    seed_cited_sources(&dir, &[(None, thread.get(), "here before", 3), (Some("me@box"), 7, "box only", 17)]);
+    seed_cited_sources(&dir, &[(None, thread.thread().get(), "here before", 3), (Some("me@box"), 7, "box only", 17)]);
     let (root, cx) = machine_window_saving_to(cx, core, machines, &dir);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     let on_box = shown(&root, cx);
     until(cx, |cx| on_box.read_with(cx, |view, _| !view.panes.is_empty()));
     send_cited(&on_box, thread, "alpha", 5, cx);
     let expected = [
-        (None, thread.get(), vec![("here before".to_string(), 3)]),
-        (Some("me@box".to_string()), thread.get(), vec![("alpha".to_string(), 5)]),
+        (None, thread.thread().get(), vec![("here before".to_string(), 3)]),
+        (Some("me@box".to_string()), thread.thread().get(), vec![("alpha".to_string(), 5)]),
         (Some("me@box".to_string()), 7, vec![("box only".to_string(), 17)]),
     ];
     assert_eq!(saved_cited_sources(&dir), expected);
@@ -1091,7 +1093,7 @@ fn turning_off_the_machine_on_screen_goes_home(cx: &mut TestAppContext) {
     let home = shown(&root, cx);
     assert_ne!(home.entity_id(), on_box.entity_id(), "built afresh");
     home.read_with(cx, |view, cx| {
-        assert!(view.cockpit.read(cx).machine().is_none(), "this computer");
+        assert!(view.bridge_on_screen(cx).is_none(), "this computer");
         assert_eq!(
             view.machine_rows(cx).unwrap()[1].connection,
             Connection::Disabled
@@ -1110,6 +1112,7 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
         ferrite_server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default())))
             .unwrap();
     let mut core = Cockpit::attach(Attach {
+            saved_as: Some(ferrite_core::MachineKey(Some("me@box".into()))),
             browser: false,
             driven: false,
         store: dir.join("window").join("threads"),
@@ -1145,9 +1148,9 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
     until(cx, |cx| {
         view.read_with(cx, |view, _| view.facts.parked().len() == 2)
     });
-    view.read_with(cx, |view, cx| {
-        assert_eq!(view.facts.parked().iter().map(|key| key.thread()).collect::<Vec<_>>(), [named, other], "in creation order");
-        assert_eq!(view.facts.name(view.cockpit.read(cx).thread_key(named)).as_ref(), "Release notes");
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.facts.parked().to_vec(), [named, other], "in creation order");
+        assert_eq!(view.facts.name(named).as_ref(), "Release notes");
         assert!(view.panes.is_empty(), "nothing open on the machine");
     });
     assert!(
@@ -1160,14 +1163,14 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
         .expect("the Parked shelf's header");
     cx.simulate_click(door.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    let row_id: &'static str = format!("nav-thread-{}", named.get()).leak();
+    let row_id: &'static str = format!("nav-thread-{}", named.thread().get()).leak();
     let row = cx
         .debug_bounds(row_id)
         .expect("shown, the machine's parked Thread has a row");
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     until(cx, |cx| {
         view.read_with(cx, |view, _| {
-            view.panes.len() == 1 && view.facts.parked().iter().map(|key| key.thread()).collect::<Vec<_>>() == [other]
+            view.panes.len() == 1 && view.facts.parked().to_vec() == [other]
         })
     });
     view.read_with(cx, |view, _| {
@@ -1432,7 +1435,7 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
     assert_ne!(on_box.entity_id(), first.entity_id(), "the window went");
     on_box.update(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.read(cx).machine().map(|bridge| bridge.name()),
+            view.bridge_on_screen(cx).map(|bridge| bridge.name()),
             Some("box")
         );
         assert_eq!(
@@ -1511,7 +1514,7 @@ fn a_system_notification_outlives_a_move(cx: &mut TestAppContext) {
     tick(cx);
     ring(cx);
     ring(cx);
-    let home_tag = system_tag(&MachineKey(None), here);
+    let home_tag = system_tag(&MachineKey(None), here.thread());
     let box_tag = system_tag(&MachineKey(Some("me@box".into())), thread);
     let mut tags: Vec<String> = cx
         .delivered_system_notifications()
@@ -1535,13 +1538,13 @@ fn a_system_notification_outlives_a_move(cx: &mut TestAppContext) {
     let home = shown(&root, cx);
     assert_ne!(home.entity_id(), on_box.entity_id(), "and came back");
     home.read_with(cx, |view, cx| {
-        assert!(view.cockpit.read(cx).machine().is_none(), "this computer");
+        assert!(view.bridge_on_screen(cx).is_none(), "this computer");
         assert_eq!(
             view.landing.as_ref().map(|(landing, _)| match landing {
                 Landing::Alert(Alert { away, thread, .. })
 => (away.clone(), *thread),
             }),
-            Some((None, here)),
+            Some((None, here.thread())),
             "on its Thread once it answers"
         );
     });
@@ -1589,7 +1592,7 @@ fn a_toast_press_goes_to_its_machine(cx: &mut TestAppContext) {
     assert_ne!(on_box.entity_id(), first.entity_id(), "the window went");
     on_box.read_with(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.read(cx).machine().map(|bridge| bridge.name()),
+            view.bridge_on_screen(cx).map(|bridge| bridge.name()),
             Some("box")
         );
         assert_eq!(
@@ -1635,7 +1638,7 @@ fn the_window_opens_what_it_came_for_once_attached(cx: &mut TestAppContext) {
             Landing::Alert(Alert {
                 away: None,
                 target: RowTarget::Decision(id),
-                thread: threads[off],
+                thread: threads[off].thread(),
             }),
             until,
         ));
@@ -1669,11 +1672,11 @@ fn a_landing_revives_a_parked_thread_and_lapses_unattached(cx: &mut TestAppConte
     core.park(threads[1]).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let gone = |thread: ThreadId| {
+    let gone = |thread: ThreadKey| {
         Landing::Alert(Alert {
             away: None,
             target: RowTarget::Notice(ferrite_core::notifications::NoticeId::from_u64(99)),
-            thread,
+            thread: thread.thread(),
         })
     };
     view.update(cx, |view, cx| {
@@ -1981,10 +1984,8 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
     );
 }
 
-/// A Cockpit attached to a Server whose browser window has one tab open on
-/// a local page, and the Thread and tab document it belongs to.
 /// The Server's word on `thread`'s Browser, as an attach answers it.
-pub(super) fn served(cockpit: &mut Cockpit, thread: ThreadId) -> ferrite_core::browser::State {
+pub(super) fn served(cockpit: &mut Cockpit, thread: ThreadKey) -> ferrite_core::browser::State {
     let ask = cockpit.browser_attach(thread);
     cockpit.wait_for(ask).unwrap()
 }
@@ -1992,20 +1993,23 @@ pub(super) fn served(cockpit: &mut Cockpit, thread: ThreadId) -> ferrite_core::b
 /// `action` on `thread`'s Browser, as the Server answers it.
 pub(super) fn browsed(
     cockpit: &mut Cockpit,
-    thread: ThreadId,
+    thread: ThreadKey,
     action: ferrite_core::browser::Action,
 ) -> ferrite_core::browser::State {
     let ask = cockpit.browser(thread, action);
     cockpit.wait_for(ask).unwrap()
 }
 
-pub(super) fn browser_core(name: &str) -> (Cockpit, ThreadId, ferrite_core::browser::Document) {
+/// A Cockpit attached to a Server whose browser window has one tab open on
+/// a local page, and the Thread and tab document it belongs to.
+pub(super) fn browser_core(name: &str) -> (Cockpit, ThreadKey, ferrite_core::browser::Document) {
     use ferrite_core::browser::Action;
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
     let dir = scratch(name);
     let dial = ferrite_server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
     let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
     let mut core = Cockpit::attach(Attach {
+        saved_as: Some(ferrite_core::MachineKey(Some("me@box".into()))),
         store: dir.join("window"), server: Endpoint::Machine(bridge),
         client: ferrite_core::protocol::Peer { name: name.into(), version: "0".into() },
         renderer: None, browser: true, driven: false, discovery: Box::new(Fake::default()),
@@ -2192,6 +2196,7 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
     let dial = ferrite_server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
     let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
     let mut core = Cockpit::attach(Attach {
+        saved_as: Some(ferrite_core::MachineKey(Some("me@box".into()))),
         store: dir.join("window"), server: Endpoint::Machine(bridge),
         client: ferrite_core::protocol::Peer { name: "browser-preview".into(), version: "0".into() },
         renderer: None, browser: true, driven: false, discovery: Box::new(Fake::default()),
@@ -2245,7 +2250,7 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
     begin_live(cx);
     assert!(protected(cx), "the live editor protects the exact page");
     assert!(cx.debug_bounds("browser-annotation-overlay").is_none(), "the editor lives in the guest page");
-    assert!(cx.update(|window, cx| view.read(cx).browser_annotation_focus(view.read(cx).cockpit.read(cx).thread_key(thread), cx).is_some_and(|focus| focus.is_focused(window))), "starting annotation focuses the rendered WebView");
+    assert!(cx.update(|window, cx| view.read(cx).browser_annotation_focus(thread, cx).is_some_and(|focus| focus.is_focused(window))), "starting annotation focuses the rendered WebView");
     cx.simulate_keystrokes("escape");
     wait(cx, "Escape reaches the guest", &mut |_| engine.journal().iter().any(|call| matches!(call, Call::Input(Input::Key { key, down: true, .. }) if key == "escape")));
     // simulate_keystrokes sends only key-down; a real release ends the
@@ -2333,6 +2338,7 @@ fn settings_on_a_machine<'a>(
         dial,
     ));
     let mut core = Cockpit::attach(Attach {
+        saved_as: Some(ferrite_core::MachineKey(Some("me@box".into()))),
         browser: false,
         driven: false,
         store: dir.join("window").join("threads"),
@@ -2636,7 +2642,7 @@ fn machine_with_edited_remote_file<'a>(
         view.open_in_files(thread, checkout.join("edited.rs"), None, true, cx);
     });
     tick(cx);
-    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(view.cockpit.read(cx).thread_key(thread)).unwrap());
+    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread).unwrap());
     editor.update(cx, |editor, cx| editor.type_text("edited ", cx));
     (root, view, editor, cx)
 }
@@ -2779,7 +2785,7 @@ fn local_environment_switch_persists_and_empty_client_blocks_new_threads(cx: &mu
     shown(&root, cx).read_with(cx, |view, cx| {
         assert!(view.panes.is_empty());
         assert!(
-            view.on_machine(cx),
+            view.elsewhere(view.on_screen(cx), cx),
             "empty client cannot use local file fallbacks"
         );
         assert!(view.shown_defaults(cx).is_none());
@@ -2830,7 +2836,7 @@ fn open_connections_asks_the_machines_defaults(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.settings_open(cx), "Settings opens");
-        assert!(view.on_machine(cx));
+        assert!(view.elsewhere(view.on_screen(cx), cx));
         assert!(
             view.environment.defaults.is_some() || view.environment.defaults_error.is_some(),
             "the machine's defaults were asked"

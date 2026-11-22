@@ -7,10 +7,10 @@ use ferrite_core::drafts::Drafts;
 use ferrite_core::replies::Reply;
 
 /// `thread` as the drafts file names this computer's.
-pub(super) fn saved_here(thread: ThreadId) -> ferrite_core::SavedThread {
+pub(super) fn saved_here(thread: ThreadKey) -> ferrite_core::SavedThread {
     ferrite_core::SavedThread {
         machine: ferrite_core::MachineKey(None),
-        thread,
+        thread: thread.thread(),
     }
 }
 

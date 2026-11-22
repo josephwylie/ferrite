@@ -131,7 +131,7 @@ impl CockpitView {
     /// saying so), or None.
     pub(crate) fn opener_unavailable(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         opener: Opener,
         cx: &gpui::App,
     ) -> Option<&'static str> {
@@ -139,7 +139,7 @@ impl CockpitView {
         match opener {
             Opener::Terminal | Opener::Files if !checkout => Some("Needs a checkout"),
             Opener::Changes if !checkout => Some("Needs a checkout"),
-            Opener::PullRequest if self.facts.pr(self.cockpit.read(cx).thread_key(thread)).is_none() => {
+            Opener::PullRequest if self.facts.pr(thread).is_none() => {
                 Some("No pull request on this branch")
             }
             Opener::SideChat
@@ -157,19 +157,19 @@ impl CockpitView {
 
     /// A row of the `+` menu or of "Open a surface": its Surface opens in
     /// `thread`'s Panel. Nothing for a row that cannot run.
-    pub(crate) fn run_opener(&mut self, thread: ThreadId, opener: Opener, cx: &mut Context<Self>) {
+    pub(crate) fn run_opener(&mut self, thread: ThreadKey, opener: Opener, cx: &mut Context<Self>) {
         if self.opener_unavailable(thread, opener, cx).is_some() {
             return;
         }
         match opener {
-            Opener::Browser => self.open_browser(self.cockpit.read(cx).thread_key(thread), cx),
+            Opener::Browser => self.open_browser(thread, cx),
             Opener::Terminal => self.new_terminal_surface(thread, cx),
-            Opener::Files => self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx),
-            Opener::Changes => self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Changes, cx),
+            Opener::Files => self.upsert_surface(thread, SurfaceId::Files, cx),
+            Opener::Changes => self.upsert_surface(thread, SurfaceId::Changes, cx),
             Opener::PullRequest => self.open_pr_surface(thread, cx),
-            Opener::SideChat => self.open_side_chat(self.cockpit.read(cx).thread_key(thread), cx),
+            Opener::SideChat => self.open_side_chat(thread, cx),
             Opener::Background => self.open_background(thread, cx),
-            Opener::Overview => self.open_panel(self.cockpit.read(cx).thread_key(thread), cx),
+            Opener::Overview => self.open_panel(thread, cx),
         }
     }
 
@@ -177,7 +177,7 @@ impl CockpitView {
     /// unavailable one disabled with its reason.
     pub(in crate::cockpit) fn surface_menu_rows(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         cx: &gpui::App,
     ) -> Vec<Option<(menu::Item, MenuVerb)>> {
         Opener::ALL
@@ -198,11 +198,10 @@ impl CockpitView {
     /// close nothing, a File's path first.
     pub(in crate::cockpit) fn surface_tab_rows(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         at: usize,
-        cx: &gpui::App,
     ) -> Vec<Option<(menu::Item, MenuVerb)>> {
-        let Some(state) = self.panel.surfaces.get(self.cockpit.read(cx).thread_key(thread)) else {
+        let Some(state) = self.panel.surfaces.get(thread) else {
             return Vec::new();
         };
         let count = state.tabs.len();
@@ -240,7 +239,7 @@ impl CockpitView {
     /// A tab menu's verb, on the tab it opened on.
     pub(in crate::cockpit) fn run_surface_tab_verb(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         at: usize,
         verb: MenuVerb,
         cx: &mut Context<Self>,
@@ -248,22 +247,22 @@ impl CockpitView {
         let Some(id) = self
             .panel
             .surfaces
-            .get(self.cockpit.read(cx).thread_key(thread))
+            .get(thread)
             .and_then(|state| state.tabs.get(at))
             .cloned()
         else {
             return;
         };
         match verb {
-            MenuVerb::CloseSurface => self.close_surface(self.cockpit.read(cx).thread_key(thread), &id, cx),
+            MenuVerb::CloseSurface => self.close_surface(thread, &id, cx),
             MenuVerb::CloseOtherSurfaces => {
-                self.close_surfaces(self.cockpit.read(cx).thread_key(thread), CloseSelection::Others(id), cx)
+                self.close_surfaces(thread, CloseSelection::Others(id), cx)
             }
             MenuVerb::CloseSurfacesRight => {
-                self.close_surfaces(self.cockpit.read(cx).thread_key(thread), CloseSelection::Right(id), cx)
+                self.close_surfaces(thread, CloseSelection::Right(id), cx)
             }
             MenuVerb::CloseAllSurfaces => {
-                self.close_surfaces(self.cockpit.read(cx).thread_key(thread), CloseSelection::All, cx)
+                self.close_surfaces(thread, CloseSelection::All, cx)
             }
             MenuVerb::CopyPath => {
                 if let SurfaceId::File(path) = &id {
@@ -276,9 +275,9 @@ impl CockpitView {
 
     /// Whether a Surface has work going on that its tab should say (T3's
     /// pending dot): a side chat answering, background work running.
-    pub(crate) fn surface_pending(&self, thread: ThreadId, id: &SurfaceId, cx: &gpui::App) -> bool {
+    pub(crate) fn surface_pending(&self, thread: ThreadKey, id: &SurfaceId, cx: &gpui::App) -> bool {
         match id {
-            SurfaceId::SideChat(tab) => self.side_chat_running(self.cockpit.read(cx).thread_key(thread), *tab, cx),
+            SurfaceId::SideChat(tab) => self.side_chat_running(thread, *tab, cx),
             SurfaceId::Background => self.cockpit.read(cx).thread(thread).is_some_and(|open| {
                 open.transcript()
                     .background_calls()
@@ -291,7 +290,7 @@ impl CockpitView {
     /// A tab's title (T3's `surfaceTitle`): the singletons' names, a file's
     /// name (a command's own), the shell's `Terminal N`, the side chat's
     /// title.
-    fn surface_title(&self, thread: ThreadId, id: &SurfaceId, cx: &gpui::App) -> SharedString {
+    fn surface_title(&self, thread: ThreadKey, id: &SurfaceId, cx: &gpui::App) -> SharedString {
         match id {
             SurfaceId::Overview => "Overview".into(),
             SurfaceId::Changes => "Changes".into(),
@@ -300,7 +299,7 @@ impl CockpitView {
             SurfaceId::Browser => "Browser".into(),
             SurfaceId::File(path) => self.file_surface_title(thread, path, cx),
             SurfaceId::Terminal(number) => format!("Terminal {number}").into(),
-            SurfaceId::SideChat(tab) => self.side_chat.read(cx).title(self.cockpit.read(cx).thread_key(thread), *tab),
+            SurfaceId::SideChat(tab) => self.side_chat.read(cx).title(thread, *tab),
             SurfaceId::PullRequest(number) => format!("#{number}").into(),
         }
     }
@@ -445,14 +444,14 @@ impl CockpitView {
                 .child(icon(icons::CLOSE, SURFACE_TAB_ICON, INK_STRONG))
         } else {
             // A pull request's icon says its state, in its state's ink.
-            let (glyph, ink) = match (id, self.pr_tone(thread.thread(), cx)) {
+            let (glyph, ink) = match (id, self.pr_tone(thread, cx)) {
                 (SurfaceId::PullRequest(_), Some(tone)) => (tone.glyph(), tone.ink()),
                 _ => (
                     surface_icon(id),
                     if active { INK_STRONG } else { INK_SUBTLE },
                 ),
             };
-            let pending = self.surface_pending(thread.thread(), id, cx).then(|| {
+            let pending = self.surface_pending(thread, id, cx).then(|| {
                 div()
                     .debug_selector({
                         let selector = selector.clone();
@@ -495,7 +494,7 @@ impl CockpitView {
         let middle = id.clone();
         let held = id.clone();
         let control = PanelControl::Tab(id.clone());
-        let semantics = Semantics::tab(self.surface_title(thread.thread(), id, cx), active);
+        let semantics = Semantics::tab(self.surface_title(thread, id, cx), active);
         let handle = self.panel.focus.register(control.clone(), semantics.clone(), cx);
         div()
             .id(element)
@@ -533,7 +532,7 @@ impl CockpitView {
                 div()
                     .min_w_0()
                     .truncate()
-                    .child(self.surface_title(thread.thread(), id, cx)),
+                    .child(self.surface_title(thread, id, cx)),
             )
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 view.activate_surface(thread, &pressed, cx);
@@ -567,7 +566,7 @@ impl CockpitView {
                 cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     view.open_context_menu(
-                        MenuTarget::SurfaceTab { thread: thread.thread(), at },
+                        MenuTarget::SurfaceTab { thread, at },
                         event.position,
                         cx,
                     );
@@ -585,7 +584,7 @@ impl CockpitView {
                 .occlude()
                 .child(self.panel.focus.measured(PanelControl::Plus));
         self.doors()
-            .button(plus, plus_door(thread.thread()), "Open a surface", cx)
+            .button(plus, plus_door(thread), "Open a surface", cx)
             .into_any_element()
     }
 
@@ -595,8 +594,8 @@ impl CockpitView {
         let Some(thread) = self.focused_thread(cx) else {
             return;
         };
-        if !self.panel_open(self.cockpit.read(cx).thread_key(thread)) {
-            self.apply_surface(self.cockpit.read(cx).thread_key(thread), SurfaceAction::SetOpen(true));
+        if !self.panel_open(thread) {
+            self.apply_surface(thread, SurfaceAction::SetOpen(true));
         }
         let window = self.panel.window_w;
         let left = window - self.panel_target_w(cx) + ferrite_ui::theme::SURFACE_HEAD_PAD_L;
@@ -617,7 +616,7 @@ impl CockpitView {
         use ferrite_ui::theme::*;
         let highlight = self.panel.empty_highlight;
         let rows = Opener::ALL.into_iter().enumerate().map(|(at, opener)| {
-            let why = self.opener_unavailable(thread.thread(), opener, cx);
+            let why = self.opener_unavailable(thread, opener, cx);
             let id = SharedString::from(format!("panel-open-{}", opener.letter()));
             let selector = id.to_string();
             let key = ferrite_ui::pointer::hover_key(&gpui::ElementId::from(id.clone()));
@@ -640,7 +639,7 @@ impl CockpitView {
                 .child(div().flex_1().min_w_0().truncate().child(opener.label()))
                 .child(soft_key_cap(opener.letter()))
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    view.run_opener(thread.thread(), opener, cx);
+                    view.run_opener(thread, opener, cx);
                 }))
         });
         div()
@@ -662,7 +661,7 @@ impl CockpitView {
             .flex_1()
             .min_h_0()
             .on_key_down(cx.listener(move |view, event: &gpui::KeyDownEvent, _, cx| {
-                if view.surface_empty_key(thread.thread(), &event.keystroke, cx) {
+                if view.surface_empty_key(thread, &event.keystroke, cx) {
                     cx.stop_propagation();
                 }
             }))
@@ -692,7 +691,7 @@ impl CockpitView {
     /// one not), ↑↓←→ move the highlight round, ⏎ fires it.
     pub(in crate::cockpit) fn surface_empty_key(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         keystroke: &gpui::Keystroke,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -741,6 +740,6 @@ pub(crate) fn soft_key_cap(key: &'static str) -> Div {
 }
 
 /// The `+`'s menu, hung from its left edge.
-pub(super) fn plus_door(thread: ThreadId) -> Door {
+pub(super) fn plus_door(thread: ThreadKey) -> Door {
     Door::new(MenuTarget::SurfaceMenu(thread), Edge::Left)
 }

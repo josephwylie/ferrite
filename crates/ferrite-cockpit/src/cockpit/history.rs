@@ -29,7 +29,7 @@ const DEPTH: usize = 50;
 /// transcript or a Subagent's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Place {
-    thread: ThreadId,
+    thread: ThreadKey,
     subject: Subject,
 }
 
@@ -129,7 +129,7 @@ impl CockpitView {
         if self.empty_board_shown(cx) {
             return None;
         }
-        let subject_of = |thread: ThreadId| {
+        let subject_of = |thread: ThreadKey| {
             let index = self.pane_for(thread)?;
             Some(self.panes[index].selected.clone())
         };
@@ -146,7 +146,7 @@ impl CockpitView {
         let parked = self.facts.parked();
         let cockpit = self.cockpit.read(cx);
         let exists =
-            |thread: ThreadId| cockpit.thread(thread).is_some() || parked.contains(&cockpit.thread_key(thread));
+            |thread: ThreadKey| cockpit.thread(thread).is_some() || parked.contains(&thread);
         self.history.prune(|place| exists(place.thread));
         let place = self.place(cx);
         self.history.visit(place);
@@ -192,7 +192,7 @@ impl CockpitView {
     /// `thread`'s Pane on `subject`, unless it already is.
     fn show_subject(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         subject: Subject,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -212,7 +212,7 @@ mod tests {
 
     fn thread(id: u64) -> Place {
         Place {
-            thread: ThreadId::new(id),
+            thread: ferrite_core::ThreadKey::fixture(0, id),
             subject: Subject::Main,
         }
     }

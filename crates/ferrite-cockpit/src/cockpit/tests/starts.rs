@@ -51,7 +51,7 @@ fn starts_window<'a>(
         .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, thread);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     core.fixture_live_factory();
     core.fixture_github(vec![
         (
@@ -65,7 +65,7 @@ fn starts_window<'a>(
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     view.update(cx, |view, cx| {
-        view.open_factory(project, cx);
+        view.open_factory(project.project(), cx);
         view.factory_surface(Surface::Workflows, cx);
         view.create_workflow(Template::Blank, cx);
     });

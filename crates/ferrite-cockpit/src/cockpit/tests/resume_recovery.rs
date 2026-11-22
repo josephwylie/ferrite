@@ -24,7 +24,7 @@ fn lost<'a>(
 ) -> (
     Entity<CockpitView>,
     Fake,
-    ThreadId,
+    ThreadKey,
     &'a mut gpui::VisualTestContext,
 ) {
     let (mut core, fake) = cockpit(name, 1);
@@ -74,7 +74,7 @@ fn composer_text(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -
 
 fn prompts(
     view: &Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     cx: &mut gpui::VisualTestContext,
 ) -> Vec<String> {
     view.read_with(cx, |view, cx| {
@@ -114,8 +114,8 @@ fn a_lost_conversation_is_recovered_from_the_offer_once_in_the_same_thread(
     settle(cx);
 
     assert_eq!(composer_text(&view, cx), PROMPT, "the prompt is back");
-    let offer = format!("resume-fresh-{}", thread.get());
-    let shown = format!("resume-offer-{}", thread.get());
+    let offer = format!("resume-fresh-{}", thread.thread().get());
+    let shown = format!("resume-offer-{}", thread.thread().get());
     assert!(
         debug_bounds(cx, shown.clone()).is_some(),
         "the offer is shown"
@@ -183,7 +183,7 @@ fn a_conversation_in_use_is_refused_and_never_forked(cx: &mut TestAppContext) {
     settle(cx);
 
     assert_eq!(composer_text(&view, cx), PROMPT, "the prompt is back");
-    let shown = format!("resume-offer-{}", thread.get());
+    let shown = format!("resume-offer-{}", thread.thread().get());
     assert!(
         debug_bounds(cx, shown.clone()).is_none(),
         "no offer to start over"
@@ -217,7 +217,7 @@ fn a_fresh_start_that_fails_keeps_the_prompt_and_does_not_loop(cx: &mut TestAppC
     cx.simulate_input(PROMPT);
     cx.simulate_keystrokes("enter");
     settle(cx);
-    let offer = format!("resume-fresh-{}", thread.get());
+    let offer = format!("resume-fresh-{}", thread.thread().get());
     let at = debug_bounds(cx, offer).unwrap().center();
 
     *fake.fail.borrow_mut() = true;

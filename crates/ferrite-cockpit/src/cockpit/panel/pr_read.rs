@@ -15,12 +15,12 @@ use gpui::SharedString;
 
 use ferrite_core::protocol::{WirePr, WirePrUnread};
 use ferrite_core::workspace::registry::ProjectId;
-use ferrite_core::ThreadId;
+use ferrite_core::ThreadKey;
 
 /// Whose repository a PR number is read in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PrSource {
-    Thread(ThreadId),
+    Thread(ThreadKey),
     Project(ProjectId),
 }
 
@@ -32,7 +32,7 @@ pub(crate) struct PrTarget {
 }
 
 impl PrTarget {
-    pub(crate) fn thread(thread: ThreadId, number: u64) -> Self {
+    pub(crate) fn thread(thread: ThreadKey, number: u64) -> Self {
         Self {
             source: PrSource::Thread(thread),
             number,
@@ -204,7 +204,7 @@ impl PrReads {
     }
 
     #[cfg(test)]
-    pub(crate) fn held_for_test(&self, thread: ThreadId) -> usize {
+    pub(crate) fn held_for_test(&self, thread: ThreadKey) -> usize {
         self.reads.keys().filter(|target| target.source == PrSource::Thread(thread)).count()
     }
 }
@@ -214,7 +214,7 @@ mod tests {
     use super::*;
 
     fn target(number: u64) -> PrTarget {
-        PrTarget::thread(ThreadId::new(1), number)
+        PrTarget::thread(ThreadKey::fixture(0, 1), number)
     }
 
     fn failure(kind: WirePrUnread) -> PrFailure {

@@ -108,7 +108,7 @@ fn the_model_picker_hangs_over_the_box_from_its_chip(cx: &mut TestAppContext) {
         cx.run_until_parked();
     }
     let menu = cx.debug_bounds("model-picker").expect("the picker is open");
-    let chip = debug_bounds(cx, format!("model-picker-{}", thread.get()))
+    let chip = debug_bounds(cx, format!("model-picker-{}", thread.thread().get()))
         .expect("the model chip rides the toolbar");
     let composer = cx.debug_bounds("composer-block").unwrap();
     assert!(
@@ -293,11 +293,11 @@ fn the_plus_menu_reaches_the_connectors(cx: &mut TestAppContext) {
     cx.simulate_click(manage.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds("panel").is_some(), "the panel shows");
-    view.read_with(cx, |view, cx| {
+    view.read_with(cx, |view, _| {
         assert!(view.popup().is_none(), "a pick closes the menu");
         let thread = view.panes[0].thread().expect("a Thread");
         assert_eq!(
-            view.active_surface(view.cockpit.read(cx).thread_key(thread)),
+            view.active_surface(thread),
             Some(crate::cockpit::surfaces::SurfaceId::Overview),
             "on its Overview, where the connectors are"
         );

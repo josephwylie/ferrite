@@ -31,7 +31,7 @@ use ferrite_core::{
     store::{Provider, Store},
     workspace::{PrState, WorkspaceChoice},
     ControlKind, Decision, DecisionAnswer, DecisionKind, Hunk, McpServer, McpStatus,
-    PermissionModeChoice, QueueEvent, QueuedPrompt, SessionCommand, SessionEvent, ThreadId,
+    PermissionModeChoice, QueueEvent, QueuedPrompt, SessionCommand, SessionEvent, ThreadKey,
     ToolResult, TurnOutcome,
 };
 use gpui::{AppContext, Context, HeadlessAppContext, Window};
@@ -351,7 +351,7 @@ impl Scene {
         dir
     }
 
-    fn open(&mut self, provider: Provider, checkout: &Path, title: &str) -> (ThreadId, Feed) {
+    fn open(&mut self, provider: Provider, checkout: &Path, title: &str) -> (ThreadKey, Feed) {
         let main = WorkspaceChoice::Main {
             checkout: checkout.to_path_buf(),
         };
@@ -363,7 +363,7 @@ impl Scene {
         provider: Provider,
         workspace: WorkspaceChoice,
         title: &str,
-    ) -> (ThreadId, Feed) {
+    ) -> (ThreadKey, Feed) {
         let thread = self
             .core
             .open(provider, workspace)
@@ -850,7 +850,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let (scene, _) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
                 let thread = view.cockpit.read(cx).roster().focused_thread().expect("focus");
-                ferrite_ui::motion::hover_listener(format!("nav-thread-0-{}", thread.get()).into())(
+                ferrite_ui::motion::hover_listener(format!("nav-thread-0-{}", thread.thread().get()).into())(
                     &true, window, cx,
                 );
                 right_click_when_drawn(thread, 8, false, window, cx);
@@ -862,7 +862,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let (scene, _) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
                 let thread = view.cockpit.read(cx).roster().focused_thread().expect("focus");
-                ferrite_ui::motion::hover_listener(format!("nav-thread-0-{}", thread.get()).into())(
+                ferrite_ui::motion::hover_listener(format!("nav-thread-0-{}", thread.thread().get()).into())(
                     &true, window, cx,
                 );
                 right_click_when_drawn(thread, 8, true, window, cx);
@@ -991,7 +991,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     url: url.then(|| "https://example.com/run".into()),
                 };
                 view.facts.set_branches(vec![(
-                    view.cockpit.read(cx).thread_key(thread),
+                    thread,
                     Some(BranchStatus {
                         branch: Some("feat/pane-chrome".into()),
                         upstream: Some("origin/feat/pane-chrome".into()),
@@ -1002,7 +1002,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     }),
                 )]);
                 view.facts.pr_answered(
-                    view.cockpit.read(cx).thread_key(thread),
+                    thread,
                     Some(PullRequest {
                         number: 48,
                         state: PrState::Open,
@@ -1050,14 +1050,14 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     url: Some("https://example.com/run".into()),
                 };
                 view.facts.set_branches(vec![(
-                    view.cockpit.read(cx).thread_key(thread),
+                    thread,
                     Some(BranchStatus {
                         branch: Some("feat/pane-chrome".into()),
                         ..Default::default()
                     }),
                 )]);
                 view.facts.pr_answered(
-                    view.cockpit.read(cx).thread_key(thread),
+                    thread,
                     Some(PullRequest {
                         number: 212,
                         state: PrState::Open,
@@ -1282,7 +1282,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             }
             let setup: Setup = Box::new(|view, _, cx| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
-                view.open_panel(view.cockpit.read(cx).thread_key(thread), cx);
+                view.open_panel(thread, cx);
             });
             (scene, setup)
         }
@@ -1398,8 +1398,8 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 branches(view, window, cx);
                 let harness = named_thread(view, "Screenshot harness", cx);
                 view.facts
-                    .pr_answered(view.cockpit.read(cx).thread_key(harness), Some(fixture_pr(415, PrState::Open, false)));
-                crate::nav::card_hover(crate::nav::card_key(view.cockpit.read(cx).thread_key(harness)), false, None)(&true, window, cx);
+                    .pr_answered(harness, Some(fixture_pr(415, PrState::Open, false)));
+                crate::nav::card_hover(crate::nav::card_key(harness), false, None)(&true, window, cx);
                 cx.notify();
             });
             (scene, setup)
@@ -1430,10 +1430,10 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     ),
                 ] {
                     let thread = named_thread(view, name, cx);
-                    view.facts.pr_answered(view.cockpit.read(cx).thread_key(thread), Some(reading));
+                    view.facts.pr_answered(thread, Some(reading));
                 }
                 let running = named_thread(view, "Retained transcript rendering", cx);
-                crate::nav::card_hover(crate::nav::card_key(view.cockpit.read(cx).thread_key(running)), true, None)(&true, window, cx);
+                crate::nav::card_hover(crate::nav::card_key(running), true, None)(&true, window, cx);
                 cx.notify();
             });
             (scene, setup)
@@ -1447,17 +1447,16 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
 /// the first frame (of `frames`) that has drawn the card; `submenu`, with
 /// its first row's submenu open.
 fn right_click_when_drawn(
-    thread: ThreadId,
+    thread: ThreadKey,
     frames: usize,
     submenu: bool,
     window: &mut Window,
     cx: &mut Context<CockpitView>,
 ) {
     cx.on_next_frame(window, move |view, window, cx| {
-        match window.debug_bounds(&format!("nav-title-{}", thread.get())) {
+        match window.debug_bounds(&format!("nav-title-{}", thread.thread().get())) {
             Some(title) => {
-                let key = view.cockpit.read(cx).thread_key(thread);
-                view.open_context_menu(MenuTarget::Thread(key), title.center(), cx);
+                view.open_context_menu(MenuTarget::Thread(thread), title.center(), cx);
                 if submenu {
                     view.open_submenu(0, super::context_menu::Submenu::OpenIn, cx);
                 }
@@ -2006,9 +2005,9 @@ fn nav() -> (Scene, Setup) {
             })
         };
         view.facts.set_branches(vec![
-            (view.cockpit.read(cx).thread_key(harness), branch("worktree-pay-api-migration-cleanup")),
-            (view.cockpit.read(cx).thread_key(notes), branch("feat/cash-webhook-retries")),
-            (view.cockpit.read(cx).thread_key(sync), branch("fix/sync")),
+            (harness, branch("worktree-pay-api-migration-cleanup")),
+            (notes, branch("feat/cash-webhook-retries")),
+            (sync, branch("fix/sync")),
         ]);
         cx.notify();
     });
@@ -2016,12 +2015,12 @@ fn nav() -> (Scene, Setup) {
 }
 
 /// The open Thread a nav scene's fixture titled `name`.
-fn named_thread(view: &CockpitView, name: &str, cx: &gpui::App) -> ThreadId {
+fn named_thread(view: &CockpitView, name: &str, cx: &gpui::App) -> ThreadKey {
     view.cockpit
         .read(cx)
         .threads()
         .into_iter()
-        .find(|thread| view.facts.name(view.cockpit.read(cx).thread_key(*thread)).as_ref() == name)
+        .find(|thread| view.facts.name(*thread).as_ref() == name)
         .unwrap_or_else(|| panic!("the fixture's {name}"))
 }
 
@@ -2547,9 +2546,10 @@ fn projecteditor() -> (Scene, Setup) {
         .first()
         .map(|project| project.id)
         .expect("a fixture Project");
+    let key = scene.core.registry().project_key(project);
     scene
         .core
-        .add_project_directories(project, &[extra])
+        .add_project_directories(key, &[extra])
         .expect("add fixture directory");
     let setup: Setup = Box::new(move |view, _, cx| view.open_project_editor(project, cx));
     (scene, setup)

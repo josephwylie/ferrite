@@ -26,32 +26,32 @@ pub(super) enum MenuTarget {
     NavFactory,
     /// A diff line in the Review beside the Thread's Pane (ADR 0021).
     Review {
-        thread: ThreadId,
+        thread: ThreadKey,
         line: usize,
     },
     /// A sent prompt's Rewind: how much of it to take back.
     Prompt {
-        thread: ThreadId,
+        thread: ThreadKey,
         block: ferrite_core::transcript::BlockId,
     },
     /// The page a Pane's preview shows: its title's menu.
     Page(PaneIdentity),
     /// A Files tree row (the path is the Files state's `pressed`).
-    File(ThreadId),
+    File(ThreadKey),
     /// The Files pane's `⋯`.
-    FilesMore(ThreadId),
+    FilesMore(ThreadKey),
     /// The Changes scope dropdown, and its `⋯`.
     ChangesScope(tools::Diff),
     ChangesMore(tools::Diff),
     /// The Changes toolbar's base: the branches to compare against.
     ChangesBase(tools::Diff),
     /// The terminal's right-click, and its `⋯`.
-    Terminal(ThreadId),
-    TerminalMore(ThreadId),
+    Terminal(ThreadKey),
+    TerminalMore(ThreadKey),
     /// The Panel head's `+`: every Surface the Thread's Panel can open.
-    SurfaceMenu(ThreadId),
+    SurfaceMenu(ThreadKey),
     /// A Panel tab's right-click, by its place in the strip.
-    SurfaceTab { thread: ThreadId, at: usize },
+    SurfaceTab { thread: ThreadKey, at: usize },
     /// The pull request Surface's `⋯`.
     PrMore(super::panel::pr_read::PrTarget),
     /// The nav card's PR badge: the PR's own doors, not the Thread's.
@@ -59,8 +59,8 @@ pub(super) enum MenuTarget {
     /// A Factory picker (#221): its rows are the Factory view's `picks`.
     Factory,
     /// A right-click on the Thread's web page.
-    BrowserPage(ThreadId),
-    Details(ThreadId),
+    BrowserPage(ThreadKey),
+    Details(ThreadKey),
 }
 
 /// One thing a context-menu row does.
@@ -207,7 +207,7 @@ impl CockpitView {
     /// oldest Blocks, the whole of it is replayed from the Thread's log off
     /// the window's thread; with no log to read here, or none readable, the
     /// kept part is copied and says it is partial.
-    pub(super) fn copy_transcript(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(super) fn copy_transcript(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         let Some(open) = self.cockpit.read(cx).thread(thread) else {
             return;
         };
@@ -227,7 +227,7 @@ impl CockpitView {
         cx.spawn(async move |_, cx| {
             let whole = cx
                 .background_executor()
-                .spawn(async move { store.full_history_text(thread) })
+                .spawn(async move { store.full_history_text(thread.thread()) })
                 .await;
             let text = whole.ok().filter(|text| !text.is_empty()).unwrap_or(partial);
             cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(text)));
@@ -332,7 +332,8 @@ impl CockpitView {
             // The transcript: what is on screen — copy it, name it, size
             // it, and the Pane's own park/close. Deleting a Thread is the
             // nav's act; the transcript never offers it.
-            MenuTarget::Pane(_) => {
+            MenuTarget::Pane(key) => {
+                let machine = key.machine();
                 let selected = self.native_copy.is_some();
                 rows.push(Some((
                     menu::Item::new("Copy")
@@ -347,7 +348,7 @@ impl CockpitView {
                 rows.push(None);
                 rows.push(Some((menu::Item::new("Rename"), MenuVerb::Rename)));
                 rows.push(None);
-                if !self.on_machine(cx) {
+                if !self.elsewhere(machine, cx) {
                     rows.push(Some((
                         menu::Item::new("Reveal in Finder"),
                         MenuVerb::Reveal,
@@ -385,13 +386,13 @@ impl CockpitView {
             }
             // The Review's diff: the pick — comment on it, read its file,
             // copy it. The reader reads this computer's files only.
-            MenuTarget::Review { .. } => {
+            MenuTarget::Review { thread, .. } => {
                 rows.push(Some((
                     menu::Item::new("Comment").shortcut("c"),
                     MenuVerb::Comment,
                 )));
                 rows.push(Some((
-                    menu::Item::new("Open file at this line").disabled(self.on_machine(cx)),
+                    menu::Item::new("Open file at this line").disabled(self.elsewhere(thread.machine(), cx)),
                     MenuVerb::OpenAtLine,
                 )));
                 rows.push(Some((menu::Item::new("Copy"), MenuVerb::CopySelection)));
@@ -422,23 +423,25 @@ impl CockpitView {
                     ))
                 }));
             }
-            MenuTarget::File(_) => rows = tools::FilesView::row_rows(self.on_machine(cx)),
-            MenuTarget::FilesMore(thread) => rows = self.files.read(cx).more_rows(self.cockpit.read(cx).thread_key(thread)),
+            MenuTarget::File(thread) => {
+                rows = tools::FilesView::row_rows(self.elsewhere(thread.machine(), cx))
+            }
+            MenuTarget::FilesMore(thread) => rows = self.files.read(cx).more_rows(thread),
             MenuTarget::ChangesScope(diff) => rows = self.changes.read(cx).scope_rows(diff),
             MenuTarget::ChangesMore(diff) => rows = self.changes.read(cx).more_rows(diff),
             MenuTarget::ChangesBase(diff) => {
                 rows = self.changes.read(cx).branch_rows(diff).into_iter().map(Some).collect()
             }
-            MenuTarget::BrowserPage(thread) => rows = self.browser_page_rows(self.cockpit.read(cx).thread_key(thread), cx),
+            MenuTarget::BrowserPage(thread) => rows = self.browser_page_rows(thread, cx),
             MenuTarget::Details(_) => rows = self.details_menu_rows(),
             MenuTarget::Terminal(_) => rows = self.terminals.read(cx).context_rows(),
             MenuTarget::TerminalMore(_) => rows = self.terminals.read(cx).more_rows(),
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread, cx),
-            MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at, cx),
+            MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
             MenuTarget::PrMore(target) => {
-                rows = self.pull_request.read(cx).menu_rows(target, self.branch_pr(target, cx))
+                rows = self.pull_request.read(cx).menu_rows(target, self.branch_pr(target))
             }
-            MenuTarget::PrLink(key) => rows = self.pr_link_rows(key.thread(), cx),
+            MenuTarget::PrLink(key) => rows = self.pr_link_rows(key),
             MenuTarget::Factory => {
                 rows = self
                     .factory_pick_rows(cx)
@@ -470,8 +473,8 @@ impl CockpitView {
     /// The PR badge's menu: the PR's native detail and the two browsers,
     /// then its forge address. A PR the forge gave no address says so on
     /// the rows that need one.
-    fn pr_link_rows(&self, thread: ThreadId, cx: &gpui::App) -> Vec<Option<(menu::Item, MenuVerb)>> {
-        let Some(target) = self.pr_target(thread, cx) else {
+    fn pr_link_rows(&self, thread: ThreadKey) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        let Some(target) = self.pr_target(thread) else {
             return Vec::new();
         };
         let address = |label: &'static str, verb| {
@@ -511,7 +514,7 @@ impl CockpitView {
         rows: &mut Vec<Option<(menu::Item, MenuVerb)>>,
         cx: &gpui::App,
     ) {
-        let thread = target.thread();
+        let thread = target;
         let key =
             |label: &'static str, letter: &'static str| menu::Item::new(label).shortcut(letter);
         let rule = |rows: &mut Vec<Option<(menu::Item, MenuVerb)>>| {
@@ -521,7 +524,7 @@ impl CockpitView {
         };
         let open = self.cockpit.read(cx).thread(thread);
         // A machine's path is not in this computer's Finder or Terminal.
-        if !self.on_machine(cx) {
+        if !self.elsewhere(thread.machine(), cx) {
             rows.push(Some((
                 menu::Item::new("Open in"),
                 MenuVerb::Submenu(Submenu::OpenIn),
@@ -539,7 +542,7 @@ impl CockpitView {
             .read(cx)
             .visible()
             .contains(&PaneIdentity::Thread(thread));
-        if !visible && self.cockpit.read(cx).notifications().can_mark_unread(thread) {
+        if !visible && self.cockpit.read(cx).notifications().can_mark_unread(thread.thread()) {
             rows.push(Some((key("Mark as unread", "U"), MenuVerb::MarkUnread)));
         }
         rows.push(Some((key("Rename", "R"), MenuVerb::Rename)));
@@ -566,7 +569,7 @@ impl CockpitView {
         rows.push(Some((key("Copy thread link", "K"), MenuVerb::CopyLink)));
         rule(rows);
         rows.push(Some((key("Refresh PR status", "S"), MenuVerb::RefreshPr)));
-        if self.facts.pr(self.cockpit.read(cx).thread_key(thread)).is_some_and(|pr| pr.url.is_some()) {
+        if self.facts.pr(thread).is_some_and(|pr| pr.url.is_some()) {
             rows.push(Some((key("Open PR in browser", "B"), MenuVerb::OpenPr)));
         }
         rule(rows);
@@ -607,7 +610,7 @@ impl CockpitView {
             (Submenu::Snooze, MenuTarget::Thread(_) | MenuTarget::Pane(_)) => self.snooze_rows(),
             (Submenu::Snooze, _) => Vec::new(),
             (Submenu::Files(sub), MenuTarget::File(thread) | MenuTarget::FilesMore(thread)) => {
-                self.files.read(cx).sub_rows(self.cockpit.read(cx).thread_key(thread), sub)
+                self.files.read(cx).sub_rows(thread, sub)
             }
             (Submenu::Files(_), _) => Vec::new(),
             (Submenu::Changes(_), MenuTarget::ChangesScope(diff)) => {
@@ -863,16 +866,16 @@ impl CockpitView {
                 self.snooze_thread(key, None, cx)
             }
             (MenuTarget::Thread(key), MenuVerb::Rename) => {
-                self.start_rename(RenameTarget::Thread(key.thread()), cx)
+                self.start_rename(RenameTarget::Thread(key), cx)
             }
             (MenuTarget::Pane(key), MenuVerb::Rename) => {
-                self.start_rename(RenameTarget::ViewTitle(key.thread()), cx)
+                self.start_rename(RenameTarget::ViewTitle(key), cx)
             }
             (MenuTarget::Thread(key) | MenuTarget::Pane(key), MenuVerb::Focus) => {
-                if self.pane_for(key.thread()).is_some() {
-                    self.focus_thread(key.thread(), cx);
+                if self.pane_for(key).is_some() {
+                    self.focus_thread(key, cx);
                 } else {
-                    self.revive_thread(key.thread(), cx);
+                    self.revive_thread(key, cx);
                 }
             }
             (MenuTarget::Thread(key), MenuVerb::Pin) => self.set_pinned(key, true, cx),
@@ -887,7 +890,7 @@ impl CockpitView {
                 self.parked_changed(cx);
             }
             (MenuTarget::Thread(key) | MenuTarget::Pane(key), MenuVerb::Park) => {
-                self.close_pane(PaneIdentity::Thread(key.thread()), cx);
+                self.close_pane(PaneIdentity::Thread(key), cx);
                 // A Thread parked from the nav may have had no Pane in
                 // this view, so the grid did not change: refresh the rows.
                 self.parked_changed(cx);
@@ -906,7 +909,7 @@ impl CockpitView {
             }
             (MenuTarget::PrMore(target), MenuVerb::Pr(action)) => self.run_pr_action(target, action, cx),
             (MenuTarget::PrLink(key), MenuVerb::PrOpen(how)) => {
-                self.open_pr_as(key.thread(), how, window, cx)
+                self.open_pr_as(key, how, window, cx)
             }
             (MenuTarget::PrLink(key), MenuVerb::PrWatch(watching)) => {
                 let thread = key.thread();
@@ -915,12 +918,12 @@ impl CockpitView {
                 }
             }
             (MenuTarget::PrLink(key), MenuVerb::PrCopy) => {
-                if let Some(Ok(address)) = self.pr_target(key.thread(), cx).map(|target| target.address()) {
+                if let Some(Ok(address)) = self.pr_target(key).map(|target| target.address()) {
                     cx.write_to_clipboard(ClipboardItem::new_string(address));
                 }
             }
             (MenuTarget::File(thread) | MenuTarget::FilesMore(thread), MenuVerb::Files(verb)) => {
-                self.files.update(cx, |files, cx| files.run_verb(self.cockpit.read(cx).thread_key(thread), verb, cx))
+                self.files.update(cx, |files, cx| files.run_verb(thread, verb, cx))
             }
             (
                 MenuTarget::ChangesScope(diff)
@@ -931,7 +934,7 @@ impl CockpitView {
                 .changes
                 .update(cx, |changes, cx| changes.run_verb(diff, verb, cx)),
             (MenuTarget::BrowserPage(thread), MenuVerb::Browser(verb)) => {
-                self.run_browser_page_verb(self.cockpit.read(cx).thread_key(thread), verb, cx)
+                self.run_browser_page_verb(thread, verb, cx)
             }
             (
                 MenuTarget::Terminal(thread) | MenuTarget::TerminalMore(thread),
@@ -970,7 +973,7 @@ impl CockpitView {
                 }
             }
             (MenuTarget::Pane(key), MenuVerb::CopyTranscript) => {
-                self.copy_transcript(key.thread(), cx);
+                self.copy_transcript(key, cx);
             }
             (MenuTarget::Parked, MenuVerb::ToggleParked) => {
                 let open = self.shelf_open(nav::Shelf::Parked);
@@ -989,7 +992,9 @@ impl CockpitView {
                 let project = match target {
                     MenuTarget::Thread(key)
                     | MenuTarget::Pane(key)
-                    | MenuTarget::Snooze(key) => self.cockpit.read(cx).project_id(key.thread()),
+                    | MenuTarget::Snooze(key) => {
+                        self.cockpit.read(cx).project_of(key).map(|project| project.project())
+                    }
                     MenuTarget::Parked
                     | MenuTarget::NavFilter
                     | MenuTarget::NavFactory
@@ -1021,9 +1026,9 @@ impl CockpitView {
                     cx.reveal_path(&path);
                 }
             }
-            (MenuTarget::Thread(key), MenuVerb::MarkUnread) => self.cockpit.update(cx, |cockpit, _| cockpit.mark_unread(key.thread())),
+            (MenuTarget::Thread(key), MenuVerb::MarkUnread) => self.cockpit.update(cx, |cockpit, _| cockpit.mark_unread(key)),
             (MenuTarget::Thread(key), MenuVerb::Fork) => {
-                self.fork_thread(key.thread(), None, None, cx)
+                self.fork_thread(key, None, None, cx)
             }
             (MenuTarget::Thread(key), MenuVerb::CopyLink) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(thread_link(key.thread())));
@@ -1038,8 +1043,8 @@ impl CockpitView {
                     }
                 }
             }
-            (MenuTarget::Thread(key), MenuVerb::RefreshPr) => self.check_pr(key.thread(), true, cx),
-            (MenuTarget::Thread(key), MenuVerb::OpenPr) => self.open_pr(key.thread(), cx),
+            (MenuTarget::Thread(key), MenuVerb::RefreshPr) => self.check_pr(key, true, cx),
+            (MenuTarget::Thread(key), MenuVerb::OpenPr) => self.open_pr(key, cx),
             (_, MenuVerb::CopyPath) => {
                 if let Some(path) = self.target_path(target, cx) {
                     cx.write_to_clipboard(ClipboardItem::new_string(
@@ -1048,12 +1053,11 @@ impl CockpitView {
                 }
             }
             (MenuTarget::Thread(key) | MenuTarget::Pane(key), MenuVerb::Delete) => {
-                let thread = key.thread();
-                match self.delete_thread(thread, cx) {
+                match self.delete_thread(key, cx) {
                     Err(error) => self.nav_notice.problem(format!("delete refused: {error}")),
                     Ok(()) => self.nav_notice.clear(),
                 }
-                if self.composer_menu.read(cx).pane() == Some(PaneIdentity::Thread(thread)) {
+                if self.composer_menu.read(cx).pane() == Some(PaneIdentity::Thread(key)) {
                     self.close_composer_menu(cx);
                 }
                 self.sync_panes(cx);

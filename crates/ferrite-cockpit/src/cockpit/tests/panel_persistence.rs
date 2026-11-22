@@ -54,14 +54,14 @@ fn idle_pump_saves_panel_and_working_sets_without_a_window(cx: &mut TestAppConte
         std::thread::yield_now();
     }
     assert_eq!(
-        Surfaces::saved_in(&dir, thread).unwrap().active,
+        Surfaces::saved_in(&dir, thread.thread()).unwrap().active,
         Some(SurfaceId::Files)
     );
     let files: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join("files.json")).unwrap()).unwrap();
     let saved = &files["threads"][0];
     assert_eq!(saved["machine"], serde_json::Value::Null, "this computer's");
-    assert_eq!(saved["thread"], thread.get());
+    assert_eq!(saved["thread"], thread.thread().get());
     assert_eq!(saved["files"][0]["path"], checkout.join("src/lib.rs").to_str().unwrap());
 }
 
@@ -75,10 +75,10 @@ fn close_reopen_and_files_preferences_restore_with_the_saved_panel(cx: &mut Test
     let thread = view.update(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         view.open_in_files(thread, file.clone(), None, true, cx);
-        view.files.update(cx, |files, cx| files.run_verb(view.cockpit.read(cx).thread_key(thread), FilesVerb::TogglePreviewTabs, cx));
-        view.close_surfaces(view.cockpit.read(cx).thread_key(thread), CloseSelection::One(SurfaceId::Files), cx);
-        view.apply_surface(view.cockpit.read(cx).thread_key(thread), SurfaceAction::Reopen);
-        view.apply_surface(view.cockpit.read(cx).thread_key(thread), SurfaceAction::ToggleDetails);
+        view.files.update(cx, |files, cx| files.run_verb(thread, FilesVerb::TogglePreviewTabs, cx));
+        view.close_surfaces(thread, CloseSelection::One(SurfaceId::Files), cx);
+        view.apply_surface(thread, SurfaceAction::Reopen);
+        view.apply_surface(thread, SurfaceAction::ToggleDetails);
         view.flush_panel_persistence(cx);
         thread
     });
@@ -88,11 +88,11 @@ fn close_reopen_and_files_preferences_restore_with_the_saved_panel(cx: &mut Test
     let restored = cx.new(|cx| CockpitView::new_with_settings(core, Provider::Claude, prefs, cx));
     restored.update(cx, |view, cx| {
         assert_eq!(view.panes[0].thread(), Some(thread));
-        assert_eq!(view.active_surface(view.cockpit.read(cx).thread_key(thread)), Some(SurfaceId::Files));
-        assert!(!view.panel.surfaces.get(view.cockpit.read(cx).thread_key(thread)).unwrap().details_inline_open);
+        assert_eq!(view.active_surface(thread), Some(SurfaceId::Files));
+        assert!(!view.panel.surfaces.get(thread).unwrap().details_inline_open);
         view.ensure_files(thread, cx);
         assert_eq!(
-            view.files.read(cx).tab_names(view.cockpit.read(cx).thread_key(thread)),
+            view.files.read(cx).tab_names(thread),
             [("lib.rs".to_string(), false)]
         );
         view.open_context_menu(
@@ -137,7 +137,7 @@ fn a_deleted_threads_working_set_is_saved_away_once(cx: &mut TestAppContext) {
     let files: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join("files.json")).unwrap()).unwrap();
     let saved: Vec<_> = files["threads"].as_array().unwrap().iter().map(|set| set["thread"].as_u64()).collect();
-    assert_eq!(saved, [Some(other.get())], "its working set is gone");
+    assert_eq!(saved, [Some(other.thread().get())], "its working set is gone");
     std::fs::remove_file(dir.join("files.json")).unwrap();
     view.update(cx, |view, cx| {
         for _ in 0..3 {

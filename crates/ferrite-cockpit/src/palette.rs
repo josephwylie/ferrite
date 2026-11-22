@@ -31,7 +31,7 @@ use std::ops::Range;
 
 use ferrite_core::roster::PaneIdentity;
 use ferrite_core::workspace::registry::ProjectId;
-use ferrite_core::ThreadId;
+use ferrite_core::ThreadKey;
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, Context, Entity, EventEmitter, IntoElement, ScrollHandle, SharedString,
@@ -241,7 +241,7 @@ impl Command {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Act {
     /// Focus the Thread, or revive it.
-    Thread(ThreadId),
+    Thread(ThreadKey),
     /// Land on the Project's Thread that most needs the operator.
     Project(ProjectId),
     /// Open the Project's Factory.
@@ -1062,7 +1062,7 @@ mod tests {
             detail: None,
             keys: None,
             used: None,
-            act: Act::Thread(ThreadId::new(id)),
+            act: Act::Thread(ThreadKey::fixture(0, id)),
         }
     }
 

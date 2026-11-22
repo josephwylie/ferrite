@@ -34,10 +34,10 @@ fn the_smallest_window_still_draws_the_transcript_and_composer(cx: &mut TestAppC
 fn wall_text(
     view: &gpui::Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
-    thread: ThreadId,
+    thread: ThreadKey,
 ) -> (String, Vec<String>) {
-    view.read_with(cx, |view, cx| {
-        let wall = &view.facts.get(view.cockpit.read(cx).thread_key(thread)).expect("an open Thread").wall;
+    view.read_with(cx, |view, _| {
+        let wall = &view.facts.get(thread).expect("an open Thread").wall;
         (
             wall.context.to_string(),
             wall.lines
@@ -141,7 +141,7 @@ fn the_locked_pane_caches_the_actual_checkout_branch(cx: &mut TestAppContext) {
         let thread = view.panes[view.focused(cx)].thread().expect("locked");
         assert_eq!(
             view.facts
-                .get(view.cockpit.read(cx).thread_key(thread))
+                .get(thread)
                 .and_then(|facts| facts.branch.as_ref())
                 .map(|branch| branch.to_string()),
             Some(expected.clone()),
@@ -157,10 +157,10 @@ fn the_locked_pane_caches_the_actual_checkout_branch(cx: &mut TestAppContext) {
         view.swept = cx.background_executor().now() - SWEEP_INTERVAL;
         view.pump(cx);
     });
-    view.read_with(cx, |view, cx| {
+    view.read_with(cx, |view, _| {
         assert_eq!(
             view.facts
-                .get(view.cockpit.read(cx).thread_key(thread))
+                .get(thread)
                 .and_then(|facts| facts.branch.as_ref())
                 .map(|branch| branch.to_string()),
             Some(expected),
@@ -168,10 +168,10 @@ fn the_locked_pane_caches_the_actual_checkout_branch(cx: &mut TestAppContext) {
         );
     });
     cx.run_until_parked();
-    view.read_with(cx, |view, cx| {
+    view.read_with(cx, |view, _| {
         assert_eq!(
             view.facts
-                .get(view.cockpit.read(cx).thread_key(thread))
+                .get(thread)
                 .and_then(|facts| facts.branch.as_ref())
                 .map(|branch| branch.to_string()),
             Some("agent-moved".to_string()),

@@ -128,10 +128,10 @@ impl Content {
             + lineage as f32 * 32.
     }
 
-    pub(super) fn key(&self, thread: ThreadId, width: f32, density: Density) -> String {
+    pub(super) fn key(&self, thread: ThreadKey, width: f32, density: Density) -> String {
         format!(
             "{}:{width}:{:?}:{:?}",
-            thread.get(),
+            thread.thread().get(),
             self.lineage_shown(density)
                 .then_some((&self.lineage, self.previous_open, self.previous_pages)),
             self.rows
@@ -143,7 +143,7 @@ impl Content {
 
     pub(super) fn render(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         density: Density,
         cx: &mut Context<CockpitView>,
     ) -> Div {
@@ -314,7 +314,7 @@ impl Content {
                                     ferrite_pane::preview::open_original(path, window, cx)
                                 }
                                 Action::Surface(surface) => {
-                                    view.upsert_surface(view.cockpit.read(cx).thread_key(thread), surface.clone(), cx)
+                                    view.upsert_surface(thread, surface.clone(), cx)
                                 }
                                 Action::CreatePr => view.create_pr(thread, cx),
                             }
@@ -332,7 +332,7 @@ impl CockpitView {
     /// The card's content for `thread` while its Pane shows `subject`.
     pub(super) fn details_content(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         subject: &ferrite_core::activity::Subject,
         previous_pages: usize,
         cx: &gpui::App,
@@ -344,11 +344,11 @@ impl CockpitView {
             Item::Environment,
             self.cockpit
                 .read(cx)
-                .machine()
+                .bridge(thread.machine())
                 .map_or_else(|| "Local".to_string(), |machine| machine.name().to_string()),
             icons::LAPTOP,
         );
-        environment.meta = self.facts.get(self.cockpit.read(cx).thread_key(thread)).map(|facts| {
+        environment.meta = self.facts.get(thread).map(|facts| {
             if facts.worktree.is_some() {
                 "Worktree"
             } else {
@@ -369,7 +369,7 @@ impl CockpitView {
             folder.tooltip = Some(path.to_string_lossy().into_owned());
             folder.action = Some(Action::Reveal(path.clone()));
             rows.push(folder);
-            if !self.on_machine(cx) {
+            if !self.elsewhere(thread.machine(), cx) {
                 let label = if cfg!(target_os = "macos") {
                     "Open in Finder"
                 } else if cfg!(target_os = "windows") {
@@ -383,23 +383,22 @@ impl CockpitView {
                 rows.push(open_in);
             }
         }
-        if let Some(branch) = self.thread_branch(self.cockpit.read(cx).thread_key(thread)) {
+        if let Some(branch) = self.thread_branch(thread) {
             let mut row = Row::new(Item::Branch, branch.to_string(), icons::BRANCH);
             row.tooltip = Some(branch.to_string());
             rows.push(row);
         }
-        let key = self.cockpit.read(cx).thread_key(thread);
-        if let Some(pr) = self.facts.pr(key) {
-            let block = pr_block(pr, self.facts.watched_pr(key));
+        if let Some(pr) = self.facts.pr(thread) {
+            let block = pr_block(pr, self.facts.watched_pr(thread));
             let mut row = Row::new(Item::Branch, block.title.clone(), block.glyph);
             row.tooltip = Some(block.tooltip.clone());
             row.action = Some(Action::Surface(SurfaceId::PullRequest(pr.number)));
             row.pr = Some(block);
             rows.push(row);
         }
-        if let Some(facts) = self.facts.get(self.cockpit.read(cx).thread_key(thread)) {
-            if self.thread_branch(self.cockpit.read(cx).thread_key(thread)).is_some() {
-                if self.facts.pr(self.cockpit.read(cx).thread_key(thread)).is_none()
+        if let Some(facts) = self.facts.get(thread) {
+            if self.thread_branch(thread).is_some() {
+                if self.facts.pr(thread).is_none()
                     && facts.status.as_ref().is_some_and(|status| status.dirty > 0)
                 {
                     let mut create =
@@ -437,17 +436,17 @@ impl CockpitView {
                 .visible(Item::Lineage)
             {
                 lineage =
-                    super::lineage::lineage(open.activity(), subject, &self.facts.name(self.cockpit.read(cx).thread_key(thread)));
+                    super::lineage::lineage(open.activity(), subject, &self.facts.name(thread));
             }
-            if let Some(surfaces) = self.panel.surfaces.get(self.cockpit.read(cx).thread_key(thread)) {
+            if let Some(surfaces) = self.panel.surfaces.get(thread) {
                 for surface in &surfaces.tabs {
                     if let SurfaceId::SideChat(tab) = surface {
                         let mut row = Row::new(
                             Item::SideChats,
-                            self.side_chat.read(cx).title(self.cockpit.read(cx).thread_key(thread), *tab).to_string(),
+                            self.side_chat.read(cx).title(thread, *tab).to_string(),
                             icons::MESSAGES_SQUARE,
                         );
-                        if self.side_chat_running(self.cockpit.read(cx).thread_key(thread), *tab, cx) {
+                        if self.side_chat_running(thread, *tab, cx) {
                             row.meta = Some("Running".to_string());
                         }
                         row.action = Some(Action::Surface(surface.clone()));
@@ -493,7 +492,7 @@ impl CockpitView {
             previous_open: self
                 .panel
                 .surfaces
-                .get(self.cockpit.read(cx).thread_key(thread))
+                .get(thread)
                 .is_some_and(|state| state.previous_agents_open),
             previous_pages,
         }
@@ -1127,7 +1126,7 @@ mod tests {
 
     #[test]
     fn actual_rendered_values_and_width_invalidate_density_measurements() {
-        let thread = ThreadId::new(7);
+        let thread = ThreadKey::fixture(0, 7);
         let mut content = Content {
             rows: vec![
                 Row::new(ContextCardItem::Environment, "Local", icons::LAPTOP),

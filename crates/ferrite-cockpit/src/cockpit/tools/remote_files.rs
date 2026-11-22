@@ -33,9 +33,7 @@ impl RemoteFiles {
                     let requested = view
                         .update(cx, |view, cx| {
                             if !view
-                                .cockpit
-                                .read(cx)
-                                .machine()
+                                .bridge_on_screen(cx)
                                 .is_some_and(|current| Arc::ptr_eq(current, &machine))
                             {
                                 return Err(io::Error::other(
