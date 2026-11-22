@@ -1080,7 +1080,7 @@ fn box_handle(serial: u64) -> ferrite_core::protocol::WireHandle {
 }
 
 /// box's request Notice for Decision `serial` on `thread`, unread.
-fn box_request(thread: ThreadId, serial: u64) -> ferrite_core::protocol::WireNotice {
+pub(super) fn box_request(thread: ThreadId, serial: u64) -> ferrite_core::protocol::WireNotice {
     ferrite_core::protocol::WireNotice::Request {
         thread,
         handle: box_handle(serial),
@@ -2079,8 +2079,16 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
         cx.simulate_click(annotate.center(), gpui::Modifiers::none());
         tick(cx);
     };
+    // The editor starts once the Server has answered for the page's
+    // protection, a beat or more after the press.
+    let started = || engine.journal().iter().filter(|call| matches!(call, Call::AnnotationStarted(..))).count();
+    let begin_live = |cx: &mut gpui::VisualTestContext| {
+        let before = started();
+        begin(cx);
+        wait(cx, "the guest editor starts", &mut |_| started() > before);
+    };
 
-    begin(cx);
+    begin_live(cx);
     assert!(protected(cx), "the live editor protects the exact page");
     assert!(cx.debug_bounds("browser-annotation-overlay").is_none(), "the editor lives in the guest page");
     assert!(cx.update(|window, cx| view.read(cx).browser_annotation_focus(thread, cx).is_some_and(|focus| focus.is_focused(window))), "starting annotation focuses the rendered WebView");
@@ -2095,7 +2103,7 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
     engine.annotation_event(Event::Closed);
     wait(cx, "cancelled session releases protection", &mut |cx| !protected(cx));
 
-    begin(cx);
+    begin_live(cx);
     let viewport = engine.browser_viewport().unwrap();
     let bounds = Rect { x: 12., y: 20., width: 80., height: 60. };
     engine.annotation_event(Event::Attach {
@@ -2131,16 +2139,16 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
     assert_eq!(annotations[0].comment(), "Keep this region even without a screenshot");
     assert!(matches!(&annotations[0].capture().selection, Selection::Live { feedback } if feedback.regions[0].id == "region-1" && matches!(feedback.screenshot, LiveScreenshot::Unavailable { .. })));
 
-    begin(cx);
+    begin_live(cx);
     let new_tab = cx.debug_bounds("browser-new-tab").unwrap();
     cx.simulate_click(new_tab.center(), gpui::Modifiers::none());
     wait(cx, "New Tab requests guest cleanup", &mut |_| finished() == 3);
     assert!(protected(cx), "hiding the page still waits for restoration");
     engine.annotation_event(Event::Closed);
     wait(cx, "hidden session releases protection", &mut |cx| !protected(cx));
-    let started = engine.journal().iter().filter(|call| matches!(call, Call::AnnotationStarted(..))).count();
+    let before = started();
     begin(cx);
-    assert_eq!(engine.journal().iter().filter(|call| matches!(call, Call::AnnotationStarted(..))).count(), started, "new address mode has no visible page to annotate");
+    assert_eq!(started(), before, "new address mode has no visible page to annotate");
 }
 
 /// A window on a machine whose own `settings.json` is `there`, with its

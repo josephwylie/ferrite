@@ -91,6 +91,9 @@ pub struct Cockpit {
     /// until the window says otherwise, so a headless Cockpit reads what it
     /// shows.
     window_active: bool,
+    /// What a Server was last told is seen on each visible Thread, so the
+    /// same unread things are told once (`acknowledge_seen`).
+    seen_told: std::collections::BTreeMap<ThreadId, Vec<Unread>>,
     /// The Threads whose Composer in this window holds unsent text, as the
     /// window says (`set_composing`).
     composing: std::collections::BTreeSet<ThreadId>,
@@ -305,6 +308,7 @@ impl Cockpit {
             drives: Vec::new(),
             visible_subjects: std::collections::BTreeMap::new(),
             window_active: true,
+            seen_told: std::collections::BTreeMap::new(),
             composing: std::collections::BTreeSet::new(),
             arrived: false,
             forge: Default::default(),
@@ -723,6 +727,19 @@ impl Cockpit {
         executed
     }
 
+    /// One act whose reply nobody reads (ADR 0041): a Server is told and
+    /// what it changed arrives as its messages do, so the window never
+    /// waits for it. An Engine in this process carries it out now.
+    fn tell(&mut self, op: Op) {
+        match &mut self.link {
+            Link::InProcess(_) => said(self.act(op)),
+            Link::Server(remote) => {
+                remote.tell(op);
+                crate::doorbell::ring();
+            }
+        }
+    }
+
     /// The Engine in this process: what only `--demo`, `--load` and the
     /// tests drive — fixtures, injected inputs, the launch-time revival a
     /// Server does for itself. It rings the bell, as an act does.
@@ -814,6 +831,7 @@ impl Cockpit {
                 remote::Arrival::Message(message) => self.message(message, boot),
                 remote::Arrival::Attached { snapshot, new_boot } => {
                     self.told = None;
+                    self.seen_told.clear();
                     if new_boot {
                         self.mirrors = mirror::Mirrors::retaining(self.mirrors.limits());
                     }
@@ -1136,9 +1154,9 @@ impl Cockpit {
     /// is gone.
     pub fn open_notice(&mut self, id: NoticeId) -> Option<ThreadId> {
         let thread = self.shared.notifications.get(id)?.thread;
-        notice(self.act(Op::Notice {
+        self.tell(Op::Notice {
             action: NoticeAction::Open { notice: id.get() },
-        }));
+        });
         self.land_on(thread)
     }
 
@@ -1146,12 +1164,12 @@ impl Cockpit {
     /// the operator lands on its Thread as `open_notice` does.
     pub fn open_decision_notice(&mut self, id: &DecisionNoticeId) -> Option<ThreadId> {
         self.shared.notifications.decision(id)?;
-        notice(self.act(Op::Notice {
+        self.tell(Op::Notice {
             action: NoticeAction::OpenDecision {
                 thread: id.thread,
                 handle: (&id.handle).into(),
             },
-        }));
+        });
         self.land_on(id.thread)
     }
 
@@ -1189,28 +1207,51 @@ impl Cockpit {
             return false;
         }
         // Only what would read anything is sent: this runs every frame.
-        let unread: Vec<ThreadId> = self
+        let unread: Vec<(ThreadId, Vec<Unread>)> = self
             .visible()
             .into_iter()
             .filter_map(PaneIdentity::thread)
-            .filter(|thread| self.would_read(*thread))
+            .map(|thread| (thread, self.unread(thread)))
             .collect();
-        if unread.is_empty() {
-            return false;
-        }
-        for thread in unread {
-            notice(self.link.execute(Op::Notice {
+        self.seen_told
+            .retain(|thread, _| unread.iter().any(|(shown, unread)| shown == thread && !unread.is_empty()));
+        let mut read = false;
+        for (thread, unread) in unread {
+            if unread.is_empty() {
+                continue;
+            }
+            let op = Op::Notice {
                 action: NoticeAction::Seen { thread },
-            }));
+            };
+            match &mut self.link {
+                Link::InProcess(_) => {
+                    notice(self.link.execute(op));
+                    read = true;
+                }
+                // A Server is told once for what is unread: its answer is
+                // the Notices it sends back read, a beat or more later.
+                Link::Server(remote) => {
+                    let told = self.seen_told.get(&thread);
+                    if !remote.reaches_server()
+                        || told.is_some_and(|told| unread.iter().all(|one| told.contains(one)))
+                    {
+                        continue;
+                    }
+                    remote.tell(op);
+                    self.seen_told.insert(thread, unread);
+                }
+            }
         }
-        // Received, not settled: the frame being pumped keeps its updates.
-        self.receive();
-        true
+        if read {
+            // Received, not settled: the frame being pumped keeps its updates.
+            self.receive();
+        }
+        read
     }
 
-    /// Whether looking at `thread` reads anything: an unread Notice, or an
-    /// unread request of the Subject its Pane shows.
-    fn would_read(&self, thread: ThreadId) -> bool {
+    /// What looking at `thread` reads: its unread Notices, and the unread
+    /// requests of the Subject its Pane shows.
+    fn unread(&self, thread: ThreadId) -> Vec<Unread> {
         let notifications = &self.shared.notifications;
         let shown = self
             .visible_subjects
@@ -1223,13 +1264,27 @@ impl Cockpit {
             .unwrap_or(Subject::Main);
         notifications
             .notices()
-            .any(|notice| notice.thread == thread && !notice.read)
-            || notifications.decisions().any(|notice| {
-                notice.id.thread == thread
-                    && !notice.read
-                    && notice.subject.as_ref() == Some(&shown)
-            })
+            .filter(|notice| notice.thread == thread && !notice.read)
+            .map(|notice| Unread::Notice(notice.id))
+            .chain(
+                notifications
+                    .decisions()
+                    .filter(|notice| {
+                        notice.id.thread == thread
+                            && !notice.read
+                            && notice.subject.as_ref() == Some(&shown)
+                    })
+                    .map(|notice| Unread::Decision(notice.id.clone())),
+            )
+            .collect()
     }
+}
+
+/// One thing on screen the operator has not read (`Cockpit::unread`).
+#[derive(PartialEq)]
+enum Unread {
+    Notice(NoticeId),
+    Decision(DecisionNoticeId),
 }
 
 /// A git read on a thread of its own, answered as a Server's would be.
@@ -2618,40 +2673,40 @@ impl Cockpit {
 
     pub fn dismiss_notice(&mut self, id: NoticeId) -> bool {
         let known = self.shared.notifications.get(id).is_some();
-        notice(self.act(Op::Notice {
+        self.tell(Op::Notice {
             action: NoticeAction::Dismiss { notice: id.get() },
-        }));
+        });
         known
     }
 
     pub fn dismiss_decision_notice(&mut self, id: &DecisionNoticeId) -> bool {
         let shown = self.shared.notifications.decision(id).is_some();
-        notice(self.act(Op::Notice {
+        self.tell(Op::Notice {
             action: NoticeAction::DismissDecision {
                 thread: id.thread,
                 handle: (&id.handle).into(),
             },
-        }));
+        });
         shown
     }
 
     pub fn clear_notices(&mut self) {
-        notice(self.act(Op::Notice {
+        self.tell(Op::Notice {
             action: NoticeAction::Clear,
-        }));
+        });
     }
 
     pub fn mark_notices_read(&mut self) {
-        notice(self.act(Op::Notice {
+        self.tell(Op::Notice {
             action: NoticeAction::Read,
-        }));
+        });
     }
 
     /// Claude's `Mark as unread` (`Notifications::mark_unread`).
     pub fn mark_unread(&mut self, thread: ThreadId) {
-        notice(self.act(Op::Notice {
+        self.tell(Op::Notice {
             action: NoticeAction::Unseen { thread },
-        }));
+        });
     }
 
     pub fn fixture_backdate_notices(&mut self, thread: ThreadId, at: std::time::SystemTime) {
@@ -2954,10 +3009,10 @@ impl Cockpit {
         } else {
             self.visible_subjects.insert(thread, subject.clone());
         }
-        said(self.act(Op::ShowSubject {
+        self.tell(Op::ShowSubject {
             thread,
             subject: (&subject).into(),
-        }));
+        });
         self.acknowledge_seen();
     }
 

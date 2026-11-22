@@ -1211,9 +1211,14 @@ never waits. The rest still do.
 - **What is left, in the order to take it.** These are the remaining
   blocking asks at main by family: how many asks, then their call sites
   outside tests.
-  1. Notices and seen: 13 asks, 63 sites. Three are reached from the
-     root's render (`set_window_active` reaches `acknowledge_seen`), so a
-     slow Server stalls a frame, not only a press. Take it first.
+  1. Notices and seen: done. Its acts read no reply, so each is a tell
+     (`Cockpit::tell`): opening, dismissing, clearing, marking read or
+     unread, the Subject a Pane shows, and what is seen. What they change
+     arrives as the Server's Notices do, a beat or more later.
+     `acknowledge_seen` runs every frame, so it remembers what it told
+     the Server was seen (`seen_told`) and tells the same unread things
+     once. A new attach forgets that. An Engine in this process still
+     carries each act out at once.
   2. Turn and Session: 13 asks, 59 sites. 34 sites drop the reply, so
      most become tells, and these are the presses an operator makes
      most.
