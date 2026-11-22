@@ -73,7 +73,9 @@ pub use session_event::{
     PermissionModeChoice, QueueEvent, QueuedPrompt, RateLimitWindow, RunState, SessionCommand,
     SessionControl, SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
 };
-pub use thread::{ThreadId, ThreadOwner};
+pub use thread::{
+    MachineId, MachineKey, ProjectKey, SavedThread, ThreadId, ThreadKey, ThreadOwner,
+};
 
 /// Conversation-owned website tabs and lifecycle.
 pub mod browser;

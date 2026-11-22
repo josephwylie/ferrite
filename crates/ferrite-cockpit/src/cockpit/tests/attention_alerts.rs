@@ -434,7 +434,7 @@ fn a_request_off_the_board_posts_while_the_window_is_frontmost(cx: &mut TestAppC
             .iter()
             .map(|notification| notification.tag.to_string())
             .collect::<Vec<_>>(),
-        [system_tag(&crate::machines::MachineKey(None), threads[off])]
+        [system_tag(&ferrite_core::MachineKey(None), threads[off])]
     );
 }
 
@@ -449,7 +449,7 @@ fn away_from_the_window_the_shown_thread_s_finish_posts_a_notification(
     cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
-    let home = crate::machines::MachineKey(None);
+    let home = ferrite_core::MachineKey(None);
     cx.deactivate_window();
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
@@ -495,7 +495,7 @@ fn clicking_a_request_s_system_notification_opens_it(cx: &mut TestAppContext) {
     cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
-    let home = crate::machines::MachineKey(None);
+    let home = ferrite_core::MachineKey(None);
     cx.deactivate_window();
     fake.streams.borrow()[1].send(decision("away")).unwrap();
     tick(cx);

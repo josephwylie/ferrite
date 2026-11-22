@@ -3,6 +3,8 @@
 
 #[path = "tests/context.rs"]
 mod context;
+#[path = "tests/keys.rs"]
+mod keys;
 #[path = "tests/rewind.rs"]
 mod rewind;
 use super::*;

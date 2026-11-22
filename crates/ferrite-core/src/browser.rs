@@ -136,10 +136,10 @@ pub struct PageState {
 pub struct Saved {
     version: u32,
     next: u64,
-    threads: BTreeMap<ThreadId, SavedThread>,
+    threads: BTreeMap<ThreadId, SavedTabs>,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct SavedThread {
+struct SavedTabs {
     tabs: Vec<(TabId, String, u64)>,
     active: Option<TabId>,
 }
@@ -735,7 +735,7 @@ impl Service {
                 .map(|(id, state)| {
                     (
                         *id,
-                        SavedThread {
+                        SavedTabs {
                             tabs: state
                                 .tabs
                                 .iter()

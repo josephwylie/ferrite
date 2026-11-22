@@ -15,6 +15,7 @@ use ferrite_core::notifications::Notifications;
 use ferrite_core::protocol::Peer;
 use ferrite_core::spawner::{self, SessionDefaults};
 use ferrite_core::visual::Renderer;
+use ferrite_core::MachineKey;
 
 /// What the nav calls this computer.
 pub const LOCAL: &str = "local";
@@ -59,11 +60,6 @@ struct Entry {
     folded: bool,
     removed: bool,
 }
-
-/// A machine as alerts name it (ADR 0017): an index moves when Settings
-/// change, a target does not. `None` is this computer.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct MachineKey(pub(crate) Option<String>);
 
 /// A machine off screen whose Server has been heard from: what the Inbox
 /// hears of it.

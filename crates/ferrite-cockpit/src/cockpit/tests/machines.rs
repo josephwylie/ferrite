@@ -920,7 +920,7 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
     });
     ring(cx);
     ring(cx);
-    let key = crate::machines::MachineKey(Some("me@box".into()));
+    let key = ferrite_core::MachineKey(Some("me@box".into()));
     let asked = box_asked(thread, 2);
     let alert = Alert {
         away: Some(key.clone()),
@@ -1035,7 +1035,7 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
 /// this computer's Thread.
 #[gpui::test]
 fn a_system_notification_outlives_a_move(cx: &mut TestAppContext) {
-    use crate::machines::MachineKey;
+    use ferrite_core::MachineKey;
     use crate::notifications::Alert;
     let (core, fake) = cockpit("machines-posted", 1);
     let machines = cx.new(|_| machines("posted", None));
@@ -1661,7 +1661,7 @@ fn remote_inbox_uses_digests_and_follows_another_clients_park(cx: &mut TestAppCo
     let (root, cx) = machine_window(cx, core, machines.clone());
     let view = shown(&root, cx);
     let thread = ThreadId::new(1);
-    let key = crate::machines::MachineKey(Some("me@box".into()));
+    let key = ferrite_core::MachineKey(Some("me@box".into()));
     hear_box(&machines, box_snapshot(&[(thread, "Review")], vec![]), cx);
     tick(cx);
     let remote = |cx: &mut gpui::VisualTestContext| {
