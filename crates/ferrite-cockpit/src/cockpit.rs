@@ -1718,9 +1718,7 @@ impl CockpitView {
                 quotes,
                 reply_to: open.provider().to_string().into(),
                 skills: open.commands().into(),
-                cited: self
-                    .cockpit
-                    .read(cx)
+                cited: model
                     .saved(thread)
                     .and_then(|saved| self.cited_sources.of(&saved))
                     .map(std::borrow::Cow::Borrowed)
