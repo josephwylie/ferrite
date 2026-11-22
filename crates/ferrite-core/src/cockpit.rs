@@ -263,6 +263,7 @@ impl Cockpit {
         machine.drawn = Some(Drawn::default());
         let id = machine.id;
         self.machines.insert(id, machine);
+        self.roster.set_start(self.start_machine());
         self.arrive(id, arrived.into_iter().collect());
         Ok(id)
     }
@@ -270,6 +271,7 @@ impl Cockpit {
     fn hold_machine(&mut self, machine: HeldMachine) -> MachineId {
         let id = machine.id;
         self.machines.insert(id, machine);
+        self.roster.set_start(self.start_machine());
         self.receive_from(id);
         id
     }
@@ -281,6 +283,7 @@ impl Cockpit {
         let Some(held) = self.machines.remove(&machine) else {
             return;
         };
+        self.roster.set_start(self.start_machine());
         for thread in &held.shared.open {
             self.roster.remove_thread(held.key(*thread));
         }
@@ -301,6 +304,15 @@ impl Cockpit {
     /// `None` while it is turned off in Settings.
     pub fn this_computer(&self) -> Option<MachineId> {
         self.machine_saved_as(&MachineKey(None))
+    }
+
+    /// Where an act with no Thread or Project of its own goes (a new Thread
+    /// before any Project, an import into no Pane), and the one machine
+    /// whose Threads take an empty screen: this computer; with it turned
+    /// off, the first machine the window holds.
+    pub fn start_machine(&self) -> Option<MachineId> {
+        self.this_computer()
+            .or_else(|| self.machines.keys().next().copied())
     }
 
     /// `thread` as saved files name it, by its machine's saved name;
@@ -2380,12 +2392,13 @@ impl Cockpit {
     /// A parked Thread answers from its row; an open one costs a `stat`
     /// and a header line. Launch-time only: callers keep the answer rather
     /// than ask it per frame.
-    pub fn last_worked_project(&self) -> Option<ProjectKey> {
+    pub fn last_worked_project(&self, machine: MachineId) -> Option<ProjectKey> {
         let mut threads: Vec<(Option<std::time::SystemTime>, ThreadKey)> = self
             .parked()
             .unwrap_or_default()
             .into_iter()
             .chain(self.threads())
+            .filter(|thread| thread.machine() == machine)
             .map(|thread| (self.last_used(thread), thread))
             .collect();
         // Newest first, and a Thread whose log cannot be stat'd sorts last

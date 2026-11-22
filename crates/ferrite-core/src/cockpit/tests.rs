@@ -356,13 +356,13 @@ fn an_open_thread_keeps_its_project_without_local_header() {
 #[test]
 fn the_last_worked_project_is_a_registered_one_or_nothing() {
     let (mut core, fake) = cockpit("last-worked-project");
-    assert_eq!(core.last_worked_project(), None);
+    assert_eq!(core.last_worked_project(core.first_machine()), None);
     let other = scratch("last-worked-project-other");
     std::fs::create_dir_all(&other).unwrap();
 
     let thread = core.open(core.first_machine(), Provider::Claude, main_choice()).unwrap();
     let project = core.project_of(thread).expect("the open Thread is bound");
-    assert_eq!(core.last_worked_project(), Some(project));
+    assert_eq!(core.last_worked_project(core.first_machine()), Some(project));
 
     // A newer Thread in another Project outranks the older one.
     let newer = core
@@ -370,7 +370,7 @@ fn the_last_worked_project_is_a_registered_one_or_nothing() {
         .unwrap();
     let newest = core.project_of(newer).expect("the open Thread is bound");
     assert_ne!(newest, project);
-    assert_eq!(core.last_worked_project(), Some(newest));
+    assert_eq!(core.last_worked_project(core.first_machine()), Some(newest));
 
     // The same store with its registry file gone: every Thread still
     // names a Project, and the menu offers none of them.
@@ -388,7 +388,7 @@ fn the_last_worked_project_is_a_registered_one_or_nothing() {
         reopened.project_of(newer).map(|project| project.project()),
         Some(newest.project())
     );
-    assert_eq!(reopened.last_worked_project(), None);
+    assert_eq!(reopened.last_worked_project(reopened.first_machine()), None);
 }
 
 /// An initialised repo with one committed file, for binding tests.

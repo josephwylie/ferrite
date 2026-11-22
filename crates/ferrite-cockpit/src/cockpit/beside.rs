@@ -273,7 +273,10 @@ impl CockpitView {
             .and_then(|facts| facts.branch.clone())
             .map_or_else(|| home_relative(&workspace), |branch| branch.to_string());
         let index = self.focused(cx);
-        self.panes[index].review.show(review.clone(), title);
+        let Some(pane) = self.panes.get_mut(index) else {
+            return;
+        };
+        pane.review.show(review.clone(), title);
         window.focus(&review.focus_handle(cx), cx);
         review.update(cx, |review, cx| review.pick_scope(scope, cx));
         cx.notify();

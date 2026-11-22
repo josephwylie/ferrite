@@ -3828,13 +3828,12 @@ impl CockpitView {
     /// The focused identity's index in this window's mirror. A core act can
     /// receive roster changes before the next pump reconciles the Panes;
     /// another Thread's old index must never receive this one's input.
+    /// The focused Pane's index; with none focused, one no Pane has.
     fn focused(&self, cx: &gpui::App) -> usize {
-        self.cockpit
-            .read(cx)
-            .roster()
-            .focused()
-            .and_then(|identity| self.index_of(identity))
-            .unwrap_or(0)
+        match self.cockpit.read(cx).roster().focused() {
+            Some(identity) => self.index_of(identity).unwrap_or(0),
+            None => self.panes.len(),
+        }
     }
 
     fn focused_thread(&self, cx: &gpui::App) -> Option<ThreadKey> {
@@ -4267,7 +4266,7 @@ impl CockpitView {
     }
 
     fn cycle_tools(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.panes[self.focused(cx)].draft().is_some() {
+        if self.panes.get(self.focused(cx)).is_none_or(|pane| pane.draft().is_some()) {
             return;
         }
         let focused = self.focused(cx);
@@ -4396,7 +4395,7 @@ impl CockpitView {
     /// ⌘⏎ / ⇧⌘⏎, the approval buttons' chords: they answer whether or not
     /// text is on the line, a Subagent's approval as Main's.
     fn answer_chorded(&mut self, answer: Answer, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.panes[self.focused(cx)].is_main() {
+        if self.panes.get(self.focused(cx)).is_some_and(|pane| !pane.is_main()) {
             self.answer_subject(answer, cx);
         } else {
             self.answer(answer, window, cx);
@@ -4565,7 +4564,7 @@ impl CockpitView {
         if !self.history_available(index, cx) {
             return;
         }
-        let Some(thread) = self.panes[index].thread() else {
+        let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
             return;
         };
         if let Some(id) = self
@@ -6389,7 +6388,7 @@ impl CockpitView {
 
     /// Cite the selection from the keyboard, as the button beside it does.
     fn cite_selection(&mut self, _: &CiteSelection, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(transcript) = self.panes[self.focused(cx)].transcript() {
+        if let Some(transcript) = self.panes.get(self.focused(cx)).and_then(|pane| pane.transcript()) {
             transcript.update(cx, |transcript, cx| transcript.cite_selection(window, cx));
         }
     }
@@ -6414,7 +6413,7 @@ impl CockpitView {
             }
             return;
         }
-        if !self.panes[self.focused(cx)].is_main() {
+        if self.panes.get(self.focused(cx)).is_none_or(|pane| !pane.is_main()) {
             return;
         }
         let Some(item) = cx.read_from_clipboard() else {
@@ -6902,7 +6901,7 @@ impl CockpitView {
         // so no Composer or control there takes a key until it is back.
         let lost = self
             .pane_machine(self.focused(cx))
-            .or_else(|| self.panes.is_empty().then(|| self.start_machine(cx)).flatten())
+            .or_else(|| self.empty_board_shown(cx).then(|| self.start_machine(cx)).flatten())
             .is_some_and(|machine| self.machine_lost(machine, cx));
         let wanted = self
             .rename
@@ -7138,7 +7137,10 @@ impl CockpitView {
             .when(!lost, |root| {
                 root.on_action(cx.listener(Self::submit))
                     .on_action(cx.listener(|view, _: &ferrite_pane::composer::SaveAndSendComment, window, cx| {
-                        let composer = view.panes[view.focused(cx)].composer.clone();
+                        let Some(pane) = view.panes.get(view.focused(cx)) else {
+                            return;
+                        };
+                        let composer = pane.composer.clone();
                         if composer.update(cx, |composer, cx| composer.save_comment(window, cx)) {
                             view.submit(&Submit, window, cx);
                         }
@@ -7149,7 +7151,7 @@ impl CockpitView {
                     .on_action(cx.listener(Self::always))
                     .on_action(cx.listener(|view, _: &AttachFiles, _, cx| {
                         let index = view.focused(cx);
-                        if view.panes[index].is_main() {
+                        if view.panes.get(index).is_some_and(|pane| pane.is_main()) {
                             view.attach_files(index, false, cx);
                         }
                     }))
@@ -8729,8 +8731,9 @@ pub(crate) fn here() -> std::path::PathBuf {
 /// is the fallback for a store whose Threads name nothing the registry
 /// still knows.
 fn startup_project(cockpit: &ferrite_core::cockpit::Cockpit) -> Option<ProjectKey> {
-    cockpit.last_worked_project().or_else(|| {
-        let registry = cockpit.registry(cockpit.this_computer()?);
+    let machine = cockpit.start_machine()?;
+    cockpit.last_worked_project(machine).or_else(|| {
+        let registry = cockpit.registry(machine);
         registry
             .projects()
             .last()

@@ -50,12 +50,10 @@ impl CockpitView {
         )
     }
 
-    /// Where an act with no Thread or Project of its own goes (a new
-    /// Thread before any Project, an import into no Pane): this computer;
-    /// with it turned off, the first machine the window holds.
+    /// Where an act with no Thread or Project of its own goes
+    /// (`Cockpit::start_machine`).
     pub(super) fn start_machine(&self, cx: &App) -> Option<ferrite_core::MachineId> {
-        let cockpit = self.cockpit.read(cx);
-        cockpit.this_computer().or_else(|| cockpit.machines().next())
+        self.cockpit.read(cx).start_machine()
     }
 
     /// Every Project of every machine the window holds, this computer's

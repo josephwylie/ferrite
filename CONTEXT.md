@@ -110,9 +110,10 @@ _Avoid_: folder (the nav has none).
 
 **Roster**
 The Cockpit's state, headless: the open Panes in order, the one holding the
-keyboard (the one on screen), the drafts, and this launch's park order.
-Changed only by the operator's acts on the Cockpit (close, reopen, focus);
-the window mirrors it and paints.
+keyboard (the one on screen, or none: another machine's Thread that merely
+opened is not where the operator is), the drafts, and this launch's park
+order. Changed only by the operator's acts on the Cockpit (close, reopen,
+focus); the window mirrors it and paints.
 _Avoid_: layout (that is the board's split), tab list.
 
 **Layout**

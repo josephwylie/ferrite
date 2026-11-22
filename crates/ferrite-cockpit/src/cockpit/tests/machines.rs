@@ -953,6 +953,66 @@ fn a_machines_thread_opens_in_place_beside_a_local_one(cx: &mut TestAppContext) 
     until(cx, |cx| shows(&view, theirs, "on it", cx));
 }
 
+/// This computer has no Project and box has one. box's Thread opening puts
+/// nobody in it, so ⌘N opens the New project card on this computer, as it
+/// does with no other machine: no agent starts on a machine the operator
+/// did not pick. Once they go to box's Thread, ⌘N starts in its Project.
+#[gpui::test]
+fn a_new_thread_with_no_project_here_stays_on_this_computer(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (mut core, _fake, machines, _agents) = two_machines("no-project-here", 0);
+    let on_box = machines.held(1).unwrap();
+    let boxes = core.register_project(on_box, &here()).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    assert_eq!(core.project_of(theirs), Some(boxes));
+    assert_eq!(startup_project(&core), None, "box's work is no default here");
+    let this_computer = core.this_computer().unwrap();
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(theirs).is_some()));
+    // A test window seeds this computer a Project; this one has none.
+    view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| {
+            let registry = cockpit.registry(this_computer);
+            let seeded: Vec<ProjectKey> = registry
+                .projects()
+                .iter()
+                .map(|project| registry.project_key(project.id))
+                .collect();
+            for project in seeded {
+                cockpit.remove_project(project).unwrap();
+            }
+        });
+        view.launch_project = None;
+        view.hide_sheet(cx);
+    });
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.focused_thread(cx), None, "nobody went to box's Thread");
+        assert!(view.empty_board_shown(cx));
+    });
+
+    cx.simulate_keystrokes("cmd-n");
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let card = view.project_card(cx).expect("the New project card");
+        assert_eq!(card.read(cx).machine, this_computer);
+        assert!(view.panes.iter().all(|pane| pane.draft().is_none()), "no draft on box");
+    });
+
+    view.update(cx, |view, cx| {
+        view.hide_sheet(cx);
+        view.focus_thread(theirs, cx);
+    });
+    tick(cx);
+    cx.simulate_keystrokes("cmd-n");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        let draft = view.panes.iter().find_map(|pane| pane.draft()).expect("a draft");
+        assert_eq!(draft.binding.project(), boxes, "in the Thread the operator went to");
+    });
+}
+
 /// A Delegate's row and its child's pill name a Thread by its Server: the
 /// press opens it in place on the machine that answers as that Server, and
 /// says so when that machine no longer has it.

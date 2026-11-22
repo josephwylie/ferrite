@@ -67,8 +67,7 @@ impl CockpitView {
         self.environment
             .machine
             .filter(|machine| cockpit.machines().any(|held| held == *machine))
-            .or(cockpit.this_computer())
-            .or_else(|| cockpit.machines().next())
+            .or(cockpit.start_machine())
     }
 
     /// Have Settings edit `machine`'s defaults and CLIs: what it heard of

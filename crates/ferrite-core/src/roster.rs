@@ -11,7 +11,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::ThreadKey;
+use crate::{MachineId, ThreadKey};
 
 /// A draft Pane's identity (#29): a Composer and a pre-prompt band with no
 /// Thread yet. Minted here, stable until the first send makes a Thread of
@@ -58,7 +58,10 @@ impl PaneIdentity {
 #[derive(Debug, Default)]
 pub struct Roster {
     panes: Vec<PaneIdentity>,
-    focused: usize,
+    /// The Pane the operator is in; `None` while they are in none. Every
+    /// machine's open Threads have Panes here, and one that merely opened
+    /// on another machine puts nobody in it (`takes_focus_unasked`).
+    focused: Option<PaneIdentity>,
     /// Threads the operator parked this launch, oldest first — cmd-o pops
     /// the tail, the one just closed. In memory only, deliberately: the
     /// store keeps no park order, so a relaunch forgets it and reopen falls
@@ -69,6 +72,9 @@ pub struct Roster {
     left_thread: Option<ThreadKey>,
     drafts: BTreeSet<DraftId>,
     next_draft: u64,
+    /// Where a new Thread with no Project starts (`Cockpit::start_machine`):
+    /// the one machine whose Threads take an empty screen.
+    start: Option<MachineId>,
 }
 
 impl Roster {
@@ -79,24 +85,23 @@ impl Roster {
         &self.panes
     }
 
-    pub fn focused_index(&self) -> usize {
-        self.focused
-    }
-
     pub fn focused(&self) -> Option<PaneIdentity> {
-        self.panes.get(self.focused).copied()
+        self.focused
     }
 
     pub fn focused_thread(&self) -> Option<ThreadKey> {
         self.focused().and_then(PaneIdentity::thread)
     }
 
-    /// The Thread the operator is in: the focused one, else the open one
-    /// focus last left.
+    /// The Thread the operator is in: the focused one, or under a focused
+    /// draft the open one focus last left. With no Pane focused, none.
     pub fn current_thread(&self) -> Option<ThreadKey> {
-        self.focused_thread().or(self
-            .left_thread
-            .filter(|thread| self.pane_of(*thread).is_some()))
+        match self.focused? {
+            PaneIdentity::Thread(thread) => Some(thread),
+            PaneIdentity::Draft(_) => self
+                .left_thread
+                .filter(|thread| self.pane_of(*thread).is_some()),
+        }
     }
 
     pub fn index_of(&self, identity: PaneIdentity) -> Option<usize> {
@@ -125,45 +130,76 @@ impl Roster {
     /// The one door to `focused`: every move — keys, clicks, nav rows —
     /// lands here.
     pub(crate) fn focus(&mut self, identity: PaneIdentity) -> bool {
-        let Some(index) = self.index_of(identity) else {
+        if self.index_of(identity).is_none() {
             return false;
-        };
-        self.focus_index(index);
-        true
-    }
-
-    pub(crate) fn focus_index(&mut self, index: usize) {
+        }
         if let Some(thread) = self.focused_thread() {
             self.left_thread = Some(thread);
         }
-        self.focused = index.min(self.panes.len().saturating_sub(1));
+        self.focused = Some(identity);
+        true
+    }
+
+    /// The machine whose Threads take an empty screen, as machines come
+    /// and go. What is focused stays.
+    pub(crate) fn set_start(&mut self, machine: Option<MachineId>) {
+        self.start = machine;
+    }
+
+    /// Whether `pane` may take focus with nobody pressing it: a draft, a
+    /// Thread of the machine new Threads start on, or one of `beside`, the
+    /// machine of the Pane focus is leaving.
+    fn takes_focus_unasked(&self, pane: PaneIdentity, beside: Option<MachineId>) -> bool {
+        pane.thread().is_none_or(|thread| {
+            Some(thread.machine()) == beside
+                || self.start.is_none_or(|start| start == thread.machine())
+        })
     }
 
     // ------------------------------------------------------------- panes
 
     /// A Thread became open: it takes the next Pane, and focus stays put.
+    /// With no Pane focused it takes the screen, unless it is another
+    /// machine's: nobody went there.
     pub(crate) fn insert_thread(&mut self, thread: ThreadKey) {
         let identity = PaneIdentity::Thread(thread);
         if !self.panes.contains(&identity) {
             self.panes.push(identity);
         }
+        if self.focused.is_none() && self.takes_focus_unasked(identity, None) {
+            self.focused = Some(identity);
+        }
     }
 
-    /// A Thread stopped being open: its Pane goes, and a surviving focused
-    /// Pane keeps focus.
+    /// A Thread stopped being open: its Pane goes, a surviving focused Pane
+    /// keeps focus, and a focused one hands it to its neighbour.
     pub(crate) fn remove_thread(&mut self, thread: ThreadKey) {
         self.remove(PaneIdentity::Thread(thread));
     }
 
     fn remove(&mut self, identity: PaneIdentity) {
-        let focused = self.focused();
+        let at = self.index_of(identity);
         self.panes.retain(|pane| *pane != identity);
         if let PaneIdentity::Draft(draft) = identity {
             self.drafts.remove(&draft);
         }
-        self.focused = focused
-            .and_then(|focused| self.index_of(focused))
-            .unwrap_or_else(|| self.focused.min(self.panes.len().saturating_sub(1)));
+        if self.focused == Some(identity) {
+            self.focused = at.and_then(|at| self.heir(identity, at));
+        }
+    }
+
+    /// Who takes focus from `gone`, which stood at `at`: the Pane now
+    /// there, else the nearest before it, of those that may take it
+    /// unasked.
+    fn heir(&self, gone: PaneIdentity, at: usize) -> Option<PaneIdentity> {
+        let beside = gone.thread().map(ThreadKey::machine);
+        let takes = |pane: &&PaneIdentity| self.takes_focus_unasked(**pane, beside);
+        let (before, after) = self.panes.split_at(at.min(self.panes.len()));
+        after
+            .iter()
+            .find(takes)
+            .or_else(|| before.iter().rev().find(takes))
+            .copied()
     }
 
     // ------------------------------------------------------------ drafts
@@ -174,7 +210,7 @@ impl Roster {
         let draft = DraftId(self.next_draft);
         self.drafts.insert(draft);
         self.panes.push(PaneIdentity::Draft(draft));
-        self.focus_index(self.panes.len() - 1);
+        self.focus(PaneIdentity::Draft(draft));
         draft
     }
 
@@ -193,7 +229,9 @@ impl Roster {
             return false;
         };
         self.panes[slot] = identity;
-        self.focused = self.focused.min(self.panes.len().saturating_sub(1));
+        if self.focused == Some(PaneIdentity::Draft(draft)) {
+            self.focused = Some(identity);
+        }
         true
     }
 
@@ -246,6 +284,37 @@ mod tests {
         roster.remove_thread(threads[2]);
         assert_eq!(roster.visible().len(), 1, "a survivor takes the screen");
         assert!(Roster::default().visible().is_empty());
+    }
+
+    /// Every machine's open Threads have Panes, but only a press goes to
+    /// another machine's: one arriving on an empty screen, or standing
+    /// next to the Pane that closed, is not where the operator is.
+    #[test]
+    fn another_machines_thread_never_takes_focus_unasked() {
+        let (here, there) = (ThreadKey::fixture(0, 1), ThreadKey::fixture(1, 1));
+        let mut roster = Roster::default();
+        roster.set_start(Some(here.machine()));
+
+        roster.insert_thread(there);
+        assert_eq!(roster.focused(), None, "it opened; nobody went there");
+        assert_eq!(roster.current_thread(), None);
+        assert!(roster.visible().is_empty(), "the board stays empty");
+
+        roster.insert_thread(here);
+        assert_eq!(roster.focused(), Some(PaneIdentity::Thread(here)));
+        roster.remove_thread(here);
+        assert_eq!(roster.focused(), None, "its neighbour is on another machine");
+
+        assert!(roster.focus(PaneIdentity::Thread(there)));
+        assert_eq!(roster.current_thread(), Some(there), "a press goes there");
+        let beside = ThreadKey::fixture(1, 2);
+        roster.insert_thread(beside);
+        roster.remove_thread(there);
+        assert_eq!(
+            roster.focused(),
+            Some(PaneIdentity::Thread(beside)),
+            "closing one of its Threads stays on that machine"
+        );
     }
 
     #[test]

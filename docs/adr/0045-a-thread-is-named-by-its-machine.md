@@ -172,6 +172,16 @@ Each lands green and proves something.
    machine; Settings names the machine whose defaults it edits; and
    Connections and the Server page name theirs.
 
+   Every machine's open Threads have Panes, but only a press, or that
+   machine's `thread.focus`, goes to another machine's. Focus is `None`
+   while the operator is in no Pane, so
+   a Thread that opens on another machine, or stands next to a Pane that
+   closed, is never where a new Thread takes its Project from. Only the
+   start machine's Threads take an empty screen; a Pane that closes hands
+   focus to a draft, or a Thread of its own machine or the start machine
+   (`Roster::takes_focus_unasked`). The Project a launch starts in is the
+   start machine's too.
+
    A machine turned off and on is the same machine to the window. Its
    Panels' tabs wait under its saved name and come back keyed by its new
    `MachineId` (`Surfaces::hold` says each re-hold). A terminal tab reads
