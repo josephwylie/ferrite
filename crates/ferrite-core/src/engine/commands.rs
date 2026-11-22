@@ -128,6 +128,8 @@ impl Engine {
             Op::Interrupt { thread } => {
                 self.open_thread(thread)?;
                 self.interrupt(*thread);
+                // Stopping the agent stops its PR watches too (T3's Stop).
+                self.end_pr_watches(*thread).map_err(failed)?;
                 Ok(None)
             }
             Op::SendQueuedNow { thread, item } => {

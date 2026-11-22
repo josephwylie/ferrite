@@ -5,6 +5,7 @@
 //! "T3 Code".
 
 use super::{Change, Check, CheckStatus, End, Report, Watch, READ_FAILURE_LIMIT, WAKE_LIMIT};
+use crate::wake::{Outcome, Wake};
 
 const LISTED_ITEMS: usize = 10;
 /// A quoted remark's length, in UTF-16 units as T3 counts it.
@@ -12,23 +13,6 @@ const SNIPPET_LENGTH: usize = 200;
 
 const WATCHING_CLOSING: &str = "Look into each item and act on it as your task requires. This PR stays linked and watched, so do not link, watch, or list it again. End your turn when you are done, and Ferrite wakes you on the next change. When you hand the work back to the user, call unwatch_pull_request first so the thread returns to their inbox.";
 const WATCHING_CLOSING_PLURAL: &str = "Look into each item and act on it as your task requires. Each PR Ferrite still watches stays linked and watched, so do not link, watch, or list them again. End your turn when you are done, and Ferrite wakes you on the next change. When you hand the work back to the user, call unwatch_pull_request for each first so the thread returns to their inbox.";
-
-/// One wake: the prompt, and its notification's outcome and line.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Wake {
-    pub text: String,
-    pub outcome: Outcome,
-    /// `#426: checks failed, new comments`.
-    pub summary: String,
-}
-
-/// How the notification reads the news.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Outcome {
-    Failed,
-    Completed,
-    Updated,
-}
 
 /// The wake for one watch's report; `None` when it has no news and does
 /// not end.

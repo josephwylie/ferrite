@@ -71,6 +71,22 @@ impl GitHub for Conditional {
     fn head(&self, repository: &str, number: u64) -> Result<String, String> {
         Err(format!("{repository}#{number}: not found"))
     }
+    fn pr_fingerprint(
+        &self,
+        _: &str,
+        _: u64,
+    ) -> Result<ferrite_core::pr_watch::Fingerprint, ferrite_core::pr_watch::ReadError> {
+        Err(ferrite_core::pr_watch::ReadError::Failed("no PRs here".into()))
+    }
+
+    fn pr_reading(
+        &self,
+        _: &str,
+        _: u64,
+        _: bool,
+    ) -> Result<ferrite_core::pr_watch::Reading, ferrite_core::pr_watch::ReadError> {
+        Err(ferrite_core::pr_watch::ReadError::Failed("no PRs here".into()))
+    }
 }
 
 fn gh_issue(number: u64, title: &str) -> GitHubItem {

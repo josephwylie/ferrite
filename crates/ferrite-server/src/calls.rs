@@ -396,6 +396,11 @@ impl Server {
             Method::WindowDrag(drag) => return self.drive(caller_id, id, Action::Drag(drag)),
             Method::WindowText(find) => return self.drive(caller_id, id, Action::Read(find)),
             Method::WindowFocus(_) => return self.drive(caller_id, id, Action::Focus),
+            Method::PrWatch(params) => match self.api_pr_watch(caller_id, &id, from, params) {
+                Some(result) => result,
+                None => return,
+            },
+            Method::PrUnwatch(params) => self.api_pr_unwatch(from, &params),
             Method::NotificationShow(params) => {
                 self.say(ServerMessage::Notification {
                     title: params.title,

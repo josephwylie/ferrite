@@ -337,6 +337,20 @@ pub enum Admission {
     Unconfirmed(String),
 }
 
+/// What `Engine::send_wake` did with a server wake.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WakeTaken {
+    /// On the wire, as a turn of its own.
+    Taken,
+    /// The Thread cannot take it yet: a Decision waits, a turn runs, or
+    /// its Session is starting. Its sender tries again.
+    NotYet,
+    /// The Thread is not open.
+    Gone,
+    /// It cannot be sent: the words say why.
+    Refused(String),
+}
+
 /// A provider and the model to serve it with — what the #25 picker picks,
 /// whole. `None` is the provider's own default, which is also what every
 /// Thread starts on.
@@ -611,6 +625,8 @@ struct Thread {
     delegated_from: Option<crate::DelegatedFrom>,
     /// The most its agent may do without asking.
     cap: Option<crate::runtime_mode::RuntimeMode>,
+    /// The PRs its agent watches (ADR 0046), as its log holds them.
+    pr_watch: crate::pr_watch::WatchFact,
     /// What waits for the Session to take it.
     awaiting: Awaiting,
     /// The Session was started for use (ADR 0032) rather than asked for:
@@ -748,6 +764,7 @@ impl Thread {
             owner: None,
             delegated_from: None,
             cap: None,
+            pr_watch: Default::default(),
             awaiting: Awaiting::default(),
             woken: false,
             settled_at: None,
@@ -1844,7 +1861,7 @@ impl Engine {
                 binding.cwd().display()
             )));
         }
-        deliver(state, pending.prompt.clone(), self.suggestions_enabled)?;
+        deliver(state, Said::Operator(pending.prompt.clone()), self.suggestions_enabled)?;
         Ok(())
     }
 
@@ -2279,6 +2296,8 @@ impl Engine {
         {
             self.snooze_thread(thread, None)?;
         }
+        // A parked Thread watches nothing: T3's settle ends every watch.
+        self.end_pr_watches(thread)?;
         if let Some(pending) = self.bootstraps.remove(&thread) {
             self.rollback_bootstrap(thread)?;
             self.bootstrap_results.push(BootstrapResult {
@@ -2394,6 +2413,7 @@ impl Engine {
         let owner = snapshot.owner().cloned();
         let delegated_from = snapshot.delegated_from().cloned();
         let cap = snapshot.cap();
+        let pr_watch = snapshot.pr_watch().clone();
         let resume = match &launch {
             Some(launch) => launch.resume.clone(),
             None => snapshot.resume_target().map(str::to_string),
@@ -2451,6 +2471,7 @@ impl Engine {
         state.owner = owner;
         state.delegated_from = delegated_from;
         state.cap = cap;
+        state.pr_watch = pr_watch;
         state.project = project;
         state.agent_args = agent_args;
         if let Some(error) = unreadable_args {
@@ -2552,7 +2573,7 @@ impl Engine {
             state.hold(text);
             return Admission::Held;
         }
-        match deliver(state, text, self.suggestions_enabled) {
+        match deliver(state, Said::Operator(text), self.suggestions_enabled) {
             Ok(_) => Admission::Delivered,
             Err(error) => {
                 let refusal = format!("send failed: {error}");
@@ -3092,6 +3113,99 @@ impl Engine {
         state.history.clear();
         state.snooze = snooze;
         Ok(())
+    }
+
+    /// Every open Thread's PR watches, as their logs hold them.
+    pub fn pr_watches(&self) -> impl Iterator<Item = (ThreadId, &crate::pr_watch::WatchFact)> {
+        self.threads
+            .iter()
+            .map(|(id, state)| (*id, &state.pr_watch))
+    }
+
+    /// An open Thread's PR watches.
+    pub fn pr_watch(&self, thread: ThreadId) -> Option<&crate::pr_watch::WatchFact> {
+        self.threads.get(&thread).map(|state| &state.pr_watch)
+    }
+
+    /// Save an open Thread's PR watches. A watch is saved before anything
+    /// acts on it (persist, then act), so a restart repeats no news.
+    pub fn set_pr_watch(
+        &mut self,
+        thread: ThreadId,
+        pr_watch: crate::pr_watch::WatchFact,
+    ) -> io::Result<()> {
+        let state = self
+            .threads
+            .get_mut(&thread)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Thread is not open"))?;
+        if state.pr_watch == pr_watch {
+            return Ok(());
+        }
+        self.store
+            .set_pr_watch(thread, pr_watch.clone(), Some(&mut state.writer))
+            .map_err(io::Error::other)?;
+        state.pr_watch = pr_watch;
+        Ok(())
+    }
+
+    /// End every PR watch on `thread` with no wake, as stopping or parking
+    /// it does (T3's Stop and settle).
+    fn end_pr_watches(&mut self, thread: ThreadId) -> io::Result<()> {
+        let Some(mut fact) = self.threads.get(&thread).map(|state| state.pr_watch.clone()) else {
+            return Ok(());
+        };
+        if fact.end_all() {
+            self.set_pr_watch(thread, fact)?;
+        }
+        Ok(())
+    }
+
+    /// Whether a Decision waits on the operator in `thread`.
+    pub fn decision_pending(&self, thread: ThreadId) -> bool {
+        self.threads
+            .get(&thread)
+            .is_some_and(|state| !state.activity.view().decisions().is_empty())
+    }
+
+    /// Send a server wake (`crate::wake`) as a turn of its own, if the
+    /// Thread can take one now: no Decision waits, no turn runs or waits,
+    /// and its Session is up. One with no Session starts it, and the wake
+    /// waits with its sender for the next try.
+    pub fn send_wake(&mut self, thread: ThreadId, wake: &crate::wake::Wake) -> WakeTaken {
+        let Some(state) = self.threads.get(&thread) else {
+            return WakeTaken::Gone;
+        };
+        if self.bootstraps.contains_key(&thread)
+            || self.decision_pending(thread)
+            || state.turn_ahead()
+            || !state.awaiting.prompts.is_empty()
+            || state.replacement.is_some()
+        {
+            return WakeTaken::NotYet;
+        }
+        if state.session.is_none() {
+            return match self.start_session_or_say(thread, "wake failed") {
+                Ok(()) => WakeTaken::NotYet,
+                Err(refusal) => WakeTaken::Refused(refusal),
+            };
+        }
+        if state.snooze.is_some() {
+            if let Err(error) = self.snooze_thread(thread, None) {
+                crate::log!("thread {thread}: could not wake: {error}");
+            }
+        }
+        let state = self.threads.get_mut(&thread).expect("checked");
+        if state.ready_session().is_none() {
+            return WakeTaken::NotYet;
+        }
+        match deliver(state, Said::Server(wake.clone()), self.suggestions_enabled) {
+            Ok(_) => WakeTaken::Taken,
+            Err(error) => {
+                let refusal = format!("wake failed: {error}");
+                state.apply(Input::Notice(refusal.clone()));
+                WakeTaken::Refused(refusal)
+            }
+        }
     }
 
     fn wake_snoozed(&mut self) {
@@ -3881,7 +3995,7 @@ impl Engine {
                 return released;
             };
             if !state.turn_ahead() {
-                if let Err(error) = deliver(state, held.text.clone(), self.suggestions_enabled) {
+                if let Err(error) = deliver(state, Said::Operator(held.text.clone()), self.suggestions_enabled) {
                     state.undelivered(held.text, error);
                 }
                 released = true;
@@ -5692,7 +5806,17 @@ fn vanished_root_refusal(state: &Thread) -> Option<String> {
 /// session-context block when a root is set: the transcript and the log
 /// carry the operator's raw text, displayed ≠ sent. Answers what the
 /// transcript changed.
-fn deliver(state: &mut Thread, text: String, suggestions_enabled: bool) -> io::Result<Update> {
+/// Who a prompt is from: the operator, or the Server on its own.
+enum Said {
+    Operator(String),
+    Server(crate::wake::Wake),
+}
+
+fn deliver(state: &mut Thread, said: Said, suggestions_enabled: bool) -> io::Result<Update> {
+    let text = match &said {
+        Said::Operator(text) => text.clone(),
+        Said::Server(wake) => wake.text.clone(),
+    };
     if let Some(refusal) = vanished_root_refusal(state) {
         return Err(io::Error::new(io::ErrorKind::NotFound, refusal));
     }
@@ -5742,6 +5866,18 @@ fn deliver(state: &mut Thread, text: String, suggestions_enabled: bool) -> io::R
     state.preface_pending = false;
     // And the Thread's first locks its provider for good (#25, #29).
     state.first_prompt_sent = true;
+    let wake = match said {
+        Said::Operator(_) => None,
+        Said::Server(wake) => Some(wake),
+    };
+    if let Some(wake) = wake {
+        // The Server's, not the operator's: no prompt record, no history,
+        // and no id, since nothing rewinds to it.
+        if let Err(error) = state.writer.record_wake(&wake) {
+            state.report_store_error(error);
+        }
+        return Ok(state.apply(Input::Wake(wake)));
+    }
     // When it went out, kept beside it so replay draws the same `7:31 pm`.
     let sent_at = crate::clock::now_stamp();
     if let Err(error) = state.writer.record_prompt(&text) {
@@ -5789,7 +5925,7 @@ fn resend_held(state: &mut Thread, suggestions_enabled: bool) -> Option<Update> 
         .map(|item| item.text.as_str())
         .collect::<Vec<_>>()
         .join("\n\n");
-    match deliver(state, text.clone(), suggestions_enabled) {
+    match deliver(state, Said::Operator(text.clone()), suggestions_enabled) {
         Ok(applied) => Some(applied),
         Err(error) => Some(state.undelivered(text, error)),
     }

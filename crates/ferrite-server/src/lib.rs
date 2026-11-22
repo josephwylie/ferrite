@@ -43,10 +43,12 @@ mod drive;
 mod factory;
 mod github;
 pub mod peers;
+mod pr_watch;
 mod render;
 pub mod remote;
 mod server_id;
 mod signals;
+mod wake;
 
 /// How long the pump waits for a client while any Thread is open: a frame.
 const PUMP: Duration = Duration::from_millis(16);
@@ -423,9 +425,13 @@ struct Server {
     /// Each Project root's skills per Provider, as the Server last listed
     /// them and when (`None`: it could not), for a Workflow's check (G7).
     skills_seen: Vec<factory::SkillsSeen>,
-    /// The Server's wall clock, in milliseconds (the Factory's, and the
-    /// welcome's `now_ms`): a test passes its own.
+    /// The Server's wall clock, in milliseconds (the Factory's, the PR
+    /// watcher's, and the welcome's `now_ms`): a test passes its own.
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+    /// The PR watcher (ADR 0046).
+    watcher: pr_watch::Watcher,
+    /// Server wakes waiting for their Thread.
+    wakes: wake::Wakes,
 }
 
 impl Server {
@@ -488,6 +494,8 @@ impl Server {
             head_reads: Vec::new(),
             skills_seen: Vec::new(),
             clock: Arc::new(|| ferrite_core::clock::now().timestamp_millis()),
+            watcher: Default::default(),
+            wakes: Default::default(),
         }
     }
 
@@ -517,6 +525,7 @@ impl Server {
             self.tell_watched();
             self.engine.pump();
             self.step_factory();
+            self.serve_pr_watches();
             if self.swept.elapsed() >= SWEEP_INTERVAL {
                 self.swept = Instant::now();
                 self.engine.sweep();

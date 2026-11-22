@@ -30,6 +30,7 @@ mod file_operations;
 mod remote_operations;
 mod owned;
 mod peers;
+mod pr_watch;
 mod progress;
 mod publish;
 mod starts;

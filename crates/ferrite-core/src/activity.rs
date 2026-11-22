@@ -469,6 +469,7 @@ impl SubjectState {
     fn bookkeeping(&mut self, input: &Input, at: Instant, live: bool) {
         match input {
             Input::Prompt(_)
+            | Input::Wake(_)
             | Input::Event(SessionEvent::TextDelta { .. })
             | Input::Event(SessionEvent::ThinkingDelta { .. })
             | Input::Event(SessionEvent::ReasoningSummaryDelta { .. })
@@ -1344,7 +1345,8 @@ impl Activity {
         if let Input::Event(SessionEvent::Activity(event)) = input {
             return self.event(event, at, live);
         }
-        let prompt = matches!(input, Input::Prompt(_));
+        // A wake starts a Main turn as the operator's prompt does.
+        let prompt = matches!(input, Input::Prompt(_) | Input::Wake(_));
         let previous_busy = self.main.busy;
         if prompt && live {
             self.main_operator_turn = true;
@@ -2796,6 +2798,7 @@ fn append_delta(previous: &mut Input, next: &Input) -> bool {
 pub(crate) fn input_bytes(input: &Input) -> usize {
     match input {
         Input::Prompt(text) | Input::Notice(text) => text.len(),
+        Input::Wake(wake) => wake.text.len() + wake.summary.len(),
         Input::Event(event) => match event {
             SessionEvent::ReasoningSummaryPart { item_id, text, .. } => item_id.len() + text.len(),
             SessionEvent::ToolOutputDelta { id, text } => id.len() + text.len(),
@@ -2899,6 +2902,10 @@ fn bounded_input(input: &Input, capacity: usize) -> Input {
             })
         }
         Input::Prompt(text) => Input::Prompt(tail(text, capacity)),
+        Input::Wake(wake) => Input::Wake(crate::wake::Wake {
+            text: tail(&wake.text, capacity),
+            ..wake.clone()
+        }),
         Input::Notice(text) => Input::Notice(tail(text, capacity)),
         _ => Input::Notice(
             "Earlier output omitted from the live view"

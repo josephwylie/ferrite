@@ -263,6 +263,10 @@ operations! {
         "The providers this machine runs Threads on: their models, efforts and the modes a Thread may be capped at.";
     AgentResult(ThreadParams) => "agent.result", ["thread"], Anyone,
         "How a Thread's latest turn ended and its final reply in full, a parked Thread's too.";
+    PrWatch(PrWatchParams) => "pr.watch", ["url"], Operator,
+        "Watch an open PR for a Thread: its agent is woken on failed checks, passed required checks, new comments or reviews, conflicts, and once on merge or close.";
+    PrUnwatch(PrParams) => "pr.unwatch", ["url"], Operator,
+        "Stop watching a PR for a Thread.";
 }
 
 /// Who may call an operation (#224). A call that names no Thread is the
@@ -279,6 +283,54 @@ pub enum Callers {
     Worker,
     /// A Project's Coordinator, from its own Thread.
     Coordinator,
+}
+
+/// A pull request, and the Thread watching it (T3 Code's
+/// `PullRequestTargetInput`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PrParams {
+    /// The Thread; the one the call runs in when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ThreadId>,
+    /// The PR's GitHub URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// `owner/name`, with `number`, when no `url`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    /// With `repository`, when no `url`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PrWatchParams {
+    #[serde(flatten)]
+    pub pr: PrParams,
+    /// How long this thread stays working. Omit to keep the current value;
+    /// a new watch starts at "checks". "checks": until checks finish, for a
+    /// PR you hand to the user. "merged": until it merges, closes or is
+    /// unwatched, when you act on it yourself, such as merging after
+    /// approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<PrWatchUntil>,
+}
+
+/// How long a watch keeps its Thread working (`pr_watch::Until`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PrWatchUntil {
+    Checks,
+    Merged,
+}
+
+impl From<PrWatchUntil> for crate::pr_watch::Until {
+    fn from(until: PrWatchUntil) -> Self {
+        match until {
+            PrWatchUntil::Checks => Self::Checks,
+            PrWatchUntil::Merged => Self::Merged,
+        }
+    }
 }
 
 /// No parameters.

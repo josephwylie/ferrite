@@ -107,7 +107,10 @@ mod rewind_tests;
 /// - **18** — a `tool_denied` record: the provider refused a call by its
 ///   permission mode (HD22). A v1–v17 log has none, so its refused calls
 ///   read as failures.
-const SCHEMA_VERSION: u32 = 18;
+/// - **19** — a `wake` record: a prompt the Server sent the agent on its
+///   own (`crate::wake`), such as a watched PR's news. A v1–v18 log has
+///   none.
+const SCHEMA_VERSION: u32 = 19;
 
 /// How far apart the store's marks sit, at least: what a peek or a reopen
 /// reads back from the end of a log to find its facts.
@@ -258,6 +261,9 @@ struct Header {
     /// The most its agent may do without asking. Absent means uncapped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cap: Option<crate::runtime_mode::RuntimeMode>,
+    /// The PRs the Thread's agent watches (ADR 0046). Absent means none.
+    #[serde(default, skip_serializing_if = "crate::pr_watch::WatchFact::is_empty")]
+    pr_watch: crate::pr_watch::WatchFact,
 }
 
 impl Header {
@@ -275,6 +281,7 @@ impl Header {
             delegated_from: self.delegated_from.clone(),
             request: self.request.clone(),
             cap: self.cap,
+            pr_watch: self.pr_watch.clone(),
         }
     }
 
@@ -293,6 +300,7 @@ impl Header {
             delegated_from: facts.delegated_from,
             request: facts.request,
             cap: facts.cap,
+            pr_watch: facts.pr_watch,
         }
     }
 }
@@ -325,6 +333,8 @@ struct Facts {
     request: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cap: Option<crate::runtime_mode::RuntimeMode>,
+    #[serde(default, skip_serializing_if = "crate::pr_watch::WatchFact::is_empty")]
+    pr_watch: crate::pr_watch::WatchFact,
 }
 
 impl Facts {
@@ -342,6 +352,7 @@ impl Facts {
             delegated_from: self.delegated_from,
             request: self.request,
             cap: self.cap,
+            pr_watch: self.pr_watch,
             summary: None,
         }
     }
@@ -410,6 +421,8 @@ impl Summary {
                 self.turns += 1;
                 self.prompted = true;
             }
+            // A wake starts a turn, but it is not the operator prompting.
+            Record::Wake { .. } => self.turns += 1,
             Record::ConversationReset { .. } => self.turns = 0,
             Record::Rewind { dropped, .. } => self.turns = self.turns.saturating_sub(*dropped),
             _ => {}
@@ -511,6 +524,12 @@ enum Record {
     /// A line the operator sent (schema 2+).
     Prompt {
         text: String,
+    },
+    /// Schema 19: a prompt the Server sent on its own (`crate::wake`).
+    Wake {
+        text: String,
+        summary: String,
+        outcome: crate::wake::Outcome,
     },
     Text {
         text: String,
@@ -696,6 +715,11 @@ impl LogRecord {
         Some(Self(match input {
             Input::Event(event) => Record::from_event(event, duration)?,
             Input::Prompt(text) => Record::Prompt { text: text.clone() },
+            Input::Wake(wake) => Record::Wake {
+                text: wake.text.clone(),
+                summary: wake.summary.clone(),
+                outcome: wake.outcome,
+            },
             Input::PromptObservation { sent_at, prompt_id } => Record::PromptObservation {
                 sent_at: sent_at.clone(),
                 prompt_id: prompt_id.clone(),
@@ -1540,6 +1564,15 @@ impl Record {
                 })
             }
             Record::Prompt { text } => Input::Prompt(text.clone()),
+            Record::Wake {
+                text,
+                summary,
+                outcome,
+            } => Input::Wake(crate::wake::Wake {
+                text: text.clone(),
+                summary: summary.clone(),
+                outcome: *outcome,
+            }),
             Record::Text { text } => Input::Event(SessionEvent::TextDelta { text: text.clone() }),
             Record::Thinking { text } => {
                 Input::Event(SessionEvent::ThinkingDelta { text: text.clone() })
@@ -2796,6 +2829,7 @@ impl Store {
             delegated_from: origin.delegated_from,
             request: origin.request,
             cap: origin.cap,
+            pr_watch: Default::default(),
         };
         let written = line(&header)?;
         file.write_all(written.as_bytes())?;
@@ -2851,7 +2885,8 @@ impl Store {
             })
             .map_or(0, |at| at + 1);
         // A fork is the operator's own, whoever's its source was, and
-        // started here: no other start's key finds it.
+        // started here: no other start's key finds it, and
+        // watches nothing: a watch's wakes are its source's agent's.
         let facts = Facts {
             snooze: None,
             title: None,
@@ -2859,6 +2894,7 @@ impl Store {
             delegated_from: None,
             request: None,
             cap: None,
+            pr_watch: Default::default(),
             ..snapshot.facts()
         };
         let binding = facts
@@ -3088,6 +3124,7 @@ impl Store {
         for (_, line) in self.backwards(id, first.len() as u64)? {
             let kinds = [
                 &br#"{"type":"prompt","#[..],
+                br#"{"type":"wake","#,
                 br#"{"type":"conversation_reset","#,
                 br#"{"type":"facts","#,
                 br#"{"type":"mark","#,
@@ -3498,6 +3535,15 @@ impl Store {
         writer: Option<&mut ThreadWriter>,
     ) -> Result<(), LoadError> {
         self.amend(id, writer, |facts| facts.snooze = snooze)
+    }
+
+    pub fn set_pr_watch(
+        &self,
+        id: ThreadId,
+        pr_watch: crate::pr_watch::WatchFact,
+        writer: Option<&mut ThreadWriter>,
+    ) -> Result<(), LoadError> {
+        self.amend(id, writer, |facts| facts.pr_watch = pr_watch)
     }
 
     pub fn set_title(
@@ -4010,6 +4056,7 @@ pub struct ThreadMeta {
     pub request: Option<String>,
     /// The most its agent may do without asking.
     pub cap: Option<crate::runtime_mode::RuntimeMode>,
+    pub pr_watch: crate::pr_watch::WatchFact,
     /// The counts a parked row shows, read off the log's tail; `None` for
     /// a log from before schema 13 (see `Store::summary`).
     pub summary: Option<ThreadSummary>,
@@ -4115,6 +4162,7 @@ pub struct ThreadSnapshot {
     delegated_from: Option<crate::DelegatedFrom>,
     request: Option<String>,
     cap: Option<crate::runtime_mode::RuntimeMode>,
+    pr_watch: crate::pr_watch::WatchFact,
     records: Vec<Record>,
 }
 
@@ -4243,6 +4291,7 @@ impl ThreadSnapshot {
             delegated_from: facts.delegated_from,
             request: facts.request,
             cap: facts.cap,
+            pr_watch: facts.pr_watch,
             records,
         }
     }
@@ -4261,6 +4310,7 @@ impl ThreadSnapshot {
             delegated_from: self.delegated_from.clone(),
             request: self.request.clone(),
             cap: self.cap,
+            pr_watch: self.pr_watch.clone(),
         }
     }
 
@@ -4296,6 +4346,11 @@ impl ThreadSnapshot {
 
     pub fn snooze(&self) -> Option<crate::snooze::Snooze> {
         self.snooze
+    }
+
+    /// The PRs its agent watches (ADR 0046).
+    pub fn pr_watch(&self) -> &crate::pr_watch::WatchFact {
+        &self.pr_watch
     }
 
     /// Whose the Thread is when not the operator's (ADR 0037).
@@ -4368,7 +4423,7 @@ impl ThreadSnapshot {
             exchanges: self.exchanges_before(at),
             delivered: self.records[at + 1..]
                 .iter()
-                .any(|record| matches!(record, Record::Prompt { .. })),
+                .any(|record| matches!(record, Record::Prompt { .. } | Record::Wake { .. })),
         })
     }
 
@@ -4391,7 +4446,8 @@ impl ThreadSnapshot {
             .unwrap_or(0);
         for record in &self.records[after_reset..at] {
             match record {
-                Record::Prompt { text } => {
+                // A wake is said to the agent as a prompt is, and answered.
+                Record::Prompt { text } | Record::Wake { text, .. } => {
                     ids.prompt();
                     exchanges.push((text.clone(), AnswerText::default()))
                 }
@@ -4524,6 +4580,8 @@ impl ThreadSnapshot {
                     ids.prompt();
                     prompts.push(text.clone())
                 }
+                // Not the operator's words, but a turn a rewind counts.
+                Record::Wake { .. } => ids.prompt(),
                 Record::PromptObservation { prompt_id, .. } => ids.observe(prompt_id),
                 Record::Rewind { prompt, dropped } => prompts.truncate(ids.cut(prompt, *dropped)),
                 _ => {}
@@ -4557,6 +4615,7 @@ impl ThreadSnapshot {
                 }
                 Record::ResumeAt { .. }
                 | Record::Prompt { .. }
+                | Record::Wake { .. }
                 | Record::ConversationReset { .. }
                 | Record::Handover { .. } => return None,
                 Record::Init { .. } => started = true,
@@ -4617,6 +4676,11 @@ impl ThreadWriter {
     /// Buffer one line the operator sent.
     pub fn record_prompt(&mut self, text: &str) -> io::Result<()> {
         self.lock().record_prompt(text)
+    }
+
+    /// Buffer a prompt the Server sent on its own (`crate::wake`).
+    pub fn record_wake(&mut self, wake: &crate::wake::Wake) -> io::Result<()> {
+        self.lock().record_wake(wake)
     }
 
     /// Buffer when the prompt just recorded was sent (`7:31 pm`), and the
@@ -4924,6 +4988,14 @@ impl WriterState {
     /// Ferrite's own act, and no provider will ever echo it back.
     pub fn record_prompt(&mut self, text: &str) -> io::Result<()> {
         self.push(Record::Prompt { text: text.into() })
+    }
+
+    fn record_wake(&mut self, wake: &crate::wake::Wake) -> io::Result<()> {
+        self.push(Record::Wake {
+            text: wake.text.clone(),
+            summary: wake.summary.clone(),
+            outcome: wake.outcome,
+        })
     }
 
     /// Buffer when the prompt just recorded was sent (`7:31 pm`), so replay
@@ -5268,6 +5340,7 @@ fn parse(id: ThreadId, bytes: &[u8]) -> Result<Parsed, LoadError> {
             delegated_from: facts.delegated_from,
             request: facts.request,
             cap: facts.cap,
+            pr_watch: facts.pr_watch,
             records,
         },
         offsets,
