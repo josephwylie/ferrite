@@ -2226,10 +2226,12 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
         cx.simulate_click(annotate.center(), gpui::Modifiers::none());
         tick(cx);
     };
-    // The editor starts once the Server has answered for the page's
-    // protection, a beat or more after the press.
+    // The button acts once the window has the page as loaded, and the
+    // editor starts once the Server has answered for the page's
+    // protection: each a beat or more later.
     let started = || engine.journal().iter().filter(|call| matches!(call, Call::AnnotationStarted(..))).count();
     let begin_live = |cx: &mut gpui::VisualTestContext| {
+        super::browser_chrome::page_shown(&view, thread, cx);
         let before = started();
         begin(cx);
         wait(cx, "the guest editor starts", &mut |_| started() > before);
