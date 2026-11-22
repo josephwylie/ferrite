@@ -21,7 +21,7 @@ use ferrite_core::roster::PaneIdentity;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::transcript::Body;
 use ferrite_core::workspace::WorkspaceChoice;
-use ferrite_core::{DecisionAnswer, SessionEvent, ThreadKey, TurnOutcome};
+use ferrite_core::{DecisionAnswer, MachineId, SessionEvent, ThreadKey, TurnOutcome};
 
 struct Scratch(PathBuf);
 
@@ -105,6 +105,8 @@ impl Spawner for Control {
 
 struct Harness {
     cockpit: Cockpit,
+    /// This computer, the one machine a Harness holds.
+    here: MachineId,
     control: Control,
     threads: Vec<ThreadKey>,
     _scratch: Scratch,
@@ -121,10 +123,12 @@ impl Harness {
             Box::new(control.clone()),
         );
         cockpit.set_notification_grace(Duration::ZERO);
+        let here = cockpit.this_computer().unwrap();
         let threads = (0..threads)
             .map(|_| {
                 cockpit
                     .open(
+                        here,
                         Provider::Claude,
                         WorkspaceChoice::Main {
                             checkout: checkout.clone(),
@@ -136,6 +140,7 @@ impl Harness {
         cockpit.pump();
         Self {
             cockpit,
+            here,
             control,
             threads,
             _scratch: scratch,
@@ -160,10 +165,10 @@ impl Harness {
     }
 
     fn unread(&self) -> usize {
-        self.cockpit.notifications().unread()
+        self.cockpit.notifications(self.here).unread()
     }
     fn count(&self) -> usize {
-        self.cockpit.notifications().notices().count()
+        self.cockpit.notifications(self.here).notices().count()
     }
 }
 
@@ -197,15 +202,15 @@ fn a_finished_thread_the_operator_is_not_on_is_unread_until_they_land_on_it() {
     h.control.emit(1, ended());
     h.cockpit.pump();
     assert_eq!(h.unread(), 1);
-    let notice = h.cockpit.notifications().notices().next().unwrap().clone();
+    let notice = h.cockpit.notifications(h.here).notices().next().unwrap().clone();
     assert_eq!(notice.thread, second.thread());
     assert_eq!(notice.outcome, TurnOutcome::Completed);
-    assert!(h.cockpit.notifications().attention(second.thread()));
-    assert!(!h.cockpit.notifications().attention(first.thread()));
+    assert!(h.cockpit.notifications(h.here).attention(second.thread()));
+    assert!(!h.cockpit.notifications(h.here).attention(first.thread()));
 
     assert!(h.cockpit.focus_thread(second));
     assert_eq!(h.unread(), 0, "landing on the Pane reads it");
-    assert!(!h.cockpit.notifications().attention(second.thread()));
+    assert!(!h.cockpit.notifications(h.here).attention(second.thread()));
 }
 
 #[test]
@@ -217,7 +222,7 @@ fn a_finish_on_the_focused_thread_is_born_read() {
     h.cockpit.pump();
     assert_eq!(h.count(), 1);
     assert_eq!(h.unread(), 0);
-    assert!(!h.cockpit.notifications().attention(thread.thread()));
+    assert!(!h.cockpit.notifications(h.here).attention(thread.thread()));
 }
 
 /// ADR 0017: the focused Pane is only seen while the window has focus. A
@@ -232,7 +237,7 @@ fn a_finish_on_the_focused_thread_waits_while_the_window_is_away() {
     h.control.emit(0, ended());
     h.cockpit.pump();
     assert_eq!(h.unread(), 1, "nobody was looking");
-    assert!(h.cockpit.notifications().attention(thread.thread()));
+    assert!(h.cockpit.notifications(h.here).attention(thread.thread()));
     h.cockpit.pump();
     assert_eq!(h.unread(), 1, "pumping never reads it");
 
@@ -302,7 +307,7 @@ fn notifications_discard_a_parked_deferral_but_keep_existing_notices() {
     let _ = h.cockpit.send(thread, "first".into());
     h.control.emit(0, ended());
     h.cockpit.pump();
-    let notice = h.cockpit.notifications().newest().unwrap();
+    let notice = h.cockpit.notifications(h.here).newest().unwrap();
 
     let _ = h.cockpit.send(thread, "delegate".into());
     h.child(0, "worker");
@@ -310,7 +315,7 @@ fn notifications_discard_a_parked_deferral_but_keep_existing_notices() {
     h.cockpit.pump();
     assert_eq!(h.count(), 1, "the new finish is deferred");
     h.cockpit.park(thread).unwrap();
-    assert!(h.cockpit.notifications().get(notice).is_some());
+    assert!(h.cockpit.notifications(h.here).get(notice).is_some());
     h.cockpit.reopen(thread).unwrap();
     for _ in 0..3 {
         h.cockpit.pump();
@@ -369,19 +374,19 @@ fn opening_a_notice_lands_on_its_thread_and_revives_a_parked_one() {
     let _ = h.cockpit.send(second, "go".into());
     h.control.emit(1, ended());
     h.cockpit.pump();
-    let id = h.cockpit.notifications().newest().unwrap();
+    let id = h.cockpit.notifications(h.here).newest().unwrap();
 
     // Parked after it finished: opening the Notice brings it back.
     h.cockpit.park(second).unwrap();
     assert!(h.cockpit.thread(second).is_none());
-    assert_eq!(h.cockpit.open_notice(id), Some(second));
+    assert_eq!(h.cockpit.open_notice(h.here, id), Some(second));
     assert_eq!(h.cockpit.roster().focused_thread(), Some(second));
     assert!(h.cockpit.thread(second).is_some(), "revived");
-    assert!(h.cockpit.notifications().get(id).unwrap().read);
+    assert!(h.cockpit.notifications(h.here).get(id).unwrap().read);
 
-    assert!(h.cockpit.dismiss_notice(id));
+    assert!(h.cockpit.dismiss_notice(h.here, id));
     assert_eq!(h.count(), 0);
-    assert_eq!(h.cockpit.open_notice(id), None);
+    assert_eq!(h.cockpit.open_notice(h.here, id), None);
 }
 
 #[test]
@@ -677,8 +682,10 @@ fn replay(label: &str, spawner: Replay) -> Vec<TurnOutcome> {
     // These captures resume Main explicitly. Grace expiry is covered by
     // the injected-clock unit tests, not the replay runner's wall clock.
     cockpit.set_notification_grace(Duration::MAX);
+    let here = cockpit.this_computer().unwrap();
     let watched = cockpit
         .open(
+            here,
             provider,
             WorkspaceChoice::Main {
                 checkout: checkout.clone(),
@@ -686,7 +693,7 @@ fn replay(label: &str, spawner: Replay) -> Vec<TurnOutcome> {
         )
         .unwrap();
     let other = cockpit
-        .open(provider, WorkspaceChoice::Main { checkout })
+        .open(here, provider, WorkspaceChoice::Main { checkout })
         .unwrap();
     assert!(cockpit.focus(PaneIdentity::Thread(other)));
     let _ = cockpit.send(watched, "go".into());
@@ -696,10 +703,10 @@ fn replay(label: &str, spawner: Replay) -> Vec<TurnOutcome> {
             Instant::now() < deadline,
             "the capture never finished replaying"
         );
-        let before = cockpit.notifications().newest();
+        let before = cockpit.notifications(here).newest();
         frame.store(true, Ordering::Relaxed);
         cockpit.pump();
-        if cockpit.notifications().newest() != before {
+        if cockpit.notifications(here).newest() != before {
             let activity = cockpit.thread(watched).unwrap().activity();
             assert!(!activity.main().busy(), "Main has not finished");
             assert!(activity.pending_decisions().is_empty());
@@ -717,7 +724,7 @@ fn replay(label: &str, spawner: Replay) -> Vec<TurnOutcome> {
         std::thread::sleep(Duration::from_millis(1));
     }
     let notices: Vec<_> = cockpit
-        .notifications()
+        .notifications(here)
         .notices()
         .map(|notice| {
             assert_eq!(notice.thread, watched.thread());
@@ -798,7 +805,7 @@ fn a_pending_question_requests_attention_and_cancellation_clears_it() {
     h.control.activity(1,ActivityEvent::Decision{subject:Some(Subject::Main),decision:ferrite_core::Decision{kind:ferrite_core::DecisionKind::Questions(vec![]),policy:Default::default(),delivery:Default::default(),id:"question".into(),tool_use_id:"ask".into(),tool_name:"AskUserQuestion".into(),description:"Choose a target".into(),input:serde_json::json!({"questions":[{"question":"Where?","header":"Target","options":[],"multiSelect":false}]}),suggestions:vec![]}});
     h.cockpit.pump();
     assert!(
-        h.cockpit.notifications().attention(second.thread()),
+        h.cockpit.notifications(h.here).attention(second.thread()),
         "pending question needs attention before the turn ends"
     );
     assert_eq!(h.unread(), 1);
@@ -815,7 +822,7 @@ fn a_pending_question_requests_attention_and_cancellation_clears_it() {
         },
     );
     h.cockpit.pump();
-    assert!(!h.cockpit.notifications().attention(second.thread()));
+    assert!(!h.cockpit.notifications(h.here).attention(second.thread()));
     assert_eq!(h.unread(), 0);
 }
 
@@ -848,7 +855,7 @@ fn contract_only_the_visible_subjects_requests_are_acknowledged() {
         );
     }
     h.cockpit.pump();
-    let notices: Vec<_> = h.cockpit.notifications().reading().decisions().collect();
+    let notices: Vec<_> = h.cockpit.notifications(h.here).reading().decisions().collect();
     assert!(
         notices
             .iter()
@@ -915,7 +922,7 @@ fn an_unseen_end_keeps_the_shown_subject() {
         );
     }
     h.cockpit.pump();
-    let notices: Vec<_> = h.cockpit.notifications().reading().decisions().collect();
+    let notices: Vec<_> = h.cockpit.notifications(h.here).reading().decisions().collect();
     assert!(
         notices
             .iter()
@@ -949,7 +956,7 @@ fn clearing_attention_dismisses_live_requests_until_they_are_replaced() {
     h.cockpit.clear_notices();
     h.cockpit.pump();
     assert_eq!(h.unread(), 0);
-    assert_eq!(h.cockpit.notifications().decisions().count(), 0);
+    assert_eq!(h.cockpit.notifications(h.here).decisions().count(), 0);
     h.control.activity(
         1,
         ActivityEvent::DecisionCancelled {
@@ -999,7 +1006,7 @@ fn decision_attention_tracks_resolved_subagent_aliases() {
     h.cockpit.pump();
     assert_eq!(
         h.cockpit
-            .notifications()
+            .notifications(h.here)
             .decisions()
             .next()
             .unwrap()

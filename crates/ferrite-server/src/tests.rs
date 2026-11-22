@@ -5132,15 +5132,16 @@ fn a_window_sees_its_restart_through() {
     use ferrite_core::cockpit::ServerRestart;
     let harness = start("restart-seen");
     let mut window = cockpit(&harness);
+    let here = window.first_machine();
     pump_until(&mut window, |window| {
         matches!(
-            window.server(),
+            window.server(here),
             Some(ferrite_core::cockpit::ServerState::Attached { .. })
         )
     });
 
-    window.restart_server(When::Now).unwrap();
-    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+    window.restart_server(here, When::Now).unwrap();
+    assert_eq!(window.server_restart(here), Some(&ServerRestart::Restarting));
     harness
         .relaunched
         .recv_timeout(PATIENCE)
@@ -5148,24 +5149,24 @@ fn a_window_sees_its_restart_through() {
     assert_eq!(harness.server.join().unwrap(), 0);
     pump_until(&mut window, |window| {
         matches!(
-            window.server(),
+            window.server(here),
             Some(ferrite_core::cockpit::ServerState::Detached { .. })
         )
     });
-    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+    assert_eq!(window.server_restart(here), Some(&ServerRestart::Restarting));
     // Pressed again while it is down: the restart under way is the one.
-    window.restart_server(When::Now).unwrap();
-    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+    window.restart_server(here, When::Now).unwrap();
+    assert_eq!(window.server_restart(here), Some(&ServerRestart::Restarting));
 
     // `exec` closes the old Server's sockets; this thread's stay open.
     gone(&harness.address);
     gone(&harness.api);
     let _successor = serve_in(harness.dir.clone(), None);
     pump_until(&mut window, |window| {
-        window.server_restart() != Some(&ServerRestart::Restarting)
+        window.server_restart(here) != Some(&ServerRestart::Restarting)
     });
     assert_eq!(
-        window.server_restart(),
+        window.server_restart(here),
         Some(&ServerRestart::Restarted {
             version: "0.9.0".into()
         })
@@ -5184,27 +5185,28 @@ fn a_restart_not_back_in_time_reads_failed_until_it_is() {
     let clock = ferrite_core::clock::ThreadFixture::install(chrono::Local::now());
     let harness = start("restart-lost");
     let mut window = cockpit(&harness);
+    let here = window.first_machine();
     pump_until(&mut window, |window| {
         matches!(
-            window.server(),
+            window.server(here),
             Some(ferrite_core::cockpit::ServerState::Attached { .. })
         )
     });
 
-    window.restart_server(When::Now).unwrap();
+    window.restart_server(here, When::Now).unwrap();
     harness
         .relaunched
         .recv_timeout(PATIENCE)
         .unwrap();
     clock.advance(Duration::from_secs(29));
     window.pump();
-    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+    assert_eq!(window.server_restart(here), Some(&ServerRestart::Restarting));
     clock.advance(Duration::from_secs(1));
     window.pump();
     assert!(
-        matches!(window.server_restart(), Some(ServerRestart::Failed { .. })),
+        matches!(window.server_restart(here), Some(ServerRestart::Failed { .. })),
         "{:?}",
-        window.server_restart()
+        window.server_restart(here)
     );
 
     // Back at last on a new boot: it did restart, and now reads so.
@@ -5214,7 +5216,7 @@ fn a_restart_not_back_in_time_reads_failed_until_it_is() {
     let _successor = serve_in(harness.dir.clone(), None);
     pump_until(&mut window, |window| {
         matches!(
-            window.server_restart(),
+            window.server_restart(here),
             Some(ServerRestart::Restarted { .. })
         )
     });
@@ -6108,6 +6110,7 @@ fn snooze_is_shared_and_survives_server_restart_without_a_session() {
     let mut first = cockpit(&harness);
     let thread = first
         .open(
+            first.first_machine(),
             Provider::Claude,
             ferrite_core::workspace::WorkspaceChoice::Main {
                 checkout: harness.dir.clone(),
