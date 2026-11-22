@@ -11,6 +11,7 @@
 //! A retained capture is edited in its review (`review.rs`), with no live page.
 use super::*;
 use ferrite_core::browser::{Lease, Protection};
+use ferrite_core::cockpit::Ask;
 use ferrite_core::browser_annotations::{
     Annotation, Capture, LiveFeedback, LiveScreenshot, Selection, Viewport,
 };
@@ -43,6 +44,9 @@ struct Guard {
 }
 type EncodedCapture = (Capture, Option<ferrite_core::protocol::WirePng>);
 enum Phase {
+    /// The Server protects its page: it authorizes the operator's input,
+    /// then grants the lease. No guard yet; the page is paused here.
+    Beginning(Beginning),
     Live,
     Capturing {
         answer: Receiver<Result<CapturedPage, String>>,
@@ -53,9 +57,27 @@ enum Phase {
         answer: Receiver<std::io::Result<EncodedCapture>>,
         ready: Option<EncodedCapture>,
     },
-    Retaining(Receiver<std::io::Result<Annotation>>),
+    Retaining(Ask<Annotation>),
     PendingAttachment(Annotation),
     Closing,
+}
+
+struct Beginning {
+    owner: Owner,
+    document: Document,
+    generation: u64,
+    manual: Rc<RefCell<manual::Manual>>,
+    native: Rc<dyn BrowserView>,
+    send_enabled: bool,
+    /// Closed, cancelled or given an action before it held its page: it
+    /// gives the page back once the Server's answer comes.
+    cancelled: bool,
+    step: Begin,
+}
+
+enum Begin {
+    Input(Ask<u64>),
+    Protect { revision: u64, lease: Ask<Lease> },
 }
 
 /// The page an annotation begins on: the Browser's shown page, settled.
@@ -108,15 +130,16 @@ impl LiveAnnotation {
         })
     }
 
-    /// Protect `target` for an annotation and start the in-page editor, its
-    /// Send shown as `send_enabled` says; or why it could not begin.
+    /// Pause `target` for an annotation and ask the Server to protect it;
+    /// the in-page editor starts, its Send shown as `send_enabled` says,
+    /// once the Server has (`tend`).
     pub(super) fn begin(
         thread: ThreadId,
         target: Target,
         window: gpui::AnyWindowHandle,
         send_enabled: bool,
         cockpit: &mut Cockpit,
-    ) -> Result<Self, String> {
+    ) -> Self {
         let Target {
             owner,
             document,
@@ -127,54 +150,98 @@ impl LiveAnnotation {
         } = target;
         manual.borrow_mut().protect_local();
         manual.borrow_mut().capture_pause(true);
-        let protected = cockpit
-            .browser_input(thread, owner, document)
-            .and_then(|revision| {
-                manual.borrow_mut().revision = revision;
-                match cockpit.browser_protect(thread, owner, document, Protection::Annotation) {
-                    Ok(lease) => Ok((revision, lease)),
-                    Err(error) => {
-                        let _ = cockpit.browser_settled(thread, owner, document, revision);
-                        Err(error)
+        let input = cockpit.browser_input(thread, owner, document);
+        Self {
+            guard: None,
+            phase: Phase::Beginning(Beginning {
+                owner,
+                document,
+                generation,
+                manual,
+                native,
+                send_enabled,
+                cancelled: false,
+                step: Begin::Input(input),
+            }),
+            focus,
+            started: Instant::now(),
+            window: Some(window),
+            submission: Submission::Attach,
+            action: None,
+            restore_failed: false,
+            recovering: false,
+            ready: false,
+        }
+    }
+
+    /// The Server's word on a beginning annotation, if it came: the next
+    /// ask, the page held, or why it could not begin, with the page given
+    /// back.
+    fn begun(&mut self, thread: ThreadId, cockpit: &mut Cockpit) -> Option<String> {
+        let Phase::Beginning(beginning) = &mut self.phase else {
+            return None;
+        };
+        let lease = match &mut beginning.step {
+            Begin::Input(ask) => {
+                match ask.answer()? {
+                    Ok(revision) => {
+                        beginning.manual.borrow_mut().revision = revision;
+                        let lease = cockpit.browser_protect(
+                            thread,
+                            beginning.owner,
+                            beginning.document,
+                            Protection::Annotation,
+                        );
+                        beginning.step = Begin::Protect { revision, lease };
+                        return None;
                     }
-                }
-            });
-        match protected {
-            Ok((revision, lease)) => {
-                let mut annotation = Self {
-                    guard: Some(Guard {
-                        owner,
-                        document,
-                        generation,
-                        lease,
-                        revision,
-                        manual,
-                        restored: false,
-                    }),
-                    phase: Phase::Live,
-                    focus,
-                    started: Instant::now(),
-                    window: Some(window),
-                    submission: Submission::Attach,
-                    action: None,
-                    restore_failed: false,
-                    recovering: false,
-                    ready: false,
-                };
-                if let Err(error) = native.start_annotation(generation, send_enabled) {
-                    annotation.guard.as_mut().unwrap().restored = true;
-                    annotation.release(thread, cockpit);
-                    Err(error)
-                } else {
-                    Ok(annotation)
+                    Err(error) => Err(error),
                 }
             }
+            Begin::Protect { revision, lease } => match lease.answer()? {
+                Ok(lease) => Ok((*revision, lease)),
+                Err(error) => {
+                    cockpit.browser_settled(thread, beginning.owner, beginning.document, *revision);
+                    Err(error)
+                }
+            },
+        };
+        let Phase::Beginning(beginning) = std::mem::replace(&mut self.phase, Phase::Closing) else {
+            unreachable!("beginning checked above")
+        };
+        let (revision, lease) = match lease {
+            Ok(held) => held,
             Err(error) => {
+                let manual = beginning.manual;
                 manual.borrow_mut().capture_pause(false);
                 manual.borrow_mut().release_local();
                 manual.borrow().restore_pause();
-                Err(error.to_string())
+                return Some(error.to_string());
             }
+        };
+        self.guard = Some(Guard {
+            owner: beginning.owner,
+            document: beginning.document,
+            generation: beginning.generation,
+            lease,
+            revision,
+            manual: beginning.manual,
+            // Its editor never started: the page is as it was.
+            restored: beginning.cancelled,
+        });
+        if beginning.cancelled {
+            return None;
+        }
+        match beginning
+            .native
+            .start_annotation(beginning.generation, beginning.send_enabled)
+        {
+            Ok(()) => {
+                self.phase = Phase::Live;
+                self.started = Instant::now();
+                None
+            }
+            Err(error) => Some(error),
         }
     }
 
@@ -192,6 +259,11 @@ impl LiveAnnotation {
     /// begins. After a failed restore only a Reload or Close of its page
     /// runs, to recover it. False when it holds no page.
     pub(super) fn defer(&mut self, action: Action) -> bool {
+        if let Phase::Beginning(beginning) = &mut self.phase {
+            beginning.cancelled = true;
+            self.action.get_or_insert(action);
+            return true;
+        }
         let Some(guard) = &self.guard else {
             return false;
         };
@@ -223,7 +295,9 @@ impl LiveAnnotation {
 
     /// Stop it: one that holds its page closes as the page is restored.
     pub(super) fn cancel(&mut self) {
-        if self.guard.is_some() {
+        if let Phase::Beginning(beginning) = &mut self.phase {
+            beginning.cancelled = true;
+        } else if self.guard.is_some() {
             self.finish_guest();
             self.phase = Phase::Closing;
         }
@@ -232,7 +306,7 @@ impl LiveAnnotation {
     /// Close it: what still holds its page closes as the page is restored;
     /// what holds none is gone now.
     pub(super) fn close(mut self) -> Option<Self> {
-        if self.guard.is_none() {
+        if self.guard.is_none() && !matches!(self.phase, Phase::Beginning(_)) {
             return None;
         }
         self.cancel();
@@ -252,6 +326,23 @@ impl LiveAnnotation {
         send_enabled: bool,
         composer: bool,
     ) -> Step {
+        // One that could not begin closes at once, giving back what it held;
+        // an action pressed meanwhile runs, as the operator asked.
+        if let Some(error) = self.begun(thread, cockpit) {
+            self.release(thread, cockpit);
+            return Step {
+                error: Some(error),
+                changed: true,
+                next: Next::Closed(self.action.take()),
+            };
+        }
+        if matches!(self.phase, Phase::Beginning(_)) {
+            return Step {
+                error: None,
+                changed: false,
+                next: Next::Open(self),
+            };
+        }
         let valid = self.guard.as_ref().is_none_or(|guard| {
             browser.owner == Some(guard.owner)
                 && browser.pages.get(&guard.document.tab).is_some_and(|page| {
@@ -436,21 +527,18 @@ impl LiveAnnotation {
                     if self.guard.as_ref().is_some_and(|guard| guard.restored) {
                         if let Some((capture, png)) = ready.take() {
                             let guard = self.guard.as_ref().unwrap();
-                            match cockpit.browser_capture(
+                            self.phase = Phase::Retaining(cockpit.browser_capture(
                                 thread,
                                 guard.owner,
                                 guard.lease,
                                 capture,
                                 png,
-                            ) {
-                                Ok(answer) => self.phase = Phase::Retaining(answer),
-                                Err(failure) => error = Some(failure.to_string()),
-                            }
+                            ));
                         }
                     }
                 }
-                Phase::Retaining(answer) => match answer.try_recv() {
-                    Ok(Ok(retained)) => {
+                Phase::Retaining(answer) => match answer.answer() {
+                    Some(Ok(retained)) => {
                         self.release(thread, cockpit);
                         if composer {
                             let send = (self.submission == Submission::Send)
@@ -463,11 +551,11 @@ impl LiveAnnotation {
                         }
                         changed = true;
                     }
-                    Ok(Err(failure)) => error = Some(failure.to_string()),
-                    Err(TryRecvError::Disconnected) => {
+                    Some(Err(failure)) if failure.kind() == std::io::ErrorKind::NotConnected => {
                         error = Some("The Server did not retain this annotation.".into())
                     }
-                    Err(TryRecvError::Empty) => {}
+                    Some(Err(failure)) => error = Some(failure.to_string()),
+                    None => {}
                 },
                 Phase::PendingAttachment(retained) => {
                     if composer {
@@ -516,8 +604,8 @@ impl LiveAnnotation {
     /// Server's lease and lift the pause.
     fn release(&mut self, thread: ThreadId, cockpit: &mut Cockpit) {
         if let Some(guard) = self.guard.take() {
-            let _ = cockpit.browser_settled(thread, guard.owner, guard.document, guard.revision);
-            let _ = cockpit.browser_release(thread, guard.owner, guard.lease);
+            cockpit.browser_settled(thread, guard.owner, guard.document, guard.revision);
+            cockpit.browser_release(thread, guard.owner, guard.lease);
             guard.manual.borrow_mut().capture_pause(false);
             guard.manual.borrow_mut().release_local();
             guard.manual.borrow().restore_pause();

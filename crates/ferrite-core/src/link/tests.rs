@@ -595,13 +595,17 @@ fn browser_annotation_upload_does_not_wait_for_socket_and_keeps_following_messag
     let (finish, finished) = mpsc::channel();
     let client = std::thread::spawn(move || {
         attached.client.send_capture(upload).unwrap();
-        attached
-            .client
-            .send(&ClientMessage::Watch {
-                thread: ThreadId::new(3),
-                resume: None,
-            })
-            .unwrap();
+        // More than one gesture's worth: asks do not wait for their
+        // replies, so a beat queues one for every input.
+        for _ in 0..64 {
+            attached
+                .client
+                .send(&ClientMessage::Watch {
+                    thread: ThreadId::new(3),
+                    resume: None,
+                })
+                .unwrap();
+        }
         queued.send(()).unwrap();
         finished
             .recv_timeout(std::time::Duration::from_secs(10))

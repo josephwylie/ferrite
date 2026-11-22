@@ -20,7 +20,7 @@ impl Scenario {
     pub fn step(&mut self, view: &Entity<CockpitView>, thread: ferrite_core::ThreadId, window: &mut Window, cx: &mut App, output: &Path) -> Result<bool, String> {
         match self.stage {
             0 => {
-                let ready=view.update(cx,|view,cx| view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread))).map_err(|e|e.to_string())?;
+                let Some(ready)=super::served(view,thread,cx)? else { return Ok(false); };
                 if !ready.tabs.iter().any(|tab|Some(tab.id)==ready.active && tab.live && tab.visible && !tab.loading && tab.error.is_none()) { return Ok(false); }
                 if view.read(cx).browser_smoke_annotation_ready(thread).is_some() { return Ok(false); }
                 // Composer thumbnails repeat the button's colour after the first round.
@@ -166,7 +166,7 @@ pub(super) fn history(view:&Entity<CockpitView>,window:&mut Window,cx:&mut App,o
     }
     window.draw(cx).clear(cx);
     if *stage==0 {
-        let state=view.update(cx,|view,cx|view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread))).map_err(|e|e.to_string())?;
+        let Some(state)=super::served(view,thread,cx)? else { return Ok(false); };
         if state.tabs.iter().any(|tab|tab.live) { return Err("History-only restoration eagerly realized a browser page".into()); }
         std::fs::write(output.join("annotation-history.json"),serde_json::to_vec_pretty(&serde_json::json!({"annotations":annotations,"restored_tabs":state.tabs,"zero_eager_pages":true})).unwrap()).map_err(|e|e.to_string())?;
         if click(window,cx,"review-browser-annotation-0") { *stage=1; }

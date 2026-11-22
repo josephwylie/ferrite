@@ -36,8 +36,9 @@ impl Scenario {
                 .ok_or("Boundary UI request has no id")?;
             if id <= self.completed {
                 if self.held.is_some() {
-                    let state = attach(view, thread, cx)?;
-                    trace(view, thread, window, cx, Tick::Holding, id, &state);
+                    if let Some(state) = super::served(view, thread, cx)? {
+                        trace(view, thread, window, cx, Tick::Holding, id, &state);
+                    }
                 }
                 return Ok(false);
             }
@@ -45,7 +46,9 @@ impl Scenario {
                 .as_str()
                 .ok_or("Boundary UI request has no action")?
                 .to_string();
-            let state = attach(view, thread, cx)?;
+            let Some(state) = super::served(view, thread, cx)? else {
+                return Ok(false);
+            };
             let Some(tab) = state.tabs.iter().find(|tab| {
                 Some(tab.id) == state.active
                     && tab.live
@@ -124,7 +127,9 @@ impl Scenario {
             return Ok(false);
         }
         let (id, action, before) = self.pending.as_ref().unwrap();
-        let state = attach(view, thread, cx)?;
+        let Some(state) = super::served(view, thread, cx)? else {
+            return Ok(false);
+        };
         let ready = state
             .tabs
             .iter()
@@ -163,15 +168,6 @@ impl Scenario {
         self.pending = None;
         Ok(false)
     }
-}
-
-fn attach(
-    view: &Entity<CockpitView>,
-    thread: ferrite_core::ThreadId,
-    cx: &mut App,
-) -> Result<State, String> {
-    view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread)))
-        .map_err(|e| e.to_string())
 }
 
 /// What a tick did with a hold the provider asked for.

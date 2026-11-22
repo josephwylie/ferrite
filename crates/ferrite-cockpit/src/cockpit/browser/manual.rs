@@ -37,6 +37,7 @@ pub(super) struct Manual {
     peers: Option<(Rc<RefCell<Peers>>, u64)>,
     sequence: u64,
     canceled_through: u64,
+    retired_through: u64,
     pub active: bool,
     pending: bool,
     held: bool,
@@ -109,8 +110,14 @@ impl Manual {
         }
         Some(self.sequence)
     }
+    /// Whether `sequence`'s gesture is still the one under way.
     pub fn valid(&self, sequence: u64) -> bool {
         sequence > self.canceled_through
+    }
+    /// Whether an action since retired the page `sequence` was for
+    /// (`retire_for_action`).
+    pub fn retired(&self, sequence: u64) -> bool {
+        sequence <= self.retired_through
     }
     pub fn acknowledge(&mut self, sequence: u64, document: Document, revision: u64) {
         self.revision = revision;
@@ -170,6 +177,7 @@ impl Manual {
     pub fn retire_for_action(&mut self) -> Option<(Document, u64)> {
         self.sequence += 1;
         self.canceled_through = self.sequence;
+        self.retired_through = self.sequence;
         self.active = false;
         self.pending = false;
         self.held = false;

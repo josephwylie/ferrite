@@ -8,7 +8,7 @@
 use super::*;
 use ferrite_core::browser_annotations::Annotation;
 use ferrite_pane::annotation_editor::{AnnotationEditor, EditorEvent};
-use std::sync::mpsc::{Receiver, TryRecvError};
+use ferrite_core::cockpit::Ask;
 use std::time::{Duration, Instant};
 
 /// One Thread's review.
@@ -16,7 +16,7 @@ enum Review {
     /// The retained capture's image is being read.
     Loading {
         retained: Annotation,
-        image: Receiver<std::io::Result<std::path::PathBuf>>,
+        image: Ask<std::path::PathBuf>,
         focus: FocusHandle,
         started: Instant,
     },
@@ -59,7 +59,7 @@ impl BrowserReviewView {
         &mut self,
         thread: ThreadId,
         retained: Annotation,
-        image: Receiver<std::io::Result<std::path::PathBuf>>,
+        image: Ask<std::path::PathBuf>,
         cx: &mut Context<Self>,
     ) {
         self.threads.insert(
@@ -108,7 +108,7 @@ impl BrowserReviewView {
     pub(super) fn tend(&mut self, cx: &mut Context<Self>) -> Vec<(ThreadId, String)> {
         let mut read = Vec::new();
         let mut failed = Vec::new();
-        for (thread, review) in &self.threads {
+        for (thread, review) in &mut self.threads {
             let Review::Loading {
                 retained,
                 image,
@@ -121,16 +121,16 @@ impl BrowserReviewView {
             let error = if started.elapsed() > Duration::from_secs(45) {
                 "The annotation capture timed out. Select it again.".to_owned()
             } else {
-                match image.try_recv() {
-                    Ok(Ok(image)) => {
+                match image.answer() {
+                    Some(Ok(image)) => {
                         read.push((*thread, retained.clone(), image));
                         continue;
                     }
-                    Ok(Err(failure)) => failure.to_string(),
-                    Err(TryRecvError::Disconnected) => {
+                    Some(Err(failure)) if failure.kind() == std::io::ErrorKind::NotConnected => {
                         "The retained capture could not be loaded. Capture it again.".to_owned()
                     }
-                    Err(TryRecvError::Empty) => continue,
+                    Some(Err(failure)) => failure.to_string(),
+                    None => continue,
                 }
             };
             failed.push((*thread, error));
