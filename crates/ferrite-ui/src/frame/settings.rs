@@ -644,8 +644,9 @@ mod tests {
         assert_eq!(PageKey::About.step(1), PageKey::About);
         assert_eq!(PageKey::NewThreads.step(-1), PageKey::NewThreads);
         assert_eq!(PageKey::Server.step(1), PageKey::Connections);
-        assert_eq!(PageKey::Connections.step(1), PageKey::About);
-        assert_eq!(PageKey::About.step(-6), PageKey::NewThreads);
+        assert_eq!(PageKey::Connections.step(1), PageKey::Labs);
+        assert_eq!(PageKey::Labs.step(1), PageKey::About);
+        assert_eq!(PageKey::About.step(-7), PageKey::NewThreads);
         assert_eq!(PageKey::default(), PageKey::NewThreads);
     }
 
