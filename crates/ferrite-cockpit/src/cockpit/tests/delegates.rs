@@ -225,3 +225,61 @@ fn a_delegate_call_is_t3s_task_row_on_its_machine(cx: &mut TestAppContext) {
     assert_eq!((done.run, done.result.as_deref()), (AgentRun::Done, Some("All green.")));
     assert!(matches!(done.clock, Some(AgentClock::Took(_))));
 }
+
+/// T3 keeps a call that started nothing as its ordinary tool row, with its
+/// error (`withoutSubagentDelegationRows`), beside the real task's row.
+#[gpui::test]
+fn a_refused_delegate_call_keeps_its_tool_row(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("delegates-refused", 1);
+    let _ = core.send(core.threads()[0], "Hand the tests to pc".into());
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    start(&view, thread, cx);
+    let send = |event| fake.streams.borrow()[0].send(event).unwrap();
+    send(SessionEvent::ToolStarted {
+        id: "call-r".into(),
+        name: "mcp__ferrite__delegate_task".into(),
+        input: serde_json::json!({"title": "Fix the tests", "task": "Make cargo test pass"}),
+    });
+    send(SessionEvent::ToolCompleted {
+        id: "call-r".into(),
+        output: "target_required: Pass target.projectId".into(),
+        is_error: true,
+        result: ferrite_core::ToolResult::Opaque,
+    });
+    send(SessionEvent::TextDelta { text: "It was refused.".into() });
+    until(cx, |cx| {
+        cx.debug_bounds("tool-row-call-r").is_some() || cx.debug_bounds("agent-row-call-r").is_some()
+    });
+    assert!(cx.debug_bounds("agent-row-call-r").is_none(), "a refused call is no task row");
+}
+
+/// The line under the transcript says Ferrite's noun for what it waits on.
+#[gpui::test]
+fn the_background_line_counts_delegates_as_delegates(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("delegates-line-noun", cx);
+    start(&view, thread, cx);
+    amend(
+        &view,
+        thread,
+        |delegates| {
+            delegates.start(Started {
+                server: ServerId::new("s-pc"),
+                machine: "pc".into(),
+                thread: ThreadId::new(8),
+                request: "delegate:here:1:8".into(),
+                title: Some("Long ping".into()),
+                task: "Long ping".into(),
+                provider: Provider::Codex,
+                model: None,
+            });
+            true
+        },
+        cx,
+    );
+    let title = view.read_with(cx, |view, cx| view.background_work_title(0, cx));
+    assert_eq!(title.as_deref(), Some("Waiting on 2 delegates"));
+}
