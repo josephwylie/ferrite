@@ -87,7 +87,9 @@ each connection to it is one run of
         -o ControlPersist=600 -- <target> ferrited bridge
 
 so `link::Client::attach` is unchanged and the client contract is the
-frozen one. `BatchMode=yes`: a bridge never prompts; a connection that
+frozen one. A machine's `welcome` names its Server's id and wall clock
+(ADR 0025), whichever route reaches it; Thread ids are per Store, so the
+id is what tells two machines' Servers apart. `BatchMode=yes`: a bridge never prompts; a connection that
 needs the operator fails. `ControlPath` is Ferrite's own (the operator's
 `~/.ssh/config` still applies otherwise): one sign-in carries every
 connection for ten idle minutes after the last. Windows' OpenSSH has no

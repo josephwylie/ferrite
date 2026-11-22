@@ -293,6 +293,8 @@ on: a window on another Machine's Server.
 The headless Ferrite process (`ferrite server`) that owns every Session,
 the Threads' history and the pending Decisions, so agents keep running
 when no window is open. Windows are its clients; several may attach.
+Each has a stable id kept in its Store (`ServerId`), which its `welcome`
+names on every route to it.
 _Avoid_: daemon, backend (that is a Provider), host.
 
 **Machine**

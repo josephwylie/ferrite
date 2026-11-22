@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::protocol::{Live, Peer, ServerInfo, SharedRoster, Snapshot};
+use crate::server::ServerId;
 use crate::store::LogRecord;
 use crate::transcript::Input;
 use crate::SessionEvent;
@@ -240,6 +241,8 @@ fn a_client_attaches_and_both_sides_hear_each_other() {
                 },
                 "b-1".into(),
                 0,
+                ServerId::new("s-1"),
+                0,
             ))
             .unwrap();
         connection
@@ -323,6 +326,8 @@ fn a_refused_generation_is_the_attach_error() {
                     executable: "/bin/ferrite".into(),
                 },
                 "b".into(),
+                0,
+                ServerId::new("s-1"),
                 0,
             ))
             .unwrap();
@@ -499,6 +504,8 @@ fn browser_annotation_upload_does_not_wait_for_socket_and_keeps_following_messag
                     executable: "/fixture/ferrite".into(),
                 },
                 "capture".into(),
+                0,
+                ServerId::new("s-1"),
                 0,
             ),
         )

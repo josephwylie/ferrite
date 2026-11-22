@@ -13,6 +13,7 @@ use serde_json::json;
 use super::*;
 use crate::activity::{ActivityInput, AgentKey, ExecutionEvent};
 use crate::engine::{Delivery, QueueItem};
+use crate::server::ServerId;
 
 fn fixtures(kind: &str) -> PathBuf {
     // Cargo runs a crate's tests in the crate's own directory.
@@ -1565,6 +1566,8 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 capabilities: vec![],
                 error: None,
                 uptime_ms: None,
+                server_id: None,
+                now_ms: None,
             }),
         ),
         (
@@ -1579,6 +1582,24 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 capabilities: vec![],
                 error: None,
                 uptime_ms: Some(61_000),
+                server_id: None,
+                now_ms: None,
+            }),
+        ),
+        (
+            "welcome_server_id",
+            Sample::Server(ServerMessage::Welcome {
+                generation: 1,
+                server: ServerInfo {
+                    version: "0.9.0".into(),
+                    executable: "/Applications/Ferrite.app/Contents/MacOS/ferrite".into(),
+                },
+                boot_id: "b-1".into(),
+                capabilities: vec![],
+                error: None,
+                uptime_ms: Some(61_000),
+                server_id: Some(ServerId::new("0123456789abcdef0123456789abcdef")),
+                now_ms: Some(1_790_000_000_000),
             }),
         ),
         (
@@ -2402,6 +2423,8 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 capabilities: vec![Capability::BrowserDispatch, Capability::ForkOf],
                 error: None,
                 uptime_ms: Some(61_000),
+                server_id: None,
+                now_ms: None,
             }),
         ),
         (
@@ -2962,12 +2985,12 @@ fn a_newer_generation_is_refused_with_unsupported_generation() {
         version: "0.9.0".into(),
         executable: "/bin/ferrite".into(),
     };
-    let ServerMessage::Welcome { error, .. } = welcome(generation, server.clone(), "b-1".into(), 0)
+    let ServerMessage::Welcome { error, .. } = welcome(generation, server.clone(), "b-1".into(), 0, ServerId::new("s-1"), 0)
     else {
         panic!("a welcome");
     };
     assert_eq!(error.unwrap().code, ErrorCode::UnsupportedGeneration);
-    let ServerMessage::Welcome { error, .. } = welcome(GENERATION, server, "b-1".into(), 0) else {
+    let ServerMessage::Welcome { error, .. } = welcome(GENERATION, server, "b-1".into(), 0, ServerId::new("s-1"), 0) else {
         panic!("a welcome");
     };
     assert_eq!(error, None);

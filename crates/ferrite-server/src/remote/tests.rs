@@ -55,6 +55,7 @@ mod network {
                 crate::Server::new(
                     engine,
                     info,
+                    crate::server_id::open(&server_store).unwrap(),
                     renders,
                     Arc::default(),
                     server_store.parent().unwrap().to_path_buf(),
