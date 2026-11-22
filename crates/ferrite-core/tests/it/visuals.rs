@@ -685,7 +685,8 @@ fn a_workers_report_is_its_own_tool_needing_no_permission() {
     .join("\n");
     let (program, env) = stub("claude", output, &host, Some(&argv));
     let (heard, hear) = std::sync::mpsc::channel();
-    let tools = Tools::new(heard).for_thread(ThreadId::new(7), &ThreadOwner::Task("t-1".into()));
+    let tools =
+        Tools::new(heard).for_thread(ThreadId::new(7), Some(&ThreadOwner::Task("t-1".into())));
     let session = ClaudeSession::spawn(ClaudeConfig {
         program,
         env,
@@ -746,4 +747,104 @@ fn a_workers_report_is_its_own_tool_needing_no_permission() {
         result["result"]["content"][0]["text"],
         "Task t-1 is completed."
     );
+}
+
+/// Every Thread's Claude Session is offered T3 Code's PR watch tools,
+/// pre-allowed. Main's watch reaches the Server as `pr.watch` from the
+/// Session's own Thread; a subagent's (its `tool_use` streamed with a
+/// `parent_tool_use_id`) is refused in T3's words, asking nothing.
+#[test]
+fn every_thread_watches_prs_and_a_subagents_watch_is_refused() {
+    use ferrite_core::api::{self, tools::Tools};
+    use ferrite_core::{link, ThreadId};
+
+    let host = dir().join("claude-pr-watch.host.jsonl");
+    let argv = dir().join("claude-pr-watch.argv");
+    let _ = fs::remove_file(&host);
+    let mcp = |id: &str, message: Value| {
+        json!({"type": "control_request", "request_id": id, "request": {
+            "subtype": "mcp_message", "server_name": "ferrite", "message": message}})
+    };
+    let watch = |id: u64, call: &str| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+            "name": "watch_pull_request",
+            "arguments": {"url": "https://github.com/acme/app/pull/7"},
+            "_meta": {"claudecode/toolUseId": call}}})
+    };
+    let output = [
+        json!({"type":"control_response","response":{"subtype":"success","request_id":"req_1","response":{}}}),
+        mcp("list-1", json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})),
+        json!({"type": "assistant", "parent_tool_use_id": "toolu_task", "message": {"content": [
+            {"type": "tool_use", "id": "toolu_child", "name": "mcp__ferrite__watch_pull_request",
+             "input": {"url": "https://github.com/acme/app/pull/7"}}]}}),
+        mcp("child-1", watch(2, "toolu_child")),
+        json!({"type": "assistant", "parent_tool_use_id": null, "message": {"content": [
+            {"type": "tool_use", "id": "toolu_main", "name": "mcp__ferrite__watch_pull_request",
+             "input": {"url": "https://github.com/acme/app/pull/7"}}]}}),
+        mcp("main-1", watch(3, "toolu_main")),
+    ]
+    .into_iter()
+    .map(|frame| frame.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    let (program, env) = stub("claude", output, &host, Some(&argv));
+    let (heard, hear) = std::sync::mpsc::channel();
+    let tools = Tools::new(heard).for_thread(ThreadId::new(7), None);
+    let session = ClaudeSession::spawn(ClaudeConfig {
+        program,
+        env,
+        api_tools: Some(tools),
+        ..Default::default()
+    })
+    .unwrap();
+    let server = std::thread::spawn(move || {
+        let mut asked = None;
+        let mut requests = Vec::new();
+        while let Ok(link::Heard::Api(heard)) = hear.recv_timeout(Duration::from_secs(5)) {
+            match heard {
+                api::Heard::Joined(_, answers) => asked = Some(answers),
+                api::Heard::Request(_, request) => {
+                    let answer = json!({"id": request.id, "result": {"watching": true}});
+                    let _ = asked
+                        .as_ref()
+                        .unwrap()
+                        .send(answer.to_string().into_bytes());
+                    requests.push(request);
+                }
+                api::Heard::Hungup(_) => {}
+            }
+        }
+        requests
+    });
+
+    let lines = host_lines(&host, |lines| {
+        answer_to(lines, "child-1").is_some() && answer_to(lines, "main-1").is_some()
+    });
+    drop(session);
+    let requests = server.join().unwrap();
+    let argv = fs::read_to_string(argv).unwrap();
+    assert!(
+        argv.contains("--allowedTools mcp__ferrite__watch_pull_request"),
+        "{argv}"
+    );
+    let listed = &answer_to(&lines, "list-1").unwrap()["response"]["response"]["mcp_response"];
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"watch_pull_request") && names.contains(&"unwatch_pull_request"),
+        "{names:?}"
+    );
+    let child = &answer_to(&lines, "child-1").unwrap()["response"]["response"]["mcp_response"];
+    assert_eq!(child["result"]["isError"], true);
+    assert_eq!(
+        child["result"]["content"][0]["text"],
+        ferrite_core::api::tools::SUBAGENT_WATCH
+    );
+    assert_eq!(requests.len(), 1, "only Main's call reached the Server");
+    assert_eq!(requests[0].method.name(), "pr.watch");
+    assert_eq!(requests[0].caller, Some(ThreadId::new(7)));
 }

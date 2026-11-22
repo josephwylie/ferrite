@@ -510,8 +510,8 @@ fn tool_call(
     let (told, said) = mpsc::channel();
     harness
         .tools
-        .for_thread(thread, owner)
-        .call(tool, &arguments, move |answer| {
+        .for_thread(thread, Some(owner))
+        .call(tool, &arguments, true, move |answer| {
             told.send((answer.text, answer.is_error)).unwrap()
         });
     said.recv_timeout(PATIENCE).unwrap()

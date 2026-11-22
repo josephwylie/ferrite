@@ -1137,7 +1137,12 @@ fn read_stdout(
             if let Ok(frame) = serde_json::from_str::<serde_json::Value>(text) {
                 if let Some(stdin) = stdin.upgrade() {
                     if wire::answer_browser(&frame, browser.as_ref(), Arc::clone(&stdin))
-                        || wire::answer_api_tool(&frame, api_tools.as_ref(), Arc::clone(&stdin))
+                        || wire::answer_api_tool(
+                            &frame,
+                            api_tools.as_ref(),
+                            turns.main_thread_id.as_deref(),
+                            Arc::clone(&stdin),
+                        )
                         || wire::answer_visual(&frame, visuals.as_ref(), stdin)
                     {
                         continue;

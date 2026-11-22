@@ -1,7 +1,8 @@
 //! Ferrite's in-band MCP server: how a Claude Session is offered
 //! `update_plan` and `wrap_up` (always), `show_visual` (at the operator's
-//! level), the browser, and an owned Thread's Factory tools
-//! (`api::tools`), with no server process of its own.
+//! level), the browser, and the Thread's own tools (`api::tools`: the PR
+//! watch, and an owned Thread's Factory tools), with no server process of
+//! its own.
 //!
 //! The CLI's SDK MCP transport, as the Agent SDK speaks it (verified against
 //! 2.1.292, fixture `claude-show-visual-2.1.292`): the initialize control
@@ -21,7 +22,7 @@
 //! for it says it succeeded for Main — a subagent's call, or one the CLI
 //! failed, moves nothing (§12: children do not update the main plan).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -42,6 +43,9 @@ pub(super) struct Server {
     api_tools: Option<crate::api::tools::ThreadTools>,
     stdin: Arc<Mutex<std::process::ChildStdin>>,
     plan: Mutex<Plan>,
+    /// The `tool_use` ids the stream named a subagent's, so a tool call
+    /// from one is known for what it is.
+    subagent_calls: Mutex<HashSet<String>>,
 }
 
 /// What the server knows of Main's plan: its steps' statuses (§12: the
@@ -77,6 +81,7 @@ impl Server {
             api_tools,
             stdin,
             plan: Mutex::default(),
+            subagent_calls: Mutex::default(),
         }
     }
 
@@ -133,6 +138,13 @@ impl Server {
     /// this server answered. Every line passes through here, consumed or not.
     pub(super) fn receipt(&self, value: &Value) -> Vec<SessionEvent> {
         let main = matches!(value.get("parent_tool_use_id"), None | Some(Value::Null));
+        if !main && value["type"] == "assistant" {
+            let uses = value["message"]["content"].as_array().into_iter().flatten();
+            lock(&self.subagent_calls).extend(
+                uses.filter(|block| block["type"] == "tool_use")
+                    .filter_map(|block| block["id"].as_str().map(str::to_owned)),
+            );
+        }
         let mut plan = lock(&self.plan);
         if value["type"] == "result" && main {
             plan.touched = false;
@@ -212,7 +224,8 @@ impl Server {
             if method == "tools/call" {
                 let stdin = Arc::clone(&self.stdin);
                 let request_id = request_id.to_owned();
-                tools.call(name, &message["params"]["arguments"], move |answer| {
+                let main = !lock(&self.subagent_calls).remove(call_id(message));
+                tools.call(name, &message["params"]["arguments"], main, move |answer| {
                     respond_mcp(
                         &stdin,
                         &request_id,
