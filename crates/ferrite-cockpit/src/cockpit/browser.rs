@@ -791,6 +791,18 @@ impl CockpitView {
                 self.browsers.reveal.entry(thread).or_insert(seen);
             }
             let browser = self.browsers.threads.get_mut(&thread).unwrap();
+            #[cfg(feature = "browser-smoke")]
+            ferrite_pane::visual::hold_trace::record(serde_json::json!({
+                "kind": "browser",
+                "owned": owned,
+                "owner": owner.map(|owner| owner.epoch),
+                "had": browser.owner.map(|owner| owner.epoch),
+                "action": action.as_ref().map(|action| format!("{action:?}").chars().take(40).collect::<String>()),
+                "active": state.active,
+                "tabs": state.tabs.iter().map(|tab| format!("{}g{} live={} loading={} visible={} err={}", tab.id.0, tab.generation, tab.live, tab.loading, tab.visible, tab.error.is_some())).collect::<Vec<_>>(),
+                "pages": browser.pages.len(),
+                "waiting": browser.waiting.len(),
+            }));
             browser.state = state;
             if !owned
                 || browser
@@ -1006,6 +1018,16 @@ impl CockpitView {
                         .get(&page.document.tab)
                         .is_some_and(|page| page.web.read(cx).browser_visible());
                     let tab = page.document.tab;
+                    #[cfg(feature = "browser-smoke")]
+                    ferrite_pane::visual::hold_trace::record(serde_json::json!({
+                        "kind": "report",
+                        "document": format!("{:?}", page.document),
+                        "native": generation,
+                        "navigation": page.navigation,
+                        "loading": page.loading,
+                        "visible": page.visible,
+                        "error": page.error,
+                    }));
                     let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_page(thread, owner, page));
                     self.browsers.threads.get_mut(&thread).unwrap().waiting.push(Waiting::Page {
                         ask,
@@ -1353,6 +1375,11 @@ impl CockpitView {
         // memory budget is imposed. The Server reserves before native release
         // (`answer_browser_ask`).
         for (thread, owner, document, generation) in candidates {
+            #[cfg(feature = "browser-smoke")]
+            ferrite_pane::visual::hold_trace::record(serde_json::json!({
+                "kind": "reclaim",
+                "document": format!("{document:?}"),
+            }));
             let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_reclaim(thread, owner, document));
             self.browsers.threads.get_mut(&thread).unwrap().waiting.push(Waiting::Reclaim {
                 ask,
