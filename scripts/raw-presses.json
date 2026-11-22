@@ -24,7 +24,7 @@
   "crates/ferrite-cockpit/src/cockpit/model_picker.rs": 6,
   "crates/ferrite-cockpit/src/cockpit/nav_chrome.rs": 2,
   "crates/ferrite-cockpit/src/cockpit/nav_keys.rs": 1,
-  "crates/ferrite-cockpit/src/cockpit/nav_list.rs": 25,
+  "crates/ferrite-cockpit/src/cockpit/nav_list.rs": 21,
   "crates/ferrite-cockpit/src/cockpit/new_task_view.rs": 4,
   "crates/ferrite-cockpit/src/cockpit/palette.rs": 1,
   "crates/ferrite-cockpit/src/cockpit/panel.rs": 1,

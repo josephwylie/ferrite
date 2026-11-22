@@ -53,11 +53,9 @@ struct Entry {
     held: Option<MachineId>,
     /// The `--remote` machine, not in Settings.
     unsaved: bool,
-    /// The nav shows its heading alone.
-    folded: bool,
 }
 
-/// A machine's connection, as its glyph in the nav says it.
+/// A machine's connection, as Settings › Connections says it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Connection {
     Online,
@@ -80,7 +78,7 @@ impl Connection {
     }
 }
 
-/// One machine, as the nav draws its heading.
+/// One machine, as Settings › Connections lists it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MachineRow {
     pub index: usize,
@@ -88,7 +86,6 @@ pub struct MachineRow {
     pub held: Option<MachineId>,
     pub name: String,
     pub connection: Connection,
-    pub folded: bool,
 }
 
 impl Machines {
@@ -224,8 +221,7 @@ impl Machines {
         true
     }
 
-    /// Every machine for the nav and Settings: this computer only while
-    /// it is on.
+    /// Every machine for Settings: this computer only while it is on.
     pub fn rows(&self, cockpit: &Cockpit) -> Vec<MachineRow> {
         self.entries
             .iter()
@@ -241,16 +237,9 @@ impl Machines {
                     held: entry.held,
                     name: entry.name(),
                     connection,
-                    folded: entry.folded,
                 }
             })
             .collect()
-    }
-
-    pub fn toggle_fold(&mut self, index: usize) {
-        if let Some(entry) = self.entries.get_mut(index) {
-            entry.folded = !entry.folded;
-        }
     }
 
     /// Sign in to machine `index` in a terminal; its link attaches once
@@ -393,7 +382,6 @@ impl Entry {
             bridge: None,
             held: None,
             unsaved,
-            folded: false,
         }
     }
 

@@ -7,7 +7,6 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use ferrite_core::ThreadKey;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, AnyElement, Div, Hsla, RenderImage, SharedString, Stateful};
 
@@ -15,7 +14,7 @@ use ferrite_ui::icons::{self, icon};
 use ferrite_ui::theme::*;
 use ferrite_ui::{components, motion};
 
-use super::{card, chord_glyphs, fitted_in, Measure, NavTooltip, RowStatus, Shelf, ThreadRow};
+use super::{card, chord_glyphs, fitted_in, Measure, NavTooltip, RowStatus, RowTag, Shelf, ThreadRow};
 
 /// The list (T3's `ul.flex.flex-col.gap-px.flex-1`): at least the scroll
 /// area's height, so the spacer can push the shelves to its foot; rows 1px
@@ -172,15 +171,15 @@ fn slim(
     measure: &Measure,
     live: bool,
 ) -> Stateful<Div> {
-    let thread = row.key;
-    let key = card::card_key(thread);
+    let id = row.tag();
+    let key = card::card_key(id);
     let fade_key = slim_fade_key(&key);
     let hover = if live { motion::hover_t(&key) } else { 0.0 };
     let lit = if live { motion::hover_t(&fade_key) } else { 0.0 };
     #[cfg(test)]
     if live {
         super::testing::DRAWN_HOVER.with(|drawn| drawn.borrow_mut().insert(key.clone(), hover));
-        super::testing::DRAWN_SLIM.with(|drawn| drawn.borrow_mut().insert(thread, lit));
+        super::testing::DRAWN_SLIM.with(|drawn| drawn.borrow_mut().insert(row.key, lit));
     }
     let strong = row.selected || row.status == RowStatus::NeedsYou;
     let ink: Hsla = if strong {
@@ -251,9 +250,10 @@ fn slim(
                 .child(action)
         }));
     let frame = if live {
+        let selector = key.clone();
         div()
-            .id(("nav-slim", thread.thread().get() as usize))
-            .debug_selector(move || format!("nav-thread-{}", thread.thread().get()))
+            .id(id.id("nav-slim"))
+            .debug_selector(move || selector.to_string())
             .on_hover({
                 let snap = motion::hover_snap(key.clone());
                 let fade =
@@ -264,9 +264,11 @@ fn slim(
                 }
             })
     } else {
-        div().id(("nav-slim-ghost", thread.thread().get() as usize))
+        div().id(id.id("nav-slim-ghost"))
     };
     frame
+        // A machine the window cannot reach keeps its rows, dimmed.
+        .when(row.lost(), |row| row.opacity(MACHINE_LOST_OPACITY))
         .relative()
         .cursor_pointer()
         .flex()
@@ -289,23 +291,23 @@ fn slim(
 
 
 /// A parked row's Revive (T3's Un-settle): `Undo2` at 14px.
-pub fn revive_button(thread: ThreadKey) -> Stateful<Div> {
-    slim_action("nav-revive", thread, icons::UNDO_2, NAV_REVIVE_GLYPH, "Revive")
+pub fn revive_button(id: RowTag) -> Stateful<Div> {
+    slim_action("nav-revive", id, icons::UNDO_2, NAV_REVIVE_GLYPH, "Revive")
 }
 
 /// A snoozed row's Wake: `AlarmClockOff` at 12px.
-pub fn wake_button(thread: ThreadKey) -> Stateful<Div> {
-    slim_action("nav-wake", thread, icons::ALARM_CLOCK_OFF, NAV_WAKE_GLYPH, "Wake thread")
+pub fn wake_button(id: RowTag) -> Stateful<Div> {
+    slim_action("nav-wake", id, icons::ALARM_CLOCK_OFF, NAV_WAKE_GLYPH, "Wake thread")
 }
 
 fn slim_action(
     name: &'static str,
-    thread: ThreadKey,
+    id: RowTag,
     glyph: &'static str,
     size: f32,
     tip: &'static str,
 ) -> Stateful<Div> {
-    let key = SharedString::from(format!("{name}-{}", thread.thread().get()));
+    let key = id.key(name);
     let selector = key.clone();
     let t = motion::hover_t(&key);
     div()

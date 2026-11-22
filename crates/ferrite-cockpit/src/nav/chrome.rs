@@ -154,12 +154,11 @@ pub fn results(rows: Vec<AnyElement>) -> Div {
 /// One result (T3's `SidebarSearchResultRow`): the badge, the title, the
 /// PR's number, and the age in a fixed 32px column at 12px, muted at 55%.
 pub fn result_row(row: &ThreadRow, age: SharedString, lit: bool) -> Stateful<Div> {
-    let thread = row.key.thread().get();
-    let key = SharedString::from(format!("nav-result-{thread}"));
+    let key = row.tag().key("nav-result");
     let hovered = motion::hover_t(&key) > 0.0;
     let selector = key.clone();
     div()
-        .id(("nav-result", thread as usize))
+        .id(key.clone())
         .debug_selector(move || selector.to_string())
         .relative()
         .flex()
@@ -261,6 +260,10 @@ pub struct HoverLines {
 /// face (`menu::glass`). The Title, a line per fact, then the pull
 /// request under a rule.
 pub fn hover_card(row: &ThreadRow, lines: HoverLines, width: f32) -> AnyElement {
+    #[cfg(test)]
+    super::testing::DRAWN_HOVER_CARD.with(|drawn| {
+        *drawn.borrow_mut() = lines.lines.iter().map(|(_, words)| words.to_string()).collect();
+    });
     let body = ferrite_ui::menu::glass()
         .debug_selector(|| "nav-hover-card".into())
         .flex()

@@ -199,20 +199,35 @@ Each lands green and proves something.
    end, as in T3. ADR 0026's "The nav", the `CONTEXT.md` Machine entry and
    the UI spec follow.
 
+   Done. `nav::RowTag` names a row's elements, its machine in them only
+   for another machine's row, so this computer's ids stay bare. What a
+   heading carried went to a home or went: its connection glyph and word
+   to the notice row ("Sign in to box", "box is offline", "box is
+   reconnecting" after `RECONNECT_GRACE`); its name to the row's hover
+   card; its "New project…" to Add project, which on more than one
+   machine opens the palette over the machines the window reaches (T3's
+   `choose-environment`, "Environments"); its fold nowhere. Ages and
+   order read every machine's times on this computer's clock: a held
+   machine keeps its Server's clock (`ServerClock`, from `welcome`) after
+   its link goes, a Thread's digest carries its last activity
+   (`Digest.active_ms`), and `Cockpit::last_used` reads a parked or
+   digest-only Thread's through that clock. Where Projects are listed by
+   name (the Filter menu), another machine's says "On box", T3's words.
+
 ## Answered questions
 
 - **The icon.** One generic server glyph, T3's default kind. A kind per
   machine can come later, in Settings.
 - **Signing in.** "Sign in to box" is a notice row in the nav naming the
   machine, plus the band on that machine's Panes.
-- **The same repo on two machines** is two Projects.
+- **The same repo on two machines** is two Projects. T3 Code groups them
+  by repository unless set to keep them separate, and marks a Project on
+  another environment with a machine icon whose tooltip says "On box".
+  Ferrite keeps them separate and says "On box" beside the name.
 - **A new Thread with no Project** starts on this computer.
 
 ## Not done here
 
-- Ages and "newest send first" mix machines' clocks once the list merges.
-  T3 corrects each environment's clock. That needs an offset per machine,
-  taken when its Server says hello.
 - System notification tags already name the machine (ADR 0017), a Factory
   task's too (`ferrite-task-{task}@{target}`, this computer's bare). Anything
   else that saves a `ThreadId` across runs must save a `SavedThread`.

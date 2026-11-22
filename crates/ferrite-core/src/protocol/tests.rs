@@ -226,6 +226,7 @@ fn digest() -> crate::digest::Digest {
             wall: WallCard::default(),
         }),
         prompt_title: Some("Make the suite pass".into()),
+        active_ms: None,
         turns: 3,
         subagents: 1,
         changed_files: vec![crate::docview::FileChange {
@@ -2111,6 +2112,16 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         }],
                         wake_waiting: true,
                     },
+                    ..digest()
+                },
+            }),
+        ),
+        (
+            "digest_active",
+            Sample::Server(ServerMessage::Digest {
+                thread,
+                digest: crate::digest::Digest {
+                    active_ms: Some(1_763_900_000_000),
                     ..digest()
                 },
             }),

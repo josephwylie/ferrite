@@ -31,21 +31,12 @@ use gpui::{App, Bounds};
 
 impl NavView {
     /// Every row the keyboard can stand on, in the list's drawing order:
-    /// the local cards (a connected machine's rows are the pointer's),
-    /// then each shelf's header and the rows it draws.
+    /// the cards, every machine's, then each shelf's header and the rows
+    /// it draws.
     pub(super) fn items(&self, inputs: &NavInputs) -> Vec<NavCursor> {
         let state = &inputs.state;
         let mut items = Vec::new();
-        if inputs.machine_folded() {
-            return items;
-        }
-        items.extend(
-            state
-                .pinned
-                .iter()
-                .chain(&state.active)
-                .map(|row| NavCursor::thread(row.key)),
-        );
+        items.extend(state.pinned.iter().chain(&state.active).map(NavCursor::thread));
         for shelf in SHELVES {
             if state.shelf(shelf).is_empty() {
                 continue;
@@ -54,7 +45,7 @@ impl NavView {
             items.extend(
                 self.shelf_rows(inputs, shelf)
                     .into_iter()
-                    .map(|row| NavCursor::thread(row.key)),
+                    .map(NavCursor::thread),
             );
         }
         items

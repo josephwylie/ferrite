@@ -8,11 +8,11 @@
 //!   quiet Thread its age (`now`, `12m`, `3h`). Under the pointer, or the
 //!   nav keyboard's cursor, the slot holds the hover strip instead
 //!   (`Snooze`, `Park`), at once.
-//! - **Line 2**: the title, fading at its edge (`fitted`).
+//! - **Line 2**: the title, fading at its edge (`fitted_in`).
 //! - **Line 3**: the checkout — the worktree glyph, the branch cut in its
-//!   middle (`middle_truncate`), the PR chip, and the Provider's logo at
-//!   the right. With none of them the card hugs lines 1 and 2 and the
-//!   logo ends line 2.
+//!   middle (`middle_truncate`), the PR chip — and at the right another
+//!   machine's server glyph (ADR 0045), then the Provider's logo. With no
+//!   checkout the card hugs lines 1 and 2 and those glyphs end line 2.
 //!
 //! At rest a card is bare: a fill only under the pointer, for the Thread
 //! the board shows, and for a card picked (⌘/⇧-click, a Park sweep). Busy cards recede
@@ -25,7 +25,6 @@ use std::time::{Duration, Instant, SystemTime};
 
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::{PrState, PullRequest};
-use ferrite_core::ThreadKey;
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, App, Div, FontWeight, Hsla, SharedString, Stateful, Window,
@@ -35,7 +34,7 @@ use ferrite_ui::icons::{self, icon};
 use ferrite_ui::theme::*;
 use ferrite_ui::{components, motion};
 
-use super::{NavTooltip, cut_ground, fitted_in, hovered, Measure, NavTail, RowStatus, ThreadRow};
+use super::{NavTooltip, cut_ground, fitted_in, hovered, Measure, NavTail, RowStatus, RowTag, ThreadRow};
 
 /// A Thread's pull request as its card's chip reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -366,9 +365,9 @@ pub(crate) fn card_hover(
 }
 
 /// The blend key a Thread's row's hover reads, its card's or its slim
-/// row's (`NavCursor::thread` mirrors it).
-pub(crate) fn card_key(thread: ThreadKey) -> SharedString {
-    format!("nav-thread-{}", thread.thread().get()).into()
+/// row's (`NavCursor::thread` mirrors it), and the row's selector.
+pub(crate) fn card_key(tag: RowTag) -> SharedString {
+    tag.key("nav-thread")
 }
 
 /// What the cockpit wires into a card.
@@ -405,14 +404,14 @@ pub fn ghost_card(row: &ThreadRow, measure: &Measure) -> Stateful<Div> {
     card(row, row.name.clone(), CardDoors::default(), false, measure, false)
 }
 
-/// `debug_selector(name-thread)` on a live card's part; nothing on a
+/// `debug_selector(name-tag)` on a live card's part; nothing on a
 /// ghost's.
-fn tag<E: Styled>(element: E, live: bool, name: &'static str, thread: ThreadKey) -> E
+fn tag<E: Styled>(element: E, live: bool, name: &'static str, tag: RowTag) -> E
 where
     E: gpui::InteractiveElement,
 {
     if live {
-        element.debug_selector(move || format!("{name}-{}", thread.thread().get()))
+        element.debug_selector(move || tag.key(name).to_string())
     } else {
         element
     }
@@ -426,8 +425,8 @@ fn card(
     measure: &Measure,
     live: bool,
 ) -> Stateful<Div> {
-    let thread = row.key;
-    let key = card_key(thread);
+    let id = row.tag();
+    let key = card_key(id);
     let active = row.selected;
     let hover = if live { motion::hover_t(&key) } else { 0.0 };
     #[cfg(test)]
@@ -437,9 +436,19 @@ fn card(
     let lit = !editing && (hover > 0.0 || doors.strip_held);
     let text_w = measure.inner_width() - 2.0 * NAV_ROW_PAD_X;
     let checkout = row.has_checkout();
-    let logo_w = row
-        .provider
-        .map_or(0.0, |_| NAV_PROVIDER_LOGO + NAV_CARD_GAP);
+    // The meta line's trailing icons (T3's): the machine's glyph, then the
+    // Provider's logo, `SPACE_1` apart; on the title line when the meta
+    // line is empty.
+    let glyphs = [
+        row.elsewhere.as_ref().map(|_| NAV_MACHINE_GLYPH),
+        row.provider.map(|_| NAV_PROVIDER_LOGO),
+    ];
+    let glyphs_w: f32 = glyphs.iter().flatten().map(|w| w + SPACE_1).sum();
+    let logo_w = if glyphs_w > 0.0 {
+        glyphs_w - SPACE_1 + NAV_CARD_GAP
+    } else {
+        0.0
+    };
     let title_w = text_w - if checkout { 0.0 } else { logo_w };
     let (ink, weight) = title_face(row, hover);
     let ground = (!editing)
@@ -448,7 +457,7 @@ fn card(
             cut_ground(measure, &row.name, FS_NAV_TITLE, weight, title_w, ground)
         })
         .flatten();
-    let opacity = if row.dims_whole() && live {
+    let receded = if row.dims_whole() && live {
         motion::lerp(
             NAV_CARD_RECEDED_OPACITY,
             1.0,
@@ -457,11 +466,13 @@ fn card(
     } else {
         1.0
     };
+    // A machine the window cannot reach keeps its cards, dimmed.
+    let opacity = receded * if row.lost() { MACHINE_LOST_OPACITY } else { 1.0 };
     #[cfg(test)]
     if live {
         super::testing::DRAWN_CARDS.with(|drawn| {
         drawn.borrow_mut().insert(
-            thread,
+            row.key,
             super::testing::DrawnCard {
                 receded: row.receded(),
                 opacity,
@@ -487,10 +498,10 @@ fn card(
             ferrite_core::clock::instant(),
             ferrite_core::clock::system_time(),
         )
-        .map(|label| status_face(thread, &label, live).into_any_element())
+        .map(|label| status_face(id, &label, live).into_any_element())
         .unwrap_or_else(|| div().into_any_element()),
     };
-    let line1 = tag(div(), live, "nav-card-line1", thread)
+    let line1 = tag(div(), live, "nav-card-line1", id)
         .flex()
         .items_center()
         .flex_shrink_0()
@@ -505,10 +516,10 @@ fn card(
         .children((row.pinned && live).then(|| {
             doors
                 .pin
-                .unwrap_or_else(|| pin_glyph(thread, false).into_any_element())
+                .unwrap_or_else(|| pin_glyph(id, false).into_any_element())
         }))
         .child(
-            tag(div(), live, "nav-card-project", thread)
+            tag(div(), live, "nav-card-project", id)
                 .flex_1()
                 .min_w_0()
                 .truncate()
@@ -517,7 +528,7 @@ fn card(
                 .children(row.project.clone()),
         )
         .child(
-            tag(div(), live, "nav-card-status", thread)
+            tag(div(), live, "nav-card-status", id)
                 .flex()
                 .flex_shrink_0()
                 .justify_end()
@@ -526,8 +537,16 @@ fn card(
                 .min_w(px(NAV_STATUS_MIN_W))
                 .child(slot),
         );
-    let logo = || row.provider.map(provider_logo);
-    let line2 = tag(div(), live, "nav-card-line2", thread)
+    let icons = || {
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(SPACE_1))
+            .children(row.elsewhere.as_ref().map(|_| machine_glyph(id, live)))
+            .children(row.provider.map(provider_logo))
+    };
+    let line2 = tag(div(), live, "nav-card-line2", id)
         .flex()
         .items_center()
         .flex_shrink_0()
@@ -539,13 +558,13 @@ fn card(
                 fitted_in(title_w, FS_NAV_TITLE, ink, weight, title, ground),
                 live,
                 "nav-title",
-                thread,
+                id,
             )
             .when(row.retitling, |title| {
                     title.opacity(NAV_CARD_RETITLING_OPACITY)
                 }),
         )
-        .children(if checkout { None } else { logo() });
+        .children((!checkout && logo_w > 0.0).then(icons));
     let line3 = checkout.then(|| {
         let pr_w = row.pr.as_ref().map_or(0.0, |pr| {
             NAV_PR_MARK
@@ -563,7 +582,7 @@ fn card(
                 measure.ui(text, FS_NAV_META, W_BODY) <= branch_w
             })
         });
-        tag(div(), live, "nav-card-line3", thread)
+        tag(div(), live, "nav-card-line3", id)
             .flex()
             .items_center()
             .flex_shrink_0()
@@ -583,15 +602,15 @@ fn card(
                     None => format!("Worktree: {path}"),
                 };
                 div()
-                    .id(("nav-card-worktree", thread.thread().get() as usize))
-                    .debug_selector(move || format!("nav-card-worktree-{}", thread.thread().get()))
+                    .id(id.id("nav-card-worktree"))
+                    .debug_selector(move || id.key("nav-card-worktree").to_string())
                     .flex_shrink_0()
                     .nav_tooltip(tip)
                     .child(glyph)
                     .into_any_element()
             }))
             .children(branch.map(|branch| {
-                tag(div(), live, "nav-card-branch", thread)
+                tag(div(), live, "nav-card-branch", id)
                     .min_w_0()
                     .flex_shrink(1.)
                     .overflow_hidden()
@@ -601,24 +620,18 @@ fn card(
             .children(row.pr.as_ref().filter(|_| live).map(|pr| {
                 doors
                     .pr
-                    .unwrap_or_else(|| pr_chip(thread, pr).into_any_element())
+                    .unwrap_or_else(|| pr_chip(id, pr).into_any_element())
             }))
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .justify_end()
-                    .gap(px(SPACE_1))
-                    .children(logo()),
-            )
+            .child(div().flex().flex_1().justify_end().child(icons()))
     });
     let frame = if live {
+        let selector = key.clone();
         div()
-            .id(("nav-thread", thread.thread().get() as usize))
-            .debug_selector(move || format!("nav-thread-{}", thread.thread().get()))
+            .id(id.id("nav-thread"))
+            .debug_selector(move || selector.to_string())
             .on_hover(card_hover(key, row.dims_whole(), None))
     } else {
-        div().id(("nav-ghost", thread.thread().get() as usize))
+        div().id(id.id("nav-ghost"))
     };
     frame
         .relative()
@@ -648,8 +661,8 @@ fn card(
 
 /// The status slot's label: its glyph, then its words in tabular
 /// figures, in the state's ink.
-fn status_face(thread: ThreadKey, label: &StatusLabel, live: bool) -> Div {
-    tag(div(), live, "nav-state", thread)
+fn status_face(id: RowTag, label: &StatusLabel, live: bool) -> Div {
+    tag(div(), live, "nav-state", id)
         .flex()
         .items_center()
         .gap(px(NAV_STATUS_GAP))
@@ -681,14 +694,26 @@ fn provider_logo(provider: Provider) -> Div {
         .child(icon(glyph, NAV_PROVIDER_LOGO, ink))
 }
 
+/// The server glyph that ends the meta line of another machine's Thread
+/// (T3's `EnvironmentMachineIcon`, `size-3.5`, the muted ink at 70%). It
+/// says no more: the card's hover detail names the machine.
+fn machine_glyph(id: RowTag, live: bool) -> Div {
+    tag(div(), live, "nav-card-machine", id)
+        .flex()
+        .flex_shrink_0()
+        .opacity((NAV_MACHINE_INK & 0xff) as f32 / 255.0)
+        .child(icon(icons::SERVER, NAV_MACHINE_GLYPH, NAV_MACHINE_INK >> 8))
+}
+
 /// The pin on line 1 of a pinned card; under the pointer it turns to
 /// `PinOff`, whose press (the cockpit's) unpins.
-pub fn pin_glyph(thread: ThreadKey, hover_unpin: bool) -> Stateful<Div> {
-    let key = SharedString::from(format!("nav-card-pin-{}", thread.thread().get()));
+pub fn pin_glyph(id: RowTag, hover_unpin: bool) -> Stateful<Div> {
+    let key = id.key("nav-card-pin");
     let over = hover_unpin && hovered(&key);
+    let selector = key.clone();
     div()
         .id(key.clone())
-        .debug_selector(move || format!("nav-card-pin-{}", thread.thread().get()))
+        .debug_selector(move || selector.to_string())
         .flex()
         .flex_shrink_0()
         .on_hover(motion::hover_snap(key))
@@ -726,27 +751,27 @@ fn strip_button(key: SharedString, selector: String) -> Stateful<Div> {
 
 /// The strip's Snooze: a 12px clock, the face of the button that opens
 /// its menu.
-pub fn snooze_button(thread: ThreadKey) -> Stateful<Div> {
-    let key = SharedString::from(format!("nav-card-snooze-{}", thread.thread().get()));
+pub fn snooze_button(id: RowTag) -> Stateful<Div> {
+    let key = id.key("nav-card-snooze");
     let ink = if hovered(&key) {
         INK_STRONG
     } else {
         INK_SUBTLE
     };
-    strip_button(key, format!("nav-card-snooze-{}", thread.thread().get()))
+    strip_button(key.clone(), key.to_string())
         .child(icon(icons::CLOCK, NAV_SNOOZE_GLYPH, ink))
 }
 
 /// The strip's Park: a 14px check and the word, which meets the card's
 /// right padding. The cockpit parks.
-pub fn park_button(thread: ThreadKey) -> Stateful<Div> {
-    let key = SharedString::from(format!("nav-card-park-{}", thread.thread().get()));
+pub fn park_button(id: RowTag) -> Stateful<Div> {
+    let key = id.key("nav-card-park");
     let ink = if hovered(&key) {
         INK_STRONG
     } else {
         INK_SUBTLE
     };
-    strip_button(key, format!("nav-card-park-{}", thread.thread().get()))
+    strip_button(key.clone(), key.to_string())
         .gap(px(SPACE_1))
         .mr(px(-NAV_PARK_PULL))
         .nav_tooltip("Park thread")
@@ -784,13 +809,14 @@ pub fn strip_w(snooze: bool, measure: &Measure) -> f32 {
 /// The PR chip on line 3: the state's glyph in its tint, then the number
 /// (no `#`), underlined under the pointer. Its hover popover names the PR
 /// and opens it in the browser. The cockpit wires the chip's press.
-pub fn pr_chip(thread: ThreadKey, pr: &NavPr) -> Stateful<Div> {
-    let key = SharedString::from(format!("nav-card-pr-{}", thread.thread().get()));
+pub fn pr_chip(id: RowTag, pr: &NavPr) -> Stateful<Div> {
+    let key = id.key("nav-card-pr");
     let over = hovered(&key);
     let popover = pr.clone();
+    let selector = key.clone();
     div()
         .id(key.clone())
-        .debug_selector(move || format!("nav-card-pr-{}", thread.thread().get()))
+        .debug_selector(move || selector.to_string())
         .flex()
         .flex_shrink_0()
         .items_center()

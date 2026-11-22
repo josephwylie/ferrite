@@ -3161,8 +3161,6 @@ pub const NAV_ROW_H: f32 = 30.0;
 /// 34, Claude's pitch (geometry.md "Sidebar row height / pitch";
 /// sbs3/sidebar.jpg). A row's guides reach across it.
 pub const NAV_ROW_GAP: f32 = SPACE_1;
-/// 44px — a two-line Thread row: its title, then its branch or reason.
-pub const NAV_ROW2_H: f32 = 44.0;
 /// 20px — one line of a row (line 1, line 2, a task's extra lines).
 pub const NAV_LINE: f32 = ROW;
 /// 16px — a view's or a Project's icon (Claude's 16), `NAV_ICON_GAP` before
@@ -3177,12 +3175,6 @@ pub const NAV_HEADING_H: f32 = 26.0;
 pub const NAV_HEADING_PAD_R: f32 = SPACE_1_5;
 pub const NAV_HEADING_BUTTON: f32 = 22.0;
 pub const NAV_HEADING_GLYPH: f32 = 14.0;
-/// 35px — where an Inbox Notice's title starts, past its mark column
-/// (`NAV_ROW_PAD_X` + `NAV_ICON` + `NAV_ICON_GAP`, on the view rows'
-/// labels); a Notice's mark sits in the 10–24 column before it. Rows under
-/// a heading start on its label (`NAV_ROW_PAD_X`, Claude's 18 from the
-/// column's edge).
-pub const NAV_TITLE_X: f32 = NAV_ROW_PAD_X + NAV_ICON + NAV_ICON_GAP;
 /// 18px — one Group level of the tree (§5.1.4): a Group's chevron sits on
 /// its row's title column and its title this far past it, where its
 /// members' titles start. No guides: the indent says the nesting. Only a
@@ -3198,20 +3190,6 @@ pub const NAV_SECTION_GAP: f32 = SPACE_1_5;
 /// them.
 pub const NAV_DOT: f32 = 8.0;
 pub const NAV_DOT_SMALL: f32 = 6.0;
-/// The middle of a two-line row's line 1 (its two lines centred in the
-/// row): where its mark centres, on the title's own middle (§5.1.5
-/// "centred on line 1"; the mockups' marks sit 3–5px under it, on the
-/// baseline, which the eye reads as dropped).
-pub const NAV_LINE1_MID: f32 = (NAV_ROW2_H - 2.0 * NAV_LINE) / 2.0 + NAV_LINE / 2.0;
-/// Where a mark sits, `(x, y)` from its mark column's left and its row's
-/// top: centred on line 1 of a two-line row, centred on a one-line row (`_LINE`) and on a shown
-/// Group's member (`_SMALL`). A dot centres where an icon
-/// does (x 7 on a two-line row).
-pub const NAV_DOT_AT: (f32, f32) = (3.0, NAV_LINE1_MID - NAV_DOT / 2.0);
-pub const NAV_DOT_AT_SMALL: (f32, f32) = (3.0, (NAV_ROW_H - NAV_DOT_SMALL) / 2.0);
-pub const NAV_ICON_AT: (f32, f32) = (0.0, NAV_LINE1_MID - NAV_MARK_ICON / 2.0);
-/// An icon on a one-line row, a shown Group's member's included.
-pub const NAV_ICON_AT_LINE: (f32, f32) = (0.0, (NAV_ROW_H - NAV_MARK_ICON) / 2.0);
 pub const NAV_MARK_ICON: f32 = 14.0;
 pub const NAV_MARK_ICON_SMALL: f32 = 13.0;
 /// The parked mark's `terminal`, at half ink.
@@ -3339,6 +3317,11 @@ pub const NAV_PROVIDER_LOGO: f32 = 14.0;
 pub const NAV_PROVIDER_EARLIER: f32 = 12.0;
 pub const NAV_PROVIDER_OPACITY: f32 = 0.60;
 pub const NAV_PROVIDER_EARLIER_OPACITY: f32 = 0.35;
+/// The server glyph a row of another machine's Thread ends its meta line
+/// with: 14px in `INK_SUBTLE` at 70% (T3's `size-3.5`,
+/// `text-sidebar-muted-foreground/70`).
+pub const NAV_MACHINE_GLYPH: f32 = 14.0;
+pub const NAV_MACHINE_INK: u32 = (INK_SUBTLE << 8) | 0xb3;
 /// The PR chip's glyph tints (T3's): open emerald-300 at 90%, draft
 /// zinc-400 at 80%, closed red-300 at 90%, merged violet-300 at 90%.
 pub const NAV_PR_OPEN: u32 = 0x5ee9b5e6;

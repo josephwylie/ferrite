@@ -59,6 +59,11 @@ pub struct Digest {
     /// What a Thread with no title is called: its first prompt, shortened.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_title: Option<String>,
+    /// When Main's newest prompt went out or turn ended, in milliseconds
+    /// since the epoch on the Server's clock: the nav's age and order for a
+    /// Thread whose log is on another machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_ms: Option<i64>,
     /// Prompts Main holds.
     #[serde(default)]
     pub turns: usize,
@@ -184,6 +189,7 @@ impl Digest {
                         .unwrap_or_default(),
                 }),
             prompt_title: prompt_title(transcript),
+            active_ms: transcript.last_activity_ms(),
             turns: transcript
                 .blocks()
                 .iter()

@@ -64,12 +64,14 @@ gpui::actions!(
     ]
 );
 
-/// What the palette lists: everything (⌘K), or the
-/// CLI sessions there are to import (`import a session`, `/import`).
+/// What the palette lists: everything (⌘K), the CLI sessions there are
+/// to import (`import a session`, `/import`), or the machines a new
+/// Project can be made on (`add_project`, T3 Code's `choose-environment`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PaletteScope {
     All,
     Sessions,
+    Machines,
 }
 
 /// A row's section, in the order the palette draws them.
@@ -79,6 +81,7 @@ pub(crate) enum Section {
     Projects,
     Commands,
     Sessions,
+    Machines,
 }
 
 impl Section {
@@ -88,6 +91,7 @@ impl Section {
             Section::Projects => "Projects",
             Section::Commands => "Actions",
             Section::Sessions => "Sessions",
+            Section::Machines => "Environments",
         }
     }
 }
@@ -252,6 +256,11 @@ pub(crate) enum Act {
     Adopt {
         path: std::path::PathBuf,
         into: Option<PaneIdentity>,
+    },
+    /// Make a Project on the machine: this computer (`here`) or another.
+    NewProjectOn {
+        machine: ferrite_core::MachineId,
+        here: bool,
     },
 }
 
@@ -555,7 +564,7 @@ impl Palette {
 /// every state. Any other line is a search, and so is every line in the
 /// import picker, whose sessions have no state.
 fn status_filter(scope: PaletteScope, query: &str) -> Option<Option<Attention>> {
-    if scope == PaletteScope::Sessions {
+    if scope != PaletteScope::All {
         return None;
     }
     match query {
@@ -970,6 +979,16 @@ fn mark(row: &Row) -> Option<gpui::AnyElement> {
         (None, Act::Command(command)) => command.icon().map(|icon| {
             ferrite_ui::icons::icon(icon, PALETTE_MARK_ICON, INK_STRONG).into_any_element()
         }),
+        // T3's `EnvironmentMachineIcon`: this computer's laptop, another
+        // machine's server.
+        (None, Act::NewProjectOn { here, .. }) => {
+            let icon = if *here {
+                ferrite_ui::icons::LAPTOP
+            } else {
+                ferrite_ui::icons::SERVER
+            };
+            Some(ferrite_ui::icons::icon(icon, PALETTE_MARK_ICON, INK_STRONG).into_any_element())
+        }
         _ => None,
     }
 }

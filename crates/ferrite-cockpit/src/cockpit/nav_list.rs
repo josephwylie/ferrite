@@ -1,6 +1,7 @@
-//! The nav's one list, wired (ADR 0040): Pinned and Active cards from the
-//! top, each other machine's heading and rows after them, then the Working, Snoozed
-//! and Parked shelves anchored over the foot. Each row rides the list's
+//! The nav's one list, wired (ADR 0040): every machine's Threads in it
+//! (ADR 0045) — Pinned and Active cards from the top, under the notice of
+//! any machine the window cannot reach, then the Working, Snoozed and
+//! Parked shelves anchored over the foot. Each row rides the list's
 //! motion (`nav::flip`), keyed by its Thread and its kind, so a card that
 //! moves from Active to Working slides there while one that parks leaves
 //! as a ghost and enters the Parked shelf as a slim row.
@@ -8,11 +9,8 @@
 use super::menu_button::{Door, Edge};
 use super::nav_view::{MenuAt, NavEvent, NavInputs, NavView};
 use super::*;
-use crate::machines::{Connection, MachineRow};
-use crate::nav::NavMachine;
 use crate::nav::flip::{self, Update};
 use crate::nav::{list, NavItem, Shelf, SHELVES};
-use ferrite_ui::components::ContextPress;
 use ferrite_ui::motion::{fold_body, Reveal, FOLD};
 use std::time::Instant;
 
@@ -183,52 +181,36 @@ impl NavView {
                 .as_ref()
                 .map(|error| nav::notice(error.clone()).into_any_element()),
         );
-        // With machines (ADR 0026): this computer heads the list, which
-        // folds under it; every other machine follows its cards, its
-        // Threads under its heading.
-        let machines = inputs.machines.as_ref();
-        let home = machines.and_then(|rows| rows.iter().find(|machine| machine.home));
-        if let Some(home) = home {
-            rows.push(self.machine_heading(&home.row, cx));
-        }
-        let folded = home.is_some_and(|home| home.row.folded);
-        for row in state.pinned.iter().filter(|_| !folded) {
+        rows.extend(inputs.machines.iter().map(|notice| {
+            let machine = notice.machine;
+            let sign_in = notice.sign_in;
+            nav::machine_notice(machine.get(), notice.words.clone())
+                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                    cx.emit(if sign_in {
+                        NavEvent::SignIn(machine)
+                    } else {
+                        NavEvent::Reconnect(machine)
+                    });
+                }))
+                .into_any_element()
+        }));
+        for row in &state.pinned {
             rows.push(self.card(inputs, row, None, &mut faces, cx));
         }
-        for notice in inputs.inbox.iter().filter(|_| !folded) {
-            let local = state.active.iter().find(|row| row.key == notice.thread);
-            rows.push(match local {
-                Some(row) => self.card(inputs, row, Some(notice.open_verb()), &mut faces, cx),
-                None => {
-                    let verb = notice.open_verb();
-                    let index = rows.len();
-                    // Another machine's Thread: dimmed while that machine is
-                    // lost, as its rows under its heading are.
-                    let lost = machines.into_iter().flatten().any(|machine| {
-                        machine.row.held == Some(notice.thread.machine())
-                            && machine.row.connection != Connection::Online
-                    });
-                    nav::notice_row(index, notice, false, &nav::Measure::Text(cx, inputs.width))
-                        .when(lost, |row| row.opacity(ferrite_ui::theme::MACHINE_LOST_OPACITY))
-                        .on_click(cx.listener(move |_, _: &ClickEvent, window, cx| {
-                            cx.emit(NavEvent::Notice(verb.clone()));
-                            window.blur(cx);
-                        }))
-                        .into_any_element()
-                }
-            });
+        // The Inbox's order: a request's card opens at its request.
+        for notice in &inputs.inbox {
+            if let Some(row) = state.active.iter().find(|row| row.key == notice.thread) {
+                rows.push(self.card(inputs, row, Some(notice.open_verb()), &mut faces, cx));
+            }
         }
-        if let Some(machines) = machines {
-            rows.extend(self.other_machines(inputs, machines, cx));
-        }
-        if !folded && state.pinned.is_empty() && state.active.is_empty() {
+        if state.pinned.is_empty() && state.active.is_empty() {
             rows.push(self.empty(inputs, cx));
         }
         let now = cx.background_executor().now();
         let reduced = ferrite_ui::motion::reduced_motion(cx);
         let mut folding = false;
         let mut anchored = false;
-        for shelf in SHELVES.into_iter().filter(|_| !folded) {
+        for shelf in SHELVES {
             let all = state.shelf(shelf);
             if all.is_empty() {
                 continue;
@@ -368,7 +350,7 @@ impl NavView {
     ) -> AnyElement {
         let thread = row.key;
         faces.push((NavKey::Card(thread), NavFace::Card(row.clone())));
-        let title = self.thread_title(inputs, thread, row.name.clone(), true, cx);
+        let title = self.thread_title(inputs, row, true, cx);
         let card = nav::thread_card(
             row,
             title,
@@ -410,6 +392,7 @@ impl NavView {
     /// browser). Pin stays in the context menu.
     fn card_doors(&self, inputs: &NavInputs, row: &nav::ThreadRow, cx: &mut Context<Self>) -> nav::CardDoors {
         let thread = row.key;
+        let id = row.tag();
         let held = inputs.menu == Some(MenuTarget::Snooze(thread));
         let strip = inputs.open.get(&thread).map(|open| {
             let mut buttons = Vec::new();
@@ -418,7 +401,7 @@ impl NavView {
                     inputs
                         .doors
                         .button(
-                            nav::snooze_button(thread),
+                            nav::snooze_button(id),
                             Door::new(MenuTarget::Snooze(thread), Edge::Left),
                             "Snooze thread",
                             cx,
@@ -427,7 +410,7 @@ impl NavView {
                 );
             }
             buttons.push(
-                nav::park_button(thread)
+                nav::park_button(id)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |nav, _: &MouseDownEvent, _, cx| {
@@ -440,7 +423,7 @@ impl NavView {
             );
             nav::strip(buttons, nav::strip_w(!open.queued, &nav::Measure::Text(cx, inputs.width)))
         });
-        let pin = nav::pin_glyph(thread, true)
+        let pin = nav::pin_glyph(id, true)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |_, _: &MouseDownEvent, _, cx| {
@@ -451,7 +434,7 @@ impl NavView {
             .on_click(|_, _, cx| cx.stop_propagation())
             .into_any_element();
         let pr = row.pr.as_ref().map(|pr| {
-            nav::pr_chip(thread, pr)
+            nav::pr_chip(id, pr)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |_, event: &MouseDownEvent, _, cx| {
@@ -482,11 +465,11 @@ impl NavView {
     fn thread_title(
         &self,
         inputs: &NavInputs,
-        thread: ThreadKey,
-        title: SharedString,
+        row: &nav::ThreadRow,
         hint: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let thread = row.key;
         if let Some((editing, editor)) = &inputs.rename {
             if *editing == thread {
                 return rename_field(editor.clone(), hint)
@@ -497,7 +480,7 @@ impl NavView {
                     .into_any_element();
             }
         }
-        nav::rename_target_thread(thread, title)
+        nav::rename_target_thread(row.tag(), row.name.clone())
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |_, event: &MouseDownEvent, _, cx| {
@@ -516,15 +499,20 @@ impl NavView {
     /// A card's hover detail, while the pointer rests on it — never during
     /// a drag or with its Snooze menu open.
     fn hover_card(&self, inputs: &NavInputs, row: &nav::ThreadRow, cx: &gpui::App) -> Option<AnyElement> {
-        let thread = row.key;
         let snoozing = matches!(inputs.menu, Some(MenuTarget::Snooze(_)));
         if snoozing
             || cx.has_active_drag()
-            || ferrite_ui::motion::hover_t(&crate::nav::card_key(thread)) < 1.0
+            || ferrite_ui::motion::hover_t(&crate::nav::card_key(row.tag())) < 1.0
         {
             return None;
         }
-        let mut lines = Vec::new();
+        // T3's row tooltip: another machine's Thread names its machine
+        // first, after its Project.
+        let mut lines: Vec<_> = row
+            .elsewhere
+            .iter()
+            .map(|elsewhere| (ferrite_ui::icons::SERVER, elsewhere.machine.clone()))
+            .collect();
         if let Some(branch) = &row.branch {
             lines.push((ferrite_ui::icons::BRANCH, branch.clone()));
         }
@@ -556,6 +544,7 @@ impl NavView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let thread = row.key;
+        let id = row.tag();
         let wall = ferrite_core::clock::system_time();
         let (time, action) = match shelf {
             Shelf::Snoozed => {
@@ -564,7 +553,7 @@ impl NavView {
                     .get(&thread)
                     .and_then(|open| open.snooze_until)
                     .unwrap_or(wall);
-                let wake = list::wake_button(thread)
+                let wake = list::wake_button(id)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |_, _: &MouseDownEvent, _, cx| {
@@ -579,7 +568,7 @@ impl NavView {
                 )
             }
             _ => {
-                let revive = list::revive_button(thread)
+                let revive = list::revive_button(id)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |_, _: &MouseDownEvent, _, cx| {
@@ -597,7 +586,7 @@ impl NavView {
         };
         faces.push((NavKey::Slim(thread), NavFace::Slim(row.clone(), time.clone())));
         let title = if renaming(inputs, thread) {
-            list::SlimTitle::Editor(self.thread_title(inputs, thread, row.name.clone(), false, cx))
+            list::SlimTitle::Editor(self.thread_title(inputs, row, false, cx))
         } else {
             list::SlimTitle::Row
         };
@@ -619,77 +608,6 @@ impl NavView {
                 }),
             );
         flip::flip_row(&self.motion, NavKey::Slim(thread), slim).into_any_element()
-    }
-
-    /// A machine's heading: its press, or its triangle's, folds it; a
-    /// held machine's right-click offers what can be made on it.
-    fn machine_heading(&self, row: &MachineRow, cx: &mut Context<Self>) -> AnyElement {
-        let index = row.index;
-        let held = row.held;
-        let fold = nav::machine_fold(index, row.folded).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |_, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                cx.emit(NavEvent::FoldMachine(index));
-            }),
-        );
-        nav::machine_heading(row, fold)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |_, _: &MouseDownEvent, _, cx| {
-                    cx.emit(NavEvent::FoldMachine(index));
-                }),
-            )
-            .when_some(held, |heading, machine| {
-                let nav = cx.entity().downgrade();
-                heading.context_press(move |at, _, cx| {
-                    let menu = NavEvent::Menu(MenuTarget::Machine(machine), MenuAt::Point(at));
-                    let _ = nav.update(cx, |_, cx| cx.emit(menu));
-                })
-            })
-            .into_any_element()
-    }
-
-    /// Every machine but this computer: its heading and, unfolded, the
-    /// Threads it has open. A Thread's press opens it in place, beside
-    /// whatever the board shows; its title renames as a card's does; its
-    /// right-click opens the Thread's menu, as a card's does.
-    fn other_machines(&self, inputs: &NavInputs, machines: &[NavMachine], cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut drawn = Vec::new();
-        for machine in machines.iter().filter(|machine| !machine.home) {
-            drawn.push(self.machine_heading(&machine.row, cx));
-            if machine.row.folded {
-                continue;
-            }
-            let lost = machine.row.connection != Connection::Online;
-            let rows = inputs
-                .state
-                .elsewhere
-                .iter()
-                .filter(|row| Some(row.key.machine()) == machine.row.held);
-            for row in rows {
-                let key = row.key;
-                let nav = cx.entity().downgrade();
-                let title = self.thread_title(inputs, key, row.name.clone(), false, cx);
-                drawn.push(
-                    nav::machine_thread_row(row, lost, title)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |_, _: &MouseDownEvent, _, cx| {
-                                cx.emit(NavEvent::Open(key));
-                            }),
-                        )
-                        .context_press(move |at, _, cx| {
-                            let _ = nav.update(cx, |nav, cx| {
-                                nav.pick_for_menu(key, cx);
-                                cx.emit(NavEvent::Menu(MenuTarget::Thread(key), MenuAt::Point(at)));
-                            });
-                        })
-                        .into_any_element(),
-                );
-            }
-        }
-        drawn
     }
 }
 

@@ -89,6 +89,7 @@ icons![
     // ---- WP-F icons (append names above the end line)
     "laptop",
     "plug",
+    "server",
     // (end WP-F)
 
     // ---- WP-G icons (append names above the end line)
@@ -265,6 +266,9 @@ pub const BOARD: &str = "icons/board.svg";
 pub const LAPTOP: &str = "icons/laptop.svg";
 /// An MCP server (the Panel's Details: Connectors), Lucide's plug.
 pub const PLUG: &str = "icons/plug.svg";
+/// Another machine (the nav row of a Thread that lives on one, and its
+/// hover card), Lucide's server: T3 Code's `EnvironmentMachineIcon`.
+pub const SERVER: &str = "icons/server.svg";
 // (end WP-F)
 
 // ---- WP-G icon names (append consts above the end line)
@@ -706,7 +710,7 @@ mod tests {
     }
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 46] = [
+    const REFRESH_ICONS: [&str; 47] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -732,6 +736,7 @@ mod tests {
         ELLIPSIS,
         LAPTOP,
         PLUG,
+        SERVER,
         PAPERCLIP,
         SQUARE_SLASH,
         BLOCKS,

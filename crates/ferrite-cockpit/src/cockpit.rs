@@ -3065,7 +3065,6 @@ impl CockpitView {
             MenuTarget::Parked
             | MenuTarget::NavFilter
             | MenuTarget::NavFactory
-            | MenuTarget::Machine(_)
             | MenuTarget::Review { .. }
             | MenuTarget::Prompt { .. }
             | MenuTarget::Factory
@@ -6096,6 +6095,7 @@ impl CockpitView {
             retitling: self.titling.naming(key),
             // The nav wears its own picks (`NavView::card_picked`).
             picked: false,
+            elsewhere: self.elsewhere_row(key, cx),
         };
         #[cfg(test)]
         drawn::record_row(
@@ -8391,6 +8391,7 @@ impl CockpitView {
             detail,
             when: crate::facts::since_label(notice.at, now),
             read: notice.read,
+            elsewhere: self.machine_label(key.machine(), cx).is_some(),
         }
     }
 
@@ -8537,6 +8538,7 @@ impl CockpitView {
             detail,
             when: crate::facts::since_label(notice.at, now),
             read: notice.read,
+            elsewhere: self.machine_label(key.machine(), cx).is_some(),
         }
     }
 
@@ -8544,36 +8546,21 @@ impl CockpitView {
     /// Requests precede other rows, retaining each machine's attention order.
     #[cfg(test)]
     pub(super) fn needs_you_rows(&self, cx: &gpui::App) -> Vec<NoticeRow> {
-        let model = self.cockpit.read(cx);
-        let listed = nav_view::listed_threads(self, model, cx);
-        self.inbox_rows(&self.nav_state(cx), &listed, cx)
+        self.inbox_rows(&self.nav_state(cx), cx)
     }
 
-    /// The Active section as the Inbox's rows: this computer's cards',
-    /// then every other machine's Threads awaiting handling, pinned or
-    /// not, requests first.
+    /// The Active section as the Inbox's rows, every machine's, requests
+    /// first.
     pub(super) fn inbox_rows(
         &self,
         state: &nav::NavState,
-        listed: &[(ThreadKey, nav::Section, Option<std::time::SystemTime>)],
         cx: &gpui::App,
     ) -> Vec<NoticeRow> {
         let now = ferrite_core::clock::system_time();
-        // Another machine's Thread has no card, pinned or not, until the
-        // list merges across machines: pinned, it stays in the Inbox.
-        let others = listed
-            .iter()
-            .filter(|(key, section, _)| {
-                matches!(section, nav::Section::Active | nav::Section::Pinned)
-                    && !self.home_card(*key, cx)
-                    && self.admitted(*key, cx)
-            })
-            .map(|(key, _, _)| *key);
         let mut rows: Vec<_> = state
             .active
             .iter()
             .map(|entry| entry.key)
-            .chain(others)
             .map(|thread| {
                 let notifications = self.cockpit.read(cx).notifications(thread.machine());
                 if let Some(decision) = notifications.first_request(thread.thread()) {
@@ -8592,6 +8579,7 @@ impl CockpitView {
                         detail: crate::notifications::Detail::None,
                         when: "".into(),
                         read: true,
+                        elsewhere: self.machine_label(thread.machine(), cx).is_some(),
                     }
                 }
             })
