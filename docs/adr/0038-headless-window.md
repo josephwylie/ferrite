@@ -48,7 +48,8 @@ window.
   `drive` with a request number. That window's `driven` answers the
   caller. `server/drive.rs` keeps the request numbers the way
   `server/render.rs` keeps the visuals owed. Only `--headless` declares
-  `driven`; a normal window is never handed an action. With none attached,
+  `driven`, and only to the first machine it holds, so a paired machine's
+  API never reaches it; a normal window is never handed an action. With none attached,
   the caller is refused `no_headless_window`. If the window goes before it
   answers, the caller is refused `failed`: the action may have happened.
 - **Only on a throwaway Store.** `--headless` refuses a `FERRITE_STORE`

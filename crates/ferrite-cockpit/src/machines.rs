@@ -337,9 +337,21 @@ impl Machines {
             saved_as: self.entries[index].key(),
             client: self.reach.client.clone(),
             renderer: self.reach.renderer.clone(),
-            driven: self.reach.driven,
+            driven: self.drives(index),
             discovery: Box::new(spawner::Spawn::new(self.reach.defaults.clone(), None)),
         }
+    }
+
+    /// Whether machine `index`'s Server hands this window its `window.*`
+    /// actions: only the first one enabled, so a paired machine's API
+    /// never reaches a headless window on another computer.
+    fn drives(&self, index: usize) -> bool {
+        self.reach.driven
+            && self
+                .entries
+                .iter()
+                .position(|entry| !entry.disabled(self.local_enabled))
+                == Some(index)
     }
 
     /// Where machine `index`'s Server is, and the Store path its holder is

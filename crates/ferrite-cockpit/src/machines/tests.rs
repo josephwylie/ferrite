@@ -79,6 +79,20 @@ fn every_enabled_machine_is_held_at_once() {
 }
 
 #[test]
+fn a_driven_window_answers_only_the_first_machine_enabled() {
+    let driven = |name| Reach {
+        driven: true,
+        ..reach(name)
+    };
+    let mut machines = Machines::new(driven("driven"), &saved(), None, true);
+    assert!(machines.attach(0).driven);
+    assert!(!machines.attach(1).driven, "a paired machine's API");
+
+    let mut machines = Machines::new(driven("driven-off"), &saved(), None, false);
+    assert!(machines.attach(1).driven, "with this computer off");
+}
+
+#[test]
 fn a_remote_launch_is_held_beside_the_rest_saved_or_not() {
     let mut machines = Machines::new(reach("by-name"), &saved(), Some("me@build"), true);
     machines.cockpit().unwrap();
