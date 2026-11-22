@@ -772,7 +772,7 @@ pub trait TryClone: Sized {
 /// Server says arrives on `messages`, read by its own thread.
 pub struct Client {
     writer: Stream,
-    capture_out: Option<mpsc::SyncSender<ClientMessage>>,
+    capture_out: Option<mpsc::Sender<ClientMessage>>,
     pub messages: Receiver<ServerMessage>,
 }
 
@@ -839,9 +839,12 @@ impl Client {
         send(&mut self.writer, message)
     }
 
-    /// Start an ordered, bounded writer for large captures. Once started, all
-    /// later messages use it: enqueueing them never waits for a socket upload
-    /// or overtakes an earlier capture. Ownership remains this connection's.
+    /// Start an ordered writer for large captures. Once started, all later
+    /// messages use it: enqueueing them never waits for a socket upload or
+    /// overtakes an earlier capture. It has no bound: asks do not wait for
+    /// their replies (ADR 0041), so a beat can queue one for every input of
+    /// a gesture, and an ask the Server never reads times out by itself.
+    /// Ownership remains this connection's.
     pub fn send_capture(&mut self, message: ClientMessage) -> io::Result<()> {
         if !matches!(
             &message,
@@ -857,7 +860,7 @@ impl Client {
         }
         if self.capture_out.is_none() {
             let mut writer = self.writer.try_clone()?;
-            let (queue, pending) = mpsc::sync_channel::<ClientMessage>(8);
+            let (queue, pending) = mpsc::channel::<ClientMessage>();
             std::thread::Builder::new()
                 .name("ferrite-capture-out".into())
                 .spawn(move || {
@@ -880,13 +883,12 @@ impl Client {
         self.capture_out
             .as_ref()
             .unwrap()
-            .try_send(message)
-            .map_err(|error| {
-                let kind = match error {
-                    mpsc::TrySendError::Full(_) => io::ErrorKind::WouldBlock,
-                    mpsc::TrySendError::Disconnected(_) => io::ErrorKind::BrokenPipe,
-                };
-                io::Error::new(kind, "the browser capture upload connection is unavailable")
+            .send(message)
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "the browser capture upload connection is unavailable",
+                )
             })
     }
 }
