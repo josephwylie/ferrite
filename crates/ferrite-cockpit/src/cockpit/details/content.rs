@@ -597,7 +597,7 @@ pub(super) const WATCHING_TIP: &str = "Watching: the agent wakes when checks fin
 /// A watched PR's eye, as T3's `ThreadDetailsPrRow` draws it: an eye,
 /// slashed while the pointer is on it, whose press only stops the watch.
 fn watch_eye(
-    thread: ThreadId,
+    thread: ThreadKey,
     number: u64,
     url: String,
     cx: &mut Context<CockpitView>,

@@ -2027,32 +2027,35 @@ impl Cockpit {
         }
     }
 
-    /// Whether a PR watch can start here: only a Server runs the watcher
-    /// (T3's `canStartWatch`). Any window can stop one.
-    pub fn starts_pr_watches(&self) -> bool {
-        matches!(self.link, Link::Server(_))
+    /// Whether a PR watch can start on `machine`: only a Server runs the
+    /// watcher (T3's `canStartWatch`). Any window can stop one.
+    pub fn starts_pr_watches(&self, machine: MachineId) -> bool {
+        self.machines
+            .get(&machine)
+            .is_some_and(|held| matches!(held.link, Link::Server(_)))
     }
 
-    /// Watch the PR at `url` for `thread`'s agent, or stop watching it
+    /// Watch the PR at `url` for `key`'s agent, or stop watching it
     /// (ADR 0046), as T3's details card and PR menu do: whether it is
-    /// watched once the Server has it. A new watch is the Server's
-    /// watcher's, which reads the PR first; an Engine in this process only
-    /// stops one.
+    /// watched once its machine's Server has it. A new watch is the
+    /// Server's watcher's, which reads the PR first; an Engine in this
+    /// process only stops one.
     pub fn watch_pr(
         &mut self,
-        thread: ThreadId,
+        key: ThreadKey,
         url: &str,
         watching: bool,
     ) -> io::Result<Receiver<io::Result<bool>>> {
+        let (machine, thread) = self.at_mut(key).ok_or_else(|| io::Error::from(gone()))?;
         let op = Op::WatchPr {
             thread,
             url: url.to_string(),
             watching,
         };
-        match &mut self.link {
+        match &mut machine.link {
             Link::Server(server) => server.watch_pr(op),
             Link::InProcess(_) => {
-                let done = self.act(op);
+                let done = self.act_at(key.machine(), op);
                 Ok(read_here(move || match done {
                     Ok(Some(Done::PrWatch { watching })) => Ok(watching),
                     Ok(_) => Err("the server answered something else".to_string()),

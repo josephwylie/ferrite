@@ -441,7 +441,7 @@ impl CockpitView {
             MenuTarget::PrMore(target) => {
                 rows = self.pull_request.read(cx).menu_rows(target, self.branch_pr(target))
             }
-            MenuTarget::PrLink(key) => rows = self.pr_link_rows(key),
+            MenuTarget::PrLink(key) => rows = self.pr_link_rows(key, cx),
             MenuTarget::Factory => {
                 rows = self
                     .factory_pick_rows(cx)
@@ -473,7 +473,7 @@ impl CockpitView {
     /// The PR badge's menu: the PR's native detail and the two browsers,
     /// then its forge address. A PR the forge gave no address says so on
     /// the rows that need one.
-    fn pr_link_rows(&self, thread: ThreadKey) -> Vec<Option<(menu::Item, MenuVerb)>> {
+    fn pr_link_rows(&self, thread: ThreadKey, cx: &gpui::App) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let Some(target) = self.pr_target(thread) else {
             return Vec::new();
         };
@@ -912,9 +912,8 @@ impl CockpitView {
                 self.open_pr_as(key, how, window, cx)
             }
             (MenuTarget::PrLink(key), MenuVerb::PrWatch(watching)) => {
-                let thread = key.thread();
-                if let Some((url, _)) = self.pr_watch_target(thread, cx) {
-                    self.watch_pr(thread, url, watching, cx);
+                if let Some((url, _)) = self.pr_watch_target(key, cx) {
+                    self.watch_pr(key, url, watching, cx);
                 }
             }
             (MenuTarget::PrLink(key), MenuVerb::PrCopy) => {
