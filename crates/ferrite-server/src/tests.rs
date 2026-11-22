@@ -3569,8 +3569,9 @@ fn a_thread_is_interrupted_and_closed_by_id() {
         serde_json::json!(thread),
         "{closed}"
     );
+    // Closed already: closing it again changes nothing, as stopping it.
     let again = caller.answer("4", "thread.close", serde_json::json!({ "thread": thread }));
-    assert_eq!(again["error"]["code"], "thread_parked", "{again}");
+    assert_eq!(again["result"]["thread"], serde_json::json!(thread), "{again}");
     let gone = caller.answer(
         "5",
         "agent.interrupt",

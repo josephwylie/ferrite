@@ -120,10 +120,14 @@ Server asks of the other machine's:
 | `agent.result` | how the latest turn ended (`outcome`: `completed`, `failed`, `interrupted`, or null while none has) and its final reply in full (`text`: the Markdown after its last tool call or prompt, joined as the Pane joins it; a failed turn's error in its place), with `parked`. A parked Thread's is replayed from its log off the pump |
 
 A Thread's answer gains `turn`, the same `outcome` once the turn has
-ended. A parked Thread is not gone: `thread.get`, `thread.close`,
-`agent.wait`, `agent.read` and `agent.interrupt` refuse it
-`thread_parked`, naming it, and keep `unknown_thread` for a Thread the
-Store does not hold.
+ended. A parked Thread is not gone, and `unknown_thread` is kept for a
+Thread the Store does not hold (never made, or deleted). What is already
+so of a parked Thread succeeds, as `thread.stop` does: `thread.close` and
+`thread.stop` answer `{thread}`. What answers with or acts on its live
+agent (`thread.get`, `thread.focus`, `thread.rename`, `agent.prompt`,
+`agent.wait`, `agent.read`, `agent.interrupt`) is refused
+`thread_parked`, naming it, and does nothing. `agent.result` reads it
+from its log, and `thread.revive` starts it again.
 
 `notification.show` gains `sound` (`request`, `done`, `none`) and
 `important`. A Thread's answer gains `focused` and `draft`, which the

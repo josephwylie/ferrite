@@ -106,25 +106,27 @@ impl Server {
             }
             Method::ThreadGet(params) => thread_result(&self.engine, params.thread)
                 .map_err(|_| self.not_open(params.thread)),
-            Method::ThreadFocus(params) => {
-                let result = thread_result(&self.engine, params.thread);
-                if result.is_ok() {
-                    self.say(ServerMessage::Focus {
-                        thread: params.thread,
-                        fork_of: None,
-                    });
-                }
-                result
-            }
-            Method::ThreadRename(params) => self
-                .execute(Op::Rename {
-                    thread: params.thread,
+            Method::ThreadFocus(params) => self.open_thread(params.thread).and_then(|thread| {
+                self.say(ServerMessage::Focus {
+                    thread,
+                    fork_of: None,
+                });
+                thread_result(&self.engine, thread)
+            }),
+            Method::ThreadRename(params) => self.open_thread(params.thread).and_then(|thread| {
+                self.execute(Op::Rename {
+                    thread,
                     title: params.title,
-                })
-                .and_then(|_| thread_result(&self.engine, params.thread)),
-            Method::ThreadClose(params) => self.open_thread(params.thread).and_then(|thread| {
-                self.park(thread)?;
-                Ok(json!({ "thread": thread }))
+                })?;
+                thread_result(&self.engine, thread)
+            }),
+            // Closing a parked Thread again changes nothing, as stopping
+            // one does (`stop_thread`).
+            Method::ThreadClose(params) => self.is_open(params.thread).and_then(|open| {
+                if open {
+                    self.park(params.thread)?;
+                }
+                Ok(json!({ "thread": params.thread }))
             }),
             Method::AgentPrompt(params) => match self.prompt(&params) {
                 Ok(()) if params.wait || !params.until.is_empty() => {
@@ -445,6 +447,18 @@ impl Server {
             .ok_or_else(|| self.not_open(thread))
     }
 
+    /// Whether `thread` is open (`true`) or parked (`false`); `unknown_thread`
+    /// for an id the Store does not hold.
+    fn is_open(&self, thread: ThreadId) -> Result<bool, ApiError> {
+        if self.engine.thread(thread).is_some() {
+            return Ok(true);
+        }
+        match self.is_parked(thread) {
+            true => Ok(false),
+            false => Err(unknown_thread()),
+        }
+    }
+
     /// The refusal for a Thread that is not open: `thread_parked` while
     /// the Store holds it, `unknown_thread` once it is gone.
     fn not_open(&self, thread: ThreadId) -> ApiError {
@@ -465,16 +479,8 @@ impl Server {
     /// changes nothing, and a parked Thread runs nothing: both are already
     /// stopped. Only a Thread the Store does not hold is unknown.
     fn stop_thread(&mut self, thread: ThreadId) -> Result<Value, ApiError> {
-        if self.engine.thread(thread).is_some() {
+        if self.is_open(thread)? {
             self.engine.stop(thread);
-        } else {
-            let parked = self
-                .engine
-                .parked()
-                .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
-            if !parked.contains(&thread) {
-                return Err(ApiError::new(Code::UnknownThread, "no Thread has that id"));
-            }
         }
         Ok(json!({ "thread": thread }))
     }
@@ -651,7 +657,10 @@ impl Server {
     /// the Composer's does.
     pub(super) fn prompt(&mut self, params: &AgentPromptParams) -> Result<(), ApiError> {
         let (thread, text) = (params.thread, params.text.clone());
-        let view = self.engine.thread(thread).ok_or_else(unknown_thread)?;
+        let view = self
+            .engine
+            .thread(thread)
+            .ok_or_else(|| self.not_open(thread))?;
         if view.pending().is_some() {
             return Err(ApiError::new(
                 Code::AgentBlocked,

@@ -124,7 +124,8 @@ pub enum Code {
     /// The line is not a request, or its parameters are not valid.
     InvalidRequest,
     UnknownMethod,
-    /// No open Thread has that id (Herdr's `pane_not_found`).
+    /// No Thread has that id: the Store never held it, or it was deleted
+    /// (Herdr's `pane_not_found`). A parked one is `thread_parked`.
     UnknownThread,
     /// No Project has that id.
     ProjectNotFound,
@@ -420,7 +421,7 @@ pub fn thread_result(engine: &Engine, thread: ThreadId) -> Result<Value, ApiErro
 }
 
 pub fn unknown_thread() -> ApiError {
-    ApiError::new(Code::UnknownThread, "no open Thread has that id")
+    ApiError::new(Code::UnknownThread, "no Thread has that id")
 }
 
 /// `thread` is parked, not gone: its history stays, and `thread.revive`

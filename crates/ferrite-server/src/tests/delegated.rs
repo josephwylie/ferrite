@@ -625,11 +625,7 @@ fn wait_for_the_turn(caller: &mut Caller, id: &str, thread: ThreadId, timeout_ms
 }
 
 /// A delegated Thread started with its task, and its provider.
-fn delegate(
-    harness: &Harness,
-    caller: &mut Caller,
-    key: &str,
-) -> (ThreadId, Sender<SessionEvent>) {
+fn delegate(harness: &Harness, caller: &mut Caller, key: &str) -> (ThreadId, Sender<SessionEvent>) {
     let before = harness.told.lock().unwrap().prompts.len();
     let thread = started(&caller.answer("start", "thread.start", delegated(harness, key)));
     let provider = harness.sessions.recv_timeout(PATIENCE).unwrap();
@@ -763,9 +759,11 @@ fn a_thread_never_prompted_and_a_blocked_turn_do_not_end_the_wait() {
     assert_eq!(waiting["error"]["code"], "timeout", "{waiting}");
 }
 
-/// A parked Thread is not gone: its result still reads from its log, and
-/// what asks for it open is refused `thread_parked`, naming it; a Thread
-/// the Store never held is `unknown_thread`.
+/// A parked Thread is not gone: its result still reads from its log;
+/// closing or stopping it changes nothing and answers it, as `thread.stop`
+/// does; what answers with or acts on its live agent is refused
+/// `thread_parked`, naming it, and does nothing; a Thread the Store never
+/// held is `unknown_thread` to every one.
 #[test]
 fn a_parked_threads_result_still_reads_and_only_a_gone_one_is_unknown() {
     let harness = start("delegated-parked-result");
@@ -776,7 +774,11 @@ fn a_parked_threads_result_still_reads_and_only_a_gone_one_is_unknown() {
     turn_ends(&provider);
     wait_for_the_turn(&mut caller, "wait", thread, 10_000);
     assert_eq!(caller.next()["result"]["thread"]["turn"], "completed");
-    caller.answer("close", "thread.close", serde_json::json!({ "thread": thread }));
+    caller.answer(
+        "close",
+        "thread.close",
+        serde_json::json!({ "thread": thread }),
+    );
 
     let result = caller.answer("r", "agent.result", serde_json::json!({ "thread": thread }));
     assert_eq!(
@@ -789,12 +791,23 @@ fn a_parked_threads_result_still_reads_and_only_a_gone_one_is_unknown() {
         }),
         "{result}"
     );
-    for (id, method) in [
-        ("get", "thread.get"),
-        ("wait", "agent.wait"),
-        ("read", "agent.read"),
-    ] {
-        let parked = caller.answer(id, method, serde_json::json!({ "thread": thread }));
+    let calls = [
+        ("thread.get", serde_json::json!({})),
+        ("thread.focus", serde_json::json!({})),
+        ("thread.rename", serde_json::json!({ "title": "Renamed" })),
+        ("agent.prompt", serde_json::json!({ "text": "carry on" })),
+        ("agent.wait", serde_json::json!({})),
+        ("agent.wait", serde_json::json!({ "turn_ended": true })),
+        ("agent.read", serde_json::json!({})),
+        ("agent.interrupt", serde_json::json!({})),
+    ];
+    let on = |thread: serde_json::Value, params: &serde_json::Value| {
+        let mut params = params.clone();
+        params["thread"] = thread;
+        params
+    };
+    for (method, params) in &calls {
+        let parked = caller.answer(method, method, on(serde_json::json!(thread), params));
         assert_eq!(parked["error"]["code"], "thread_parked", "{parked}");
         assert_eq!(
             parked["error"]["thread"],
@@ -802,6 +815,29 @@ fn a_parked_threads_result_still_reads_and_only_a_gone_one_is_unknown() {
             "{parked}"
         );
     }
-    let gone = caller.answer("gone", "agent.result", serde_json::json!({ "thread": 999 }));
-    assert_eq!(gone["error"]["code"], "unknown_thread", "{gone}");
+    let title = caller.answer("title", "thread.list", serde_json::json!({}));
+    assert!(!title.to_string().contains("Renamed"), "{title}");
+    assert_eq!(
+        harness.told.lock().unwrap().prompts.len(),
+        1,
+        "a prompt was sent"
+    );
+    for method in ["thread.close", "thread.stop"] {
+        let done = caller.answer(method, method, serde_json::json!({ "thread": thread }));
+        assert_eq!(
+            done["result"],
+            serde_json::json!({ "thread": thread }),
+            "{done}"
+        );
+    }
+
+    let more = [
+        ("agent.result", serde_json::json!({})),
+        ("thread.close", serde_json::json!({})),
+        ("thread.stop", serde_json::json!({})),
+    ];
+    for (method, params) in calls.iter().chain(&more) {
+        let gone = caller.answer(method, method, on(serde_json::json!(999), params));
+        assert_eq!(gone["error"]["code"], "unknown_thread", "{method}: {gone}");
+    }
 }
