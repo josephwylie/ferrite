@@ -392,19 +392,18 @@ impl Facts {
     /// default branch, read once). This path stays in the pump, so it must
     /// never launch Git. Answers whether any of these facts moved.
     fn refresh_metadata(&mut self, cockpit: &Cockpit, key: ThreadKey) -> bool {
-        let (project, project_label, worktree) = match cockpit.peek(key) {
-            Ok(meta) => {
-                let project = meta
-                    .project_id
-                    .map(|id| cockpit.registry(key.machine()).project_key(id));
-                (
-                    project,
-                    project_label(cockpit, project, meta.workspace.as_ref()),
-                    worktree_label(meta.workspace.as_ref()),
-                )
-            }
-            Err(_) => (None, None, None),
+        let (project_id, workspace) = match cockpit.peek(key) {
+            Ok(meta) => (meta.project_id, meta.workspace),
+            // Another machine's open Thread has no log here: its mirror
+            // says.
+            Err(_) => cockpit
+                .thread(key)
+                .map(|open| (open.project_id(), open.workspace().cloned()))
+                .unwrap_or_default(),
         };
+        let project = project_id.map(|id| cockpit.registry(key.machine()).project_key(id));
+        let project_label = project_label(cockpit, project, workspace.as_ref());
+        let worktree = worktree_label(workspace.as_ref());
         let name = display_name(cockpit, key, self.auto_title);
         let last_used = cockpit.last_activity(key);
         let facts = self.threads.entry(key).or_default();

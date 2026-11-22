@@ -704,9 +704,15 @@ fn a_machines_threads_sit_in_the_one_list_with_its_icon(cx: &mut TestAppContext)
     until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(theirs).is_some()));
     tick(cx);
     let active = view.read_with(cx, |view, cx| {
-        view.nav_state(cx).active.iter().map(|row| row.key).collect::<Vec<_>>()
+        view.nav_state(cx)
+            .active
+            .iter()
+            .map(|row| (row.key, row.project.clone()))
+            .collect::<Vec<_>>()
     });
-    assert!(active.contains(&mine) && active.contains(&theirs), "{active:?}");
+    let project = |thread| active.iter().find(|(key, _)| *key == thread).map(|(_, project)| project);
+    assert!(project(mine).is_some() && project(theirs).is_some(), "{active:?}");
+    assert!(project(theirs).unwrap().is_some(), "box's card names its Project: {active:?}");
     let card = debug_bounds(cx, format!("nav-thread-{}", on(on_box, theirs))).expect("box's card");
     let glyph = debug_bounds(cx, format!("nav-card-machine-{}", on(on_box, theirs)))
         .expect("its server glyph");
