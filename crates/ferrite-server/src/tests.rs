@@ -1372,15 +1372,21 @@ fn pump_until_asked(
     asked
 }
 
-/// Whether the window's digest of `thread` reads `said` on its wall card.
+/// Whether the window's digest of `thread` reads `said` as the answer of
+/// its latest turn, the one row of words the bell says.
 fn digest_says(window: &ferrite_core::cockpit::Cockpit, thread: ThreadKey, said: &str) -> bool {
-    window.thread(thread).is_some_and(|open| {
-        open.digest()
-            .wall
-            .lines
-            .iter()
-            .any(|line| line.text.contains(said))
-    })
+    window
+        .thread(thread)
+        .is_some_and(|open| answered(&open.digest(), said))
+}
+
+/// Whether `digest` reads `said` as its latest turn's answer.
+fn answered(digest: &ferrite_core::digest::Digest, said: &str) -> bool {
+    digest
+        .finish
+        .answer
+        .as_deref()
+        .is_some_and(|answer| answer.contains(said))
 }
 
 fn shows(window: &ferrite_core::cockpit::Cockpit, thread: ThreadKey, said: &str) -> bool {
@@ -4365,10 +4371,8 @@ fn a_window_that_watches_nothing_reads_each_thread_from_its_digest() {
     });
 
     let digest = window.digest(thread).unwrap();
-    assert_eq!(
-        digest.wall.lines.first().map(|line| line.text.as_str()),
-        Some("\u{25cf} Reading the spike notes")
-    );
+    assert_eq!(digest.wall.context, "Write \u{b7} ferrite-perm.txt");
+    assert!(!format!("{digest:?}").contains("spike notes"), "none of its words");
     assert_eq!(window.histories, 0, "no history crossed");
     assert!(window.said(thread).is_empty(), "no input crossed");
     let late = attach(&harness.address);
@@ -4378,10 +4382,45 @@ fn a_window_that_watches_nothing_reads_each_thread_from_its_digest() {
     window.until(|window| window.digest(thread).is_none());
 }
 
-/// A Thread's digest goes out as it changes: a stream at most four times
-/// a second, as the Wall card always refolded, and a Decision at once.
+/// A Thread at work that no window watches costs the link its digest
+/// alone, and the digest carries none of its transcript (F-A2): a long
+/// answer streamed through it leaves the digest as small as a short one,
+/// only what its rows and the bell read.
 #[test]
-fn a_stream_digests_four_times_a_second_and_a_decision_at_once() {
+fn an_unwatched_thread_at_work_sends_none_of_its_transcript() {
+    let harness = start("unwatched-cost");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    let paragraph = "streamed words ".repeat(64);
+    for _ in 0..32 {
+        provider.send(text(&format!("{paragraph}
+
+"))).unwrap();
+    }
+    window.until(|window| {
+        window
+            .digest(thread)
+            .is_some_and(|digest| digest.working && digest.at_work)
+    });
+    turn_ends(&provider);
+    window.until(|window| window.digest(thread).is_some_and(|digest| !digest.at_work));
+
+    let digest = window.digest(thread).unwrap();
+    assert!(
+        !format!("{digest:?}").contains("streamed words"),
+        "the digest holds no transcript: {digest:?}"
+    );
+    let bytes = serde_json::to_vec(&ServerMessage::Digest { thread, digest }).unwrap().len();
+    assert!(bytes < 512, "a digest of {bytes} bytes");
+    assert_eq!(window.histories, 0, "no history crossed");
+    assert!(window.said(thread).is_empty(), "no input crossed");
+}
+
+/// A Thread's digest goes out as it changes, and the words a turn streams
+/// do not change it (F-A2): what does change mid-turn, a test run's
+/// count, goes at most four times a second, and a Decision at once.
+#[test]
+fn a_digest_refolds_four_times_a_second_and_a_decision_at_once() {
     let (spawner, providers) = spawn();
     let (mut engine, thread, agent, clock) = at_rest("digest-pace", spawner, &providers);
     let holds = |engine: &Engine, said: &str| {
@@ -4403,39 +4442,57 @@ fn a_stream_digests_four_times_a_second_and_a_decision_at_once() {
             })
             .collect()
     };
-    let first_line =
-        |digest: &ferrite_core::digest::Digest| digest.wall.lines.first().map(|line| line.text.clone());
-    let streamed = |engine: &mut Engine, said: &str| {
-        agent.send(text(said)).unwrap();
-        pump_engine_until(engine, "the text never landed", |engine| {
-            holds(engine, said)
-        });
+    let failing = |digest: &ferrite_core::digest::Digest| digest.wall.failing_count;
+    let ran = |engine: &mut Engine, run: usize| {
+        let id = format!("run-{run}");
+        agent
+            .send(SessionEvent::ToolStarted {
+                id: id.clone(),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": "cargo test" }),
+            })
+            .unwrap();
+        let output = format!("test result: FAILED. 10 passed; {run} failed");
+        agent
+            .send(SessionEvent::ToolCompleted {
+                id,
+                output: output.clone(),
+                is_error: true,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+        pump_engine_until(engine, "the run never landed", |engine| holds(engine, &output));
     };
-    streamed(&mut engine, "Reading");
+    agent.send(text("Reading the notes")).unwrap();
+    pump_engine_until(&mut engine, "the text never landed", |engine| {
+        holds(engine, "Reading the notes")
+    });
     clock.advance(Duration::from_millis(250));
     engine.pump();
-    assert_eq!(
-        digests(&mut engine).last().and_then(first_line).as_deref(),
-        Some("\u{25cf} Reading")
+    assert!(
+        digests(&mut engine).iter().all(|digest| !format!("{digest:?}").contains("Reading")),
+        "the stream's words are in no digest"
     );
 
+    ran(&mut engine, 1);
     clock.advance(Duration::from_millis(250));
-    streamed(&mut engine, " the notes");
+    engine.pump();
+    assert_eq!(digests(&mut engine).last().and_then(failing), Some(1));
+
+    clock.advance(Duration::from_millis(250));
+    ran(&mut engine, 2);
     assert_eq!(
-        digests(&mut engine).last().and_then(first_line).as_deref(),
-        Some("\u{25cf} Reading the notes"),
+        digests(&mut engine).last().and_then(failing),
+        Some(2),
         "a quarter second since the last: at once"
     );
-    streamed(&mut engine, " again");
+    ran(&mut engine, 3);
     clock.advance(Duration::from_millis(249));
     engine.pump();
     assert_eq!(digests(&mut engine), Vec::new(), "not yet a quarter second");
     clock.advance(Duration::from_millis(1));
     engine.pump();
-    assert_eq!(
-        digests(&mut engine).last().and_then(first_line).as_deref(),
-        Some("\u{25cf} Reading the notes again")
-    );
+    assert_eq!(digests(&mut engine).last().and_then(failing), Some(3));
 
     agent.send(decision()).unwrap();
     pump_engine_until(&mut engine, "the Decision never landed", |engine| {
@@ -4551,15 +4608,7 @@ fn a_thread_watched_mid_turn_reads_working() {
         })
         .unwrap();
     provider.send(text("thinking\n\n")).unwrap();
-    other.until(|other| {
-        other.digest(thread).is_some_and(|digest| {
-            digest
-                .wall
-                .lines
-                .iter()
-                .any(|line| line.text.contains("thinking"))
-        })
-    });
+    other.until(|other| other.digest(thread).is_some_and(|digest| digest.working));
 
     // Attached mid-turn: what it reads of the turn comes in the history.
     let mut window = cockpit(&harness);
@@ -4635,7 +4684,7 @@ fn a_small_history_never_waits_on_a_big_one() {
         [big, small].iter().all(|thread| {
             other
                 .digest(*thread)
-                .is_some_and(|digest| !digest.at_work && !digest.wall.lines.is_empty())
+                .is_some_and(|digest| !digest.at_work && digest.outcome.is_some())
         })
     });
 
@@ -4679,21 +4728,37 @@ fn a_thread_drawn_again_arrives_whole() {
     }
     turn_ends(&provider);
     provider.send(text("latest\n\n")).unwrap();
+    // The digest holds none of those words: its test run says the last
+    // turn has landed.
+    provider
+        .send(SessionEvent::ToolStarted {
+            id: "run".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "cargo test" }),
+        })
+        .unwrap();
+    provider
+        .send(SessionEvent::ToolCompleted {
+            id: "run".into(),
+            output: "test result: FAILED. 10 passed; 3 failed".into(),
+            is_error: true,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
     turn_ends(&provider);
     other.until(|other| {
-        other.digest(thread).is_some_and(|digest| {
-            !digest.at_work
-                && digest
-                    .wall
-                    .lines
-                    .iter()
-                    .any(|line| line.text.contains("latest"))
-        })
+        other
+            .digest(thread)
+            .is_some_and(|digest| !digest.at_work && digest.wall.failing_count == Some(3))
     });
     // A window that comes to it settled holds none of it until it draws it.
     let mut window = cockpit(&harness);
     let key = here(&window, thread);
-    pump_until(&mut window, |window| digest_says(window, key, "latest"));
+    pump_until(&mut window, |window| {
+        window
+            .thread(key)
+            .is_some_and(|open| open.digest().wall.failing_count == Some(3))
+    });
     assert!(!shows(&window, key, "latest"));
 
     // Drawn every frame as fast as the window can, as the app draws while
@@ -4723,7 +4788,7 @@ fn a_window_attaching_streams_no_thread_it_does_not_draw() {
     other.until(|other| {
         other
             .digest(thread)
-            .is_some_and(|digest| !digest.wall.lines.is_empty())
+            .is_some_and(|digest| answered(&digest, "before the window"))
     });
 
     let mut window = cockpit(&harness);
@@ -4829,10 +4894,7 @@ fn a_thread_nobody_uses_holds_only_its_digest_until_used() {
     let_go(&mut engine);
     assert!(said(&engine).is_empty(), "nothing held but the digest");
     let digest = engine.snapshot().digests.unwrap().remove(0).digest;
-    assert_eq!(
-        digest.wall.lines.first().map(|line| line.text.as_str()),
-        Some("\u{25cf} All done here.")
-    );
+    assert_eq!(digest.finish.answer.as_deref(), Some("All done here."));
 
     engine.set_watched([thread].into());
     assert_eq!(said(&engine), before, "watched, it reads as it did");

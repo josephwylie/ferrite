@@ -29,23 +29,13 @@ fn the_smallest_window_still_draws_the_transcript_and_composer(cx: &mut TestAppC
     assert!(cx.debug_bounds("transcript-answer").is_some(), "the transcript");
 }
 
-/// What a Thread's wall card says right now: its alert context and the
-/// text of its lines.
-fn wall_text(
+/// A Thread's wall card as it reads right now.
+fn wall_card(
     view: &gpui::Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
     thread: ThreadKey,
-) -> (String, Vec<String>) {
-    view.read_with(cx, |view, _| {
-        let wall = &view.facts.get(thread).expect("an open Thread").wall;
-        (
-            wall.context.to_string(),
-            wall.lines
-                .iter()
-                .map(|line| line.text.to_string())
-                .collect(),
-        )
-    })
+) -> ferrite_pane::pane::WallCard {
+    view.read_with(cx, |view, _| view.facts.get(thread).expect("an open Thread").wall.clone())
 }
 
 /// What the operator must see at once is never held for the throttle:
@@ -74,22 +64,31 @@ fn a_decision_or_a_turn_end_refolds_the_wall_card_at_once(cx: &mut TestAppContex
     send(decision("perm_wall"));
     step(cx, 16);
     assert!(
-        wall_text(&view, cx, thread).0.contains("ferrite-perm.txt"),
+        wall_card(&view, cx, thread).context.contains("ferrite-perm.txt"),
         "a Decision reaches the card at once: {:?}",
-        wall_text(&view, cx, thread)
+        wall_card(&view, cx, thread)
     );
     cx.simulate_keystrokes("y");
     assert!(
-        !wall_text(&view, cx, thread).0.contains("ferrite-perm.txt"),
+        !wall_card(&view, cx, thread).context.contains("ferrite-perm.txt"),
         "and so does its answer"
     );
 
     send(turn_ended());
     step(cx, 16);
     // An idle card was just refolded; inside its quarter second a turn
-    // starts, streams and ends. The end is seen and refolds at once.
-    send(SessionEvent::TextDelta {
-        text: "a quick turn\n\n".into(),
+    // starts, runs its tests red and ends. The end is seen and refolds at
+    // once.
+    send(SessionEvent::ToolStarted {
+        id: "quick".into(),
+        name: "Bash".into(),
+        input: serde_json::json!({ "command": "cargo test" }),
+    });
+    send(SessionEvent::ToolCompleted {
+        id: "quick".into(),
+        output: "test result: FAILED. 3 passed; 1 failed".into(),
+        is_error: true,
+        result: ferrite_core::ToolResult::Opaque,
     });
     step(cx, 16);
     send(turn_ended());
@@ -99,12 +98,9 @@ fn a_decision_or_a_turn_end_refolds_the_wall_card_at_once(cx: &mut TestAppContex
         "the premise: the turn is over"
     );
     assert!(
-        wall_text(&view, cx, thread)
-            .1
-            .iter()
-            .any(|line| line.contains("a quick turn")),
+        wall_card(&view, cx, thread).tests_failing,
         "the turn's end refolds the card at once: {:?}",
-        wall_text(&view, cx, thread)
+        wall_card(&view, cx, thread)
     );
 }
 

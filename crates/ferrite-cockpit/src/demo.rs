@@ -1323,7 +1323,7 @@ mod tests {
                 }
                 transcript.apply(Input::Event(step.event));
             }
-            let card = WallCard::of(&transcript, None, None);
+            let card = WallCard::of(&transcript, None);
             census.push(wall_state(
                 Some(&Turn::of(&transcript)),
                 pending,
