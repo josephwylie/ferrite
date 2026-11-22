@@ -435,8 +435,18 @@ impl CockpitView {
                 .context_card_preferences
                 .visible(Item::Lineage)
             {
-                lineage =
-                    super::lineage::lineage(open.activity(), subject, &self.facts.name(thread));
+                let facts = self.facts.get(thread);
+                let nothing = Default::default();
+                lineage = super::lineage::lineage(
+                    open.activity(),
+                    subject,
+                    &self.facts.name(thread),
+                    super::lineage::Elsewhere {
+                        delegating: facts.map_or(&nothing, |facts| &facts.delegating),
+                        delegated_from: facts.and_then(|facts| facts.delegated_from.as_ref()),
+                        serving: |server: &ferrite_core::server::ServerId| self.serving(server, cx),
+                    },
+                );
             }
             if let Some(surfaces) = self.panel.surfaces.get(thread) {
                 for surface in &surfaces.tabs {

@@ -2065,6 +2065,25 @@ impl Cockpit {
         }
     }
 
+    /// Cancel `key`'s Delegate `delegate` (ADR 0047), as the press on its
+    /// Lineage row asks: the agent's `delegate.cancel`, on the Server that
+    /// follows it. An Engine in this process follows none, and says so.
+    pub fn cancel_delegate(
+        &mut self,
+        key: ThreadKey,
+        delegate: crate::delegate::DelegateId,
+    ) -> io::Result<Receiver<io::Result<()>>> {
+        let (machine, thread) = self.at_mut(key).ok_or_else(|| io::Error::from(gone()))?;
+        let op = Op::CancelDelegate { thread, delegate };
+        match &mut machine.link {
+            Link::Server(server) => server.cancel_delegate(op),
+            Link::InProcess(_) => {
+                let done = self.act_at(key.machine(), op);
+                Ok(read_here(move || done.map(drop).map_err(|error| error.message)))
+            }
+        }
+    }
+
     /// What a GitHub start's picker lists, read by `gh` where the Server
     /// runs (or here, when this window runs its agents itself).
     pub fn github_names(
@@ -2734,6 +2753,26 @@ impl Cockpit {
         }
         // The digest it sends is left for the window's pump, which reads
         // the watch from it as a window of the Server does.
+        self.receive_from(thread.machine());
+    }
+
+    /// A fixture world's Delegates for `thread` (ADR 0047), changed as its
+    /// Server's follower would have changed them.
+    pub fn fixture_delegates(
+        &mut self,
+        thread: ThreadKey,
+        change: impl FnOnce(&mut crate::delegate::Delegates) -> bool,
+    ) {
+        if let Err(error) = self.in_process_of(thread).amend_delegates(thread.thread(), change) {
+            crate::log!("thread {}: fixture Delegates were not saved: {error}", thread.thread());
+        }
+        self.receive_from(thread.machine());
+    }
+
+    /// A fixture world's `thread`, delegated from `from` (ADR 0047).
+    pub fn fixture_delegated_from(&mut self, thread: ThreadKey, from: crate::DelegatedFrom) {
+        self.in_process_of(thread)
+            .fixture_delegated_from(thread.thread(), from);
         self.receive_from(thread.machine());
     }
 

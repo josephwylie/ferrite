@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 
 use crate::server::ServerId;
 use crate::store::Provider;
-use crate::wake::{Outcome, Wake};
+use crate::wake::{Outcome, Source, Wake};
 use crate::ThreadId;
 
 /// The most of its results a wake carries in full, in bytes (T3's
@@ -180,6 +180,81 @@ impl<'de> Deserialize<'de> for DelegateId {
             .parse()
             .map_err(serde::de::Error::custom)
     }
+}
+
+/// What every window reads of a Thread's Delegates, as its digest carries
+/// them (ADR 0047): each one, oldest first, and the Server's word on
+/// whether its parent waits on them. Lineage draws the first, the Working
+/// shelf and the Notice read the second.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Delegating {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegates: Vec<Delegated>,
+    /// One is open, or one ended and its wake is owed
+    /// ([`Delegates::holding`]).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub holds: bool,
+}
+
+/// One Delegate, as a window draws it: no task, no result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Delegated {
+    pub id: DelegateId,
+    /// The peer's Server: the window finds the machine that answers as it.
+    pub server: ServerId,
+    /// The machine's saved name when it started.
+    pub machine: String,
+    /// Its Thread there.
+    pub thread: ThreadId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Provider>,
+    pub status: Status,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub stop_owed: bool,
+}
+
+impl Delegating {
+    pub fn of(delegates: &Delegates) -> Self {
+        Self {
+            delegates: delegates
+                .iter()
+                .map(|delegate| Delegated {
+                    id: delegate.id,
+                    server: delegate.server.clone(),
+                    machine: delegate.machine.clone(),
+                    thread: delegate.thread,
+                    title: delegate.title.clone(),
+                    provider: delegate.provider,
+                    status: delegate.status,
+                    problem: delegate.problem.clone(),
+                    stop_owed: delegate.stop_owed,
+                })
+                .collect(),
+            holds: delegates.holding(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+impl Delegated {
+    /// What a stop still owed there says (T3's cancel result, without the
+    /// result before it): `None` until a stop has failed to get there.
+    pub fn unstopped(&self) -> Option<String> {
+        let problem = self.problem.as_ref().filter(|_| self.stop_owed)?;
+        Some(unstopped(&self.machine, problem))
+    }
+}
+
+/// T3's words for a stop that has not reached the Delegate's Thread.
+fn unstopped(machine: &str, problem: &str) -> String {
+    format!("It could not be stopped on {machine} and may still run there: {problem}")
 }
 
 /// What a launch there answered, for the record.
@@ -419,6 +494,7 @@ impl Delegates {
             text,
             outcome,
             summary,
+            source: Source::Delegates,
         })
     }
 
@@ -451,10 +527,7 @@ impl Delegate {
     pub fn result_text(&self) -> Option<String> {
         let result = self.result.as_ref()?;
         Some(match (self.stop_owed, &self.problem) {
-            (true, Some(problem)) => format!(
-                "{result} It could not be stopped on {} and may still run there: {problem}",
-                self.machine
-            ),
+            (true, Some(problem)) => format!("{result} {}", unstopped(&self.machine, problem)),
             _ => result.clone(),
         })
     }

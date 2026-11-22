@@ -5,7 +5,7 @@
 //! "T3 Code".
 
 use super::{Change, Check, CheckStatus, End, Report, Watch, READ_FAILURE_LIMIT, WAKE_LIMIT};
-use crate::wake::{Outcome, Wake};
+use crate::wake::{Outcome, Source, Wake};
 
 const LISTED_ITEMS: usize = 10;
 /// A quoted remark's length, in UTF-16 units as T3 counts it.
@@ -29,6 +29,7 @@ pub fn wake_text(watch: &Watch, report: &Report) -> Option<Wake> {
                 .map(|commit| format!(" as {}", short(commit)))
                 .unwrap_or_default();
             return Some(Wake {
+                source: Source::PrWatch,
                 text: format!(
                     "Pull request #{number} ({url}) was merged into {base}{by}{commit}, so Ferrite stopped watching it."
                 ),
@@ -38,6 +39,7 @@ pub fn wake_text(watch: &Watch, report: &Report) -> Option<Wake> {
         }
         Some(End::Closed) => {
             return Some(Wake {
+                source: Source::PrWatch,
                 text: format!(
                     "Pull request #{number} ({url}) was closed without merging, so Ferrite stopped watching it. If it is reopened, call watch_pull_request to watch it again."
                 ),
@@ -48,6 +50,7 @@ pub fn wake_text(watch: &Watch, report: &Report) -> Option<Wake> {
         Some(End::Unreadable { problem }) => {
             return Some(match problem {
                 None => Wake {
+                    source: Source::PrWatch,
                     text: format!(
                         "Ferrite stopped watching pull request #{number} ({url}) because it failed to read it from the host {READ_FAILURE_LIMIT} times in a row. Check it yourself, and call watch_pull_request only if it is still open."
                     ),
@@ -55,6 +58,7 @@ pub fn wake_text(watch: &Watch, report: &Report) -> Option<Wake> {
                     summary: format!("#{number}: stopped watching, could not read it"),
                 },
                 Some(problem) => Wake {
+                    source: Source::PrWatch,
                     text: format!(
                         "Ferrite stopped watching pull request #{number} ({url}) because the Ferrite server cannot use the host: {problem} Fix that on the server, then call watch_pull_request only if it is still open."
                     ),
@@ -103,6 +107,7 @@ pub fn wake_text(watch: &Watch, report: &Report) -> Option<Wake> {
         summary.push("stopped watching");
     }
     Some(Wake {
+        source: Source::PrWatch,
         text: lines.join("\n"),
         outcome: if failed {
             Outcome::Failed
@@ -142,6 +147,7 @@ pub fn combine(mut wakes: Vec<Wake>) -> Option<Wake> {
         Outcome::Updated
     };
     Some(Wake {
+        source: Source::PrWatch,
         text: parts.join("\n\n"),
         outcome,
         summary: wakes

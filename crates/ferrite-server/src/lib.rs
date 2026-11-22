@@ -1085,6 +1085,20 @@ impl Server {
                 self.window_watch_pr(id, request, *thread, url);
                 return;
             }
+            // The operator's cancel is the agent's `delegate.cancel`.
+            Op::CancelDelegate { thread, delegate } => self
+                .api_delegate_cancel(
+                    None,
+                    &ferrite_core::api::schema::DelegateCancelParams {
+                        delegate: ferrite_core::api::schema::DelegateParams {
+                            thread: Some(*thread),
+                            delegate: *delegate,
+                        },
+                        reason: None,
+                    },
+                )
+                .map(|_| Some(Done::Changed { changed: true }))
+                .map_err(|error| failed(error.message)),
             Op::Focused { .. } | Op::Composing { .. } => {
                 self.engine.window_says(id, &op);
                 Ok(None)

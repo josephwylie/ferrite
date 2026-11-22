@@ -209,19 +209,21 @@ impl Mirror {
     }
 
     /// An empty Activity: what a history rebuilds from, and what a window
-    /// holds of a Thread it lets go. It keeps what the digest said of the
-    /// Server's watching, which no history carries.
+    /// holds of a Thread it lets go. It keeps what the digest said the
+    /// Server holds of it, which no history carries.
     fn start_over(&mut self) {
         self.activity = Activity::new(self.limits);
         self.generation = 0;
-        self.watching_from_digest();
+        self.server_holds_from_digest();
     }
 
-    /// What the Server's PR watching holds of the Thread (ADR 0046) comes
-    /// with its digest, never with its inputs.
-    fn watching_from_digest(&mut self) {
+    /// What the Server holds of the Thread, its PR watches (ADR 0046) and
+    /// its Delegates (ADR 0047), comes with its digest, never with its
+    /// inputs.
+    fn server_holds_from_digest(&mut self) {
         if let Some(held) = &self.digest {
             self.activity.set_watching(held.digest.watching.clone());
+            self.activity.set_delegating(held.digest.delegating.clone());
         }
     }
 
@@ -394,7 +396,7 @@ impl Mirrors {
                     .entry(thread)
                     .or_insert_with(|| Mirror::new(limits));
                 mirror.digest = Some(HeldDigest::of(digest, boot));
-                mirror.watching_from_digest();
+                mirror.server_holds_from_digest();
                 self.digested = true;
                 updated(&mut self.updates, thread).activity_changed = true;
             }

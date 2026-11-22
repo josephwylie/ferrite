@@ -125,6 +125,7 @@ fn a_wake_carries_each_result_in_t3_words() {
     );
     assert_eq!(wake.outcome, Outcome::Failed);
     assert_eq!(wake.summary, "2 delegated tasks ended");
+    assert_eq!(wake.source, crate::wake::Source::Delegates, "its row wears the bot");
     let alone = delegates.wake(&[first]).unwrap();
     assert_eq!(
         (alone.outcome, alone.summary.as_str()),
@@ -147,4 +148,29 @@ fn a_result_past_the_budget_is_left_for_task_status() {
     assert_eq!(wake.outcome, Outcome::Updated);
     let open = delegates.start(started(9, None)).id;
     assert_eq!(delegates.wake(&[open]), None, "an open one has nothing to tell");
+}
+
+#[test]
+fn the_window_reads_each_one_and_whether_they_hold() {
+    let (mut delegates, id) = one(Some("Tests"));
+    let seen = Delegating::of(&delegates);
+    assert!(seen.holds);
+    let row = &seen.delegates[0];
+    assert_eq!(
+        (row.id, row.machine.as_str(), row.thread, row.title.as_deref(), row.status),
+        (id, "pc", ThreadId::new(7), Some("Tests"), Status::Starting)
+    );
+    assert!(delegates.seen(id, Status::Running, Some("pc did not answer".into())));
+    let row = &Delegating::of(&delegates).delegates[0];
+    assert_eq!(row.problem.as_deref(), Some("pc did not answer"));
+    assert_eq!(row.unstopped(), None, "following is held up, but no stop is owed");
+    delegates.cancel(id, None);
+    assert!(delegates.unstopped(id, "pc is asleep".into()));
+    let seen = Delegating::of(&delegates);
+    assert!(!seen.holds, "the agent asked: no wake is owed");
+    assert_eq!(
+        seen.delegates[0].unstopped().as_deref(),
+        Some("It could not be stopped on pc and may still run there: pc is asleep")
+    );
+    assert!(Delegating::of(&Delegates::default()).is_empty());
 }

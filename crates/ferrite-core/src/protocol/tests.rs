@@ -239,6 +239,8 @@ fn digest() -> crate::digest::Digest {
             worked_ms: Some(192_000),
         },
         watching: Default::default(),
+        delegating: Default::default(),
+        delegated_from: None,
     }
 }
 
@@ -2121,6 +2123,45 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     thread,
                     url: "https://github.com/o/r/pull/48".into(),
                     watching: false,
+                },
+            ),
+        ),
+        (
+            "digest_delegating",
+            Sample::Server(ServerMessage::Digest {
+                thread,
+                digest: crate::digest::Digest {
+                    delegating: crate::delegate::Delegating {
+                        delegates: vec![crate::delegate::Delegated {
+                            id: crate::delegate::DelegateId::new(1),
+                            server: crate::server::ServerId::new("s-pc"),
+                            machine: "pc".into(),
+                            thread: ThreadId::new(7),
+                            title: Some("Fix the tests".into()),
+                            provider: Some(crate::store::Provider::Claude),
+                            status: crate::delegate::Status::Running,
+                            problem: Some("pc did not answer".into()),
+                            stop_owed: true,
+                        }],
+                        holds: true,
+                    },
+                    delegated_from: Some(crate::DelegatedFrom {
+                        server: crate::server::ServerId::new("s-mac"),
+                        label: "mac".into(),
+                        thread: ThreadId::new(3),
+                        title: "Ship it".into(),
+                    }),
+                    ..digest()
+                },
+            }),
+        ),
+        (
+            "command_cancel_delegate",
+            command(
+                45,
+                Op::CancelDelegate {
+                    thread,
+                    delegate: crate::delegate::DelegateId::new(1),
                 },
             ),
         ),
