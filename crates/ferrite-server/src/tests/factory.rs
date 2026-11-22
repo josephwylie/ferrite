@@ -462,7 +462,7 @@ fn a_task_is_stopped_resumed_and_deleted_leaving_dirty_work_alone() {
     let parked = caller.answer("8", "thread.get", serde_json::json!({ "thread": worker }));
     assert_eq!(
         parked["error"]["code"], "unknown_thread",
-        "the Worker is parked"
+        "the Worker went with its Task"
     );
 
     // Clean: its worktree goes, its branch stays.

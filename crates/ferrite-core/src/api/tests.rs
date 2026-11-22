@@ -21,6 +21,7 @@ fn seen(attention: Attention) -> Seen {
     Seen {
         attention,
         starting: false,
+        ended: false,
     }
 }
 
@@ -28,6 +29,7 @@ fn starting() -> Seen {
     Seen {
         attention: Attention::Idle,
         starting: true,
+        ended: false,
     }
 }
 
@@ -241,6 +243,7 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "identity.get",
             "thread.stop",
             "provider.list",
+            "agent.result",
         ]
     );
 }
@@ -362,6 +365,7 @@ fn samples() -> Vec<Request> {
         request(Method::AgentWait(AgentWaitParams {
             thread: thread(),
             until: Some(Attention::Blocked),
+            turn_ended: false,
             timeout_ms: Some(60_000),
         })),
         request(Method::AgentRead(AgentReadParams {
@@ -624,6 +628,7 @@ fn samples() -> Vec<Request> {
         request(Method::WindowFocus(Empty {})),
         request(Method::ThreadStop(ThreadParams { thread: thread() })),
         request(Method::ProviderList(Empty {})),
+        request(Method::AgentResult(ThreadParams { thread: thread() })),
     ]
 }
 
@@ -774,6 +779,15 @@ fn later_samples() -> Vec<(&'static str, Request)> {
             })),
         ),
         (
+            "agent_wait_turn_ended",
+            request(Method::AgentWait(AgentWaitParams {
+                thread: thread(),
+                until: None,
+                turn_ended: true,
+                timeout_ms: Some(600_000),
+            })),
+        ),
+        (
             "thread_start_delegated",
             request(Method::ThreadStart(ThreadStartParams {
                 worktree: false,
@@ -915,6 +929,7 @@ fn answers_refusals_and_events_keep_their_shape() {
         branch: Some("hp/billing/invoices".into()),
         owner: None,
         delegated_from: None,
+        turn: None,
     };
     let answer = Response::Result {
         id: "1".into(),
@@ -1088,6 +1103,7 @@ fn positionals_come_in_their_declared_order_and_flags_by_their_type() {
         Ok(Method::AgentWait(AgentWaitParams {
             thread: thread(),
             until: Some(Attention::Blocked),
+            turn_ended: false,
             timeout_ms: None,
         }))
     );

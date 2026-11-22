@@ -3828,6 +3828,21 @@ impl Store {
     /// lags a running turn by the flush interval. Reads the whole file:
     /// call it on a worker.
     pub fn full_history_text(&self, id: ThreadId) -> Result<String, LoadError> {
+        let activity = self.replay_whole(id)?;
+        Ok(crate::transcript::plain_text(
+            activity.view().main().transcript().blocks(),
+        ))
+    }
+
+    /// How a Thread's latest turn ended and its answer, whole, replayed
+    /// from its log as `full_history_text` replays it: a parked Thread's
+    /// too. Reads the whole file: call it on a worker.
+    pub fn turn_result(&self, id: ThreadId) -> Result<crate::transcript::TurnResult, LoadError> {
+        Ok(self.replay_whole(id)?.view().main().transcript().turn_result())
+    }
+
+    /// A Thread's log replayed under no Block or byte limit.
+    fn replay_whole(&self, id: ThreadId) -> Result<crate::activity::Activity, LoadError> {
         let limits = crate::activity::ActivityLimits {
             blocks_per_subject: usize::MAX,
             content_bytes_per_subject: usize::MAX,
@@ -3837,9 +3852,7 @@ impl Store {
         for input in self.load(id)?.activity_inputs() {
             activity.apply(input);
         }
-        Ok(crate::transcript::plain_text(
-            activity.view().main().transcript().blocks(),
-        ))
+        Ok(activity)
     }
 
     /// One Thread's log as it stands at `through` (`ThreadWriter::checkpoint`),

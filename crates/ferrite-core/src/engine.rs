@@ -2898,6 +2898,34 @@ impl Engine {
         }
     }
 
+    /// How `thread`'s latest turn ended, once it has and nothing follows
+    /// it: no Decision, prompt or queued prompt waits and its agent is not
+    /// at work. Work in the background is not the turn's. `None` while a
+    /// turn runs or is blocked, and for a Thread never prompted. A let-go
+    /// Thread answers from the digest it was let go with.
+    pub fn ended_turn(&self, thread: ThreadId) -> Option<crate::TurnOutcome> {
+        let view = self.thread(thread)?;
+        let busy = view.pending().is_some()
+            || view.working()
+            || view.activity().main_operator_turn()
+            || view.queue_pending()
+            || self.holds_prompt(thread);
+        if busy {
+            return None;
+        }
+        match view.state.held {
+            true => view.transcript().turn_outcome().cloned(),
+            false => self
+                .published
+                .get(&thread)?
+                .digest
+                .as_ref()?
+                .outcome
+                .as_ref()
+                .and_then(|outcome| outcome.try_into().ok()),
+        }
+    }
+
     /// Threads the store holds that no Pane is showing — what a restart finds,
     /// and what "reopen" reopens.
     pub fn parked(&self) -> io::Result<Vec<ThreadId>> {

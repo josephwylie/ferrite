@@ -312,6 +312,7 @@ fn a_long_wait_is_asked_in_pieces() {
     let wait = |ms| AgentWaitParams {
         thread: ThreadId::new(3),
         until: None,
+        turn_ended: false,
         timeout_ms: Some(ms),
     };
     let piece = WAIT_PIECE.as_millis() as u64;

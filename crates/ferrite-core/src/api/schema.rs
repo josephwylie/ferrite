@@ -132,7 +132,7 @@ operations! {
     AgentPrompt(AgentPromptParams) => "agent.prompt", ["thread", "text"], Operator,
         "Send a Thread's agent a prompt; with wait, until it settles.";
     AgentWait(AgentWaitParams) => "agent.wait", ["thread"], Anyone,
-        "Wait until a Thread's agent settles, or reaches one Attention.";
+        "Wait until a Thread's agent settles, reaches one Attention, or ends its turn.";
     AgentRead(AgentReadParams) => "agent.read", ["thread"], Anyone,
         "The tail of a Thread's transcript, as plain text.";
     AgentInterrupt(ThreadParams) => "agent.interrupt", ["thread"], Operator,
@@ -261,6 +261,8 @@ operations! {
         "Stop everything a Thread runs: Main's turn, its subagents and background commands. Its queued prompts go back to the Composer.";
     ProviderList(Empty) => "provider.list", [], Anyone,
         "The providers this machine runs Threads on: their models, efforts and the modes a Thread may be capped at.";
+    AgentResult(ThreadParams) => "agent.result", ["thread"], Anyone,
+        "How a Thread's latest turn ended and its final reply in full, a parked Thread's too.";
 }
 
 /// Who may call an operation (#224). A call that names no Thread is the
@@ -456,6 +458,11 @@ pub struct AgentWaitParams {
     /// The Attention to wait for; settled (idle, done or blocked) when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<Attention>,
+    /// Wait instead until its latest turn has ended and nothing follows
+    /// it, as `turn` reads: a blocked turn and a Thread never prompted
+    /// wait on. Refused with `until`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub turn_ended: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
 }

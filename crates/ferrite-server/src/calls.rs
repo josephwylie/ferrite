@@ -104,7 +104,8 @@ impl Server {
                     .collect();
                 Ok(json!({ "threads": threads }))
             }
-            Method::ThreadGet(params) => thread_result(&self.engine, params.thread),
+            Method::ThreadGet(params) => thread_result(&self.engine, params.thread)
+                .map_err(|_| self.not_open(params.thread)),
             Method::ThreadFocus(params) => {
                 let result = thread_result(&self.engine, params.thread);
                 if result.is_ok() {
@@ -141,24 +142,61 @@ impl Server {
             },
             Method::AgentWait(AgentWaitParams {
                 thread,
+                until: Some(_),
+                turn_ended: true,
+                ..
+            }) => Err(ApiError::new(
+                Code::InvalidRequest,
+                "wait for an Attention or for the turn to end, not both",
+            )
+            .on(thread)),
+            Method::AgentWait(AgentWaitParams {
+                thread,
                 until,
+                turn_ended,
                 timeout_ms,
             }) => match self.engine.thread(thread) {
                 Some(_) => {
-                    let until = until.map_or(Until::Settled, Until::Attention);
+                    let until = match turn_ended {
+                        true => Until::TurnEnded,
+                        false => until.map_or(Until::Settled, Until::Attention),
+                    };
                     let wait = Wait::until(until, timeout(timeout_ms), now);
                     self.api.wait(&self.engine, caller_id, id, thread, wait);
                     return;
                 }
-                None => Err(unknown_thread()),
+                None => Err(self.not_open(thread)),
             },
             Method::AgentRead(params) => match self.engine.read_back_later(params.thread) {
                 Some(read_back) => {
-                    self.read_back_off_pump(caller_id, id, params, read_back);
+                    self.read_back_off_pump(caller_id, id, read_back, move |transcript| {
+                        read_answer(&params, transcript)
+                    });
                     return;
                 }
                 None => self.read(&params),
             },
+            Method::AgentResult(params) => {
+                let thread = params.thread;
+                let outcome = self.engine.ended_turn(thread);
+                if let Some(read_back) = self.engine.read_back_later(thread) {
+                    self.read_back_off_pump(caller_id, id, read_back, move |transcript| {
+                        api::turn_answer(thread, outcome.as_ref(), transcript.turn_result().reply, false)
+                    });
+                    return;
+                }
+                match self.engine.thread(thread) {
+                    Some(view) => {
+                        let reply = view.transcript().turn_result().reply;
+                        Ok(api::turn_answer(thread, outcome.as_ref(), reply, false))
+                    }
+                    None if self.is_parked(thread) => {
+                        self.parked_result_off_pump(caller_id, id, thread);
+                        return;
+                    }
+                    None => Err(unknown_thread()),
+                }
+            }
             Method::AgentInterrupt(params) => self.open_thread(params.thread).and_then(|thread| {
                 self.execute(Op::Interrupt { thread })?;
                 thread_result(&self.engine, thread)
@@ -399,12 +437,28 @@ impl Server {
             .count()
     }
 
-    /// An open Thread, or `unknown_thread`.
+    /// An open Thread, or why not (`not_open`).
     fn open_thread(&self, thread: ThreadId) -> Result<ThreadId, ApiError> {
         self.engine
             .thread(thread)
             .map(|_| thread)
-            .ok_or_else(unknown_thread)
+            .ok_or_else(|| self.not_open(thread))
+    }
+
+    /// The refusal for a Thread that is not open: `thread_parked` while
+    /// the Store holds it, `unknown_thread` once it is gone.
+    fn not_open(&self, thread: ThreadId) -> ApiError {
+        match self.is_parked(thread) {
+            true => thread_parked(thread),
+            false => unknown_thread(),
+        }
+    }
+
+    /// Whether the Store holds `thread`, parked.
+    fn is_parked(&self, thread: ThreadId) -> bool {
+        self.engine
+            .parked()
+            .is_ok_and(|parked| parked.contains(&thread))
     }
 
     /// Stop everything `thread` runs (`Engine::stop`). Stopping it again
@@ -617,25 +671,45 @@ impl Server {
         let view = self
             .engine
             .thread(params.thread)
-            .ok_or_else(unknown_thread)?;
+            .ok_or_else(|| self.not_open(params.thread))?;
         Ok(read_answer(params, view.transcript()))
     }
 
+    /// A parked Thread's latest turn (`agent.result`), replayed whole from
+    /// its log on a thread of its own.
+    fn parked_result_off_pump(&mut self, caller: CallerId, request: String, thread: ThreadId) {
+        let store = self.engine.browser_store().clone();
+        let (answer, answered) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            ferrite_core::spawn::serve_the_operator();
+            let reply = match store.turn_result(thread) {
+                Ok(turn) => Ok(api::turn_answer(thread, turn.outcome.as_ref(), turn.reply, true)),
+                Err(error) => Err(ApiError::new(
+                    Code::Failed,
+                    format!("the Thread's log could not be read: {error}"),
+                )),
+            };
+            let _ = answer.send((reply, None));
+        });
+        self.api_reads.push((caller, request, answered));
+    }
+
     /// A let-go Thread's transcript, read back from its log on a thread of
-    /// its own while the pump goes on serving every window and Session.
+    /// its own while the pump goes on serving every window and Session,
+    /// and answered as `answer` reads it.
     fn read_back_off_pump(
         &mut self,
         caller: CallerId,
         request: String,
-        params: AgentReadParams,
         read_back: std::io::Result<ReadBack>,
+        answer_with: impl FnOnce(&ferrite_core::transcript::Transcript) -> Value + Send + 'static,
     ) {
         let (answer, answered) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             ferrite_core::spawn::serve_the_operator();
             let read = read_back.map_err(LoadError::Io).and_then(ReadBack::read);
             let reply = match &read {
-                Ok(read) => Ok(read_answer(&params, read.view().main().transcript())),
+                Ok(read) => Ok(answer_with(read.view().main().transcript())),
                 Err(error) => Err(ApiError::new(
                     Code::Failed,
                     format!("the Thread's log could not be read back: {error}"),
