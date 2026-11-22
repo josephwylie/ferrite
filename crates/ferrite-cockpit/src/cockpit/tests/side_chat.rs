@@ -3,6 +3,7 @@
 //! beside it — and nothing in the nav, the board or the palette.
 #[allow(unused_imports)]
 use super::*;
+use ferrite_core::ThreadKey;
 
 /// One Thread whose agent can fork, holding a finished answer.
 fn answered<'a>(
@@ -32,7 +33,7 @@ fn answered<'a>(
 fn open_chat(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| {
         let owner = view.focused_thread(cx).unwrap();
-        view.open_side_chat(owner, cx);
+        view.open_side_chat(view.cockpit.read(cx).thread_key(owner), cx);
     });
     tick(cx);
     tick(cx);
@@ -58,27 +59,40 @@ pub(super) fn side_tabs(
         .collect()
 }
 
+/// `thread` as the side chat keys it.
+fn key(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> ThreadKey {
+    view.cockpit.read(cx).thread_key(thread)
+}
+
 /// What the cases read of the side chat, held here so a move of its
 /// state changes these and not the cases.
 pub(super) fn draft(view: &CockpitView, owner: ThreadId, cx: &gpui::App) -> Option<String> {
-    view.side_chat.read(cx).draft(owner, cx)
+    view.side_chat.read(cx).draft(key(view, owner, cx), cx)
 }
 
 fn titles(view: &CockpitView, owner: ThreadId, cx: &gpui::App) -> (Vec<SharedString>, usize) {
-    view.side_chat.read(cx).titles(owner)
+    view.side_chat.read(cx).titles(key(view, owner, cx))
 }
 
 fn forks(view: &CockpitView, owner: ThreadId, cx: &gpui::App) -> Vec<ThreadId> {
-    view.side_chat.read(cx).threads(owner)
+    view.side_chat
+        .read(cx)
+        .threads(key(view, owner, cx))
+        .into_iter()
+        .map(ThreadKey::thread)
+        .collect()
 }
 
 fn owns(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> bool {
-    view.side_chat.read(cx).owns(thread)
+    view.side_chat.read(cx).owns(key(view, thread, cx))
 }
 
 /// The shown tab's fork, once it has one.
 pub(super) fn shown_fork(view: &CockpitView, owner: ThreadId, cx: &gpui::App) -> Option<ThreadId> {
-    view.side_chat.read(cx).shown_fork(owner)
+    view.side_chat
+        .read(cx)
+        .shown_fork(key(view, owner, cx))
+        .map(ThreadKey::thread)
 }
 
 fn field_of(
@@ -87,10 +101,11 @@ fn field_of(
     index: usize,
     cx: &gpui::App,
 ) -> Option<Entity<ferrite_pane::composer::Composer>> {
-    view.side_chat.read(cx).field_of(owner, index).cloned()
+    view.side_chat.read(cx).field_of(key(view, owner, cx), index).cloned()
 }
 
 fn bring_back_blocked(view: &CockpitView, owner: ThreadId, id: u64, cx: &gpui::App) -> Option<&'static str> {
+    let owner = key(view, owner, cx);
     view.bring_back_blocked(owner, view.side_chat.read(cx).fork(owner, id), cx)
 }
 
@@ -100,7 +115,7 @@ fn shown_pane<R>(
     cx: &gpui::App,
     read: impl FnOnce(&PaneView, &gpui::App) -> R,
 ) -> Option<R> {
-    Some(read(view.side_chat.read(cx).pane(owner)?, cx))
+    Some(read(view.side_chat.read(cx).pane(key(view, owner, cx))?, cx))
 }
 
 /// Opened, a side chat is a Panel tab (ADR 0039) at least its token wide,
@@ -517,13 +532,33 @@ fn holds(view: &CockpitView, thread: ThreadId, text: &str, cx: &gpui::App) -> bo
     })
 }
 
+/// Thread 3 here and Thread 3 on a machine are two Threads: one's side
+/// chat, its tabs and its fork are none of the other's.
+#[gpui::test]
+fn a_side_chat_keeps_two_machines_threads_apart(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = answered("side-chat-two-machines", cx);
+    let owner = owner(&view, cx);
+    open_chat(&view, cx);
+    view.read_with(cx, |view, cx| {
+        let fork = shown_fork(view, owner, cx).expect("the tab took the fork");
+        let elsewhere = |thread: ThreadId| ThreadKey::fixture(u32::MAX, thread.get());
+        let chat = view.side_chat.read(cx);
+        assert_eq!(titles(view, owner, cx).0.len(), 1);
+        assert_eq!(chat.titles(elsewhere(owner)), (Vec::new(), 0));
+        assert_eq!(chat.shown_fork(elsewhere(owner)), None);
+        assert!(owns(view, fork, cx));
+        assert!(!chat.owns(elsewhere(fork)));
+        assert_eq!(chat.owner_of(elsewhere(fork)), None);
+    });
+}
+
 /// A tab closed before its fork lands takes that fork with it: the window
 /// stays on the Thread, one Pane, and the fork is retired.
 #[gpui::test]
 fn a_fork_that_lands_after_its_tab_closed_is_retired(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("side-chat-closed-early", cx);
     let owner = owner(&view, cx);
-    view.update(cx, |view, cx| view.open_side_chat(owner, cx));
+    view.update(cx, |view, cx| view.open_side_chat(view.cockpit.read(cx).thread_key(owner), cx));
     let id = side_tabs(&view, owner, cx)[0];
     assert!(view.read_with(cx, |view, cx| shown_fork(view, owner, cx)).is_none(), "not landed yet");
     let tab = crate::cockpit::surfaces::SurfaceId::SideChat(id);
@@ -564,8 +599,8 @@ fn each_fork_lands_in_the_tab_of_the_thread_it_forks(cx: &mut TestAppContext) {
         assert!(holds(view, first, "alpha", cx) && holds(view, second, "beta", cx));
     });
     view.update(cx, |view, cx| {
-        view.open_side_chat(first, cx);
-        view.open_side_chat(second, cx);
+        view.open_side_chat(view.cockpit.read(cx).thread_key(first), cx);
+        view.open_side_chat(view.cockpit.read(cx).thread_key(second), cx);
     });
     let tab = crate::cockpit::surfaces::SurfaceId::SideChat(side_tabs(&view, first, cx)[0]);
     view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(first), &tab, cx));
@@ -604,7 +639,7 @@ fn a_focus_asked_while_a_fork_is_on_its_way_lands_the_window(cx: &mut TestAppCon
                 thread: other,
                 fork_of: None,
             }));
-        view.open_side_chat(owner, cx);
+        view.open_side_chat(view.cockpit.read(cx).thread_key(owner), cx);
     });
     tick(cx);
     tick(cx);
@@ -658,8 +693,8 @@ fn a_server_from_before_fork_of_guesses_no_owner_between_two(cx: &mut TestAppCon
         tick(cx);
     }
     view.update(cx, |view, cx| {
-        view.open_side_chat(first, cx);
-        view.open_side_chat(second, cx);
+        view.open_side_chat(view.cockpit.read(cx).thread_key(first), cx);
+        view.open_side_chat(view.cockpit.read(cx).thread_key(second), cx);
     });
     tick(cx);
     tick(cx);
@@ -686,8 +721,8 @@ fn a_failed_fork_leaves_the_next_forks_where_they_belong(cx: &mut TestAppContext
     open_chat(&view, cx);
     let tabs = side_tabs(&view, owner, cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.side_chat.read(cx).fork(owner, tabs[0]), None, "the failed fork's tab waits");
-        assert!(view.side_chat.read(cx).fork(owner, tabs[1]).is_some(), "the next tab takes its fork");
+        assert_eq!(view.side_chat.read(cx).fork(view.cockpit.read(cx).thread_key(owner), tabs[0]), None, "the failed fork's tab waits");
+        assert!(view.side_chat.read(cx).fork(view.cockpit.read(cx).thread_key(owner), tabs[1]).is_some(), "the next tab takes its fork");
     });
 
     *fake.fail_fork.borrow_mut() = true;

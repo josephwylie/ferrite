@@ -167,7 +167,7 @@ impl CockpitView {
             Opener::Files => self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx),
             Opener::Changes => self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Changes, cx),
             Opener::PullRequest => self.open_pr_surface(thread, cx),
-            Opener::SideChat => self.open_side_chat(thread, cx),
+            Opener::SideChat => self.open_side_chat(self.cockpit.read(cx).thread_key(thread), cx),
             Opener::Background => self.open_background(thread, cx),
             Opener::Overview => self.open_panel(self.cockpit.read(cx).thread_key(thread), cx),
         }
@@ -278,7 +278,7 @@ impl CockpitView {
     /// pending dot): a side chat answering, background work running.
     pub(crate) fn surface_pending(&self, thread: ThreadId, id: &SurfaceId, cx: &gpui::App) -> bool {
         match id {
-            SurfaceId::SideChat(tab) => self.side_chat_running(thread, *tab, cx),
+            SurfaceId::SideChat(tab) => self.side_chat_running(self.cockpit.read(cx).thread_key(thread), *tab, cx),
             SurfaceId::Background => self.cockpit.read(cx).thread(thread).is_some_and(|open| {
                 open.transcript()
                     .background_calls()
@@ -300,7 +300,7 @@ impl CockpitView {
             SurfaceId::Browser => "Browser".into(),
             SurfaceId::File(path) => self.file_surface_title(thread, path, cx),
             SurfaceId::Terminal(number) => format!("Terminal {number}").into(),
-            SurfaceId::SideChat(tab) => self.side_chat.read(cx).title(thread, *tab),
+            SurfaceId::SideChat(tab) => self.side_chat.read(cx).title(self.cockpit.read(cx).thread_key(thread), *tab),
             SurfaceId::PullRequest(number) => format!("#{number}").into(),
         }
     }

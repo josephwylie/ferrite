@@ -6,6 +6,14 @@ use ferrite_core::draft_content::DraftContent;
 use ferrite_core::drafts::Drafts;
 use ferrite_core::replies::Reply;
 
+/// `thread` as the drafts file names this computer's.
+pub(super) fn saved_here(thread: ThreadId) -> ferrite_core::SavedThread {
+    ferrite_core::SavedThread {
+        machine: ferrite_core::MachineKey(None),
+        thread,
+    }
+}
+
 fn words(text: &str) -> DraftContent {
     DraftContent {
         text: text.into(),
@@ -37,11 +45,11 @@ fn the_line_typed_is_written_for_the_next_launch(cx: &mut TestAppContext) {
     });
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     cx.simulate_input("half a thought");
-    assert_eq!(Drafts::load(&dir).thread(thread), None, "not on every key");
+    assert_eq!(Drafts::load(&dir).thread(&saved_here(thread)), None, "not on every key");
     cx.executor().advance_clock(Duration::from_secs(2));
     cx.run_until_parked();
     assert_eq!(
-        Drafts::load(&dir).thread(thread),
+        Drafts::load(&dir).thread(&saved_here(thread)),
         Some(&words("half a thought"))
     );
 
@@ -52,7 +60,7 @@ fn the_line_typed_is_written_for_the_next_launch(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     view.update(cx, |view, cx| view.save_drafts(cx));
-    assert_eq!(Drafts::load(&dir).thread(thread), None);
+    assert_eq!(Drafts::load(&dir).thread(&saved_here(thread)), None);
 }
 
 /// A Thread's Pane opens with the line it was left with.
@@ -62,7 +70,7 @@ fn a_pane_opens_with_the_line_it_was_left_with(cx: &mut TestAppContext) {
     let thread = core.threads()[0];
     let prefs = prefs_in("drafts-restored-prefs");
     let mut drafts = Drafts::default();
-    drafts.keep_thread(thread, words("where I left off"));
+    drafts.keep_thread(saved_here(thread), words("where I left off"));
     drafts.save(&prefs.dir).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| {
         CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)

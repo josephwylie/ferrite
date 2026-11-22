@@ -377,7 +377,10 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match self.cockpit.update(cx, |cockpit, _| cockpit.fork(thread, before.as_deref(), draft)) {
-            Ok(()) => self.side_chat.update(cx, |chat, _| chat.forget_fork(thread)),
+            Ok(()) => {
+                let owner = self.cockpit.read(cx).thread_key(thread);
+                self.side_chat.update(cx, |chat, _| chat.forget_fork(owner))
+            }
             Err(why) => self.cockpit.update(cx, |cockpit, _| cockpit.say(thread, format!("fork refused: {why}"))),
         }
         cx.notify();

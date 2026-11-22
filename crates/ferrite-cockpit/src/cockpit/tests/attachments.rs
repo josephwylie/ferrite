@@ -297,7 +297,7 @@ fn a_local_file_bound_for_a_machine_waits_for_upload_and_a_workspace_file_does_n
     view.update(cx, |view, cx| view.save_drafts(cx));
     assert!(
         ferrite_core::drafts::Drafts::load(&dir)
-            .thread(view.read_with(cx, |view, _| view.panes[0].thread().unwrap()))
+            .thread(&super::drafts::saved_here(view.read_with(cx, |view, _| view.panes[0].thread().unwrap())))
             .is_some_and(|draft| draft.local == [local.clone()]),
         "that it is local is saved with the draft"
     );

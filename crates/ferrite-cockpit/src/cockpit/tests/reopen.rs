@@ -55,7 +55,7 @@ fn a_closed_side_chat_is_ended_not_reopened_and_no_fork_is_substituted(cx: &mut 
         .unwrap();
     tick(cx);
     let thread = view.read_with(cx, |view, cx| view.focused_thread(cx).unwrap());
-    view.update(cx, |view, cx| view.open_side_chat(thread, cx));
+    view.update(cx, |view, cx| view.open_side_chat(view.cockpit.read(cx).thread_key(thread), cx));
     tick(cx);
     tick(cx);
     let side = |cx: &mut gpui::VisualTestContext| {

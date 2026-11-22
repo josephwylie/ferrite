@@ -7,6 +7,7 @@ use ferrite_core::draft_content::DraftContent;
 use ferrite_core::drafts::Drafts;
 use ferrite_core::replies::Reply;
 use ferrite_core::roster::DraftId;
+use ferrite_core::{MachineKey, SavedThread, ThreadKey};
 
 /// How long after the last keystroke the drafts are written: a burst of
 /// typing is one write.
@@ -23,7 +24,7 @@ pub(super) struct Unsent {
 /// History hands back as text the draft it was given, so the typed parts of
 /// that draft are kept here to come back when the walk reaches it again.
 struct Walk {
-    thread: ThreadId,
+    thread: ThreadKey,
     draft: String,
     content: DraftContent,
     /// The text the last step showed.
@@ -42,7 +43,7 @@ impl Unsent {
     /// A history step is about to replace the Composer's `content`, whose
     /// text form is `draft`. Mid-walk, that is a prompt the walk showed on
     /// this Thread and the draft it began from stays.
-    pub(super) fn step_from(&mut self, thread: ThreadId, draft: String, content: DraftContent) {
+    pub(super) fn step_from(&mut self, thread: ThreadKey, draft: String, content: DraftContent) {
         if self.walk.as_ref().is_some_and(|walk| {
             walk.thread == thread && walk.shown.as_deref() == Some(draft.as_str())
         }) {
@@ -87,11 +88,31 @@ impl CockpitView {
         };
         let content = pane.composer.read(cx).content();
         match (identity, pane.draft()) {
-            (PaneIdentity::Thread(thread), _) => self.unsent.drafts.keep_thread(thread, content),
+            (PaneIdentity::Thread(thread), _) => {
+                let thread = self.saved_thread(self.cockpit.read(cx).thread_key(thread), cx);
+                self.unsent.drafts.keep_thread(thread, content)
+            }
             (PaneIdentity::Draft(id), Some(draft)) => {
                 self.unsent.drafts.keep_fresh(id, &draft.binding, content)
             }
             (PaneIdentity::Draft(_), None) => false,
+        }
+    }
+
+    /// `thread` as the drafts file names it. Until the window holds every
+    /// machine at once (ADR 0045), each key it has is of the one machine it
+    /// is on: the one its machines have selected, or this computer in a
+    /// window without them.
+    fn saved_thread(&self, thread: ThreadKey, cx: &gpui::App) -> SavedThread {
+        debug_assert_eq!(thread.machine(), self.cockpit.read(cx).machine_id());
+        let machine = self
+            .machines
+            .as_ref()
+            .and_then(|machines| machines.read(cx).selected_key())
+            .unwrap_or(MachineKey(None));
+        SavedThread {
+            machine,
+            thread: thread.thread(),
         }
     }
 
@@ -138,11 +159,11 @@ impl CockpitView {
     /// with.
     pub(super) fn restore_draft(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         composer: &Entity<Composer>,
         cx: &mut Context<Self>,
     ) {
-        if let Some(content) = self.unsent.drafts.thread(thread).cloned() {
+        if let Some(content) = self.unsent.drafts.thread(&self.saved_thread(thread, cx)).cloned() {
             composer.update(cx, |composer, cx| composer.load(content, cx));
         }
     }
@@ -186,15 +207,16 @@ impl CockpitView {
 
     /// The first send made a Thread of draft `id`: whatever its Composer
     /// still holds goes to the Thread's draft, and the new Pane's is gone.
-    pub(super) fn promote_draft(&mut self, id: DraftId, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(super) fn promote_draft(&mut self, id: DraftId, thread: ThreadKey, cx: &mut Context<Self>) {
         let Some(pane) = self
             .panes
             .iter()
-            .find(|pane| pane.identity == PaneIdentity::Thread(thread))
+            .find(|pane| pane.identity == PaneIdentity::Thread(thread.thread()))
         else {
             return;
         };
         let content = pane.composer.read(cx).content();
+        let thread = self.saved_thread(thread, cx);
         if self.unsent.drafts.promote(id, thread, content) {
             self.save_drafts_soon(cx);
         }
@@ -239,7 +261,7 @@ mod tests {
     /// parts to another Thread whose Composer happens to show the same text.
     #[test]
     fn a_walk_belongs_to_its_thread() {
-        let (first, second) = (ThreadId::new(1), ThreadId::new(2));
+        let (first, second) = (ThreadKey::fixture(0, 1), ThreadKey::fixture(0, 2));
         let mut unsent = unsent();
         let first_draft = DraftContent {
             text: "mine".into(),
@@ -258,6 +280,28 @@ mod tests {
             unsent.stepped_to("mine".into()),
             DraftContent::from_prompt("mine".into()),
             "the first Thread's files stay with it"
+        );
+    }
+
+    /// Thread 3 here and Thread 3 on a machine are two Threads: a walk
+    /// through one's history is not the other's.
+    #[test]
+    fn a_walk_keeps_two_machines_threads_apart() {
+        let (here, there) = (ThreadKey::fixture(0, 3), ThreadKey::fixture(1, 3));
+        let mut unsent = unsent();
+        let mine = DraftContent {
+            text: "mine".into(),
+            files: vec!["/tmp/a.png".into()],
+            ..DraftContent::default()
+        };
+        unsent.step_from(here, "mine".into(), mine);
+        assert_eq!(unsent.stepped_to("older".into()).text, "older");
+
+        unsent.step_from(there, "older".into(), DraftContent::from_prompt("older".into()));
+        assert_eq!(
+            unsent.stepped_to("mine".into()),
+            DraftContent::from_prompt("mine".into()),
+            "the walk here keeps its files from the Thread on the machine"
         );
     }
 }

@@ -1499,7 +1499,7 @@ impl CockpitView {
             cx.subscribe(&pane.composer, Self::composer_edited).detach();
             cx.subscribe(&pane.composer, Self::composer_opens_source).detach();
             cx.subscribe(&pane.composer, Self::composer_comment_opened).detach();
-            self.restore_draft(thread, &pane.composer.clone(), cx);
+            self.restore_draft(self.cockpit.read(cx).thread_key(thread), &pane.composer.clone(), cx);
             self.panes.push(pane);
             self.thread_opened(thread, cx);
             opened = true;
@@ -2224,11 +2224,12 @@ impl CockpitView {
         self.settle_held_sends(cx);
         for index in 0..self.panes.len() {
             if let Some(thread) = self.panes[index].thread() {
-                for draft in self.lost_sends(thread) {
+                let key = self.cockpit.read(cx).thread_key(thread);
+                for draft in self.lost_sends(key) {
                     self.put_back_send(index, draft, true, cx);
                 }
                 while let Some((held, prepend)) = self.cockpit.update(cx, |cockpit, _| cockpit.take_retrieved_prompt(thread)) {
-                    let content = self.recovered_content(thread, held);
+                    let content = self.recovered_content(key, held);
                     self.panes[index].composer.update(cx, |composer, cx| {
                         composer.restore_content(content, prepend, cx)
                     });
@@ -3636,9 +3637,12 @@ impl CockpitView {
         match asked {
             // A fork the side chat asked for goes to its tab, not the board.
             Asked::Focus { thread, fork_of } => {
-                let fork_of = fork_of.or_else(|| self.unnamed_fork_owner(thread, cx));
+                let key = self.cockpit.read(cx).thread_key(thread);
+                let fork_of = fork_of
+                    .map(|owner| self.cockpit.read(cx).thread_key(owner))
+                    .or_else(|| self.unnamed_fork_owner(key, cx));
                 self.switch_thread(window, cx, |view, _, cx| {
-                    if !fork_of.is_some_and(|owner| view.bind_side_thread(owner, thread, cx)) {
+                    if !fork_of.is_some_and(|owner| view.bind_side_thread(owner, key, cx)) {
                         view.land_on_thread(thread, cx);
                     }
                 });
@@ -3921,7 +3925,7 @@ impl CockpitView {
         if text.is_empty() {
             // Enter on an empty line takes a held prompt back to edit it.
             if let Some(held) = self.cockpit.update(cx, |cockpit, _| cockpit.unqueue(thread)) {
-                let content = self.recovered_content(thread, held);
+                let content = self.recovered_content(self.cockpit.read(cx).thread_key(thread), held);
                 composer.update(cx, |composer, cx| {
                     composer.restore_content(content, true, cx)
                 });
@@ -3939,14 +3943,14 @@ impl CockpitView {
         {
             let queued = self.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, text.clone()));
             if queued {
-                self.hold_queued(thread, draft);
+                self.hold_queued(self.cockpit.read(cx).thread_key(thread), draft);
             } else {
                 self.put_back_send(focused, draft, true, cx);
             }
             queued
         } else {
             let admission = self.cockpit.update(cx, |cockpit, _| cockpit.send(thread, text.clone()));
-            let admitted = self.settle_send(focused, thread, draft, admission, cx);
+            let admitted = self.settle_send(focused, self.cockpit.read(cx).thread_key(thread), draft, admission, cx);
             if admitted {
                 self.scroll_transcript_to_new_prompt(focused, cx);
             }
@@ -3960,7 +3964,7 @@ impl CockpitView {
         self.facts.renamed(self.cockpit.read(cx), thread);
         self.refresh_names();
         if admitted && self.is_first_prompt(thread, cx) {
-            self.start_titling(thread, text, cx);
+            self.start_titling(self.cockpit.read(cx).thread_key(thread), text, cx);
         }
         cx.notify();
     }
@@ -4533,7 +4537,7 @@ impl CockpitView {
         let composer = self.panes[index].composer.clone();
         let draft = composer.read(cx).editable();
         self.unsent
-            .step_from(thread, draft.clone(), composer.read(cx).content());
+            .step_from(self.cockpit.read(cx).thread_key(thread), draft.clone(), composer.read(cx).content());
         let Some(text) = self.cockpit.update(cx, |cockpit, _| cockpit.recall_prompt(thread, direction, &draft)) else {
             return;
         };
@@ -5523,11 +5527,11 @@ impl CockpitView {
                     }
                 });
                 self.adopt_thread(index, done.thread, cx);
-                self.promote_draft(id, done.thread, cx);
+                self.promote_draft(id, self.cockpit.read(cx).thread_key(done.thread), cx);
                 self.sync_panes(cx);
                 self.thread_opened(done.thread, cx);
                 self.refresh_names();
-                self.start_titling(done.thread, text.to_string(), cx);
+                self.start_titling(self.cockpit.read(cx).thread_key(done.thread), text.to_string(), cx);
                 self.scroll_transcript_to_bottom(index, cx);
             }
             Ok(None) => {
@@ -5994,7 +5998,7 @@ impl CockpitView {
                 .filter(|_| working)
                 .and_then(|open| open.turn().started),
             pinned: self.pins(cx).contains(&key),
-            retitling: self.titling.naming(thread),
+            retitling: self.titling.naming(key),
             // The nav wears its own picks (`NavView::card_picked`).
             picked: false,
         };

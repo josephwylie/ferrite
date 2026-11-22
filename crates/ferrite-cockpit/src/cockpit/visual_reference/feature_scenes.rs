@@ -734,7 +734,7 @@ fn side_chat() -> (Scene, Setup) {
     let scene = conversation("side-chat");
     let setup: Setup = Box::new(|view, _, cx| {
         if let Some(owner) = view.focused_thread(cx) {
-            view.fixture_side_chat(owner, cx);
+            view.fixture_side_chat(view.cockpit.read(cx).thread_key(owner), cx);
         }
     });
     (scene, setup)

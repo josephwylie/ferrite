@@ -428,7 +428,7 @@ impl CockpitView {
         let now = ferrite_core::clock::system_time();
         let mut recent: Vec<ThreadId> = self.cockpit.read(cx).threads();
         let side_chat = self.side_chat.read(cx);
-        recent.retain(|thread| !side_chat.owns(*thread));
+        recent.retain(|thread| !side_chat.owns(self.cockpit.read(cx).thread_key(*thread)));
         for thread in self.parked_threads(cx) {
             if !recent.contains(&thread) {
                 recent.push(thread);
