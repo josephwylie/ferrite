@@ -95,7 +95,7 @@ fn open(view: &Entity<CockpitView>, kind: Kind, cx: &mut gpui::VisualTestContext
     cx.update(|window, cx| {
         view.update(cx, |view, cx| match kind {
             Kind::Menu => view.open_context_menu(
-                MenuTarget::Thread(thread),
+                MenuTarget::Thread(keyed(view, thread, cx)),
                 gpui::point(px(300.), px(200.)),
                 cx,
             ),

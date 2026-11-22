@@ -453,17 +453,17 @@ fn cmd_i_walks_the_list_requests_first(cx: &mut TestAppContext) {
     let cursor = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| view.nav_view.read(cx).cursor.as_ref().map(|cursor| cursor.item))
     };
-    assert_eq!(cursor(cx), Some(nav::NavItem::Thread(rows[0].thread)));
+    assert_eq!(cursor(cx), Some(nav::NavItem::Thread(keyed_in(&view, rows[0].thread, cx))));
     cx.simulate_keystrokes("up");
     tick(cx);
     assert_eq!(
         cursor(cx),
-        Some(nav::NavItem::Thread(rows[0].thread)),
+        Some(nav::NavItem::Thread(keyed_in(&view, rows[0].thread, cx))),
         "↑ stops at the top"
     );
     cx.simulate_keystrokes("down");
     tick(cx);
-    assert_eq!(cursor(cx), Some(nav::NavItem::Thread(rows[1].thread)));
+    assert_eq!(cursor(cx), Some(nav::NavItem::Thread(keyed_in(&view, rows[1].thread, cx))));
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert!(!view.read_with(cx, |view, cx| view.nav_view.read(cx).keys_held));

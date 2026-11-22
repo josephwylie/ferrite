@@ -92,13 +92,13 @@ fn under_the_pointer_the_status_gives_way_to_snooze_and_park(cx: &mut TestAppCon
         cx.debug_bounds(key("nav-state")).is_none(),
         "in place of the status"
     );
-    assert!(nav::testing::drawn_card(thread).is_some_and(|card| card.strip));
+    assert!(nav::testing::drawn_card(keyed_in(&view, thread, cx)).is_some_and(|card| card.strip));
 
     cx.simulate_click(snooze.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(
         view.read_with(cx, |view, _| view.context_menu().map(|menu| menu.target)),
-        Some(MenuTarget::Snooze(thread)),
+        Some(MenuTarget::Snooze(keyed_in(&view, thread, cx))),
         "the Snooze menu"
     );
     // The pointer leaves for the menu: the strip holds.
@@ -166,7 +166,7 @@ fn a_park_press_swept_across_three_cards_parks_all_three(cx: &mut TestAppContext
         cx.simulate_mouse_move(card.center(), Some(MouseButton::Left), gpui::Modifiers::none());
         tick(cx);
         assert!(
-            view.read_with(cx, |view, cx| view.nav_view.read(cx).card_picked(*thread)),
+            view.read_with(cx, |view, cx| view.nav_view.read(cx).card_picked(keyed(view, *thread, cx))),
             "a swept card wears the picked fill"
         );
     }
@@ -208,13 +208,14 @@ fn cmd_and_shift_click_pick_cards_and_park_takes_the_pick(cx: &mut TestAppContex
     cx.simulate_click(cards[2].1.center(), gpui::Modifiers::shift());
     tick(cx);
     let picked: Vec<ThreadId> = cards[..3].iter().map(|(thread, _)| *thread).collect();
-    assert_eq!(view.read_with(cx, |view, cx| view.nav_view.read(cx).picked.clone()), picked);
-    assert!(view.read_with(cx, |view, cx| view.nav_view.read(cx).card_picked(picked[1])));
+    let keys: Vec<ThreadKey> = picked.iter().map(|thread| keyed_in(&view, *thread, cx)).collect();
+    assert_eq!(view.read_with(cx, |view, cx| view.nav_view.read(cx).picked.clone()), keys);
+    assert!(view.read_with(cx, |view, cx| view.nav_view.read(cx).card_picked(keys[1])));
 
     cx.simulate_mouse_down(cards[1].1.center(), MouseButton::Right, gpui::Modifiers::none());
     tick(cx);
     let park = view.read_with(cx, |view, cx| {
-        view.context_rows(MenuTarget::Thread(picked[1]), cx)
+        view.context_rows(MenuTarget::Thread(keyed(view, picked[1], cx)), cx)
             .into_iter()
             .flatten()
             .find(|(_, verb)| *verb == MenuVerb::Park)
@@ -222,7 +223,7 @@ fn cmd_and_shift_click_pick_cards_and_park_takes_the_pick(cx: &mut TestAppContex
     });
     assert_eq!(park.as_deref(), Some("Park (3)"));
     view.update_in(cx, |view, window, cx| {
-        view.run_menu_verb(MenuTarget::Thread(picked[1]), MenuVerb::Park, window, cx)
+        view.run_menu_verb(MenuTarget::Thread(keyed(view, picked[1], cx)), MenuVerb::Park, window, cx)
     });
     tick(cx);
     for thread in &picked {
@@ -249,7 +250,7 @@ fn a_working_card_counts_its_run_and_recedes(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.focus_thread(threads[1], cx));
     tick(cx);
     let label = |view: &CockpitView, cx: &gpui::App| {
-        let row = view.thread_row(threads[0], cx);
+        let row = view.thread_row(keyed(view, threads[0], cx), cx);
         nav::status_label(
             &row,
             ferrite_core::clock::instant(),
@@ -257,7 +258,7 @@ fn a_working_card_counts_its_run_and_recedes(cx: &mut TestAppContext) {
         )
         .expect("a label")
     };
-    let started = view.read_with(cx, |view, cx| view.thread_row(threads[0], cx).working_since);
+    let started = view.read_with(cx, |view, cx| view.thread_row(keyed(view, threads[0], cx), cx).working_since);
     assert!(started.is_some(), "the run's start is on the row");
     let first = view.read_with(cx, |view, cx| label(view, cx));
     assert_eq!(first.ink, NAV_WORKING_INK);
@@ -277,14 +278,15 @@ fn a_working_card_counts_its_run_and_recedes(cx: &mut TestAppContext) {
         cx.update(|window, cx| window.simulate_next_frame(cx));
         cx.run_until_parked();
     }
-    let drawn = nav::testing::drawn_card(threads[0]).expect("drawn");
+    let keys = [keyed_in(&view, threads[0], cx), keyed_in(&view, threads[1], cx)];
+    let drawn = nav::testing::drawn_card(keys[0]).expect("drawn");
     assert!(drawn.receded);
     assert_eq!(drawn.opacity, NAV_CARD_RECEDED_OPACITY, "70% at rest");
     let key: &'static str = format!("nav-thread-{}", threads[0].get()).leak();
     let card = cx.debug_bounds(key).expect("the card");
     cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
     cx.run_until_parked();
-    let rising = nav::testing::drawn_card(threads[0]).unwrap().opacity;
+    let rising = nav::testing::drawn_card(keys[0]).unwrap().opacity;
     assert!(rising < 1.0, "it fades, not snaps: {rising}");
     cx.executor().advance_clock(Duration::from_millis(200));
     cx.run_until_parked();
@@ -293,12 +295,12 @@ fn a_working_card_counts_its_run_and_recedes(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.simulate_next_frame(cx));
     cx.run_until_parked();
     assert_eq!(
-        nav::testing::drawn_card(threads[0]).unwrap().opacity,
+        nav::testing::drawn_card(keys[0]).unwrap().opacity,
         1.0,
         "full under the pointer after 150ms"
     );
     assert!(
-        !nav::testing::drawn_card(threads[1]).unwrap().receded,
+        !nav::testing::drawn_card(keys[1]).unwrap().receded,
         "the shown Thread never recedes"
     );
 }
@@ -324,14 +326,14 @@ fn two_decisions_head_the_list_and_no_toast(cx: &mut TestAppContext) {
 
     view.read_with(cx, |view, cx| {
         let state = view.nav_state(cx);
-        let first: Vec<ThreadId> = state.active.iter().take(2).map(|row| row.thread).collect();
+        let first: Vec<ThreadId> = state.active.iter().take(2).map(|row| row.key.thread()).collect();
         assert_eq!(
             first,
             [threads[2], threads[0]],
             "the requests head the list, oldest first"
         );
         for at in [0, 2] {
-            let row = view.thread_row(threads[at], cx);
+            let row = view.thread_row(keyed(view, threads[at], cx), cx);
             assert_eq!(row.status, nav::RowStatus::NeedsYou);
             assert_eq!(
                 row.tail,
@@ -339,7 +341,7 @@ fn two_decisions_head_the_list_and_no_toast(cx: &mut TestAppContext) {
                 "the word says what it waits for"
             );
         }
-        assert_ne!(view.thread_row(threads[1], cx).status, nav::RowStatus::NeedsYou);
+        assert_ne!(view.thread_row(keyed(view, threads[1], cx), cx).status, nav::RowStatus::NeedsYou);
     });
     assert!(
         cx.debug_bounds("nav-needs-you").is_none(),
@@ -583,7 +585,7 @@ fn cmd_i_hands_the_list_the_keys_on_its_first_card(cx: &mut TestAppContext) {
     assert!(held(&view, cx));
     assert_eq!(
         view.read_with(cx, |view, cx| view.nav_view.read(cx).cursor.clone().map(|cursor| cursor.item)),
-        Some(nav::NavItem::Thread(threads[2])),
+        Some(nav::NavItem::Thread(keyed_in(&view, threads[2], cx))),
         "on the first card"
     );
     assert_eq!(
@@ -613,7 +615,7 @@ fn a_working_thread_moves_to_the_working_shelf_and_back(cx: &mut TestAppContext)
     let sections = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             let state = view.nav_state(cx);
-            let ids = |rows: &[nav::ThreadRow]| rows.iter().map(|row| row.thread).collect::<Vec<_>>();
+            let ids = |rows: &[nav::ThreadRow]| rows.iter().map(|row| row.key.thread()).collect::<Vec<_>>();
             (ids(&state.active), ids(&state.working))
         })
     };
@@ -629,7 +631,7 @@ fn a_working_thread_moves_to_the_working_shelf_and_back(cx: &mut TestAppContext)
         .unwrap();
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, cx| view.thread_row(busy, cx).status),
+        view.read_with(cx, |view, cx| view.thread_row(keyed(view, busy, cx), cx).status),
         nav::RowStatus::Working,
         "the premise: it started work"
     );
@@ -878,7 +880,7 @@ fn f2_renames_the_cursors_card(cx: &mut TestAppContext) {
     assert!(
         view.read_with(cx, |view, _| matches!(
             view.rename.shown(),
-            Some((RenameTarget::Thread(editing), _)) if editing == thread
+            Some((RenameTarget::Thread(editing), _)) if editing == thread.thread()
         )),
         "the card's title is the rename field"
     );
@@ -930,7 +932,7 @@ fn a_pinned_thread_heads_the_list_until_unpinned(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     let menu = |view: &CockpitView, cx: &gpui::App| -> Vec<String> {
-        view.context_rows(MenuTarget::Thread(threads[2]), cx)
+        view.context_rows(MenuTarget::Thread(keyed(view, threads[2], cx)), cx)
             .into_iter()
             .flatten()
             .map(|(item, _)| item.label.to_string())
@@ -942,22 +944,28 @@ fn a_pinned_thread_heads_the_list_until_unpinned(cx: &mut TestAppContext) {
         ["Open in", "Pin"]
     );
     view.update_in(cx, |view, window, cx| {
-        view.run_menu_verb(MenuTarget::Thread(threads[2]), MenuVerb::Pin, window, cx)
+        view.run_menu_verb(MenuTarget::Thread(keyed(view, threads[2], cx)), MenuVerb::Pin, window, cx)
     });
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.prefs.settings.pinned_threads, vec![threads[2]]);
+        assert_eq!(
+            view.prefs.settings.pinned_threads,
+            [ferrite_core::SavedThread {
+                machine: ferrite_core::MachineKey(None),
+                thread: threads[2],
+            }]
+        );
         let state = view.nav_state(cx);
         assert_eq!(
             state
                 .pinned
                 .iter()
-                .map(|row| row.thread)
+                .map(|row| row.key.thread())
                 .collect::<Vec<_>>(),
             vec![threads[2]]
         );
         assert!(
-            state.active.iter().all(|row| row.thread != threads[2]),
+            state.active.iter().all(|row| row.key.thread() != threads[2]),
             "listed once"
         );
         assert_eq!(menu(view, cx)[1], "Unpin");
@@ -972,7 +980,7 @@ fn a_pinned_thread_heads_the_list_until_unpinned(cx: &mut TestAppContext) {
     }
 
     view.update_in(cx, |view, window, cx| {
-        view.run_menu_verb(MenuTarget::Thread(threads[2]), MenuVerb::Unpin, window, cx)
+        view.run_menu_verb(MenuTarget::Thread(keyed(view, threads[2], cx)), MenuVerb::Unpin, window, cx)
     });
     tick(cx);
     view.read_with(cx, |view, cx| {

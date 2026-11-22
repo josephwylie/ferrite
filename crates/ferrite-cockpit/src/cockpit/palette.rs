@@ -434,7 +434,7 @@ impl CockpitView {
                 if !seen.insert(thread) {
                     continue;
                 }
-                let row = self.thread_row(thread, cx);
+                let row = self.thread_row(self.cockpit.read(cx).thread_key(thread), cx);
                 let age = self
                     .facts
                     .last_used(thread)
@@ -540,7 +540,7 @@ impl CockpitView {
             .filter(|thread| {
                 self.facts.get(*thread).and_then(|facts| facts.project) == Some(project)
             })
-            .map(|thread| self.thread_row(thread, cx))
+            .map(|thread| self.thread_row(self.cockpit.read(cx).thread_key(thread), cx))
             .collect()
     }
 
@@ -551,7 +551,7 @@ impl CockpitView {
             .into_iter()
             .rev()
             .max_by_key(|row| row.status.attention())
-            .map(|row| row.thread)
+            .map(|row| row.key.thread())
     }
 
     /// The command table (FL-4), in its fixed order; a row whose act is

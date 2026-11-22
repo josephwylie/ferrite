@@ -6,7 +6,7 @@ use ferrite_core::snooze::{self, Preset};
 /// The Custom… field (`NavView`): the Thread it snoozes, its line, and why
 /// the last ⏎ did not take.
 pub(super) struct Editor {
-    pub thread: ThreadId,
+    pub thread: ThreadKey,
     pub line: Entity<ferrite_pane::composer::Composer>,
     pub error: Option<SharedString>,
 }
@@ -23,11 +23,11 @@ impl CockpitView {
 
     pub(super) fn snooze_thread(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         until: Option<std::time::SystemTime>,
         cx: &mut Context<Self>,
     ) {
-        match self.cockpit.update(cx, |cockpit, _| cockpit.snooze_thread(thread, until)) {
+        match self.cockpit.update(cx, |cockpit, _| cockpit.snooze_thread(thread.thread(), until)) {
             Ok(()) => {
                 if until.is_some() {
                     self.nav_view.update(cx, |nav, cx| {
@@ -45,7 +45,7 @@ impl CockpitView {
 impl NavView {
     /// Custom… on a Thread's Snooze menu: the field over the list, seeded
     /// with an hour, takes the keyboard.
-    pub(super) fn edit_snooze(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn edit_snooze(&mut self, thread: ThreadKey, window: &mut Window, cx: &mut Context<Self>) {
         let line = cx.new(ferrite_pane::composer::Composer::new);
         line.update(cx, |line, cx| {
             line.set_role(ferrite_pane::composer::Role::Field(None), cx);
@@ -113,7 +113,7 @@ impl NavView {
         let title = inputs
             .state
             .open_rows()
-            .find(|row| row.thread == editor.thread)
+            .find(|row| row.key == editor.thread)
             .map(|row| row.name.clone())
             .unwrap_or_default();
         Some(field(editor, title))

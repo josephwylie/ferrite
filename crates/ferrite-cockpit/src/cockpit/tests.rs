@@ -668,6 +668,20 @@ fn quotes(replies: &[ferrite_core::replies::Reply]) -> Vec<(&str, &str)> {
         .collect()
 }
 
+/// `thread` as the window names it: a Thread of its Cockpit's machine.
+fn keyed(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> ThreadKey {
+    view.cockpit.read(cx).thread_key(thread)
+}
+
+/// [`keyed`], from outside the window's updates.
+fn keyed_in(
+    view: &Entity<CockpitView>,
+    thread: ThreadId,
+    cx: &mut gpui::VisualTestContext,
+) -> ThreadKey {
+    view.read_with(cx, |view, cx| keyed(view, thread, cx))
+}
+
 fn tick(cx: &mut gpui::VisualTestContext) {
     cx.executor()
         .advance_clock(Duration::from_millis(PUMP_MS * 4));
@@ -695,11 +709,11 @@ fn press_nav_verb(
 ) {
     view.update_in(cx, |view, window, cx| {
         let row = view
-            .context_rows(MenuTarget::Thread(thread), cx)
+            .context_rows(MenuTarget::Thread(keyed(view, thread, cx)), cx)
             .iter()
             .position(|row| matches!(row, Some((_, listed)) if *listed == verb))
             .expect("the nav row's menu has the verb");
-        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(600.), px(300.)), cx);
+        view.open_context_menu(MenuTarget::Thread(keyed(view, thread, cx)), gpui::point(px(600.), px(300.)), cx);
         view.press_menu_row(row, window, cx);
         if view.context_menu().is_some() {
             view.press_menu_row(row, window, cx);

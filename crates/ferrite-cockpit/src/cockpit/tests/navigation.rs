@@ -259,10 +259,10 @@ fn the_solo_head_is_a_project_then_title_breadcrumb(cx: &mut TestAppContext) {
 
     cx.simulate_mouse_down(title.center(), gpui::MouseButton::Right, gpui::Modifiers::none());
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
             view.context_menu()
-                .is_some_and(|menu| menu.target == MenuTarget::Thread(thread)),
+                .is_some_and(|menu| menu.target == MenuTarget::Thread(keyed(view, thread, cx))),
             "right-click opens the Thread's menu"
         );
     });
@@ -424,10 +424,10 @@ fn a_double_click_on_the_view_title_renames_the_thread(cx: &mut TestAppContext) 
     let at = cx.debug_bounds("view-title").expect("the title").center();
 
     click_at(cx, at, 1);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
             view.context_menu()
-                .is_some_and(|menu| menu.target == MenuTarget::Thread(thread)),
+                .is_some_and(|menu| menu.target == MenuTarget::Thread(keyed(view, thread, cx))),
             "a click opens the Thread's menu"
         );
     });

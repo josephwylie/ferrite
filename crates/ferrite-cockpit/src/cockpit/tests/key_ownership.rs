@@ -125,7 +125,7 @@ fn an_open_menu_keeps_its_keys_from_a_pending_approval(cx: &mut TestAppContext) 
     cx.update(|window, cx| window.focus(&composer, cx));
     tick(cx);
     view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(300.), px(200.)), cx)
+        view.open_context_menu(MenuTarget::Thread(keyed(view, thread, cx)), gpui::point(px(300.), px(200.)), cx)
     });
     tick(cx);
     cx.simulate_keystrokes("down");
@@ -134,7 +134,7 @@ fn an_open_menu_keeps_its_keys_from_a_pending_approval(cx: &mut TestAppContext) 
     assert_eq!(cursor, Some(MenuCursor::Row(0)), "down moved the menu's cursor");
     cx.update(|window, cx| window.focus(&composer, cx));
     view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::Pane(thread), gpui::point(px(500.), px(400.)), cx)
+        view.open_context_menu(MenuTarget::Pane(keyed(view, thread, cx)), gpui::point(px(500.), px(400.)), cx)
     });
     tick(cx);
     cx.simulate_keystrokes("down");
@@ -172,7 +172,7 @@ fn a_menu_from_the_nav_list_gives_the_list_back_its_keys(cx: &mut TestAppContext
     assert!(before && cursor.is_some(), "the list holds the keys");
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(200.), px(200.)), cx)
+        view.open_context_menu(MenuTarget::Thread(keyed(view, thread, cx)), gpui::point(px(200.), px(200.)), cx)
     });
     tick(cx);
     cx.simulate_keystrokes("escape");

@@ -73,8 +73,8 @@ fn a_folded_shelf_still_shows_the_shown_threads_row(cx: &mut TestAppContext) {
             .find(|thread| *thread != shown)
             .unwrap();
         let later = ferrite_core::clock::system_time() + Duration::from_secs(3600);
-        view.snooze_thread(shown, Some(later), cx);
-        view.snooze_thread(other, Some(later), cx);
+        view.snooze_thread(keyed(view, shown, cx), Some(later), cx);
+        view.snooze_thread(keyed(view, other, cx), Some(later), cx);
         (shown, other)
     });
     tick(cx);
@@ -125,6 +125,7 @@ fn a_resorted_card_slides_and_a_parked_one_leaves_a_ghost(cx: &mut TestAppContex
     cx.simulate_resize(gpui::size(px(1000.), px(900.)));
     tick(cx);
     let mover = threads[2];
+    let moving = keyed_in(&view, mover, cx);
     let travel = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             let now = cx.background_executor().now();
@@ -132,7 +133,7 @@ fn a_resorted_card_slides_and_a_parked_one_leaves_a_ghost(cx: &mut TestAppContex
                 .read(cx)
                 .motion
                 .borrow()
-                .offset(super::super::nav_list::NavKey::Card(mover), now)
+                .offset(super::super::nav_list::NavKey::Card(moving), now)
         })
     };
     leap(cx, Duration::from_millis(400));
@@ -142,7 +143,7 @@ fn a_resorted_card_slides_and_a_parked_one_leaves_a_ghost(cx: &mut TestAppContex
     tick(cx);
     let first = travel(&view, cx).expect("it travels");
     assert_eq!(
-        view.read_with(cx, |view, cx| view.nav_state(cx).active[0].thread),
+        view.read_with(cx, |view, cx| view.nav_state(cx).active[0].key.thread()),
         mover,
         "a request lifts it to the top"
     );
@@ -153,7 +154,7 @@ fn a_resorted_card_slides_and_a_parked_one_leaves_a_ghost(cx: &mut TestAppContex
     leap(cx, Duration::from_millis(400));
     assert_eq!(travel(&view, cx), None, "landed");
 
-    view.update(cx, |view, cx| view.park_listed(&[threads[0]], cx));
+    view.update(cx, |view, cx| view.park_listed(&[keyed(view, threads[0], cx)], cx));
     tick(cx);
     view.read_with(cx, |view, cx| {
         let now = cx.background_executor().now();
@@ -253,13 +254,15 @@ fn the_search_highlight_follows_its_thread_through_live_updates(cx: &mut TestApp
 
     let results = |view: &CockpitView, cx: &gpui::App| {
         let state = view.nav_state(cx);
-        view.nav_view.read(cx).search_matches(&state, cx).iter().map(|row| row.thread).collect::<Vec<_>>()
+        view.nav_view.read(cx).search_matches(&state, cx).iter().map(|row| row.key.thread()).collect::<Vec<_>>()
     };
-    let (order, lit) = view.read_with(cx, |view, cx| (results(view, cx), view.nav_view.read(cx).search_pick.get()));
+    let (order, lit) = view.read_with(cx, |view, cx| {
+        (results(view, cx), view.nav_view.read(cx).search_pick.get().map(|key| key.thread()))
+    });
     assert_eq!(order.len(), 3);
     assert_eq!(lit, Some(order[1]), "↓ lit the second result");
 
-    view.update(cx, |view, cx| view.park_listed(&[order[0]], cx));
+    view.update(cx, |view, cx| view.park_listed(&[keyed(view, order[0], cx)], cx));
     tick(cx);
     let after = view.read_with(cx, |view, cx| results(view, cx));
     assert_ne!(after[1], order[1], "the live update moved the highlighted Thread");
@@ -289,7 +292,7 @@ fn the_foot_offers_undo_for_a_park(cx: &mut TestAppContext) {
         assert_eq!(bounds.size.height, px(ferrite_ui::theme::NAV_FOOT_BUTTON));
     }
     assert!(cx.debug_bounds("nav-undo-notice").is_none());
-    view.update(cx, |view, cx| view.park_listed(&[threads[1]], cx));
+    view.update(cx, |view, cx| view.park_listed(&[keyed(view, threads[1], cx)], cx));
     tick(cx);
     assert!(cx.debug_bounds("nav-undo-notice").is_some(), "Parked, Undo ⌘Z");
     view.read_with(cx, |view, _| {
@@ -304,7 +307,7 @@ fn the_foot_offers_undo_for_a_park(cx: &mut TestAppContext) {
     });
     assert!(cx.debug_bounds("nav-undo-notice").is_none());
 
-    view.update(cx, |view, cx| view.park_listed(&[threads[1]], cx));
+    view.update(cx, |view, cx| view.park_listed(&[keyed(view, threads[1], cx)], cx));
     tick(cx);
     leap(cx, Duration::from_millis(ferrite_ui::theme::NAV_UNDO_SHOWN_MS + 100));
     assert!(cx.debug_bounds("nav-undo-notice").is_none(), "it fades and goes");
@@ -347,13 +350,13 @@ fn the_keyboard_walks_the_list_and_follows_a_parked_thread(cx: &mut TestAppConte
     cx.simulate_keystrokes("cmd-w");
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.facts.parked().contains(&thread), "⌘W parked it");
+        assert!(view.facts.parked().contains(&thread.thread()), "⌘W parked it");
         assert_eq!(
             view.nav_view.read(cx).cursor.clone().map(|cursor| cursor.item),
             Some(nav::NavItem::Thread(thread)),
             "the cursor follows it"
         );
-        assert!(view.nav_state(cx).parked.iter().any(|row| row.thread == thread));
+        assert!(view.nav_state(cx).parked.iter().any(|row| row.key == thread));
     });
     for key in ["shift-f10", "menu"] {
         cx.simulate_keystrokes(key);
@@ -471,7 +474,7 @@ fn a_hovered_card_shows_its_detail_card(cx: &mut TestAppContext) {
     );
 
     view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::Snooze(threads[0]), row.center(), cx)
+        view.open_context_menu(MenuTarget::Snooze(keyed(view, threads[0], cx)), row.center(), cx)
     });
     tick(cx);
     assert!(
@@ -499,10 +502,11 @@ fn a_slim_row_fades_its_age_into_revive(cx: &mut TestAppContext) {
         cx.update(|window, cx| window.simulate_next_frame(cx));
         cx.run_until_parked();
     }
+    let slim = keyed_in(&view, threads[0], cx);
     let row = cx.debug_bounds(card(threads[0])).expect("its slim row");
     assert_eq!(row.size.height, px(ferrite_ui::theme::NAV_SLIM_H));
     assert_eq!(
-        nav::testing::drawn_slim(threads[0]),
+        nav::testing::drawn_slim(slim),
         Some(0.0),
         "its age at rest"
     );
@@ -511,7 +515,7 @@ fn a_slim_row_fades_its_age_into_revive(cx: &mut TestAppContext) {
 
     cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
     cx.run_until_parked();
-    let rising = nav::testing::drawn_slim(threads[0]).unwrap();
+    let rising = nav::testing::drawn_slim(slim).unwrap();
     assert!(rising < 1.0, "it fades, not snaps: {rising}");
     cx.executor().advance_clock(Duration::from_millis(200));
     cx.run_until_parked();
@@ -520,7 +524,7 @@ fn a_slim_row_fades_its_age_into_revive(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.simulate_next_frame(cx));
     cx.run_until_parked();
     assert_eq!(
-        nav::testing::drawn_slim(threads[0]),
+        nav::testing::drawn_slim(slim),
         Some(1.0),
         "Revive after 150ms"
     );
@@ -545,7 +549,7 @@ fn a_resize_does_not_send_shelf_rows_travelling(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.set_shelf_open(nav::Shelf::Parked, true, cx));
     tick(cx);
     leap(cx, Duration::from_millis(400));
-    let key = super::super::nav_list::NavKey::Slim(threads[0]);
+    let key = super::super::nav_list::NavKey::Slim(keyed_in(&view, threads[0], cx));
     let travel = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             let now = cx.background_executor().now();
@@ -576,15 +580,15 @@ fn rename_on_a_slim_row_draws_the_editor(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.set_shelf_open(nav::Shelf::Parked, true, cx);
         let later = ferrite_core::clock::system_time() + Duration::from_secs(3600);
-        view.snooze_thread(threads[1], Some(later), cx);
+        view.snooze_thread(keyed(view, threads[1], cx), Some(later), cx);
         view.set_shelf_open(nav::Shelf::Snoozed, true, cx);
     });
     tick(cx);
     for (at, thread) in [("Parked", threads[0]), ("Snoozed", threads[1])] {
-        view.update(cx, |view, cx| view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(10.), px(10.)), cx));
+        view.update(cx, |view, cx| view.open_context_menu(MenuTarget::Thread(keyed(view, thread, cx)), gpui::point(px(10.), px(10.)), cx));
         tick(cx);
         let rename = view.read_with(cx, |view, cx| {
-            view.context_rows(MenuTarget::Thread(thread), cx)
+            view.context_rows(MenuTarget::Thread(keyed(view, thread, cx)), cx)
                 .iter()
                 .position(|row| matches!(row, Some((_, verb)) if *verb == MenuVerb::Rename))
                 .expect("the menu offers Rename")

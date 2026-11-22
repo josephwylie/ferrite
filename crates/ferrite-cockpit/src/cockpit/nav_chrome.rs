@@ -23,8 +23,8 @@ pub(crate) struct NavUndo {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UndoAct {
-    Parked(Vec<ThreadId>),
-    Snoozed(ThreadId),
+    Parked(Vec<ThreadKey>),
+    Snoozed(ThreadKey),
 }
 
 impl NavUndo {
@@ -113,9 +113,9 @@ impl NavView {
         let at = self
             .search_pick
             .get()
-            .and_then(|pick| matches.iter().position(|row| row.thread == pick))
+            .and_then(|pick| matches.iter().position(|row| row.key == pick))
             .or((!matches.is_empty()).then_some(0))?;
-        self.search_pick.set(Some(matches[at].thread));
+        self.search_pick.set(Some(matches[at].key));
         Some(at)
     }
 
@@ -200,7 +200,7 @@ impl NavView {
             .iter()
             .enumerate()
             .map(|(at, row)| {
-                let thread = row.thread;
+                let thread = row.key;
                 let age = row
                     .activity_at
                     .map(|at| nav::card_age(at, wall))
@@ -233,7 +233,7 @@ impl NavView {
             return;
         };
         let to = at.saturating_add_signed(by).min(matches.len() - 1);
-        self.search_pick.set(Some(matches[to].thread));
+        self.search_pick.set(Some(matches[to].key));
         self.reveal.set(true);
         cx.notify();
     }
@@ -245,7 +245,7 @@ impl NavView {
         };
         let matches = self.search_matches(&inputs.state, cx);
         if let Some(at) = self.search_cursor(&matches) {
-            cx.emit(NavEvent::OpenResult(matches[at].thread));
+            cx.emit(NavEvent::OpenResult(matches[at].key));
         }
     }
 

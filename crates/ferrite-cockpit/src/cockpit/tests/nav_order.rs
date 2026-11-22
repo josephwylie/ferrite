@@ -30,7 +30,7 @@ fn streaming() -> SessionEvent {
 }
 
 fn ids(rows: &[nav::ThreadRow]) -> Vec<ThreadId> {
-    rows.iter().map(|row| row.thread).collect()
+    rows.iter().map(|row| row.key.thread()).collect()
 }
 
 /// A shell that outlives Main's turn keeps the Thread working: on the
@@ -196,6 +196,6 @@ fn a_window_that_starts_watching_mid_subagent_sees_the_thread_working(cx: &mut T
     view.read_with(cx, |view, cx| {
         let state = view.nav_state(cx);
         assert!(state.working.is_empty());
-        assert_eq!(state.active[0].thread, threads[1], "done goes to the top");
+        assert_eq!(state.active[0].key.thread(), threads[1], "done goes to the top");
     });
 }

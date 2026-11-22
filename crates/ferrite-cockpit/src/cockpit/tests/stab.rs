@@ -46,7 +46,7 @@ fn keycaps_and_menu_shortcuts_draw_the_command_glyph(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| {
         view.open_context_menu(
-            MenuTarget::Pane(thread),
+            MenuTarget::Pane(keyed(view, thread, cx)),
             gpui::point(px(400.), px(300.)),
             cx,
         )

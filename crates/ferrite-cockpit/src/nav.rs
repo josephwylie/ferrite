@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use std::time::{Instant, SystemTime};
 
 use ferrite_core::store::Provider;
-use ferrite_core::ThreadId;
+use ferrite_core::ThreadKey;
 
 use gpui::prelude::*;
 use gpui::{
@@ -115,7 +115,7 @@ impl<E: gpui::InteractiveElement> NavTooltip for E {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NavItem {
     Shelf(Shelf),
-    Thread(ThreadId),
+    Thread(ThreadKey),
 }
 
 /// The keyboard's place in the nav: its row, and the blend key that row's
@@ -135,7 +135,7 @@ impl NavCursor {
     }
 
     /// The key mirrors the row's own (`thread_card`, `list::slim_row`).
-    pub fn thread(thread: ThreadId) -> Self {
+    pub fn thread(thread: ThreadKey) -> Self {
         NavCursor {
             item: NavItem::Thread(thread),
             key: card::card_key(thread),
@@ -208,7 +208,7 @@ pub enum Section {
 #[derive(Default)]
 pub struct Arrivals {
     /// `None` until a first-seen Thread's last activity is known.
-    at: HashMap<ThreadId, (Section, Option<SystemTime>)>,
+    at: HashMap<ThreadKey, (Section, Option<SystemTime>)>,
 }
 
 impl Arrivals {
@@ -218,7 +218,7 @@ impl Arrivals {
     /// True when any of it changed.
     pub fn note(
         &mut self,
-        listed: &[(ThreadId, Section, Option<SystemTime>)],
+        listed: &[(ThreadKey, Section, Option<SystemTime>)],
         now: SystemTime,
     ) -> bool {
         let mut at = HashMap::with_capacity(listed.len());
@@ -236,7 +236,7 @@ impl Arrivals {
     }
 
     /// When `thread` came into its section.
-    pub fn since(&self, thread: ThreadId) -> Option<SystemTime> {
+    pub fn since(&self, thread: ThreadKey) -> Option<SystemTime> {
         self.at.get(&thread).and_then(|(_, since)| *since)
     }
 }
@@ -252,7 +252,7 @@ pub fn roll_up<'a>(rows: impl IntoIterator<Item = &'a ThreadRow>) -> Option<RowS
 /// container differs. Every field is a cache read (`CockpitView::thread_row`).
 #[derive(Clone, PartialEq)]
 pub struct ThreadRow {
-    pub thread: ThreadId,
+    pub key: ThreadKey,
     pub name: SharedString,
     /// What the Thread is doing right now.
     pub status: RowStatus,
@@ -288,9 +288,9 @@ pub struct ThreadRow {
 #[cfg(test)]
 impl ThreadRow {
     /// A row with nothing known but its Thread, name and state.
-    pub fn bare(thread: ThreadId, name: impl Into<SharedString>, status: RowStatus) -> Self {
+    pub fn bare(key: ThreadKey, name: impl Into<SharedString>, status: RowStatus) -> Self {
         ThreadRow {
-            thread,
+            key,
             name: name.into(),
             status,
             project: None,
@@ -963,10 +963,10 @@ pub fn machine_thread_row(machine: usize, row: &StatusRow, lost: bool) -> Statef
 /// A Thread title that can be renamed: the row's own title text, and
 /// nothing else. It wears **no** hover wash: the double click is the
 /// affordance; the row is the control.
-pub fn rename_target_thread(thread: ThreadId, title: SharedString) -> Stateful<Div> {
+pub fn rename_target_thread(thread: ThreadKey, title: SharedString) -> Stateful<Div> {
     div()
-        .id(("rename-thread", thread.get() as usize))
-        .debug_selector(move || format!("rename-thread-{}", thread.get()))
+        .id(("rename-thread", thread.thread().get() as usize))
+        .debug_selector(move || format!("rename-thread-{}", thread.thread().get()))
         .min_w_0()
         .overflow_hidden()
         .whitespace_nowrap()
@@ -976,7 +976,6 @@ pub fn rename_target_thread(thread: ThreadId, title: SharedString) -> Stateful<D
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrite_core::ThreadId;
     use ferrite_pane::pane::WallState;
 
     fn thread() -> ThreadRow {
@@ -988,7 +987,7 @@ mod tests {
             project: Some("ferrite".into()),
             selected,
             tail: NavTail::Age("2h".into()),
-            ..ThreadRow::bare(ThreadId::new(8), "thread-08", RowStatus::Idle)
+            ..ThreadRow::bare(ThreadKey::fixture(0, 8), "thread-08", RowStatus::Idle)
         }
     }
 
@@ -1375,13 +1374,34 @@ mod tests {
     #[test]
     fn a_title_is_clipped_not_ellipsized() {
         let mut title = rename_target_thread(
-            ThreadId::new(1),
+            ThreadKey::fixture(0, 1),
             "UI test: color tokens and shell commands".into(),
         );
         let style = title.style().clone();
         assert_eq!(style.text.text_overflow, None, "no …");
         assert_eq!(style.text.white_space, Some(gpui::WhiteSpace::Nowrap));
         assert_eq!(style.overflow.x, Some(gpui::Overflow::Hidden));
+    }
+
+    /// Thread 3 here and Thread 3 on another machine are two rows: each
+    /// arrives in its own section at its own time.
+    #[test]
+    fn a_nav_keeps_two_machines_threads_apart() {
+        let here = ThreadKey::fixture(0, 3);
+        let there = ThreadKey::fixture(1, 3);
+        let start = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(100);
+        let later = start + std::time::Duration::from_secs(60);
+        let mut arrivals = Arrivals::default();
+        arrivals.note(
+            &[(here, Section::Active, Some(start)), (there, Section::Active, Some(start))],
+            start,
+        );
+        arrivals.note(
+            &[(here, Section::Active, Some(start)), (there, Section::Working, Some(start))],
+            later,
+        );
+        assert_eq!(arrivals.since(here), Some(start), "this computer's stays put");
+        assert_eq!(arrivals.since(there), Some(later), "the other machine's moved");
     }
 
     /// The list's rows travel over T3's 150ms `ease-out`; a shelf's
@@ -1407,12 +1427,12 @@ pub(crate) mod testing {
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
 
-    use ferrite_core::ThreadId;
+    use ferrite_core::ThreadKey;
     use gpui::{FontWeight, Hsla, SharedString};
 
     /// A slim row's lit level as last drawn (its action's fade, its
     /// badge's colour).
-    pub fn drawn_slim(thread: ThreadId) -> Option<f32> {
+    pub fn drawn_slim(thread: ThreadKey) -> Option<f32> {
         DRAWN_SLIM.with(|drawn| drawn.borrow().get(&thread).copied())
     }
 
@@ -1423,10 +1443,10 @@ pub(crate) mod testing {
 
     thread_local! {
         pub(super) static SHAPED: Cell<usize> = const { Cell::new(0) };
-        pub(super) static DRAWN_SLIM: RefCell<HashMap<ThreadId, f32>> = RefCell::default();
+        pub(super) static DRAWN_SLIM: RefCell<HashMap<ThreadKey, f32>> = RefCell::default();
         pub(super) static DRAWN_HOVER: RefCell<HashMap<SharedString, f32>> =
             RefCell::new(HashMap::new());
-        pub(super) static DRAWN_CARDS: RefCell<HashMap<ThreadId, DrawnCard>> =
+        pub(super) static DRAWN_CARDS: RefCell<HashMap<ThreadKey, DrawnCard>> =
             RefCell::new(HashMap::new());
     }
 
@@ -1442,7 +1462,7 @@ pub(crate) mod testing {
     }
 
     /// The card for `thread` as last drawn.
-    pub(crate) fn drawn_card(thread: ThreadId) -> Option<DrawnCard> {
+    pub(crate) fn drawn_card(thread: ThreadKey) -> Option<DrawnCard> {
         DRAWN_CARDS.with(|drawn| drawn.borrow().get(&thread).copied())
     }
 
