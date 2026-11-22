@@ -20,16 +20,24 @@ and a window that holds every machine at once.
 - **A Thread is named by a `ThreadKey`.** `ThreadKey { machine:
   MachineId, thread: ThreadId }` (`ferrite-core/src/thread.rs`) is Copy,
   Ord and Hash. Its fields are private and only core makes one, stamping
-  the machine whose Server reported the Thread (`Cockpit::thread_key`). A
-  key that pairs a Thread with the wrong machine cannot be written, so no
-  call site has to check it. Tests in other crates make one with
-  `ThreadKey::fixture` (core's `test-support` feature). A Project is named
+  the machine whose Server reported the Thread. A key that pairs a Thread
+  with the wrong machine cannot be written, so no call site has to check
+  it. Tests in other crates make one with `ThreadKey::fixture` or a
+  Cockpit's `key(id)` (core's `test-support` feature). A Project is named
   the same way, by `ProjectKey { machine, project }`, because a
   `ProjectId` is per machine too.
+- **An id read from a machine becomes a key there.** What one machine's
+  Server said that every window shares (its registry, its Notices, its
+  Factory board) is read as an `OnMachine` reading (`Cockpit::registry`,
+  `notifications`, `factory`): it derefs to what it reads, and its `key(id)`
+  and `project_key(id)` name what an id read in it is. An id a Thread's own
+  transcript names, such as a link to a Thread it spawned, is a Thread of
+  its machine (`ThreadKey::sibling`). No caller pairs an id with a machine
+  it chose.
 - **A `MachineId` lasts one run and is never reissued.** It is minted from
   one counter for the whole process as a Cockpit opens its link
-  (`MachineId::mint`), and `Cockpit::machine_id` says which one a Cockpit
-  holds. A machine that is removed takes its id with it, so a key held
+  (`MachineId::mint`), and `Cockpit::on_screen` says which one the window
+  is on. A machine that is removed takes its id with it, so a key held
   from it names nothing rather than a Thread of the next machine. The
   counter is per process, not per Cockpit, because until the window holds
   every machine a move between machines builds a new Cockpit, and a
@@ -49,21 +57,44 @@ and a window that holds every machine at once.
   linked machine will save its child the same way (ADR 0047, to come).
   Its design called the type `ThreadRef`; there is one name,
   `SavedThread`.
-- **The shape: one `Cockpit` holds one Server per machine.** The window
-  keeps its one `Cockpit`. Inside it, a private per-machine holder keeps
-  what one link means today: the link, the bridge, the mirrors, the shared
-  state, the parked rows, the logs, the registry and what the Server was
-  told. The Cockpit keeps it in `BTreeMap<MachineId, _>`. What
-  exists once per window stays on the Cockpit, keyed by `ThreadKey`: the
-  Roster, `composing`, `visible_subjects`, `Drawn` and `window_active`.
-  The Cockpit's public API takes `ThreadKey` only, and one private
-  function splits a key into its machine's holder and the `ThreadId`
-  there. `ServerStatus` goes, since a full link that draws nothing streams
-  only status already (ADR 0032). The wire does not change: each Server
-  keeps its own `ThreadId`s, and the CLI, the API and `window.*` actions
-  address this computer's Server. The design named the holder `Server`.
-  The Server process is now the `ferrite-server` crate, so the change that
-  adds the holder (P4) gives it a name that does not clash.
+- **A saved name is fixed when the machine attaches.** What saved files
+  call a machine is given to the Cockpit as it attaches there
+  (`Attach::saved_as`, from the machine's entry in Settings), and the
+  holder keeps it. `Cockpit::saved(key)` writes a key as a `SavedThread`
+  and `Cockpit::resolve(saved)` reads one back, as a Thread of the machine
+  saved under that name or as nothing. A pin, a draft, a cited source and
+  a Panel are saved through them, never through the machine `Machines` has
+  selected when the file is written, so a write that races a move between
+  machines cannot save one machine's Thread under another's name.
+- **The shape: one `Cockpit` holds each machine as a `HeldMachine`.** The
+  window keeps its one `Cockpit`. Inside it, the private `HeldMachine`
+  (`ferrite-core/src/cockpit/held.rs`) keeps what one link means: its
+  `MachineId`, its saved name, the link (an Engine in this process or a
+  Server's), the mirrors, the shared state, the parked rows, the logs,
+  what the Server was told of this window and what this window draws of
+  its Threads (`Drawn`). The Cockpit keeps them in
+  `BTreeMap<MachineId, HeldMachine>`. What exists once per window stays
+  on the Cockpit, keyed by `ThreadKey`: the Roster, focus, `composing`,
+  `visible_subjects` and `window_active`. `Drawn` is per holder, not per
+  window as the design had it: each Server is told what this window draws
+  of its own Threads, by their own ids. The Cockpit's public API names
+  Threads and Projects by key only: `pump`'s `PaneUpdate`s, `threads`,
+  `known_threads`, `sweep`'s `Restart`s and the browser's messages carry
+  keys, and private `at`/`act_on` split a key into its machine's holder
+  and the `ThreadId` there. The wire does not change: each Server keeps
+  its own `ThreadId`s, and the CLI, the API and `window.*` actions address
+  this computer's Server. The design named the holder `Server`. The
+  Server process is the `ferrite-server` crate, so the holder is
+  `HeldMachine`.
+- **What stays a bare id in the window.** A board's layout leaves
+  (`layout::Tree`, the view's `Leaf`) name readers as well as Threads,
+  and the view maps a leaf back to its Pane. The Inbox and alerts read
+  the Notices of the machine on screen by id and key a Notice's Thread
+  where it meets a Pane (`notifications().key`), since an alert from a
+  machine off screen names it by `Alert.away`. The view's Project state
+  (the nav filter, the Factory and draft bindings) stays a `ProjectId` of
+  the machine on screen and is keyed at each Cockpit call
+  (`registry().project_key`). All three fold into keys in P6.
 
 ## Rejected
 
@@ -87,15 +118,15 @@ and a window that holds every machine at once.
 Each lands green and proves something.
 
 1. **P1** `feat(core): a ThreadKey names a Thread and its machine`. The
-   types above, `Cockpit::machine_id`, and this record.
+   types above, `Cockpit::machine_id` (now `on_screen`), and this record.
 2. **P2a to P2d** `refactor(cockpit): <feature> keys its per-Thread state
    by ThreadKey`, in parallel: (a) the browser; (b) the Files and terminal
    tools; (c) Surfaces, beside, the Panel's controls and overview; (d) side
    chats, sends, titling, the PR watch, background work and the Facts.
-   Where a group meets state still keyed by a bare id, it converts at
+   Where a group met state still keyed by a bare id, it converted at
    that call with core's `Cockpit::thread_key(id)` and the key's
-   `thread()`; there is no seam on the root, so five changes in parallel
-   do not each add one. A file a group saves moves to `SavedThread`s: the
+   `thread()`, a seam P4 and P5 removed; there was no seam on the root, so
+   five changes in parallel did not each add one. A file a group saves moves to `SavedThread`s: the
    Panel's `panel.json` keeps every machine's Panels, the window holds
    those of the machine it is on, and writes the others back as it read
    them.
@@ -109,17 +140,28 @@ Each lands green and proves something.
    whole; and `Alert.away` names a machine off screen, which has no
    `MachineId` until the window holds every machine, so it folds into the
    key in P6.
-4. **P4** `refactor(core): one Cockpit holds a Server per machine`: the
-   split inside core only, with the `ThreadId` API and the single attach
-   kept. In parallel with P2 and P3.
-5. **P5** `refactor(core): the Cockpit's API takes only ThreadKey`, after
-   P2 to P4. Those conversions go, and the window-wide
-   `on_machine()` becomes a question about a key's machine at every site.
+4. **P4 and P5, as one change** `refactor(core): the Cockpit holds each
+   machine as a HeldMachine and names Threads only by key`. The split
+   inside core, the key-only API with `thread_key(id)` gone, every caller
+   moved, and the window-wide `on_machine()` replaced by a question about
+   a key's machine (`Cockpit::local(machine)`) or, where an act names no
+   Thread, about the machine on screen. A core test proves two machines
+   holding a Thread of the same id stay apart; a view test proves pins
+   stay each machine's through a trip to another machine and back. Most
+   of the callers moved by a mechanical rewrite, kept out of the tree.
 6. **P6** `feat(cockpit): the window holds every machine at once`. The
    window swap goes (`CockpitWindow::go_to`, `GoToMachine`, landing,
    `ServerStatus`, `Bell::moved`). A press opens in place, and a lost
    machine dims only its own Panes and rows. ADR 0026's "One machine on
-   screen" and "Alerts from machines off screen" are superseded.
+   screen" and "Alerts from machines off screen" are superseded. What
+   P4 and P5 left on the machine on screen moves to the key of what it
+   acts on: Settings' environment and defaults, the Server page,
+   attachments and their uploads, the project editor and draft panes,
+   the default-branch and checkout lookups, free disk, remote files, a
+   system notification's machine, and the Notices the Inbox reads (one
+   `notifications()` per machine). So do the bare ids above and how
+   remote Threads stream (which Threads each Server is told this window
+   draws).
 7. **P7** `feat(nav): one list across machines, a small icon marks a
    Thread on another machine`. The machine headings go, rows merge into
    the sections, and a 14px server glyph sits at the meta line's right
@@ -156,4 +198,6 @@ is not on the primary one.
 
 A **Thread key** is a Thread and the machine it lives on, for this run. A
 **saved Thread** is the same, as it is written to disk. _Avoid_ thread ref
-and scoped id.
+and scoped id. A **held machine** is one machine as a
+window holds it: its link, what its Server said, and the name it is saved
+under. _Avoid_ server for it: the Server is the process.
