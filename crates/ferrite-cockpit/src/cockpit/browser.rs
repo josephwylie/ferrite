@@ -1222,6 +1222,9 @@ impl CockpitView {
                         },
                     );
                     browser.error = None;
+                    // The page is new to the Surface: nothing else says so
+                    // when the engine came up after the Server's message.
+                    cx.notify();
                 }
                 Err(error) => {
                     browser.failed.insert(tab.id, tab.document());
