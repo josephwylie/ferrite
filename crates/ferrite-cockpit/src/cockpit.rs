@@ -1083,20 +1083,37 @@ impl CockpitView {
         prefs: Preferences,
         cx: &mut Context<Self>,
     ) -> Self {
-        let panel = panel::Panel::load(&prefs.dir);
-        Self::new_with_panel(cockpit, launch_provider, prefs, panel, cx)
+        Self::new_with_machines(cockpit, launch_provider, prefs, None, cx)
     }
 
+    /// A view on the machine `machines` has selected, which `cockpit` is
+    /// attached to; `None` is a window on an Engine of its own.
+    pub fn new_with_machines(
+        cockpit: Cockpit,
+        launch_provider: Provider,
+        prefs: Preferences,
+        machines: Option<Entity<crate::machines::Machines>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let panel = panel::Panel::load(&prefs.dir);
+        Self::new_with_panel(cockpit, launch_provider, prefs, panel, machines, cx)
+    }
+
+    /// The view knows its machine before its first Panes open: each opens
+    /// with its draft as that machine's (ADR 0045).
     pub(crate) fn new_with_panel(
         mut cockpit: Cockpit,
         launch_provider: Provider,
         prefs: Preferences,
         mut panel: panel::Panel,
+        machines: Option<Entity<crate::machines::Machines>>,
         cx: &mut Context<Self>,
     ) -> Self {
-        // A window is on this computer until it is given its machines
-        // (`with_machines`).
-        panel.hold(ferrite_core::MachineKey(None), &cockpit);
+        let machine_key = match &machines {
+            Some(machines) => machines.read(cx).selected_key(),
+            None => Some(ferrite_core::MachineKey(None)),
+        };
+        panel.hold(machine_key.clone().unwrap_or(ferrite_core::MachineKey(None)), &cockpit);
         ferrite_pane::pane::init_components(cx);
         subagents::init(cx);
         cockpit.settings_changed(&prefs.settings);
@@ -1366,8 +1383,8 @@ impl CockpitView {
             reader_slides: Default::default(),
             columns: columns::Columns::new(),
             launch_provider,
-            machines: None,
-            machine_key: Some(ferrite_core::MachineKey(None)),
+            machines,
+            machine_key,
         };
         // A Cockpit notification is the earliest common point after core
         // state changes and before GPUI draws cached transcript children.
@@ -1402,16 +1419,6 @@ impl CockpitView {
             }
         }
         view
-    }
-
-    /// The window's machines (ADR 0026), listed in the nav and Settings;
-    /// the one selected now is the one this view's core is on.
-    pub fn with_machines(mut self, machines: Entity<crate::machines::Machines>, cx: &gpui::App) -> Self {
-        self.machine_key = machines.read(cx).selected_key();
-        let here = self.machine_key.clone().unwrap_or(ferrite_core::MachineKey(None));
-        self.panel.hold(here, self.cockpit.read(cx));
-        self.machines = Some(machines);
-        self
     }
 
     /// Open `open` once the Cockpit is attached, if it is by `until`.

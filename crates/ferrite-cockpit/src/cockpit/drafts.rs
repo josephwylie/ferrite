@@ -100,18 +100,13 @@ impl CockpitView {
     }
 
     /// `thread` as the drafts file names it. Until the window holds every
-    /// machine at once (ADR 0045), each key it has is of the one machine it
-    /// is on: the one its machines have selected, or this computer in a
-    /// window without them.
+    /// machine at once (ADR 0045), each key it has is of the one machine
+    /// its core is on, which the view took with its core: never the one
+    /// `Machines` has selected now, which a swap moves first.
     fn saved_thread(&self, thread: ThreadKey, cx: &gpui::App) -> SavedThread {
         debug_assert_eq!(thread.machine(), self.cockpit.read(cx).machine_id());
-        let machine = self
-            .machines
-            .as_ref()
-            .and_then(|machines| machines.read(cx).selected_key())
-            .unwrap_or(MachineKey(None));
         SavedThread {
-            machine,
+            machine: self.machine_key.clone().unwrap_or(MachineKey(None)),
             thread: thread.thread(),
         }
     }

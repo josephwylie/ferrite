@@ -162,7 +162,7 @@ fn machine_window(
     machines: Entity<Machines>,
 ) -> (Entity<gpui::component::Root>, &mut gpui::VisualTestContext) {
     cx.add_window_view(|window, cx| {
-        let view = cx.new(|cx| CockpitView::new(core, cx).with_machines(machines, cx));
+        let view = cx.new(|cx| CockpitView::new_with_machines(core, Provider::Claude, Preferences::ephemeral(), Some(machines), cx));
         gpui::component::Root::new(
             cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
             window,
@@ -381,7 +381,7 @@ fn a_machine_off_screen_heads_its_rows_with_its_connection(cx: &mut TestAppConte
     let (core, _fake) = cockpit("machines-listed", 1);
     let machines = cx.new(|_| machines("listed", None));
     let (view, cx) = add_cockpit_window(cx, |_, cx| {
-        CockpitView::new(core, cx).with_machines(machines, cx)
+        CockpitView::new_with_machines(core, Provider::Claude, Preferences::ephemeral(), Some(machines), cx)
     });
     tick(cx);
     assert!(
@@ -471,7 +471,7 @@ fn a_window_with_only_this_computer_lists_no_machines(cx: &mut TestAppContext) {
         )
     });
     let (_view, cx) =
-        add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx).with_machines(alone, cx));
+        add_cockpit_window(cx, |_, cx| CockpitView::new_with_machines(core, Provider::Claude, Preferences::ephemeral(), Some(alone), cx));
     tick(cx);
     assert!(debug_bounds(cx, "nav-machine-0".into()).is_none());
 }
@@ -662,7 +662,7 @@ fn machine_window_saving_to<'a>(
     prefs.dir = dir.to_path_buf();
     cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| {
-            CockpitView::new_with_settings(core, Provider::Claude, prefs, cx).with_machines(machines, cx)
+            CockpitView::new_with_machines(core, Provider::Claude, prefs, Some(machines), cx)
         });
         gpui::component::Root::new(
             cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
@@ -786,7 +786,7 @@ fn machine_window_drafting_in<'a>(
     prefs.dir = dir.to_path_buf();
     cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| {
-            CockpitView::new_with_settings(core, Provider::Claude, prefs, cx).with_machines(machines)
+            CockpitView::new_with_machines(core, Provider::Claude, prefs, Some(machines), cx)
         });
         gpui::component::Root::new(
             cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
@@ -889,7 +889,7 @@ fn a_machine_without_ferrited_says_so_and_takes_no_input(cx: &mut TestAppContext
         .update(cx, |machines, _| machines.cockpit())
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| {
-        CockpitView::new(core, cx).with_machines(machines, cx)
+        CockpitView::new_with_machines(core, Provider::Claude, Preferences::ephemeral(), Some(machines), cx)
     });
     until(cx, |cx| {
         view.read_with(cx, |view, cx| {
@@ -1586,7 +1586,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         .update(cx, |machines, _| machines.cockpit())
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| {
-        CockpitView::new(core, cx).with_machines(machines, cx)
+        CockpitView::new_with_machines(core, Provider::Claude, Preferences::ephemeral(), Some(machines), cx)
     });
     until(cx, |cx| {
         view.read_with(cx, |view, cx| {
@@ -1760,7 +1760,7 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
         .update(cx, |machines, _| machines.cockpit())
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| {
-        CockpitView::new(core, cx).with_machines(machines, cx)
+        CockpitView::new_with_machines(core, Provider::Claude, Preferences::ephemeral(), Some(machines), cx)
     });
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     until(cx, |cx| {

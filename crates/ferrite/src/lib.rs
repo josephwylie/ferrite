@@ -397,7 +397,7 @@ pub fn launch() {
                     |window, cx| {
                         motion::adopt_renderer(window.gpu_specs(), cx);
                         let view = cx.new(|cx| {
-                            let view = CockpitView::new_with_settings(
+                            CockpitView::new_with_machines(
                                 core,
                                 provider,
                                 cockpit::Preferences {
@@ -411,12 +411,9 @@ pub fn launch() {
                                     unreadable: unreadable.clone(),
                                     keys_refused: keys_refused.clone(),
                                 },
+                                machines,
                                 cx,
-                            );
-                            match machines {
-                                Some(machines) => view.with_machines(machines, cx),
-                                None => view,
-                            }
+                            )
                         });
                         // The kit Root paints the window's ground
                         // (`paint::WINDOW`) under every region.
