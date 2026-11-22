@@ -42,6 +42,7 @@ mod coordinator;
 mod drive;
 mod factory;
 mod github;
+pub mod peers;
 mod render;
 pub mod remote;
 mod server_id;

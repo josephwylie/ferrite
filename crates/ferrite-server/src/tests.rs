@@ -28,6 +28,7 @@ mod factory;
 mod file_operations;
 mod remote_operations;
 mod owned;
+mod peers;
 mod progress;
 mod publish;
 mod starts;
