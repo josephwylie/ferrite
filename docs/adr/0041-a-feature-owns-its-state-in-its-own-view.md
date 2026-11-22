@@ -1232,9 +1232,12 @@ never waits. The rest still do.
      the Server was seen (`seen_told`) and tells the same unread things
      once. A new attach forgets that. An Engine in this process still
      carries each act out at once.
-  2. Turn and Session: 13 asks, 59 sites. 34 sites drop the reply, so
-     most become tells, and these are the presses an operator makes
-     most.
+  2. Turn and Session: the acts that read no reply are tells now
+     (interrupt, stopping a Subagent, Ferrite's own words, sending or
+     taking back a queued prompt, settings changed). The ones whose
+     reply the window reads still block: send, answer, rewind, fork,
+     model, effort, provider, start fresh. Each needs its reply as an
+     `Ask` and a place to say a refusal.
   3. Thread lifecycle: 16 asks, 31 sites. What follows an open, a park or
      a revive is the root's (the Panes, focus, the Project filter). Each
      needs a continuation like the Browser's `Then`.

@@ -1616,15 +1616,15 @@ impl Cockpit {
     }
 
     pub fn interrupt(&mut self, thread: ThreadKey) {
-        said(self.act_on(thread, |thread| Op::Interrupt { thread }));
+        self.tell_on(thread, |thread| Op::Interrupt { thread });
     }
 
     /// Stop one Subagent of `thread`; Main's turn and the others run on.
     pub fn stop_subagent(&mut self, thread: ThreadKey, key: &AgentKey) {
-        said(self.act_on(thread, |thread| Op::StopSubagent {
+        self.tell_on(thread, |thread| Op::StopSubagent {
             thread,
             key: key.as_str().into(),
-        }));
+        });
     }
 
     /// Answer the pending Decision `decision` names, if it still waits.
@@ -1669,7 +1669,7 @@ impl Cockpit {
 
     /// Ferrite's own words in a Thread's Pane.
     pub fn say(&mut self, thread: ThreadKey, text: String) {
-        said(self.act_on(thread, |thread| Op::Say { thread, text }));
+        self.tell_on(thread, |thread| Op::Say { thread, text });
     }
 
     pub fn search_files(
@@ -2367,10 +2367,10 @@ impl Cockpit {
 
     /// Send the queued prompt `id` names next (`Engine::send_queued_now`).
     pub fn send_queued_now(&mut self, thread: ThreadKey, id: &str) {
-        said(self.act_on(thread, |thread| Op::SendQueuedNow {
+        self.tell_on(thread, |thread| Op::SendQueuedNow {
             thread,
             item: id.to_string(),
-        }));
+        });
     }
 
     /// Edit the queued prompt `id` names, ahead of the current draft.
@@ -2382,12 +2382,12 @@ impl Cockpit {
         // A Server too old to send ids listed its queue by text alone
         // (`mirror::queue_of`): its items take back the latest.
         let id = (!id.is_empty()).then_some(id);
-        said(self.act_on(thread, |thread| Op::CancelQueued {
+        self.tell_on(thread, |thread| Op::CancelQueued {
             thread,
             restore,
             edit,
             item: id.map(str::to_string),
-        }));
+        });
     }
 
     /// A prompt the provider handed back, for the Composer, and whether it
@@ -2448,7 +2448,7 @@ impl Cockpit {
         for machine in machines {
             match &mut self.machines.get_mut(&machine).unwrap().link {
                 Link::InProcess(engine) => engine.apply_settings(settings),
-                Link::Server(server) => said(server.execute(Op::SettingsChanged)),
+                Link::Server(server) => server.tell(Op::SettingsChanged),
             }
             self.receive_from(machine);
         }
