@@ -8509,8 +8509,8 @@ impl CockpitView {
     }
 
     /// The Active section as the Inbox's rows: this computer's cards',
-    /// then every other machine's Threads awaiting handling, requests
-    /// first.
+    /// then every other machine's Threads awaiting handling, pinned or
+    /// not, requests first.
     pub(super) fn inbox_rows(
         &self,
         state: &nav::NavState,
@@ -8518,10 +8518,12 @@ impl CockpitView {
         cx: &gpui::App,
     ) -> Vec<NoticeRow> {
         let now = ferrite_core::clock::system_time();
+        // Another machine's Thread has no card, pinned or not, until the
+        // list merges across machines: pinned, it stays in the Inbox.
         let others = listed
             .iter()
             .filter(|(key, section, _)| {
-                *section == nav::Section::Active
+                matches!(section, nav::Section::Active | nav::Section::Pinned)
                     && !self.home_card(*key, cx)
                     && self.admitted(*key, cx)
             })

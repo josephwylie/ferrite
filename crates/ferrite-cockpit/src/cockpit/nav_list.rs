@@ -202,7 +202,14 @@ impl NavView {
                 None => {
                     let verb = notice.open_verb();
                     let index = rows.len();
+                    // Another machine's Thread: dimmed while that machine is
+                    // lost, as its rows under its heading are.
+                    let lost = machines.into_iter().flatten().any(|machine| {
+                        machine.row.held == Some(notice.thread.machine())
+                            && machine.row.connection != Connection::Online
+                    });
                     nav::notice_row(index, notice, false, &nav::Measure::Text(cx, inputs.width))
+                        .when(lost, |row| row.opacity(ferrite_ui::theme::MACHINE_LOST_OPACITY))
                         .on_click(cx.listener(move |_, _: &ClickEvent, window, cx| {
                             cx.emit(NavEvent::Notice(verb.clone()));
                             window.blur(cx);
@@ -645,7 +652,8 @@ impl NavView {
 
     /// Every machine but this computer: its heading and, unfolded, the
     /// Threads it has open. A Thread's press opens it in place, beside
-    /// whatever the board shows.
+    /// whatever the board shows; its right-click opens the Thread's menu,
+    /// as a card's does.
     fn other_machines(&self, machines: &[NavMachine], cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut drawn = Vec::new();
         for machine in machines.iter().filter(|machine| !machine.home) {
@@ -656,6 +664,7 @@ impl NavView {
             let lost = machine.row.connection != Connection::Online;
             drawn.extend(machine.threads.iter().map(|thread| {
                 let key = thread.key;
+                let nav = cx.entity().downgrade();
                 nav::machine_thread_row(thread, lost)
                     .on_mouse_down(
                         MouseButton::Left,
@@ -663,6 +672,12 @@ impl NavView {
                             cx.emit(NavEvent::Open(key));
                         }),
                     )
+                    .context_press(move |at, _, cx| {
+                        let _ = nav.update(cx, |nav, cx| {
+                            nav.pick_for_menu(key, cx);
+                            cx.emit(NavEvent::Menu(MenuTarget::Thread(key), MenuAt::Point(at)));
+                        });
+                    })
                     .into_any_element()
             }));
         }

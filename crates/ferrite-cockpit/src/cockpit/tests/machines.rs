@@ -516,6 +516,57 @@ fn each_machines_pin_is_its_own(cx: &mut TestAppContext) {
     );
 }
 
+/// box's row opens its Thread's menu on a right-click, as a card does,
+/// without what only this computer's paths can do; its Pin pins box's
+/// Thread, saved under box's name, and the Inbox still lists it: no
+/// Pinned card stands for another machine's Thread.
+#[gpui::test]
+fn a_machines_row_opens_its_threads_menu(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (mut core, _fake, machines, _agents) = two_machines("row-menu", 1);
+    let on_box = machines.held(1).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    let row = debug_bounds(cx, format!("nav-machine-{}-{}", on_box.get(), theirs.thread().get()))
+        .expect("box's row");
+    cx.simulate_mouse_down(row.center(), gpui::MouseButton::Right, gpui::Modifiers::none());
+    tick(cx);
+    let labels = view.read_with(cx, |view, _| {
+        view.context_menu()
+            .map(|menu| {
+                menu.rows
+                    .iter()
+                    .flatten()
+                    .map(|(item, _)| item.label.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
+    assert!(labels.iter().any(|label| label == "Pin"), "{labels:?}");
+    assert!(!labels.iter().any(|label| label == "Open in"), "{labels:?}");
+    let inbox = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.needs_you_rows(cx).iter().filter(|row| row.thread == theirs).count()
+        })
+    };
+    assert_eq!(inbox(cx), 1);
+    cx.simulate_keystrokes("p");
+    tick(cx);
+    assert_eq!(inbox(cx), 1, "pinned, still in the Inbox");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.pins(cx), [theirs]);
+        assert_eq!(
+            view.prefs.settings.pinned_threads,
+            [SavedThread {
+                machine: on_box_key(),
+                thread: theirs.thread(),
+            }]
+        );
+    });
+}
+
 #[gpui::test]
 fn every_machine_heads_its_rows_with_its_connection(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("machines-listed", 1);
