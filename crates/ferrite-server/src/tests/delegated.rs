@@ -232,3 +232,285 @@ fn provider_list_says_what_this_machine_runs_threads_on() {
     assert_eq!(named("codex")["mode"], "full_access");
     assert_eq!(listed["result"]["default_provider"], "claude");
 }
+
+/// What a capped start's `args` may not carry, per provider: every
+/// argument that sets or widens how far the agent goes without asking,
+/// and the name the refusal gives it. The Server alone sets that under a
+/// cap.
+const WIDENING: &[(&str, &[&str], &str)] = &[
+    ("claude", &["--dangerously-skip-permissions"], "--dangerously-skip-permissions"),
+    ("claude", &["--allow-dangerously-skip-permissions"], "--allow-dangerously-skip-permissions"),
+    ("claude", &["--permission-mode", "bypassPermissions"], "--permission-mode"),
+    ("claude", &["--permission-mode=acceptEdits"], "--permission-mode"),
+    ("claude", &["--allowedTools", "Write"], "--allowedTools"),
+    ("claude", &["--allowedTools=Bash"], "--allowedTools"),
+    ("claude", &["--allowed-tools", "Bash"], "--allowed-tools"),
+    ("claude", &["--permission-prompt-tool", "mcp__x__allow"], "--permission-prompt-tool"),
+    ("claude", &["--permission-prompts", "host"], "--permission-prompts"),
+    ("claude", &["--settings", r#"{"permissions":{"allow":["Bash"]}}"#], "--settings"),
+    ("claude", &["--setting-sources", "user"], "--setting-sources"),
+    ("claude", &["--add-dir", "/"], "--add-dir"),
+    ("claude", &["--mcp-config", "servers.json"], "--mcp-config"),
+    ("claude", &["--plugin-dir", "plugin"], "--plugin-dir"),
+    ("claude", &["--plugin-url", "https://example.com/p.zip"], "--plugin-url"),
+    ("claude", &["--agents", "{}"], "--agents"),
+    ("claude", &["--agent", "reviewer"], "--agent"),
+    ("claude", &["--bare"], "--bare"),
+    ("claude", &["--safe-mode"], "--safe-mode"),
+    ("codex", &["--yolo"], "--yolo"),
+    ("codex", &["--dangerously-bypass-approvals-and-sandbox"], "--dangerously-bypass-approvals-and-sandbox"),
+    ("codex", &["-s", "danger-full-access"], "-s"),
+    ("codex", &["-sdanger-full-access"], "-s"),
+    ("codex", &["--sandbox", "workspace-write"], "--sandbox"),
+    ("codex", &["--sandbox=danger-full-access"], "--sandbox"),
+    ("codex", &["-a", "never"], "-a"),
+    ("codex", &["--ask-for-approval", "never"], "--ask-for-approval"),
+    ("codex", &["--approve-for-me"], "--approve-for-me"),
+    ("codex", &["--dangerously-bypass-hook-trust"], "--dangerously-bypass-hook-trust"),
+    ("codex", &["-p", "yolo"], "-p"),
+    ("codex", &["--profile", "yolo"], "--profile"),
+    ("codex", &["--add-dir", "/"], "--add-dir"),
+    ("codex", &["-c", "approval_policy=never"], "approval_policy"),
+    ("codex", &["-c", "sandbox_mode=danger-full-access"], "sandbox_mode"),
+    ("codex", &["--config", "sandbox_workspace_write.network_access=true"], "sandbox_workspace_write"),
+    ("codex", &["--config=sandbox_permissions=[\"disk-full-read-access\"]"], "sandbox_permissions"),
+    ("codex", &["-capproval_policy=never"], "approval_policy"),
+    ("codex", &["-c", "approvals_reviewer=auto_review"], "approvals_reviewer"),
+    ("codex", &["-c", "profile=yolo"], "profile"),
+    ("codex", &["-c", "profiles.yolo.approval_policy=never"], "profiles"),
+    ("codex", &["-c", "mcp_servers.x.command=\"sh\""], "mcp_servers"),
+];
+
+/// A capped start refuses, naming it, each argument that sets or widens
+/// how far its agent goes, and an `env` or `launcher`, either of which can
+/// point the CLI at other settings or run another program; it opens
+/// nothing. The cap is the Server's to set.
+#[test]
+fn a_capped_start_refuses_each_argument_that_sets_or_widens_its_permissions() {
+    let harness = start("delegated-widening");
+    let mut caller = call(&harness);
+    let mut refused = |id: &str, params: serde_json::Value, named: &str| {
+        let answer = caller.answer(id, "thread.start", params);
+        assert_eq!(answer["error"]["code"], "widens_cap", "{named}: {answer}");
+        let message = answer["error"]["message"].as_str().unwrap();
+        assert!(message.contains(named), "{named}: {answer}");
+    };
+    for (row, (provider, args, named)) in WIDENING.iter().enumerate() {
+        refused(
+            &row.to_string(),
+            serde_json::json!({
+                "cwd": harness.dir, "provider": provider, "args": args,
+                "mode": "approval_required",
+            }),
+            named,
+        );
+    }
+    for provider in ["claude", "codex"] {
+        refused(
+            "env",
+            serde_json::json!({
+                "cwd": harness.dir, "provider": provider, "mode": "auto",
+                "env": { "CLAUDE_CONFIG_DIR": "/tmp/other" },
+            }),
+            "CLAUDE_CONFIG_DIR",
+        );
+        refused(
+            "launcher",
+            serde_json::json!({
+                "cwd": harness.dir, "provider": provider, "mode": "auto",
+                "launcher": ["sh", "-c"],
+            }),
+            "launcher",
+        );
+    }
+    let listed = caller.answer("list", "thread.list", serde_json::json!({}));
+    assert_eq!(listed["result"]["threads"], serde_json::json!([]), "{listed}");
+    caller.quiet();
+    assert!(harness.sessions.try_recv().is_err(), "a Session started");
+}
+
+/// The two starts #446's verifier got past the cap with: Claude's skip
+/// flag before the cap, and Write and Bash allowed outright. Both are
+/// refused, and nothing is sent.
+#[test]
+fn the_starts_that_got_past_the_cap_are_refused() {
+    let harness = start("delegated-verifier");
+    let mut caller = call(&harness);
+    for (id, args) in [
+        ("1", vec!["--model", "haiku", "--dangerously-skip-permissions"]),
+        ("2", vec!["--allowedTools", "Write", "--allowedTools", "Bash"]),
+    ] {
+        let answer = caller.answer(
+            id,
+            "thread.start",
+            serde_json::json!({
+                "cwd": harness.dir, "args": args, "mode": "approval_required",
+                "prompt": "Use the Write tool to create adv_skip.txt",
+            }),
+        );
+        assert_eq!(answer["error"]["code"], "widens_cap", "{answer}");
+    }
+    caller.quiet();
+    assert!(harness.sessions.try_recv().is_err(), "a Session started");
+    assert!(harness.told.lock().unwrap().prompts.is_empty());
+}
+
+/// An uncapped start is the operator's own: its arguments go to the CLI
+/// as they are, whatever they allow.
+#[test]
+fn an_uncapped_start_keeps_every_argument() {
+    let harness = start("delegated-uncapped");
+    let mut caller = call(&harness);
+    let args = ["--dangerously-skip-permissions", "--allowedTools", "Write"];
+    started(&caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir, "args": args }),
+    ));
+    harness.sessions.recv_timeout(PATIENCE).unwrap();
+    assert_eq!(harness.told.lock().unwrap().args.last().unwrap(), &args);
+}
+
+/// A parked capped Thread is revived under its cap: arguments that would
+/// widen it are refused there too.
+#[test]
+fn a_capped_threads_revive_refuses_what_its_start_would() {
+    let harness = start("delegated-revive-widening");
+    let mut caller = call(&harness);
+    let thread = started(&caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir, "mode": "approval_required" }),
+    ));
+    harness.sessions.recv_timeout(PATIENCE).unwrap();
+    caller.answer("2", "thread.close", serde_json::json!({ "thread": thread }));
+    let refused = caller.answer(
+        "3",
+        "thread.revive",
+        serde_json::json!({ "thread": thread, "args": ["--dangerously-skip-permissions"] }),
+    );
+    assert_eq!(refused["error"]["code"], "widens_cap", "{refused}");
+    caller.quiet();
+    assert!(harness.sessions.try_recv().is_err(), "a Session started");
+}
+
+/// A permission Decision that offers to remember its answer.
+fn remembering_decision() -> SessionEvent {
+    let SessionEvent::DecisionRequested { mut decision } = super::decision() else {
+        unreachable!()
+    };
+    decision.suggestions = vec![ferrite_core::DecisionChoice {
+        label: "Use Accept edits for this session".into(),
+        value: accept_edits(),
+        standing: true,
+    }];
+    SessionEvent::DecisionRequested { decision }
+}
+
+fn accept_edits() -> serde_json::Value {
+    serde_json::json!({ "type": "setMode", "mode": "acceptEdits", "destination": "session" })
+}
+
+fn until_blocked(window: &mut Window, thread: ThreadId) {
+    window.until(|window| {
+        window
+            .mirrors
+            .view(thread)
+            .is_some_and(|view| !view.pending_decisions().is_empty())
+    });
+}
+
+/// Over the API a capped Thread's Decision is allowed once or refused,
+/// never answered with a remembered choice (a mode, a rule), which would
+/// widen what its agent does without asking: that is the operator's own,
+/// from the window on this machine.
+#[test]
+fn only_the_window_answers_a_capped_threads_decision_with_a_remembered_choice() {
+    let harness = start("delegated-remembered");
+    let mut window = attach(&harness.address);
+    let mut caller = call(&harness);
+    let thread = started(&caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir, "mode": "approval_required" }),
+    ));
+    let provider = harness.sessions.recv_timeout(PATIENCE).unwrap();
+    window.watch(thread, None);
+    provider.send(remembering_decision()).unwrap();
+    until_blocked(&mut window, thread);
+    for (id, answer) in [
+        (
+            "2",
+            serde_json::json!({ "kind": "allow_always", "input": {}, "suggestion": accept_edits() }),
+        ),
+        ("3", serde_json::json!({ "kind": "choose", "value": accept_edits() })),
+    ] {
+        let refused = caller.answer(
+            id,
+            "decision.answer",
+            serde_json::json!({ "thread": thread, "decision": "perm_01", "answer": answer }),
+        );
+        assert_eq!(refused["error"]["code"], "widens_cap", "{refused}");
+    }
+    assert!(harness.answers.lock().unwrap().is_empty());
+
+    let handle: protocol::WireHandle =
+        (&window.mirrors.view(thread).unwrap().pending_decisions()[0].handle).into();
+    let taken = window.command(
+        10,
+        Op::Answer {
+            thread,
+            handle,
+            answer: WireAnswer::AllowAlways {
+                input: serde_json::json!({}),
+                suggestion: accept_edits(),
+            },
+        },
+    );
+    assert!(
+        matches!(taken, ServerMessage::Reply { error: None, .. }),
+        "{taken:?}"
+    );
+    assert_eq!(harness.answers.lock().unwrap().len(), 1);
+}
+
+/// An uncapped Thread's Decision takes a remembered choice over the API,
+/// as before.
+#[test]
+fn an_uncapped_threads_decision_takes_a_remembered_choice_over_the_api() {
+    let harness = start("delegated-remembered-uncapped");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    window.watch(thread, None);
+    provider.send(remembering_decision()).unwrap();
+    until_blocked(&mut window, thread);
+    let mut caller = call(&harness);
+    let answered = caller.answer(
+        "1",
+        "decision.answer",
+        serde_json::json!({
+            "thread": thread, "decision": "perm_01",
+            "answer": { "kind": "allow_always", "input": {}, "suggestion": accept_edits() },
+        }),
+    );
+    assert!(answered.get("result").is_some(), "{answered}");
+}
+
+/// `ready` with a `prompt` answers once the agent has taken it: a first
+/// turn that stops at a Decision is an agent up and at work, not one that
+/// is not ready.
+#[test]
+fn a_ready_start_whose_prompt_meets_a_decision_answers_ready() {
+    let harness = start("delegated-ready-blocked");
+    let mut caller = call(&harness);
+    caller.ask(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir, "ready": true, "prompt": "Write the file." }),
+    );
+    let provider = harness.sessions.recv_timeout(PATIENCE).unwrap();
+    sent(&harness, 1);
+    provider.send(super::decision()).unwrap();
+    let answer = caller.next();
+    assert!(answer.get("result").is_some(), "{answer}");
+}
