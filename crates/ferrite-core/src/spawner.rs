@@ -365,6 +365,10 @@ impl Session for SessionWithDefaults {
         self.inner.interrupt()
     }
 
+    fn stop_subagent(&mut self, key: &crate::activity::AgentKey) -> io::Result<()> {
+        self.inner.stop_subagent(key)
+    }
+
     fn respond_to_decision(&mut self, id: &str, answer: crate::DecisionAnswer) -> io::Result<()> {
         self.inner.respond_to_decision(id, answer)
     }
