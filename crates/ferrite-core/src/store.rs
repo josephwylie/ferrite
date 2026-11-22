@@ -538,6 +538,8 @@ enum Record {
         text: String,
         summary: String,
         outcome: crate::wake::Outcome,
+        #[serde(default, skip_serializing_if = "crate::wake::Source::is_pr_watch")]
+        source: crate::wake::Source,
     },
     Text {
         text: String,
@@ -727,6 +729,7 @@ impl LogRecord {
                 text: wake.text.clone(),
                 summary: wake.summary.clone(),
                 outcome: wake.outcome,
+                source: wake.source,
             },
             Input::PromptObservation { sent_at, prompt_id } => Record::PromptObservation {
                 sent_at: sent_at.clone(),
@@ -1576,10 +1579,12 @@ impl Record {
                 text,
                 summary,
                 outcome,
+                source,
             } => Input::Wake(crate::wake::Wake {
                 text: text.clone(),
                 summary: summary.clone(),
                 outcome: *outcome,
+                source: *source,
             }),
             Record::Text { text } => Input::Event(SessionEvent::TextDelta { text: text.clone() }),
             Record::Thinking { text } => {
@@ -5025,6 +5030,7 @@ impl WriterState {
             text: wake.text.clone(),
             summary: wake.summary.clone(),
             outcome: wake.outcome,
+            source: wake.source,
         })
     }
 

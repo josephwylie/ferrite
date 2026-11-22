@@ -578,6 +578,13 @@ pub enum Op {
         url: String,
         watching: bool,
     },
+    /// Cancel `thread`'s Delegate `delegate` as `delegate.cancel` does
+    /// (ADR 0047): the operator's press on its Lineage row. Only a Server
+    /// follows Delegates. Replied `changed`.
+    CancelDelegate {
+        thread: ThreadId,
+        delegate: crate::delegate::DelegateId,
+    },
     Restart {
         when: When,
     },
@@ -633,6 +640,7 @@ impl Op {
             | Op::Say { thread, .. }
             | Op::SearchFiles { thread, .. }
             | Op::WatchPr { thread, .. }
+            | Op::CancelDelegate { thread, .. }
             | Op::Composing { thread, .. } => Some(*thread),
             Op::Open { .. }
             | Op::Bootstrap { .. }

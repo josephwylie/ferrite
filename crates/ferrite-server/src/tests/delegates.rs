@@ -231,7 +231,7 @@ fn a_delegates_reply_wakes_its_parent_in_t3_words() {
         .until(|window| !wakes_in(window, thread).is_empty());
     let (note, said) = wakes_in(&world.window, thread).remove(0);
     assert_eq!(said, woken);
-    assert_eq!(note.summary, "Delegated task \"Login test\" completed");
+    assert_eq!(note.summary, "Delegated task \"Login test\" finished");
     assert_eq!(note.outcome, WakeOutcome::Completed);
     let d1 = world.d1();
     assert_eq!((&d1["status"], &d1["result"]), (&"completed".into(), &"All green.".into()));
@@ -294,6 +294,51 @@ fn a_cancel_stops_it_there_and_an_unreachable_stop_is_owed_until_it_gets_there()
     assert_eq!(again["result"]["status"], "cancelled", "{again}");
     let unknown = world.as_agent("delegate.get", serde_json::json!({ "delegate": "d9" }));
     assert_eq!(unknown["error"]["code"], "unknown_delegate", "{unknown}");
+}
+
+/// The window draws what the parent's digest says of its Delegates, and its
+/// stop is the agent's `delegate.cancel`: the Delegate ends at once, and
+/// holds its parent no longer.
+#[test]
+fn the_window_reads_a_delegate_from_its_digest_and_cancels_it() {
+    use ferrite_core::delegate::{DelegateId, Status};
+    let mut world = world("delegates-window");
+    let (child, _provider) = world.delegate();
+    world.d1_until("status", "running".into());
+    let thread = world.thread;
+    let delegating = |window: &Window| window.digest(thread).map(|digest| digest.delegating);
+    world.window.until(|window| {
+        delegating(window).is_some_and(|seen| seen.delegates.first().is_some_and(|d| d.status == Status::Running))
+    });
+    let seen = delegating(&world.window).unwrap();
+    let row = &seen.delegates[0];
+    assert_eq!(
+        (row.id, row.machine.as_str(), row.thread, row.title.as_deref()),
+        (DelegateId::new(1), "pc", child, Some("Login test"))
+    );
+    assert_eq!(
+        row.server,
+        server_id::open(&world.peer.dir.join("threads")).unwrap(),
+        "the window finds the machine that answers as it"
+    );
+    assert!(seen.holds, "an open one holds its parent");
+
+    let reply = world.window.command(
+        92,
+        Op::CancelDelegate {
+            thread,
+            delegate: DelegateId::new(1),
+        },
+    );
+    assert!(
+        matches!(reply, ServerMessage::Reply { ok: Some(Done::Changed { changed: true }), .. }),
+        "{reply:?}"
+    );
+    assert_eq!(world.d1()["status"], "cancelled");
+    world.window.until(|window| {
+        delegating(window).is_some_and(|seen| seen.delegates[0].status == Status::Cancelled && !seen.holds)
+    });
+    assert!(world.parent.told.lock().unwrap().prompts.is_empty(), "no wake");
 }
 
 /// AC: interrupting the parent's Main leaves its Delegate running (the

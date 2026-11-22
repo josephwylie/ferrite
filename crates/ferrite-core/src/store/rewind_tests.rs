@@ -263,6 +263,7 @@ fn a_fork_watches_nothing_and_a_wake_is_no_prompt() {
             text: "Update on pull request #7".into(),
             outcome: crate::wake::Outcome::Failed,
             summary: "#7: checks failed".into(),
+            source: crate::wake::Source::PrWatch,
         })
         .unwrap();
     writer.flush().unwrap();

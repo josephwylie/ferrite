@@ -1573,6 +1573,15 @@ pub const DIVIDER_GAP: f32 = SPACE_3;
 pub const DIVIDER_PAD_Y: f32 = SPACE_1;
 pub const DIVIDER_ICON: f32 = 12.0;
 pub const DIVIDER_LABEL_GAP: f32 = SPACE_1_5;
+/// A Delegate's divider (T3's `TimelineSystemDivider` with an action): its
+/// label a `PARENT_PILL_PAD_X` × `PARENT_PILL_PAD_Y` pill (`px-2.5 py-1`),
+/// the parent's title in it cut at `PARENT_DETAIL_W` (`max-w-80`).
+pub const PARENT_PILL_PAD_X: f32 = 10.0;
+pub const PARENT_PILL_PAD_Y: f32 = SPACE_1;
+/// The pressable pill's height: its line, padding and hairline border, set
+/// outright because a kit button keeps its own height otherwise.
+pub const PARENT_PILL_H: f32 = LH_META + 2.0 * (PARENT_PILL_PAD_Y + HAIRLINE_W);
+pub const PARENT_DETAIL_W: f32 = 320.0;
 
 /// **A subagent** (T3's `SubagentTimelineLink`): an `AGENT_ROW_PAD_X` ×
 /// `AGENT_ROW_PAD_Y` row at `AGENT_ROW_RADIUS`, `AGENT_ROW_GAP` between its

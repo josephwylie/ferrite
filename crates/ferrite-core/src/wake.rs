@@ -18,6 +18,7 @@ pub struct Wake {
     pub outcome: Outcome,
     /// `#426: checks failed, new comments`.
     pub summary: String,
+    pub source: Source,
 }
 
 impl Wake {
@@ -25,15 +26,36 @@ impl Wake {
         WakeNote {
             summary: self.summary.clone(),
             outcome: self.outcome,
+            source: self.source,
         }
     }
 }
 
-/// What a wake's notice row draws: its line and how it reads the news.
+/// What a wake's notice row draws: its line, how it reads the news, and
+/// whose news it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WakeNote {
     pub summary: String,
     pub outcome: Outcome,
+    pub source: Source,
+}
+
+/// Whose news a wake carries (T3's notification `source.kind`): its row's
+/// icon says it, an eye for a watch (`monitor`) and a bot for Delegates
+/// (`delegated_task`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    /// A wake logged before a wake said whose it was was a watch's.
+    #[default]
+    PrWatch,
+    Delegates,
+}
+
+impl Source {
+    pub fn is_pr_watch(&self) -> bool {
+        *self == Self::PrWatch
+    }
 }
 
 /// How the notice reads the news (T3's notification outcome).

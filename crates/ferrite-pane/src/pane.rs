@@ -19,10 +19,10 @@ mod working;
 mod work_row;
 mod wrap_up;
 pub(crate) use agents::{is_agent, render_agent, render_agent_card, AgentCardCx, AgentRowCx};
-pub use agents::{AgentClock, AgentFace, AgentFaces, AgentRun};
+pub use agents::{AgentClock, AgentFace, AgentFaces, AgentRun, Elsewhere};
 pub use background_work::{
-    background_work_line, inline_button, present as present_background_work, BackgroundTask,
-    WorkKind,
+    background_work_line, inline_action, inline_button, now_line, present as present_background_work,
+    BackgroundTask, NowLine, WorkKind,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use composer::model_label;
@@ -2490,11 +2490,24 @@ pub(crate) fn prompt_clamps(line: &str) -> bool {
             || words.split('\n').count() > theme::PROMPT_CLAMP_LINES)
 }
 
+/// A wake row's icon, as T3's `workEntryIconName` picks a notification's:
+/// the alert for a failure, else its source's.
+fn wake_icon(wake: &ferrite_core::wake::WakeNote) -> ferrite_core::transcript::tools::ToolIcon {
+    use ferrite_core::transcript::tools::ToolIcon;
+    use ferrite_core::wake::{Outcome, Source};
+    match (wake.outcome, wake.source) {
+        (Outcome::Failed, _) => ToolIcon::Alert,
+        (_, Source::PrWatch) => ToolIcon::Eye,
+        (_, Source::Delegates) => ToolIcon::Bot,
+    }
+}
+
 /// A prompt the Server sent on its own (T3's notification work row,
 /// `WorkEntryLogRow`): never the operator's bubble. Its summary on one line
 /// (`#412: checks failed, new comments`) in an update's ink, by the eye of
-/// a watch, or the alert when the news is a failure; opened, the whole
-/// text it woke the agent with, past the icon gutter.
+/// a watch or the bot of Delegates (T3's `workEntryIconName`), or the alert
+/// when the news is a failure; opened, the whole text it woke the agent
+/// with, past the icon gutter.
 fn wake_row(
     block: &Block,
     wake: &ferrite_core::wake::WakeNote,
@@ -2503,16 +2516,12 @@ fn wake_row(
     expanded: bool,
     disclosure: Option<Disclosure>,
 ) -> AnyElement {
-    use ferrite_core::transcript::tools::ToolIcon;
     let selection = row_cx.selection;
     let (overlay, _, targeted) = disclosure_parts(disclosure);
     let summary = SharedString::from(wake.summary.clone());
     let header = work_row::work_row(work_row::WorkRow {
         key: SharedString::from(format!("wake-row-{:?}", block.id)),
-        icon: match wake.outcome {
-            ferrite_core::wake::Outcome::Failed => ToolIcon::Alert,
-            _ => ToolIcon::Eye,
-        },
+        icon: wake_icon(wake),
         failed: false,
         error: false,
         label: div()
@@ -4079,6 +4088,22 @@ mod tests {
         );
     }
 
+    /// A wake's icon is its source's, as T3's: a watch's eye, Delegates'
+    /// bot, and the alert for either's failure.
+    #[test]
+    fn a_wake_wears_its_sources_icon() {
+        use ferrite_core::transcript::tools::ToolIcon;
+        use ferrite_core::wake::{Outcome, Source, WakeNote};
+        let note = |outcome, source| WakeNote {
+            summary: String::new(),
+            outcome,
+            source,
+        };
+        assert_eq!(wake_icon(&note(Outcome::Updated, Source::PrWatch)), ToolIcon::Eye);
+        assert_eq!(wake_icon(&note(Outcome::Completed, Source::Delegates)), ToolIcon::Bot);
+        assert_eq!(wake_icon(&note(Outcome::Failed, Source::Delegates)), ToolIcon::Alert);
+    }
+
     /// A wake the Server sent is T3's notification row, never the
     /// operator's bubble: its summary by the alert of a failure, and its
     /// whole text only once it is opened.
@@ -4089,6 +4114,7 @@ mod tests {
             text: "Update on pull request #412 (https://github.com/o/r/pull/412), which Ferrite is watching for you:\n- Checks failed on abc1234:\n  - test".into(),
             outcome: ferrite_core::wake::Outcome::Failed,
             summary: "#412: checks failed, new comments".into(),
+            source: ferrite_core::wake::Source::PrWatch,
         }));
         let blocks: Vec<Block> = transcript.blocks().to_vec();
         let wake = blocks.iter().find(|block| block.wake.is_some()).unwrap().id;
@@ -4328,6 +4354,7 @@ mod tests {
                     cited: Default::default(),
                     note: None,
                     earlier: None,
+                    parent: None,
                     queued: 0,
                 },
                 crate::transcript::TranscriptBody {
@@ -5001,10 +5028,10 @@ mod tests {
         );
         let blocks = transcript.blocks();
         assert_eq!(
-            text::group_live(blocks).first().map(|block| block.id),
+            text::group_live(blocks, &AgentFaces::default()).first().map(|block| block.id),
             Some(blocks[5].id)
         );
-        assert!(text::group_live(&blocks[..5]).is_empty());
+        assert!(text::group_live(&blocks[..5], &AgentFaces::default()).is_empty());
     }
 
     #[gpui::test]

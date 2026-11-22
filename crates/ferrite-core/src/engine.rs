@@ -1071,11 +1071,21 @@ impl Thread {
         self.busy() || self.activity.view().main_operator_turn() || self.native_queue.pending()
     }
 
-    /// Tell its Activity what the Server's watching holds of it (ADR 0046):
-    /// a new Activity knows nothing of it. Answers whether that moved.
-    fn sync_watching(&mut self) -> bool {
-        let watching = crate::pr_watch::Watching::of(&self.pr_watch, self.wake_waiting);
-        self.activity.activity.set_watching(watching)
+    /// Tell its Activity what the Server holds of it: its PR watches and
+    /// waiting wake (ADR 0046) and its Delegates (ADR 0047). A new Activity
+    /// knows nothing of them. Answers whether that moved.
+    fn sync_server_holds(&mut self) -> bool {
+        let (watching, delegating) = self.server_holds();
+        let activity = &mut self.activity.activity;
+        activity.set_watching(watching) | activity.set_delegating(delegating)
+    }
+
+    /// What the Server holds of it, as its digest says it.
+    fn server_holds(&self) -> (crate::pr_watch::Watching, crate::delegate::Delegating) {
+        (
+            crate::pr_watch::Watching::of(&self.pr_watch, self.wake_waiting),
+            crate::delegate::Delegating::of(&self.delegates),
+        )
     }
 
     /// Whether work goes on behind Main: its Subagents, its transcript's
@@ -3171,14 +3181,14 @@ impl Engine {
             .set_pr_watch(thread, pr_watch.clone(), Some(&mut state.writer))
             .map_err(io::Error::other)?;
         state.pr_watch = pr_watch;
-        self.watching_moved(thread);
+        self.server_holds_moved(thread);
         Ok(())
     }
 
-    /// A Thread's watches or its waiting wake moved: its digest is refolded
-    /// at once when what it says of them moved, a let-go Thread's held
-    /// again for it.
-    fn watching_moved(&mut self, thread: ThreadId) {
+    /// A Thread's watches, its waiting wake or its Delegates moved: its
+    /// digest is refolded at once when what it says of them moved, a
+    /// let-go Thread's held again for it.
+    fn server_holds_moved(&mut self, thread: ThreadId) {
         let Some(state) = self.threads.get(&thread) else {
             return;
         };
@@ -3186,17 +3196,15 @@ impl Engine {
             .published
             .get(&thread)
             .and_then(|published| published.digest.as_ref())
-            .map(|digest| &digest.watching);
-        if !state.held
-            && told == Some(&crate::pr_watch::Watching::of(&state.pr_watch, state.wake_waiting))
-        {
+            .map(|digest| (digest.watching.clone(), digest.delegating.clone()));
+        if !state.held && told == Some(state.server_holds()) {
             return;
         }
         self.hold(thread);
         if self
             .threads
             .get_mut(&thread)
-            .is_some_and(Thread::sync_watching)
+            .is_some_and(Thread::sync_server_holds)
         {
             self.published.entry(thread).or_default().digest_owed = true;
         }
@@ -3278,6 +3286,7 @@ impl Engine {
         state.delegates = delegates;
         // What it waits on decides its Attention.
         state.state_changed = true;
+        self.server_holds_moved(thread);
         Ok(true)
     }
 
@@ -3313,7 +3322,7 @@ impl Engine {
         };
         if state.wake_waiting != waiting {
             state.wake_waiting = waiting;
-            self.watching_moved(thread);
+            self.server_holds_moved(thread);
         }
     }
 
@@ -3604,7 +3613,7 @@ impl Engine {
         // says its Pane changed (below, after the walk).
         for (id, thread) in self.threads.walk_mut() {
             let mut update = PaneUpdate::new(*id);
-            if thread.held && thread.sync_watching() {
+            if thread.held && thread.sync_server_holds() {
                 self.published.entry(*id).or_default().digest_owed = true;
             }
             if let Some(session) = thread.session.as_ref().and_then(SessionLifecycle::session) {
@@ -4839,6 +4848,19 @@ impl Engine {
         self.notifications.fixture_backdate(thread, at);
     }
 
+    /// Fixtures only: `thread` was delegated from `from` (ADR 0047), as
+    /// its open would have said. Its next digest says so at once.
+    pub fn fixture_delegated_from(&mut self, thread: ThreadId, from: crate::DelegatedFrom) {
+        let Some(state) = self.threads.get_mut(&thread) else {
+            return;
+        };
+        state.delegated_from = Some(from);
+        if let Some(published) = self.published.get_mut(&thread) {
+            published.digest = None;
+        }
+        self.hold(thread);
+    }
+
     /// Fixtures only (the parity scenes): a Notice for `thread`, born now
     /// (`Notifications::fixture_push`).
     pub fn fixture_notice(&mut self, thread: ThreadId, outcome: crate::TurnOutcome) {
@@ -5407,6 +5429,7 @@ impl Engine {
             published.digest_at = published.digest.is_some().then_some(now);
             let digest = Digest {
                 at_work,
+                delegated_from: thread.delegated_from.clone(),
                 ..Digest::of(id, activity, shown, self.boot)
             };
             if published.digest.as_ref() != Some(&digest) {

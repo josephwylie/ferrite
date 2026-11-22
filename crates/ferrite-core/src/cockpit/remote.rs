@@ -984,6 +984,11 @@ impl Remote {
         })
     }
 
+    /// A `cancel_delegate`: answered once the Server has cancelled it.
+    pub(crate) fn cancel_delegate(&mut self, op: Op) -> io::Result<Receiver<io::Result<()>>> {
+        self.ask(op, |done| matches!(done, Done::Changed { .. }).then_some(()))
+    }
+
     /// What a GitHub start's picker lists (#225).
     pub(crate) fn github_names(
         &mut self,

@@ -631,7 +631,10 @@ into plain values that draw themselves (`cockpit/details/content.rs`); a
 watched PR's eye is one more value on its `PrBlock`, the watch's URL from
 the Thread's digest (`Facts::watched_pr`), and its press calls the root's
 `watch_pr` (`cockpit/pr_watching.rs`), as the palette and the PR's context
-menu do.
+menu do. Main's Lineage rows for Delegates and for the Thread that
+delegated it are plain values from the digest too (`ThreadFacts::delegating`
+and `delegated_from`, ADR 0047); a row's press calls the root's
+`open_elsewhere` and its stop `cancel_delegate` (`cockpit/delegates.rs`).
 What stays on the root is the root's: moving the keyboard between the card
 and the Composer, fitting the card to the Pane's width as the columns
 move, and closing a card whose Pane lost the focus. A view would move

@@ -275,7 +275,7 @@ pub(in crate::cockpit) fn label(call: &ToolBlock) -> SharedString {
 
 fn glyph(work: &Work) -> &'static str {
     match work.task.kind {
-        WorkKind::Subagent => icons::SUBAGENTS,
+        WorkKind::Subagent | WorkKind::Delegate => icons::SUBAGENTS,
         WorkKind::Command => icons::TERMINAL,
         WorkKind::Monitor => icons::EYE,
     }

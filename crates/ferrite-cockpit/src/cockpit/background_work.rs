@@ -26,7 +26,7 @@ use super::panel::background::label;
 use super::*;
 
 use ferrite_core::activity::AgentKey;
-use ferrite_core::pr_watch::WatchedPr;
+use crate::facts::ThreadFacts;
 use ferrite_core::transcript::tools::{policy, ToolKind};
 use ferrite_core::transcript::ToolBlock;
 use ferrite_core::ThreadKey;
@@ -63,8 +63,9 @@ pub(super) enum StopState {
 
 /// One piece of work still running. A command is the provider's task
 /// (`call` is the call that launched it, which holds its output); a
-/// subagent is an agent launched into the background, or any still
-/// working after Main's turn; a monitor is a PR the Server watches.
+/// subagent is an agent launched into the background, or any still working
+/// after Main's turn; a Delegate is one open on another machine; a monitor
+/// is a PR the Server watches.
 #[derive(Clone)]
 pub(super) struct Work {
     pub(super) task: BackgroundTask,
@@ -88,10 +89,10 @@ impl Work {
 
 /// Every piece of background work the Thread knows of, whichever view asks:
 /// the provider's tasks, the agents still working, the calls that launched
-/// work into the background that nothing else accounts for, and the PRs
-/// the Server watches for it as the Facts hold them (`watched`), which the
-/// details card reads too.
-fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>, watched: &[WatchedPr]) -> Vec<Work> {
+/// work into the background that nothing else accounts for, and what the
+/// Server holds of it as the Facts hold it, which the details card reads
+/// too: the PRs it watches and its open Delegates.
+fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>, facts: Option<&ThreadFacts>) -> Vec<Work> {
     use ferrite_core::activity::AgentStatus;
     use ferrite_core::progress::TaskStatus;
     let transcript = open.transcript();
@@ -179,6 +180,9 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>, watched: &[Watched
             holds: true,
         });
     }
+    let (watched, delegates) = facts.map_or((&[][..], &[][..]), |facts| {
+        (&facts.watching.prs[..], &facts.delegating.delegates[..])
+    });
     // T3's PR watch task: one per watched PR, held or not.
     work.extend(watched.iter().map(|pr| Work {
         task: BackgroundTask {
@@ -190,6 +194,24 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>, watched: &[Watched
         stop: None,
         call: None,
         holds: pr.holds,
+    }));
+    // Each open Delegate, by its title and machine as its transcript row
+    // names it in T3 (`on pc`), doing what holds it up there. Its stop is
+    // its Lineage row's: the line's stops what runs here.
+    work.extend(delegates.iter().filter(|delegate| !delegate.status.ended()).map(|delegate| Work {
+        task: BackgroundTask {
+            kind: WorkKind::Delegate,
+            label: format!(
+                "{} on {}",
+                delegate.title.as_deref().unwrap_or("Delegate"),
+                delegate.machine
+            ),
+            launched: None,
+            activity: delegate.problem.clone(),
+        },
+        stop: None,
+        call: None,
+        holds: true,
     }));
     work
 }
@@ -231,7 +253,7 @@ impl BackgroundInputs {
     pub(super) fn line_work(&self) -> Vec<Work> {
         let mut work = self.running.clone();
         if self.busy {
-            work.retain(|work| work.task.kind != WorkKind::Subagent);
+            work.retain(|work| !matches!(work.task.kind, WorkKind::Subagent | WorkKind::Delegate));
         }
         work
     }
@@ -269,11 +291,12 @@ fn stop_leaves(work: &[Work], targets: &[StopTarget]) -> Option<String> {
             .filter(|work| work.task.kind == kind && !work.stop.as_ref().is_some_and(|stop| targets.contains(stop)))
             .count()
     };
-    let (commands, agents) = (left(WorkKind::Command), left(WorkKind::Subagent));
+    let (commands, agents, delegates) =
+        (left(WorkKind::Command), left(WorkKind::Subagent), left(WorkKind::Delegate));
     let counted = |count: usize, noun: &str| {
         (count > 0).then(|| format!("{count} {noun}{}", if count == 1 { "" } else { "s" }))
     };
-    let parts: Vec<String> = [counted(commands, "command"), counted(agents, "agent")]
+    let parts: Vec<String> = [counted(commands, "command"), counted(agents, "agent"), counted(delegates, "delegate")]
         .into_iter()
         .flatten()
         .collect();
@@ -581,8 +604,7 @@ impl CockpitView {
     pub(super) fn background_inputs(&self, thread: ThreadKey, outputs: bool, cx: &App) -> Option<BackgroundInputs> {
         let open = self.cockpit.read(cx).thread(thread)?;
         let transcript = open.transcript();
-        let watched = self.facts.get(thread).map_or(&[][..], |facts| &facts.watching.prs);
-        let running = running_work(&open, watched);
+        let running = running_work(&open, self.facts.get(thread));
         let refusals = running
             .iter()
             .filter_map(|work| match &work.stop {

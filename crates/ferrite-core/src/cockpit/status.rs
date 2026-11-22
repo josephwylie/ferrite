@@ -26,6 +26,8 @@ pub struct ServerStatus {
     digests: HashMap<ThreadId, crate::digest::Digest>,
     /// The pending Decisions.
     waiting: BTreeMap<(ThreadId, WireHandle), WireDecision>,
+    /// The Threads not open, as its Store says them; `None` until heard.
+    parked: Option<Vec<ThreadId>>,
     /// The Server's Notices as last heard; `None` until the first snapshot.
     notifications: Option<Notifications>,
     /// The snapshot's: a state message older than it is dropped.
@@ -71,6 +73,7 @@ impl ServerStatus {
             states: HashMap::new(),
             digests: HashMap::new(),
             waiting: BTreeMap::new(),
+            parked: None,
             notifications: None,
             revision: 0,
         }
@@ -169,6 +172,18 @@ impl ServerStatus {
         self.states.get(&thread)?.title.as_deref()
     }
 
+    /// What an open Thread's digest last said.
+    pub fn digest(&self, thread: ThreadId) -> Option<&crate::digest::Digest> {
+        self.digests.get(&thread)
+    }
+
+    /// Whether the Server still has `thread`, open or parked: `None` until
+    /// it has said which Threads it parked (a deleted one is neither).
+    pub fn holds(&self, thread: ThreadId) -> Option<bool> {
+        let parked = self.parked.as_ref()?;
+        Some(self.open.contains(&thread) || parked.contains(&thread))
+    }
+
     pub fn provider(&self, thread: ThreadId) -> Option<Provider> {
         Some(self.states.get(&thread)?.provider)
     }
@@ -198,6 +213,9 @@ impl ServerStatus {
             .collect();
         self.revision = snapshot.revision;
         self.open = snapshot.roster.open;
+        self.parked = snapshot
+            .parked
+            .map(|parked| parked.into_iter().map(|parked| parked.thread).collect());
         self.states = snapshot
             .threads
             .into_iter()
@@ -232,6 +250,10 @@ impl ServerStatus {
                 self.notifications = Some(Notifications::from_wire(&notices));
                 true
             }
+            ServerMessage::Parked { revision, threads } if revision >= self.revision => {
+                self.parked = Some(threads.into_iter().map(|parked| parked.thread).collect());
+                false
+            }
             ServerMessage::Decision {
                 thread,
                 handle,
@@ -243,5 +265,73 @@ impl ServerStatus {
             }
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{ParkedThread, SharedRoster};
+
+    fn parked(thread: u64) -> ParkedThread {
+        ParkedThread {
+            thread: ThreadId::new(thread),
+            provider: None,
+            title: None,
+            prompt_title: None,
+            workspace: None,
+            session_project_root: None,
+            project: None,
+            last_used_ms: None,
+            turns: None,
+            subagents: None,
+            owner: None,
+        }
+    }
+
+    /// A Delegate's row asks the machine of the Thread that delegated it
+    /// whether that Thread is still there (T3's `DelegatedFromRow`): open
+    /// or parked it is; one in neither was deleted; until the Server says
+    /// what it parked, nothing is claimed.
+    #[test]
+    fn a_status_link_says_whether_its_server_still_has_a_thread() {
+        let mut status = ServerStatus::new(
+            std::env::temp_dir().join("ferrite-status-holds"),
+            Endpoint::Unavailable,
+            Peer {
+                name: "test".into(),
+                version: "0".into(),
+            },
+        );
+        let snapshot = |parked: Option<Vec<ParkedThread>>| Snapshot {
+            boot_id: "pc".into(),
+            revision: 1,
+            threads: vec![],
+            roster: SharedRoster {
+                open: vec![ThreadId::new(1)],
+                ..SharedRoster::default()
+            },
+            decisions: vec![],
+            groups: None,
+            registry: None,
+            notices: None,
+            providers: None,
+            parked,
+            digests: None,
+            factory: None,
+        };
+        status.fixture_receive(ServerMessage::Snapshot(snapshot(None)));
+        assert_eq!(status.holds(ThreadId::new(1)), None, "not yet told what it parked");
+
+        status.fixture_receive(ServerMessage::Snapshot(snapshot(Some(vec![parked(2)]))));
+        assert_eq!(status.holds(ThreadId::new(1)), Some(true), "open");
+        assert_eq!(status.holds(ThreadId::new(2)), Some(true), "parked");
+        assert_eq!(status.holds(ThreadId::new(3)), Some(false), "deleted");
+
+        status.fixture_receive(ServerMessage::Parked {
+            revision: 2,
+            threads: vec![],
+        });
+        assert_eq!(status.holds(ThreadId::new(2)), Some(false), "deleted since");
     }
 }
