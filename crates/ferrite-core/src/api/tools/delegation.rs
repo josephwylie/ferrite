@@ -148,6 +148,8 @@ fn said(refusal: Refusal) -> Failure {
     Failure::new(code, message)
 }
 
+/// The tools as the agent is told of them, each schema closed as T3's
+/// are: [`super::checked`] holds a call to it.
 pub(super) fn definitions() -> Vec<Definition> {
     let here_or_there = json!({
         "type": "string",
@@ -159,7 +161,7 @@ pub(super) fn definitions() -> Vec<Definition> {
         "maxLength": 256,
         "description": "Reuse it to retry the same call. A new call gets a new key.",
     });
-    vec![
+    let mut definitions = vec![
         Definition {
             name: "orchestrator_capabilities".into(),
             description: "List providers, models, options, and runtime modes for `delegate_task`. Short list. `search` finds others. Any catalog model works.".into(),
@@ -296,7 +298,11 @@ pub(super) fn definitions() -> Vec<Definition> {
                 },
             }),
         },
-    ]
+    ];
+    for definition in &mut definitions {
+        super::close(&mut definition.input_schema);
+    }
+    definitions
 }
 
 /// Run `tool` for `thread`'s agent with `arguments` its schema took,

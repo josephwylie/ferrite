@@ -148,11 +148,14 @@ and `agent.result`. Peers is the Server's client of a saved machine.
     does; without one it names what this Thread hands on, from
     `delegate.defaults`: the model its Session announced it runs, so a
     parent started on a model by its launch arguments hands on that one.
-  - Every tool's schema is closed (`additionalProperties: false` on each
-    object), and one check in `api::tools` refuses, in T3's words, a call
-    naming anything else or a value its schema rules out, for every tool
-    a Thread has. T3 leaves nested objects lenient because its schemas
-    merge unions; Ferrite's do not, so it checks them too.
+  - Each of these tools' schemas is closed (`additionalProperties: false`
+    on each object), and one check in `api::tools` refuses, in T3's words,
+    a call to one naming anything else or a value its schema rules out.
+    T3 leaves nested objects lenient because its schemas merge unions;
+    Ferrite's do not, so it checks them too. A Thread's other tools (the
+    Factory's, the PR watch) read a call as their operations' parameters
+    do, as before: a Worker's report naming another Worker is still its
+    own.
   - The Server's refusals name API parameters in backticks and modes by
     API word; the tool layer says each in the tools' names with T3's code
     (`widens_cap` is `runtime_mode_escalation_denied`, `unknown_delegate`

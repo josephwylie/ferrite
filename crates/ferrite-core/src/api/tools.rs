@@ -10,10 +10,12 @@
 //! call reaches the Server as an API request whose caller is the Thread
 //! its Session was spawned for: the agent never names it.
 //!
-//! Every tool's schema names all it takes (`additionalProperties: false`
-//! on each object) and a call naming anything else is refused in T3's
-//! words before the Server hears it ([`checked`]). The agent is told of
-//! the tools as T3 tells its agents ([`ThreadTools::instructions`]).
+//! Each Delegate tool's schema names all it takes (`additionalProperties:
+//! false` on each object) and a call to one naming anything else is
+//! refused in T3's words before the Server hears it ([`checked`]). Every
+//! other tool reads its call as its operation's parameters do: a Worker's
+//! report naming a `worker` is still its own Thread's. The agent is told
+//! of the tools as T3 tells its agents ([`ThreadTools::instructions`]).
 //!
 //! The CLI (`ferrite report …`) stays for an agent without them: a Codex
 //! Thread resumed from before they were offered keeps its old tools.
@@ -196,10 +198,6 @@ impl ThreadTools {
             })
             .chain(pr)
             .chain(self.delegation.then(delegation::definitions).into_iter().flatten())
-            .map(|mut definition| {
-                close(&mut definition.input_schema);
-                definition
-            })
             .collect()
     }
 
@@ -234,14 +232,15 @@ impl ThreadTools {
         main: bool,
         respond: impl FnOnce(Answer) + Send + 'static,
     ) {
-        let Some(definition) = self.definitions().into_iter().find(|d| d.name == tool) else {
-            return respond(refused(format!("Ferrite offers no tool {tool}")));
-        };
-        let arguments = match checked(tool, &definition.input_schema, arguments) {
-            Ok(arguments) => arguments,
-            Err(refusal) => return respond(refused(refusal)),
-        };
         if self.delegates(tool) {
+            let schema = delegation::definitions()
+                .into_iter()
+                .find(|definition| definition.name == tool)
+                .map(|definition| definition.input_schema);
+            let arguments = match checked(tool, &schema.unwrap_or_default(), arguments) {
+                Ok(arguments) => arguments,
+                Err(refusal) => return respond(refused(refusal)),
+            };
             let (heard, thread, tool) = (self.heard.clone(), self.thread, tool.to_string());
             std::thread::spawn(move || {
                 let ask = |method| ask(&heard, thread, method);
@@ -258,7 +257,7 @@ impl ThreadTools {
         let request: Request = match serde_json::from_value(json!({
             "id": "1",
             "method": operation.name,
-            "params": &arguments,
+            "params": arguments,
             "caller": self.thread,
         })) {
             Ok(request) => request,
@@ -419,7 +418,7 @@ fn mistyped(schema: &Value, value: &Value) -> Option<String> {
     (!types.iter().any(|kind| is(kind))).then(|| types.join(" | "))
 }
 
-/// Every object a tool's schema describes names all it takes:
+/// Every object a Delegate tool's schema describes names all it takes:
 /// `additionalProperties: false`, which [`checked`] holds a call to.
 fn close(schema: &mut Value) {
     match schema {
@@ -699,18 +698,6 @@ mod tests {
         assert!(hear.try_recv().is_err(), "nothing reached the Server");
     }
 
-    /// Every tool a Thread can be offered, of every kind of Thread.
-    fn every_tool() -> Vec<Definition> {
-        let (heard, _) = mpsc::channel();
-        let tools = Tools::new(heard);
-        let worker = ThreadOwner::Task("t-1".into());
-        let coordinator = ThreadOwner::Factory(serde_json::from_value(json!(3)).unwrap());
-        [Some(&worker), Some(&coordinator), None]
-            .into_iter()
-            .flat_map(|owner| tools.for_thread(ThreadId::new(7), owner, true).definitions())
-            .collect()
-    }
-
     /// Each object a schema describes, and where.
     fn objects<'a>(schema: &'a Value, at: String, found: &mut Vec<(String, &'a Value)>) {
         match schema {
@@ -731,14 +718,22 @@ mod tests {
         }
     }
 
-    /// Every tool's schema, and each object in it, names all it takes.
+    /// Each Delegate tool's schema, and each object in it, names all it
+    /// takes; every other tool's is its operation's own, as before.
     #[test]
-    fn every_tools_schema_names_all_it_takes() {
-        let tools = every_tool();
-        assert!(tools.iter().any(|tool| tool.name == "delegate_task"));
-        assert!(tools.iter().any(|tool| tool.name == "report_outcome"));
-        assert!(tools.iter().any(|tool| tool.name == "proposal_raise"));
-        for tool in &tools {
+    fn each_delegate_tools_schema_names_all_it_takes() {
+        let (heard, _) = mpsc::channel();
+        let worker = ThreadOwner::Task("t-1".into());
+        let offered = Tools::new(heard).for_thread(ThreadId::new(7), Some(&worker), true).definitions();
+        let (delegates, others): (Vec<_>, Vec<_>) = offered
+            .iter()
+            .partition(|tool| delegation::NAMES.contains(&tool.name.as_str()));
+        assert_eq!(delegates.len(), delegation::NAMES.len());
+        assert!(others.iter().any(|tool| tool.name == "report_outcome"));
+        for tool in others {
+            assert!(tool.input_schema.get("additionalProperties").is_none(), "{}", tool.name);
+        }
+        for tool in delegates {
             assert_eq!(tool.input_schema["type"], "object", "{}", tool.name);
             assert_eq!(tool.input_schema["additionalProperties"], false, "{}", tool.name);
             let mut found = Vec::new();
@@ -759,9 +754,9 @@ mod tests {
         (text, hear.try_recv().is_ok())
     }
 
-    /// A call naming what its tool does not take, or a value its schema
-    /// rules out, is refused in T3's words before the Server hears it:
-    /// one check for every tool.
+    /// A call naming what its Delegate tool does not take, or a value its
+    /// schema rules out, is refused in T3's words before the Server hears
+    /// it: one check for every Delegate tool.
     #[test]
     fn a_call_naming_what_its_tool_does_not_take_is_refused_without_asking() {
         let (heard, hear) = mpsc::channel();
@@ -769,11 +764,6 @@ mod tests {
         let tools = Tools::new(heard).for_thread(ThreadId::new(7), Some(&worker), true);
         let there = json!({ "machineId": "pc" });
         for (tool, arguments, said) in [
-            (
-                "report_outcome",
-                json!({ "outcome": "finished", "summary": "Done", "worker": 8 }),
-                "Invalid parameters for tool 'report_outcome': Unknown argument \"worker\". Accepted arguments: outcome, summary.",
-            ),
             (
                 "delegate_task",
                 json!({ "task": "x", "target": there, "bogus": 1, "later": true }),
@@ -798,11 +788,6 @@ mod tests {
                 "machine_list",
                 json!({ "reach": false }),
                 "Invalid parameters for tool 'machine_list': Unknown argument \"reach\". Accepted arguments: none.",
-            ),
-            (
-                "watch_pull_request",
-                json!({ "number": "7" }),
-                "Invalid parameters for tool 'watch_pull_request': Expected integer, got \"7\" at number.",
             ),
         ] {
             assert_eq!(answer(&tools, &hear, tool, arguments), (said.to_string(), false), "{tool}");
