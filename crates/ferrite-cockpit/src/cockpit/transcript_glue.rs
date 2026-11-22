@@ -98,6 +98,7 @@ pub(super) fn agent_faces(activity: ActivityView<'_>) -> AgentFaces {
                 summary,
                 result,
                 clock,
+                on: None,
             },
         );
     }
@@ -159,16 +160,36 @@ fn failure_words(message: &str) -> SharedString {
 impl CockpitView {
     /// The row after a transcript's last: the pending Decision, as its
     /// card is built for the tail (`CockpitView::decision_tail`, the
-    /// Decision card's owner), else the failure strip, else the
-    /// background-work line.
+    /// Decision card's owner), else the failure strip or the
+    /// background-work line, under the line that says a Delegate waits on
+    /// the operator (T3's `ThreadNow`: the line that needs you first).
     pub(super) fn transcript_tail(
         &self,
         index: usize,
         cx: &Context<Self>,
     ) -> Option<TranscriptTail> {
-        self.decision_tail(index, cx)
-            .or_else(|| self.failure_tail(index, cx.weak_entity(), cx))
-            .or_else(|| self.background_work_tail(index, cx))
+        if let Some(decision) = self.decision_tail(index, cx) {
+            return Some(decision);
+        }
+        let below = self
+            .failure_tail(index, cx.weak_entity(), cx)
+            .or_else(|| self.background_work_tail(index, cx));
+        match (self.delegate_waiting_tail(index, cx), below) {
+            (Some(above), Some(below)) => Some(TranscriptTail {
+                key: above.key ^ below.key.rotate_left(1),
+                render: std::rc::Rc::new(move |window: &mut Window, cx: &mut App| {
+                    use gpui::prelude::*;
+                    gpui::div()
+                        .flex()
+                        .flex_col()
+                        .w_full()
+                        .child((above.render)(window, cx))
+                        .child((below.render)(window, cx))
+                        .into_any_element()
+                }),
+            }),
+            (above, below) => above.or(below),
+        }
     }
 
     /// The failure strip (SPEC §5.9 item 4) under Main's transcript when the

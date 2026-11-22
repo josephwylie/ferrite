@@ -621,6 +621,7 @@ impl RenderOnce for LiveClock {
         let selector = self.selector;
         div()
             .debug_selector(move || selector.into())
+            .whitespace_nowrap()
             .child(SharedString::from((self.format)(elapsed)))
     }
 }
@@ -767,6 +768,34 @@ pub(crate) fn plan_card(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Cockpit lays a live clock out at the reading it had; the overlay
+    /// draws the next in that same box. `22s` in the box of `2s` stays on
+    /// one line.
+    #[gpui::test]
+    fn a_counting_clock_stays_on_one_line_in_a_box_a_digit_short(cx: &mut gpui::TestAppContext) {
+        struct Short;
+        impl Render for Short {
+            fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                div()
+                    .w(px(10.))
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .child(counting_clock(
+                        ferrite_core::clock::instant(),
+                        "short-clock",
+                        |_| "22s".to_owned(),
+                    ))
+            }
+        }
+        let (_, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            Short
+        });
+        cx.run_until_parked();
+        let clock = cx.debug_bounds("short-clock").expect("the clock");
+        assert_eq!(clock.size.height, px(16.), "one line");
+    }
     use ferrite_core::transcript::{Input, Lexer};
     use ferrite_core::SessionEvent;
     use std::sync::Arc;

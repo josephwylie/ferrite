@@ -1067,6 +1067,9 @@ pub struct Activity {
     /// (`set_watching`): the Engine from the Thread's watches, a window
     /// from the digest.
     watching: crate::pr_watch::Watching,
+    /// What the Server holds of the Delegates the Thread started (ADR
+    /// 0047), set as `watching` is (`set_delegating`).
+    delegating: crate::delegate::Delegating,
 }
 
 impl Default for Activity {
@@ -1093,6 +1096,7 @@ impl Activity {
             limited: false,
             main_operator_turn: false,
             watching: Default::default(),
+            delegating: Default::default(),
         }
     }
 
@@ -1101,6 +1105,14 @@ impl Activity {
     pub fn set_watching(&mut self, watching: crate::pr_watch::Watching) -> bool {
         let moved = self.watching != watching;
         self.watching = watching;
+        moved
+    }
+
+    /// Say what the Server holds of the Thread's Delegates. Answers whether
+    /// it moved.
+    pub fn set_delegating(&mut self, delegating: crate::delegate::Delegating) -> bool {
+        let moved = self.delegating != delegating;
+        self.delegating = delegating;
         moved
     }
 
@@ -2299,6 +2311,10 @@ impl<'a> ActivityView<'a> {
     pub fn watching(self) -> &'a crate::pr_watch::Watching {
         &self.activity.watching
     }
+    /// What the Server holds of the Thread's Delegates (ADR 0047).
+    pub fn delegating(self) -> &'a crate::delegate::Delegating {
+        &self.activity.delegating
+    }
     pub fn working_descendants(self) -> usize {
         self.activity
             .order
@@ -2307,11 +2323,11 @@ impl<'a> ActivityView<'a> {
             .count()
     }
     /// Whether work goes on behind Main: what runs behind it
-    /// ([`Self::running_behind`]), or a PR watch that holds the Thread (T3's
-    /// awaited watch task, ADR 0046). The Notice waits for it, and the nav
-    /// counts it as working.
+    /// ([`Self::running_behind`]), a PR watch that holds the Thread (T3's
+    /// awaited watch task, ADR 0046), or Delegates it waits on (ADR 0047).
+    /// The Notice waits for it, and the nav counts it as working.
     pub fn background_work(self) -> bool {
-        self.running_behind() || self.activity.watching.holds()
+        self.running_behind() || self.activity.watching.holds() || self.activity.delegating.holds
     }
     /// Whether something runs behind Main: a Subagent, or a background task
     /// (a shell, a monitor) of Main's transcript. Unlike a watch, this cuts

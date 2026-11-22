@@ -5278,3 +5278,78 @@ fn a_store_with_groups_lists_every_thread_and_opens_each_alone() {
     drop(cockpit);
     assert_eq!(std::fs::read(dir.join("groups.json")).unwrap(), LEGACY);
 }
+
+/// A Thread's Delegates reach its window by its digest (ADR 0047): each as
+/// the window draws it, and the Thread at background work while one is
+/// open or its end untold. A Thread another machine delegated says whose.
+#[test]
+fn a_threads_delegates_reach_its_window_by_its_digest() {
+    use crate::delegate::{Started, Status};
+    use crate::server::ServerId;
+    let (mut cockpit, _fake) = cockpit("delegates-digest");
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
+    cockpit.pump();
+    let seen = |cockpit: &Cockpit| {
+        let open = cockpit.thread(thread).unwrap();
+        let digest = open.digest().into_owned();
+        (digest.delegating, open.activity().background_work())
+    };
+    assert!(seen(&cockpit).0.is_empty() && !seen(&cockpit).1, "the premise: none");
+
+    let mut id = None;
+    cockpit.fixture_delegates(thread, |delegates| {
+        id = Some(
+            delegates
+                .start(Started {
+                    server: ServerId::new("s-pc"),
+                    machine: "pc".into(),
+                    thread: ThreadId::new(7),
+                    request: "delegate:here:1:7".into(),
+                    title: Some("Fix the tests".into()),
+                    task: "Fix the tests".into(),
+                    provider: Provider::Codex,
+                    model: None,
+                })
+                .id,
+        );
+        true
+    });
+    cockpit.pump();
+    let id = id.unwrap();
+    let (delegating, working) = seen(&cockpit);
+    let row = &delegating.delegates[0];
+    assert_eq!(
+        (row.id, row.machine.as_str(), row.thread, row.status),
+        (id, "pc", ThreadId::new(7), Status::Starting)
+    );
+    assert!(delegating.holds && working, "an open one is background work");
+    assert_eq!(
+        cockpit.thread(thread).unwrap().activity().delegating(),
+        &delegating,
+        "the mirror holds what the digest said"
+    );
+
+    cockpit.fixture_delegates(thread, |delegates| {
+        delegates.end(id, Status::Completed, "done".into())
+    });
+    cockpit.pump();
+    let (delegating, working) = seen(&cockpit);
+    assert_eq!(delegating.delegates[0].status, Status::Completed);
+    assert!(working, "its wake is owed");
+    cockpit.fixture_delegates(thread, |delegates| delegates.tell(&[id]));
+    cockpit.pump();
+    assert!(!seen(&cockpit).1, "told: nothing holds it");
+
+    let from = crate::DelegatedFrom {
+        server: ServerId::new("s-mac"),
+        label: "mac".into(),
+        thread: ThreadId::new(3),
+        title: "Ship it".into(),
+    };
+    cockpit.fixture_delegated_from(thread, from.clone());
+    cockpit.pump();
+    assert_eq!(
+        cockpit.thread(thread).unwrap().digest().delegated_from,
+        Some(from)
+    );
+}

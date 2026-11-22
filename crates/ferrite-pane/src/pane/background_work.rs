@@ -1,8 +1,10 @@
-//! The background-work line (T3's `ThreadNowLine`, ADR 0038): the last
-//! thing in the transcript, directly above the Composer, while the Thread
-//! has work running in the background. It is a line of muted words, not a
-//! banner: an icon, the title (`Waiting on 2 subagents`), what the work
-//! reads, and its actions (`Details`, `Stop`).
+//! The lines at the transcript's foot (T3's `ThreadNowLine`, ADR 0038):
+//! the last thing in the transcript, directly above the Composer. The
+//! background-work line stands there while the Thread has work running in
+//! the background; over it, the one that needs you stands while a Delegate
+//! waits on the operator (T3's `childInputNowItem`). Each is a line of
+//! muted words, not a banner: an icon, the title (`Waiting on 2
+//! subagents`), what it reads, and its actions (`Details`, `Stop`).
 use gpui::prelude::*;
 use gpui::{div, px, rgb, AnyElement, Div, ElementId, SharedString, Stateful};
 use std::time::Instant;
@@ -15,6 +17,8 @@ use ferrite_ui::{icons, motion};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WorkKind {
     Subagent,
+    /// A Thread this one started on another machine (ADR 0047).
+    Delegate,
     Command,
     /// A watch that goes on of its own, a PR watch (T3's `monitor`).
     Monitor,
@@ -25,6 +29,8 @@ impl WorkKind {
         match (self, count) {
             (Self::Subagent, 1) => "subagent",
             (Self::Subagent, _) => "subagents",
+            (Self::Delegate, 1) => "delegate",
+            (Self::Delegate, _) => "delegates",
             (Self::Command, 1) => "command",
             (Self::Command, _) => "commands",
             (Self::Monitor, 1) => "monitor",
@@ -120,10 +126,7 @@ fn activity(task: &BackgroundTask) -> Option<&str> {
     task.activity.as_deref().map(str::trim).filter(|doing| !doing.is_empty())
 }
 
-/// The line: icon, title and description in 12px muted words that give way
-/// to the actions at the right (so `Stop` stays reachable), fading in over
-/// `motion::LINE_IN`. `actions` are inline buttons ([`inline_button`]) or
-/// a clock.
+/// The background-work line ([`now_line`]), its description in words.
 pub fn background_work_line(
     key: u64,
     presented: Presentation,
@@ -134,8 +137,50 @@ pub fn background_work_line(
         title,
         description,
     } = presented;
+    now_line(
+        "background-work",
+        key,
+        NowLine {
+            icon,
+            needs_you: false,
+            title,
+            description: description.map(|description| {
+                div()
+                    .debug_selector(|| "background-work-detail".into())
+                    .min_w_0()
+                    .truncate()
+                    .child(SharedString::from(description))
+                    .into_any_element()
+            }),
+        },
+        actions,
+    )
+}
+
+/// What one line at the transcript's foot says (T3's `ThreadNowItem`).
+pub struct NowLine {
+    pub icon: &'static str,
+    /// It needs the operator: its icon wears the info ink, as T3 inks the
+    /// only line at the timeline's end that needs you.
+    pub needs_you: bool,
+    pub title: String,
+    pub description: Option<AnyElement>,
+}
+
+/// One line (T3's `ThreadNowLine`): icon, title and description in 12px
+/// muted words that give way to the actions at the right (so `Stop` stays
+/// reachable), fading in over `motion::LINE_IN`, named `{name}-line`.
+/// `actions` are inline buttons or a clock.
+pub fn now_line(name: &'static str, key: u64, line: NowLine, actions: Vec<AnyElement>) -> impl IntoElement {
+    let NowLine {
+        icon,
+        needs_you,
+        title,
+        description,
+    } = line;
+    let icon_ink = if needs_you { theme::BLUE } else { INK_SUBTLE };
     let line = div()
-        .debug_selector(|| "background-work-line".into())
+        .debug_selector(move || format!("{name}-line"))
         .flex()
         .flex_shrink_0()
         .items_baseline()
@@ -153,7 +198,7 @@ pub fn background_work_line(
             div()
                 .flex_shrink_0()
                 .self_center()
-                .child(icons::icon(icon, theme::BACKGROUND_LINE_ICON, INK_SUBTLE)),
+                .child(icons::icon(icon, theme::BACKGROUND_LINE_ICON, icon_ink)),
         )
         .child(
             div()
@@ -163,11 +208,10 @@ pub fn background_work_line(
                 .child(div().min_w_0().truncate().child(SharedString::from(title)))
                 .children(description.map(|description| {
                     div()
-                        .debug_selector(|| "background-work-detail".into())
+                        .flex()
                         .min_w_0()
-                        .truncate()
                         .opacity(theme::BACKGROUND_LINE_DETAIL_OPACITY)
-                        .child(SharedString::from(description))
+                        .child(description)
                 })),
         )
         .child(
@@ -180,11 +224,37 @@ pub fn background_work_line(
                 .children(actions),
         );
     motion::fade_in(
-        ElementId::Name(SharedString::from(format!("background-work-line-{key}"))),
+        ElementId::Name(SharedString::from(format!("{name}-line-{key}"))),
         line,
         motion::LINE_IN,
         1.0,
     )
+}
+
+/// An inline action through the shared press (ADR 0044, T3's
+/// `InlineButton`): `inline_button`'s words in `ink` on a clear ground,
+/// underlined under the pointer, one line of the thread-state line tall
+/// (a kit button keeps its own height otherwise). The caller wires the
+/// press.
+pub fn inline_action(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    ink: u32,
+    cx: &gpui::App,
+) -> gpui::component::button::Button {
+    let clear: gpui::Hsla = gpui::rgba(0).into();
+    ferrite_ui::components::faded_button(id, clear, clear, clear, rgb(ink).into(), cx)
+        .h(px(theme::LH_META))
+        .p_0()
+        .child(
+            div()
+                .text_size(px(theme::FS_BADGE))
+                .line_height(px(theme::LH_META))
+                .font_weight(theme::W_LABEL)
+                .text_color(rgb(ink))
+                .hover(|style| style.underline())
+                .child(label.into()),
+        )
 }
 
 /// An inline action on a thread-state line (`Details`, `Stop`): medium
@@ -229,6 +299,23 @@ mod tests {
             task(WorkKind::Command, "b"),
         ];
         assert_eq!(present(&commands, false).unwrap().title, "Running 2 commands");
+    }
+
+    /// T3's count by kind, a Delegate under Ferrite's noun, after subagents.
+    #[test]
+    fn delegates_are_counted_as_delegates_beside_subagents() {
+        let mixed = [
+            task(WorkKind::Delegate, "Ping on pc"),
+            task(WorkKind::Subagent, "Review"),
+            task(WorkKind::Delegate, "Long ping on pc"),
+        ];
+        let line = present(&mixed, true).unwrap();
+        assert_eq!(line.title, "Waiting on 1 subagent and 2 delegates");
+        assert_eq!(line.description.as_deref(), Some("Review, Ping on pc, Long ping on pc"));
+        assert_eq!(
+            present(&[task(WorkKind::Delegate, " ")], true).unwrap().title,
+            "Waiting on a delegate"
+        );
     }
 
     #[test]

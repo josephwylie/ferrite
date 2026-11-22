@@ -97,7 +97,12 @@ and `agent.result`. Peers is the Server's client of a saved machine.
   - results in full while they fit 16 000 bytes between them;
   - `task_status` for the rest.
 
-  Once the agent takes the wake, those Delegates are marked told.
+  Once the agent takes the wake, those Delegates are marked told. Its
+  notification says it in T3's `delegatedCompletionNotification` words:
+  `Delegated task "Fix the tests" finished`, `stopped` or `failed` (failed
+  if any failed, else stopped if any stopped), and `2 delegated tasks
+  finished: Fix the tests, Lint`, each by its title's first line, else its
+  task's, cut at 80 characters.
 - **Its parent waits on it.** A Delegate that is open, or ended and not
   told, holds its parent:
   - the parent's Attention is working;
@@ -167,6 +172,73 @@ and `agent.result`. Peers is the Server's client of a saved machine.
     every Session, and T3's orchestration block, cut to delegating and
     linked machines, while the tools are offered.
 
+- **The window draws what the parent's digest says** (T3's parts, cited
+  in `docs/design/t3-reference/delegates.md`). `Digest` carries
+  `Delegating`: each Delegate as a window draws it (`Delegated`: no task,
+  its result cut to the 280 characters a row shows, and when it started
+  and ended) and whether they hold the Thread; a child's digest carries
+  its `delegated_from`. The Server sends a new digest when either moves,
+  and the pump copies both into the window's Facts, the one copy every
+  reader reads. Where the window names a Delegate's machine it says `on
+  pc`, as T3's window does everywhere it places a remote task (its
+  timeline row, its Lineage, its divider); T3's `in {label}` is only its
+  server's cancel words.
+  - The parent's transcript draws its `delegate_task` call as T3's
+    `SubagentTimelineLink` for the task, which T3 draws in place of that
+    call: the bot, the title, `on pc`, then the result once it ended, its
+    status word while it runs, and how long it ran, from the times its
+    Server stamped. The call's answer names the Delegate (`taskId`), so the
+    row is the Delegate's (`CockpitView::delegate_faces`). Its press opens
+    the Thread there as the Lineage row's does; a machine this window does
+    not reach draws the row with no press.
+  - Main's Lineage draws each as T3's remote row: its title, else
+    `Delegate`, and `on pc · Running` in T3's status words (`Starting`,
+    `Running`, `Waiting`, `Done`, `Failed`, `Stopped`). The heading counts
+    those Running. Under the pointer it says `Open on pc`, then what holds
+    it up: the follower's `problem`, or an owed stop in its result's words.
+  - The Lineage's order is T3's: the Thread that delegated this one, then
+    the parent (a Subagent's), then the open agents newest first and the
+    open Delegates after them, then under `Previous agents` the ended
+    agents newest first and the ended Delegates after them. Delegates
+    keep the order they were started in, as T3 lists a thread's remote
+    tasks by when they started.
+  - Its press opens the Thread there by its Server and id, on the machine
+    of this window that answers as that Server, in place, as any row of
+    that machine opens (`CockpitView::open_elsewhere`). A row no machine
+    of this window answers for is drawn but cannot be pressed, as T3
+    disables it.
+  - An open one has a stop: `Op::CancelDelegate`, the agent's
+    `delegate.cancel`.
+  - While they hold, `ActivityView::background_work` is true: the Thread
+    is on the Working shelf, its Notice waits, and the background line
+    lists each open one as `Fix the tests on pc`.
+  - While a Delegate waits on the operator there, the foot of its
+    parent's transcript says so, over the background line, as T3's
+    `childInputNowItem` says it of a child: `Delegate needs approval`
+    (`input` for a question, `you` for both; `2 delegates need …`), the
+    waiting ones by name, and `Open approval` (else `Open question`). It
+    finds them as T3 walks a thread's descendants: each open Delegate, and
+    its own as its machine's digest names them, on every machine this
+    window reaches. Each name and the action open that Delegate's Thread
+    at its oldest request on its machine. It is hidden while the parent
+    itself waits on the operator. The line only opens: the operator
+    reads and answers a Delegate's questions there, and its permission
+    Decisions are answered on its own Thread, never from its parent's.
+  - A Delegates' wake is T3's notification row with T3's bot
+    (`wake::Source::Delegates`), where a watch's has an eye.
+  - A child's transcript opens with T3's divider for a delegated thread,
+    `Delegate of · Release check on mac`, and the child heads its Lineage
+    with T3's delegated-from row. Both name the parent by its title as its
+    machine says it now, else as it was then, and its machine by the name
+    this window saved it by, else by the label the parent's Server sent
+    (`DelegatedFrom::label`): this computer is not `local` to the Thread
+    it delegated. The divider's press (`Open parent thread`) opens the
+    parent as T3's does. The row's asks that machine first, as T3's
+    `DelegatedFromRow` does: a parent its Server no longer has says `The
+    parent thread was deleted`, a machine gone since says `Could not open
+    the parent thread`.
+  - The child is an ordinary row in its machine's nav, not nested.
+
 ## Operator decisions
 
 - **Interrupting the parent's Main does not cancel its Delegates.** This
@@ -202,8 +274,15 @@ Nothing here fences the link itself, and T3 does not either.
   until it ends. Ferrite looks between pieces, so a Delegate that waits
   on a Decision there reads `waiting`. No status is `queued`: a Delegate
   is recorded once its Thread there exists.
-- **A machine, not an environment.** "On pc" and "the linked machine"
-  stand for T3's "in {label}" and "the linked environment".
+- **A machine, not an environment.** `pc` and "the linked machine" stand
+  for T3's environment label and "the linked environment". Where T3's
+  server words say `in {label}`, its cancel's, Ferrite says `on pc`, the
+  word T3's window uses.
+- **Delegate where T3 says Subagent.** T3 calls a remote task a subagent;
+  `CONTEXT.md` keeps Subagent for the provider's own agent, and a Delegate
+  is a Thread of its own on another Machine. So the child's divider says
+  `Delegate of`, the line at the parent's foot `Delegate needs approval`,
+  and an untitled row `Delegate`.
 - **What a remote task cannot be is refused, never dropped.** Each is
   refused before anything starts, in T3's manner:
   - `isolation: "worktree"`, as T3 refuses it for a remote task, without
@@ -239,3 +318,37 @@ Nothing here fences the link itself, and T3 does not either.
   without running git, so a remote spelled through one keys as written.
 - **No re-stop for a stop already under way.** A stop owed again while
   one is out is covered by that one (T3 looks once more).
+- **The window says more, by operator decision.** Each addition stays
+  for its reason:
+  - T3's remote row has no stop (its local agents' rows have `Stop
+    subagent`): T3 cancels a remote task only through the parent's Stop.
+    Interrupting Ferrite's parent does not cancel its Delegates (above),
+    so the Lineage row's stop (`Stop delegated task`, drawn as T3's local
+    stop) is the operator's one cancel of a single Delegate.
+  - T3's window shows no follow problem. A Delegate Ferrite cannot reach
+    still holds its parent working, so its row says why under the
+    pointer: the follower's problem, or a stop owed.
+  - T3's background line lists only the provider's tasks. A Delegate
+    holds Ferrite's parent on the Working shelf, so the line names what
+    it waits on, counted as T3 counts kinds under Ferrite's noun, after
+    subagents (`Waiting on 1 subagent and 2 delegates`).
+- **No `N of M` in a wake's words.** T3 counts the tasks of the parent's
+  run (`2 of 3 delegated tasks finished`). Ferrite has no runs: the count
+  is of the Delegates the wake covers.
+- **The timeline row is the call's.** T3 draws the task's row from its
+  subagent turn item and hides the `delegate_task` call. Ferrite's
+  parent has no such item, so the call that started a Delegate is drawn
+  as T3's row. A call still out or refused keeps its ordinary tool row
+  with its error, as T3's does. A Delegate started by `ferrite delegate
+  start` has no call, so no row in the transcript (its Lineage row still
+  shows it).
+- **A Done dot is not green.** T3 inks a completed relative's dot as
+  success. Ferrite's state inks have no done hue (Done is a shape, not a
+  hue), so it is the idle dot.
+- **Not nested in the nav** (operator decision). T3's sidebar nests a
+  delegated thread under its parent; Ferrite's nav lists each machine's
+  own Threads.
+- **No read through another machine.** T3 reads a thread in a linked
+  environment it is not connected to through the linking one (`Read the
+  thread on pc`). Ferrite's window opens only a machine it reaches, and
+  sees a Delegate waiting only there.

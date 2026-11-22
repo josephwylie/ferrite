@@ -11,12 +11,13 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 
 use ferrite_core::cockpit::Cockpit;
+use ferrite_core::delegate::Delegating;
 use ferrite_core::docview::FileChange;
 use ferrite_core::pr_watch::{WatchedPr, Watching};
 use ferrite_core::store::Provider;
 use ferrite_core::ProjectKey;
 use ferrite_core::workspace::{BranchStatus, PullRequest, WorkspaceBinding};
-use ferrite_core::ThreadKey;
+use ferrite_core::{DelegatedFrom, ThreadKey};
 use ferrite_pane::pane::WallCard;
 use gpui::SharedString;
 
@@ -46,6 +47,13 @@ pub struct ThreadFacts {
     /// its digest: the one copy the window draws them from (the details
     /// card's eye, the palette and PR menu entries, the background line).
     pub watching: Watching,
+    /// The Delegates its agent started on other machines and whether it
+    /// waits on them (ADR 0047), from its digest: what the details card's
+    /// Lineage and the background line draw them from.
+    pub delegating: Delegating,
+    /// The Thread on another machine that delegated this one, from its
+    /// digest: the Lineage's delegated-from row.
+    pub delegated_from: Option<DelegatedFrom>,
     /// Directory label and branch for every root attached to the Project.
     pub project_branches: Vec<(SharedString, SharedString)>,
     /// The Project the Thread recorded (#29) — what the nav filter matches
@@ -173,8 +181,8 @@ impl Facts {
         lookups
     }
 
-    /// Something arrived for a Thread: its digest's Wall card, counts and
-    /// PR watches are copied in (the Server folds them, paced). A turn that
+    /// Something arrived for a Thread: its digest's Wall card, counts, PR
+    /// watches and Delegates are copied in (the Server folds them, paced). A turn that
     /// just ended may have moved the checkout, the other stated refresh
     /// moment (#29), so the metadata follows it; the checkout itself is a
     /// `git` call the pump must never wait on, so this answers whether the
@@ -463,10 +471,14 @@ impl Facts {
             facts.changed_files = digest.changed_files.clone();
             facts.subagents = digest.subagents;
             facts.watching = digest.watching.clone();
+            facts.delegating = digest.delegating.clone();
+            facts.delegated_from = digest.delegated_from.clone();
             facts.main_busy = open.busy();
         } else {
             facts.wall = WallCard::default();
             facts.watching = Watching::default();
+            facts.delegating = Delegating::default();
+            facts.delegated_from = None;
             facts.main_busy = false;
         }
         // The wall refolds on exactly the moments that append to the log —

@@ -208,6 +208,7 @@ impl CockpitView {
                 cited: Default::default(),
                 note: None,
                 earlier: None,
+                parent: None,
                 queued: 0,
             };
             let Some(entity) = pane.transcript() else {

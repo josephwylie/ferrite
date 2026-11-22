@@ -437,10 +437,15 @@ impl CockpitView {
     /// Pane takes that agent's transcript at full reading width. The
     /// Subject's own viewport (scroll, open tools) and Main's draft stay
     /// where they were; the focus pump hands the transcript the keyboard.
+    /// A Delegate's row opens its Thread on its machine (`open_elsewhere`).
     pub(super) fn open_agent_from(&mut self, index: usize, call: String, cx: &mut Context<Self>) {
         let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
             return;
         };
+        let selected = &self.panes[index].selected;
+        if let Some((server, there)) = self.delegate_of_call(thread, selected, &call, cx) {
+            return self.open_elsewhere(&server, there, cx);
+        }
         if let Some(subject) = self.agent_of_call(thread, &call, cx) {
             self.open_subagent(thread, subject, cx);
         }

@@ -75,6 +75,15 @@ pub struct Digest {
     /// sends none.
     #[serde(default, skip_serializing_if = "crate::pr_watch::Watching::is_empty")]
     pub watching: crate::pr_watch::Watching,
+    /// The Delegates it started and whether it waits on them (ADR 0047):
+    /// the details card's Lineage and the background line read it. A
+    /// Server older than it sends none.
+    #[serde(default, skip_serializing_if = "crate::delegate::Delegating::is_empty")]
+    pub delegating: crate::delegate::Delegating,
+    /// The Thread on another machine whose agent started this one, as its
+    /// header keeps it (ADR 0047): the Lineage's delegated-from row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_from: Option<crate::DelegatedFrom>,
 }
 
 /// Main's turn as the state word reads it: what Main does, how its last
@@ -151,6 +160,8 @@ impl Digest {
             background_work: activity.background_work(),
             // The Server's verdict, from its Thread (`Engine::publish_digests`).
             at_work: false,
+            // Its header's, which no Activity holds (`Engine::publish_digests`).
+            delegated_from: None,
             pending: pending
                 .iter()
                 .map(|pending| PendingEntry {
@@ -182,6 +193,7 @@ impl Digest {
             changed_files: changed_files(activity),
             finish: Finish::of(transcript),
             watching: activity.watching().clone(),
+            delegating: activity.delegating().clone(),
         }
     }
 
@@ -195,7 +207,8 @@ impl Digest {
     /// Whether `activity` moved past this digest in a way no window should
     /// wait a refold for: Main started or ended a turn or changed phase, a
     /// Decision came or went, a Subagent came or work behind Main started
-    /// or stopped, a PR watch moved, or the windows show another Subject.
+    /// or stopped, a PR watch or a Delegate moved, or the windows show
+    /// another Subject.
     pub fn outdated_by(&self, activity: ActivityView<'_>, shown: Option<&Subject>) -> bool {
         let main = activity.main();
         let transcript = main.transcript();
@@ -206,6 +219,7 @@ impl Digest {
             || self.working_descendants != activity.working_descendants()
             || self.subagents != activity.children().len()
             || self.watching != *activity.watching()
+            || self.delegating != *activity.delegating()
             || self.wall.working != caption(transcript)
             || self.shown.as_ref().is_some_and(|card| {
                 shown

@@ -124,11 +124,40 @@ fn a_wake_carries_each_result_in_t3_words() {
         "Delegated task d1 (Tests) [completed]:\nAll green.\n\nDelegated task d2 [failed]:\nIt broke."
     );
     assert_eq!(wake.outcome, Outcome::Failed);
-    assert_eq!(wake.summary, "2 delegated tasks ended");
+    assert_eq!(
+        wake.summary, "2 delegated tasks failed: Tests, Fix the tests",
+        "T3's verb, and each one's title else its task"
+    );
+    assert_eq!(wake.source, crate::wake::Source::Delegates, "its row wears the bot");
     let alone = delegates.wake(&[first]).unwrap();
     assert_eq!(
         (alone.outcome, alone.summary.as_str()),
-        (Outcome::Completed, "Delegated task \"Tests\" completed")
+        (Outcome::Completed, "Delegated task \"Tests\" finished")
+    );
+}
+
+/// T3's `delegatedCompletionNotification`: failed over stopped over
+/// finished, and a label of 80 characters at most.
+#[test]
+fn a_wake_line_says_finished_stopped_or_failed_as_t3_does() {
+    let mut delegates = Delegates::default();
+    let done = delegates.start(started(7, Some("Tests"))).id;
+    let stopped = delegates.start(started(8, Some("Lint"))).id;
+    let long = delegates
+        .start(Started {
+            task: format!("{}\nmore", "y".repeat(90)),
+            ..started(9, None)
+        })
+        .id;
+    delegates.end(done, Status::Completed, "All green.".into());
+    delegates.end(stopped, Status::Interrupted, "Interrupted there.".into());
+    delegates.end(long, Status::Completed, "ok".into());
+    let line = |ids: &[DelegateId]| delegates.wake(ids).unwrap().summary;
+    assert_eq!(line(&[stopped]), "Delegated task \"Lint\" stopped");
+    assert_eq!(line(&[done, stopped]), "2 delegated tasks stopped: Tests, Lint");
+    assert_eq!(
+        line(&[done, long]),
+        format!("2 delegated tasks finished: Tests, {}\u{2026}", "y".repeat(79))
     );
 }
 
@@ -147,4 +176,85 @@ fn a_result_past_the_budget_is_left_for_task_status() {
     assert_eq!(wake.outcome, Outcome::Updated);
     let open = delegates.start(started(9, None)).id;
     assert_eq!(delegates.wake(&[open]), None, "an open one has nothing to tell");
+}
+
+#[test]
+fn the_window_reads_each_one_and_whether_they_hold() {
+    let (mut delegates, id) = one(Some("Tests"));
+    let seen = Delegating::of(&delegates);
+    assert!(seen.holds);
+    let row = &seen.delegates[0];
+    assert_eq!(
+        (row.id, row.machine.as_str(), row.thread, row.title.as_deref(), row.status),
+        (id, "pc", ThreadId::new(7), Some("Tests"), Status::Starting)
+    );
+    assert!(delegates.seen(id, Status::Running, Some("pc did not answer".into())));
+    let row = &Delegating::of(&delegates).delegates[0];
+    assert_eq!(row.problem.as_deref(), Some("pc did not answer"));
+    assert_eq!(row.unstopped(), None, "following is held up, but no stop is owed");
+    delegates.cancel(id, None);
+    assert!(delegates.unstopped(id, "pc is asleep".into()));
+    let seen = Delegating::of(&delegates);
+    assert!(!seen.holds, "the agent asked: no wake is owed");
+    assert_eq!(
+        seen.delegates[0].unstopped().as_deref(),
+        Some("It could not be stopped on pc and may still run there: pc is asleep")
+    );
+    assert!(Delegating::of(&Delegates::default()).is_empty());
+}
+
+/// Its row's clock and result line: when it started and ended here, and
+/// its result cut to one row's worth.
+#[test]
+fn the_window_reads_its_times_and_a_line_of_its_result() {
+    let (mut delegates, id) = one(None);
+    let row = Delegating::of(&delegates).delegates.remove(0);
+    assert!(row.started_at.is_some() && row.ended_at.is_none() && row.result.is_none());
+    delegates.end(id, Status::Completed, "z".repeat(RESULT_LINE_CHARS + 1));
+    let row = Delegating::of(&delegates).delegates.remove(0);
+    assert!(row.ended_at.is_some());
+    assert_eq!(row.result, Some(format!("{}\u{2026}", "z".repeat(RESULT_LINE_CHARS))));
+    let old: Delegate = serde_json::from_str(
+        r#"{"id":"d1","server":"s","machine":"pc","thread":7,"request":"k","task":"t","status":"running"}"#,
+    )
+    .unwrap();
+    assert_eq!((old.started_at, old.ended_at), (None, None), "a record from before reads as one");
+}
+
+/// A `delegate_task` call names its Delegate by the `taskId` it answered,
+/// quoted once or twice; a call still out, refused or another names none.
+#[test]
+fn a_delegate_call_names_the_delegate_it_started() {
+    use crate::transcript::{ToolOutput, ToolState};
+    let call = |name: &str, state: ToolState, answer: &str| crate::transcript::ToolBlock {
+        call: "toolu_1".into(),
+        name: name.into(),
+        title: None,
+        summary: String::new(),
+        state,
+        diffs: Vec::new(),
+        structured_preview: None,
+        result_line: None,
+        output: Some(ToolOutput {
+            text: answer.into(),
+            omitted_bytes: 0,
+        }),
+        progress: None,
+        caption: None,
+        background: None,
+        image: false,
+        findings: Vec::new(),
+    };
+    let named = |name, state, answer| started_by(&call(name, state, answer));
+    assert_eq!(
+        named("mcp__ferrite__delegate_task", ToolState::Ok, r#"{"taskId":"d2","status":"running"}"#),
+        Some(DelegateId::new(2))
+    );
+    assert_eq!(
+        named("delegate_task", ToolState::Ok, r#"[{"type":"inputText","text":"{\"taskId\": \"d12\"}"}]"#),
+        Some(DelegateId::new(12))
+    );
+    assert_eq!(named("delegate_task", ToolState::Running, r#"{"taskId":"d2"}"#), None);
+    assert_eq!(named("delegate_task", ToolState::Failed("no".into()), r#"{"taskId":"d2"}"#), None);
+    assert_eq!(named("task_status", ToolState::Ok, r#"{"taskId":"d2"}"#), None);
 }

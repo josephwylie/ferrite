@@ -15,7 +15,7 @@
 
 use std::cell::RefCell;
 use std::marker::PhantomData;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Local};
@@ -81,6 +81,20 @@ pub fn instant() -> Instant {
 /// The wall time now as a `SystemTime`, for ages (`2 min ago`).
 pub fn system_time() -> SystemTime {
     fixed(|fixed| SystemTime::from(fixed.now())).unwrap_or_else(SystemTime::now)
+}
+
+/// Wall time `at` (a stamp another process wrote: a Delegate's start) as
+/// an instant, so a live counter counts from it as from an `instant()`.
+/// The same `at` reads the same each time: it is measured from one pair of
+/// readings taken together, not from two fresh ones.
+pub fn instant_at(at: SystemTime) -> Instant {
+    static ANCHOR: OnceLock<(Instant, SystemTime)> = OnceLock::new();
+    let (instant, wall) = fixed(|fixed| (fixed.instant(), SystemTime::from(fixed.now())))
+        .unwrap_or_else(|| *ANCHOR.get_or_init(|| (Instant::now(), SystemTime::now())));
+    match wall.duration_since(at) {
+        Ok(ago) => instant.checked_sub(ago).unwrap_or(instant),
+        Err(ahead) => instant + ahead.duration(),
+    }
 }
 
 /// A forge's RFC 3339 stamp (`2026-10-21T01:25:30Z`) as a wall time, for

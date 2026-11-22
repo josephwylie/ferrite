@@ -953,6 +953,51 @@ fn a_machines_thread_opens_in_place_beside_a_local_one(cx: &mut TestAppContext) 
     until(cx, |cx| shows(&view, theirs, "on it", cx));
 }
 
+/// A Delegate's row and its child's pill name a Thread by its Server: the
+/// press opens it in place on the machine that answers as that Server, and
+/// says so when that machine no longer has it.
+#[gpui::test]
+fn a_delegates_thread_opens_in_place_on_its_machine(cx: &mut TestAppContext) {
+    use ferrite_core::cockpit::ServerState;
+    bind_production_keys(cx);
+    let (mut core, _fake, machines, _agents) = two_machines("delegate-in-place", 1);
+    let mine = core.threads()[0];
+    let on_box = machines.held(1).unwrap();
+    let child = open_on(&mut core, on_box);
+    core.focus_thread(mine);
+    let Some(ServerState::Attached { id: Some(server), .. }) = core.server(on_box) else {
+        panic!("box answers as a Server");
+    };
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(child).is_some()));
+
+    view.update(cx, |view, cx| view.open_elsewhere(&server, child.thread(), cx));
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.focused_thread(cx), Some(child), "opened on box, in place");
+        assert!(view.pane_for(mine).is_some(), "this computer's Thread stays");
+        assert_eq!(view.serving(&server, cx).and_then(|serving| serving.name), Some("box".into()));
+    });
+
+    view.update(cx, |view, cx| {
+        view.focus_thread(mine, cx);
+        view.cockpit.update(cx, |cockpit, _| cockpit.delete(child)).unwrap();
+    });
+    until(cx, |cx| {
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).holds(child) == Some(false))
+    });
+    view.update(cx, |view, cx| view.open_delegator(&server, child.thread(), cx));
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.focused_thread(cx), Some(mine), "a deleted Thread opens nothing");
+        assert_eq!(
+            view.nav_notice.text().map(|text| text.to_string()),
+            Some("The parent thread was deleted".into())
+        );
+    });
+}
+
 /// Every act goes to its Thread's machine: a prompt typed in box's Pane
 /// reaches box's agent and one typed in this computer's reaches its own;
 /// ⎋ stops box's turn alone; ⌘W parks box's Thread on box, and this

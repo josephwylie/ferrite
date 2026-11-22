@@ -229,6 +229,7 @@ impl<'a> Work<'a> {
             ToolKind::Fetch => tense("Fetching", "Fetched"),
             ToolKind::WebSearch => tense("Searching the web for", "Searched the web for"),
             ToolKind::Agent => tense("Running agent", "Ran agent"),
+            ToolKind::Delegate => tense("Delegating", "Delegated"),
             ToolKind::Findings => tense("Reporting findings", "Reported findings"),
             ToolKind::Mcp(_)
             | ToolKind::Todo
@@ -335,7 +336,13 @@ pub(crate) fn call_line(tool: &ToolBlock) -> CallLine {
         ToolKind::Command => (String::new(), without_cd(&argument).to_owned()),
         ToolKind::Edit | ToolKind::Write => (String::new(), argument.into_owned()),
         _ => {
-            let mut verb = work.verb(tool.state == ToolState::Running).to_owned();
+            // T3's sentence for a `delegate_task` call that started nothing.
+            let mut verb = match (work.kind, &tool.state) {
+                (ToolKind::Delegate, ToolState::Failed(_)) => "Failed to delegate",
+                (ToolKind::Delegate, ToolState::Stopped) => "Stopped delegating",
+                _ => work.verb(tool.state == ToolState::Running),
+            }
+            .to_owned();
             if !argument.is_empty() {
                 verb.push(' ');
             }
@@ -389,6 +396,14 @@ fn without_cd(command: &str) -> &str {
 /// An agent row's first line (`agents::render_agent`): its task (the
 /// provider's description), or `Agent` with none.
 pub(crate) fn agent_title(tool: &ToolBlock) -> String {
+    // A Delegate's is T3's task title (`tools::policy`'s summary), its
+    // noun Ferrite's (ADR 0047).
+    if tools::policy(&tool.name).kind == ToolKind::Delegate {
+        return match tool.summary.is_empty() {
+            true => "Delegate".into(),
+            false => tool.summary.clone(),
+        };
+    }
     let task = tool.argument();
     if task.is_empty() {
         "Agent".into()
@@ -397,9 +412,23 @@ pub(crate) fn agent_title(tool: &ToolBlock) -> String {
     }
 }
 
-/// A subagent card's title: `3 subagents`.
-pub(crate) fn agent_card_title(tools: &[&ToolBlock]) -> String {
-    format!("{} subagents", tools.len())
+/// A card's title, its agents counted by kind: `3 subagents`, `2 delegates`,
+/// `1 subagent and 1 delegate`.
+pub(crate) fn agent_card_title(calls: &[&ToolBlock]) -> String {
+    let delegates = calls
+        .iter()
+        .filter(|call| tools::policy(&call.name).kind == ToolKind::Delegate)
+        .count();
+    let counted = |count, one, many| format!("{count} {}", if count == 1 { one } else { many });
+    match (calls.len() - delegates, delegates) {
+        (subagents, 0) => counted(subagents, "subagent", "subagents"),
+        (0, delegates) => counted(delegates, "delegate", "delegates"),
+        (subagents, delegates) => format!(
+            "{} and {}",
+            counted(subagents, "subagent", "subagents"),
+            counted(delegates, "delegate", "delegates"),
+        ),
+    }
 }
 
 /// How a card's agents stand (T3's `subagentDisplay`): `1 working · 2
@@ -518,6 +547,7 @@ enum Action {
     Command,
     Edit,
     Agent,
+    Delegate,
     Read,
     CodeSearch,
     WebSearch,
@@ -534,6 +564,7 @@ impl Action {
             ToolKind::Command => Self::Command,
             ToolKind::Edit | ToolKind::Write => Self::Edit,
             ToolKind::Agent => Self::Agent,
+            ToolKind::Delegate => Self::Delegate,
             ToolKind::Read | ToolKind::List => Self::Read,
             ToolKind::Search => Self::CodeSearch,
             ToolKind::Fetch | ToolKind::WebSearch => Self::WebSearch,
@@ -547,7 +578,7 @@ impl Action {
     /// read them, then the rest.
     fn priority(self) -> u8 {
         match self {
-            Self::Command | Self::Edit | Self::Agent => 0,
+            Self::Command | Self::Edit | Self::Agent | Self::Delegate => 0,
             Self::Read | Self::CodeSearch | Self::WebSearch | Self::Browser => 1,
             Self::Other => 2,
         }
@@ -563,6 +594,7 @@ impl Action {
             Self::Command => counted(count, "Ran", "command", "commands"),
             Self::Edit => counted(changed_files(calls), "Changed", "file", "files"),
             Self::Agent => counted(count, "Ran", "agent", "agents"),
+            Self::Delegate => counted(count, "Delegated", "task", "tasks"),
             Self::Read => counted(count, "Read", "file", "files"),
             Self::CodeSearch => times(count, "Searched code"),
             Self::WebSearch => times(count, "Searched the web"),
@@ -615,8 +647,8 @@ pub(crate) fn call_failed(tool: &ToolBlock) -> bool {
 /// whole (a suite's bar, a command's live line): its newest running call.
 /// A subagent card shut shows its trigger alone (T3's); settled, a shut
 /// group shows nothing under it.
-pub(crate) fn group_live(members: &[Block]) -> Vec<&Block> {
-    if is_agent_card(members) {
+pub(crate) fn group_live<'a>(members: &'a [Block], agents: &super::AgentFaces) -> Vec<&'a Block> {
+    if is_agent_card(members, agents) {
         return Vec::new();
     }
     members
@@ -629,10 +661,8 @@ pub(crate) fn group_live(members: &[Block]) -> Vec<&Block> {
 
 /// Whether a group is agents started together: T3's subagent card
 /// (`agents::render_agent_card`).
-pub(crate) fn is_agent_card(members: &[Block]) -> bool {
-    group_tools(members)
-        .next()
-        .is_some_and(super::agents::is_agent)
+pub(crate) fn is_agent_card(members: &[Block], agents: &super::AgentFaces) -> bool {
+    group_tools(members).next().is_some_and(|tool| agents.draws(tool))
 }
 
 /// Whether an opened call that is not a command echoes its input: only
@@ -807,7 +837,7 @@ pub(crate) fn collect_group_text(
     let Some(leader) = members.first() else {
         return;
     };
-    if is_agent_card(members) {
+    if is_agent_card(members, agents) {
         let tools: Vec<_> = group_tools(members).collect();
         let _ = selection.line(leader.id, agent_card_title(&tools), Vec::new());
         let _ = selection.line(leader.id, agent_card_status(&tools), Vec::new());
@@ -817,9 +847,9 @@ pub(crate) fn collect_group_text(
     let drawn: Vec<&Block> = if expanded {
         members.iter().collect()
     } else {
-        group_live(members)
+        group_live(members, agents)
     };
-    let live = group_live(members);
+    let live = group_live(members, agents);
     for block in drawn {
         let collect = || collect_block_text(block, member_expanded(block), &[], agents, selection);
         if live.iter().any(|working| working.id == block.id) {
@@ -840,7 +870,7 @@ fn collect_tool_text(
     agents: &super::AgentFaces,
     selection: &TextRuns,
 ) {
-    if super::agents::is_agent(tool) {
+    if agents.draws(tool) {
         let row = super::agents::agent_row(tool, agents.get(&tool.call));
         let _ = selection.line(block, row.title, Vec::new());
         let _ = selection.line(block, row.detail, Vec::new());

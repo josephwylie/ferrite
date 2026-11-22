@@ -631,7 +631,10 @@ into plain values that draw themselves (`cockpit/details/content.rs`); a
 watched PR's eye is one more value on its `PrBlock`, the watch's URL from
 the Thread's digest (`Facts::watched_pr`), and its press calls the root's
 `watch_pr` (`cockpit/pr_watching.rs`), as the palette and the PR's context
-menu do.
+menu do. Main's Lineage rows for Delegates and for the Thread that
+delegated it are plain values from the digest too (`ThreadFacts::delegating`
+and `delegated_from`, ADR 0047); a row's press calls the root's
+`open_elsewhere` and its stop `cancel_delegate` (`cockpit/delegates.rs`).
 What stays on the root is the root's: moving the keyboard between the card
 and the Composer, fitting the card to the Pane's width as the columns
 move, and closing a card whose Pane lost the focus. A view would move
@@ -1232,9 +1235,12 @@ never waits. The rest still do.
      the Server was seen (`seen_told`) and tells the same unread things
      once. A new attach forgets that. An Engine in this process still
      carries each act out at once.
-  2. Turn and Session: 13 asks, 59 sites. 34 sites drop the reply, so
-     most become tells, and these are the presses an operator makes
-     most.
+  2. Turn and Session: the acts that read no reply are tells now
+     (interrupt, stopping a Subagent, Ferrite's own words, sending or
+     taking back a queued prompt, settings changed). The ones whose
+     reply the window reads still block: send, answer, rewind, fork,
+     model, effort, provider, start fresh. Each needs its reply as an
+     `Ask` and a place to say a refusal.
   3. Thread lifecycle: 16 asks, 31 sites. What follows an open, a park or
      a revive is the root's (the Panes, focus, the Project filter). Each
      needs a continuation like the Browser's `Then`.

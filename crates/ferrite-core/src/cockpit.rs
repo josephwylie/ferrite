@@ -1691,15 +1691,15 @@ impl Cockpit {
     }
 
     pub fn interrupt(&mut self, thread: ThreadKey) {
-        said(self.act_on(thread, |thread| Op::Interrupt { thread }));
+        self.tell_on(thread, |thread| Op::Interrupt { thread });
     }
 
     /// Stop one Subagent of `thread`; Main's turn and the others run on.
     pub fn stop_subagent(&mut self, thread: ThreadKey, key: &AgentKey) {
-        said(self.act_on(thread, |thread| Op::StopSubagent {
+        self.tell_on(thread, |thread| Op::StopSubagent {
             thread,
             key: key.as_str().into(),
-        }));
+        });
     }
 
     /// Answer the pending Decision `decision` names, if it still waits.
@@ -1744,7 +1744,7 @@ impl Cockpit {
 
     /// Ferrite's own words in a Thread's Pane.
     pub fn say(&mut self, thread: ThreadKey, text: String) {
-        said(self.act_on(thread, |thread| Op::Say { thread, text }));
+        self.tell_on(thread, |thread| Op::Say { thread, text });
     }
 
     pub fn search_files(
@@ -2156,6 +2156,25 @@ impl Cockpit {
         }
     }
 
+    /// Cancel `key`'s Delegate `delegate` (ADR 0047), as the press on its
+    /// Lineage row asks: the agent's `delegate.cancel`, on the Server that
+    /// follows it. An Engine in this process follows none, and says so.
+    pub fn cancel_delegate(
+        &mut self,
+        key: ThreadKey,
+        delegate: crate::delegate::DelegateId,
+    ) -> io::Result<Receiver<io::Result<()>>> {
+        let (machine, thread) = self.at_mut(key).ok_or_else(|| io::Error::from(gone()))?;
+        let op = Op::CancelDelegate { thread, delegate };
+        match &mut machine.link {
+            Link::Server(server) => server.cancel_delegate(op),
+            Link::InProcess(_) => {
+                let done = self.act_at(key.machine(), op);
+                Ok(read_here(move || done.map(drop).map_err(|error| error.message)))
+            }
+        }
+    }
+
     /// What a GitHub start's picker lists, read by `gh` where the Server
     /// runs (or here, when this window runs its agents itself).
     pub fn github_names(
@@ -2219,6 +2238,17 @@ impl Cockpit {
             .values()
             .flat_map(|machine| machine.known().map(|thread| machine.key(thread)))
             .collect()
+    }
+
+    /// Whether `thread`'s Server still has it, open or parked: `None`
+    /// until it has said what it parked, or for a machine not held. A
+    /// deleted Thread is neither.
+    pub fn holds(&self, thread: ThreadKey) -> Option<bool> {
+        let (machine, thread) = self.at(thread)?;
+        if machine.shared.open.contains(&thread) {
+            return Some(true);
+        }
+        machine.parked.has(thread)
     }
 
     /// Whose `thread` is when not the operator's (ADR 0037), open or
@@ -2459,10 +2489,10 @@ impl Cockpit {
 
     /// Send the queued prompt `id` names next (`Engine::send_queued_now`).
     pub fn send_queued_now(&mut self, thread: ThreadKey, id: &str) {
-        said(self.act_on(thread, |thread| Op::SendQueuedNow {
+        self.tell_on(thread, |thread| Op::SendQueuedNow {
             thread,
             item: id.to_string(),
-        }));
+        });
     }
 
     /// Edit the queued prompt `id` names, ahead of the current draft.
@@ -2474,12 +2504,12 @@ impl Cockpit {
         // A Server too old to send ids listed its queue by text alone
         // (`mirror::queue_of`): its items take back the latest.
         let id = (!id.is_empty()).then_some(id);
-        said(self.act_on(thread, |thread| Op::CancelQueued {
+        self.tell_on(thread, |thread| Op::CancelQueued {
             thread,
             restore,
             edit,
             item: id.map(str::to_string),
-        }));
+        });
     }
 
     /// A prompt the provider handed back, for the Composer, and whether it
@@ -2540,7 +2570,7 @@ impl Cockpit {
         for machine in machines {
             match &mut self.machines.get_mut(&machine).unwrap().link {
                 Link::InProcess(engine) => engine.apply_settings(settings),
-                Link::Server(server) => said(server.execute(Op::SettingsChanged)),
+                Link::Server(server) => server.tell(Op::SettingsChanged),
             }
             self.receive_from(machine);
         }
@@ -2883,6 +2913,26 @@ impl Cockpit {
         }
         // The digest it sends is left for the window's pump, which reads
         // the watch from it as a window of the Server does.
+        self.receive_from(thread.machine());
+    }
+
+    /// A fixture world's Delegates for `thread` (ADR 0047), changed as its
+    /// Server's follower would have changed them.
+    pub fn fixture_delegates(
+        &mut self,
+        thread: ThreadKey,
+        change: impl FnOnce(&mut crate::delegate::Delegates) -> bool,
+    ) {
+        if let Err(error) = self.in_process_of(thread).amend_delegates(thread.thread(), change) {
+            crate::log!("thread {}: fixture Delegates were not saved: {error}", thread.thread());
+        }
+        self.receive_from(thread.machine());
+    }
+
+    /// A fixture world's `thread`, delegated from `from` (ADR 0047).
+    pub fn fixture_delegated_from(&mut self, thread: ThreadKey, from: crate::DelegatedFrom) {
+        self.in_process_of(thread)
+            .fixture_delegated_from(thread.thread(), from);
         self.receive_from(thread.machine());
     }
 

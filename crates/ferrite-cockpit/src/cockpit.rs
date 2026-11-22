@@ -18,6 +18,7 @@ mod composer_menu;
 mod context_menu;
 pub(crate) mod coordinator;
 pub(crate) mod decisions;
+mod delegates;
 mod delivery;
 mod destination;
 mod details;
@@ -1608,6 +1609,8 @@ impl CockpitView {
         // What the root's own reads give, before the model is lent to the
         // transcript's update below.
         let earlier = self.earlier_history(thread, subject_view.transcript(), self.panes[index].is_main(), cx);
+        let delegates = self.delegate_faces(thread, subject_view.transcript(), cx);
+        let parent = self.delegator_link(index, cx);
         let tail = self.transcript_tail(index, cx);
         let solo = self.on_plane(thread, cx);
         self.wake_for_background_clock(index, cx);
@@ -1651,7 +1654,10 @@ impl CockpitView {
                 focused,
                 reduce_motion,
             });
-            let agents = transcript_glue::agent_faces(open.activity());
+            let mut agents = transcript_glue::agent_faces(open.activity());
+            for (call, face) in delegates {
+                agents.insert(call, face);
+            }
             let rewind = transcript_glue::rewind_gate(&open);
             // A subagent's tab draws no Composer to quote into.
             let quotes = pane.is_main();
@@ -1684,6 +1690,7 @@ impl CockpitView {
                     .unwrap_or_default(),
                 note: None,
                 earlier,
+                parent,
                 queued,
             };
             let transcript = subject_view.transcript();
@@ -1935,6 +1942,14 @@ impl CockpitView {
             ferrite_pane::transcript::TranscriptEvent::CopyFullHistory => {
                 if let Some(thread) = self.panes[index].thread() {
                     self.copy_transcript(thread, cx);
+                }
+            }
+            ferrite_pane::transcript::TranscriptEvent::OpenParent => {
+                if let Some(from) = self.panes[index]
+                    .thread()
+                    .and_then(|thread| self.facts.get(thread)?.delegated_from.clone())
+                {
+                    self.open_elsewhere(&from.server, from.thread, cx);
                 }
             }
             // A wrap-up's next step: its words go as the next prompt.

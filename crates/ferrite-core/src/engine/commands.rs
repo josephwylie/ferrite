@@ -192,6 +192,8 @@ impl Engine {
             Op::WatchPr {
                 watching: true, ..
             } => Err(failed("Watching a pull request needs the Ferrite server.")),
+            // Only a Server follows Delegates (ADR 0047).
+            Op::CancelDelegate { .. } => Err(failed("Cancelling a Delegate needs the Ferrite server.")),
             Op::WatchPr {
                 thread,
                 url,
