@@ -1196,6 +1196,7 @@ mod tests {
             shown: true,
         });
         cx.simulate_resize(size(px(500.), px(700.)));
+        cx.update(|window, _| window.activate_window());
         cx.run_until_parked();
         (handed, cx)
     }
