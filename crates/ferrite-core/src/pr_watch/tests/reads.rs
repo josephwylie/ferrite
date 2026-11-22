@@ -347,6 +347,7 @@ fn watching_again_starts_from_the_ended_watch() {
         conflicting: true,
         wakes: 4,
         remark_ids: vec!["c1".into()],
+        awaiting_baseline: None,
         ..watch.cursor.clone()
     };
     assert!(!fact.advance("o/r", 1, 999, told.clone()), "another watch's read");

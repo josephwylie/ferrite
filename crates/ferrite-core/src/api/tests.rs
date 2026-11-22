@@ -244,6 +244,8 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "thread.stop",
             "provider.list",
             "agent.result",
+            "pr.watch",
+            "pr.unwatch",
         ]
     );
 }
@@ -629,6 +631,19 @@ fn samples() -> Vec<Request> {
         request(Method::ThreadStop(ThreadParams { thread: thread() })),
         request(Method::ProviderList(Empty {})),
         request(Method::AgentResult(ThreadParams { thread: thread() })),
+        request(Method::PrWatch(PrWatchParams {
+            pr: PrParams {
+                thread: Some(ThreadId::new(14)),
+                url: Some("https://github.com/acme/app/pull/7".into()),
+                ..PrParams::default()
+            },
+            until: Some(PrWatchUntil::Merged),
+        })),
+        request(Method::PrUnwatch(PrParams {
+            repository: Some("acme/app".into()),
+            number: Some(7),
+            ..PrParams::default()
+        })),
     ]
 }
 
@@ -1977,6 +1992,33 @@ fn pull_requests_and_merging_parse_from_the_cli() {
                 on_pending: Some(crate::factory::Destination::Wait),
                 ..Default::default()
             },
+        }))
+    );
+}
+
+/// `ferrite pr watch <url> --until merged`: the PR by its url, for the
+/// Thread the call runs in unless `--thread` names one.
+#[test]
+fn a_pr_is_watched_by_its_url() {
+    assert_eq!(
+        parse(
+            "pr.watch",
+            &["https://github.com/acme/app/pull/7", "--until", "merged"]
+        ),
+        Ok(Method::PrWatch(PrWatchParams {
+            pr: PrParams {
+                url: Some("https://github.com/acme/app/pull/7".into()),
+                ..PrParams::default()
+            },
+            until: Some(PrWatchUntil::Merged),
+        }))
+    );
+    assert_eq!(
+        parse("pr.unwatch", &["--repository", "acme/app", "--number", "7"]),
+        Ok(Method::PrUnwatch(PrParams {
+            repository: Some("acme/app".into()),
+            number: Some(7),
+            ..PrParams::default()
         }))
     );
 }

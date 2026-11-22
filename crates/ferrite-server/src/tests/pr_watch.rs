@@ -227,6 +227,19 @@ impl World {
     }
 }
 
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else if std::fs::copy(entry.path(), &target).is_err() {
+            // A socket or a lock is the old Server's, not the store.
+        }
+    }
+}
+
 fn wakes_in(window: &Window, thread: ThreadId) -> Vec<(WakeNote, String)> {
     window.mirrors.view(thread).map_or(Vec::new(), |view| {
         view.transcript()
@@ -291,20 +304,20 @@ fn a_reloaded_store_repeats_nothing() {
     } = world;
     window.command(90, Op::Stop { when: When::Now });
     assert_eq!(harness.server.join().unwrap(), 0);
-    // The in-process harness keeps its listeners after shutdown; a real
-    // exec closes these sockets before the successor listens.
-    std::fs::remove_file(&harness.address).unwrap();
-    std::fs::remove_file(&harness.api).unwrap();
+    // The in-process harness keeps its listeners after shutdown, so the
+    // successor loads a copy of the store.
+    let dir = scratch("prw-reload-successor");
+    copy_dir(&harness.dir, &dir);
+    // The successor's first sweep runs at once.
+    let looked = forge.looks();
     let successor = serve_configured(
-        harness.dir.clone(),
+        dir,
         None,
         Tuning::default(),
         configured(&clock, &forge),
     );
     let mut window = attach(&successor.address);
     window.watch(thread, None);
-    // The successor's first sweep runs at once.
-    let looked = forge.looks();
     let deadline = Instant::now() + PATIENCE;
     while forge.looks() <= looked {
         assert!(Instant::now() < deadline, "the successor never swept");
@@ -386,7 +399,7 @@ fn a_merge_or_a_close_ends_the_watch_with_one_wake() {
         let (note, text) = world.woken(1);
         assert_eq!((note.summary.as_str(), text), (summary, words));
         turn_ends(&world.agent);
-        world.sweep();
+        world.idle_sweep();
         assert_eq!(world.wakes().len(), 1, "one wake");
         assert!(!world.watching(), "the watch ended");
     }
@@ -421,7 +434,7 @@ fn a_merge_the_agent_made_ends_the_watch_with_no_wake() {
     // The command's end reads the Thread's watches at once.
     world.looked_since(looked);
     turn_ends(&world.agent);
-    world.sweep();
+    world.idle_sweep();
     assert!(world.wakes().is_empty(), "{:?}", world.wakes());
     assert!(!world.watching(), "the watch ended");
 }

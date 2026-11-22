@@ -129,6 +129,13 @@ agent (`thread.get`, `thread.focus`, `thread.rename`, `agent.prompt`,
 `thread_parked`, naming it, and does nothing. `agent.result` reads it
 from its log, and `thread.revive` starts it again.
 
+Added for PR watching (ADR 0046):
+
+| Operation | Does |
+|---|---|
+| `pr.watch` | watch a PR (`url`, or `repository` and `number`) for `thread`, the calling Thread when absent: its agent is woken with the PR's news; `until` is `checks` or `merged`. A PR already merged or closed starts no watch: `{watching: false, state, next}` |
+| `pr.unwatch` | stop watching it; `was_watching` says whether it was |
+
 `notification.show` gains `sound` (`request`, `done`, `none`) and
 `important`. A Thread's answer gains `focused` and `draft`, which the
 windows tell the Server (`focused`, `composing`, gen-1 commands only a
