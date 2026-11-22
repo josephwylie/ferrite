@@ -292,10 +292,12 @@ fn snapshot(root: &Path, mut directories: Vec<PathBuf>, search: bool) -> io::Res
 }
 
 fn status(root: &Path) -> Vec<(PathBuf, Status)> {
+    use crate::spawn::NoConsoleWindow;
     use std::process::{Command, Stdio};
     let Ok(mut child) = Command::new("git")
         .args(["status", "--porcelain=v1", "-z"])
         .current_dir(root)
+        .no_console_window()
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
