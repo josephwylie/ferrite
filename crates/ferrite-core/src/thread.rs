@@ -98,6 +98,12 @@ impl ThreadKey {
     pub fn sibling(self, thread: ThreadId) -> Self {
         Self::new(self.machine, thread)
     }
+
+    /// This Thread once its machine is held again, as `machine`: its id is
+    /// its machine's Store's, which a new attach does not change.
+    pub fn held_again(self, machine: MachineId) -> Self {
+        Self::new(machine, self.thread)
+    }
 }
 
 /// A Project and the machine it is registered on: a `ProjectId` is per

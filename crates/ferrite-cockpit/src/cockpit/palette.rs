@@ -447,10 +447,13 @@ impl CockpitView {
                     .facts
                     .get(thread)
                     .and_then(|facts| facts.project_label.clone());
+                // Another machine's Thread is named after its machine, as
+                // in the Inbox.
+                let title = self.row_title(thread, cx);
                 let name = if row.status == nav::RowStatus::Parked {
-                    SharedString::from(format!("Parked \u{b7} {}", row.name))
+                    SharedString::from(format!("Parked \u{b7} {title}"))
                 } else {
-                    row.name.clone()
+                    title
                 };
                 let keys = ordinal
                     .filter(|at| *at < 9)

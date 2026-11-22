@@ -219,7 +219,7 @@ impl NavView {
             });
         }
         if let Some(machines) = machines {
-            rows.extend(self.other_machines(machines, cx));
+            rows.extend(self.other_machines(inputs, machines, cx));
         }
         if !folded && state.pinned.is_empty() && state.active.is_empty() {
             rows.push(self.empty(inputs, cx));
@@ -652,9 +652,9 @@ impl NavView {
 
     /// Every machine but this computer: its heading and, unfolded, the
     /// Threads it has open. A Thread's press opens it in place, beside
-    /// whatever the board shows; its right-click opens the Thread's menu,
-    /// as a card's does.
-    fn other_machines(&self, machines: &[NavMachine], cx: &mut Context<Self>) -> Vec<AnyElement> {
+    /// whatever the board shows; its title renames as a card's does; its
+    /// right-click opens the Thread's menu, as a card's does.
+    fn other_machines(&self, inputs: &NavInputs, machines: &[NavMachine], cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut drawn = Vec::new();
         for machine in machines.iter().filter(|machine| !machine.home) {
             drawn.push(self.machine_heading(&machine.row, cx));
@@ -662,24 +662,32 @@ impl NavView {
                 continue;
             }
             let lost = machine.row.connection != Connection::Online;
-            drawn.extend(machine.threads.iter().map(|thread| {
-                let key = thread.key;
+            let rows = inputs
+                .state
+                .elsewhere
+                .iter()
+                .filter(|row| Some(row.key.machine()) == machine.row.held);
+            for row in rows {
+                let key = row.key;
                 let nav = cx.entity().downgrade();
-                nav::machine_thread_row(thread, lost)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |_, _: &MouseDownEvent, _, cx| {
-                            cx.emit(NavEvent::Open(key));
-                        }),
-                    )
-                    .context_press(move |at, _, cx| {
-                        let _ = nav.update(cx, |nav, cx| {
-                            nav.pick_for_menu(key, cx);
-                            cx.emit(NavEvent::Menu(MenuTarget::Thread(key), MenuAt::Point(at)));
-                        });
-                    })
-                    .into_any_element()
-            }));
+                let title = self.thread_title(inputs, key, row.name.clone(), false, cx);
+                drawn.push(
+                    nav::machine_thread_row(row, lost, title)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                                cx.emit(NavEvent::Open(key));
+                            }),
+                        )
+                        .context_press(move |at, _, cx| {
+                            let _ = nav.update(cx, |nav, cx| {
+                                nav.pick_for_menu(key, cx);
+                                cx.emit(NavEvent::Menu(MenuTarget::Thread(key), MenuAt::Point(at)));
+                            });
+                        })
+                        .into_any_element(),
+                );
+            }
         }
         drawn
     }

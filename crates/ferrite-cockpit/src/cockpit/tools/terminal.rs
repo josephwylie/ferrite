@@ -37,6 +37,7 @@ use ferrite_ui::theme;
 
 use super::*;
 use crate::cockpit::context_menu::Submenu;
+use crate::cockpit::surfaces::Rehold;
 
 /// What a Terminal menu row does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -445,6 +446,29 @@ impl TerminalsView {
             TerminalEvent::Open(address) => cx.emit(TerminalsEvent::Open { thread, address: address.clone() }),
             TerminalEvent::Title(_) => {}
         }
+    }
+
+    /// The window let go of `machine`: each of its shells ends with it,
+    /// and its tab says so, to start again once the machine is back.
+    pub(in crate::cockpit) fn let_go(&mut self, machine: ferrite_core::MachineId, cx: &mut Context<Self>) {
+        let tabs = self
+            .threads
+            .iter_mut()
+            .filter(|(thread, _)| thread.machine() == machine)
+            .flat_map(|(_, shells)| &mut shells.tabs);
+        for tab in tabs.filter(|tab| tab.view().is_some()) {
+            tab.shell = Shell::Failed("The remote terminal ended when its machine was turned off.".into());
+        }
+        cx.notify();
+    }
+
+    /// A machine let go is held again: its Threads' shells are theirs.
+    pub(in crate::cockpit) fn held_again(&mut self, rehold: Rehold, cx: &mut Context<Self>) {
+        let moved: Vec<_> = self.threads.extract_if(|thread, _| rehold.key(*thread).is_some()).collect();
+        self.threads.extend(
+            moved.into_iter().filter_map(|(thread, shells)| Some((rehold.key(thread)?, shells))),
+        );
+        cx.notify();
     }
 
     /// Shell `number` of `thread` ends: its tab closed, or it exited.

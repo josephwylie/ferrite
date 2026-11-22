@@ -5,7 +5,7 @@
 //! computer draws no headings.
 
 use super::*;
-use crate::nav::{MachineThread, NavMachine};
+use crate::nav::NavMachine;
 use crate::notifications::Alert;
 use ferrite_core::cockpit::ServerState;
 use gpui::App;
@@ -29,9 +29,8 @@ pub(super) fn held(element: Div, id: impl Into<SharedString>) -> Div {
 }
 
 impl CockpitView {
-    /// Every machine for the nav, when there is more than this computer:
-    /// each heading and, for a machine other than this computer — whose
-    /// Threads are the list's own cards — the Threads it has open.
+    /// Every machine's heading for the nav, when there is more than this
+    /// computer.
     pub(super) fn machine_rows(&self, cx: &App) -> Option<Vec<NavMachine>> {
         let machines = self.machines.as_ref()?;
         if !machines.listed() {
@@ -39,39 +38,13 @@ impl CockpitView {
         }
         let model = self.cockpit.read(cx);
         let home = model.this_computer();
-        let shown = (!self.empty_board_shown(cx))
-            .then(|| model.roster().focused_thread())
-            .flatten();
         Some(
             machines
                 .rows(model)
                 .into_iter()
-                .map(|row| {
-                    let threads = match row.held {
-                        Some(machine) if Some(machine) != home => self
-                            .panes
-                            .iter()
-                            .filter_map(|pane| pane.thread())
-                            .filter(|key| key.machine() == machine && model.operators(*key))
-                            .filter_map(|key| {
-                                let open = model.thread(key)?;
-                                let digest = open.digest();
-                                Some(MachineThread {
-                                    key,
-                                    title: self.facts.name(key),
-                                    waiting: !digest.pending.is_empty(),
-                                    working: digest.working,
-                                    selected: shown == Some(key),
-                                })
-                            })
-                            .collect(),
-                        _ => Vec::new(),
-                    };
-                    NavMachine {
-                        home: row.held.is_some() && row.held == home,
-                        row,
-                        threads,
-                    }
+                .map(|row| NavMachine {
+                    home: row.held.is_some() && row.held == home,
+                    row,
                 })
                 .collect(),
         )
@@ -172,8 +145,10 @@ impl CockpitView {
         if self.machines.is_none() {
             return;
         }
-        // What the Files of a machine about to go hold is saved first.
+        // What the Files and the new Panes of a machine about to go hold
+        // is saved first.
         self.sync_working_sets(cx);
+        self.save_drafts(cx);
         let before: Vec<ferrite_core::MachineId> = self.cockpit.read(cx).machines().collect();
         let machines = self.machines.as_mut().expect("checked");
         self.cockpit.update(cx, |cockpit, _| {
@@ -184,8 +159,10 @@ impl CockpitView {
     }
 
     /// The machines held in `before` that the window let go of since, and
-    /// those it took: the Panels of each are put away or held, the Inbox
-    /// forgets each one gone, and the Panes and the nav redraw.
+    /// those it took: the Panels of each are put away or held, a shell of
+    /// each one gone ends, what the window keeps by the Threads of each one
+    /// held again follows them to their new keys, the Inbox forgets each
+    /// one gone, and the Panes and the nav redraw.
     pub(super) fn machines_let_go(
         &mut self,
         before: &[ferrite_core::MachineId],
@@ -200,7 +177,18 @@ impl CockpitView {
         if gone.is_empty() && before.len() == now.len() {
             return;
         }
-        self.panel.hold(self.cockpit.read(cx));
+        for machine in &gone {
+            self.terminals.update(cx, |terminals, cx| terminals.let_go(*machine, cx));
+        }
+        self.forget_projects_of(&gone, cx);
+        let reheld = self.panel.hold(self.cockpit.read(cx));
+        for rehold in &reheld {
+            self.terminals.update(cx, |terminals, cx| terminals.held_again(*rehold, cx));
+            self.side_chat.update(cx, |chat, cx| chat.held_again(*rehold, cx));
+        }
+        if !reheld.is_empty() {
+            self.reopen_put_away_drafts(cx);
+        }
         self.toasts.update(cx, |toasts, cx| {
             for machine in &gone {
                 toasts.needs_you.forget(*machine);
@@ -211,18 +199,29 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// The window let go of `gone`: a Project of theirs names nothing it
+    /// holds, so no guess of where a new Thread starts (the nav's filter,
+    /// the last Project worked in) names one any longer, and each new Pane
+    /// aimed at one goes with its machine. A new Thread starts on a machine
+    /// the window holds: before any Project there, the new-Project card on
+    /// this computer (`start_machine`).
+    fn forget_projects_of(&mut self, gone: &[ferrite_core::MachineId], cx: &mut Context<Self>) {
+        let gone_with = |project: Option<ProjectKey>| project.is_some_and(|project| gone.contains(&project.machine()));
+        if gone_with(self.nav_filter) {
+            self.nav_filter = None;
+        }
+        if gone_with(self.launch_project) {
+            self.launch_project = super::startup_project(self.cockpit.read(cx));
+        }
+        self.put_away_drafts(gone, cx);
+    }
+
     /// Whether `thread` is one of the list's own cards: this computer's,
     /// or any while the window lists no other machine. Another machine's
     /// Threads are rows under its heading.
     pub(super) fn home_card(&self, thread: ThreadKey, cx: &App) -> bool {
         let listed = self.machines.as_ref().is_some_and(|machines| machines.listed());
         !listed || self.cockpit.read(cx).this_computer() == Some(thread.machine())
-    }
-
-    /// Whether the list draws `thread` as a card: one of its own, and the
-    /// Project filter's.
-    pub(super) fn carded(&self, thread: ThreadKey, cx: &App) -> bool {
-        self.home_card(thread, cx) && self.admitted(thread, cx)
     }
 
     /// `thread`'s title as the Inbox and a toast say it: after its

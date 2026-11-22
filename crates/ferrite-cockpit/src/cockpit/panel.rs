@@ -42,7 +42,7 @@ mod sections;
 mod strip;
 pub(in crate::cockpit) mod controls;
 
-use super::surfaces::{Close, CloseSelection, PrTab, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
+use super::surfaces::{Close, CloseSelection, PrTab, Rehold, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
 use ferrite_ui::icons::{self, icon};
 use super::*;
 
@@ -103,7 +103,10 @@ impl Panel {
 
     /// Hold the Panels of every machine `cockpit` holds, as its saved
     /// files name it (F-A8), and put away those of every machine it let go.
-    pub(crate) fn hold(&mut self, cockpit: &Cockpit) {
+    /// The machines it holds again, for what else the window keeps by
+    /// their Threads' keys.
+    #[must_use]
+    pub(crate) fn hold(&mut self, cockpit: &Cockpit) -> Vec<Rehold> {
         let gone: Vec<ferrite_core::MachineId> = self
             .surfaces
             .machines()
@@ -112,6 +115,7 @@ impl Panel {
         for machine in gone {
             self.surfaces.let_go(machine);
         }
+        let mut reheld = Vec::new();
         for machine in cockpit.machines() {
             if self.surfaces.machines().any(|held| held == machine) {
                 continue;
@@ -120,8 +124,9 @@ impl Panel {
                 continue;
             };
             let reading = cockpit.registry(machine);
-            self.surfaces.hold(machine, saved_as, |thread| reading.key(thread));
+            reheld.extend(self.surfaces.hold(machine, saved_as, |thread| reading.key(thread)));
         }
+        reheld
     }
 
     fn with_storage(

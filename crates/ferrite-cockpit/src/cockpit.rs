@@ -1085,7 +1085,8 @@ impl CockpitView {
         machines: Option<crate::machines::Machines>,
         cx: &mut Context<Self>,
     ) -> Self {
-        panel.hold(&cockpit);
+        // A new window holds each machine for the first time: none again.
+        let _ = panel.hold(&cockpit);
         ferrite_pane::pane::init_components(cx);
         subagents::init(cx);
         cockpit.settings_changed(&prefs.settings);
@@ -1418,6 +1419,20 @@ impl CockpitView {
     /// `open_draft_with_choice`, which knows their binding; the roster
     /// never holds a draft this window did not open.
     fn sync_panes(&mut self, cx: &mut Context<Self>) {
+        // A side chat's fork has no Pane: one the roster took, as its
+        // machine listed it open on being held again, leaves it.
+        let forks: Vec<ThreadKey> = self
+            .cockpit
+            .read(cx)
+            .roster()
+            .panes()
+            .iter()
+            .filter_map(|pane| pane.thread())
+            .filter(|thread| self.side_chat.read(cx).owns(*thread))
+            .collect();
+        for fork in forks {
+            self.cockpit.update(cx, |cockpit, _| cockpit.set_aside(fork));
+        }
         let wanted = self.cockpit.read(cx).roster().panes().to_vec();
         let before = self.panes.len();
         self.panes.retain(|pane| wanted.contains(&pane.identity));
@@ -2149,6 +2164,7 @@ impl CockpitView {
             self.sync_menu(cx);
         }
         let frame = self.cockpit.update(cx, |cockpit, _| cockpit.pump());
+        self.settle_side_forks(cx);
         self.fetch_attachment_previews(cx);
         self.note_work(&frame);
         self.prune_background_stops(cx);
@@ -2925,6 +2941,24 @@ impl CockpitView {
 
     /// The Panes on screen, as indices into the mirror — the roster's
     /// `visible`, in its order.
+    /// Every Thread whose records this frame draws, which the window
+    /// streams whole while it does; every other reads its digest (ADR
+    /// 0032, F-A2): the shown Pane's Thread, or the Factory's Worker or
+    /// Coordinator in its place, and the fork of the side chat the Panel
+    /// shows. A subagent's transcript, the Panel's other Surfaces and a
+    /// review beside the Pane read the shown Thread's own records.
+    fn transcripts_drawn(&self, cx: &gpui::App) -> Vec<ThreadKey> {
+        let board = match self.factory_worker_drawn(cx) {
+            Some(worker) => vec![worker],
+            None => self
+                .visible_indices(cx)
+                .into_iter()
+                .filter_map(|index| self.panes[index].thread())
+                .collect(),
+        };
+        board.into_iter().chain(self.side_chat_drawn(cx)).collect()
+    }
+
     fn visible_indices(&self, cx: &gpui::App) -> Vec<usize> {
         self.cockpit
             .read(cx)
@@ -6754,19 +6788,8 @@ impl CockpitView {
         self.retire_task_toasts(window, cx);
         self.place_toasts(cx);
         self.maximized = window.is_maximized();
-        // What this frame draws is what the window streams whole;
-        // everything else reads its digest (ADR 0032).
-        let drawn: Vec<ThreadKey> = self
-            .visible_indices(cx)
-            .into_iter()
-            .filter_map(|index| self.panes[index].thread())
-            .collect();
-        // The open Task's Worker, drawn in its panel, streams whole too.
         self.leave_destination_if_moved(cx);
-        let drawn: Vec<ThreadKey> = match self.factory_worker_drawn(cx) {
-            Some(worker) => vec![worker],
-            None => drawn,
-        };
+        let drawn = self.transcripts_drawn(cx);
         self.cockpit.update(cx, |cockpit, _| cockpit.draws_transcripts(drawn));
 
         for index in 0..self.panes.len() {

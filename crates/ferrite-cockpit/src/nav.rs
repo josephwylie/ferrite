@@ -166,8 +166,11 @@ pub struct NavState {
     pub working: Vec<ThreadRow>,
     /// Snoozed Threads, the soonest to wake first.
     pub snoozed: Vec<ThreadRow>,
-    /// Parked Threads, in the park order.
+    /// Parked Threads, every machine's, in the park order.
     pub parked: Vec<ThreadRow>,
+    /// Every other machine's open Threads, each drawn under its machine's
+    /// heading (ADR 0045, P6), in creation order.
+    pub elsewhere: Vec<ThreadRow>,
 }
 
 impl NavState {
@@ -180,12 +183,14 @@ impl NavState {
         }
     }
 
+    /// Every open Thread's row, every machine's.
     pub fn open_rows(&self) -> impl Iterator<Item = &ThreadRow> {
         self.pinned
             .iter()
             .chain(&self.active)
             .chain(&self.working)
             .chain(&self.snoozed)
+            .chain(&self.elsewhere)
     }
 }
 
@@ -868,27 +873,14 @@ pub fn notice(text: SharedString) -> Div {
 
 // ------------------------------------------------------------- machines
 
-/// A machine as the nav draws it (ADR 0026): its heading and, for a
-/// machine other than this computer — whose Threads are the list's own
-/// cards — the Threads it has open.
+/// A machine's heading as the nav draws it (ADR 0026). Under it, for a
+/// machine other than this computer, whose Threads are the list's own
+/// cards, go its open Threads (`NavState::elsewhere`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct NavMachine {
     pub row: MachineRow,
     /// This computer, held: the list's cards are its Threads.
     pub home: bool,
-    pub threads: Vec<MachineThread>,
-}
-
-/// One open Thread under its machine's heading, as its row draws it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MachineThread {
-    pub key: ThreadKey,
-    pub title: SharedString,
-    pub working: bool,
-    /// A Decision waits.
-    pub waiting: bool,
-    /// The board shows it.
-    pub selected: bool,
 }
 
 /// A machine's heading (ADR 0026), in the heading style: its chevron
@@ -952,21 +944,18 @@ pub fn machine_fold(index: usize, folded: bool) -> Stateful<Div> {
         ))
 }
 
-/// One open Thread under its machine's heading: its mark, its title and
-/// its word, from what the machine streams of it. The cockpit wires the
-/// press: it opens the Thread in place. A machine that went keeps its
-/// rows, dimmed.
-pub fn machine_thread_row(row: &MachineThread, lost: bool) -> Stateful<Div> {
-    let (status, word) = if row.waiting {
-        (RowStatus::NeedsYou, Some((words::NEEDS_YOU, ATTENTION)))
-    } else if row.working {
-        (RowStatus::Working, Some((words::WORKING, INK_SUBTLE)))
-    } else {
-        (RowStatus::Idle, None)
+/// One open Thread under its machine's heading: its mark, its title cell
+/// (`title`: the row's name, or the rename field while it renames) and its
+/// word. The cockpit wires the press: it opens the Thread in place. A
+/// machine that went keeps its rows, dimmed.
+pub fn machine_thread_row(row: &ThreadRow, lost: bool, title: impl IntoElement) -> Stateful<Div> {
+    let word = match row.status {
+        RowStatus::NeedsYou => Some((words::NEEDS_YOU, ATTENTION)),
+        RowStatus::Working | RowStatus::Failing => Some((words::WORKING, INK_SUBTLE)),
+        _ => None,
     };
     let (machine, thread) = (row.key.machine().get(), row.key.thread().get());
     let key = SharedString::from(format!("nav-machine-{machine}-{thread}"));
-    let title = row.title.clone();
     // Thread ids are per Server: the machine is part of the id.
     row_frame(key.clone(), key.clone(), row.selected)
         .debug_selector(move || key.to_string())
@@ -976,7 +965,7 @@ pub fn machine_thread_row(row: &MachineThread, lost: bool) -> Stateful<Div> {
         .h(px(NAV_ROW_H))
         .pl(px(NAV_TITLE_X))
         .pr(px(NAV_ROW_PAD_X))
-        .child(mark_at(status, NAV_ROW_PAD_X - 1.0, MarkSeat::Member))
+        .child(mark_at(row.status, NAV_ROW_PAD_X - 1.0, MarkSeat::Member))
         .child(div().flex_1().min_w_0().truncate().child(title))
         .children(word.map(|(word, ink)| trailing(word, FS_META, ink)))
 }

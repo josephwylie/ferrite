@@ -477,7 +477,12 @@ fn nav_state(
     let mut pinned = Vec::new();
     let mut snoozed = Vec::new();
     for &(key, section, _) in listed {
-        if !view.carded(key, cx) {
+        if !view.admitted(key, cx) {
+            continue;
+        }
+        // Another machine's open Thread is a row under its heading.
+        if !view.home_card(key, cx) {
+            state.elsewhere.push(row(key));
             continue;
         }
         match section {
@@ -510,12 +515,7 @@ fn nav_state(
         )
     });
     state.working.sort_by_key(latest);
-    state.parked = view
-        .parked_threads(cx)
-        .into_iter()
-        .filter(|thread| view.home_card(*thread, cx))
-        .map(|thread| row(thread))
-        .collect();
+    state.parked = view.parked_threads(cx).into_iter().map(row).collect();
     state
 }
 

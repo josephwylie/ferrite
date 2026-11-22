@@ -14,6 +14,8 @@ use ferrite_core::{MachineId, MachineKey, SavedThread};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+mod everywhere;
+
 /// A bridge whose every tunnel ends as ssh does after `failure`.
 fn failing(machine: &Machine, settings_dir: &std::path::Path, failure: Failure) -> Bridge {
     Bridge::new(
@@ -204,6 +206,19 @@ impl ferrite_core::providers::Session for Agent {
     }
     fn respond_to_decision(&mut self, _: &str, _: DecisionAnswer) -> std::io::Result<()> {
         Ok(())
+    }
+    /// It can cut its conversation, so it offers a side chat.
+    fn supports_control(&self, kind: ferrite_core::ControlKind) -> bool {
+        kind == ferrite_core::ControlKind::Rewind
+    }
+    /// Forks afresh, at once: the fork's agent is the next Session.
+    fn fork(
+        &mut self,
+        _: ferrite_core::providers::ForkRequest,
+    ) -> std::io::Result<ferrite_core::providers::ForkAck> {
+        let (answer, ack) = ferrite_core::doorbell::sync_channel(1);
+        answer.send(Ok(ferrite_core::providers::Forked::Fresh)).unwrap();
+        Ok(ack)
     }
 }
 

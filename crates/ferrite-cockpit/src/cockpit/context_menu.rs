@@ -1047,7 +1047,11 @@ impl CockpitView {
                 self.fork_thread(key, None, None, cx)
             }
             (MenuTarget::Thread(key), MenuVerb::CopyLink) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(thread_link(key.thread())));
+                let machine = self.machine_label(key.machine(), cx);
+                cx.write_to_clipboard(ClipboardItem::new_string(thread_link(
+                    machine.as_deref(),
+                    key.thread(),
+                )));
             }
             (_, MenuVerb::OpenTerminal) => {
                 if let Some(path) = self.target_path(target, cx) {
@@ -1290,8 +1294,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_threads_link_is_the_cli_command_that_focuses_it() {
-        assert_eq!(thread_link(ThreadId::new(12)), "ferrite thread focus 12");
+    fn a_threads_link_is_the_cli_command_that_focuses_it_on_its_machine() {
+        assert_eq!(thread_link(None, ThreadId::new(12)), "ferrite thread focus 12");
+        assert_eq!(
+            thread_link(Some("box"), ThreadId::new(12)),
+            "ferrite --machine box thread focus 12"
+        );
+        assert_eq!(
+            thread_link(Some("my box"), ThreadId::new(12)),
+            "ferrite --machine 'my box' thread focus 12"
+        );
     }
 
     #[cfg(target_os = "macos")]

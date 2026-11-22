@@ -371,7 +371,27 @@ pub(crate) struct Surfaces {
     /// back as they were read, and held again when the window holds their
     /// machine.
     elsewhere: BTreeMap<SavedThread, ThreadSurfaces>,
+    /// What each machine the window let go of was held as, until it holds
+    /// that machine again (`Rehold`).
+    let_go: HashMap<MachineKey, MachineId>,
     revision: u64,
+}
+
+/// A machine the window holds again, after it let go of it: held as `now`,
+/// it was `was`. A machine's Thread ids are its Store's, which a new attach
+/// does not change, so what the window keeps by a Thread's key moves to
+/// the same Thread's new key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Rehold {
+    pub(crate) was: MachineId,
+    pub(crate) now: MachineId,
+}
+
+impl Rehold {
+    /// `thread`'s key now, when it was a Thread of the machine let go.
+    pub(crate) fn key(self, thread: ThreadKey) -> Option<ThreadKey> {
+        (thread.machine() == self.was).then(|| thread.held_again(self.now))
+    }
 }
 
 impl Surfaces {
@@ -391,13 +411,15 @@ impl Surfaces {
     }
 
     /// Hold the Panels of `machine`, which saved files call `saved_as`,
-    /// each by the key `key` gives its Thread there.
+    /// each by the key `key` gives its Thread there. The machine it was,
+    /// when the window let it go.
     pub(crate) fn hold(
         &mut self,
         machine: MachineId,
         saved_as: MachineKey,
         key: impl Fn(ThreadId) -> ThreadKey,
-    ) {
+    ) -> Option<Rehold> {
+        let was = self.let_go.remove(&saved_as);
         let held: Vec<SavedThread> = self
             .elsewhere
             .keys()
@@ -409,28 +431,29 @@ impl Surfaces {
             self.threads.insert(key(saved.thread), surfaces);
         }
         self.held.insert(machine, saved_as);
+        was.map(|was| Rehold { was, now: machine })
     }
 
-    /// The window let go of `machine`: what each of its Panels showed is
-    /// built again from its subject, as at a restart, and the Panels are
-    /// kept as saved until the window holds that machine again.
+    /// The window let go of `machine`: its Panels are kept as they are,
+    /// every tab, until the window holds that machine again. The window
+    /// did not restart, so a tab whose resource ended with the machine (a
+    /// shell) says so in its place; only a restart drops those tabs.
     pub(crate) fn let_go(&mut self, machine: MachineId) {
-        if !self.held.contains_key(&machine) {
+        let Some(saved_as) = self.held.remove(&machine) else {
             return;
-        }
-        let before = self.persisted();
+        };
         let gone: Vec<(ThreadKey, ThreadSurfaces)> = self
             .threads
             .extract_if(|key, _| key.machine() == machine)
             .collect();
         for (key, surfaces) in gone {
-            let saved = self.saved(key);
-            let stored = PersistedThread::of(saved.clone(), &surfaces);
-            let surfaces = restored(stored, |id| id.lifecycle().restart == Restart::Restore);
+            let saved = SavedThread {
+                machine: saved_as.clone(),
+                thread: key.thread(),
+            };
             self.elsewhere.insert(saved, surfaces);
         }
-        self.held.remove(&machine);
-        self.revision += u64::from(before != self.persisted());
+        self.let_go.insert(saved_as, machine);
     }
 
     /// The machines whose Panels are held.

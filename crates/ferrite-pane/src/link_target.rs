@@ -122,7 +122,7 @@ impl LinkTarget {
             Self::PullRequest { number, .. } => {
                 Err(format!("PR #{number} has no address yet").into())
             }
-            Self::Thread(thread) => Ok(thread_link(*thread)),
+            Self::Thread(thread) => Ok(thread_link(None, *thread)),
             Self::File(file) => Ok(file.address()),
             Self::Fragment(fragment) => Ok(fragment.clone()),
             Self::Unavailable(why) => Err(why.clone()),
@@ -199,9 +199,25 @@ pub fn notify_unavailable(why: &str, window: &mut Window, cx: &mut App) {
 
 /// A Thread's link, in the form the CLI takes: there is no `ferrite://`
 /// scheme, so the command that lands every window on it (`thread.focus`,
-/// ADR 0027).
-pub fn thread_link(thread: ThreadId) -> String {
-    format!("ferrite thread focus {}", thread.get())
+/// ADR 0027). A Thread on another machine is named on that machine
+/// (`--machine`, by the name Settings saves it under): its id is that
+/// machine's.
+pub fn thread_link(machine: Option<&str>, thread: ThreadId) -> String {
+    let on = machine.map_or_else(String::new, |name| format!("--machine {} ", shell_word(name)));
+    format!("ferrite {on}thread focus {}", thread.get())
+}
+
+/// `word` as a shell reads it back: bare while it is plain, else quoted.
+fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-@:+".contains(c));
+    if plain {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    }
 }
 
 #[cfg(test)]

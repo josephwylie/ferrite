@@ -170,6 +170,11 @@ impl Drafts {
         self.fresh.insert(draft, kept.clone()) != Some(kept)
     }
 
+    /// What new Pane `draft` is kept with, when it holds any words.
+    pub fn fresh(&self, draft: DraftId) -> Option<&FreshDraft> {
+        self.fresh.get(&draft)
+    }
+
     /// A new Pane was discarded unsent: its prompt is not kept for the next
     /// launch. Says whether anything changed, so a caller saves only then.
     pub fn discard_fresh(&mut self, draft: DraftId) -> bool {
