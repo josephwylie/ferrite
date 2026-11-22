@@ -85,6 +85,9 @@ pub struct Launch {
     pub delegated_from: Option<crate::DelegatedFrom>,
     /// The key of the `thread.start` that opens it (`Engine::started_by`).
     pub request: Option<String>,
+    /// The most its agent may do without asking (`thread.start`'s
+    /// `mode`), kept for its life: every Session starts within it.
+    pub cap: Option<crate::runtime_mode::RuntimeMode>,
 }
 
 /// Everything one spawn needs, in one struct: every path that starts a
@@ -130,6 +133,9 @@ pub struct SpawnRequest<'a> {
     /// Coordinator's Session are offered their Factory tools
     /// (`api::tools`).
     pub owner: Option<&'a crate::ThreadOwner>,
+    /// The most the agent may do without asking: the spawner starts it at
+    /// the narrower of this and the mode it would otherwise start in.
+    pub cap: Option<crate::runtime_mode::RuntimeMode>,
 }
 
 /// What a Session starts with beyond Ferrite's own (`thread.start --args
@@ -603,6 +609,8 @@ struct Thread {
     owner: Option<crate::ThreadOwner>,
     /// The Thread on another machine that delegated it.
     delegated_from: Option<crate::DelegatedFrom>,
+    /// The most its agent may do without asking.
+    cap: Option<crate::runtime_mode::RuntimeMode>,
     /// What waits for the Session to take it.
     awaiting: Awaiting,
     /// The Session was started for use (ADR 0032) rather than asked for:
@@ -739,6 +747,7 @@ impl Thread {
             snooze: None,
             owner: None,
             delegated_from: None,
+            cap: None,
             awaiting: Awaiting::default(),
             woken: false,
             settled_at: None,
@@ -1450,6 +1459,7 @@ impl Engine {
                 ),
                 launch: thread.agent_launch(thread.provider),
                 owner: thread.owner.as_ref(),
+                cap: thread.cap,
             },
         );
         Some(spawned.map(|session| thread.begin_session(session)))
@@ -1561,6 +1571,7 @@ impl Engine {
             owner,
             delegated_from,
             request,
+            cap,
             ..
         } = launch;
         let root =
@@ -1647,6 +1658,7 @@ impl Engine {
                 owner: owner.clone(),
                 delegated_from: delegated_from.clone(),
                 request,
+                cap,
             },
         );
         let (id, mut writer) = match created {
@@ -1705,6 +1717,7 @@ impl Engine {
             ),
             launch: launch_args::for_provider(first_args.as_ref(), provider),
             owner: owner.as_ref(),
+            cap,
         };
         let started = match make {
             MakeCheckout::BeforeReply => prepare().and_then(|()| self.spawner.start(request)),
@@ -1742,6 +1755,7 @@ impl Engine {
             state.project = Some(project);
             state.owner = owner;
             state.delegated_from = delegated_from;
+            state.cap = cap;
             state.reserved_worktree = reserved;
         }
         self.note_open(id);
@@ -2045,6 +2059,7 @@ impl Engine {
                     ),
                     launch: state.agent_launch(provider),
                     owner: state.owner.as_ref(),
+                    cap: state.cap,
                 },
             );
             Some(started.map_err(ProvisionError::Spawn)?)
@@ -2378,6 +2393,7 @@ impl Engine {
         let snooze = snapshot.snooze();
         let owner = snapshot.owner().cloned();
         let delegated_from = snapshot.delegated_from().cloned();
+        let cap = snapshot.cap();
         let resume = match &launch {
             Some(launch) => launch.resume.clone(),
             None => snapshot.resume_target().map(str::to_string),
@@ -2434,6 +2450,7 @@ impl Engine {
         state.snooze = snooze;
         state.owner = owner;
         state.delegated_from = delegated_from;
+        state.cap = cap;
         state.project = project;
         state.agent_args = agent_args;
         if let Some(error) = unreadable_args {
@@ -2630,6 +2647,7 @@ impl Engine {
                     None => state.agent_launch(state.provider),
                 },
                 owner: state.owner.as_ref(),
+                cap: state.cap,
             },
         )?;
         state.begin_session(session);
@@ -2866,6 +2884,18 @@ impl Engine {
     /// parked, while the Store holds it (`Store::started_by`).
     pub fn started_by(&self, request: &str) -> io::Result<Option<ThreadId>> {
         self.store.started_by(request)
+    }
+
+    /// The most `thread`'s agent may do without asking, open or parked,
+    /// when it was started capped, and the Provider it runs on.
+    pub fn cap(&self, thread: ThreadId) -> Option<(Provider, crate::runtime_mode::RuntimeMode)> {
+        match self.threads.get(&thread) {
+            Some(state) => state.cap.map(|cap| (state.provider, cap)),
+            None => {
+                let meta = self.store.peek(thread).ok()?;
+                meta.cap.map(|cap| (meta.provider, cap))
+            }
+        }
     }
 
     /// Threads the store holds that no Pane is showing — what a restart finds,

@@ -1,7 +1,8 @@
 //! A Thread another machine's Thread starts to do a piece of work (a
 //! Delegate), from this machine's side: one start per key with
 //! its task sent inside it, a mode capped at the narrower of the caller's
-//! and this machine's, the Labs gate, and what `provider.list` offers.
+//! and this machine's that nothing the caller sends can widen, the Labs
+//! gate, and what `provider.list` offers.
 
 use super::*;
 use ferrite_core::settings::{Labs, Settings};
@@ -153,47 +154,60 @@ fn a_delegated_start_is_refused_while_linked_machines_is_off() {
     started(&own);
 }
 
-/// A capped Thread runs at the narrower of its cap and what this
-/// machine's settings and its own arguments start it at: a broad start is
-/// narrowed by the arguments that win over the others, a narrow one is
-/// never broadened.
+/// A capped Thread carries its cap to every Session it starts, a revive
+/// with or without arguments of its own too, and its arguments go to the
+/// CLI as they were given: the spawner holds each Session within the cap
+/// (`spawner`'s `a_capped_session_starts_within_its_cap`).
 #[test]
-fn a_capped_start_runs_at_the_narrower_of_its_cap_and_this_machines_mode() {
+fn a_capped_thread_carries_its_cap_to_every_session() {
+    use ferrite_core::runtime_mode::RuntimeMode;
     let harness = start("delegated-cap");
     let mut caller = call(&harness);
-    let mut start = |id: &str, params: serde_json::Value| {
-        started(&caller.answer(id, "thread.start", params));
+    let last = || {
         harness.sessions.recv_timeout(PATIENCE).unwrap();
-        harness.told.lock().unwrap().args.last().cloned().unwrap()
+        let told = harness.told.lock().unwrap();
+        (
+            told.args.last().cloned().unwrap(),
+            *told.caps.last().unwrap(),
+        )
     };
-    // Codex's own sandbox is unknown here, so it counts as full access.
-    let codex = start(
+    let thread = started(&caller.answer(
         "1",
-        serde_json::json!({ "cwd": harness.dir, "provider": "codex", "mode": "auto_accept_edits" }),
-    );
-    assert_eq!(codex, ["-a", "on-request", "-s", "workspace-write"]);
-    let claude = start(
-        "2",
+        "thread.start",
         serde_json::json!({
-            "cwd": harness.dir,
-            "args": ["--dangerously-skip-permissions"],
-            "mode": "auto",
+            "cwd": harness.dir, "args": ["--model", "haiku"], "mode": "auto",
         }),
-    );
+    ));
     assert_eq!(
-        claude,
-        [
-            "--dangerously-skip-permissions",
-            "--permission-mode",
-            "auto"
-        ]
+        last(),
+        (
+            vec!["--model".into(), "haiku".into()],
+            Some(RuntimeMode::Auto)
+        )
     );
-    // Claude's default asks first: a broader cap leaves it as it is.
-    let narrow = start(
-        "3",
-        serde_json::json!({ "cwd": harness.dir, "mode": "full_access" }),
-    );
-    assert_eq!(narrow, Vec::<String>::new());
+    for (id, revive) in [
+        ("2", serde_json::json!({ "thread": thread })),
+        (
+            "3",
+            serde_json::json!({ "thread": thread, "args": ["--effort", "high"] }),
+        ),
+    ] {
+        caller.answer(
+            "close",
+            "thread.close",
+            serde_json::json!({ "thread": thread }),
+        );
+        let revived = caller.answer(id, "thread.revive", revive);
+        assert!(revived.get("result").is_some(), "{revived}");
+        assert_eq!(last().1, Some(RuntimeMode::Auto), "{id}");
+    }
+
+    started(&caller.answer(
+        "4",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir }),
+    ));
+    assert_eq!(last().1, None);
 }
 
 /// `provider.list` (T3 Code's `orchestrator_capabilities`): each provider
@@ -238,47 +252,119 @@ fn provider_list_says_what_this_machine_runs_threads_on() {
 /// and the name the refusal gives it. The Server alone sets that under a
 /// cap.
 const WIDENING: &[(&str, &[&str], &str)] = &[
-    ("claude", &["--dangerously-skip-permissions"], "--dangerously-skip-permissions"),
-    ("claude", &["--allow-dangerously-skip-permissions"], "--allow-dangerously-skip-permissions"),
-    ("claude", &["--permission-mode", "bypassPermissions"], "--permission-mode"),
-    ("claude", &["--permission-mode=acceptEdits"], "--permission-mode"),
+    (
+        "claude",
+        &["--dangerously-skip-permissions"],
+        "--dangerously-skip-permissions",
+    ),
+    (
+        "claude",
+        &["--allow-dangerously-skip-permissions"],
+        "--allow-dangerously-skip-permissions",
+    ),
+    (
+        "claude",
+        &["--permission-mode", "bypassPermissions"],
+        "--permission-mode",
+    ),
+    (
+        "claude",
+        &["--permission-mode=acceptEdits"],
+        "--permission-mode",
+    ),
     ("claude", &["--allowedTools", "Write"], "--allowedTools"),
     ("claude", &["--allowedTools=Bash"], "--allowedTools"),
     ("claude", &["--allowed-tools", "Bash"], "--allowed-tools"),
-    ("claude", &["--permission-prompt-tool", "mcp__x__allow"], "--permission-prompt-tool"),
-    ("claude", &["--permission-prompts", "host"], "--permission-prompts"),
-    ("claude", &["--settings", r#"{"permissions":{"allow":["Bash"]}}"#], "--settings"),
-    ("claude", &["--setting-sources", "user"], "--setting-sources"),
+    (
+        "claude",
+        &["--permission-prompt-tool", "mcp__x__allow"],
+        "--permission-prompt-tool",
+    ),
+    (
+        "claude",
+        &["--permission-prompts", "host"],
+        "--permission-prompts",
+    ),
+    (
+        "claude",
+        &["--settings", r#"{"permissions":{"allow":["Bash"]}}"#],
+        "--settings",
+    ),
+    (
+        "claude",
+        &["--setting-sources", "user"],
+        "--setting-sources",
+    ),
     ("claude", &["--add-dir", "/"], "--add-dir"),
     ("claude", &["--mcp-config", "servers.json"], "--mcp-config"),
     ("claude", &["--plugin-dir", "plugin"], "--plugin-dir"),
-    ("claude", &["--plugin-url", "https://example.com/p.zip"], "--plugin-url"),
+    (
+        "claude",
+        &["--plugin-url", "https://example.com/p.zip"],
+        "--plugin-url",
+    ),
     ("claude", &["--agents", "{}"], "--agents"),
     ("claude", &["--agent", "reviewer"], "--agent"),
     ("claude", &["--bare"], "--bare"),
     ("claude", &["--safe-mode"], "--safe-mode"),
     ("codex", &["--yolo"], "--yolo"),
-    ("codex", &["--dangerously-bypass-approvals-and-sandbox"], "--dangerously-bypass-approvals-and-sandbox"),
+    (
+        "codex",
+        &["--dangerously-bypass-approvals-and-sandbox"],
+        "--dangerously-bypass-approvals-and-sandbox",
+    ),
     ("codex", &["-s", "danger-full-access"], "-s"),
     ("codex", &["-sdanger-full-access"], "-s"),
     ("codex", &["--sandbox", "workspace-write"], "--sandbox"),
     ("codex", &["--sandbox=danger-full-access"], "--sandbox"),
     ("codex", &["-a", "never"], "-a"),
-    ("codex", &["--ask-for-approval", "never"], "--ask-for-approval"),
+    (
+        "codex",
+        &["--ask-for-approval", "never"],
+        "--ask-for-approval",
+    ),
     ("codex", &["--approve-for-me"], "--approve-for-me"),
-    ("codex", &["--dangerously-bypass-hook-trust"], "--dangerously-bypass-hook-trust"),
+    (
+        "codex",
+        &["--dangerously-bypass-hook-trust"],
+        "--dangerously-bypass-hook-trust",
+    ),
     ("codex", &["-p", "yolo"], "-p"),
     ("codex", &["--profile", "yolo"], "--profile"),
     ("codex", &["--add-dir", "/"], "--add-dir"),
     ("codex", &["-c", "approval_policy=never"], "approval_policy"),
-    ("codex", &["-c", "sandbox_mode=danger-full-access"], "sandbox_mode"),
-    ("codex", &["--config", "sandbox_workspace_write.network_access=true"], "sandbox_workspace_write"),
-    ("codex", &["--config=sandbox_permissions=[\"disk-full-read-access\"]"], "sandbox_permissions"),
+    (
+        "codex",
+        &["-c", "sandbox_mode=danger-full-access"],
+        "sandbox_mode",
+    ),
+    (
+        "codex",
+        &["--config", "sandbox_workspace_write.network_access=true"],
+        "sandbox_workspace_write",
+    ),
+    (
+        "codex",
+        &["--config=sandbox_permissions=[\"disk-full-read-access\"]"],
+        "sandbox_permissions",
+    ),
     ("codex", &["-capproval_policy=never"], "approval_policy"),
-    ("codex", &["-c", "approvals_reviewer=auto_review"], "approvals_reviewer"),
+    (
+        "codex",
+        &["-c", "approvals_reviewer=auto_review"],
+        "approvals_reviewer",
+    ),
     ("codex", &["-c", "profile=yolo"], "profile"),
-    ("codex", &["-c", "profiles.yolo.approval_policy=never"], "profiles"),
-    ("codex", &["-c", "mcp_servers.x.command=\"sh\""], "mcp_servers"),
+    (
+        "codex",
+        &["-c", "profiles.yolo.approval_policy=never"],
+        "profiles",
+    ),
+    (
+        "codex",
+        &["-c", "mcp_servers.x.command=\"sh\""],
+        "mcp_servers",
+    ),
 ];
 
 /// A capped start refuses, naming it, each argument that sets or widens
@@ -324,7 +410,11 @@ fn a_capped_start_refuses_each_argument_that_sets_or_widens_its_permissions() {
         );
     }
     let listed = caller.answer("list", "thread.list", serde_json::json!({}));
-    assert_eq!(listed["result"]["threads"], serde_json::json!([]), "{listed}");
+    assert_eq!(
+        listed["result"]["threads"],
+        serde_json::json!([]),
+        "{listed}"
+    );
     caller.quiet();
     assert!(harness.sessions.try_recv().is_err(), "a Session started");
 }
@@ -337,8 +427,14 @@ fn the_starts_that_got_past_the_cap_are_refused() {
     let harness = start("delegated-verifier");
     let mut caller = call(&harness);
     for (id, args) in [
-        ("1", vec!["--model", "haiku", "--dangerously-skip-permissions"]),
-        ("2", vec!["--allowedTools", "Write", "--allowedTools", "Bash"]),
+        (
+            "1",
+            vec!["--model", "haiku", "--dangerously-skip-permissions"],
+        ),
+        (
+            "2",
+            vec!["--allowedTools", "Write", "--allowedTools", "Bash"],
+        ),
     ] {
         let answer = caller.answer(
             id,
@@ -443,7 +539,10 @@ fn only_the_window_answers_a_capped_threads_decision_with_a_remembered_choice() 
             "2",
             serde_json::json!({ "kind": "allow_always", "input": {}, "suggestion": accept_edits() }),
         ),
-        ("3", serde_json::json!({ "kind": "choose", "value": accept_edits() })),
+        (
+            "3",
+            serde_json::json!({ "kind": "choose", "value": accept_edits() }),
+        ),
     ] {
         let refused = caller.answer(
             id,

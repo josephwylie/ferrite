@@ -255,6 +255,9 @@ struct Header {
     /// finds again rather than starting another.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     request: Option<String>,
+    /// The most its agent may do without asking. Absent means uncapped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cap: Option<crate::runtime_mode::RuntimeMode>,
 }
 
 impl Header {
@@ -271,6 +274,7 @@ impl Header {
             owner: self.owner.clone(),
             delegated_from: self.delegated_from.clone(),
             request: self.request.clone(),
+            cap: self.cap,
         }
     }
 
@@ -288,6 +292,7 @@ impl Header {
             owner: facts.owner,
             delegated_from: facts.delegated_from,
             request: facts.request,
+            cap: facts.cap,
         }
     }
 }
@@ -318,6 +323,8 @@ struct Facts {
     delegated_from: Option<crate::DelegatedFrom>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     request: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cap: Option<crate::runtime_mode::RuntimeMode>,
 }
 
 impl Facts {
@@ -334,6 +341,7 @@ impl Facts {
             owner: self.owner,
             delegated_from: self.delegated_from,
             request: self.request,
+            cap: self.cap,
             summary: None,
         }
     }
@@ -2787,6 +2795,7 @@ impl Store {
             owner: origin.owner,
             delegated_from: origin.delegated_from,
             request: origin.request,
+            cap: origin.cap,
         };
         let written = line(&header)?;
         file.write_all(written.as_bytes())?;
@@ -2849,6 +2858,7 @@ impl Store {
             owner: None,
             delegated_from: None,
             request: None,
+            cap: None,
             ..snapshot.facts()
         };
         let binding = facts
@@ -3985,6 +3995,8 @@ pub struct ThreadMeta {
     pub delegated_from: Option<crate::DelegatedFrom>,
     /// The key of the `thread.start` that made it.
     pub request: Option<String>,
+    /// The most its agent may do without asking.
+    pub cap: Option<crate::runtime_mode::RuntimeMode>,
     /// The counts a parked row shows, read off the log's tail; `None` for
     /// a log from before schema 13 (see `Store::summary`).
     pub summary: Option<ThreadSummary>,
@@ -3997,6 +4009,7 @@ pub(crate) struct Origin {
     pub owner: Option<crate::ThreadOwner>,
     pub delegated_from: Option<crate::DelegatedFrom>,
     pub request: Option<String>,
+    pub cap: Option<crate::runtime_mode::RuntimeMode>,
 }
 
 /// What a revive replays and resumes from (`Store::revive`): the Thread's
@@ -4088,6 +4101,7 @@ pub struct ThreadSnapshot {
     owner: Option<crate::ThreadOwner>,
     delegated_from: Option<crate::DelegatedFrom>,
     request: Option<String>,
+    cap: Option<crate::runtime_mode::RuntimeMode>,
     records: Vec<Record>,
 }
 
@@ -4215,6 +4229,7 @@ impl ThreadSnapshot {
             owner: facts.owner,
             delegated_from: facts.delegated_from,
             request: facts.request,
+            cap: facts.cap,
             records,
         }
     }
@@ -4232,6 +4247,7 @@ impl ThreadSnapshot {
             owner: self.owner.clone(),
             delegated_from: self.delegated_from.clone(),
             request: self.request.clone(),
+            cap: self.cap,
         }
     }
 
@@ -4277,6 +4293,12 @@ impl ThreadSnapshot {
     /// The Thread on another machine that delegated it.
     pub fn delegated_from(&self) -> Option<&crate::DelegatedFrom> {
         self.delegated_from.as_ref()
+    }
+
+    /// The most its agent may do without asking, when it was started
+    /// capped.
+    pub fn cap(&self) -> Option<crate::runtime_mode::RuntimeMode> {
+        self.cap
     }
 
     pub fn title(&self) -> Option<&str> {
@@ -5232,6 +5254,7 @@ fn parse(id: ThreadId, bytes: &[u8]) -> Result<Parsed, LoadError> {
             owner: facts.owner,
             delegated_from: facts.delegated_from,
             request: facts.request,
+            cap: facts.cap,
             records,
         },
         offsets,

@@ -20,7 +20,7 @@ use ferrite_core::api::{
 };
 use ferrite_core::drive::Action;
 use ferrite_core::engine::{Launch, ReadBack};
-use ferrite_core::protocol::{Done, Op, ProjectAction, ServerMessage};
+use ferrite_core::protocol::{Done, Op, ProjectAction, ServerMessage, WireAnswer};
 use ferrite_core::runtime_mode::RuntimeMode;
 use ferrite_core::settings::Settings;
 use ferrite_core::store::{LoadError, Provider};
@@ -62,9 +62,14 @@ impl Server {
         let timeout = |ms: Option<u64>| ms.map(Duration::from_millis);
         let result = match method {
             Method::ThreadStart(params) => {
+                // With a prompt, ready is up and at work on it: a first
+                // turn that meets a Decision is an agent that is ready.
                 let ready = params.ready.then(|| {
-                    let within = timeout(params.timeout_ms).unwrap_or(api::READY);
-                    Wait::until(Until::Ready, Some(within), now)
+                    let within = Some(timeout(params.timeout_ms).unwrap_or(api::READY));
+                    match params.prompt {
+                        Some(_) => Wait::after_prompt_until(Until::Taken, within, now),
+                        None => Wait::until(Until::Ready, within, now),
+                    }
                 });
                 match (self.start_thread(params), ready) {
                     (Ok(thread), Some(wait)) => {
@@ -442,12 +447,9 @@ impl Server {
             }
         }
         let provider = params.provider.unwrap_or(self.default_provider);
-        let mut args = params.args;
-        if let Some(cap) = params.mode {
-            let defaults = self.defaults.lock().unwrap_or_else(|e| e.into_inner()).clone();
-            if cap < RuntimeMode::of_launch(provider, &defaults, &args) {
-                args.extend(cap.args(provider));
-            }
+        let env: Vec<(String, String)> = params.env.into_iter().collect();
+        if params.mode.is_some() {
+            refuse_widening(provider, &params.args, &env, &params.launcher)?;
         }
         let (checkout, project) = match &params.project {
             Some(project) => {
@@ -472,14 +474,15 @@ impl Server {
         let workspace = workspace_choice(checkout, params.worktree, params.branch, params.base)?;
         let launch = Launch {
             launch_provider: params.provider,
-            args,
-            env: params.env.into_iter().collect(),
+            args: params.args,
+            env,
             launcher: params.launcher,
             resume: params.resume,
             project,
             owner,
             delegated_from: params.delegated_from,
             request: params.request,
+            cap: params.mode,
         };
         let thread = self
             .engine
@@ -536,6 +539,10 @@ impl Server {
             resume: params.resume,
             ..Launch::default()
         };
+        // A revive runs the Thread's own Provider (`Engine::reopen`).
+        if let Some((provider, _)) = self.engine.cap(thread) {
+            refuse_widening(provider, &launch.args, &launch.env, &launch.launcher)?;
+        }
         self.engine
             .revive_with(thread, launch)
             .map_err(|error| ApiError::new(Code::Failed, error.to_string()))
@@ -575,7 +582,7 @@ impl Server {
                     "provider": provider,
                     "models": models,
                     "modes": RuntimeMode::ALL,
-                    "mode": RuntimeMode::of_launch(provider, &defaults, &[]),
+                    "mode": RuntimeMode::of_defaults(provider, &defaults),
                 })
             })
             .collect();
@@ -672,6 +679,19 @@ impl Server {
         params: DecisionAnswerParams,
     ) -> Result<Value, ApiError> {
         let thread: ThreadId = params.thread;
+        if self.engine.cap(thread).is_some()
+            && matches!(
+                params.answer,
+                WireAnswer::AllowAlways { .. } | WireAnswer::Choose { .. }
+            )
+        {
+            return Err(ApiError::new(
+                Code::WidensCap,
+                "a capped Thread's Decision is allowed once or refused over the API: an answer \
+                 that remembers a choice would widen what its agent does without asking, and is \
+                 the operator's own, from the window",
+            ));
+        }
         let handle = self
             .engine
             .pending_decisions()
@@ -691,6 +711,21 @@ impl Server {
         })?;
         self.answered.insert((thread, handle), caller);
         thread_result(&self.engine, thread)
+    }
+}
+
+/// Refused `widens_cap`, naming it, when a capped launch on `provider`
+/// carries what would set or widen how far its agent goes: under a cap
+/// the Server alone sets that.
+fn refuse_widening(
+    provider: Provider,
+    args: &[String],
+    env: &[(String, String)],
+    launcher: &[String],
+) -> Result<(), ApiError> {
+    match ferrite_core::runtime_mode::widening(provider, args, env, launcher) {
+        Some(widening) => Err(ApiError::new(Code::WidensCap, widening.to_string())),
+        None => Ok(()),
     }
 }
 

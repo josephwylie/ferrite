@@ -75,6 +75,7 @@ impl Parked {
             owner: row.owner.clone(),
             delegated_from: None,
             request: None,
+            cap: None,
             summary: None,
         })
     }

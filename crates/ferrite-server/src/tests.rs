@@ -55,10 +55,11 @@ type Queued = Arc<Mutex<Vec<String>>>;
 type Installed = Arc<Mutex<Option<Vec<String>>>>;
 
 /// What every Session was started with beyond Ferrite's own (its launch
-/// arguments) and the prompts it was sent, in order.
+/// arguments and its cap) and the prompts it was sent, in order.
 #[derive(Default)]
 pub(super) struct Told {
     pub(super) args: Vec<Vec<String>>,
+    pub(super) caps: Vec<Option<ferrite_core::runtime_mode::RuntimeMode>>,
     pub(super) prompts: Vec<String>,
 }
 
@@ -167,7 +168,9 @@ impl Spawn {
             request.model.map(str::to_string),
             request.effort.map(str::to_string),
         ));
-        self.told.lock().unwrap().args.push(request.launch.args.to_vec());
+        let mut told = self.told.lock().unwrap();
+        told.args.push(request.launch.args.to_vec());
+        told.caps.push(request.cap);
     }
 
     fn scripted(&self) -> Scripted {

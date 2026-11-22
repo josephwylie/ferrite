@@ -324,7 +324,9 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// Answer only once the agent is up and ready for a prompt (idle or
-    /// done); `agent_not_ready` when it is blocked or not up in time.
+    /// done); `agent_not_ready` when it is blocked or not up in time. With
+    /// `prompt`, once it is up and at work on it (working, blocked on a
+    /// Decision, or done); `agent_not_ready` when not in time.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ready: bool,
     /// With `ready`: how long to give it, from the request; 20 s when
@@ -358,9 +360,14 @@ pub struct ThreadStartParams {
     /// The agent's first prompt, sent once, with the start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
-    /// The most the agent may do without asking: it runs at the narrower
-    /// of this and what this machine's settings and `args` start it at,
-    /// never broader (`provider.list`'s `mode`).
+    /// The most the agent may do without asking, kept for the Thread's
+    /// life: every Session, revived ones too, starts at the narrower of
+    /// this and this machine's mode (`provider.list`'s `mode`), never
+    /// broader. Under it the Server alone sets how far the agent goes: a
+    /// start whose `args` set or widen it (`--dangerously-skip-permissions`,
+    /// `--allowedTools`, `--yolo`, `-c sandbox_mode=…`, …), or that carries
+    /// an `env` or a `launcher`, is refused `widens_cap`, naming it; so is
+    /// such a revive, and a `decision.answer` that remembers a choice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<RuntimeMode>,
     /// The Thread on another machine whose agent starts this one to do a
