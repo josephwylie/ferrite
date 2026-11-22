@@ -893,8 +893,8 @@ impl Cockpit {
     }
 
     /// The window draws exactly these Threads at Transcript level now. It
-    /// streams them whole while it does, and each other while it is at work
-    /// and for `UNWATCH_AFTER` after (ADR 0032).
+    /// streams them whole while it does, and each other of this computer's
+    /// while it is at work and for `UNWATCH_AFTER` after (ADR 0032; F-A2).
     pub fn draws_transcripts(&mut self, threads: impl IntoIterator<Item = ThreadKey>) {
         let threads: Vec<ThreadKey> = threads.into_iter().collect();
         let at = crate::clock::instant();

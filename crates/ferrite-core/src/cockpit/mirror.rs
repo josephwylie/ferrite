@@ -819,11 +819,16 @@ impl<'a> ThreadView<'a> {
     }
 
     pub fn needs_queue(&self) -> bool {
-        let operator_turn = match self.stand_in {
+        self.busy() || self.operator_turn() || self.facts.native_queue_pending
+    }
+
+    /// Is an operator prompt out and unanswered? A Thread this window does
+    /// not stream says so in its digest.
+    pub fn operator_turn(&self) -> bool {
+        match self.stand_in {
             Some(held) => held.digest.operator_turn,
             None => self.activity.main_operator_turn(),
-        };
-        self.busy() || operator_turn || self.facts.native_queue_pending
+        }
     }
 
     /// The checkout this Thread works in — what the Pane's chrome shows.

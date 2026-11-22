@@ -249,7 +249,7 @@ pub(crate) struct FilesView {
     /// Files whose Thread is gone, kept while a buffer holds an edit the
     /// disk does not have: auto save still writes it, a quit still flushes
     /// it, and leaving still names it.
-    orphaned: Vec<Files>,
+    orphaned: Vec<(ThreadKey, Files)>,
 }
 
 /// What Files draws from, as the Cockpit has it this frame.
@@ -948,16 +948,19 @@ impl FilesView {
         self.threads.values().any(|files| files.tab_scroll.running(cx))
     }
 
-    /// Every Files, a gone Thread's included.
-    fn every_files(&self) -> impl Iterator<Item = &Files> {
-        self.threads.values().chain(&self.orphaned)
+    /// Every Files and its Thread, a gone Thread's included.
+    fn every_files(&self) -> impl Iterator<Item = (ThreadKey, &Files)> {
+        self.threads
+            .iter()
+            .chain(self.orphaned.iter().map(|(thread, files)| (thread, files)))
+            .map(|(thread, files)| (*thread, files))
     }
 
     /// A quit's last chance for text auto save has not yet written.
     pub(in crate::cockpit) fn flush_for_quit(&mut self, cx: &mut Context<Self>) {
         let editors: Vec<_> = self
             .every_files()
-            .flat_map(|files| files.tabs.iter())
+            .flat_map(|(_, files)| files.tabs.iter())
             .filter_map(|tab| match &tab.body {
                 TabBody::Code(editor) => Some(editor.clone()),
                 TabBody::Unshown(_) => None,
@@ -976,8 +979,7 @@ impl FilesView {
         cx: &gpui::App,
     ) -> Option<usize> {
         let lost = self
-            .threads
-            .iter()
+            .every_files()
             .filter(|(thread, _)| thread.machine() == machine)
             .flat_map(|(_, files)| files.tabs.iter())
             .filter(|tab| match &tab.body {
@@ -1017,9 +1019,9 @@ impl FilesView {
     pub(in crate::cockpit) fn forget(&mut self, keep: impl Fn(ThreadKey) -> bool, cx: &gpui::App) {
         let gone: Vec<ThreadKey> = self.threads.keys().copied().filter(|&thread| !keep(thread)).collect();
         for thread in gone {
-            self.orphaned.extend(self.threads.remove(&thread));
+            self.orphaned.extend(self.threads.remove(&thread).map(|files| (thread, files)));
         }
-        self.orphaned.retain(|files| files.holds_edits(cx));
+        self.orphaned.retain(|(_, files)| files.holds_edits(cx));
     }
 
     /// ⌘P: the tree's filter takes the keyboard.

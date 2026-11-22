@@ -294,7 +294,7 @@ const TUNING_PENDING_HINT: &str = "Available once the last change is accepted";
 /// Composer reads it (`pane::primary_actions`), so a way to stop is in view
 /// from the first frame.
 fn turn_running(open: &ThreadView) -> bool {
-    open.busy() || open.activity().main_operator_turn()
+    open.busy() || open.operator_turn()
 }
 
 /// The id of the latest queued prompt while it can still be taken back:
@@ -6859,11 +6859,12 @@ impl CockpitView {
         // An empty cockpit still needs the keyboard: with nothing focused,
         // dispatch starts above these handlers and cmd-n could never make the
         // first Thread. A machine whose Server went is read-only (ADR
-        // 0026): while the focused Pane is one of its, the root holds the
-        // keyboard, so no Composer or control there takes a key until it
-        // is back.
+        // 0026): while the focused Pane is one of its, or with no Pane the
+        // machine a new Thread starts on is, the root holds the keyboard,
+        // so no Composer or control there takes a key until it is back.
         let lost = self
             .pane_machine(self.focused(cx))
+            .or_else(|| self.panes.is_empty().then(|| self.start_machine(cx)).flatten())
             .is_some_and(|machine| self.machine_lost(machine, cx));
         let wanted = self
             .rename
