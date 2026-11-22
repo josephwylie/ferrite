@@ -627,6 +627,9 @@ struct Thread {
     cap: Option<crate::runtime_mode::RuntimeMode>,
     /// The PRs its agent watches (ADR 0046), as its log holds them.
     pr_watch: crate::pr_watch::WatchFact,
+    /// The Threads it started on other machines (ADR 0047), as its log
+    /// holds them.
+    delegates: crate::delegate::Delegates,
     /// What waits for the Session to take it.
     awaiting: Awaiting,
     /// The Session was started for use (ADR 0032) rather than asked for:
@@ -765,6 +768,7 @@ impl Thread {
             delegated_from: None,
             cap: None,
             pr_watch: Default::default(),
+            delegates: Default::default(),
             awaiting: Awaiting::default(),
             woken: false,
             settled_at: None,
@@ -2298,6 +2302,8 @@ impl Engine {
         }
         // A parked Thread watches nothing: T3's settle ends every watch.
         self.end_pr_watches(thread)?;
+        // And it waits on no Delegate: T3's archive stops them there.
+        self.stop_delegates(thread)?;
         if let Some(pending) = self.bootstraps.remove(&thread) {
             self.rollback_bootstrap(thread)?;
             self.bootstrap_results.push(BootstrapResult {
@@ -2414,6 +2420,7 @@ impl Engine {
         let delegated_from = snapshot.delegated_from().cloned();
         let cap = snapshot.cap();
         let pr_watch = snapshot.pr_watch().clone();
+        let delegates = snapshot.delegates().clone();
         let resume = match &launch {
             Some(launch) => launch.resume.clone(),
             None => snapshot.resume_target().map(str::to_string),
@@ -2472,6 +2479,7 @@ impl Engine {
         state.delegated_from = delegated_from;
         state.cap = cap;
         state.pr_watch = pr_watch;
+        state.delegates = delegates;
         state.project = project;
         state.agent_args = agent_args;
         if let Some(error) = unreadable_args {
@@ -2920,8 +2928,10 @@ impl Engine {
     }
 
     /// How `thread`'s latest turn ended, once it has and nothing follows
-    /// it: no Decision, prompt or queued prompt waits and its agent is not
-    /// at work. Work in the background is not the turn's. `None` while a
+    /// it: no Decision, prompt or queued prompt waits, no Delegate it
+    /// started is open or still to wake it (T3's
+    /// `untilDelegatedWorkSettled`), and its agent is not at work. Work in
+    /// the background is not the turn's. `None` while a
     /// turn runs or is blocked, and for a Thread never prompted. A let-go
     /// Thread answers from the digest it was let go with.
     pub fn ended_turn(&self, thread: ThreadId) -> Option<crate::TurnOutcome> {
@@ -2930,6 +2940,7 @@ impl Engine {
             || view.working()
             || view.activity().main_operator_turn()
             || view.queue_pending()
+            || view.state.delegates.holding()
             || self.holds_prompt(thread);
         if busy {
             return None;
@@ -3158,6 +3169,68 @@ impl Engine {
             self.set_pr_watch(thread, fact)?;
         }
         Ok(())
+    }
+
+    /// Every open Thread that started a Delegate, with its Delegates as
+    /// its log holds them.
+    pub fn all_delegates(
+        &self,
+    ) -> impl Iterator<Item = (ThreadId, &crate::delegate::Delegates)> {
+        self.threads
+            .iter()
+            .map(|(id, state)| (*id, &state.delegates))
+            .filter(|(_, delegates)| !delegates.is_empty())
+    }
+
+    /// A Thread's Delegates, open or parked.
+    pub fn delegates(&self, thread: ThreadId) -> io::Result<crate::delegate::Delegates> {
+        match self.threads.get(&thread) {
+            Some(state) => Ok(state.delegates.clone()),
+            None => self
+                .store
+                .peek(thread)
+                .map(|meta| meta.delegates)
+                .map_err(io::Error::other),
+        }
+    }
+
+    /// Change a Thread's Delegates, open or parked, and save them before
+    /// anything acts on the change (persist, then act), so a restarted
+    /// Server follows and stops what the log says. `change` answers
+    /// whether it changed anything; so does this.
+    pub fn amend_delegates(
+        &mut self,
+        thread: ThreadId,
+        change: impl FnOnce(&mut crate::delegate::Delegates) -> bool,
+    ) -> io::Result<bool> {
+        let Some(state) = self.threads.get_mut(&thread) else {
+            let mut delegates = self.delegates(thread)?;
+            if !change(&mut delegates) {
+                return Ok(false);
+            }
+            self.store
+                .set_delegates(thread, delegates, None)
+                .map_err(io::Error::other)?;
+            return Ok(true);
+        };
+        let mut delegates = state.delegates.clone();
+        if !change(&mut delegates) {
+            return Ok(false);
+        }
+        self.store
+            .set_delegates(thread, delegates.clone(), Some(&mut state.writer))
+            .map_err(io::Error::other)?;
+        state.delegates = delegates;
+        // What it waits on decides its Attention.
+        state.state_changed = true;
+        Ok(true)
+    }
+
+    /// Stop every Delegate `thread` started, as stopping or parking it does
+    /// (T3's `stopDelegatedTasks`); the Server carries each stop there.
+    fn stop_delegates(&mut self, thread: ThreadId) -> io::Result<()> {
+        self.amend_delegates(thread, crate::delegate::Delegates::stop_with_parent)
+            .map(drop)
     }
 
     /// Whether a Decision waits on the operator in `thread`.
@@ -3756,6 +3829,7 @@ impl Engine {
                         activity: thread.activity.view(),
                         settled,
                         resumed: thread.native_queue.pending(),
+                        delegated: thread.delegates.holding(),
                     },
                     crate::clock::instant(),
                 );
@@ -4745,6 +4819,7 @@ impl Engine {
             || view.activity().main_operator_turn()
             || view.queue_pending()
             || view.background_work()
+            || view.state.delegates.holding()
             || (view.starting() && self.holds_prompt(thread))
         {
             Attention::Working

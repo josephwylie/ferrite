@@ -48,7 +48,8 @@ from T3 and why.
   log record (schema 19), and its transcript block is a prompt marked with
   a `WakeNote` (its `summary` and outcome), so a window can draw T3's
   compact row. It is never stored as a `prompt` and never goes through
-  `Op::Send`. It is general: a Delegate's result will be the next one.
+  `Op::Send`. It is general: a Delegate's result is the other kind
+  (ADR 0047), held in the same one-per-Thread slot.
 - **When a wake goes.** It waits while a turn runs or prompts are queued,
   and starts an ended Session. While a Decision is pending, or a wake
   already waits for the Thread, the pass saves nothing for that Thread, so

@@ -1,7 +1,7 @@
 //! A server wake: a prompt the Server sends a Thread's agent on its own,
-//! with no one at the Composer. A watched PR's news is the first (T3 Code's
+//! with no one at the Composer. A watched PR's news is one (T3 Code's
 //! `creationSource: "server"` message with a notification); a Delegate's
-//! result will be the next.
+//! result is the other (ADR 0047).
 //!
 //! It reaches the agent as any prompt does, but it is not the operator's:
 //! the log keeps it as a `wake` record, never a `prompt`, and the

@@ -274,3 +274,26 @@ fn a_fork_watches_nothing_and_a_wake_is_no_prompt() {
     drop(writer);
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_parked_threads_delegates_read_back_and_a_fork_follows_none() {
+    let dir = scratch("rewind-fork-delegates");
+    let store = Store::open(&dir).unwrap();
+    let (id, writer) = three_prompts(&store);
+    drop(writer);
+    let mut delegates = crate::delegate::Delegates::default();
+    delegates.start(crate::delegate::Started {
+        server: crate::server::ServerId::new("peer"),
+        machine: "pc".into(),
+        thread: ThreadId::new(4),
+        request: "delegate:here:1:a".into(),
+        title: None,
+        task: "Fix the tests".into(),
+    });
+    store.set_delegates(id, delegates.clone(), None).unwrap();
+    assert_eq!(store.peek(id).unwrap().delegates, delegates);
+    assert_eq!(store.load(id).unwrap().delegates(), &delegates);
+    let fork = store.fork(id, None, None).unwrap();
+    assert!(store.load(fork).unwrap().delegates().is_empty());
+    let _ = fs::remove_dir_all(&dir);
+}

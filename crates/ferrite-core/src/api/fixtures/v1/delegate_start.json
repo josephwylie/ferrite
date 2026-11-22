@@ -1,0 +1,1 @@
+{"id":"1","method":"delegate.start","params":{"thread":14,"machine":"pc","task":"Fix the flaky login test.","checkout":"/home/me/app","project":"p-1","title":"Login test","provider":"codex","request":"k-1"}}

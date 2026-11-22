@@ -227,7 +227,7 @@ impl World {
     }
 }
 
-fn copy_dir(from: &Path, to: &Path) {
+pub(super) fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap() {
         let entry = entry.unwrap();
@@ -240,7 +240,7 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-fn wakes_in(window: &Window, thread: ThreadId) -> Vec<(WakeNote, String)> {
+pub(super) fn wakes_in(window: &Window, thread: ThreadId) -> Vec<(WakeNote, String)> {
     window.mirrors.view(thread).map_or(Vec::new(), |view| {
         view.transcript()
             .blocks()
