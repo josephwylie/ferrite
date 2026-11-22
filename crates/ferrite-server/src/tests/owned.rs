@@ -35,9 +35,10 @@ fn a_thread_started_for_a_task_names_its_owner() {
     );
 
     let mut window = cockpit(&harness);
-    pump_until(&mut window, |window| window.thread(thread).is_some());
+    let key = here(&window, thread);
+    pump_until(&mut window, |window| window.thread(key).is_some());
     assert_eq!(
-        window.owner(thread),
+        window.owner(key),
         Some(ferrite_core::ThreadOwner::Task("7".into()))
     );
 }

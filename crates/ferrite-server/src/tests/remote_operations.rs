@@ -4,6 +4,7 @@ fn machine(harness: &Harness, sent: &Arc<Mutex<Vec<u8>>>) -> ferrite_core::cockp
     let mut cockpit = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
         store: harness.dir.join("desktop"),
         server: ferrite_core::cockpit::Endpoint::Machine(bridge(harness, sent)),
+        saved_as: Some(ferrite_core::MachineKey(Some("box".into()))),
         client: peer(),
         renderer: None,
         browser: false,

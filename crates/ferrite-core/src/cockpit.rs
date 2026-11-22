@@ -128,7 +128,8 @@ struct Said {
 /// What one machine's Server said that every window shares — its registry,
 /// its Notices, its Factory — read with the machine it is of, so an id read
 /// in it names a Thread or Project of that machine and no other
-/// (`thread`, `project`).
+/// (`key`, `project_key`). Its own names stay clear of the reading's, which
+/// it derefs to.
 pub struct OnMachine<'a, T> {
     machine: MachineId,
     reading: &'a T,
@@ -140,17 +141,17 @@ impl<'a, T> OnMachine<'a, T> {
     }
 
     /// The Thread `thread` names in this reading.
-    pub fn thread(&self, thread: ThreadId) -> ThreadKey {
+    pub fn key(&self, thread: ThreadId) -> ThreadKey {
         ThreadKey::new(self.machine, thread)
     }
 
     /// The Project `project` names in this reading.
-    pub fn project(&self, project: ProjectId) -> ProjectKey {
+    pub fn project_key(&self, project: ProjectId) -> ProjectKey {
         ProjectKey::new(self.machine, project)
     }
 
     /// The reading itself, for as long as the Cockpit is borrowed.
-    pub fn get(&self) -> &'a T {
+    pub fn reading(&self) -> &'a T {
         self.reading
     }
 }
