@@ -24,7 +24,7 @@ fn a_thread_card_is_three_lines_in_a_fixed_box(cx: &mut TestAppContext) {
     without_checkouts(&view, cx);
     view.update(cx, |view, cx| {
         view.facts.set_branches(vec![(
-            threads[0],
+            view.cockpit.read(cx).thread_key(threads[0]),
             Some(ferrite_core::workspace::BranchStatus {
                 branch: Some("t3/improve-sidebar-architecture".into()),
                 ..Default::default()
@@ -678,8 +678,8 @@ fn deleting_every_parked_thread_always_asks_first(cx: &mut TestAppContext) {
             .expect("still up: one press only arms, whatever the setting says");
         assert_eq!(menu.armed, Some(delete));
         assert_eq!(
-            view.facts.parked(),
-            &[threads[0]],
+            view.facts.parked().iter().map(|key| key.thread()).collect::<Vec<_>>(),
+            [threads[0]],
             "nothing was deleted yet"
         );
         view.press_menu_row(delete, window, cx);

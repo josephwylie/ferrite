@@ -563,7 +563,7 @@ fn hold_tools(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::Visua
         view.overview.update(cx, |overview, cx| overview.toggle_file(view.cockpit.read(cx).thread_key(thread), "src/lib.rs".to_string(), cx));
         view.ensure_browser(thread, cx);
         view.fixture_pr_snapshot(thread, super::pr::snapshot(ferrite_core::protocol::WirePrState::Open), cx);
-        view.background.update(cx, |background, cx| background.turn(thread, "call-1".into(), cx));
+        view.background.update(cx, |background, cx| background.turn(view.cockpit.read(cx).thread_key(thread), "call-1".into(), cx));
     });
     tick(cx);
     super::panel_focus::press("f6", cx);

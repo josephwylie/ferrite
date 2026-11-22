@@ -697,7 +697,7 @@ fn panel_pr(label: &'static str, staged: PrStaged) -> (Scene, Setup) {
             pr.state = WirePrState::Merged;
         }
         view.facts.pr_answered(
-            thread,
+            view.cockpit.read(cx).thread_key(thread),
             Some(PullRequest {
                 number: pr.number,
                 state: if merged {
@@ -800,13 +800,13 @@ fn nav_states() -> (Scene, Setup) {
             })
         };
         let facts = &mut view.facts;
-        facts.pr_answered(working, pr(12, PrState::Open, Some(CheckState::Passing)));
-        facts.pr_answered(blocked, pr(31, PrState::Open, Some(CheckState::Failing)));
-        facts.pr_answered(done, pr(48, PrState::Open, Some(CheckState::Pending)));
-        facts.pr_answered(merged, pr(40, PrState::Merged, None));
-        facts.pr_answered(closed, pr(22, PrState::Closed, None));
-        facts.pr_answered(checking, pr(53, PrState::Open, Some(CheckState::Passing)));
-        facts.ask_pr(checking, cx.background_executor().now(), true);
+        facts.pr_answered(view.cockpit.read(cx).thread_key(working), pr(12, PrState::Open, Some(CheckState::Passing)));
+        facts.pr_answered(view.cockpit.read(cx).thread_key(blocked), pr(31, PrState::Open, Some(CheckState::Failing)));
+        facts.pr_answered(view.cockpit.read(cx).thread_key(done), pr(48, PrState::Open, Some(CheckState::Pending)));
+        facts.pr_answered(view.cockpit.read(cx).thread_key(merged), pr(40, PrState::Merged, None));
+        facts.pr_answered(view.cockpit.read(cx).thread_key(closed), pr(22, PrState::Closed, None));
+        facts.pr_answered(view.cockpit.read(cx).thread_key(checking), pr(53, PrState::Open, Some(CheckState::Passing)));
+        facts.ask_pr(view.cockpit.read(cx).thread_key(checking), cx.background_executor().now(), true);
         cx.notify();
     });
     (scene, setup)

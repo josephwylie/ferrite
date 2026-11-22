@@ -342,7 +342,7 @@ impl CockpitView {
                 .map_or_else(|| "Local".to_string(), |machine| machine.name().to_string()),
             icons::LAPTOP,
         );
-        environment.meta = self.facts.get(thread).map(|facts| {
+        environment.meta = self.facts.get(self.cockpit.read(cx).thread_key(thread)).map(|facts| {
             if facts.worktree.is_some() {
                 "Worktree"
             } else {
@@ -377,12 +377,12 @@ impl CockpitView {
                 rows.push(open_in);
             }
         }
-        if let Some(branch) = self.thread_branch(thread) {
+        if let Some(branch) = self.thread_branch(self.cockpit.read(cx).thread_key(thread)) {
             let mut row = Row::new(Item::Branch, branch.to_string(), icons::BRANCH);
             row.tooltip = Some(branch.to_string());
             rows.push(row);
         }
-        if let Some(pr) = self.facts.pr(thread) {
+        if let Some(pr) = self.facts.pr(self.cockpit.read(cx).thread_key(thread)) {
             let block = pr_block(pr);
             let mut row = Row::new(Item::Branch, block.title.clone(), block.glyph);
             row.tooltip = Some(block.tooltip.clone());
@@ -390,9 +390,9 @@ impl CockpitView {
             row.pr = Some(block);
             rows.push(row);
         }
-        if let Some(facts) = self.facts.get(thread) {
-            if self.thread_branch(thread).is_some() {
-                if self.facts.pr(thread).is_none()
+        if let Some(facts) = self.facts.get(self.cockpit.read(cx).thread_key(thread)) {
+            if self.thread_branch(self.cockpit.read(cx).thread_key(thread)).is_some() {
+                if self.facts.pr(self.cockpit.read(cx).thread_key(thread)).is_none()
                     && facts.status.as_ref().is_some_and(|status| status.dirty > 0)
                 {
                     let mut create =
@@ -430,7 +430,7 @@ impl CockpitView {
                 .visible(Item::Lineage)
             {
                 lineage =
-                    super::lineage::lineage(open.activity(), subject, &self.facts.name(thread));
+                    super::lineage::lineage(open.activity(), subject, &self.facts.name(self.cockpit.read(cx).thread_key(thread)));
             }
             if let Some(surfaces) = self.panel.surfaces.get(self.cockpit.read(cx).thread_key(thread)) {
                 for surface in &surfaces.tabs {

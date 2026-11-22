@@ -397,15 +397,15 @@ impl CockpitView {
         self.overview.update(cx, |overview, _| overview.retain_threads(keep_key));
         self.panel.focus.retain_threads(keep_key);
         self.pull_request.update(cx, |reader, _| reader.retain_threads(keep));
-        self.background.update(cx, |background, _| background.retain_threads(keep));
+        self.background.update(cx, |background, _| background.retain_threads(keep_key));
         self.browsers.retain_threads(keep);
         self.browser_chrome.update(cx, |chrome, _| chrome.retain_threads(keep));
         self.browser_dialog.update(cx, |dialog, _| dialog.retain_threads(keep));
         self.browser_review.update(cx, |review, _| review.retain_threads(keep));
-        self.facts.retain_threads(keep);
-        self.decisions.update(cx, |decisions, _| decisions.retain_threads(keep));
+        self.facts.retain_threads(keep_key);
+        self.decisions.update(cx, |decisions, _| decisions.retain_threads(keep_key));
         if let Some(archive) = self.factory().map(|view| view.read(cx).archive.clone()) {
-            archive.update(cx, |archive, _| archive.retain_threads(keep));
+            archive.update(cx, |archive, _| archive.retain_threads(keep_key));
         }
         self.pr_watch.retain_threads(keep);
     }
@@ -418,16 +418,16 @@ impl CockpitView {
             + self.overview.read(cx).held_for_test(key)
             + self.panel.focus.held_for_test(key)
             + self.pull_request.read(cx).held_for_test(thread)
-            + self.background.read(cx).held_for_test(thread)
+            + self.background.read(cx).held_for_test(key)
             + self.browsers.held_for_test(thread)
             + self.browser_chrome.read(cx).held_for_test(thread)
             + self.browser_dialog.read(cx).held_for_test(thread)
             + self.browser_review.read(cx).held_for_test(thread)
-            + usize::from(self.facts.get(thread).is_some())
-            + self.decisions.read(cx).rules().iter().filter(|rule| rule.thread == thread).count()
+            + usize::from(self.facts.get(key).is_some())
+            + self.decisions.read(cx).rules().iter().filter(|rule| rule.thread == key).count()
             + self
                 .factory()
-                .map_or(0, |view| view.read(cx).archive.read(cx).held_for_test(thread))
+                .map_or(0, |view| view.read(cx).archive.read(cx).held_for_test(key))
             + usize::from(self.pr_watch.holds(thread))
     }
 

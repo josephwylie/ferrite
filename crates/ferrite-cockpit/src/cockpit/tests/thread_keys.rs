@@ -114,8 +114,8 @@ fn the_walk_steps_over_a_parked_thread(cx: &mut TestAppContext) {
     for _ in 0..3 {
         cx.simulate_keystrokes("cmd-}");
         tick(cx);
-        view.read_with(cx, |view, _| {
-            assert!(view.facts.parked().contains(&threads[1]), "still parked");
+        view.read_with(cx, |view, cx| {
+            assert!(view.facts.parked().contains(&view.cockpit.read(cx).thread_key(threads[1])), "still parked");
         });
     }
     assert_eq!(shown(&threads, cx), [open[1]], "three steps over two Threads");

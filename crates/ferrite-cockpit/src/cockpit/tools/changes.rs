@@ -466,9 +466,9 @@ impl CockpitView {
     pub(in crate::cockpit) fn changes_pane(&self, diff: Diff, cx: &mut Context<Self>) -> Div {
         let thread = diff.local_thread();
         let inputs = ChangesInputs {
-            head: thread.and_then(|thread| self.thread_branch(thread)),
+            head: thread.and_then(|thread| self.thread_branch(self.cockpit.read(cx).thread_key(thread))),
             default_branch: thread
-                .and_then(|thread| self.facts.get(thread))
+                .and_then(|thread| self.facts.get(self.cockpit.read(cx).thread_key(thread)))
                 .and_then(|facts| facts.default_branch.clone()),
             doors: self.doors(),
         };

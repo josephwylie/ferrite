@@ -18,7 +18,7 @@ use std::ops::Range;
 use std::path::Path;
 
 use ferrite_core::store::Provider;
-use ferrite_core::{Decision, DecisionKind, ThreadId};
+use ferrite_core::{Decision, DecisionKind, ThreadKey};
 use gpui::prelude::*;
 use gpui::{
     actions, deferred, div, px, rgb, rgba, AnyElement, App, Div, ElementId, SharedString, Stateful,
@@ -528,14 +528,14 @@ pub fn option_two_pattern(decision: &Decision, workspace: Option<&Path>) -> Stri
 /// approvals in `thread` that `pattern` covers are allowed without asking.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThreadRule {
-    pub thread: ThreadId,
+    pub thread: ThreadKey,
     /// The tool as the transcript names it (`Bash` for both providers).
     pub tool: String,
     pub pattern: String,
 }
 
 impl ThreadRule {
-    pub fn new(thread: ThreadId, decision: &Decision, workspace: Option<&Path>) -> Self {
+    pub fn new(thread: ThreadKey, decision: &Decision, workspace: Option<&Path>) -> Self {
         Self {
             thread,
             tool: tool_word(&decision.tool_name).to_string(),
@@ -547,7 +547,7 @@ impl ThreadRule {
     /// approval, and — for a shell pattern — a plain command starting with
     /// the pattern's words; for a directory pattern, a file under it; a
     /// tool-wide pattern covers the tool.
-    pub fn covers(&self, thread: ThreadId, decision: &Decision, workspace: Option<&Path>) -> bool {
+    pub fn covers(&self, thread: ThreadKey, decision: &Decision, workspace: Option<&Path>) -> bool {
         if thread != self.thread
             || self.pattern.is_empty()
             || !matches!(decision.kind, DecisionKind::Approval)
@@ -1716,11 +1716,11 @@ mod tests {
     /// and never a compound command.
     #[test]
     fn a_thread_rule_covers_only_its_pattern() {
-        let thread = ThreadId::new(7);
+        let thread = ThreadKey::fixture(0, 7);
         let rule = ThreadRule::new(thread, &bash("gh issue close 212"), None);
         assert_eq!(rule.pattern, "gh issue *");
         assert!(rule.covers(thread, &bash("gh issue list --state open"), None));
-        assert!(!rule.covers(ThreadId::new(8), &bash("gh issue list"), None));
+        assert!(!rule.covers(ThreadKey::fixture(0, 8), &bash("gh issue list"), None));
         assert!(!rule.covers(thread, &bash("gh pr merge 3"), None));
         assert!(!rule.covers(thread, &bash("gh issue list && rm -rf /"), None));
         assert!(!rule.covers(thread, &bash("gh issue list | sh"), None));
@@ -1738,6 +1738,16 @@ mod tests {
         assert!(!dir.covers(thread, &edit("src/other.rs"), None));
         assert!(!dir.covers(thread, &edit("src/ui/../../etc/passwd"), None));
         assert!(!dir.covers(thread, &bash("cat src/ui/a.rs"), None));
+    }
+
+    /// Thread 7 here and Thread 7 on a machine are two Threads: a rule
+    /// made in one allows nothing in the other.
+    #[test]
+    fn a_thread_rule_keeps_two_machines_threads_apart() {
+        let here = ThreadKey::fixture(0, 7);
+        let rule = ThreadRule::new(here, &bash("gh issue close 212"), None);
+        assert!(rule.covers(here, &bash("gh issue list"), None));
+        assert!(!rule.covers(ThreadKey::fixture(1, 7), &bash("gh issue list"), None));
     }
 
     /// D-7: Codex's login-shell wrapper comes off, in either quoting, so

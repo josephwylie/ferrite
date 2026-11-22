@@ -15,7 +15,7 @@ use ferrite_core::docview::FileChange;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::{BranchStatus, PullRequest, WorkspaceBinding};
-use ferrite_core::ThreadId;
+use ferrite_core::{ThreadId, ThreadKey};
 use ferrite_pane::pane::WallCard;
 use gpui::SharedString;
 
@@ -86,13 +86,13 @@ pub struct ThreadFacts {
     branch_asked: bool,
 }
 pub struct Facts {
-    threads: HashMap<ThreadId, ThreadFacts>,
+    threads: HashMap<ThreadKey, ThreadFacts>,
     /// Each Project's default branch, read once (a `git` call or two, off
     /// the UI thread) the first time a Thread of it is refreshed: `None`
     /// while that read is out.
     default_branches: HashMap<ProjectId, Option<SharedString>>,
     /// The nav's parked Threads, in the Cockpit's stable park order (#21).
-    parked: Vec<ThreadId>,
+    parked: Vec<ThreadKey>,
     /// Whether an untitled Thread is named from its first prompt (a
     /// setting), else by its number.
     auto_title: bool,
@@ -121,17 +121,17 @@ impl Facts {
         changed
     }
 
-    pub fn get(&self, thread: ThreadId) -> Option<&ThreadFacts> {
+    pub fn get(&self, thread: ThreadKey) -> Option<&ThreadFacts> {
         self.threads.get(&thread)
     }
 
     /// Every Thread `keep` refuses is no longer known.
-    pub fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
+    pub fn retain_threads(&mut self, keep: impl Fn(ThreadKey) -> bool) {
         self.threads.retain(|thread, _| keep(*thread));
     }
 
     /// The parked rows the nav draws, in order.
-    pub fn parked(&self) -> &[ThreadId] {
+    pub fn parked(&self) -> &[ThreadKey] {
         &self.parked
     }
 
@@ -141,9 +141,10 @@ impl Facts {
     /// off the UI thread (`looked_up`); the branch refresh then keeps the
     /// label current, with its status.
     pub fn opened(&mut self, cockpit: &Cockpit, thread: ThreadId) -> Lookups {
+        let open = cockpit.thread(thread);
+        let thread = cockpit.thread_key(thread);
         self.refresh_metadata(cockpit, thread);
         self.refresh_wall(cockpit, thread);
-        let open = cockpit.thread(thread);
         let cwd = ferrite_core::workspace::effective_cwd(
             open.and_then(|open| open.session_project_root()),
             open.and_then(|open| open.workspace()),
@@ -167,6 +168,7 @@ impl Facts {
     /// ended, for the caller to re-read it off the UI thread.
     pub fn streamed(&mut self, cockpit: &Cockpit, thread: ThreadId) -> bool {
         let busy = cockpit.thread(thread).is_some_and(|open| open.busy());
+        let thread = cockpit.thread_key(thread);
         let facts = self.threads.entry(thread).or_default();
         let settled = facts.main_busy && !busy;
         facts.main_busy = busy;
@@ -181,17 +183,18 @@ impl Facts {
     /// re-aim — or the watchdog's restart notice changed the transcript:
     /// the wall card refolds, at once.
     pub fn acted(&mut self, cockpit: &Cockpit, thread: ThreadId) {
-        self.refresh_wall(cockpit, thread);
+        self.refresh_wall(cockpit, cockpit.thread_key(thread));
     }
 
     /// The watchdog's tick: the checkout labels ride its slow cadence (#29)
     /// — the agent may have switched branches under a Pane — for every
     /// open Thread.
     /// Answers the Threads whose drawn facts moved.
-    pub fn tick(&mut self, cockpit: &Cockpit) -> Vec<ThreadId> {
+    pub fn tick(&mut self, cockpit: &Cockpit) -> Vec<ThreadKey> {
         cockpit
             .threads()
             .into_iter()
+            .map(|thread| cockpit.thread_key(thread))
             .filter(|thread| self.refresh_metadata(cockpit, *thread))
             .collect()
     }
@@ -202,8 +205,8 @@ impl Facts {
     /// contradicts itself for a tick. Answers the Threads whose labels moved.
     pub fn set_branches(
         &mut self,
-        branches: Vec<(ThreadId, Option<BranchStatus>)>,
-    ) -> Vec<ThreadId> {
+        branches: Vec<(ThreadKey, Option<BranchStatus>)>,
+    ) -> Vec<ThreadKey> {
         let mut changed = Vec::new();
         for (thread, status) in branches {
             let facts = self.threads.entry(thread).or_default();
@@ -221,17 +224,17 @@ impl Facts {
     }
 
     /// Whether to ask `gh` for the Thread's PR now (`PrWatch::ask`).
-    pub fn ask_pr(&mut self, thread: ThreadId, now: Instant, manual: bool) -> bool {
+    pub fn ask_pr(&mut self, thread: ThreadKey, now: Instant, manual: bool) -> bool {
         self.threads.entry(thread).or_default().pr.ask(now, manual)
     }
 
     /// Adopt what `gh` said about the Thread's PR. Whether its label moved.
-    pub fn pr_answered(&mut self, thread: ThreadId, reading: Option<PullRequest>) -> bool {
+    pub fn pr_answered(&mut self, thread: ThreadKey, reading: Option<PullRequest>) -> bool {
         self.threads.entry(thread).or_default().pr.answered(reading)
     }
 
     /// The Thread's last PR reading.
-    pub fn pr(&self, thread: ThreadId) -> Option<&PullRequest> {
+    pub fn pr(&self, thread: ThreadKey) -> Option<&PullRequest> {
         self.get(thread)?.pr.reading.as_ref()
     }
 
@@ -239,8 +242,8 @@ impl Facts {
     /// moved.
     pub fn set_project_branches(
         &mut self,
-        branches: Vec<(ThreadId, Vec<(SharedString, SharedString)>)>,
-    ) -> Vec<ThreadId> {
+        branches: Vec<(ThreadKey, Vec<(SharedString, SharedString)>)>,
+    ) -> Vec<ThreadKey> {
         let mut changed = Vec::new();
         for (thread, project_branches) in branches {
             let facts = self.threads.entry(thread).or_default();
@@ -265,15 +268,21 @@ impl Facts {
     /// through `looked_up`. A launch with dozens of parked Threads would
     /// otherwise hold the first frame for seconds.
     pub fn parked_changed(&mut self, cockpit: &Cockpit) -> Lookups {
-        let ordered = cockpit.parked_in_order().unwrap_or_default();
+        let ordered: Vec<ThreadKey> = cockpit
+            .parked_in_order()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|thread| cockpit.thread_key(thread))
+            .collect();
         let mut lookups = Lookups::default();
-        for thread in &ordered {
-            let last_used = cockpit.last_activity(*thread);
-            let facts = self.threads.entry(*thread).or_default();
+        for key in &ordered {
+            let thread = key.thread();
+            let last_used = cockpit.last_activity(thread);
+            let facts = self.threads.entry(*key).or_default();
             facts.last_used = last_used;
-            facts.name = display_name(cockpit, *thread, self.auto_title);
-            facts.subagents = cockpit.subagent_count(*thread).unwrap_or_default();
-            let Ok(meta) = cockpit.peek(*thread) else {
+            facts.name = display_name(cockpit, thread, self.auto_title);
+            facts.subagents = cockpit.subagent_count(thread).unwrap_or_default();
+            let Ok(meta) = cockpit.peek(thread) else {
                 facts.provider = None;
                 facts.project = None;
                 facts.project_label = None;
@@ -316,7 +325,7 @@ impl Facts {
                     None => None,
                 };
                 if let Some(checkout) = checkout {
-                    lookups.branches.push((*thread, checkout));
+                    lookups.branches.push((*key, checkout));
                 }
             }
         }
@@ -348,7 +357,8 @@ impl Facts {
     /// Refresh everything except the checkout label (and the Project's
     /// default branch, read once). This path stays in the pump, so it must
     /// never launch Git. Answers whether any of these facts moved.
-    fn refresh_metadata(&mut self, cockpit: &Cockpit, thread: ThreadId) -> bool {
+    fn refresh_metadata(&mut self, cockpit: &Cockpit, key: ThreadKey) -> bool {
+        let thread = key.thread();
         let (project, project_label, worktree) = match cockpit.peek(thread) {
             Ok(meta) => (
                 meta.project_id,
@@ -359,7 +369,7 @@ impl Facts {
         };
         let name = display_name(cockpit, thread, self.auto_title);
         let last_used = cockpit.last_activity(thread);
-        let facts = self.threads.entry(thread).or_default();
+        let facts = self.threads.entry(key).or_default();
         let changed = facts.last_used != last_used
             || facts.project != project
             || facts.project_label != project_label
@@ -377,12 +387,12 @@ impl Facts {
     /// that moved.
     pub fn renamed(&mut self, cockpit: &Cockpit, thread: ThreadId) {
         let name = display_name(cockpit, thread, self.auto_title);
-        self.threads.entry(thread).or_default().name = name;
+        self.threads.entry(cockpit.thread_key(thread)).or_default().name = name;
     }
 
     /// What a Thread is called, from the cache; `New thread` until a moment
     /// has named it (never its number).
-    pub fn name(&self, thread: ThreadId) -> SharedString {
+    pub fn name(&self, thread: ThreadKey) -> SharedString {
         self.threads
             .get(&thread)
             .filter(|facts| !facts.name.is_empty())
@@ -391,13 +401,13 @@ impl Facts {
     }
 
     /// When a Thread was last used, from the cache.
-    pub fn last_used(&self, thread: ThreadId) -> Option<SystemTime> {
+    pub fn last_used(&self, thread: ThreadKey) -> Option<SystemTime> {
         self.threads.get(&thread).and_then(|facts| facts.last_used)
     }
 
     /// A Thread whose time is not known, as a legacy log ending in marks reads.
     #[cfg(test)]
-    pub fn fixture_forget_last_used(&mut self, thread: ThreadId) {
+    pub fn fixture_forget_last_used(&mut self, thread: ThreadKey) {
         self.threads.entry(thread).or_default().last_used = None;
     }
 
@@ -413,10 +423,10 @@ impl Facts {
 
     /// Copy in one Thread's Wall card, counts and changed files from its
     /// digest, wherever its transcript can change.
-    fn refresh_wall(&mut self, cockpit: &Cockpit, thread: ThreadId) {
-        let open = cockpit.thread(thread);
-        let last_used = cockpit.last_activity(thread);
-        let facts = self.threads.entry(thread).or_default();
+    fn refresh_wall(&mut self, cockpit: &Cockpit, key: ThreadKey) {
+        let open = cockpit.thread(key.thread());
+        let last_used = cockpit.last_activity(key.thread());
+        let facts = self.threads.entry(key).or_default();
         if let Some(open) = open {
             let digest = open.digest();
             facts.wall = digest.wall.clone();
@@ -583,7 +593,7 @@ fn at_word_boundary(title: &str) -> String {
 #[derive(Default)]
 pub struct Lookups {
     /// Threads whose checkout branch only `git` can say.
-    pub branches: Vec<(ThreadId, std::path::PathBuf)>,
+    pub branches: Vec<(ThreadKey, std::path::PathBuf)>,
     /// Projects whose default branch only `git` can say, each with a
     /// checkout of it.
     pub default_branches: Vec<(ProjectId, std::path::PathBuf)>,
@@ -619,7 +629,7 @@ impl Lookups {
 /// What `Lookups::run` found, for `Facts::looked_up`.
 pub struct Answers {
     default_branches: Vec<(ProjectId, String)>,
-    branches: Vec<(ThreadId, Option<String>)>,
+    branches: Vec<(ThreadKey, Option<String>)>,
 }
 
 #[cfg(test)]
@@ -688,7 +698,21 @@ mod tests {
         );
         assert_eq!(NEW_THREAD, "New thread");
         let facts = Facts::default();
-        assert_eq!(facts.name(ThreadId::new(7)), NEW_THREAD, "never thread-7");
+        assert_eq!(facts.name(ThreadKey::fixture(0, 7)), NEW_THREAD, "never thread-7");
+    }
+
+    /// Thread 3 here and Thread 3 on a machine are two Threads: what is
+    /// known of one is not the other's.
+    #[test]
+    fn a_threads_facts_keep_two_machines_threads_apart() {
+        let (here, there) = (ThreadKey::fixture(0, 3), ThreadKey::fixture(1, 3));
+        let mut facts = Facts::default();
+        let branches = vec![("repo".into(), "main".into())];
+        assert_eq!(facts.set_project_branches(vec![(here, branches.clone())]), [here]);
+        assert_eq!(facts.get(here).unwrap().project_branches, branches);
+        assert!(facts.get(there).is_none());
+        facts.retain_threads(|thread| thread != there);
+        assert!(facts.get(here).is_some(), "forgetting the machine's keeps this one's");
     }
 
     #[test]
@@ -730,6 +754,7 @@ mod tests {
             .unwrap();
         drop(writer);
         let cockpit = Cockpit::new(store, Box::new(crate::demo::Spawn::new(false)));
+        let thread = cockpit.thread_key(thread);
         let mut facts = Facts::default();
 
         let lookups = facts.parked_changed(&cockpit);
@@ -784,6 +809,7 @@ mod tests {
         writer.flush().unwrap();
         writer.park();
         let cockpit = Cockpit::new(store, Box::new(crate::demo::Spawn::new(false)));
+        let (titled, untitled) = (cockpit.thread_key(titled), cockpit.thread_key(untitled));
         let mut facts = Facts::default();
 
         facts.parked_changed(&cockpit);
@@ -826,16 +852,17 @@ mod tests {
         drop(writer);
         let mut cockpit = Cockpit::new(store, Box::new(crate::demo::Spawn::new(false)));
         cockpit.revive(thread).unwrap();
+        let thread = cockpit.thread_key(thread);
         let mut facts = Facts::default();
 
-        let lookups = facts.opened(&cockpit, thread);
+        let lookups = facts.opened(&cockpit, thread.thread());
         assert_eq!(lookups.branches, vec![(thread, checkout.clone())]);
         assert_eq!(lookups.default_branches, vec![(project, checkout.clone())]);
         let opened = facts.get(thread).unwrap();
         assert_eq!(opened.branch, None, "no git ran here");
         assert_eq!(opened.default_branch, None, "no git ran here");
         assert!(
-            facts.opened(&cockpit, thread).default_branches.is_empty(),
+            facts.opened(&cockpit, thread.thread()).default_branches.is_empty(),
             "a Project's default branch is asked once"
         );
 

@@ -146,7 +146,7 @@ impl CockpitView {
         let parked = self.facts.parked();
         let cockpit = self.cockpit.read(cx);
         let exists =
-            |thread: ThreadId| cockpit.thread(thread).is_some() || parked.contains(&thread);
+            |thread: ThreadId| cockpit.thread(thread).is_some() || parked.contains(&cockpit.thread_key(thread));
         self.history.prune(|place| exists(place.thread));
         let place = self.place(cx);
         self.history.visit(place);

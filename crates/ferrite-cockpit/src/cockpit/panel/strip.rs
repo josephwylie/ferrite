@@ -139,7 +139,7 @@ impl CockpitView {
         match opener {
             Opener::Terminal | Opener::Files if !checkout => Some("Needs a checkout"),
             Opener::Changes if !checkout => Some("Needs a checkout"),
-            Opener::PullRequest if self.facts.pr(thread).is_none() => {
+            Opener::PullRequest if self.facts.pr(self.cockpit.read(cx).thread_key(thread)).is_none() => {
                 Some("No pull request on this branch")
             }
             Opener::SideChat

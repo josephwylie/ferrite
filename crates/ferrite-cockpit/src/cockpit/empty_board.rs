@@ -434,7 +434,7 @@ impl CockpitView {
                 recent.push(thread);
             }
         }
-        recent.sort_by_key(|thread| std::cmp::Reverse(self.last_used(*thread)));
+        recent.sort_by_key(|thread| std::cmp::Reverse(self.last_used(*thread, cx)));
         recent.truncate(ferrite_ui::theme::EMPTY_RECENT_MAX);
         let recent = recent
             .into_iter()
@@ -442,7 +442,7 @@ impl CockpitView {
                 row: self.thread_row(self.cockpit.read(cx).thread_key(thread), cx),
                 age: self
                     .facts
-                    .last_used(thread)
+                    .last_used(self.cockpit.read(cx).thread_key(thread))
                     .map(|at| crate::facts::since_label(at, now)),
                 open: self.pane_for(thread).is_some(),
             })
@@ -506,8 +506,8 @@ impl CockpitView {
     /// An empty Thread's hero: its Project's word, settled, so a word and
     /// not a switcher, or the scratch wording for a Thread with no Project.
     /// None while the Thread's facts are unknown.
-    pub(super) fn thread_hero(&self, thread: ThreadId) -> Option<pane::Hero> {
-        Some(match self.facts.get(thread)?.project_label.clone() {
+    pub(super) fn thread_hero(&self, thread: ThreadId, cx: &gpui::App) -> Option<pane::Hero> {
+        Some(match self.facts.get(self.cockpit.read(cx).thread_key(thread))?.project_label.clone() {
             Some(project) => pane::Hero::Project(pane::hero_project(project, false).into_any_element()),
             None => pane::Hero::Scratch,
         })

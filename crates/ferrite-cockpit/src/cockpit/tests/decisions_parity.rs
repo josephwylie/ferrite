@@ -227,7 +227,7 @@ fn option_two_without_a_standing_answer_keeps_a_thread_rule(cx: &mut TestAppCont
         "{:?}",
         answered(&fake)
     );
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).thread_key(view.panes[0].thread().unwrap()));
     view.read_with(cx, |view, cx| {
         assert_eq!(
             view.decisions.read(cx).rules(),

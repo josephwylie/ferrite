@@ -435,9 +435,9 @@ impl CockpitView {
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread, cx),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at, cx),
             MenuTarget::PrMore(target) => {
-                rows = self.pull_request.read(cx).menu_rows(target, self.branch_pr(target))
+                rows = self.pull_request.read(cx).menu_rows(target, self.branch_pr(target, cx))
             }
-            MenuTarget::PrLink(key) => rows = self.pr_link_rows(key.thread()),
+            MenuTarget::PrLink(key) => rows = self.pr_link_rows(key.thread(), cx),
             MenuTarget::Factory => {
                 rows = self
                     .factory_pick_rows(cx)
@@ -469,8 +469,8 @@ impl CockpitView {
     /// The PR badge's menu: the PR's native detail and the two browsers,
     /// then its forge address. A PR the forge gave no address says so on
     /// the rows that need one.
-    fn pr_link_rows(&self, thread: ThreadId) -> Vec<Option<(menu::Item, MenuVerb)>> {
-        let Some(target) = self.pr_target(thread) else {
+    fn pr_link_rows(&self, thread: ThreadId, cx: &gpui::App) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        let Some(target) = self.pr_target(thread, cx) else {
             return Vec::new();
         };
         let address = |label: &'static str, verb| {
@@ -556,7 +556,7 @@ impl CockpitView {
         rows.push(Some((key("Copy thread link", "K"), MenuVerb::CopyLink)));
         rule(rows);
         rows.push(Some((key("Refresh PR status", "S"), MenuVerb::RefreshPr)));
-        if self.facts.pr(thread).is_some_and(|pr| pr.url.is_some()) {
+        if self.facts.pr(self.cockpit.read(cx).thread_key(thread)).is_some_and(|pr| pr.url.is_some()) {
             rows.push(Some((key("Open PR in browser", "B"), MenuVerb::OpenPr)));
         }
         rule(rows);
@@ -899,7 +899,7 @@ impl CockpitView {
                 self.open_pr_as(key.thread(), how, window, cx)
             }
             (MenuTarget::PrLink(key), MenuVerb::PrCopy) => {
-                if let Some(Ok(address)) = self.pr_target(key.thread()).map(|target| target.address()) {
+                if let Some(Ok(address)) = self.pr_target(key.thread(), cx).map(|target| target.address()) {
                     cx.write_to_clipboard(ClipboardItem::new_string(address));
                 }
             }

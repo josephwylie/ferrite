@@ -177,7 +177,7 @@ fn prepare(
     view.facts.set_branches(
         branches
             .into_iter()
-            .map(|(thread, status)| (thread, Some(status)))
+            .map(|(thread, status)| (view.cockpit.read(cx).thread_key(thread), Some(status)))
             .collect(),
     );
     use gpui::component::WindowExt as _;
@@ -194,7 +194,7 @@ fn unfold_file(
     name: &str,
     cx: &mut Context<CockpitView>,
 ) {
-    let path = view.facts.get(thread).and_then(|facts| {
+    let path = view.facts.get(view.cockpit.read(cx).thread_key(thread)).and_then(|facts| {
         facts
             .changed_files
             .iter()

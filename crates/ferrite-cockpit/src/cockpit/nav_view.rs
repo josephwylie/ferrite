@@ -419,7 +419,7 @@ fn factory_projects(view: &CockpitView, model: &Cockpit, state: &nav::NavState) 
     let mut projects: Vec<ProjectId> = state
         .open_rows()
         .chain(&state.parked)
-        .filter_map(|row| view.facts.get(row.key.thread()).and_then(|facts| facts.project))
+        .filter_map(|row| view.facts.get(row.key).and_then(|facts| facts.project))
         .chain(board.tasks.iter().map(|task| task.project))
         .chain(automatic)
         .chain(view.nav_filter)
@@ -548,7 +548,7 @@ fn listed_threads(
             } else {
                 Section::Active
             };
-            (key, section, view.facts.last_used(thread))
+            (key, section, view.facts.last_used(key))
         })
         .collect()
 }

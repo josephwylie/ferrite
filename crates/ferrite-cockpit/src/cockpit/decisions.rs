@@ -15,6 +15,7 @@ use super::*;
 use ferrite_core::activity::{DecisionHandle, PendingDecision, Subject};
 use ferrite_pane::decision::{self, ApprovalChoice, ThreadRule};
 use gpui::App;
+use ferrite_core::ThreadKey;
 use std::collections::HashMap;
 
 /// What a Decision card's press asks of the window.
@@ -121,13 +122,13 @@ impl DecisionsView {
         }
     }
 
-    fn covers_any(&self, thread: ThreadId) -> bool {
+    fn covers_any(&self, thread: ThreadKey) -> bool {
         self.rules.iter().any(|rule| rule.thread == thread)
     }
 
     fn covers(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         decision: &ferrite_core::Decision,
         workspace: Option<&std::path::Path>,
     ) -> bool {
@@ -137,7 +138,7 @@ impl DecisionsView {
     }
 
     /// A gone Thread's rules go with it.
-    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
+    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadKey) -> bool) {
         self.rules.retain(|rule| keep(rule.thread));
     }
 
@@ -700,7 +701,8 @@ impl CockpitView {
                 },
                 None if allows => {
                     let workspace = self.thread_workspace(thread, cx);
-                    rule = Some(ThreadRule::new(thread, decision, workspace.as_deref()));
+                    let key = self.cockpit.read(cx).thread_key(thread);
+                    rule = Some(ThreadRule::new(key, decision, workspace.as_deref()));
                     DecisionAnswer::Allow {
                         input: decision.input.clone(),
                     }
@@ -761,8 +763,9 @@ impl CockpitView {
         }
         for update in frame {
             let thread = update.thread;
+            let key = self.cockpit.read(cx).thread_key(thread);
             let rules = self.decisions.read(cx);
-            if !rules.covers_any(thread) {
+            if !rules.covers_any(key) {
                 continue;
             }
             let workspace = self.thread_workspace(thread, cx);
@@ -778,7 +781,7 @@ impl CockpitView {
                                 && request.reply_error.is_none()
                                 && request.decision.policy.allow
                                 && !request.decision.policy.interaction_required
-                                && rules.covers(thread, &request.decision, workspace.as_deref())
+                                && rules.covers(key, &request.decision, workspace.as_deref())
                         })
                         .cloned()
                         .collect()

@@ -33,20 +33,20 @@ fn a_bulk_park_of_loose_threads_names_the_thread_that_failed(cx: &mut TestAppCon
     tick(cx);
 
     let said = notice(&view, cx).expect("the failure is reported");
-    let name = view.read_with(cx, |view, _| view.facts.name(threads[0]).to_string());
+    let name = view.read_with(cx, |view, cx| view.facts.name(view.cockpit.read(cx).thread_key(threads[0])).to_string());
     assert!(said.starts_with(&format!("Couldn't park {name}: ")), "{said}");
     assert_eq!(said.matches(';').count(), 0, "one failure, one entry: {said}");
     assert!(cx.debug_bounds("nav-notice").is_some(), "drawn in the list");
     view.read_with(cx, |view, cx| {
         assert_eq!(view.nav_view.read(cx).picked, vec![both[0]], "the failed one stays picked");
-        assert!(view.facts.parked().contains(&threads[2]));
+        assert!(view.facts.parked().contains(&both[1]));
     });
 
     cx.simulate_keystrokes("cmd-shift-e cmd-z");
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            !view.facts.parked().contains(&threads[2]),
+            !view.facts.parked().contains(&view.cockpit.read(cx).thread_key(threads[2])),
             "Undo revived the one that parked"
         );
     });
@@ -80,8 +80,8 @@ fn a_failed_reopen_is_reported(cx: &mut TestAppContext) {
     let said = notice(&view, cx).expect("the failure is reported");
     assert!(said.starts_with("Couldn't reopen "), "{said}");
     assert!(cx.debug_bounds("nav-notice").is_some(), "drawn in the list");
-    view.read_with(cx, |view, _| {
-        assert!(view.facts.parked().contains(&threads[0]), "still parked");
+    view.read_with(cx, |view, cx| {
+        assert!(view.facts.parked().contains(&view.cockpit.read(cx).thread_key(threads[0])), "still parked");
     });
 }
 

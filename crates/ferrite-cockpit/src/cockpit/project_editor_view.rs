@@ -746,7 +746,7 @@ impl CockpitView {
                     );
                 }
                 self.nav_notice.clear();
-                self.refresh_names();
+                self.refresh_names(cx);
             }
             Err(error) => {
                 let error = Some(format!("project unchanged · {error}").into());

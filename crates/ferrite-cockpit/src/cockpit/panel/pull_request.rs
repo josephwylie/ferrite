@@ -382,8 +382,9 @@ impl CockpitView {
     /// The PR row and the `+` menu's Pull request: the branch's PR as a
     /// Surface of `thread`'s Panel. Nothing with no PR on the branch.
     pub(crate) fn open_pr_surface(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if let Some(number) = self.facts.pr(thread).map(|pr| pr.number) {
-            self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::PullRequest(number), cx);
+        let key = self.cockpit.read(cx).thread_key(thread);
+        if let Some(number) = self.facts.pr(key).map(|pr| pr.number) {
+            self.upsert_surface(key, SurfaceId::PullRequest(number), cx);
         }
     }
 
@@ -399,7 +400,7 @@ impl CockpitView {
                     _ => None,
                 })
         });
-        let number = tab.or_else(|| self.facts.pr(thread).map(|pr| pr.number))?;
+        let number = tab.or_else(|| self.facts.pr(self.cockpit.read(cx).thread_key(thread)).map(|pr| pr.number))?;
         Some(PrTarget::thread(thread, number))
     }
 
@@ -486,7 +487,7 @@ impl CockpitView {
     /// merge the agent ran) is let go, until its read lands: the reading
     /// speaks. Any other change asks the forge again, as checks do.
     pub(crate) fn pr_reading_changed(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(reading) = self.facts.pr(thread) else {
+        let Some(reading) = self.facts.pr(self.cockpit.read(cx).thread_key(thread)) else {
             return;
         };
         let target = PrTarget::thread(thread, reading.number);
@@ -516,17 +517,17 @@ impl CockpitView {
             .map(PrTone::of_snapshot)
             .or_else(|| {
                 self.facts
-                    .pr(thread)
+                    .pr(self.cockpit.read(cx).thread_key(thread))
                     .map(|pr| PrTone::of_reading(pr.state, pr.draft))
             })
     }
 
     /// Whether `target` is the PR of its Thread's branch.
-    pub(in crate::cockpit) fn branch_pr(&self, target: PrTarget) -> bool {
+    pub(in crate::cockpit) fn branch_pr(&self, target: PrTarget, cx: &gpui::App) -> bool {
         match target.source {
             PrSource::Thread(thread) => self
                 .facts
-                .pr(thread)
+                .pr(self.cockpit.read(cx).thread_key(thread))
                 .is_some_and(|pr| pr.number == target.number),
             PrSource::Project(_) => false,
         }
@@ -542,7 +543,7 @@ impl CockpitView {
         PrShown {
             target,
             tab,
-            branch: self.branch_pr(target),
+            branch: self.branch_pr(target, cx),
             code: (tab == PrTab::Code).then(|| {
                 self.changes_pane(tools::Diff::PullRequest(target), cx)
                     .into_any_element()
@@ -564,7 +565,7 @@ impl CockpitView {
             .map_or(PrTab::Summary, |state| state.pr_tab(number));
         let reading = self
             .facts
-            .pr(thread)
+            .pr(self.cockpit.read(cx).thread_key(thread))
             .map(|pr| (PrTone::of_reading(pr.state, pr.draft), pr.url.clone()));
         Some(PrInputs {
             shown: self.pr_shown(PrTarget::thread(thread, number), tab, cx),

@@ -453,7 +453,7 @@ fn without_checkouts(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContex
     view.update(cx, |view, cx| {
         let threads = view.cockpit.read(cx).threads();
         view.facts
-            .set_branches(threads.into_iter().map(|thread| (thread, None)).collect());
+            .set_branches(threads.into_iter().map(|thread| (view.cockpit.read(cx).thread_key(thread), None)).collect());
         view.notify_part(parts::Part::Nav, cx);
     });
     cx.run_until_parked();

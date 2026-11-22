@@ -100,7 +100,7 @@ impl CockpitView {
         }
         if self.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(thread.thread(), &title).is_ok()) {
             self.facts.renamed(self.cockpit.read(cx), thread.thread());
-            self.refresh_names();
+            self.refresh_names(cx);
             cx.notify();
         }
     }

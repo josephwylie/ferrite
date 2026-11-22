@@ -28,6 +28,7 @@ use super::*;
 use ferrite_core::activity::AgentKey;
 use ferrite_core::transcript::tools::{policy, ToolKind};
 use ferrite_core::transcript::ToolBlock;
+use ferrite_core::ThreadKey;
 use ferrite_pane::pane::{BackgroundTask, WorkKind};
 use ferrite_pane::transcript::TranscriptTail;
 
@@ -174,7 +175,7 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
 
 /// A sent stop: by Thread and Session generation (a provider reuses task
 /// ids), and what it ends.
-type Stop = (ThreadId, u64, StopTarget);
+type Stop = (ThreadKey, u64, StopTarget);
 
 /// A call whose background work has ended.
 pub(super) struct Finished {
@@ -187,7 +188,7 @@ pub(super) struct Finished {
 /// What the background work draws of one Thread, as the window has it this
 /// frame.
 pub(crate) struct BackgroundInputs {
-    pub(super) thread: ThreadId,
+    pub(super) thread: ThreadKey,
     pub(super) generation: u64,
     /// Main's turn runs.
     pub(super) busy: bool,
@@ -316,17 +317,17 @@ pub(super) fn stop_elements(
 #[derive(Clone)]
 pub(crate) enum BackgroundEvent {
     /// `Details` on the line: the `Background work` dialog on the Thread.
-    Details(ThreadId),
+    Details(ThreadKey),
     /// A row of the Overview's section: the Background Surface.
-    Open(ThreadId),
+    Open(ThreadKey),
     /// `Open` on an agent's card in the Background Surface: the agent the
     /// call started.
-    OpenAgent { thread: ThreadId, call: String },
+    OpenAgent { thread: ThreadKey, call: String },
     /// The line's `Stop`, or `Retry`: every piece of work it lists that the
     /// Session can stop.
-    StopLine(ThreadId),
+    StopLine(ThreadKey),
     /// A stop square: `target` of the Thread's Session `generation`.
-    Stop { thread: ThreadId, generation: u64, target: StopTarget },
+    Stop { thread: ThreadKey, generation: u64, target: StopTarget },
 }
 
 /// Every Thread's background work as the window keeps it: the stops sent
@@ -340,7 +341,7 @@ pub(crate) struct BackgroundView {
     sends: u64,
     /// The Background Surface's cards turned from how they start (running
     /// open, finished closed), by call.
-    turned: HashMap<ThreadId, HashSet<String>>,
+    turned: HashMap<ThreadKey, HashSet<String>>,
 }
 
 impl EventEmitter<BackgroundEvent> for BackgroundView {}
@@ -401,7 +402,7 @@ impl BackgroundView {
                     );
                 }
                 actions.push(
-                    pane::inline_button(("background-details", thread.get() as usize), "Details")
+                    pane::inline_button(("background-details", thread.thread().get() as usize), "Details")
                         .debug_selector(|| "background-details".into())
                         .on_click(emit(BackgroundEvent::Details(thread)))
                         .into_any_element(),
@@ -409,7 +410,7 @@ impl BackgroundView {
                 if let Some(control) = &stop {
                     actions.extend(stop_elements(
                         control,
-                        thread,
+                        thread.thread(),
                         "background",
                         emit(BackgroundEvent::StopLine(thread)),
                     ));
@@ -499,11 +500,11 @@ impl BackgroundView {
     /// Forget the stops of work that has ended, or of a Session that has:
     /// `running` is each Thread's Session generation and what `Stop` can
     /// end in it, none for a Thread not open.
-    fn prune(&mut self, running: impl Fn(ThreadId) -> Option<(u64, Vec<StopTarget>)>) {
+    fn prune(&mut self, running: impl Fn(ThreadKey) -> Option<(u64, Vec<StopTarget>)>) {
         if self.stops.is_empty() {
             return;
         }
-        let mut seen: HashMap<ThreadId, Option<(u64, Vec<StopTarget>)>> = HashMap::new();
+        let mut seen: HashMap<ThreadKey, Option<(u64, Vec<StopTarget>)>> = HashMap::new();
         self.stops.retain(|(thread, generation, target), _| {
             seen.entry(*thread)
                 .or_insert_with(|| running(*thread))
@@ -513,7 +514,7 @@ impl BackgroundView {
     }
 
     /// A card's head pressed: it turns from how it starts, or back.
-    pub(super) fn turn(&mut self, thread: ThreadId, call: String, cx: &mut Context<Self>) {
+    pub(super) fn turn(&mut self, thread: ThreadKey, call: String, cx: &mut Context<Self>) {
         let turned = self.turned.entry(thread).or_default();
         if !turned.remove(&call) {
             turned.insert(call);
@@ -522,12 +523,12 @@ impl BackgroundView {
     }
 
     /// Whether `thread`'s card on `call` is turned from how it starts.
-    pub(super) fn is_turned(&self, thread: ThreadId, call: &str) -> bool {
+    pub(super) fn is_turned(&self, thread: ThreadKey, call: &str) -> bool {
         self.turned.get(&thread).is_some_and(|turned| turned.contains(call))
     }
 
     /// Everything of a Thread `keep` refuses goes.
-    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
+    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadKey) -> bool) {
         self.stops.retain(|(thread, _, _), _| keep(*thread));
         self.turned.retain(|thread, _| keep(*thread));
     }
@@ -541,7 +542,7 @@ impl BackgroundView {
     }
 
     /// How much of `thread`'s background work is held.
-    pub(super) fn held_for_test(&self, thread: ThreadId) -> usize {
+    pub(super) fn held_for_test(&self, thread: ThreadKey) -> usize {
         self.stops.keys().filter(|(held, _, _)| *held == thread).count()
             + self.turned.get(&thread).map_or(0, HashSet::len)
     }
@@ -589,7 +590,7 @@ impl CockpitView {
             HashMap::new()
         };
         Some(BackgroundInputs {
-            thread,
+            thread: self.cockpit.read(cx).thread_key(thread),
             generation: open.generation(),
             busy: open.busy(),
             stops_tasks: open.supports_control(ferrite_core::ControlKind::StopTask),
@@ -664,11 +665,11 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match event.clone() {
-            BackgroundEvent::Details(thread) => self.open_background_dialog(thread, cx),
-            BackgroundEvent::Open(thread) => self.open_background(thread, cx),
-            BackgroundEvent::OpenAgent { thread, call } => self.open_background_agent(thread, &call, cx),
+            BackgroundEvent::Details(thread) => self.open_background_dialog(thread.thread(), cx),
+            BackgroundEvent::Open(thread) => self.open_background(thread.thread(), cx),
+            BackgroundEvent::OpenAgent { thread, call } => self.open_background_agent(thread.thread(), &call, cx),
             BackgroundEvent::StopLine(thread) => {
-                self.stop_background_work(thread, BackgroundInputs::line_work, cx)
+                self.stop_background_work(thread.thread(), BackgroundInputs::line_work, cx)
             }
             BackgroundEvent::Stop { thread, generation, target } => {
                 self.send_stop(thread, generation, target, cx)
@@ -688,7 +689,7 @@ impl CockpitView {
             return;
         };
         for target in inputs.targets(&work_of(&inputs)) {
-            self.send_stop(thread, inputs.generation, target, cx);
+            self.send_stop(inputs.thread, inputs.generation, target, cx);
         }
         cx.notify();
     }
@@ -696,7 +697,8 @@ impl CockpitView {
     /// Stop `target` of `thread`'s Session `generation`, if that very
     /// Session still runs it: a press that lands as the work is handed back
     /// stops nothing else.
-    fn send_stop(&mut self, thread: ThreadId, generation: u64, target: StopTarget, cx: &mut Context<Self>) {
+    fn send_stop(&mut self, key: ThreadKey, generation: u64, target: StopTarget, cx: &mut Context<Self>) {
+        let thread = key.thread();
         let Some(inputs) = self
             .background_inputs(thread, false, cx)
             .filter(|inputs| inputs.generation == generation)
@@ -706,7 +708,7 @@ impl CockpitView {
         if !inputs.targets(&inputs.running).contains(&target) {
             return;
         }
-        let stop = (thread, generation, target.clone());
+        let stop = (key, generation, target.clone());
         let refused = inputs.refusal(&target).map_or(0, |(count, _)| count);
         self.background
             .update(cx, |background, cx| background.sent(stop.clone(), refused, cx));
@@ -735,7 +737,7 @@ impl CockpitView {
     pub(super) fn prune_background_stops(&mut self, cx: &mut Context<Self>) {
         self.background.update(cx, |background, cx| {
             background.prune(|thread| {
-                let inputs = self.background_inputs(thread, false, cx)?;
+                let inputs = self.background_inputs(thread.thread(), false, cx)?;
                 Some((inputs.generation, inputs.targets(&inputs.running)))
             })
         });
@@ -768,4 +770,28 @@ fn clock_reading(launched: std::time::Instant) -> String {
     ferrite_core::progress::live_seconds(
         ferrite_core::clock::instant().saturating_duration_since(launched),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Thread 3 here and Thread 3 on a machine are two Threads: a stop sent
+    /// or a card turned in one is not the other's, and forgetting one keeps
+    /// the other's.
+    #[test]
+    fn a_background_stop_keeps_two_machines_threads_apart() {
+        let (here, there) = (ThreadKey::fixture(0, 3), ThreadKey::fixture(1, 3));
+        let mut view = BackgroundView::new();
+        view.turned.entry(here).or_default().insert("call-1".into());
+        view.stops.insert(
+            (here, 1, StopTarget::Command("task-1".into())),
+            StopState::Refused("no".into()),
+        );
+        assert!(view.is_turned(here, "call-1"));
+        assert!(!view.is_turned(there, "call-1"));
+        assert_eq!((view.held_for_test(here), view.held_for_test(there)), (2, 0));
+        view.retain_threads(|thread| thread != there);
+        assert_eq!(view.held_for_test(here), 2, "forgetting the machine's keeps this one's");
+    }
 }

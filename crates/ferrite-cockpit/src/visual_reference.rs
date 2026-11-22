@@ -991,7 +991,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     url: url.then(|| "https://example.com/run".into()),
                 };
                 view.facts.set_branches(vec![(
-                    thread,
+                    view.cockpit.read(cx).thread_key(thread),
                     Some(BranchStatus {
                         branch: Some("feat/pane-chrome".into()),
                         upstream: Some("origin/feat/pane-chrome".into()),
@@ -1002,7 +1002,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     }),
                 )]);
                 view.facts.pr_answered(
-                    thread,
+                    view.cockpit.read(cx).thread_key(thread),
                     Some(PullRequest {
                         number: 48,
                         state: PrState::Open,
@@ -1050,14 +1050,14 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     url: Some("https://example.com/run".into()),
                 };
                 view.facts.set_branches(vec![(
-                    thread,
+                    view.cockpit.read(cx).thread_key(thread),
                     Some(BranchStatus {
                         branch: Some("feat/pane-chrome".into()),
                         ..Default::default()
                     }),
                 )]);
                 view.facts.pr_answered(
-                    thread,
+                    view.cockpit.read(cx).thread_key(thread),
                     Some(PullRequest {
                         number: 212,
                         state: PrState::Open,
@@ -1398,7 +1398,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 branches(view, window, cx);
                 let harness = named_thread(view, "Screenshot harness", cx);
                 view.facts
-                    .pr_answered(harness, Some(fixture_pr(415, PrState::Open, false)));
+                    .pr_answered(view.cockpit.read(cx).thread_key(harness), Some(fixture_pr(415, PrState::Open, false)));
                 crate::nav::card_hover(crate::nav::card_key(view.cockpit.read(cx).thread_key(harness)), false, None)(&true, window, cx);
                 cx.notify();
             });
@@ -1430,7 +1430,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     ),
                 ] {
                     let thread = named_thread(view, name, cx);
-                    view.facts.pr_answered(thread, Some(reading));
+                    view.facts.pr_answered(view.cockpit.read(cx).thread_key(thread), Some(reading));
                 }
                 let running = named_thread(view, "Retained transcript rendering", cx);
                 crate::nav::card_hover(crate::nav::card_key(view.cockpit.read(cx).thread_key(running)), true, None)(&true, window, cx);
@@ -2006,9 +2006,9 @@ fn nav() -> (Scene, Setup) {
             })
         };
         view.facts.set_branches(vec![
-            (harness, branch("worktree-pay-api-migration-cleanup")),
-            (notes, branch("feat/cash-webhook-retries")),
-            (sync, branch("fix/sync")),
+            (view.cockpit.read(cx).thread_key(harness), branch("worktree-pay-api-migration-cleanup")),
+            (view.cockpit.read(cx).thread_key(notes), branch("feat/cash-webhook-retries")),
+            (view.cockpit.read(cx).thread_key(sync), branch("fix/sync")),
         ]);
         cx.notify();
     });
@@ -2021,7 +2021,7 @@ fn named_thread(view: &CockpitView, name: &str, cx: &gpui::App) -> ThreadId {
         .read(cx)
         .threads()
         .into_iter()
-        .find(|thread| view.facts.name(*thread).as_ref() == name)
+        .find(|thread| view.facts.name(view.cockpit.read(cx).thread_key(*thread)).as_ref() == name)
         .unwrap_or_else(|| panic!("the fixture's {name}"))
 }
 
