@@ -74,7 +74,7 @@ fn serving(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
 }
 
 /// `box`'s Sessions: each keeps where it was started, and says nothing.
-struct OnBox(std::sync::Arc<std::sync::Mutex<Vec<std::path::PathBuf>>>);
+pub(super) struct OnBox(pub(super) std::sync::Arc<std::sync::Mutex<Vec<std::path::PathBuf>>>);
 
 struct Quiet {
     _alive: ferrite_core::doorbell::Sender<SessionEvent>,
@@ -1541,6 +1541,22 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
 
 /// A Cockpit attached to a Server whose browser window has one tab open on
 /// a local page, and the Thread and tab document it belongs to.
+/// The Server's word on `thread`'s Browser, as an attach answers it.
+pub(super) fn served(cockpit: &mut Cockpit, thread: ThreadId) -> ferrite_core::browser::State {
+    let ask = cockpit.browser_attach(thread);
+    cockpit.wait_for(ask).unwrap()
+}
+
+/// `action` on `thread`'s Browser, as the Server answers it.
+pub(super) fn browsed(
+    cockpit: &mut Cockpit,
+    thread: ThreadId,
+    action: ferrite_core::browser::Action,
+) -> ferrite_core::browser::State {
+    let ask = cockpit.browser(thread, action);
+    cockpit.wait_for(ask).unwrap()
+}
+
 pub(super) fn browser_core(name: &str) -> (Cockpit, ThreadId, ferrite_core::browser::Document) {
     use ferrite_core::browser::Action;
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
@@ -1556,8 +1572,8 @@ pub(super) fn browser_core(name: &str) -> (Cockpit, ThreadId, ferrite_core::brow
         core.pump(); matches!(core.server(), Some(ServerState::Attached { .. }))
     });
     let thread = core.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() }).unwrap();
-    core.browser_attach(thread).unwrap();
-    let opened = core.browser(thread, Action::Open { url: "http://localhost:5173/start".into() }).unwrap();
+    served(&mut core, thread);
+    let opened = browsed(&mut core, thread, Action::Open { url: "http://localhost:5173/start".into() });
     let document = opened.tabs[0].document();
     (core, thread, document)
 }
@@ -1576,11 +1592,11 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
     until(cx, |cx| engine.live_views() == 1 && cx.debug_bounds("browser-preview").is_some());
     view.update(cx, |view, cx| {
-        let state = view.cockpit.update(cx, |cockpit, _| cockpit.browser(thread, Action::Navigate { document, url: "http://localhost:5173/first".into() }).unwrap());
-        view.cockpit.update(cx, |cockpit, _| cockpit.browser(thread, Action::Navigate { document: state.tabs[0].document(), url: "http://localhost:5173/final".into() }).unwrap());
+        let state = view.cockpit.update(cx, |cockpit, _| browsed(cockpit, thread, Action::Navigate { document, url: "http://localhost:5173/first".into() }));
+        view.cockpit.update(cx, |cockpit, _| browsed(cockpit, thread, Action::Navigate { document: state.tabs[0].document(), url: "http://localhost:5173/final".into() }));
     });
     until(cx, |cx| view.update(cx, |view, cx| {
-        let state = view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap());
+        let state = view.cockpit.update(cx, |cockpit, _| served(cockpit, thread));
         state.tabs[0].url == "http://localhost:5173/final" && !state.tabs[0].loading
     }));
     assert_eq!(engine.live_views(), 1, "navigation retains the page displayed by the preview");
@@ -1590,8 +1606,8 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
     tick(cx);
     cx.simulate_input("http://localhost:5173/second");
     cx.simulate_keystrokes("enter");
-    until(cx, |cx| view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap().tabs.len()) == 2));
-    let state = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap()));
+    until(cx, |cx| view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| served(cockpit, thread).tabs.len()) == 2));
+    let state = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| served(cockpit, thread)));
     assert_eq!(state.tabs[0].url, "http://localhost:5173/final", "new tab does not navigate the existing page");
     assert_eq!(state.tabs[1].url, "http://localhost:5173/second");
     engine.defer_browser_navigation(true);
@@ -1600,13 +1616,13 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
     cx.simulate_keystrokes("enter");
     until(cx, |_| engine.journal().contains(&Call::BrowserNavigate("http://localhost:5173/delayed".into())));
     tick(cx);
-    let pending = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap()));
+    let pending = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| served(cockpit, thread)));
     assert_eq!(pending.tabs[1].url, "http://localhost:5173/delayed", "old native metadata must not overwrite an accepted navigation intent");
     assert!(pending.tabs[1].loading);
     assert_eq!(pending.tabs[1].dirty, ferrite_core::browser::Dirty::Unknown);
     engine.finish_browser_navigations();
     until(cx, |cx| view.update(cx, |view, cx| {
-        let state = view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap());
+        let state = view.cockpit.update(cx, |cockpit, _| served(cockpit, thread));
         state.tabs[1].url == "http://localhost:5173/delayed" && !state.tabs[1].loading
     }));
     engine.defer_browser_navigation(false);
@@ -1614,14 +1630,14 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
     cx.simulate_input("http://localhost:5173/delayed#section");
     cx.simulate_keystrokes("enter");
     until(cx, |cx| view.update(cx, |view, cx| {
-        let state = view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap());
+        let state = view.cockpit.update(cx, |cockpit, _| served(cockpit, thread));
         state.tabs[1].url == "http://localhost:5173/delayed#section" && !state.tabs[1].loading
     }));
     let wait_protection = |cx: &mut gpui::VisualTestContext, expected: bool, stage: &str| {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         until(cx, |cx| {
             let (state, active) = view.update(cx, |view, cx| {
-                (view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap()), view.cockpit.read(cx).window_active())
+                (view.cockpit.update(cx, |cockpit, _| served(cockpit, thread)), view.cockpit.read(cx).window_active())
             });
             assert!(std::time::Instant::now() < deadline,
                 "{stage}: expected protected={expected}, active={active}, state={state:?}");
@@ -1633,7 +1649,7 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
     cx.simulate_mouse_down(page_point, gpui::MouseButton::Left, gpui::Modifiers::none());
     wait_protection(cx, true, "held pointer begins");
     for _ in 0..3 { tick(cx); }
-    assert!(view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap().tabs.iter().any(|tab| tab.protected))),
+    assert!(view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| served(cockpit, thread).tabs.iter().any(|tab| tab.protected))),
         "a held gesture must not settle between pointer events");
     cx.simulate_mouse_up(viewport.origin - gpui::point(px(10.), px(10.)), gpui::MouseButton::Left, gpui::Modifiers::none());
     wait_protection(cx, false, "outside pointer release settles");
@@ -1646,7 +1662,7 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
     cx.simulate_keystrokes("b");
     cx.simulate_event(gpui::KeyUpEvent { keystroke: gpui::Keystroke::parse("b").unwrap() });
     tick(cx);
-    assert!(view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap().tabs.iter().any(|tab| tab.protected))),
+    assert!(view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| served(cockpit, thread).tabs.iter().any(|tab| tab.protected))),
         "a typing burst must remain protected between keys");
     wait_protection(cx, false, "typing burst settles");
     cx.simulate_mouse_down(page_point, gpui::MouseButton::Left, gpui::Modifiers::none());
@@ -1737,8 +1753,8 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
         core.pump(); matches!(core.server(), Some(ServerState::Attached { .. }))
     });
     let thread = core.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() }).unwrap();
-    core.browser_attach(thread).unwrap();
-    core.browser(thread, Action::Open { url: "http://localhost:5173/start".into() }).unwrap();
+    served(&mut core, thread);
+    browsed(&mut core, thread, Action::Open { url: "http://localhost:5173/start".into() });
     bind_production_keys(cx);
     let engine = std::rc::Rc::new(FakeEngine::new());
     cx.update(|cx| Visuals::install(engine.clone(), cx));
@@ -1757,11 +1773,11 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
     };
     wait(cx, "browser becomes visible", &mut |cx| engine.live_views() == 1 && cx.debug_bounds("browser-preview").is_some());
     wait(cx, "page finishes loading", &mut |cx| view.update(cx, |view, cx| {
-        !view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap().tabs[0].loading)
+        !view.cockpit.update(cx, |cockpit, _| served(cockpit, thread).tabs[0].loading)
     }));
     let finished = || engine.journal().iter().filter(|call| matches!(call, Call::AnnotationFinished(_))).count();
     let protected = |cx: &mut gpui::VisualTestContext| view.update(cx, |view, cx| {
-        view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap().tabs[0].protected)
+        view.cockpit.update(cx, |cockpit, _| served(cockpit, thread).tabs[0].protected)
     });
     let begin = |cx: &mut gpui::VisualTestContext| {
         let annotate = cx.debug_bounds("browser-annotate").expect("live page offers annotation");

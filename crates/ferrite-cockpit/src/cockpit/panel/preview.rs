@@ -83,7 +83,7 @@ pub(crate) struct PreviewTab {
 pub(in crate::cockpit) struct AnnotationImage {
     annotation: ferrite_core::browser_annotations::Annotation,
     opened: Option<u64>,
-    image: std::sync::mpsc::Receiver<std::io::Result<PathBuf>>,
+    image: ferrite_core::cockpit::Ask<PathBuf>,
 }
 
 impl PreviewTab {
@@ -248,7 +248,7 @@ impl FileSurfaceView {
         owner: PaneIdentity,
         preview: &Preview,
         annotation: ferrite_core::browser_annotations::Annotation,
-        image: std::sync::mpsc::Receiver<std::io::Result<PathBuf>>,
+        image: ferrite_core::cockpit::Ask<PathBuf>,
     ) {
         let opened = preview.opened().map(|(open, _)| open);
         self.tab(owner, preview).annotation_image = Some(AnnotationImage {
@@ -275,16 +275,16 @@ impl FileSurfaceView {
         for (owner, preview) in panes {
             let thread = owner.thread();
             let tab = self.tab(*owner, preview);
-            if let Some(pending) = tab.annotation_image.take() {
+            if let Some(mut pending) = tab.annotation_image.take() {
                 if preview.opened().map(|(open, _)| open) == pending.opened {
-                    match pending.image.try_recv() {
-                        Ok(Ok(image)) => preview.open_annotation(pending.annotation, image, window),
-                        Ok(Err(error)) => preview.annotation_error(&pending.annotation, format!("The retained capture could not be opened: {error}. Reopen the annotation to try again."), window),
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    match pending.image.answer() {
+                        Some(Ok(image)) => preview.open_annotation(pending.annotation, image, window),
+                        Some(Err(error)) if error.kind() == std::io::ErrorKind::NotConnected => preview.annotation_error(&pending.annotation, "The retained capture could not be loaded. Reopen the annotation to try again.".into(), window),
+                        Some(Err(error)) => preview.annotation_error(&pending.annotation, format!("The retained capture could not be opened: {error}. Reopen the annotation to try again."), window),
+                        None => {
                             tab.annotation_image = Some(pending);
                             tended.waiting = true;
                         }
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => preview.annotation_error(&pending.annotation, "The retained capture could not be loaded. Reopen the annotation to try again.".into(), window),
                     }
                 }
             }
@@ -863,29 +863,21 @@ impl CockpitView {
                     pane.preview.loading_annotation(annotation, window);
                     continue;
                 }
-                let image = pane
-                    .thread()
-                    .ok_or_else(|| {
-                        std::io::Error::other(
-                            "Open the owning Thread to review this browser capture",
-                        )
-                    })
-                    .and_then(|thread| {
-                        self.cockpit
-                            .update(cx, |cockpit, _| cockpit.browser_annotation_image(thread, annotation.clone()))
-                    });
-                match image {
-                    Ok(image) => {
-                        pane.preview.loading_annotation(annotation.clone(), window);
-                        self.file_surface.update(cx, |files, _| {
-                            files.wait_annotation(pane.identity, &pane.preview, annotation, image)
-                        });
-                    }
-                    Err(error) => {
-                        pane.preview
-                            .annotation_error(&annotation, error.to_string(), window)
-                    }
-                }
+                let Some(thread) = pane.thread() else {
+                    pane.preview.annotation_error(
+                        &annotation,
+                        "Open the owning Thread to review this browser capture".into(),
+                        window,
+                    );
+                    continue;
+                };
+                let image = self
+                    .cockpit
+                    .update(cx, |cockpit, _| cockpit.browser_annotation_image(thread, annotation.clone()));
+                pane.preview.loading_annotation(annotation.clone(), window);
+                self.file_surface.update(cx, |files, _| {
+                    files.wait_annotation(pane.identity, &pane.preview, annotation, image)
+                });
             }
         }
         let panes: Vec<_> = self

@@ -7,6 +7,37 @@ use gpui::{point, App, Modifiers, PlatformInput};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// The Server's word on `thread`'s Browser, as an attach answers it. The
+/// smoke polls it each step as it polls the window, so it never waits for
+/// the reply (ADR 0041): `None` until the ask is answered, then asked again.
+fn served(
+    view: &Entity<CockpitView>,
+    thread: ferrite_core::ThreadId,
+    cx: &mut App,
+) -> Result<Option<ferrite_core::browser::State>, String> {
+    thread_local! {
+        static ASKED: std::cell::RefCell<std::collections::BTreeMap<
+            ferrite_core::ThreadId,
+            ferrite_core::cockpit::Ask<ferrite_core::browser::State>,
+        >> = Default::default();
+    }
+    ASKED.with(|asked| {
+        let mut asked = asked.borrow_mut();
+        let answer = asked
+            .entry(thread)
+            .or_insert_with(|| {
+                view.update(cx, |view, cx| {
+                    view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread))
+                })
+            })
+            .answer();
+        if answer.is_some() {
+            asked.remove(&thread);
+        }
+        answer.transpose().map_err(|error| error.to_string())
+    })
+}
+
 impl CockpitView {
     pub fn start_browser_smoke(view: Entity<Self>, window: &mut Window, cx: &mut App) {
         let handle = window.window_handle();
@@ -79,7 +110,7 @@ impl CockpitView {
                             if !boundaries { return Ok(true); }
                             if !reclamation_phase { phase(&output,"reclamation-and-restoration");reclamation_phase=true; }
                             let thread=scenario_thread.expect("scenario Thread");
-                            let state=view.update(cx,|view,cx|view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread))).map_err(|e|e.to_string())?;
+                            let Some(state)=served(&view,thread,cx)? else { return Ok(false); };
                             if let Some((document,ref url))=restoring_page {
                                 if let Some(tab)=state.tabs.iter().find(|tab|tab.id==document.tab && tab.live && !tab.loading && tab.error.is_none() && tab.url==*url) {
                                     if tab.document()==document { return Err("Reclaimed page restoration reused stale document identity".into()); }
@@ -91,7 +122,7 @@ impl CockpitView {
                                 std::fs::write(output.join("lifecycle-before-restoration.json"),serde_json::to_vec_pretty(&state.tabs).unwrap()).map_err(|e|e.to_string())?;
                                 if let Some(tab)=state.tabs.iter().find(|tab|Some(tab.id)!=state.active && !tab.live) {
                                     restoring_page=Some((tab.document(),tab.url.clone()));
-                                    view.update(cx,|view,cx|view.cockpit.update(cx, |cockpit, _| cockpit.browser(thread,ferrite_core::browser::Action::Select{tab:tab.id}))).map_err(|e|e.to_string())?;
+                                    view.update(cx,|view,cx|view.browser_action(thread,ferrite_core::browser::Action::Select{tab:tab.id},cx));
                                     phase(&output,"restored-page");quiet_started=Some(Instant::now());return Ok(false);
                                 }
                             }
@@ -193,13 +224,10 @@ impl CockpitView {
                         return Ok(false);
                     }
                     if work_orders {
-                        let document = view.update(cx, |view, cx| {
-                            let thread = scenario_thread.expect("scenario Thread");
-                            let state = view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).map_err(|error| error.to_string()))?;
-                            Ok::<_, String>(state.tabs.iter().find(|tab| Some(tab.id) == state.active)
-                                .filter(|tab| tab.live && tab.visible && !tab.loading && tab.error.is_none() && tab.url == url)
-                                .map(|tab| tab.document()))
-                        })?;
+                        let Some(state) = served(&view, scenario_thread.expect("scenario Thread"), cx)? else { return Ok(false); };
+                        let document = state.tabs.iter().find(|tab| Some(tab.id) == state.active)
+                            .filter(|tab| tab.live && tab.visible && !tab.loading && tab.error.is_none() && tab.url == url)
+                            .map(|tab| tab.document());
                         let stable = document.is_some() && ready_document == document;
                         ready_document = document;
                         if !stable { return Ok(false); }
@@ -228,14 +256,11 @@ impl CockpitView {
                         // current across a frame before injecting one gesture.
                         // Otherwise production correctly discards that gesture
                         // when its older document is superseded in the queue.
-                        let document = view.update(cx, |view, cx| {
-                            let thread = scenario_thread.expect("scenario Thread");
-                            let state = view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).map_err(|error| error.to_string()))?;
-                            Ok::<_, String>(state.tabs.iter()
-                                .find(|tab| Some(tab.id) == state.active)
-                                .filter(|tab| tab.live && tab.visible && !tab.loading && tab.error.is_none() && tab.url == url)
-                                .map(|tab| tab.document()))
-                        })?;
+                        let Some(state) = served(&view, scenario_thread.expect("scenario Thread"), cx)? else { return Ok(false); };
+                        let document = state.tabs.iter()
+                            .find(|tab| Some(tab.id) == state.active)
+                            .filter(|tab| tab.live && tab.visible && !tab.loading && tab.error.is_none() && tab.url == url)
+                            .map(|tab| tab.document());
                         let stable = document.is_some() && ready_document == document;
                         ready_document = document;
                         if !stable { return Ok(false); }

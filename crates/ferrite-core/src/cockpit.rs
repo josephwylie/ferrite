@@ -33,10 +33,14 @@ use crate::transcript::Input;
 use crate::workspace::registry::{ProjectId, Registry};
 use crate::workspace::WorkspaceChoice;
 use crate::{Decision, DecisionAnswer, MachineId, ModelInfo, ProjectKey, ThreadId, ThreadKey};
+pub use ask::Ask;
 pub use mirror::ThreadView;
 pub use remote::{Attach, Endpoint, ServerRestart, ServerState};
+#[cfg(any(test, feature = "test-support"))]
+pub use remote::waits;
 pub use status::{ServerStatus, StatusRow};
 
+mod ask;
 mod factory_fixture;
 pub mod mirror;
 mod parked;
@@ -338,7 +342,11 @@ impl Cockpit {
         std::mem::take(&mut self.browser_messages)
     }
 
-    pub fn browser_attach(&mut self, thread: ThreadId) -> io::Result<crate::browser::State> {
+    // A Browser's asks of the Server (ADR 0041, 0036): each returns at once
+    // and is answered through its `Ask` by the pump, so the window's thread
+    // never waits on the Server for its pages.
+
+    pub fn browser_attach(&mut self, thread: ThreadId) -> Ask<crate::browser::State> {
         self.browser_op(Op::BrowserAttach { thread })
     }
 
@@ -346,23 +354,40 @@ impl Cockpit {
         &mut self,
         thread: ThreadId,
         action: crate::browser::Action,
-    ) -> io::Result<crate::browser::State> {
+    ) -> Ask<crate::browser::State> {
         self.browser_op(Op::Browser { thread, action })
     }
 
-    fn browser_op(&mut self, op: Op) -> io::Result<crate::browser::State> {
+    fn browser_op(&mut self, op: Op) -> Ask<crate::browser::State> {
         if self.browser_fixture {
-            return Ok(crate::browser::State::default());
+            return Ask::answered(Ok(crate::browser::State::default()));
         }
-        match self
-            .remote()?
-            .execute(op)
-            .map_err(|e| io::Error::other(e.message))?
-        {
+        self.browser_ask(op, |done| match done {
             Some(Done::Browser { state }) => Ok(state),
             _ => Err(io::Error::other(
                 "The Server does not support the Conversation browser; update Ferrite",
             )),
+        })
+    }
+
+    /// One Browser ask of the Server; an Engine in this process has no
+    /// Browser, which its `Ask` answers at once.
+    fn browser_ask<T: Send + 'static>(
+        &mut self,
+        op: Op,
+        read: fn(Option<Done>) -> io::Result<T>,
+    ) -> Ask<T> {
+        match self.remote() {
+            Ok(remote) => remote.ask_in_time(op, read),
+            Err(error) => Ask::answered(Err(error)),
+        }
+    }
+
+    /// One Browser act whose reply nobody reads: the Server's broadcasts
+    /// say what it changed.
+    fn browser_tell(&mut self, op: Op) {
+        if let Ok(remote) = self.remote() {
+            remote.tell(op);
         }
     }
 
@@ -373,9 +398,14 @@ impl Cockpit {
         lease: crate::browser::Lease,
         capture: crate::browser_annotations::Capture,
         png: Option<crate::protocol::WirePng>,
-    ) -> io::Result<Receiver<io::Result<crate::browser_annotations::Annotation>>> {
-        self.remote()?
-            .browser_capture(thread, owner, lease, capture, png)
+    ) -> Ask<crate::browser_annotations::Annotation> {
+        match self.remote() {
+            Ok(remote) => match remote.browser_capture(thread, owner, lease, capture, png) {
+                Ok(answer) => Ask::of(answer),
+                Err(error) => Ask::answered(Err(error)),
+            },
+            Err(error) => Ask::answered(Err(error)),
+        }
     }
 
     /// Image reads share the existing asynchronous Server read path. The
@@ -384,14 +414,17 @@ impl Cockpit {
         &mut self,
         thread: ThreadId,
         annotation: crate::browser_annotations::Annotation,
-    ) -> io::Result<Receiver<io::Result<PathBuf>>> {
+    ) -> Ask<PathBuf> {
         match &mut self.link {
             Link::Server(server) => {
-                let hash = annotation
-                    .original_hash()
-                    .ok_or_else(|| io::Error::other("This annotation has no screenshot"))?;
-                let image = server.browser_capture_image(thread, hash.to_owned())?;
-                Ok(read_here(move || {
+                let Some(hash) = annotation.original_hash() else {
+                    return Ask::answered(Err(io::Error::other("This annotation has no screenshot")));
+                };
+                let image = match server.browser_capture_image(thread, hash.to_owned()) {
+                    Ok(image) => image,
+                    Err(error) => return Ask::answered(Err(error)),
+                };
+                Ask::of(read_here(move || {
                     let png = image
                         .recv_timeout(std::time::Duration::from_secs(30))
                         .map_err(|error| error.to_string())?
@@ -401,7 +434,7 @@ impl Cockpit {
                         .map_err(|error| error.to_string())
                 }))
             }
-            Link::InProcess(_) => Ok(read_here(move || {
+            Link::InProcess(_) => Ask::of(read_here(move || {
                 annotation
                     .local_image()
                     .and_then(|bytes| annotation.cache_image(&bytes))
@@ -416,22 +449,21 @@ impl Cockpit {
         owner: crate::browser::Owner,
         document: crate::browser::Document,
         protection: crate::browser::Protection,
-    ) -> io::Result<crate::browser::Lease> {
-        match self
-            .remote()?
-            .execute(Op::BrowserProtect {
+    ) -> Ask<crate::browser::Lease> {
+        self.browser_ask(
+            Op::BrowserProtect {
                 thread,
                 owner,
                 document,
                 protection,
-            })
-            .map_err(|error| io::Error::other(error.message))?
-        {
-            Some(Done::BrowserProtection { lease }) => Ok(lease),
-            _ => Err(io::Error::other(
-                "The Server could not protect this browser page",
-            )),
-        }
+            },
+            |done| match done {
+                Some(Done::BrowserProtection { lease }) => Ok(lease),
+                _ => Err(io::Error::other(
+                    "The Server could not protect this browser page",
+                )),
+            },
+        )
     }
 
     pub fn browser_release(
@@ -439,15 +471,12 @@ impl Cockpit {
         thread: ThreadId,
         owner: crate::browser::Owner,
         lease: crate::browser::Lease,
-    ) -> io::Result<()> {
-        self.remote()?
-            .execute(Op::BrowserRelease {
-                thread,
-                owner,
-                lease,
-            })
-            .map_err(|error| io::Error::other(error.message))?;
-        Ok(())
+    ) {
+        self.browser_tell(Op::BrowserRelease {
+            thread,
+            owner,
+            lease,
+        });
     }
 
     pub fn browser_reclaim(
@@ -455,21 +484,20 @@ impl Cockpit {
         thread: ThreadId,
         owner: crate::browser::Owner,
         document: crate::browser::Document,
-    ) -> io::Result<Option<crate::browser::Lease>> {
-        match self
-            .remote()?
-            .execute(Op::BrowserReclaim {
+    ) -> Ask<Option<crate::browser::Lease>> {
+        self.browser_ask(
+            Op::BrowserReclaim {
                 thread,
                 owner,
                 document,
-            })
-            .map_err(|error| io::Error::other(error.message))?
-        {
-            Some(Done::BrowserReclaim { lease }) => Ok(lease),
-            _ => Err(io::Error::other(
-                "The Server could not reserve this page for unloading",
-            )),
-        }
+            },
+            |done| match done {
+                Some(Done::BrowserReclaim { lease }) => Ok(lease),
+                _ => Err(io::Error::other(
+                    "The Server could not reserve this page for unloading",
+                )),
+            },
+        )
     }
 
     pub fn browser_reclaimed(
@@ -478,7 +506,7 @@ impl Cockpit {
         owner: crate::browser::Owner,
         lease: crate::browser::Lease,
         released: bool,
-    ) -> io::Result<crate::browser::State> {
+    ) -> Ask<crate::browser::State> {
         self.browser_op(Op::BrowserReclaimed {
             thread,
             owner,
@@ -492,7 +520,7 @@ impl Cockpit {
         thread: ThreadId,
         owner: crate::browser::Owner,
         page: crate::browser::PageState,
-    ) -> io::Result<crate::browser::State> {
+    ) -> Ask<crate::browser::State> {
         self.browser_op(Op::BrowserPage {
             thread,
             owner,
@@ -508,8 +536,16 @@ impl Cockpit {
         owner: crate::browser::Owner,
         document: crate::browser::Document,
         revision: u64,
-    ) -> io::Result<Receiver<io::Result<u64>>> {
-        self.remote()?.browser_dispatch(request, boot_id, thread, owner, document, revision)
+    ) -> Ask<u64> {
+        match self.remote() {
+            Ok(remote) => {
+                match remote.browser_dispatch(request, boot_id, thread, owner, document, revision) {
+                    Ok(answer) => Ask::of(answer),
+                    Err(error) => Ask::answered(Err(error)),
+                }
+            }
+            Err(error) => Ask::answered(Err(error)),
+        }
     }
 
     pub fn browser_reply(
@@ -541,16 +577,13 @@ impl Cockpit {
         owner: crate::browser::Owner,
         document: crate::browser::Document,
         revision: u64,
-    ) -> io::Result<()> {
-        self.remote()?
-            .execute(Op::BrowserSettled {
-                thread,
-                owner,
-                document,
-                revision,
-            })
-            .map_err(|error| io::Error::other(error.message))?;
-        Ok(())
+    ) {
+        self.browser_tell(Op::BrowserSettled {
+            thread,
+            owner,
+            document,
+            revision,
+        });
     }
 
     pub fn browser_input(
@@ -558,21 +591,33 @@ impl Cockpit {
         thread: ThreadId,
         owner: crate::browser::Owner,
         document: crate::browser::Document,
-    ) -> io::Result<u64> {
-        match self
-            .remote()?
-            .execute(Op::BrowserInput {
+    ) -> Ask<u64> {
+        self.browser_ask(
+            Op::BrowserInput {
                 thread,
                 owner,
                 document,
-            })
-            .map_err(|e| io::Error::other(e.message))?
-        {
-            Some(Done::BrowserInput { revision }) => Ok(revision),
-            _ => Err(io::Error::other(
-                "The Server did not authorize browser input",
-            )),
-        }
+            },
+            |done| match done {
+                Some(Done::BrowserInput { revision }) => Ok(revision),
+                _ => Err(io::Error::other(
+                    "The Server did not authorize browser input",
+                )),
+            },
+        )
+    }
+
+    /// Pump until `ask` is answered: a test's or a driver's way to take an
+    /// answer in one step, which the window never does.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn wait_for<T>(&mut self, mut ask: Ask<T>) -> io::Result<T> {
+        let mut answer = None;
+        crate::doorbell::until("an ask was never answered", || {
+            self.receive();
+            answer = ask.answer();
+            answer.is_some()
+        });
+        answer.expect("answered")
     }
 
     /// The Server this window is attached to, or why it is not; `None` for
@@ -788,6 +833,7 @@ impl Cockpit {
                     self.mirrors.attached(snapshot.digests, boot);
                 }
                 remote::Arrival::Started(result) => settled.push(result),
+                remote::Arrival::Answered => {}
             }
         }
         // A settled first send completes its Draft in this window — its

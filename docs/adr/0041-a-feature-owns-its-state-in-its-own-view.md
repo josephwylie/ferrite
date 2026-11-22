@@ -945,7 +945,9 @@ model itself.
 - **The next three** were the Panes' heads, the toasts' hearing and the
   Facts. The amendment below (the toasts hear for themselves) did the
   second, found the first gone, and names the next three.
-- **A feature does not ask the Server itself yet.** Core's asks block:
+- **A feature does not ask the Server itself yet** (the Browser's asks no
+  longer block, and an answer is an arrival: see the amendment below,
+  which says what that leaves). Core's asks block:
   a remote one waits on the Server's socket for its reply, up to
   `REPLY_WAIT`, queueing every other message it reads (`Remote::execute`).
   What follows an ask is the root's too: the nav's Snooze is answered by
@@ -1123,6 +1125,124 @@ hearing, and the pump knows nothing of them.
   the root: once the Facts and the Pane on the board say when they move,
   the float tends on those instead of on every root notify.
 
+## Amendment (2026-11-21): an ask never waits on the window's thread
+
+A remote ask sent its command and waited on the Server's socket for the
+reply, up to `REPLY_WAIT` (10 s), on the window's thread
+(`Remote::execute`). Nothing pumped or drew meanwhile. Measured at main
+against the fixture Server (`tests/browser_asks.rs`): a press on the
+Browser's Reload with a Server that never answers held the window for
+10.03 s. Over a healthy link each Browser ask waited one round trip:
+on the fixture Server, a page report 7.8 ms at the median and 18 ms at
+worst, an action 17.5 ms, an input 1.1 ms. Every input on a page waited
+like this before the page had it. The Browser is the first family that
+never waits. The rest still do.
+
+- **An ask returns at once with an `Ask<T>`** (core,
+  `cockpit/ask.rs`), the asker's to hold. `answer()` is `None` while it
+  is on its way and the answer once it came, taken once. The asker looks
+  when it hears the model's `Arrived`, or on its pump step. The Browser
+  looks in `answer_browser_asks`.
+- **Its answer comes the way every Server message does.** The command
+  goes out with an id. The Remote keeps the ask's answer channel under
+  that id (`Remote::answers`, `ask_in_time`), as the asks that already
+  answered later do (`changes`, `list_dir`, the reviews,
+  `browser_dispatch`, `browser_capture`). The socket's reader rings the
+  bell. The pump's `poll` reads the reply and routes it by its id to the
+  ask's channel. That poll returns `Arrival::Answered`, so the model
+  emits `Arrived` on that beat. It is one mechanism, with no second
+  queue and no thread of its own.
+- **A timeout and a dropped link answer it too.** A remote ask has until
+  `REPLY_WAIT` from when it went, by core's clock (`clock::instant`, so a
+  test moves it). The asks that already answered later keep their own
+  deadlines: a capture's 45 s and its image's 30 s read. A dispatch
+  grant waits as it did, until its page changes or its link goes. Each
+  poll answers the late ones: "the Ferrite server did not answer in
+  time". The pump is due at least every `PUMP_FALLBACK`
+  (250 ms), and a window with a live Browser keeps its beat, so a timeout
+  lands at most that late. A detach drops every channel. Each `Ask` then
+  reads `NotConnected`: "the Ferrite server went away; this may not have
+  arrived".
+- **The in-process Link has the same shape.** An Engine in this process,
+  a fixture world or a send that could not go answers through an `Ask`
+  that is answered already (`Ask::answered`), and rings the bell. The
+  caller has one path and never asks which Link it has. The Engine in
+  this process has no Browser, and its `Ask` says so.
+- **An ask whose reply nobody reads is a tell** (`Remote::tell`). That
+  covers `browser_settled` and `browser_release`: every caller dropped
+  their result, and the Server's broadcasts say what they changed.
+- **What the Browser shows meanwhile is what it last heard.** It takes
+  its tabs only from the Server's `Browser` messages. The Server sends one
+  to the owning window before every reply that carries a state: attach,
+  action, page and reclaimed publish, then reply. So a reply says only
+  whether the ask went, and what it grants: a lease, an input's
+  revision, a reservation. Applying a reply's state would undo a later
+  message read in the same beat. The continuation sits next to the state
+  it guards (the Browser's `Waiting`, a live annotation's `Beginning`). It
+  runs on the answer.
+  - An action pressed before the window owns the Browser waits for the
+    attach (`Then`).
+  - A recovered page stays paused for the agent until its Reload or
+    Close is answered.
+  - The operator's input reaches the page once the Server authorizes it,
+    one at a time per page. The page is paused for the agent from the
+    first input event, as before.
+  - The address field keeps what was entered until the action lands.
+    Choosing a page's tab leaves a new tab being entered at once. A
+    page's own new window leaves the field as it is.
+  - A page report or a reclaim is not asked again while one for its tab
+    is on its way.
+  - A failed ask, a timeout included, shows on the Browser's notice.
+- **No blocking path for the Browser.** Its asks no longer reach
+  `Remote::execute`. Tests take an answer in one step with
+  `Cockpit::wait_for` (test-support), which pumps the model until it
+  comes. The window never does. The browser smoke polls an attach's
+  `Ask` frame by frame (`browser_smoke::served`).
+- **The probe.** Under test-support, `cockpit::waits` records each
+  command the window sends: its op, whether it waited for the reply, and
+  how long the window's thread spent on it. `tests/browser_asks.rs`
+  prints the distribution and requires that no Browser ask waited. After
+  this change, on the fixture Server, a Browser ask costs the window's
+  thread only its send: 50 to 200 µs at the median by kind over two
+  runs, 0.5 ms at worst, and no wait. With a Server that never answers,
+  the press takes 24 to 27 ms. The window pumps and draws on each of
+  the next 20 beats, and the Browser's notice says the Server did not
+  answer once the ask's time is up.
+- **What is left, in the order to take it.** These are the remaining
+  blocking asks at main by family: how many asks, then their call sites
+  outside tests.
+  1. Notices and seen: 13 asks, 63 sites. Three are reached from the
+     root's render (`set_window_active` reaches `acknowledge_seen`), so a
+     slow Server stalls a frame, not only a press. Take it first.
+  2. Turn and Session: 13 asks, 59 sites. 34 sites drop the reply, so
+     most become tells, and these are the presses an operator makes
+     most.
+  3. Thread lifecycle: 16 asks, 31 sites. What follows an open, a park or
+     a revive is the root's (the Panes, focus, the Project filter). Each
+     needs a continuation like the Browser's `Then`.
+  4. Queue: 5 asks, 15 sites. These are Composer presses, with the
+     queue's rows answered by the Server's state.
+  5. Projects: 7 asks, 11 sites. These are rare presses in the settings
+     and the add flow.
+  6. Factory: 3 asks, 5 sites, all on the Server only (`factory_ask`).
+  7. Server lifecycle: 4 asks, 6 sites. `stop_server_and_wait` waits on
+     purpose: an installer replaces the executable next. The other three
+     go last.
+  8. History: 2 asks, no sites outside tests.
+- **A feature view could now ask the Server itself, for the Browser's
+  asks.** An `Ask` is a value its asker holds, and its answer is an
+  arrival: the model emits `Arrived` on the beat that brings it, even a
+  beat on which the Server said nothing (a timeout). The test is
+  `an_asks_answer_is_an_arrival`. A feature that holds the model's handle
+  and subscribes to `Arrived` can ask and then look at its `Ask` when it
+  hears. It needs neither the root's pump nor a blocked listener.
+  - What still needs the root is what follows an ask, where that is the
+    root's: a Pane remade, focus, the Project filter.
+  - The other families' asks still block, so a feature that used one
+    would block its own listener.
+  - The Browser's state stays the root's here (What does not get a
+    view). Moving it is not part of this change.
+
 ## Precedent
 
 Zed builds its workspace this way: each panel is an entity that owns its
@@ -1135,3 +1255,7 @@ copied.
 ## Words
 
 The word is **nav**, and the nav is the Inbox (ADR 0040). _Avoid_ sidebar.
+
+An **ask** is a command whose answer the asker reads (`Ask<T>`). A
+**tell** is one whose reply nobody reads. _Avoid_ request and call for
+either: a request is a Browser control the Server asks of a window.

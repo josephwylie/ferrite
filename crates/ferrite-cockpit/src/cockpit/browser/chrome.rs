@@ -96,14 +96,6 @@ impl BrowserChromeView {
             .is_some_and(|chrome| chrome.entry == Entry::NewTab)
     }
 
-    /// A page's own new window opened while a new tab was being entered:
-    /// the field stays the new tab's.
-    pub(super) fn resume_new_tab(&mut self, thread: ThreadId) {
-        if let Some(chrome) = self.threads.get_mut(&thread) {
-            chrome.entry = Entry::NewTab;
-        }
-    }
-
     /// The Server took an action: the field acts on the page again, and
     /// with no page left it empties.
     pub(super) fn landed(&mut self, thread: ThreadId, page: bool, cx: &mut Context<Self>) {
@@ -218,7 +210,13 @@ impl BrowserChromeView {
                             .text_ellipsis()
                             .child(title),
                     )
-                    .on_click(cx.listener(move |_, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        // Choosing a page leaves a new tab being entered at
+                        // once; the Server's selection follows.
+                        if let Some(chrome) = this.threads.get_mut(&thread) {
+                            chrome.entry = Entry::Page;
+                            cx.notify();
+                        }
                         cx.emit(BrowserChromeEvent::Act(thread, Action::Select { tab: id }))
                     }))
                     .child(

@@ -71,7 +71,7 @@ enum Phase {
         started: std::time::Instant,
         permission:
             std::sync::mpsc::SyncSender<ferrite_pane::visual::browser_control::native::Permission>,
-        answer: std::sync::mpsc::Receiver<std::io::Result<u64>>,
+        answer: ferrite_core::cockpit::Ask<u64>,
     },
     Running,
 }
@@ -325,10 +325,14 @@ impl Controls {
         #[cfg(feature = "cef")]
         if let Some(mut running) = self.active.take() {
             let result = loop {
+                let granted = match &mut running.phase {
+                    Phase::AwaitingGrant { answer, .. } => answer.answer(),
+                    _ => None,
+                };
                 if let Phase::AwaitingGrant {
                     started,
                     permission,
-                    answer,
+                    ..
                 } = &running.phase
                 {
                     use ferrite_pane::visual::browser_control::native::Permission;
@@ -336,8 +340,8 @@ impl Controls {
                         let _ = permission.send(Permission::Deny);
                         break Some(running.interrupted("The page or operator state changed while dispatch authorization was pending"));
                     }
-                    match answer.try_recv() {
-                        Ok(Ok(remaining_ms)) => {
+                    match granted {
+                        Some(Ok(remaining_ms)) => {
                             let deadline =
                                 started.checked_add(std::time::Duration::from_millis(remaining_ms));
                             let Some(deadline) =
@@ -355,17 +359,17 @@ impl Controls {
                             }
                             running.phase = Phase::Running;
                         }
-                        Ok(Err(error)) => {
-                            let _ = permission.send(Permission::Deny);
-                            break Some(running.interrupted(&error.to_string()));
-                        }
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        Some(Err(error)) if error.kind() == std::io::ErrorKind::NotConnected => {
                             let _ = permission.send(Permission::Deny);
                             break Some(
                                 running.interrupted("Browser dispatch authorization disconnected"),
                             );
                         }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                        Some(Err(error)) => {
+                            let _ = permission.send(Permission::Deny);
+                            break Some(running.interrupted(&error.to_string()));
+                        }
+                        None => {}
                     }
                 }
                 match running.answer.try_recv() {
@@ -379,7 +383,9 @@ impl Controls {
                         }
                         let started = std::time::Instant::now();
                         let request = &running.request;
-                        match cockpit.browser_dispatch(
+                        // A dispatch that could not be sent is answered so,
+                        // as a grant that never came (AwaitingGrant).
+                        let answer = cockpit.browser_dispatch(
                             request.request,
                             request
                                 .dispatch
@@ -389,21 +395,12 @@ impl Controls {
                             request.owner,
                             request.document,
                             request.revision,
-                        ) {
-                            Ok(answer) => {
-                                running.phase = Phase::AwaitingGrant {
-                                    started,
-                                    permission: authorize,
-                                    answer,
-                                };
-                            }
-                            Err(error) => {
-                                let _ = authorize.send(Permission::Deny);
-                                break Some(Outcome::Failed {
-                                    error: error.to_string(),
-                                });
-                            }
-                        }
+                        );
+                        running.phase = Phase::AwaitingGrant {
+                            started,
+                            permission: authorize,
+                            answer,
+                        };
                     }
                     Ok(ferrite_pane::visual::browser_control::native::Event::Finished(outcome)) => {
                         break Some(outcome)

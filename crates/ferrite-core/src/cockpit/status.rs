@@ -87,7 +87,7 @@ impl ServerStatus {
                     true
                 }
                 Arrival::Message(message) => self.heard(message),
-                Arrival::Started(_) => false,
+                Arrival::Started(_) | Arrival::Answered => false,
             };
         }
         changed || self.remote.state() != was

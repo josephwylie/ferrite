@@ -18,7 +18,8 @@ pub(super) use review::BrowserReviewView;
 pub(super) use page_menu::PageVerb;
 
 use super::*;
-use ferrite_core::browser::{Action, Document, Owner, PageState, State, Tab, TabId};
+use ferrite_core::browser::{Action, Document, Lease, Owner, PageState, State, Tab, TabId};
+use ferrite_core::cockpit::Ask;
 use ferrite_pane::composer::{Composer, Role};
 use ferrite_pane::visual::{
     element::WebView,
@@ -73,7 +74,80 @@ pub(super) struct Browser {
     failed: BTreeMap<TabId, Document>,
     annotation: Option<LiveAnnotation>,
     native_peers: Rc<RefCell<manual::Peers>>,
+    /// This window's attach, while the Server has not answered it, and what
+    /// waits for it to be the owner.
+    attaching: Option<Attaching>,
+    /// Every other ask of the Server on its way, oldest first (ADR 0041).
+    waiting: Vec<Waiting>,
 }
+
+struct Attaching {
+    ask: Ask<State>,
+    then: Vec<Then>,
+}
+
+/// What runs once the Server answers this window's attach.
+enum Then {
+    /// Select the active tab, which realizes its page.
+    SelectActive,
+    /// The action pressed before the window owned the Browser, with the
+    /// Panel's revision when it was pressed and whether the chrome lands.
+    Act(Action, u64, bool),
+}
+
+/// A Browser ask on its way and what its answer does. The tabs themselves
+/// come from the Server's `Browser` messages, which it sends before each
+/// reply: a reply says only whether the ask went, and what it grants.
+enum Waiting {
+    /// An action on the pages; `echoed` is the revision stamped for its
+    /// echo (`Browsers::sent`), `recovery` the page it retired, `lands`
+    /// whether the chrome's address acts on the page again once it is
+    /// taken (`BrowserChromeView::landed`).
+    Action {
+        ask: Ask<State>,
+        echoed: Option<u64>,
+        recovery: Option<Rc<RefCell<manual::Manual>>>,
+        lands: bool,
+    },
+    /// A page's state, reported; `generation` the native document it is of.
+    Page {
+        ask: Ask<State>,
+        tab: TabId,
+        generation: Option<u64>,
+    },
+    /// The operator's input, held until the Server authorizes it.
+    Input {
+        ask: Ask<u64>,
+        owner: Owner,
+        document: Document,
+        generation: Option<u64>,
+        sequence: u64,
+        input: Input,
+    },
+    /// A hidden page the Server may let this window unload.
+    Reclaim {
+        ask: Ask<Option<Lease>>,
+        owner: Owner,
+        document: Document,
+        generation: u64,
+    },
+    /// The unload done, or not, for the Server to record.
+    Reclaimed { ask: Ask<State>, tab: TabId },
+}
+
+impl Waiting {
+    /// The tab whose page this ask is about, when it is about one.
+    fn tab(&self) -> Option<TabId> {
+        match self {
+            Waiting::Action { .. } => None,
+            Waiting::Page { tab, .. } | Waiting::Reclaimed { tab, .. } => Some(*tab),
+            Waiting::Input { document, .. } | Waiting::Reclaim { document, .. } => {
+                Some(document.tab)
+            }
+        }
+    }
+}
+
 struct Page {
     web: Entity<WebView>,
     native: Rc<dyn BrowserView>,
@@ -106,6 +180,14 @@ impl Browsers {
         usize::from(self.threads.contains_key(&thread))
             + usize::from(self.reveal.contains_key(&thread))
             + usize::from(self.sent.contains_key(&thread))
+    }
+
+    /// `thread`'s tabs as the window last had them from the Server, and
+    /// its Browser's notice.
+    #[cfg(test)]
+    pub(super) fn shown_for_test(&self, thread: ThreadId) -> Option<(State, Option<String>)> {
+        let browser = self.threads.get(&thread)?;
+        Some((browser.state.clone(), browser.error.clone()))
     }
 
     /// Rechecked at queue dispatch and after native attachment becomes Ready.
@@ -198,26 +280,29 @@ impl CockpitView {
                 failed: BTreeMap::new(),
                 annotation: None,
                 native_peers: Default::default(),
+                attaching: None,
+                waiting: Vec::new(),
             });
+    }
+
+    /// Ask the Server for `thread`'s Browser, `then` to run once it
+    /// answers; with an attach already on its way, `then` joins it.
+    fn attach_browser(&mut self, thread: ThreadId, then: Then, cx: &mut Context<Self>) {
+        let browser = self.browsers.threads.get_mut(&thread).unwrap();
+        if let Some(attaching) = &mut browser.attaching {
+            attaching.then.push(then);
+            return;
+        }
+        let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread));
+        browser.attaching = Some(Attaching {
+            ask,
+            then: vec![then],
+        });
     }
 
     pub(super) fn open_browser(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         self.ensure_browser(thread, cx);
-        match self.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread)) {
-            Ok(state) => {
-                let active = state.active;
-                let browser = self.browsers.threads.get_mut(&thread).unwrap();
-                browser.owner = state.owner;
-                browser.state = state;
-                browser.error = None;
-                if let Some(tab) = active {
-                    self.browser_action(thread, Action::Select { tab }, cx);
-                }
-            }
-            Err(error) => {
-                self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string())
-            }
-        }
+        self.attach_browser(thread, Then::SelectActive, cx);
         if let Some(index) = self.pane_for(thread) {
             self.panes[index].preview.show_browser();
         }
@@ -230,29 +315,45 @@ impl CockpitView {
         action: Action,
         cx: &mut Context<Self>,
     ) {
+        self.act_in_browser(thread, action, true, cx);
+    }
+
+    /// `action` on `thread`'s pages; `lands` whether the chrome's address
+    /// acts on the page again once the Server takes it. A page's own new
+    /// window does not land while a new tab is being entered.
+    fn act_in_browser(
+        &mut self,
+        thread: ThreadId,
+        action: Action,
+        lands: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.defer_annotation_action(thread, action.clone(), cx) { return; }
         self.cancel_browser_capture(thread, cx);
         self.ensure_browser(thread, cx);
         let seen = self.surface_revision(thread);
-        // Only an action the Server accepts is echoed back to claim this revision.
-        let echoed = matches!(action, Action::Open { .. } | Action::Select { .. });
         if matches!(action, Action::Open { .. }) {
             self.browsers.reveal.entry(thread).or_insert(seen);
         }
         if self.browsers.threads[&thread].owner.is_none() {
-            match self.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread)) {
-                Ok(state) => {
-                    let browser = self.browsers.threads.get_mut(&thread).unwrap();
-                    browser.owner = state.owner;
-                    browser.state = state;
-                }
-                Err(error) => {
-                    self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string());
-                    cx.notify();
-                    return;
-                }
-            }
+            self.attach_browser(thread, Then::Act(action, seen, lands), cx);
+            return;
         }
+        self.act_on_pages(thread, action, seen, lands, cx);
+    }
+
+    /// `action` asked of the Server for the Browser this window owns,
+    /// `seen` the Panel's revision when it was pressed.
+    fn act_on_pages(
+        &mut self,
+        thread: ThreadId,
+        action: Action,
+        seen: u64,
+        lands: bool,
+        cx: &mut Context<Self>,
+    ) {
+        // Only an action the Server accepts is echoed back to claim this revision.
+        let echoed = matches!(action, Action::Open { .. } | Action::Select { .. }).then_some(seen);
         let recovery_tab = match &action {
             Action::Close { tab } => Some(*tab),
             Action::Reload { document } => Some(document.tab),
@@ -270,33 +371,303 @@ impl CockpitView {
             if let (Some((document, revision)), Some(owner)) =
                 (settled, self.browsers.threads[&thread].owner)
             {
-                let _ = self
-                    .cockpit
+                self.cockpit
                     .update(cx, |cockpit, _| cockpit.browser_settled(thread, owner, document, revision));
             }
         }
-        let result = self.cockpit.update(cx, |cockpit, _| cockpit.browser(thread, action));
-        if let Some(manual) = &recovery {
-            manual.borrow().restore_pause();
+        let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser(thread, action));
+        // Its echo arrives before its answer, so it is stamped as it goes.
+        if let Some(seen) = echoed {
+            self.browsers.sent.entry(thread).or_default().push_back(seen);
         }
-        match result {
-            Ok(state) => {
-                if echoed {
-                    self.browsers.sent.entry(thread).or_default().push_back(seen);
+        self.browsers.threads.get_mut(&thread).unwrap().waiting.push(Waiting::Action {
+            ask,
+            echoed,
+            recovery,
+            lands,
+        });
+    }
+
+    /// The Server's answers to each Browser's asks since the last frame,
+    /// after its messages: the attach first, then the rest in the order
+    /// asked. An input waits for the one before it on its page.
+    fn answer_browser_asks(&mut self, cx: &mut Context<Self>) {
+        let threads: Vec<_> = self.browsers.threads.keys().copied().collect();
+        for thread in threads {
+            self.answer_browser_attach(thread, cx);
+            let Some(browser) = self.browsers.threads.get_mut(&thread) else {
+                continue;
+            };
+            let mut kept = Vec::new();
+            let mut held = std::collections::BTreeSet::new();
+            for waiting in std::mem::take(&mut browser.waiting) {
+                let input = matches!(waiting, Waiting::Input { .. });
+                let tab = waiting.tab();
+                let unanswered = if input && tab.is_some_and(|tab| held.contains(&tab)) {
+                    Some(waiting)
+                } else {
+                    self.answer_browser_ask(thread, waiting, cx)
+                };
+                if let Some(waiting) = unanswered {
+                    if let (true, Some(tab)) = (input, tab) {
+                        held.insert(tab);
+                    }
+                    kept.push(waiting);
                 }
-                let page = state.active.is_some();
-                let browser = self.browsers.threads.get_mut(&thread).unwrap();
-                browser.state = state;
+            }
+            let browser = self.browsers.threads.get_mut(&thread).unwrap();
+            kept.append(&mut browser.waiting);
+            browser.waiting = kept;
+        }
+    }
+
+    /// The Server's answer to this window's attach: what waited for it
+    /// runs, or the Browser says why it could not attach.
+    fn answer_browser_attach(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let browser = self.browsers.threads.get_mut(&thread).unwrap();
+        let Some(answer) = browser
+            .attaching
+            .as_mut()
+            .and_then(|attaching| attaching.ask.answer())
+        else {
+            return;
+        };
+        let attaching = browser.attaching.take().unwrap();
+        match answer {
+            Ok(_) => {
                 browser.error = None;
-                browser.sync_documents(cx, false);
-                self.browser_chrome
-                    .update(cx, |chrome, cx| chrome.landed(thread, page, cx));
+                for then in attaching.then {
+                    let browser = &self.browsers.threads[&thread];
+                    match then {
+                        // Never one with no owner: it would attach again.
+                        Then::SelectActive => {
+                            if let (Some(tab), Some(_)) = (browser.state.active, browser.owner) {
+                                self.browser_action(thread, Action::Select { tab }, cx);
+                            }
+                        }
+                        Then::Act(action, seen, lands) => {
+                            self.act_on_pages(thread, action, seen, lands, cx)
+                        }
+                    }
+                }
             }
-            Err(error) => {
-                self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string())
-            }
+            Err(error) => browser.error = Some(error.to_string()),
         }
         cx.notify();
+    }
+
+    /// `waiting`'s answer, if it came, done; else `waiting` back.
+    fn answer_browser_ask(
+        &mut self,
+        thread: ThreadId,
+        waiting: Waiting,
+        cx: &mut Context<Self>,
+    ) -> Option<Waiting> {
+        match waiting {
+            Waiting::Action {
+                mut ask,
+                echoed,
+                recovery,
+                lands,
+            } => {
+                let Some(answer) = ask.answer() else {
+                    return Some(Waiting::Action {
+                        ask,
+                        echoed,
+                        recovery,
+                        lands,
+                    });
+                };
+                if let Some(manual) = &recovery {
+                    manual.borrow().restore_pause();
+                }
+                let browser = self.browsers.threads.get_mut(&thread).unwrap();
+                match answer {
+                    Ok(_) => {
+                        browser.error = None;
+                        browser.sync_documents(cx, false);
+                        let page = browser.state.active.is_some();
+                        if lands {
+                            self.browser_chrome
+                                .update(cx, |chrome, cx| chrome.landed(thread, page, cx));
+                        }
+                    }
+                    Err(error) => {
+                        browser.error = Some(error.to_string());
+                        // Refused: no echo will claim its stamp.
+                        if let (Some(seen), Some(sent)) = (echoed, self.browsers.sent.get_mut(&thread)) {
+                            if let Some(at) = sent.iter().rposition(|stamp| *stamp == seen) {
+                                sent.remove(at);
+                            }
+                        }
+                    }
+                }
+                cx.notify();
+            }
+            Waiting::Page {
+                mut ask,
+                tab,
+                generation,
+            } => {
+                let Some(answer) = ask.answer() else {
+                    return Some(Waiting::Page {
+                        ask,
+                        tab,
+                        generation,
+                    });
+                };
+                let browser = self.browsers.threads.get_mut(&thread).unwrap();
+                match answer {
+                    Ok(_) => {
+                        if let (Some(generation), Some(page), Some(shown)) = (
+                            generation,
+                            browser.pages.get(&tab),
+                            browser.state.tabs.iter().find(|shown| shown.id == tab),
+                        ) {
+                            page.acknowledged.set(Some((shown.document(), generation)));
+                        }
+                        browser.sync_documents(cx, true);
+                    }
+                    Err(error) => {
+                        browser.error = Some(error.to_string());
+                        cx.notify();
+                    }
+                }
+            }
+            Waiting::Input {
+                mut ask,
+                owner,
+                document,
+                generation,
+                sequence,
+                input,
+            } => {
+                let Some(answer) = ask.answer() else {
+                    return Some(Waiting::Input {
+                        ask,
+                        owner,
+                        document,
+                        generation,
+                        sequence,
+                        input,
+                    });
+                };
+                let browser = &self.browsers.threads[&thread];
+                let page = browser
+                    .pages
+                    .get(&document.tab)
+                    .filter(|_| browser.owner == Some(owner));
+                let settled = match answer {
+                    Ok(revision) => match page {
+                        // The page went while the Server answered: its input
+                        // is over.
+                        None => Some((document, revision)),
+                        Some(page) => {
+                            page.manual
+                                .borrow_mut()
+                                .acknowledge(sequence, document, revision);
+                            // The page may have moved on while it was asked.
+                            if page.document.get() == document
+                                && generation == Some(page.native.state().document_generation)
+                                && page.manual.borrow().valid(sequence)
+                            {
+                                page.native.input(input);
+                                None
+                            } else {
+                                page.manual.borrow_mut().discard(sequence, manual::Finish::Stale)
+                            }
+                        }
+                    },
+                    Err(error) => {
+                        let settled = page.and_then(|page| page.manual.borrow_mut().discard(sequence, manual::Finish::Refused));
+                        self.browsers.threads.get_mut(&thread).unwrap().error =
+                            Some(error.to_string());
+                        cx.notify();
+                        settled
+                    }
+                };
+                if let Some((document, revision)) = settled {
+                    self.cockpit
+                        .update(cx, |cockpit, _| cockpit.browser_settled(thread, owner, document, revision));
+                }
+            }
+            Waiting::Reclaim {
+                mut ask,
+                owner,
+                document,
+                generation,
+            } => {
+                let Some(answer) = ask.answer() else {
+                    return Some(Waiting::Reclaim {
+                        ask,
+                        owner,
+                        document,
+                        generation,
+                    });
+                };
+                let browser = self.browsers.threads.get_mut(&thread).unwrap();
+                let lease = match answer {
+                    Ok(Some(lease)) => lease,
+                    Ok(None) => return None,
+                    Err(error) => {
+                        browser.error = Some(error.to_string());
+                        cx.notify();
+                        return None;
+                    }
+                };
+                // The Server reserved the page; the window unloads it only
+                // if it is still the document reserved.
+                let released = match browser.pages.get(&document.tab) {
+                    Some(page) if page.native.state().document_generation == generation => {
+                        match page.native.try_release() {
+                            Ok(released) => released,
+                            Err(error) => {
+                                browser.error = Some(error);
+                                false
+                            }
+                        }
+                    }
+                    Some(page) => {
+                        page.web.update(cx, |web, cx| web.refresh_browser_state(cx));
+                        false
+                    }
+                    None => false,
+                };
+                let ask = self
+                    .cockpit
+                    .update(cx, |cockpit, _| cockpit.browser_reclaimed(thread, owner, lease, released));
+                self.browsers
+                    .threads
+                    .get_mut(&thread)
+                    .unwrap()
+                    .waiting
+                    .push(Waiting::Reclaimed {
+                        ask,
+                        tab: document.tab,
+                    });
+            }
+            Waiting::Reclaimed { mut ask, tab } => {
+                let Some(answer) = ask.answer() else {
+                    return Some(Waiting::Reclaimed { ask, tab });
+                };
+                let browser = self.browsers.threads.get_mut(&thread).unwrap();
+                match answer {
+                    Ok(_) => {
+                        browser.pages.retain(|id, _| {
+                            browser
+                                .state
+                                .tabs
+                                .iter()
+                                .any(|tab| tab.id == *id && tab.live)
+                        });
+                        browser.sync_documents(cx, false);
+                    }
+                    Err(error) => browser.error = Some(error.to_string()),
+                }
+                cx.notify();
+            }
+        }
+        None
     }
 
     pub(super) fn pump_browsers(&mut self, cx: &mut Context<Self>) {
@@ -306,6 +677,9 @@ impl CockpitView {
             Some(ferrite_core::cockpit::ServerState::Detached { .. })
         ) {
             for browser in self.browsers.threads.values_mut() {
+                // Their answers went with the link.
+                browser.attaching = None;
+                browser.waiting.clear();
                 browser.pages.clear();
                 browser.owner = None;
                 browser.state.owner = None;
@@ -334,6 +708,7 @@ impl CockpitView {
             }
         }
         self.apply_browser_messages(cx);
+        self.answer_browser_asks(cx);
         self.drain_browser_events(cx);
         for (thread, seen) in std::mem::take(&mut self.browsers.reveal) {
             match self.pane_for(thread) {
@@ -504,8 +879,7 @@ impl CockpitView {
                     }
                 }
                 Event::SettledInput(thread, owner, document, revision) => {
-                    let _ = self
-                        .cockpit
+                    self.cockpit
                         .update(cx, |cockpit, _| cockpit.browser_settled(thread, owner, document, revision));
                 }
                 Event::Input(thread, owner, document, generation, sequence, input) => {
@@ -526,31 +900,22 @@ impl CockpitView {
                     {
                         let settled = page.manual.borrow_mut().discard(sequence, manual::Finish::Stale);
                         if let Some((document, revision)) = settled {
-                            let _ = self
-                                .cockpit
+                            self.cockpit
                                 .update(cx, |cockpit, _| cockpit.browser_settled(thread, owner, document, revision));
                         }
                         continue;
                     }
-                    match self.cockpit.update(cx, |cockpit, _| cockpit.browser_input(thread, owner, document)) {
-                        Ok(revision) => {
-                            page.manual
-                                .borrow_mut()
-                                .acknowledge(sequence, document, revision);
-                            page.native.input(input);
-                        }
-                        Err(error) => {
-                            let settled = page.manual.borrow_mut().discard(sequence, manual::Finish::Refused);
-                            if let Some((document, revision)) = settled {
-                                let _ = self
-                                    .cockpit
-                                    .update(cx, |cockpit, _| cockpit.browser_settled(thread, owner, document, revision));
-                            }
-                            self.browsers.threads.get_mut(&thread).unwrap().error =
-                                Some(error.to_string());
-                            cx.notify();
-                        }
-                    }
+                    // The page has it once the Server authorizes it
+                    // (`answer_browser_ask`).
+                    let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_input(thread, owner, document));
+                    self.browsers.threads.get_mut(&thread).unwrap().waiting.push(Waiting::Input {
+                        ask,
+                        owner,
+                        document,
+                        generation,
+                        sequence,
+                        input,
+                    });
                 }
                 Event::Changed(thread, owner, mut page, mut generation) => {
                     while let Some(Event::Changed(next_thread, next_owner, next_page, _)) =
@@ -628,25 +993,13 @@ impl CockpitView {
                         .pages
                         .get(&page.document.tab)
                         .is_some_and(|page| page.web.read(cx).browser_visible());
-                    let tab_id = page.document.tab;
-                    match self.cockpit.update(cx, |cockpit, _| cockpit.browser_page(thread, owner, page)) {
-                        Ok(state) => {
-                            let browser = self.browsers.threads.get_mut(&thread).unwrap();
-                            browser.state = state;
-                            if let (Some(generation), Some(page), Some(tab)) = (
-                                generation,
-                                browser.pages.get(&tab_id),
-                                browser.state.tabs.iter().find(|tab| tab.id == tab_id),
-                            ) {
-                                page.acknowledged.set(Some((tab.document(), generation)));
-                            }
-                            browser.sync_documents(cx, true);
-                        }
-                        Err(error) => {
-                            self.browsers.threads.get_mut(&thread).unwrap().error =
-                                Some(error.to_string())
-                        }
-                    }
+                    let tab = page.document.tab;
+                    let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_page(thread, owner, page));
+                    self.browsers.threads.get_mut(&thread).unwrap().waiting.push(Waiting::Page {
+                        ask,
+                        tab,
+                        generation,
+                    });
                 }
             }
         }
@@ -853,12 +1206,9 @@ impl CockpitView {
                 .update(cx, |dialog, cx| dialog.sync(thread, asked, cx));
         }
         for (thread, url) in windows {
+            // The field stays the new tab's being entered, if one is.
             let new_tab = self.browser_chrome.read(cx).new_tab(thread);
-            self.browser_action(thread, Action::Open { url }, cx);
-            if new_tab {
-                self.browser_chrome
-                    .update(cx, |chrome, _| chrome.resume_new_tab(thread));
-            }
+            self.act_in_browser(thread, Action::Open { url }, !new_tab, cx);
         }
         for (thread, at) in menus {
             self.open_context_menu(MenuTarget::BrowserPage(thread), at, cx);
@@ -886,8 +1236,7 @@ impl CockpitView {
         };
         let settled = page.manual.borrow_mut().finish(reason);
         if let Some((document, revision)) = settled {
-            let _ = self
-                .cockpit
+            self.cockpit
                 .update(cx, |cockpit, _| cockpit.browser_settled(thread, owner, document, revision));
         }
     }
@@ -928,7 +1277,8 @@ impl CockpitView {
                     continue;
                 };
                 let visible = page.web.read(cx).browser_visible();
-                if tab.visible != visible {
+                // A report on its way says it already; its broadcast will.
+                if tab.visible != visible && !browser.asking(tab.id, |waiting| matches!(waiting, Waiting::Page { .. })) {
                     visibility.push((
                         *thread,
                         owner,
@@ -948,16 +1298,13 @@ impl CockpitView {
             }
         }
         for (thread, owner, page) in visibility {
-            match self.cockpit.update(cx, |cockpit, _| cockpit.browser_page(thread, owner, page)) {
-                Ok(state) => {
-                    let browser = self.browsers.threads.get_mut(&thread).unwrap();
-                    browser.state = state;
-                    browser.sync_documents(cx, true);
-                }
-                Err(error) => {
-                    self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string())
-                }
-            }
+            let tab = page.document.tab;
+            let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_page(thread, owner, page));
+            self.browsers.threads.get_mut(&thread).unwrap().waiting.push(Waiting::Page {
+                ask,
+                tab,
+                generation: None,
+            });
         }
         let focused = self.focused_thread(cx);
         let mut candidates = Vec::new();
@@ -975,6 +1322,9 @@ impl CockpitView {
                     && !page.web.read(cx).browser_visible()
                     && page.native.state().dirty == ferrite_pane::visual::web::BrowserDirty::Clean
                     && !(Some(*thread) == focused && Some(tab.id) == browser.state.active)
+                    && !browser.asking(tab.id, |waiting| {
+                        matches!(waiting, Waiting::Reclaim { .. } | Waiting::Reclaimed { .. })
+                    })
                 {
                     if let Some((document, generation)) =
                         page.acknowledged.get().filter(|(document, generation)| {
@@ -982,62 +1332,22 @@ impl CockpitView {
                                 && *generation == page.native.state().document_generation
                         })
                     {
-                        candidates.push((
-                            *thread,
-                            owner,
-                            document,
-                            generation,
-                            page.native.clone(),
-                            page.web.clone(),
-                        ));
+                        candidates.push((*thread, owner, document, generation));
                     }
                 }
             }
         }
         // Immediate state-based release is provisional; no unmeasured timer or
-        // memory budget is imposed. The Server reserves before native release.
-        for (thread, owner, document, generation, native, web) in candidates {
-            let lease = match self.cockpit.update(cx, |cockpit, _| cockpit.browser_reclaim(thread, owner, document)) {
-                Ok(Some(lease)) => lease,
-                Ok(None) => continue,
-                Err(error) => {
-                    self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string());
-                    continue;
-                }
-            };
-            let released = if native.state().document_generation == generation {
-                match native.try_release() {
-                    Ok(released) => released,
-                    Err(error) => {
-                        self.browsers.threads.get_mut(&thread).unwrap().error = Some(error);
-                        false
-                    }
-                }
-            } else {
-                web.update(cx, |web, cx| web.refresh_browser_state(cx));
-                false
-            };
-            match self
-                .cockpit
-                .update(cx, |cockpit, _| cockpit.browser_reclaimed(thread, owner, lease, released))
-            {
-                Ok(state) => {
-                    let browser = self.browsers.threads.get_mut(&thread).unwrap();
-                    browser.state = state;
-                    browser.pages.retain(|id, _| {
-                        browser
-                            .state
-                            .tabs
-                            .iter()
-                            .any(|tab| tab.id == *id && tab.live)
-                    });
-                    browser.sync_documents(cx, false);
-                }
-                Err(error) => {
-                    self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string())
-                }
-            }
-            cx.notify();
+        // memory budget is imposed. The Server reserves before native release
+        // (`answer_browser_ask`).
+        for (thread, owner, document, generation) in candidates {
+            let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_reclaim(thread, owner, document));
+            self.browsers.threads.get_mut(&thread).unwrap().waiting.push(Waiting::Reclaim {
+                ask,
+                owner,
+                document,
+                generation,
+            });
         }
     }
 
@@ -1152,6 +1462,13 @@ impl CockpitView {
 }
 
 impl Browser {
+    /// Whether an ask `of` the kind is on its way for `tab`'s page.
+    fn asking(&self, tab: TabId, of: impl Fn(&Waiting) -> bool) -> bool {
+        self.waiting
+            .iter()
+            .any(|waiting| waiting.tab() == Some(tab) && of(waiting))
+    }
+
     /// The page the controls act on: none while a new tab is being entered
     /// (the chrome's `new_tab`).
     fn shown_tab(&self, new_tab: bool) -> Option<&Tab> {

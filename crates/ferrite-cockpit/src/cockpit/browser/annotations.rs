@@ -93,17 +93,12 @@ impl CockpitView {
         );
         window.focus(&target.focus, cx);
         let send_enabled = self.annotation_send_enabled(thread, cx);
-        let begun = self.cockpit.update(cx, |cockpit, _| {
+        let annotation = self.cockpit.update(cx, |cockpit, _| {
             LiveAnnotation::begin(thread, target, window.window_handle(), send_enabled, cockpit)
         });
         let browser = self.browsers.threads.get_mut(&thread).unwrap();
-        match begun {
-            Ok(annotation) => {
-                browser.error = None;
-                browser.annotation = Some(annotation);
-            }
-            Err(error) => browser.error = Some(error),
-        }
+        browser.error = None;
+        browser.annotation = Some(annotation);
         cx.notify();
     }
 
@@ -217,17 +212,11 @@ impl CockpitView {
                 self.browsers.threads.get_mut(&thread).unwrap().error = Some("This annotation has no screenshot. Its comment and targets are retained in the attachment.".into());
                 continue;
             }
-            match self
+            let image = self
                 .cockpit
-                .update(cx, |cockpit, _| cockpit.browser_annotation_image(thread, retained.clone()))
-            {
-                Ok(image) => self
-                    .browser_review
-                    .update(cx, |review, cx| review.load(thread, retained, image, cx)),
-                Err(error) => {
-                    self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string())
-                }
-            }
+                .update(cx, |cockpit, _| cockpit.browser_annotation_image(thread, retained.clone()));
+            self.browser_review
+                .update(cx, |review, cx| review.load(thread, retained, image, cx));
             cx.notify();
         }
         let failed = self.browser_review.update(cx, |review, cx| review.tend(cx));

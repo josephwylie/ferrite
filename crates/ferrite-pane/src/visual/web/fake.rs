@@ -83,6 +83,7 @@ pub struct FakeEngine {
     grace: Duration,
     views: RefCell<Vec<Weak<FakeView>>>,
     defer_navigation: Rc<Cell<bool>>,
+    clean: Rc<Cell<bool>>,
     navigation: RefCell<Vec<Weak<BrowserNavigation>>>,
 }
 
@@ -104,8 +105,15 @@ impl FakeEngine {
             grace,
             views: RefCell::default(),
             defer_navigation: Rc::default(),
+            clean: Rc::default(),
             navigation: RefCell::default(),
         }
+    }
+
+    /// Browser pages say they hold nothing unsaved, and give their page
+    /// up when asked (`try_release`); by default they cannot tell.
+    pub fn clean_browser_pages(&self, clean: bool) {
+        self.clean.set(clean);
     }
 
     /// Hold browser navigation at the native pending-intent boundary.
@@ -266,6 +274,7 @@ impl Engine for FakeEngine {
             generation: Cell::new(1),
             pending: RefCell::new(None),
             defer: self.defer_navigation.clone(),
+            clean: self.clean.clone(),
             dialog: RefCell::default(),
             windows: RefCell::default(),
             context: RefCell::default(),
@@ -327,6 +336,7 @@ struct BrowserNavigation {
     generation: Cell<u64>,
     pending: RefCell<Option<String>>,
     defer: Rc<Cell<bool>>,
+    clean: Rc<Cell<bool>>,
     dialog: RefCell<Option<DialogRequest>>,
     windows: RefCell<Vec<String>>,
     context: RefCell<Option<PageContext>>,
@@ -367,7 +377,11 @@ impl BrowserView for BrowserHandle {
             can_forward: false,
             error: None,
             document_generation: self.navigation.generation.get(),
-            dirty: BrowserDirty::Unknown,
+            dirty: if self.navigation.clean.get() {
+                BrowserDirty::Clean
+            } else {
+                BrowserDirty::Unknown
+            },
             dialog: self.navigation.dialog.borrow().clone(),
         }
     }
@@ -467,7 +481,7 @@ impl BrowserView for BrowserHandle {
         }
     }
     fn try_release(&self) -> Result<bool, String> {
-        Ok(false)
+        Ok(self.navigation.clean.get())
     }
 }
 

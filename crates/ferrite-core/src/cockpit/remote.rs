@@ -1,7 +1,8 @@
 //! A window's link to its Server (ADR 0025): the socket, the acts as
 //! commands, and staying attached. An act waits for its reply, reading
 //! what the Server says before it into the inbox, so the window is up to
-//! date when the act returns. A first send and a file search answer later.
+//! date when the act returns. An ask (`Ask`, ADR 0041), a first send and a
+//! file search answer later.
 //! When the Server goes, the window keeps what it drew and attaches again
 //! in the background, resuming each Thread where it left off.
 
@@ -43,7 +44,15 @@ use ferrite_reviewr::search::SearchResults;
 /// Where a later-answered command's reply goes (`Remote::ask`).
 type Answer = Box<dyn FnOnce(io::Result<Option<Done>>) + Send>;
 
-/// How long an act waits for the Server's reply.
+/// A command whose reply the window takes later: where it goes, and when
+/// it is answered that the Server did not answer, if ever.
+struct Waiting {
+    answer: Answer,
+    by: Option<Instant>,
+}
+
+/// How long an act waits for the Server's reply, and an ask (`ask_in_time`)
+/// before it is answered that the Server did not answer.
 const REPLY_WAIT: Duration = Duration::from_secs(10);
 /// How long the window waits before attaching again, at first and at most;
 /// a machine's attempts each start an ssh, so they back off further.
@@ -141,6 +150,9 @@ pub(crate) enum Arrival {
     },
     /// A first send settled: its Thread, or why not.
     Started(BootstrapResult),
+    /// A command the window takes the reply of later was answered, or ran
+    /// out of time: what asked hears it (ADR 0041).
+    Answered,
 }
 
 /// The open connection.
@@ -178,8 +190,8 @@ pub(crate) struct Remote {
     abandoned: Vec<Arrival>,
     searches: BTreeMap<u64, Sender<io::Result<Vec<FileSuggestion>>>>,
     /// Commands whose reply the window takes later, each with where its
-    /// answer goes (`ask`).
-    answers: BTreeMap<u64, Answer>,
+    /// answer goes and by when (`ask`, `ask_in_time`).
+    answers: BTreeMap<u64, Waiting>,
     /// `review_read`s in flight, by command.
     reviews: BTreeMap<u64, Review>,
     watching: BTreeSet<ThreadId>,
@@ -293,6 +305,9 @@ impl Remote {
     pub(crate) fn poll(&mut self) -> Vec<Arrival> {
         self.time_out_restart();
         let mut arrivals = Vec::new();
+        if self.time_out_asks() {
+            arrivals.push(Arrival::Answered);
+        }
         if let Some(attaching) = &self.attaching {
             match attaching.try_recv() {
                 Ok(attached) => {
@@ -352,6 +367,8 @@ impl Remote {
     /// One act: sent, and its reply waited for. What the Server said
     /// before the reply waits in the inbox for the next `poll`.
     pub(crate) fn execute(&mut self, op: Op) -> Result<Option<Done>, WireError> {
+        #[cfg(any(test, feature = "test-support"))]
+        let _waited = waits::Timing::of(&op, true);
         let deadline = Instant::now() + REPLY_WAIT;
         let id = self.send_command(op)?;
         loop {
@@ -394,6 +411,52 @@ impl Remote {
     /// sent while detached; the caller tells it again once attached.
     pub(crate) fn tell(&mut self, op: Op) {
         let _ = self.send_command(op);
+    }
+
+    /// One ask (ADR 0041): sent now, and answered through its `Ask` as
+    /// `read` makes of the Server's reply, or, without one in
+    /// `REPLY_WAIT`, that the Server did not answer in time. It never
+    /// waits: a send that cannot go is answered at once.
+    pub(crate) fn ask_in_time<T: Send + 'static>(
+        &mut self,
+        op: Op,
+        read: fn(Option<Done>) -> io::Result<T>,
+    ) -> super::Ask<T> {
+        let id = match self.send_command(op) {
+            Ok(id) => id,
+            Err(error) => return super::Ask::answered(Err(error.into())),
+        };
+        let (answer, answered) = crate::doorbell::channel();
+        self.answers.insert(
+            id,
+            Waiting {
+                answer: Box::new(move |reply| {
+                    let _ = answer.send(reply.and_then(read));
+                }),
+                by: Some(crate::clock::instant() + REPLY_WAIT),
+            },
+        );
+        super::Ask::of(answered)
+    }
+
+    /// Each ask whose time is up is answered so; true when one was.
+    fn time_out_asks(&mut self) -> bool {
+        let now = crate::clock::instant();
+        let late: Vec<u64> = self
+            .answers
+            .iter()
+            .filter(|(_, waiting)| waiting.by.is_some_and(|by| now >= by))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &late {
+            if let Some(waiting) = self.answers.remove(id) {
+                (waiting.answer)(Err(io::Error::from(WireError {
+                    code: ErrorCode::Unconfirmed,
+                    message: "the Ferrite server did not answer in time".into(),
+                })));
+            }
+        }
+        !late.is_empty()
     }
 
     /// Wait, until `deadline`, for a stopping Server to be gone: it lets
@@ -721,18 +784,20 @@ impl Remote {
             .ok_or_else(|| io::Error::from(gone(&self.detached)))?;
         self.next_request += 1;
         let id = self.next_request;
-        let sent = attachment
-            .client
-            .send_capture(ClientMessage::Command(Command {
-                id,
-                op: Op::BrowserCapture {
-                    thread,
-                    owner,
-                    lease,
-                    capture,
-                    png,
-                },
-            }));
+        let op = Op::BrowserCapture {
+            thread,
+            owner,
+            lease,
+            capture,
+            png,
+        };
+        let sent = {
+            #[cfg(any(test, feature = "test-support"))]
+            let _sent = waits::Timing::of(&op, false);
+            attachment
+                .client
+                .send_capture(ClientMessage::Command(Command { id, op }))
+        };
         if let Err(error) = sent {
             self.detach(&format!("the capture upload could not be queued: {error}"));
             return Err(error);
@@ -945,13 +1010,16 @@ impl Remote {
     ) {
         self.answers.insert(
             id,
-            Box::new(move |result| {
-                let read = result.and_then(|done| {
-                    done.and_then(read)
-                        .ok_or_else(|| io::Error::other("the server answered something else"))
-                });
-                let _ = answer.send(read);
-            }),
+            Waiting {
+                answer: Box::new(move |result| {
+                    let read = result.and_then(|done| {
+                        done.and_then(read)
+                            .ok_or_else(|| io::Error::other("the server answered something else"))
+                    });
+                    let _ = answer.send(read);
+                }),
+                by: None,
+            },
         );
     }
 
@@ -987,6 +1055,8 @@ impl Remote {
     }
 
     fn send_command(&mut self, op: Op) -> Result<u64, WireError> {
+        #[cfg(any(test, feature = "test-support"))]
+        let _sent = waits::Timing::of(&op, false);
         if self.available() && self.attachment.is_none() {
             return Err(WireError {
                 code: ErrorCode::Failed,
@@ -1111,7 +1181,7 @@ impl Remote {
                 if let Some(review) = self.reviews.remove(&id) {
                     let reply = error.map_or(Ok(ok), Err);
                     self.reviewed(review, reply);
-                    return Vec::new();
+                    return vec![Arrival::Answered];
                 }
                 let result = match error {
                     Some(error) => Err(io::Error::from(error)),
@@ -1128,6 +1198,7 @@ impl Remote {
                         result,
                     })];
                 }
+                let answered = vec![Arrival::Answered];
                 if let Some(answer) = self.searches.remove(&id) {
                     let _ = answer.send(result.map(|done| {
                         match done {
@@ -1142,8 +1213,10 @@ impl Remote {
                             _ => Vec::new(),
                         }
                     }));
-                } else if let Some(answer) = self.answers.remove(&id) {
-                    answer(result);
+                    return answered;
+                } else if let Some(waiting) = self.answers.remove(&id) {
+                    (waiting.answer)(result);
+                    return answered;
                 }
                 Vec::new()
             }
@@ -1354,6 +1427,72 @@ impl From<WireError> for io::Error {
         match error.code {
             ErrorCode::Unsupported => io::Error::new(io::ErrorKind::Unsupported, error.message),
             _ => io::Error::other(error.message),
+        }
+    }
+}
+
+/// How long the window's thread spent on each command it sent its Server:
+/// waiting for the reply (`execute`), or only sending it (an ask). What the
+/// tests read to show which asks hold the window (ADR 0041). It records
+/// only between `start` and `take`, and only in tests and test-support
+/// builds.
+#[cfg(any(test, feature = "test-support"))]
+pub mod waits {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    use crate::protocol::Op;
+
+    /// One command: its `op` as the wire names it, whether the window
+    /// waited for its reply, and how long the window's thread spent on it.
+    #[derive(Debug, Clone)]
+    pub struct Wait {
+        pub op: String,
+        pub waited: bool,
+        pub took: Duration,
+    }
+
+    static RECORDING: AtomicBool = AtomicBool::new(false);
+    static WAITS: Mutex<Vec<Wait>> = Mutex::new(Vec::new());
+
+    /// Record from now on, forgetting what was recorded before.
+    pub fn start() {
+        WAITS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        RECORDING.store(true, Ordering::SeqCst);
+    }
+
+    /// What was recorded since `start`, which stops recording.
+    pub fn take() -> Vec<Wait> {
+        RECORDING.store(false, Ordering::SeqCst);
+        std::mem::take(&mut *WAITS.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Times one command from its making to its drop.
+    pub(crate) struct Timing(Option<(String, bool, Instant)>);
+
+    impl Timing {
+        pub(crate) fn of(op: &Op, waited: bool) -> Self {
+            if !RECORDING.load(Ordering::SeqCst) {
+                return Self(None);
+            }
+            let name = serde_json::to_value(op)
+                .ok()
+                .and_then(|value| value["op"].as_str().map(str::to_owned))
+                .unwrap_or_default();
+            Self(Some((name, waited, Instant::now())))
+        }
+    }
+
+    impl Drop for Timing {
+        fn drop(&mut self) {
+            if let Some((op, waited, from)) = self.0.take() {
+                let took = from.elapsed();
+                WAITS
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(Wait { op, waited, took });
+            }
         }
     }
 }

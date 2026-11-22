@@ -291,6 +291,8 @@ fn the_browser_page_gets_the_keys_the_host_binds(cx: &mut TestAppContext) {
     for key in ["enter", "tab", "shift-tab", "escape", "cmd-v", "cmd-c"] {
         let before = key_downs();
         cx.simulate_keystrokes(key);
+        // The page has it once the Server authorizes the input (ADR 0041).
+        until(cx, |_| key_downs() > before);
         tick(cx);
         assert_eq!(key_downs(), before + 1, "{key} reached the page");
     }
