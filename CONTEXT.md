@@ -236,10 +236,9 @@ beside Thread (no Thread opens beside another).
 **Notice**
 Ferrite's own record that a Thread's Main finished for good: its turn ended
 and no Subagent or background task (a shell, a monitor) is still working,
-and no Delegate is open or still to wake it, so the operator is wanted
-back. Unread
-and no PR watch holds it (checks still running, or waiting for the merge),
-so the operator is wanted back. Unread
+no Delegate is open or still to wake it, and no PR watch holds it (checks
+still running, or waiting for the merge), so the operator is wanted back.
+Unread
 until it is **seen** — its Thread on screen while the window has focus —
 or opened from the Inbox; shown there, by a toast, a chime, the
 Thread's done mark, and a system notification
@@ -288,12 +287,9 @@ _Avoid_: subscription, PR monitor.
 
 **Server wake**
 A prompt the Server sends a Thread's agent on its own: a PR watch's news,
-or a Delegate's result. It is never the operator's prompt: the log keeps it as a wake, and a
-window draws it as a short notice. It waits while a Decision is pending or a
-A prompt the Server sends a Thread's agent on its own, such as a PR watch's
-news. It is never the operator's prompt: the log keeps it as a wake, and a
-window draws it as a one-line notice row with its summary, which opens to
-its whole text. It waits while a Decision is pending or a
+or a Delegate's result. It is never the operator's prompt: the log keeps it
+as a wake, and a window draws it as a one-line notice row with its summary,
+which opens to its whole text. It waits while a Decision is pending or a
 turn runs, and starts an ended Session.
 _Avoid_: notification (a toast), message.
 
