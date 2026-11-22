@@ -441,8 +441,12 @@ impl Service {
         if self
             .protections
             .iter()
-            .any(|(lease, (id, _, _, existing))| {
+            .any(|(lease, (id, _, held, existing))| {
                 *id == thread
+                    // A reclaim reserves its own page only: the window asks
+                    // for the unload and its outcome a beat apart (ADR 0036),
+                    // and another tab's command does not wait on that.
+                    && !(*existing == Protection::Reclaim && held.tab != document.tab)
                     && !(kind == Protection::Annotation
                         && *existing == Protection::Command
                         && self.finished_uncertain.contains(lease))
@@ -513,15 +517,20 @@ impl Service {
         lease: Lease,
     ) -> Result<()> {
         self.check_owner(thread, owner)?;
-        if !matches!(self.protections.get(&lease.0), Some((id, candidate, _, Protection::Command)) if *id == thread && *candidate == owner)
-        {
-            return Err("This command protection is no longer valid".into());
-        }
-        if self
-            .protections
-            .iter()
-            .any(|(key, (id, _, _, _))| *id == thread && *key != lease.0)
-        {
+        let document = match self.protections.get(&lease.0) {
+            Some((id, candidate, document, Protection::Command))
+                if *id == thread && *candidate == owner =>
+            {
+                *document
+            }
+            _ => return Err("This command protection is no longer valid".into()),
+        };
+        // Another tab's reclaim reserves that page only (`protect`).
+        if self.protections.iter().any(|(key, (id, _, held, kind))| {
+            *id == thread
+                && *key != lease.0
+                && !(*kind == Protection::Reclaim && held.tab != document.tab)
+        }) {
             return Err(
                 "Finish the annotation capture before observing or controlling this browser".into(),
             );

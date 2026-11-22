@@ -335,3 +335,56 @@ fn unsupported_or_invalid_browser_metadata_survives_attempted_replacement() {
     drop(store);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn a_page_being_reclaimed_does_not_hold_another_tabs_command() {
+    use ferrite_core::browser::{Dirty, PageState, Protection};
+    let thread = ThreadId::new(1);
+    let mut browser = Service::default();
+    let owner = browser.attach(thread, 7).unwrap();
+    let open = |browser: &mut Service, url: &str| {
+        browser
+            .apply(thread, 7, Action::Open { url: url.into() })
+            .unwrap()
+    };
+    let first = open(&mut browser, "https://example.com/first").tabs[0].document();
+    let second = open(&mut browser, "https://example.com/second").tabs[1].document();
+    // The first tab is hidden behind the second, loaded and clean.
+    browser
+        .update(
+            thread,
+            owner,
+            PageState {
+                navigation: false,
+                visible: false,
+                document: first,
+                url: "https://example.com/first".into(),
+                loading: false,
+                can_back: false,
+                can_forward: false,
+                error: None,
+                dirty: Dirty::Clean,
+            },
+        )
+        .unwrap();
+    let reclaim = browser
+        .begin_reclaim(thread, owner, first)
+        .unwrap()
+        .expect("the hidden tab may unload");
+    assert!(
+        browser
+            .protect(thread, owner, first, Protection::Command)
+            .is_err(),
+        "the page being unloaded takes no command"
+    );
+    let command = browser
+        .protect(thread, owner, second, Protection::Command)
+        .expect("the shown tab's command does not wait on the other's unload");
+    browser
+        .check_exclusive_command(thread, owner, command)
+        .expect("and it runs");
+    browser.release(thread, owner, command).unwrap();
+    let released = browser.finish_reclaim(thread, owner, reclaim, true).unwrap();
+    assert!(!released.tabs[0].live);
+    assert!(released.tabs[1].live);
+}
