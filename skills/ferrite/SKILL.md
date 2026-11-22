@@ -449,6 +449,8 @@ A machine's Threads have its own numbers: name them by number, never with
 absolute path on that machine. `server_unavailable` from a machine says why: no
 `ferrited` on it, or the user must sign in to it from a Ferrite window
 first. Tell the user; do not retry in a loop.
+`"$F" identity get --machine build-box` names the server a machine runs
+(`server_id`), the same however the machine is reached.
 
 ## Safety rules
 

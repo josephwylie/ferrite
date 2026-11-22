@@ -177,12 +177,12 @@ fn command(group: &str, rest: &[&str], to: &To) -> i32 {
         );
         return 2;
     };
-    let context = Context {
-        thread: std::env::var("FERRITE_THREAD_ID").ok(),
-        cwd: match to {
-            To::Local(_) => Some(std::env::current_dir().unwrap_or_default()),
-            To::Machine(..) => None,
+    let context = match to {
+        To::Local(_) => Context {
+            thread: std::env::var("FERRITE_THREAD_ID").ok(),
+            cwd: Some(std::env::current_dir().unwrap_or_default()),
         },
+        To::Machine(..) => Context::on_machine(),
     };
     let request = match parse(op, args, &context) {
         Ok(request) => request,
@@ -216,6 +216,19 @@ pub struct Context {
     /// Where a `cwd` is resolved from, and what one not given is. `None`
     /// on a machine: a `cwd` must then be its absolute path there.
     pub cwd: Option<PathBuf>,
+}
+
+impl Context {
+    /// On a machine neither this computer's Thread nor its directory
+    /// means anything: its Thread ids are its own Store's, so the calling
+    /// Thread is never sent as the `caller` there, which would name
+    /// whichever Thread has that number on the machine.
+    pub fn on_machine() -> Self {
+        Self {
+            thread: None,
+            cwd: None,
+        }
+    }
 }
 
 /// The request one operation's arguments make.
@@ -579,8 +592,7 @@ fn unreachable(failure: &Failure) -> ApiError {
         Failure::SignIn => {
             format!("{failure}: sign in from a Ferrite window, then ask again")
         }
-        // A `ferrited` older than `api-bridge` refuses it with its usage.
-        Failure::Unreachable(said) if said.starts_with("usage: ferrited") => {
+        failure if failure.older_ferrited() => {
             "the machine's `ferrited` is older than this `ferrite`: update it there".into()
         }
         failure => failure.to_string(),
