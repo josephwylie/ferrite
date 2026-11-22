@@ -344,7 +344,9 @@ fn a_live_annotation_cannot_send_under_a_sheet(cx: &mut TestAppContext) {
     };
     let annotate = cx.debug_bounds("browser-annotate").expect("live page offers annotation");
     cx.simulate_click(annotate.center(), gpui::Modifiers::none());
-    tick(cx);
+    // The editor starts once the Server has answered for the page's
+    // protection, a beat or more after the press.
+    until(cx, |_| send_enabled().is_some());
     assert_eq!(send_enabled(), Some(true), "Send sends, with no sheet up");
     view.update(cx, |view, cx| view.toggle_settings(cx));
     tick(cx);

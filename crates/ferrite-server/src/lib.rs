@@ -267,10 +267,26 @@ pub fn fixture_browser_machine(
         server.browser_requests = browser_requests;
         server.serve(hear)
     });
+    /// The Server's words, each read held back by `FERRITE_FIXTURE_LINK_DELAY_MS`
+    /// when a run sets it: a slow link, which shows a test that acts on
+    /// the window before the window has what the Server said.
+    struct Slow(link::Stream, Option<Duration>);
+    impl io::Read for Slow {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if let Some(delay) = self.1 {
+                std::thread::sleep(delay);
+            }
+            self.0.read(buf)
+        }
+    }
+    let delay = std::env::var("FERRITE_FIXTURE_LINK_DELAY_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map(Duration::from_millis);
     Ok(Box::new(move || {
         let stream = link::connect(&address)?;
         Ok(ferrite_core::machine::Tunnel {
-            from: Box::new(link::TryClone::try_clone(&stream)?),
+            from: Box::new(Slow(link::TryClone::try_clone(&stream)?, delay)),
             to: Box::new(Upload(stream)),
             ended: Box::new(|| None),
         })

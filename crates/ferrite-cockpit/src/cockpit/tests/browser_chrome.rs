@@ -196,13 +196,28 @@ pub(super) fn browser_window<'a>(cx: &'a mut TestAppContext, name: &str) -> Wind
 /// the page only from then. The word comes as a message, a beat or more
 /// after the Server has it.
 pub(super) fn page_shown(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
+    page_shown_where(view, thread, cx, |_| true);
+}
+
+/// `page_shown`, for the page at `url`: after a navigation or a new tab,
+/// the window still has the page before it as loaded.
+pub(super) fn page_shown_at(view: &Entity<CockpitView>, thread: ThreadId, url: &str, cx: &mut gpui::VisualTestContext) {
+    page_shown_where(view, thread, cx, |tab| tab.url == url);
+}
+
+fn page_shown_where(
+    view: &Entity<CockpitView>,
+    thread: ThreadId,
+    cx: &mut gpui::VisualTestContext,
+    is: impl Fn(&ferrite_core::browser::Tab) -> bool,
+) {
     until(cx, |cx| {
         view.read_with(cx, |view, cx| {
             view.browsers
                 .shown_for_test(view.cockpit.read(cx).thread_key(thread))
         })
         .is_some_and(|(state, _)| {
-            state.tabs.iter().any(|tab| Some(tab.id) == state.active && tab.live && !tab.loading)
+            state.tabs.iter().any(|tab| Some(tab.id) == state.active && tab.live && !tab.loading && is(tab))
         })
     });
     tick(cx);
