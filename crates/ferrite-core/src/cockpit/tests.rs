@@ -3050,7 +3050,7 @@ fn a_leaking_session_is_restarted_where_the_operator_can_see_it() {
     let restarted = cockpit.sweep();
 
     assert_eq!(restarted.len(), 1);
-    assert_eq!(restarted[0].thread, thread.thread());
+    assert_eq!(restarted[0].thread, thread);
     assert_eq!(restarted[0].rss, 4 * 1024 * 1024 * 1024);
     // A second Session, told where to pick up — and where to work: the
     // replacement spawns into the same binding the first Session had.

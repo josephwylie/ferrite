@@ -237,9 +237,11 @@ pub trait RssSampler {
 }
 
 /// A Session the watchdog replaced, for the operator and the app's log.
+/// The Engine names its Thread by id; a Cockpit by its key
+/// (`cockpit::Restart`).
 #[derive(Debug, Clone, PartialEq)]
-pub struct Restart {
-    pub thread: ThreadId,
+pub struct Restart<T = ThreadId> {
+    pub thread: T,
     /// What it had grown to when the watchdog acted.
     pub rss: u64,
 }

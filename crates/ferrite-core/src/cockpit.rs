@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use crate::activity::{AgentKey, DecisionHandle, Subject};
 pub use crate::engine::{
     title_from_prompt, Admission, AgentLaunch, Engine, HistoryDirection, Preparation,
-    ProviderChoice, Restart, RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
+    ProviderChoice, RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
 };
 use crate::notifications::{DecisionNoticeId, NoticeId, Notifications};
 use crate::protocol::{
@@ -58,6 +58,8 @@ pub type PaneUpdate = crate::engine::PaneUpdate<ThreadKey>;
 pub type Bootstrapped = crate::engine::Bootstrapped<ThreadKey>;
 /// A first send settled by `pump`, its Thread named by its key.
 pub type BootstrapResult = crate::engine::BootstrapResult<ThreadKey>;
+/// A Session the watchdog replaced, its Thread named by its key.
+pub type Restart = crate::engine::Restart<ThreadKey>;
 
 /// One window's hold on every machine it holds (ADR 0045): each machine's
 /// link and what its Engine said (`HeldMachine`), and what exists once per
@@ -267,11 +269,16 @@ impl Cockpit {
     /// `None` for a machine the window no longer holds, or one with no
     /// environment, whose Threads nothing saves.
     pub fn saved(&self, thread: ThreadKey) -> Option<SavedThread> {
-        let machine = self.machines.get(&thread.machine())?;
         Some(SavedThread {
-            machine: machine.saved_as.clone()?,
+            machine: self.saved_as(thread.machine())?.clone(),
             thread: thread.thread(),
         })
+    }
+
+    /// What saved files name `machine`, fixed when the window attached it
+    /// (F-A8); `None` as for `saved`.
+    pub fn saved_as(&self, machine: MachineId) -> Option<&MachineKey> {
+        self.machines.get(&machine)?.saved_as.as_ref()
     }
 
     /// The Thread a saved file names, if the window holds its machine.
@@ -1197,6 +1204,15 @@ impl Cockpit {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl Cockpit {
+    /// Thread `thread` of the machine on screen, for a test that names one
+    /// by its number, or made it in a Store before the Cockpit held it.
+    pub fn key(&self, thread: ThreadId) -> ThreadKey {
+        self.here().key(thread)
+    }
+}
+
 #[cfg(test)]
 impl Cockpit {
     pub(crate) fn set_session_project_root(
@@ -1209,12 +1225,6 @@ impl Cockpit {
             .set_session_project_root(thread.thread(), root);
         self.receive_from(thread.machine());
         set
-    }
-
-    /// Thread `thread` of the machine on screen, for a test that names one
-    /// by its number.
-    pub(crate) fn key(&self, thread: ThreadId) -> ThreadKey {
-        self.here().key(thread)
     }
 
     /// The Engine in this process on screen, for a test to reach into.
@@ -1431,10 +1441,18 @@ impl Cockpit {
     /// Replace any Session grown past the memory limit. A Server sweeps on
     /// its own, so a window attached to one has nothing to do.
     pub fn sweep(&mut self) -> Vec<Restart> {
-        let restarts = match &mut self.here_mut().link {
+        let here = self.here_mut();
+        let restarts = match &mut here.link {
             Link::InProcess(engine) => engine.sweep(),
             Link::Server(_) => Vec::new(),
         };
+        let restarts = restarts
+            .into_iter()
+            .map(|restart| Restart {
+                thread: here.key(restart.thread),
+                rss: restart.rss,
+            })
+            .collect();
         self.receive_from(self.on_screen);
         restarts
     }

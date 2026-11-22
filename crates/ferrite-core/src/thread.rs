@@ -87,6 +87,12 @@ impl ThreadKey {
     pub fn thread(self) -> ThreadId {
         self.thread
     }
+
+    /// Another Thread of this one's machine: what this Thread's own
+    /// transcript names, as a link to a Thread it spawned, is on its machine.
+    pub fn sibling(self, thread: ThreadId) -> Self {
+        Self::new(self.machine, thread)
+    }
 }
 
 /// A Project and the machine it is registered on: a `ProjectId` is per
