@@ -191,14 +191,11 @@ mod tests {
     }
 
     fn open(surfaces: &mut Surfaces, id: SurfaceId) {
-        surfaces.apply(ThreadId::new(7), true, SurfaceAction::Open(id));
+        surfaces.apply(ferrite_core::ThreadKey::fixture(0, 7), true, SurfaceAction::Open(id));
     }
 
     fn active(dir: &Path) -> Option<SurfaceId> {
-        Surfaces::load(dir, |_, _| true)
-            .unwrap()
-            .get(ThreadId::new(7))
-            .and_then(|state| state.active.clone())
+        Surfaces::saved_in(dir, ThreadId::new(7)).and_then(|state| state.active)
     }
 
     fn wait_for_write(persistence: &Persistence) {

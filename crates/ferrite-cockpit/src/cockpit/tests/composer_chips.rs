@@ -293,11 +293,11 @@ fn the_plus_menu_reaches_the_connectors(cx: &mut TestAppContext) {
     cx.simulate_click(manage.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds("panel").is_some(), "the panel shows");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.popup().is_none(), "a pick closes the menu");
         let thread = view.panes[0].thread().expect("a Thread");
         assert_eq!(
-            view.active_surface(thread),
+            view.active_surface(view.cockpit.read(cx).thread_key(thread)),
             Some(crate::cockpit::surfaces::SurfaceId::Overview),
             "on its Overview, where the connectors are"
         );

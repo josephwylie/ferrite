@@ -238,6 +238,7 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "window.drag",
             "window.text",
             "window.focus",
+            "identity.get",
         ]
     );
 }
@@ -399,6 +400,7 @@ fn samples() -> Vec<Request> {
             path: PathBuf::from("/work/.worktrees/app/hp-billing-t-0001"),
         })),
         request(Method::MachineList(Empty {})),
+        request(Method::IdentityGet(Empty {})),
         request(Method::EventsSubscribe(EventsSubscribeParams {
             threads: vec![thread(), ThreadId::new(14)],
         })),
@@ -1570,17 +1572,19 @@ fn a_worktree_is_removed_by_its_directory() {
     }
 }
 
-/// On a machine this computer's directory means nothing: a `cwd` is the
-/// machine's own absolute path, and never left out.
+/// On a machine this computer's directory and Thread mean nothing: a
+/// `cwd` is the machine's own absolute path, and never left out, and the
+/// calling Thread is no `caller` there.
 #[test]
 fn on_a_machine_a_cwd_is_given_whole() {
-    let remote = Context {
-        cwd: None,
-        ..context()
-    };
+    let remote = Context::on_machine();
     let start = |name: &str, args: &[&str]| cli::parse(op(name), args, &remote);
-    match start("thread.start", &["--cwd", "/srv/app"]).map(|request| request.method) {
-        Ok(Method::ThreadStart(params)) => assert_eq!(params.cwd, PathBuf::from("/srv/app")),
+    match start("thread.start", &["--cwd", "/srv/app"]) {
+        Ok(Request {
+            method: Method::ThreadStart(params),
+            caller: None,
+            ..
+        }) => assert_eq!(params.cwd, PathBuf::from("/srv/app")),
         other => panic!("{other:?}"),
     }
     for (name, args) in [

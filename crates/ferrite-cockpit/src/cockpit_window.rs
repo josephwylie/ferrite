@@ -135,7 +135,7 @@ impl CockpitWindow {
         let until = cx.background_executor().now() + LANDING_WAIT;
         let view = cx.new(|cx| {
             CockpitView::new_with_panel(core, provider, prefs, panel, cx)
-                .with_machines(machines)
+                .with_machines(machines, cx)
                 .with_needs_you(needs_you, cx)
                 .with_landing(open, until)
         });

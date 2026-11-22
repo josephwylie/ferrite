@@ -7,11 +7,30 @@
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 use crate::protocol::ServerInfo;
 
 pub mod agent;
 pub mod clis;
 pub mod github;
+
+/// A Server's own stable id: made once, the first time a Server starts on
+/// its Store, and kept there, so every boot and every route to it (ssh, a
+/// paired link) names the same Server. Its `welcome` says it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ServerId(String);
+
+impl ServerId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Where the Threads live: `FERRITE_STORE`, else `~/.ferrite/threads`.
 pub fn store_dir() -> PathBuf {

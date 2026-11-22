@@ -494,7 +494,7 @@ fn a_changed_files_tab_offers_show_changes(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("files-show-changes").is_none(), "unchanged");
     open(&view, thread, &checkout.join("fresh.rs"), true, cx);
     let link = cx.debug_bounds("files-show-changes").expect("a changed file");
-    view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Changes, cx));
+    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Changes, cx));
     tick(cx);
     assert!(cx.debug_bounds("changes").is_none(), "its tab is closed");
     cx.simulate_click(link.center(), gpui::Modifiers::none());

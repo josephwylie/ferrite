@@ -125,7 +125,7 @@ impl CockpitView {
         cx: &mut gpui::App,
     ) -> std::io::Result<()> {
         self.cockpit.update(cx, |cockpit, _| cockpit.delete(thread))?;
-        self.panel.deleted.push(thread);
+        self.panel.deleted.push(self.cockpit.read(cx).thread_key(thread));
         if self.cited_sources.forget(thread) {
             if let Err(error) = self.cited_sources.save(&self.prefs.dir) {
                 ferrite_core::log!("cited sources were not saved: {error}");

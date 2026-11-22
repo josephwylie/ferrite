@@ -308,7 +308,7 @@ impl Content {
                                     ferrite_pane::preview::open_original(path, window, cx)
                                 }
                                 Action::Surface(surface) => {
-                                    view.upsert_surface(thread, surface.clone(), cx)
+                                    view.upsert_surface(view.cockpit.read(cx).thread_key(thread), surface.clone(), cx)
                                 }
                                 Action::CreatePr => view.create_pr(thread, cx),
                             }
@@ -432,7 +432,7 @@ impl CockpitView {
                 lineage =
                     super::lineage::lineage(open.activity(), subject, &self.facts.name(thread));
             }
-            if let Some(surfaces) = self.panel.surfaces.get(thread) {
+            if let Some(surfaces) = self.panel.surfaces.get(self.cockpit.read(cx).thread_key(thread)) {
                 for surface in &surfaces.tabs {
                     if let SurfaceId::SideChat(tab) = surface {
                         let mut row = Row::new(
@@ -486,7 +486,7 @@ impl CockpitView {
             previous_open: self
                 .panel
                 .surfaces
-                .get(thread)
+                .get(self.cockpit.read(cx).thread_key(thread))
                 .is_some_and(|state| state.previous_agents_open),
             previous_pages,
         }

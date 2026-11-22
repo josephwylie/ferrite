@@ -343,7 +343,7 @@ fn submenus(
                 let _ = view.update(cx, |view, cx| {
                     match act {
                         Some(act) => view.run_session_control(thread, generation, act, cx),
-                        None => view.open_panel(thread, cx),
+                        None => view.open_panel(view.cockpit.read(cx).thread_key(thread), cx),
                     }
                     cx.notify();
                 });

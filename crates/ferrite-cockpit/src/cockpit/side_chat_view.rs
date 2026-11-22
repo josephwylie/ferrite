@@ -239,7 +239,7 @@ impl CockpitView {
         let id = self
             .side_chat
             .update(cx, |chat, cx| chat.open(owner, asked, cx));
-        self.upsert_surface(owner, SurfaceId::SideChat(id), cx);
+        self.upsert_surface(self.cockpit.read(cx).thread_key(owner), SurfaceId::SideChat(id), cx);
         cx.notify();
     }
 
@@ -266,7 +266,7 @@ impl CockpitView {
         let id = self
             .side_chat
             .update(cx, |chat, cx| chat.push_tab(owner, None, cx));
-        self.upsert_surface(owner, SurfaceId::SideChat(id), cx);
+        self.upsert_surface(self.cockpit.read(cx).thread_key(owner), SurfaceId::SideChat(id), cx);
     }
 
     /// Whose side chat a focus that names no `fork_of` is for. Only a
@@ -352,7 +352,7 @@ impl CockpitView {
             SideChatEvent::Ask { tab, fork, draft } => self.ask_side_chat(*tab, *fork, draft, cx),
             SideChatEvent::BringBack { owner, fork } => self.bring_back(*owner, *fork, window, cx),
             SideChatEvent::Trash { owner, tab } => {
-                self.close_surface(*owner, &SurfaceId::SideChat(*tab), cx)
+                self.close_surface(self.cockpit.read(cx).thread_key(*owner), &SurfaceId::SideChat(*tab), cx)
             }
         }
     }
@@ -390,7 +390,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<SideChatInputs> {
         let owner = self.panes[self.panel_drawn_pane(cx)?].thread()?;
-        let Some(SurfaceId::SideChat(tab)) = self.active_surface(owner) else {
+        let Some(SurfaceId::SideChat(tab)) = self.active_surface(self.cockpit.read(cx).thread_key(owner)) else {
             return None;
         };
         let conversation = conversation(owner, tab);
@@ -407,7 +407,7 @@ impl CockpitView {
         Some(SideChatInputs {
             owner,
             tab,
-            shown: self.panel_thread(cx) == Some(owner),
+            shown: self.panel_thread(cx) == Some(self.cockpit.read(cx).thread_key(owner)),
             answered,
             blocked: self.bring_back_blocked(owner, fork, cx),
             confirm_delete: self.prefs.settings.confirm_delete,

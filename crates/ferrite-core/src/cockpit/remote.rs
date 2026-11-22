@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 
 use crate::ThreadId;
+use crate::clock::ServerClock;
 // A Remote's answers ring as the pump routes them (ADR 0041).
 use crate::doorbell::Sender;
 use crate::engine::{BootstrapResult, Bootstrapped};
@@ -28,6 +29,7 @@ use crate::protocol::{
 use crate::protocol::{ReviewPullRequest, ReviewPullRequests, WirePrFilter, WirePrList};
 use crate::providers::FileSuggestion;
 use crate::roster::DraftId;
+use crate::server::ServerId;
 use crate::visual::{RenderRequest, Renderer};
 use crate::workspace::registry::ProjectId;
 use crate::workspace::{
@@ -127,8 +129,13 @@ const RESTART_TIMEOUT: Duration = Duration::from_secs(30);
 pub enum ServerState {
     Attached {
         server: ServerInfo,
+        /// Which Server it is; `None` for a Server from before every
+        /// Server had an id.
+        id: Option<ServerId>,
         /// When the Server started, on this side's clock.
         since: Instant,
+        /// How its wall clock reads on this side's.
+        clock: ServerClock,
     },
     /// No Server answers: why, and the window keeps trying. `attention`:
     /// what the operator must do first (sign in, install `ferrited`) for
@@ -160,6 +167,8 @@ struct Attachment {
     client: link::Client,
     boot_id: String,
     server: ServerInfo,
+    id: Option<ServerId>,
+    clock: ServerClock,
     /// The Server's boot on this side's clock: `at_ms` counts from it.
     boot: Instant,
     /// It welcomed this connection with `Capability::ForkOf`.
@@ -243,7 +252,9 @@ impl Remote {
         match &self.attachment {
             Some(attachment) => ServerState::Attached {
                 server: attachment.server.clone(),
+                id: attachment.id.clone(),
                 since: attachment.boot,
+                clock: attachment.clock,
             },
             None => ServerState::Detached {
                 reason: self.detached.clone(),
@@ -1085,6 +1096,7 @@ impl Remote {
         let link::Attached {
             client,
             welcome,
+            clock,
             snapshot,
         } = match attached {
             Ok(attached) => attached,
@@ -1112,6 +1124,7 @@ impl Remote {
             server,
             uptime_ms,
             capabilities,
+            server_id,
             ..
         } = welcome
         else {
@@ -1142,6 +1155,8 @@ impl Remote {
             client,
             boot_id: snapshot.boot_id.clone(),
             server,
+            id: server_id,
+            clock,
             boot,
             names_fork_owners: capabilities.contains(&Capability::ForkOf),
         });

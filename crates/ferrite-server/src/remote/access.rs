@@ -1,5 +1,6 @@
 use super::{random_secret, write_private};
 use ferrite_core::machine::remote::{Descriptor, Granted};
+use ferrite_core::server::ServerId;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -26,7 +27,6 @@ struct Session {
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Saved {
-    server_id: String,
     name: String,
     grants: Vec<Grant>,
     sessions: Vec<Session>,
@@ -34,6 +34,8 @@ struct Saved {
 
 pub(super) struct Access {
     path: PathBuf,
+    /// The Server's id (`crate::server_id`): remote access keeps none of its own.
+    id: ServerId,
     saved: Saved,
     recent: Vec<u64>,
 }
@@ -53,11 +55,11 @@ fn matches(hash: &[u8], secret: &str) -> bool {
 
 impl Access {
     pub fn open(store: &Path) -> io::Result<Self> {
+        let id = crate::server_id::open(store)?;
         let path = store.join("remote-access.json");
         let saved = match std::fs::read(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes)?,
             Err(error) if error.kind() == io::ErrorKind::NotFound => Saved {
-                server_id: random_secret(16),
                 name: std::env::var("HOSTNAME")
                     .or_else(|_| std::env::var("COMPUTERNAME"))
                     .unwrap_or_else(|_| "Remote environment".into()),
@@ -68,6 +70,7 @@ impl Access {
         };
         let access = Self {
             path,
+            id,
             saved,
             recent: Vec::new(),
         };
@@ -79,7 +82,7 @@ impl Access {
     }
     pub fn descriptor(&self) -> Descriptor {
         Descriptor {
-            server_id: self.saved.server_id.clone(),
+            server_id: self.id.as_str().into(),
             name: self.saved.name.clone(),
         }
     }
@@ -139,7 +142,7 @@ impl Access {
         self.persist(&saved)?;
         self.saved = saved;
         Ok(Granted {
-            server_id: self.saved.server_id.clone(),
+            server_id: self.id.as_str().into(),
             session_id: id,
             secret,
         })
@@ -180,6 +183,7 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("ferrite-access-{}", random_secret(8)));
         let mut access = Access::open(&folder).unwrap();
         let identity = access.descriptor().server_id;
+        assert_eq!(identity, crate::server_id::open(&folder).unwrap().as_str());
         let code = access.issue().unwrap();
         let granted = access.exchange(&code, "test desktop").unwrap();
         assert_ne!(code, granted.secret);
@@ -187,6 +191,7 @@ mod tests {
         let bytes = std::fs::read_to_string(folder.join("remote-access.json")).unwrap();
         assert!(!bytes.contains(&code));
         assert!(!bytes.contains(&granted.secret));
+        assert!(!bytes.contains(&identity), "the Server keeps its id itself");
         let mut reopened = Access::open(&folder).unwrap();
         assert_eq!(identity, reopened.descriptor().server_id);
         assert_eq!(

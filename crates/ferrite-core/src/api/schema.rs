@@ -249,6 +249,8 @@ operations! {
         "The text the headless window last showed inside an element, by its debug selector, line by line.";
     WindowFocus(Empty) => "window.focus", [], Operator,
         "What holds the headless window's keyboard: its key contexts, nearest debug selector and name.";
+    IdentityGet(Empty) => "identity.get", [], Anyone,
+        "This Server's identity: its server_id, the same over every route to it, ssh or a paired link.";
 }
 
 /// Who may call an operation (#224). A call that names no Thread is the

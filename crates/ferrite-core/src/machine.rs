@@ -258,6 +258,12 @@ impl Failure {
     pub fn needs_operator(&self) -> bool {
         matches!(self, Self::NotInstalled | Self::SignIn)
     }
+
+    /// The machine's `ferrited` is older than `api-bridge`: it refuses the
+    /// word with its usage.
+    pub fn older_ferrited(&self) -> bool {
+        matches!(self, Self::Unreachable(said) if said.starts_with("usage: ferrited"))
+    }
 }
 
 impl fmt::Display for Failure {

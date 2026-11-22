@@ -776,10 +776,12 @@ pub struct Client {
     pub messages: Receiver<ServerMessage>,
 }
 
-/// What attaching found: the Server's welcome and its snapshot.
+/// What attaching found: the Server's welcome, its clock as the welcome
+/// read against this side's, and its snapshot.
 pub struct Attached {
     pub client: Client,
     pub welcome: ServerMessage,
+    pub clock: crate::clock::ServerClock,
     pub snapshot: protocol::Snapshot,
 }
 
@@ -787,21 +789,29 @@ impl Client {
     /// Connect, say hello, and read the welcome and snapshot. A refused
     /// welcome is an error carrying the Server's reason.
     pub fn attach(address: &Path, hello: ClientMessage) -> io::Result<Attached> {
+        let wall_ms = || crate::clock::now().timestamp_millis();
+        // Before connecting: a Server that refuses the generation closes
+        // as soon as it has welcomed, so the hello follows the connect at once.
+        let requested_ms = wall_ms();
         let mut stream = connect(address)?;
         send(&mut stream, &hello)?;
         let mut lines = Lines::new(stream.try_clone()?);
         let welcome: ServerMessage = lines
             .next_message()?
             .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "no welcome"))?;
-        if let ServerMessage::Welcome {
-            error: Some(error), ..
-        } = &welcome
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                error.message.clone(),
-            ));
-        }
+        let received_ms = wall_ms();
+        let server_ms = match &welcome {
+            ServerMessage::Welcome {
+                error: Some(error), ..
+            } => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    error.message.clone(),
+                ))
+            }
+            ServerMessage::Welcome { now_ms, .. } => *now_ms,
+            _ => None,
+        };
         let snapshot = match lines.next_message()? {
             Some(ServerMessage::Snapshot(snapshot)) => snapshot,
             _ => {
@@ -828,6 +838,7 @@ impl Client {
                 messages,
             },
             welcome,
+            clock: crate::clock::ServerClock::sampled(server_ms, requested_ms, received_ms),
             snapshot,
         })
     }

@@ -1224,6 +1224,15 @@ pub enum ServerMessage {
         /// every `at_ms` by it, so working timers agree across windows.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         uptime_ms: Option<u64>,
+        /// Which Server this is, on every route to it. Absent from a
+        /// Server from before every Server had one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server_id: Option<crate::server::ServerId>,
+        /// The Server's wall clock now, in milliseconds since the epoch: a
+        /// window reads the Server's wall times through the offset it
+        /// measures from it (`clock::ServerClock`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        now_ms: Option<i64>,
     },
     Snapshot(Snapshot),
     /// A watched Thread's log, from its start or after `after`.
@@ -2444,6 +2453,8 @@ pub fn welcome(
     server: ServerInfo,
     boot_id: String,
     uptime_ms: u64,
+    server_id: crate::server::ServerId,
+    now_ms: i64,
 ) -> ServerMessage {
     ServerMessage::Welcome {
         generation: GENERATION,
@@ -2455,6 +2466,8 @@ pub fn welcome(
             message: format!("this server speaks generation {GENERATION}, not {generation}"),
         }),
         uptime_ms: Some(uptime_ms),
+        server_id: Some(server_id),
+        now_ms: Some(now_ms),
     }
 }
 

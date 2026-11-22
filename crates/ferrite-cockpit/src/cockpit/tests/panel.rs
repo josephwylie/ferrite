@@ -30,7 +30,7 @@ fn own_settings(view: &Entity<CockpitView>, name: &str, cx: &mut gpui::VisualTes
 
 /// The Thread the panel shows for this frame.
 fn shown(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<ThreadId> {
-    view.read_with(cx, |view, cx| view.panel_thread(cx))
+    view.read_with(cx, |view, cx| view.panel_thread(cx).map(|thread| thread.thread()))
 }
 
 /// The Solo card's right edge, as the board laid it out.
@@ -221,7 +221,7 @@ fn the_overview_is_one_scroll_of_sections(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     tick(cx);
     assert!(cx.debug_bounds("panel").is_none());
-    view.update(cx, |view, cx| view.open_panel(thread, cx));
+    view.update(cx, |view, cx| view.open_panel(view.cockpit.read(cx).thread_key(thread), cx));
     tick(cx);
     assert!(cx.debug_bounds("panel").is_some(), "opening it shows it");
 }

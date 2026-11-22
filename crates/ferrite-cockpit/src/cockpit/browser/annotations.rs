@@ -17,7 +17,7 @@ impl CockpitView {
         self.ensure_browser(thread, cx);
         self.browser_review
             .update(cx, |review, cx| review.edit(thread, annotation, image, cx));
-        self.upsert_surface(thread, super::super::surfaces::SurfaceId::Browser, cx);
+        self.upsert_surface(self.cockpit.read(cx).thread_key(thread), super::super::surfaces::SurfaceId::Browser, cx);
     }
 
     #[cfg(feature = "browser-smoke")]

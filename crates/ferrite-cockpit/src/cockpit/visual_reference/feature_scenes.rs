@@ -658,12 +658,12 @@ fn panel(state: &str, staged: PanelStaged) -> (Scene, Setup) {
         for opener in [Opener::Changes, Opener::Files, Opener::Terminal] {
             view.run_opener(thread, opener, cx);
         }
-        view.upsert_surface(thread, SurfaceId::Changes, cx);
+        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Changes, cx);
         match staged {
             PanelStaged::Tabs => {}
             PanelStaged::PlusMenu => view.open_surface_menu(cx),
-            PanelStaged::Empty => view.close_surfaces(thread, crate::cockpit::surfaces::CloseSelection::All, cx),
-            PanelStaged::Maximized => view.toggle_panel_maximized(thread, cx),
+            PanelStaged::Empty => view.close_surfaces(view.cockpit.read(cx).thread_key(thread), crate::cockpit::surfaces::CloseSelection::All, cx),
+            PanelStaged::Maximized => view.toggle_panel_maximized(view.cockpit.read(cx).thread_key(thread), cx),
         }
     });
     (scene, setup)

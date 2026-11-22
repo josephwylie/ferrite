@@ -145,7 +145,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
     let setup: Setup = Box::new(move |view, window, cx| {
         prepare(view, branches, window, cx);
         if shot.panel() {
-            view.open_panel(cast.memory, cx);
+            view.open_panel(view.cockpit.read(cx).thread_key(cast.memory), cx);
         }
         if shot == Shot::SoloChanges {
             unfold_file(view, cast.memory, "scheduled_work.rs", cx);
@@ -202,7 +202,10 @@ fn unfold_file(
             .map(|file| file.path.clone())
     });
     match path {
-        Some(path) => view.overview.update(cx, |overview, cx| overview.toggle_file(thread, path, cx)),
+        Some(path) => {
+            let thread = view.cockpit.read(cx).thread_key(thread);
+            view.overview.update(cx, |overview, cx| overview.toggle_file(thread, path, cx))
+        }
         None => eprintln!("ferrite: refresh scene: no changed file {name} to unfold"),
     }
 }

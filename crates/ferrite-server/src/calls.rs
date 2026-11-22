@@ -193,6 +193,7 @@ impl Server {
             Method::WorktreeCreate(params) => self.create_worktree(params),
             Method::WorktreeRemove(params) => self.remove_worktree(&params.path),
             Method::MachineList(_) => self.machines(),
+            Method::IdentityGet(_) => Ok(json!({ "server_id": self.id })),
             Method::EventsSubscribe(params) => {
                 self.api
                     .subscribe(&self.engine, caller_id, id, params.threads);

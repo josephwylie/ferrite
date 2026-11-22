@@ -50,7 +50,7 @@ impl OverviewView {
     /// `INK_STRONG`. With `create_pr`, Claude's `Create PR` ends it.
     fn changes_summary(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         files: &[FileChange],
         create_pr: bool,
         cx: &mut Context<Self>,
@@ -60,7 +60,7 @@ impl OverviewView {
         let removed = files.iter().map(|file| file.removed).sum();
         let count = files.len();
         let noun = if count == 1 { "file" } else { "files" };
-        let section_key = SharedString::from(format!("panel-changes-section-{}", thread.get()));
+        let section_key = SharedString::from(format!("panel-changes-section-{}", thread.thread().get()));
         let all = self.files_unfolded(thread, files.iter().map(|file| file.path.as_str()));
         let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
         div()
@@ -122,7 +122,7 @@ impl OverviewView {
     /// fold (`fold_chevron`).
     fn panel_file_block(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         index: usize,
         file: &FileChange,
         cwd: Option<&std::path::Path>,
@@ -239,7 +239,7 @@ impl OverviewView {
 
 /// The `Create PR` button at the end of the summary line
 /// (`PANEL_LINE_BUTTON_H`): a press stops at it, so the line does not fold.
-fn create_pr_button(thread: ThreadId, cx: &mut Context<OverviewView>) -> gpui::Stateful<Div> {
+fn create_pr_button(thread: ThreadKey, cx: &mut Context<OverviewView>) -> gpui::Stateful<Div> {
     use ferrite_ui::theme::*;
     let id = gpui::ElementId::from("panel-create-pr");
     let key = ferrite_ui::pointer::hover_key(&id);
@@ -325,7 +325,7 @@ fn review_changes(cx: &mut Context<OverviewView>) -> gpui::Stateful<Div> {
 /// in its state ink when it needs the operator); a click opens it as a
 /// Surface of the Panel.
 fn pr_row(
-    thread: ThreadId,
+    thread: ThreadKey,
     pr: &PullRequest,
     cx: &mut Context<OverviewView>,
 ) -> gpui::Stateful<Div> {

@@ -69,7 +69,7 @@ fn a_drag_of_the_panels_edge_moves_its_left_side_to_the_release(cx: &mut TestApp
 fn a_tab_dragged_five_points_is_a_click_and_onto_another_moves(cx: &mut TestAppContext) {
     let (view, thread, cx) = solo("hands-drag-tab", 1900., cx);
     for id in [SurfaceId::Changes, SurfaceId::Background] {
-        view.update(cx, |view, cx| view.upsert_surface(thread, id, cx));
+        view.update(cx, |view, cx| view.upsert_surface(view.cockpit.read(cx).thread_key(thread), id, cx));
         tick(cx);
     }
     let edge = cx.debug_bounds("panel-edge").unwrap().center();

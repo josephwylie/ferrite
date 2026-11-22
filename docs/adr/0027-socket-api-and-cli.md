@@ -105,6 +105,7 @@ stay, as any agent driving others uses them:
 | `worktree.create` | `git worktree add -b branch` from `base` in the registry's layout, for a Thread to start in; `{worktree {path, branch}, project}` |
 | `worktree.remove` | by `path`: `worktree_not_found` unless a linked worktree is there; refuse `dirty_worktree_requires_force` unless `git status` is clean, then park its open Threads, `git worktree remove` (never forced), bind its Threads to the main checkout; the branch stays |
 | `machine.list` | the enabled saved machines, `{id, label, target}` by name |
+| `identity.get` | `{server_id}`: the Server's `ServerId` (ADR 0025), the same over every route to it, for a Peer to check (below) |
 
 `notification.show` gains `sound` (`request`, `done`, `none`) and
 `important`. A Thread's answer gains `focused` and `draft`, which the
@@ -229,8 +230,26 @@ non-delivery; never resend blindly; don't prompt your own Thread.
   `ferrited`, or a sign-in the operator must do from a window); a CLI
   cannot sign in. Thread ids are per Store, so `--current` is refused with
   `--machine`, and `FERRITE_SOCKET` is not consulted. A set
-  `FERRITE_THREAD_ID` is not refused: only `--current` reads it, and
-  refusing it would keep every agent inside a Thread from `--machine`. Paths are the
+  `FERRITE_THREAD_ID` is not refused, but it is never sent as the
+  request's `caller` there, where it would name whichever Thread has
+  that number; refusing it would keep every agent inside a Thread from
+  `--machine`. Paths are the
   machine's too: a `cwd` is never filled in from this computer's
   directory, so `thread start` needs `--cwd` with an absolute path on
   the machine.
+- A Server asks a saved machine's Server the same way, through
+  `peers::Peers` (T3 Code's `PeerMcpClient`): `machine::api_dial` over
+  the machine's saved transport, ssh or a paired link, one request for
+  one answer, as the Server's own caller with no `caller`. A Peer is named
+  by its `ServerId`, not its saved name or target, which the operator can
+  edit or point elsewhere: each call asks `identity.get` first and sends
+  its request only if the expected Server answers, as T3 gives a link's
+  token only to an address that answers as the linked environment. An
+  `agent.wait` is asked in calls of at most 50 s, each timed-out one asked
+  again until its whole timeout has passed, because a link's edge drops
+  a request idle for about 100 s (T3's `docs/internals/remote.md`). A
+  failure is typed for its caller to decide whether to ask again:
+  `Unreachable` (the request may still have run), `SignIn`, `NoFerrited`,
+  `Unsupported` (an older `ferrited`), `Final` (no saved machine is that
+  Server, it is turned off, or the Thread is gone there), `OtherServer`,
+  and `Refused`, the peer's own refusal. Peers retries nothing itself.

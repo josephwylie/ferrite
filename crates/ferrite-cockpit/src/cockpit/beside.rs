@@ -130,7 +130,7 @@ impl ReviewSlot {
 /// of each.
 #[derive(Default)]
 pub(crate) struct ReaderSlides {
-    slides: HashMap<ThreadId, Slide>,
+    slides: HashMap<ThreadKey, Slide>,
     /// The first frame has been tended: a review open by then arrives in
     /// place, with no entrance (nothing animates on first paint).
     tended: bool,
@@ -494,12 +494,13 @@ impl CockpitView {
 
     /// Whether Pane `index` has a reader slot on the board: a review open
     /// in it, or one sliding shut.
-    pub(super) fn has_reader(&self, index: usize) -> bool {
+    pub(super) fn has_reader(&self, index: usize, cx: &gpui::App) -> bool {
         self.panes.get(index).is_some_and(|pane| {
             pane.review.is_open()
-                || pane
-                    .thread()
-                    .is_some_and(|thread| self.reader_slides.slides.contains_key(&thread))
+                || pane.thread().is_some_and(|thread| {
+                    let owner = self.cockpit.read(cx).thread_key(thread);
+                    self.reader_slides.slides.contains_key(&owner)
+                })
         })
     }
 
@@ -511,14 +512,16 @@ impl CockpitView {
     pub(super) fn tend_reader_slides(&mut self, cx: &gpui::App) {
         let now = cx.background_executor().now();
         let reduced = ferrite_ui::motion::reduced_motion(cx);
+        let cockpit = self.cockpit.read(cx);
         let panes = &mut self.panes;
         let slides = &mut self.reader_slides;
         let first = !std::mem::replace(&mut slides.tended, true);
+        let owner_of = |pane: &CockpitPane| pane.thread().map(|thread| cockpit.thread_key(thread));
         slides
             .slides
-            .retain(|owner, _| panes.iter().any(|pane| pane.thread() == Some(*owner)));
+            .retain(|owner, _| panes.iter().any(|pane| owner_of(pane) == Some(*owner)));
         for pane in panes {
-            let Some(owner) = pane.thread() else {
+            let Some(owner) = owner_of(pane) else {
                 continue;
             };
             match (slides.slides.get_mut(&owner), pane.review.is_open()) {
@@ -560,12 +563,16 @@ impl CockpitView {
     /// closing one is gone — so the drag starts from the board at rest.
     pub(super) fn land_reader_slides(&mut self, cx: &gpui::App) {
         let now = cx.background_executor().now();
+        let cockpit = self.cockpit.read(cx);
         let panes = &mut self.panes;
         self.reader_slides.slides.retain(|owner, slide| {
             slide.reveal.land(now);
             slide.drawn = 1.0;
             if !slide.reveal.is_open() {
-                if let Some(pane) = panes.iter_mut().find(|pane| pane.thread() == Some(*owner)) {
+                let owns = |pane: &&mut CockpitPane| {
+                    pane.thread().map(|thread| cockpit.thread_key(thread)) == Some(*owner)
+                };
+                if let Some(pane) = panes.iter_mut().find(owns) {
                     pane.review.let_go();
                 }
             }
@@ -584,7 +591,7 @@ impl CockpitView {
             .slides
             .iter()
             .filter(|(_, slide)| slide.drawn < 1.0)
-            .map(|(owner, slide)| (reader_leaf(*owner), slide.drawn))
+            .map(|(owner, slide)| (reader_leaf(owner.thread()), slide.drawn))
             .collect();
         if !reveals.is_empty() {
             tree.reveal(&reveals, bounds, ferrite_ui::theme::BOARD_SEAM);
@@ -597,7 +604,7 @@ impl CockpitView {
     pub(super) fn rest_tree(&self, mut tree: Tree) -> Tree {
         for (owner, slide) in &self.reader_slides.slides {
             if !slide.reveal.is_open() {
-                tree.remove(reader_leaf(*owner));
+                tree.remove(reader_leaf(owner.thread()));
             }
         }
         tree
