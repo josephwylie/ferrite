@@ -7,9 +7,9 @@ date: 2026-11-22
 
 The operator wants one sidebar holding every connected machine's Threads,
 each usable in place, with a small icon on a Thread that lives on another
-machine: "Its simple fully merged, and a little icon." Today a window is
-on one machine at a time (ADR 0026, "One machine on screen"). Going to
-another rebuilds the whole view, because the window keeps per-Thread state
+machine: "Its simple fully merged, and a little icon." Until P6 a window
+was on one machine at a time (ADR 0026, "One machine on screen"). Going to
+another rebuilt the whole view, because the window keeps per-Thread state
 in dozens of places keyed by `ThreadId`, and a `ThreadId` is unique only
 within one machine's Store: Thread 3 here and Thread 3 on box are two
 Threads. A merged list needs a key that says which machine a Thread is on,
@@ -35,13 +35,11 @@ and a window that holds every machine at once.
   its machine (`ThreadKey::sibling`). No caller pairs an id with a machine
   it chose.
 - **A `MachineId` lasts one run and is never reissued.** It is minted from
-  one counter for the whole process as a Cockpit opens its link
-  (`MachineId::mint`), and `Cockpit::on_screen` says which one the window
-  is on. A machine that is removed takes its id with it, so a key held
-  from it names nothing rather than a Thread of the next machine. The
-  counter is per process, not per Cockpit, because until the window holds
-  every machine a move between machines builds a new Cockpit, and a
-  counter per Cockpit would give both machines the same id.
+  one counter for the whole process as a Cockpit holds a machine
+  (`MachineId::mint`). A machine that is let go takes its id with it, so a
+  key held from it names nothing rather than a Thread of the next machine.
+  The counter is per process, not per Cockpit, so a key carried to another
+  Cockpit in the same process names nothing there either.
 - **A Thread is saved as a `SavedThread`.** A `MachineId` means nothing in
   the next run, so what is saved is `SavedThread { machine: MachineKey,
   thread: ThreadId }`, which is `{"machine":"me@box","thread":3}` on disk.
@@ -51,10 +49,8 @@ and a window that holds every machine at once.
   before this change is a bare id, and it reads as this computer's: most
   were, and a wrong one is only a draft or a pin on another Thread, which
   the operator can clear. Pins (`Settings::pinned_threads`) are saved this
-  way, and a pin made while the window is on a machine names that machine.
-  So are the drafts, whose one `drafts.json` every machine's window
-  shares. A Delegate on a
-  linked machine will save its child the same way (ADR 0047, to come).
+  way, each naming its Thread's machine. So are the drafts, whose one
+  `drafts.json` holds every machine's. A Delegate on a linked machine will save its child the same way (ADR 0047, to come).
   Its design called the type `ThreadRef`; there is one name,
   `SavedThread`.
 - **A saved name is fixed when the machine attaches.** What saved files
@@ -63,9 +59,8 @@ and a window that holds every machine at once.
   holder keeps it. `Cockpit::saved(key)` writes a key as a `SavedThread`
   and `Cockpit::resolve(saved)` reads one back, as a Thread of the machine
   saved under that name or as nothing. A pin, a draft, a cited source and
-  a Panel are saved through them, never through the machine `Machines` has
-  selected when the file is written, so a write that races a move between
-  machines cannot save one machine's Thread under another's name.
+  a Panel are saved through them, so each is saved under its own machine's
+  name, and read back for every machine the window holds.
 - **The shape: one `Cockpit` holds each machine as a `HeldMachine`.** The
   window keeps its one `Cockpit`. Inside it, the private `HeldMachine`
   (`ferrite-core/src/cockpit/held.rs`) keeps what one link means: its
@@ -86,15 +81,15 @@ and a window that holds every machine at once.
   this computer's Server. The design named the holder `Server`. The
   Server process is the `ferrite-server` crate, so the holder is
   `HeldMachine`.
-- **What stays a bare id in the window.** A board's layout leaves
-  (`layout::Tree`, the view's `Leaf`) name readers as well as Threads,
-  and the view maps a leaf back to its Pane. The Inbox and alerts read
-  the Notices of the machine on screen by id and key a Notice's Thread
-  where it meets a Pane (`notifications().key`), since an alert from a
-  machine off screen names it by `Alert.away`. The view's Project state
-  (the nav filter, the Factory and draft bindings) stays a `ProjectId` of
-  the machine on screen and is keyed at each Cockpit call
-  (`registry().project_key`). All three fold into keys in P6.
+- **What stays a bare id in the window.** Only a board's layout leaves
+  (`layout::Tree`, the view's `Leaf`), which name readers as well as
+  Threads. A board holds one Pane and its reader, so the view maps a leaf
+  back to its slot through the board (`leaf_slot`), never through every
+  Pane, where two machines' Threads share ids. The Inbox and alerts read
+  each machine's Notices (`notifications(machine)`) and key a Notice's
+  Thread as they read it, an `Alert` names its `ThreadKey`, and the view's
+  Project state (the nav filter, the Factory and draft bindings) is a
+  `ProjectKey`.
 
 ## Rejected
 
@@ -146,7 +141,7 @@ Each lands green and proves something.
    a key's machine (`Cockpit::local(machine)`) or, where an act names no
    Thread, about the machine on screen. A core test proves two machines
    holding a Thread of the same id stay apart; a view test proves pins
-   stay each machine's through a trip to another machine and back. Most
+   stay each machine's (`each_machines_pin_is_its_own`). Most
    of the callers moved by a mechanical rewrite, kept out of the tree.
 6. **P6** `feat(cockpit): the window holds every machine at once`. The
    window swap goes (`CockpitWindow::go_to`, `GoToMachine`, landing,
@@ -161,6 +156,21 @@ Each lands green and proves something.
    `notifications()` per machine). So do the bare ids above and how
    remote Threads stream (which Threads each Server is told this window
    draws).
+
+   Done. Every enabled machine is held at start and whenever one is turned
+   on; one that is unreachable or wants a sign-in dims only its own rows
+   and Panes. A machine other than this computer streams a Thread whole
+   only while the window draws it, and its status, Decisions and Notices
+   arrive for every Thread; this computer keeps its Threads at work
+   mirrored as before (`HeldMachine::watched`). Whether a machine has been
+   heard is per machine, and a prune of saved per-Thread state (a Panel,
+   the Files' working sets) drops only a heard machine's Threads it no
+   longer has. Where an act names no Thread or Project, the machine is an
+   explicit argument or page state: a new Thread with no Project starts
+   on this computer (with it off, on the first machine held), and so does
+   an import not opened for a Pane; the Factory is about its Project's
+   machine; Settings names the machine whose defaults it edits; and
+   Connections and the Server page name theirs.
 7. **P7** `feat(nav): one list across machines, a small icon marks a
    Thread on another machine`. The machine headings go, rows merge into
    the sections, and a 14px server glyph sits at the meta line's right
