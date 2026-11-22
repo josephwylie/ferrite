@@ -66,7 +66,7 @@ fn silenceable_browser(name: &str) -> (Cockpit, ThreadKey, Arc<AtomicBool>) {
         core.pump(); matches!(core.server(core.first_machine()), Some(ServerState::Attached { .. }))
     });
     let thread = core.open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() }).unwrap();
-    super::machines::served(&mut core, thread);
+    super::machines::drawn_and_served(&mut core, thread);
     super::machines::browsed(&mut core, thread, Action::Open { url: "http://localhost:5173/start".into() });
     (core, thread, silent)
 }

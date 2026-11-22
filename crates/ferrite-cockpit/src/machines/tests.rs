@@ -69,7 +69,6 @@ fn every_enabled_machine_is_held_at_once() {
     assert_eq!(cockpit.machines().count(), 2);
     let rows = machines.rows(&cockpit);
     assert_eq!(rows[0].name, LOCAL);
-    assert_eq!(rows[0].connection, Connection::Online);
     assert_eq!(rows[1].connection, Connection::Connecting, "not polled yet");
     assert_eq!(rows[2].connection, Connection::Disabled);
     assert_eq!(

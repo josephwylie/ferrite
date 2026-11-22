@@ -2802,6 +2802,8 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
             },
         )
         .unwrap();
+    // A machine's Thread streams whole only while the window draws it.
+    window.draws_transcripts([thread]);
     let provider = harness
         .sessions
         .recv_timeout(PATIENCE)

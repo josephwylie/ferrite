@@ -350,9 +350,26 @@ fn window_of(
     machines: Machines,
     prefs: Preferences,
 ) -> (Entity<CockpitView>, &mut gpui::VisualTestContext) {
+    let prefs = listing(&machines, prefs);
     add_cockpit_window(cx, |_, cx| {
         CockpitView::new_with_machines(core, Provider::Claude, prefs, Some(machines), cx)
     })
+}
+
+/// `prefs`, its Settings saying what `machines` was made with: this
+/// computer on or off, and the machines, when they list none. A window
+/// follows Settings' machines at every change to Settings, as it was
+/// started from them.
+fn listing(machines: &Machines, mut prefs: Preferences) -> Preferences {
+    prefs.settings.local_environment_enabled = machines.held(0).is_some();
+    if prefs.settings.machines.is_empty() {
+        prefs.settings.machines = (1..)
+            .map_while(|index| machines.machine(index))
+            .filter(|machine| machines.unsaved() != Some(*machine))
+            .cloned()
+            .collect();
+    }
+    prefs
 }
 
 /// `window_of`, inside the `CockpitWindow` main opens it in: what a
@@ -363,6 +380,7 @@ fn machine_window(
     machines: Machines,
     prefs: Preferences,
 ) -> (Entity<gpui::component::Root>, &mut gpui::VisualTestContext) {
+    let prefs = listing(&machines, prefs);
     cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| {
             CockpitView::new_with_machines(core, Provider::Claude, prefs, Some(machines), cx)
@@ -945,20 +963,23 @@ fn prompt_stop_and_park_reach_the_threads_machine(cx: &mut TestAppContext) {
         "box's prompt stayed on box"
     );
     assert!(!agents.sent("hello here"), "and this computer's here");
+    tick(cx);
+    assert!(running(&view, theirs, cx), "off screen, box's turn still reads as running (F-A2)");
 
     view.update(cx, |view, cx| view.focus_thread(theirs, cx));
     tick(cx);
     cx.simulate_keystrokes("escape");
+    // box's agent hears the stop a beat after the window says it.
+    until(cx, |_| agents.interrupts.load(Ordering::SeqCst) == 1);
     until(cx, |cx| !running(&view, theirs, cx));
-    assert_eq!(agents.interrupts.load(Ordering::SeqCst), 1, "box's turn stopped");
+    assert_eq!(agents.interrupts.load(Ordering::SeqCst), 1, "box's turn stopped once");
     assert_eq!(*fake.interrupts.borrow(), 0, "this computer's runs on");
 
     cx.simulate_keystrokes("cmd-w");
-    until(cx, |cx| {
-        view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(theirs).is_none())
-    });
+    // box lists its parked Threads a beat after it closes one.
+    until(cx, |cx| view.read_with(cx, |view, _| view.facts.parked().contains(&theirs)));
     view.read_with(cx, |view, cx| {
-        assert!(view.facts.parked().contains(&theirs), "parked on box");
+        assert!(view.cockpit.read(cx).thread(theirs).is_none(), "parked on box");
         assert!(view.cockpit.read(cx).thread(mine).is_some(), "this computer's stays open");
         assert!(view.pane_for(mine).is_some());
     });
@@ -977,6 +998,7 @@ fn a_lost_machine_holds_only_its_own_panes(cx: &mut TestAppContext) {
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
     until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(theirs).is_some()));
+    view.update(cx, |view, cx| view.focus_thread(theirs, cx));
     tick(cx);
     let cover = format!("machine-lost-{}", on_box.get());
     assert!(debug_bounds(cx, cover.clone()).is_none(), "box is there");
@@ -1003,6 +1025,7 @@ fn a_lost_machine_holds_only_its_own_panes(cx: &mut TestAppContext) {
         cx.notify();
     });
     until(cx, |cx| view.read_with(cx, |view, cx| !view.machine_lost(on_box, cx)));
+    view.update(cx, |view, cx| view.focus_thread(theirs, cx));
     tick(cx);
     assert!(debug_bounds(cx, cover).is_none(), "back, box's Pane is live");
     view.read_with(cx, |view, _| assert!(view.pane_for(theirs).is_some()));
@@ -1187,6 +1210,15 @@ fn a_restart_restores_each_machines_pins_drafts_and_panes(cx: &mut TestAppContex
         view.save_drafts(cx);
     });
     let settings = view.read_with(cx, |view, _| view.prefs.settings.clone());
+    // The window lets box go, as closing it does, so the next run's
+    // bridge can take box's socket.
+    view.update(cx, |view, cx| {
+        view.prefs.settings.machines.clear();
+        view.machines_changed(cx);
+    });
+    cx.update(|window, _| window.remove_window());
+    drop(view);
+    cx.run_until_parked();
 
     // Started again: this computer's Store afresh, whose first Thread is
     // its Thread 1 too, and box's Server as it was.
@@ -1791,6 +1823,15 @@ pub(super) fn served(cockpit: &mut Cockpit, thread: ThreadKey) -> ferrite_core::
     cockpit.wait_for(ask).unwrap()
 }
 
+/// `thread` drawn, as a window draws it, and then its Browser attached:
+/// box's Thread streams, and so has a Browser, only while it is drawn
+/// (F-A2).
+pub(super) fn drawn_and_served(cockpit: &mut Cockpit, thread: ThreadKey) {
+    cockpit.draws_transcripts([thread]);
+    cockpit.pump();
+    served(cockpit, thread);
+}
+
 /// `action` on `thread`'s Browser, as the Server answers it.
 pub(super) fn browsed(
     cockpit: &mut Cockpit,
@@ -1819,7 +1860,7 @@ pub(super) fn browser_core(name: &str) -> (Cockpit, ThreadKey, ferrite_core::bro
         core.pump(); matches!(core.server(core.first_machine()), Some(ServerState::Attached { .. }))
     });
     let thread = core.open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() }).unwrap();
-    served(&mut core, thread);
+    drawn_and_served(&mut core, thread);
     let opened = browsed(&mut core, thread, Action::Open { url: "http://localhost:5173/start".into() });
     let document = opened.tabs[0].document();
     (core, thread, document)
@@ -1948,7 +1989,7 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
         core.pump(); matches!(core.server(core.first_machine()), Some(ServerState::Attached { .. }))
     });
     let thread = core.open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() }).unwrap();
-    served(&mut core, thread);
+    drawn_and_served(&mut core, thread);
     browsed(&mut core, thread, Action::Open { url: "http://localhost:5173/start".into() });
     bind_production_keys(cx);
     let engine = std::rc::Rc::new(FakeEngine::new());

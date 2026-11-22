@@ -387,9 +387,14 @@ fn open_second_page(
             .cockpit
             .update(cx, |cockpit, _| cockpit.open(cockpit.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() }))
             .unwrap();
+        view.focus_thread(second, cx);
+        second
+    });
+    // box's Thread has a Browser only once it is drawn (F-A2).
+    tick(cx);
+    view.update(cx, |view, cx| {
         view.browser_action(second, ferrite_core::browser::Action::Open { url: url.into() }, cx);
         view.focus_thread(first, cx);
-        second
     });
     tick(cx);
     second
