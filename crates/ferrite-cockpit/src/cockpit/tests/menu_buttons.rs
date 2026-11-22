@@ -155,7 +155,7 @@ fn the_view_titles_menu_button_owns_its_menu(cx: &mut TestAppContext) {
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     let door = Door {
         button: "view-title-chevron-shown".into(),
-        target: MenuTarget::Thread(keyed_in(&view, thread, cx)),
+        target: MenuTarget::Thread(thread),
         rows: labels(&[
             "Open in",
             "Pin",
@@ -210,17 +210,17 @@ fn a_nav_cards_snooze_button_owns_its_menu(cx: &mut TestAppContext) {
     tick(cx);
     let thread = threads[0];
     let door = Door {
-        button: format!("nav-card-snooze-{}", thread.get()),
-        target: MenuTarget::Snooze(keyed_in(&view, thread, cx)),
+        button: format!("nav-card-snooze-{}", thread.thread().get()),
+        target: MenuTarget::Snooze(thread),
         // The rows follow the clock: "Today at 6 pm" is offered only before then.
         rows: view.read_with(cx, |view, _| {
             view.snooze_rows().into_iter().map(|(item, _)| item.label.to_string()).collect()
         }),
         edge: Edge::Left,
     };
-    let card = format!("nav-thread-{}", thread.get());
+    let card = format!("nav-thread-{}", thread.thread().get());
     let show = move |cx: &mut gpui::VisualTestContext| {
-        if debug_bounds(cx, format!("nav-card-snooze-{}", thread.get())).is_none() {
+        if debug_bounds(cx, format!("nav-card-snooze-{}", thread.thread().get())).is_none() {
             let card = bounds(cx, card.clone());
             cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
             tick(cx);

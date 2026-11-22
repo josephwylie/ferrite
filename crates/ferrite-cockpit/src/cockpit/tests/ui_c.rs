@@ -13,7 +13,7 @@ fn the_solo_thread_is_named_by_the_view_head_and_meters_no_plan(cx: &mut TestApp
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     view.update(cx, |view, cx| {
-        view.facts.pr_answered(view.cockpit.read(cx).thread_key(thread), Some(pr_with_checks()));
+        view.facts.pr_answered(thread, Some(pr_with_checks()));
         cx.notify();
     });
     for (id, status) in [
@@ -34,7 +34,7 @@ fn the_solo_thread_is_named_by_the_view_head_and_meters_no_plan(cx: &mut TestApp
     tick(cx);
     assert!(cx.debug_bounds("pane-head-1").is_none(), "Solo has no head");
     assert!(cx.debug_bounds("titlebar-location").is_none());
-    let row: &'static str = format!("nav-thread-{}", thread.get()).leak();
+    let row: &'static str = format!("nav-thread-{}", thread.thread().get()).leak();
     assert!(cx.debug_bounds(row).is_some(), "the nav's row names it");
     let head = cx
         .debug_bounds("view-title")
@@ -165,7 +165,7 @@ fn the_next_digit_arms_the_own_answer_line(cx: &mut TestAppContext) {
             .serial;
         (thread, serial)
     });
-    let send = bounds(cx, format!("request-submit-{}-{serial}", thread.get()));
+    let send = bounds(cx, format!("request-submit-{}-{serial}", thread.thread().get()));
     cx.simulate_click(send.center(), gpui::Modifiers::none());
     tick(cx);
     let answered = fake.answered.borrow();
@@ -231,7 +231,7 @@ fn a_card_title_takes_its_line_and_the_branch_its_own(cx: &mut TestAppContext) {
                 .iter()
                 .map(|thread| {
                     (
-                        view.cockpit.read(cx).thread_key(*thread),
+                        *thread,
                         Some(ferrite_core::workspace::BranchStatus {
                             branch: Some(long_branch.into()),
                             ..Default::default()
@@ -249,7 +249,7 @@ fn a_card_title_takes_its_line_and_the_branch_its_own(cx: &mut TestAppContext) {
         "the nav at its default width"
     );
     for thread in &threads {
-        let id = thread.get();
+        let id = thread.thread().get();
         let title = bounds(cx, format!("nav-title-{id}"));
         let card = bounds(cx, format!("nav-thread-{id}"));
         assert_eq!(card.size.height, px(NAV_CARD_H), "three lines");
@@ -303,7 +303,7 @@ fn a_failed_threads_dot_is_blocked_until_the_failure_is_seen(cx: &mut TestAppCon
     tick(cx);
     view.read_with(cx, |view, cx| {
         let thread = view.cockpit.read(cx).threads()[0];
-        let row = view.thread_row(keyed(view, thread, cx), cx);
+        let row = view.thread_row(thread, cx);
         assert_eq!(
             row.tail,
             nav::NavTail::Failed,
@@ -324,8 +324,8 @@ fn a_failed_threads_dot_is_blocked_until_the_failure_is_seen(cx: &mut TestAppCon
     cx.run_until_parked();
     view.read_with(cx, |view, cx| {
         let thread = view.cockpit.read(cx).threads()[0];
-        assert!(!view.cockpit.read(cx).notifications().attention(thread), "seen");
-        let row = view.thread_row(keyed(view, thread, cx), cx);
+        assert!(!view.cockpit.read(cx).notifications().attention(thread.thread()), "seen");
+        let row = view.thread_row(thread, cx);
         assert_ne!(row.tail, nav::NavTail::Failed, "seen, it says nothing");
         assert_eq!(row.status, nav::RowStatus::Idle, "and wears no dot");
         assert_eq!(

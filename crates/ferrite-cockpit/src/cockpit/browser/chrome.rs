@@ -75,13 +75,13 @@ impl BrowserChromeView {
     }
 
     /// Every Thread `keep` refuses takes its chrome with it.
-    pub(in crate::cockpit) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
-        self.threads.retain(|key, _| keep(key.thread()));
+    pub(in crate::cockpit) fn retain_threads(&mut self, keep: impl Fn(ThreadKey) -> bool) {
+        self.threads.retain(|key, _| keep(*key));
     }
 
     #[cfg(test)]
-    pub(in crate::cockpit) fn held_for_test(&self, thread: ThreadId) -> usize {
-        self.threads.keys().filter(|key| key.thread() == thread).count()
+    pub(in crate::cockpit) fn held_for_test(&self, thread: ThreadKey) -> usize {
+        self.threads.keys().filter(|key| **key == thread).count()
     }
 
     #[cfg(test)]

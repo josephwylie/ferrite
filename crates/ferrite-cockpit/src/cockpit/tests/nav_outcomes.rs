@@ -3,7 +3,7 @@
 
 use super::*;
 
-fn sorted_threads(core: &Cockpit) -> Vec<ThreadId> {
+fn sorted_threads(core: &Cockpit) -> Vec<ThreadKey> {
     let mut threads = core.threads();
     threads.sort();
     threads
@@ -25,7 +25,7 @@ fn a_bulk_park_of_loose_threads_names_the_thread_that_failed(cx: &mut TestAppCon
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     tick(cx);
-    let both = [keyed_in(&view, threads[0], cx), keyed_in(&view, threads[2], cx)];
+    let both = [threads[0], threads[2]];
     view.update(cx, |view, cx| {
         view.nav_view.update(cx, |nav, _| nav.picked = both.to_vec());
         view.park_listed(&both, cx);
@@ -33,7 +33,7 @@ fn a_bulk_park_of_loose_threads_names_the_thread_that_failed(cx: &mut TestAppCon
     tick(cx);
 
     let said = notice(&view, cx).expect("the failure is reported");
-    let name = view.read_with(cx, |view, cx| view.facts.name(view.cockpit.read(cx).thread_key(threads[0])).to_string());
+    let name = view.read_with(cx, |view, _| view.facts.name(threads[0]).to_string());
     assert!(said.starts_with(&format!("Couldn't park {name}: ")), "{said}");
     assert_eq!(said.matches(';').count(), 0, "one failure, one entry: {said}");
     assert!(cx.debug_bounds("nav-notice").is_some(), "drawn in the list");
@@ -44,9 +44,9 @@ fn a_bulk_park_of_loose_threads_names_the_thread_that_failed(cx: &mut TestAppCon
 
     cx.simulate_keystrokes("cmd-shift-e cmd-z");
     tick(cx);
-    view.read_with(cx, |view, cx| {
+    view.read_with(cx, |view, _| {
         assert!(
-            !view.facts.parked().contains(&view.cockpit.read(cx).thread_key(threads[2])),
+            !view.facts.parked().contains(&threads[2]),
             "Undo revived the one that parked"
         );
     });
@@ -62,7 +62,7 @@ fn a_failed_reopen_is_reported(cx: &mut TestAppContext) {
     std::fs::write(
         std::env::temp_dir()
             .join(format!("ferrite-view-{}-nav-reopen-fails", std::process::id()))
-            .join(threads[0].to_string())
+            .join(threads[0].thread().to_string())
             .join("log.jsonl"),
         "not a log\n",
     )
@@ -73,15 +73,15 @@ fn a_failed_reopen_is_reported(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.set_shelf_open(nav::Shelf::Parked, true, cx));
     tick(cx);
 
-    let row_id: &'static str = format!("nav-thread-{}", threads[0].get()).leak();
+    let row_id: &'static str = format!("nav-thread-{}", threads[0].thread().get()).leak();
     let row = cx.debug_bounds(row_id).expect("the parked row");
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     tick(cx);
     let said = notice(&view, cx).expect("the failure is reported");
     assert!(said.starts_with("Couldn't reopen "), "{said}");
     assert!(cx.debug_bounds("nav-notice").is_some(), "drawn in the list");
-    view.read_with(cx, |view, cx| {
-        assert!(view.facts.parked().contains(&view.cockpit.read(cx).thread_key(threads[0])), "still parked");
+    view.read_with(cx, |view, _| {
+        assert!(view.facts.parked().contains(&threads[0]), "still parked");
     });
 }
 
@@ -97,7 +97,7 @@ fn a_refused_park_reaches_the_log(cx: &mut TestAppContext) {
     ferrite_core::diagnostics::open(&dir);
     tick(cx);
 
-    view.update(cx, |view, cx| view.park_listed(&[keyed(view, threads[0], cx)], cx));
+    view.update(cx, |view, cx| view.park_listed(&[threads[0]], cx));
     tick(cx);
     let said = notice(&view, cx).expect("the failure is reported");
     view.update(cx, |view, cx| view.copy_diagnostics(cx));
@@ -124,9 +124,9 @@ fn opening_a_thread_outside_the_scope_widens_it(cx: &mut TestAppContext) {
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
-    view.update(cx, |view, cx| view.choose_nav_filter(Some(elsewhere), cx));
+    view.update(cx, |view, cx| view.choose_nav_filter(Some(elsewhere.project()), cx));
     tick(cx);
-    let row_id: &'static str = format!("nav-thread-{}", threads[1].get()).leak();
+    let row_id: &'static str = format!("nav-thread-{}", threads[1].thread().get()).leak();
     assert!(cx.debug_bounds(row_id).is_none(), "scoped out of the list");
 
     cx.simulate_keystrokes("cmd-o");

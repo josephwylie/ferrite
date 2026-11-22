@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use ferrite_core::activity::{ActivityView, AgentStatus};
 use ferrite_core::cockpit::Admission;
 use ferrite_core::transcript::BlockId;
-use ferrite_core::ThreadId;
+use ferrite_core::ThreadKey;
 use ferrite_pane::pane::{AgentClock, AgentFace, AgentFaces, AgentRun};
 use ferrite_pane::transcript::{PromptAction, ScrollTarget, TranscriptTail};
 use gpui::{App, ClipboardItem, Context, IntoElement, SharedString, Window};
@@ -202,13 +202,13 @@ impl CockpitView {
             render: std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
                 let owner = owner.clone();
                 let retry = (!closed).then(|| {
-                    ferrite_pane::pane::retry_button(thread.get(), cx)
+                    ferrite_pane::pane::retry_button(thread.thread().get(), cx)
                         .on_click(move |_, _, cx| {
                             let _ = owner.update(cx, |view, cx| view.retry_failed_turn(thread, cx));
                         })
                         .into_any_element()
                 });
-                ferrite_pane::pane::failure_strip(thread.get(), words.clone(), retry)
+                ferrite_pane::pane::failure_strip(thread.thread().get(), words.clone(), retry)
                     .into_any_element()
             }),
         })
@@ -216,7 +216,7 @@ impl CockpitView {
 
     /// `Retry` on the failure strip: send the failed turn's prompt again,
     /// attachments and all, through the one resend path. Whether it went.
-    pub(crate) fn retry_failed_turn(&mut self, thread: ThreadId, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn retry_failed_turn(&mut self, thread: ThreadKey, cx: &mut Context<Self>) -> bool {
         let Some(index) = self.pane_for(thread) else {
             return false;
         };
@@ -339,7 +339,7 @@ impl CockpitView {
     /// too when `files`); a refusal is said in its Pane.
     pub(super) fn cut_at_prompt(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         block: BlockId,
         action: PromptAction,
         files: bool,
@@ -374,14 +374,14 @@ impl CockpitView {
     /// the agent answers (`Engine::fork`). A refusal is said in `thread`.
     pub(super) fn fork_thread(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         before: Option<String>,
         draft: Option<String>,
         cx: &mut Context<Self>,
     ) {
         match self.cockpit.update(cx, |cockpit, _| cockpit.fork(thread, before.as_deref(), draft)) {
             Ok(()) => {
-                let owner = self.cockpit.read(cx).thread_key(thread);
+                let owner = thread;
                 self.side_chat.update(cx, |chat, _| chat.forget_fork(owner))
             }
             Err(why) => self.cockpit.update(cx, |cockpit, _| cockpit.say(thread, format!("fork refused: {why}"))),
@@ -392,7 +392,7 @@ impl CockpitView {
     /// An answer's Fork: the conversation through the answer ending at
     /// `after` — before the next prompt, or all of it when the answer is
     /// the latest.
-    pub(super) fn fork_after(&mut self, thread: ThreadId, after: BlockId, cx: &mut Context<Self>) {
+    pub(super) fn fork_after(&mut self, thread: ThreadKey, after: BlockId, cx: &mut Context<Self>) {
         let next = self.cockpit.read(cx).thread(thread).and_then(|open| {
             open.transcript()
                 .blocks()
@@ -405,7 +405,7 @@ impl CockpitView {
     }
 
     /// `thread`'s latest prompt a rewind can name.
-    pub(super) fn last_prompt(&self, thread: ThreadId, cx: &App) -> Option<BlockId> {
+    pub(super) fn last_prompt(&self, thread: ThreadKey, cx: &App) -> Option<BlockId> {
         self.cockpit
             .read(cx)
             .thread(thread)?
@@ -422,7 +422,7 @@ impl CockpitView {
     pub(super) fn send_again(
         &mut self,
         index: usize,
-        thread: ThreadId,
+        thread: ThreadKey,
         prompt: String,
         cx: &mut Context<Self>,
     ) -> Result<Handoff, String> {

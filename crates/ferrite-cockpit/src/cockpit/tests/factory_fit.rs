@@ -97,11 +97,11 @@ fn every_column(project: ProjectId) -> Board {
 #[gpui::test]
 fn the_board_fits_and_brings_an_open_tasks_column_into_view(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("fit-board", 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
-    core.fixture_factory(every_column(project));
+    let project = core.project_of(core.threads()[0]).unwrap();
+    core.fixture_factory(every_column(project.project()));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
-    view.update(cx, |view, cx| view.open_factory(project, cx));
+    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
     tick(cx);
     let board = bounds(cx, "factory-board".into());
     assert!(board.left() > px(150.), "the sidebar is open: {board:?}");
@@ -180,17 +180,17 @@ fn whole_columns(cx: &mut gpui::VisualTestContext, open: &str) {
 #[gpui::test]
 fn an_open_task_that_moves_column_stays_in_view(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("fit-moves", 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
-    core.fixture_factory(every_column(project));
+    let project = core.project_of(core.threads()[0]).unwrap();
+    core.fixture_factory(every_column(project.project()));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     view.update(cx, |view, cx| {
-        view.open_factory(project, cx);
+        view.open_factory(project.project(), cx);
         view.open_task("t-3", cx);
     });
     tick(cx);
     tick(cx);
-    let mut board = every_column(project);
+    let mut board = every_column(project.project());
     board.tasks[2].status = Status::Completed;
     view.update(cx, |view, cx| {
         view.cockpit.update(cx, |cockpit, _| cockpit.fixture_factory(board));
@@ -229,7 +229,7 @@ fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext)
         view.cockpit
             .read(cx)
             .registry()
-            .project(empty)
+            .project(empty.project())
             .unwrap()
             .title
             .clone()
@@ -261,7 +261,7 @@ fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext)
     view.read_with(cx, |view, _| {
         assert_eq!(
             view.factory_project(),
-            Some(empty)
+            Some(empty).map(|key| key.project())
         );
     });
     assert!(shows(cx, "factory-board"));
@@ -272,13 +272,13 @@ fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext)
 #[gpui::test]
 fn an_answer_sent_lets_the_keyboard_go(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("fit-answer-focus", 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     core.fixture_record_tasks();
     core.fixture_factory(Board {
         workflows: Vec::new(),
         tasks: vec![task(
             "t-1",
-            project,
+            project.project(),
             Status::NeedsHuman,
             serde_json::json!({
                 "question": {"id": 3, "text": "Which fruit?", "asker": "Worker", "worker": 40},
@@ -331,7 +331,7 @@ fn an_answer_sent_lets_the_keyboard_go(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_worker_tab_takes_the_keyboard_from_the_overviews_field(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("fit-worker-focus", 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     let worker = core
         .fixture_open_owned(
             Provider::Claude,
@@ -343,11 +343,11 @@ fn the_worker_tab_takes_the_keyboard_from_the_overviews_field(cx: &mut TestAppCo
         workflows: Vec::new(),
         tasks: vec![task(
             "t-1",
-            project,
+            project.project(),
             Status::NeedsHuman,
             serde_json::json!({
-                "worker": worker,
-                "question": {"id": 3, "text": "Which fruit?", "asker": "Worker", "worker": worker},
+                "worker": worker.thread(),
+                "question": {"id": 3, "text": "Which fruit?", "asker": "Worker", "worker": worker.thread()},
                 "asked": 3,
                 "reason": "Which fruit?",
             }),
@@ -384,18 +384,18 @@ fn the_coordinators_pane_draws_without_a_click(cx: &mut TestAppContext) {
     let first = core
         .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
-    let project = core.project_id(first).unwrap();
+    let project = core.project_of(first).unwrap();
     core.fixture_live_factory();
     let coordinator = core
         .fixture_open_owned(
             Provider::Claude,
             WorkspaceChoice::Main { checkout: here() },
-            ferrite_core::ThreadOwner::Factory(project),
+            ferrite_core::ThreadOwner::Factory(project.project()),
         )
         .unwrap();
     core.fixture_factory_command(Command::CoordinatorStarted {
-        project,
-        thread: coordinator,
+        project: project.project(),
+        thread: coordinator.thread(),
     });
     // The operator's own Thread is the one on screen from the first frame.
     let mine = core
@@ -406,7 +406,7 @@ fn the_coordinators_pane_draws_without_a_click(cx: &mut TestAppContext) {
     wide(cx);
     view.update(cx, |view, cx| {
         view.focus_thread(mine, cx);
-        view.open_factory(project, cx);
+        view.open_factory(project.project(), cx);
         // The surface already shows when the Coordinator's Pane arrives:
         // nothing moved the roster to it.
         view.update_factory(cx, |factory, _| factory.surface = Surface::Coordinator);
@@ -423,7 +423,7 @@ fn the_coordinators_pane_draws_without_a_click(cx: &mut TestAppContext) {
     });
     assert!(shows(cx, "coordinator-pane"));
     assert!(
-        shows(cx, &format!("pane-body-{}", coordinator.get())),
+        shows(cx, &format!("pane-body-{}", coordinator.thread().get())),
         "its transcript draws without a click"
     );
 }
@@ -433,8 +433,8 @@ fn the_coordinators_pane_draws_without_a_click(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_tasks_toast_is_not_raised_over_its_own_panel(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("fit-toast", 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
-    let mut board = every_column(project);
+    let project = core.project_of(core.threads()[0]).unwrap();
+    let mut board = every_column(project.project());
     board
         .tasks
         .retain(|task| task.id == "t-3" || task.id == "t-4");
@@ -452,7 +452,7 @@ fn a_tasks_toast_is_not_raised_over_its_own_panel(cx: &mut TestAppContext) {
     tick(cx);
     let before = toasts(cx);
     let alert = |task: &str, status: Status| ferrite_core::protocol::ServerMessage::TaskAlert {
-        project,
+        project: project.project(),
         task: task.into(),
         status,
         title: format!("Task {task}"),
@@ -510,12 +510,12 @@ fn a_tasks_toast_is_not_raised_over_its_own_panel(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_title_bar_names_the_factory_and_its_open_task(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("fit-title", 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
-    core.fixture_factory(every_column(project));
+    let project = core.project_of(core.threads()[0]).unwrap();
+    core.fixture_factory(every_column(project.project()));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     assert!(shows(cx, "view-title"), "a Thread's title before");
-    view.update(cx, |view, cx| view.open_factory(project, cx));
+    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
     tick(cx);
     assert!(!shows(cx, "view-title"), "not the Thread behind the board");
     assert!(!shows(cx, "title-tools"), "nor its Panel's toggle");
@@ -532,10 +532,10 @@ fn the_title_bar_names_the_factory_and_its_open_task(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_task("t-6", cx));
     tick(cx);
     assert!(shows(cx, "view-head-task"), "the Completed Task");
-    let mut cleared = every_column(project);
+    let mut cleared = every_column(project.project());
     cleared.tasks[5] = task(
         "t-6",
-        project,
+        project.project(),
         Status::Completed,
         serde_json::json!({"result": "Created hello.txt", "archived_ms": 2_000}),
     );
@@ -557,13 +557,13 @@ fn the_title_bar_names_the_factory_and_its_open_task(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_new_task_sheet_closes_with_its_menu_and_keeps_its_words(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("fit-sheet", 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
-    core.fixture_factory(every_column(project));
+    let project = core.project_of(core.threads()[0]).unwrap();
+    core.fixture_factory(every_column(project.project()));
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     view.update(cx, |view, cx| {
-        view.open_factory(project, cx);
+        view.open_factory(project.project(), cx);
         view.open_new_task(cx);
     });
     tick(cx);
@@ -598,7 +598,7 @@ fn the_new_task_sheet_closes_with_its_menu_and_keeps_its_words(cx: &mut TestAppC
 #[gpui::test]
 fn focusing_a_worker_by_id_brings_its_panel_forward_from_workflows(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("fit-focus-worker", 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     let worker = core
         .fixture_open_owned(
             Provider::Claude,
@@ -610,23 +610,23 @@ fn focusing_a_worker_by_id_brings_its_panel_forward_from_workflows(cx: &mut Test
         workflows: Vec::new(),
         tasks: vec![task(
             "t-2",
-            project,
+            project.project(),
             Status::Working,
-            serde_json::json!({"worker": worker}),
+            serde_json::json!({"worker": worker.thread()}),
         )],
         ..Default::default()
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     view.update(cx, |view, cx| {
-        view.open_factory(project, cx);
+        view.open_factory(project.project(), cx);
         view.factory_surface(Surface::Workflows, cx);
     });
     tick(cx);
     view.update(cx, |view, cx| {
         view.cockpit
             .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
-                thread: worker,
+                thread: worker.thread(),
                 fork_of: None,
             }));
         cx.notify();
@@ -658,13 +658,13 @@ fn template_window<'a>(
         .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, thread);
-    let project = core.project_id(thread).unwrap();
+    let project = core.project_of(thread).unwrap();
     core.fixture_live_factory();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     view.update(cx, |view, cx| {
-        view.open_factory(project, cx);
+        view.open_factory(project.project(), cx);
         view.factory_surface(Surface::Workflows, cx);
         view.create_workflow(Template::IssueToReviewedPr, cx);
     });
@@ -838,12 +838,12 @@ fn the_coordinators_settings_fit_the_window(cx: &mut TestAppContext) {
         .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, mine);
-    let project = core.project_id(mine).unwrap();
+    let project = core.project_of(mine).unwrap();
     core.fixture_live_factory();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     view.update(cx, |view, cx| {
-        view.open_factory(project, cx);
+        view.open_factory(project.project(), cx);
         view.factory_surface(Surface::Coordinator, cx);
     });
     tick(cx);
@@ -943,11 +943,11 @@ fn a_long_model_menu_opens_down_and_fits(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_board_tab_leaves_the_archive(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("fit-archive-tab", 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
-    core.fixture_factory(every_column(project));
+    let project = core.project_of(core.threads()[0]).unwrap();
+    core.fixture_factory(every_column(project.project()));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
-    view.update(cx, |view, cx| view.open_factory(project, cx));
+    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
     tick(cx);
     click(cx, "factory-archive");
     assert!(shows(cx, "factory-archive-list"));

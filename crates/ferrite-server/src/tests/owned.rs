@@ -35,9 +35,10 @@ fn a_thread_started_for_a_task_names_its_owner() {
     );
 
     let mut window = cockpit(&harness);
-    pump_until(&mut window, |window| window.thread(thread).is_some());
+    let key = here(&window, thread);
+    pump_until(&mut window, |window| window.thread(key).is_some());
     assert_eq!(
-        window.owner(thread),
+        window.owner(key),
         Some(ferrite_core::ThreadOwner::Task("7".into()))
     );
 }
@@ -116,14 +117,16 @@ fn owned_threads_stay_owned_and_unlisted_across_a_restart_and_a_revive() {
 
     // Both ask; only the operator's own is the operator's to answer.
     let mut window = cockpit(&harness);
+    let [worker_key, coordinator_key, mine_key] =
+        [worker, coordinator, mine].map(|thread| here(&window, thread));
     worker_agent.send(decision()).unwrap();
     my_agent.send(decision()).unwrap();
     pump_until(&mut window, |window| window.blocked().len() == 2);
-    assert_eq!(window.needs_you(), vec![mine]);
-    assert!(!window.operators(worker) && !window.operators(coordinator));
-    assert!(window.operators(mine));
+    assert_eq!(window.needs_you(), vec![mine_key]);
+    assert!(!window.operators(worker_key) && !window.operators(coordinator_key));
+    assert!(window.operators(mine_key));
     assert_eq!(
-        window.owner(coordinator).as_ref().map(ferrite_core::api::owner),
+        window.owner(coordinator_key).as_ref().map(ferrite_core::api::owner),
         Some(ferrite_core::api::schema::Owner::Factory(
             project.as_str().unwrap().into()
         ))
@@ -136,9 +139,9 @@ fn owned_threads_stay_owned_and_unlisted_across_a_restart_and_a_revive() {
         "thread.close",
         serde_json::json!({ "thread": coordinator }),
     );
-    pump_until(&mut window, |window| window.thread(coordinator).is_none());
-    pump_until(&mut window, |window| window.owner(coordinator).is_some());
-    assert!(!window.parked().unwrap().contains(&coordinator));
+    pump_until(&mut window, |window| window.thread(coordinator_key).is_none());
+    pump_until(&mut window, |window| window.owner(coordinator_key).is_some());
+    assert!(!window.parked().unwrap().contains(&coordinator_key));
 
     let mut control = attach(&harness.address);
     control.command(219, Op::Stop { when: When::Now });
@@ -147,16 +150,19 @@ fn owned_threads_stay_owned_and_unlisted_across_a_restart_and_a_revive() {
     gone(&harness.api);
     let successor = serve_in(harness.dir.clone(), None);
     let mut window = cockpit(&successor);
+    // The successor's window holds this computer under a new id.
+    let [worker_key, coordinator_key, mine_key] =
+        [worker, coordinator, mine].map(|thread| here(&window, thread));
     pump_until(&mut window, |window| {
-        window.thread(worker).is_some() && window.thread(mine).is_some()
+        window.thread(worker_key).is_some() && window.thread(mine_key).is_some()
     });
-    pump_until(&mut window, |window| window.owner(coordinator).is_some());
+    pump_until(&mut window, |window| window.owner(coordinator_key).is_some());
     assert_eq!(
-        window.owner(worker),
+        window.owner(worker_key),
         Some(ferrite_core::ThreadOwner::Task("t-1".into()))
     );
-    assert!(window.operators(mine));
-    assert!(!window.parked().unwrap().contains(&coordinator));
+    assert!(window.operators(mine_key));
+    assert!(!window.parked().unwrap().contains(&coordinator_key));
 
     let mut caller = call(&successor);
     let revived = caller.answer(
@@ -176,8 +182,8 @@ fn owned_threads_stay_owned_and_unlisted_across_a_restart_and_a_revive() {
             Some(None)
         )
     );
-    pump_until(&mut window, |window| window.thread(coordinator).is_some());
-    assert!(!window.operators(coordinator));
+    pump_until(&mut window, |window| window.thread(coordinator_key).is_some());
+    assert!(!window.operators(coordinator_key));
 }
 
 /// An owner names a Project the Server has: one it has not is refused,

@@ -3,7 +3,7 @@
 
 use super::*;
 
-fn sorted_threads(core: &Cockpit) -> Vec<ThreadId> {
+fn sorted_threads(core: &Cockpit) -> Vec<ThreadKey> {
     let mut threads = core.threads();
     threads.sort();
     threads
@@ -25,7 +25,7 @@ fn the_nav_scrollbar_sits_beside_the_rows(cx: &mut TestAppContext) {
     let strip = bar.right() - px(NAV_SCROLLBAR_GUTTER);
     for thread in threads {
         let row = cx
-            .debug_bounds(format!("nav-thread-{}", thread.get()).leak())
+            .debug_bounds(format!("nav-thread-{}", thread.thread().get()).leak())
             .expect("a row");
         assert!(row.right() <= strip, "{row:?} ends before the strip");
     }
@@ -97,7 +97,7 @@ fn the_edge_tab_folds_and_opens_the_nav(cx: &mut TestAppContext) {
 #[gpui::test]
 fn resizing_the_sidebar_persists_and_resets_without_losing_collapse(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("nav-resize", 1);
-    let title: &'static str = format!("nav-title-{}", core.threads()[0].get()).leak();
+    let title: &'static str = format!("nav-title-{}", core.threads()[0].thread().get()).leak();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let dir = scratch("nav-resize-settings");
     std::fs::create_dir_all(&dir).unwrap();

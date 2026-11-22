@@ -170,15 +170,15 @@ impl Browsers {
     /// Every Thread `keep` refuses takes its browser with it: its pages
     /// close here, as when the Server detaches; the Server deleted its side
     /// with the Thread.
-    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
-        self.threads.retain(|key, _| keep(key.thread()));
-        self.reveal.retain(|key, _| keep(key.thread()));
-        self.sent.retain(|key, _| keep(key.thread()));
+    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadKey) -> bool) {
+        self.threads.retain(|key, _| keep(*key));
+        self.reveal.retain(|key, _| keep(*key));
+        self.sent.retain(|key, _| keep(*key));
     }
 
     #[cfg(test)]
-    pub(super) fn held_for_test(&self, thread: ThreadId) -> usize {
-        let this = |key: &&ThreadKey| key.thread() == thread;
+    pub(super) fn held_for_test(&self, thread: ThreadKey) -> usize {
+        let this = |key: &&ThreadKey| **key == thread;
         self.threads.keys().filter(this).count()
             + self.reveal.keys().filter(this).count()
             + self.sent.keys().filter(this).count()
@@ -295,7 +295,7 @@ impl CockpitView {
             attaching.then.push(then);
             return;
         }
-        let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread.thread()));
+        let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread));
         browser.attaching = Some(Attaching {
             ask,
             then: vec![then],
@@ -305,7 +305,7 @@ impl CockpitView {
     pub(super) fn open_browser(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         self.ensure_browser(thread, cx);
         self.attach_browser(thread, Then::SelectActive, cx);
-        if let Some(index) = self.pane_for(thread.thread()) {
+        if let Some(index) = self.pane_for(thread) {
             self.panes[index].preview.show_browser();
         }
         self.upsert_surface(thread, super::surfaces::SurfaceId::Browser, cx);
@@ -374,10 +374,10 @@ impl CockpitView {
                 (settled, self.browsers.threads[&thread].owner)
             {
                 self.cockpit
-                    .update(cx, |cockpit, _| cockpit.browser_settled(thread.thread(), owner, document, revision));
+                    .update(cx, |cockpit, _| cockpit.browser_settled(thread, owner, document, revision));
             }
         }
-        let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser(thread.thread(), action));
+        let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser(thread, action));
         // Its echo arrives before its answer, so it is stamped as it goes.
         if let Some(seen) = echoed {
             self.browsers.sent.entry(thread).or_default().push_back(seen);
@@ -602,7 +602,7 @@ impl CockpitView {
                 };
                 if let Some((document, revision)) = settled {
                     self.cockpit
-                        .update(cx, |cockpit, _| cockpit.browser_settled(thread.thread(), owner, document, revision));
+                        .update(cx, |cockpit, _| cockpit.browser_settled(thread, owner, document, revision));
                 }
             }
             Waiting::Reclaim {
@@ -649,7 +649,7 @@ impl CockpitView {
                 };
                 let ask = self
                     .cockpit
-                    .update(cx, |cockpit, _| cockpit.browser_reclaimed(thread.thread(), owner, lease, released));
+                    .update(cx, |cockpit, _| cockpit.browser_reclaimed(thread, owner, lease, released));
                 self.browsers
                     .threads
                     .get_mut(&thread)
@@ -709,7 +709,7 @@ impl CockpitView {
             .panes
             .iter()
             .flat_map(|pane| {
-                let thread = pane.thread().map(|thread| self.cockpit.read(cx).thread_key(thread));
+                let thread = pane.thread();
                 pane.preview
                     .take_browser_urls()
                     .into_iter()
@@ -725,7 +725,7 @@ impl CockpitView {
         self.answer_browser_asks(cx);
         self.drain_browser_events(cx);
         for (thread, seen) in std::mem::take(&mut self.browsers.reveal) {
-            match self.pane_for(thread.thread()) {
+            match self.pane_for(thread) {
                 Some(index) => {
                     if self.reveal_surface(thread, super::surfaces::SurfaceId::Browser, seen) {
                         self.panes[index].preview.show_browser();
@@ -748,18 +748,17 @@ impl CockpitView {
     /// for, and each Browser's tabs and owner as they now stand, with the
     /// navigation it asked of a page.
     fn apply_browser_messages(&mut self, cx: &mut Context<Self>) {
-        for message in self.cockpit.update(cx, |cockpit, _| cockpit.take_browser_messages()) {
+        for (thread, message) in self.cockpit.update(cx, |cockpit, _| cockpit.take_browser_messages()) {
             let message = match message {
                 ferrite_core::protocol::ServerMessage::BrowserRequest {
                     request,
-                    thread,
+                    thread: _,
                     owner,
                     document,
                     revision,
                     control,
                     dispatch,
                 } => {
-                    let thread = self.cockpit.read(cx).thread_key(thread);
                     self.browser_controls.push(ControlRequest {
                         request,
                         thread,
@@ -774,7 +773,7 @@ impl CockpitView {
                 other => other,
             };
             let ferrite_core::protocol::ServerMessage::Browser {
-                thread,
+                thread: _,
                 owner,
                 state,
                 action,
@@ -783,7 +782,6 @@ impl CockpitView {
             else {
                 continue;
             };
-            let thread = self.cockpit.read(cx).thread_key(thread);
             self.ensure_browser(thread, cx);
             if matches!(action, Some(Action::Open { .. } | Action::Select { .. })) {
                 let seen = self
@@ -898,7 +896,7 @@ impl CockpitView {
                 }
                 Event::SettledInput(thread, owner, document, revision) => {
                     self.cockpit
-                        .update(cx, |cockpit, _| cockpit.browser_settled(thread.thread(), owner, document, revision));
+                        .update(cx, |cockpit, _| cockpit.browser_settled(thread, owner, document, revision));
                 }
                 Event::Input(thread, owner, document, generation, sequence, input) => {
                     let Some(browser) = self
@@ -919,13 +917,13 @@ impl CockpitView {
                         let settled = page.manual.borrow_mut().discard(sequence, manual::Finish::Stale);
                         if let Some((document, revision)) = settled {
                             self.cockpit
-                                .update(cx, |cockpit, _| cockpit.browser_settled(thread.thread(), owner, document, revision));
+                                .update(cx, |cockpit, _| cockpit.browser_settled(thread, owner, document, revision));
                         }
                         continue;
                     }
                     // The page has it once the Server authorizes it
                     // (`answer_browser_ask`).
-                    let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_input(thread.thread(), owner, document));
+                    let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_input(thread, owner, document));
                     self.browsers.threads.get_mut(&thread).unwrap().waiting.push(Waiting::Input {
                         ask,
                         owner,
@@ -1012,7 +1010,7 @@ impl CockpitView {
                         .get(&page.document.tab)
                         .is_some_and(|page| page.web.read(cx).browser_visible());
                     let tab = page.document.tab;
-                    let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_page(thread.thread(), owner, page));
+                    let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_page(thread, owner, page));
                     self.browsers.threads.get_mut(&thread).unwrap().waiting.push(Waiting::Page {
                         ask,
                         tab,
@@ -1232,7 +1230,7 @@ impl CockpitView {
             self.act_in_browser(thread, Action::Open { url }, !new_tab, cx);
         }
         for (thread, at) in menus {
-            self.open_context_menu(MenuTarget::BrowserPage(thread.thread()), at, cx);
+            self.open_context_menu(MenuTarget::BrowserPage(thread), at, cx);
         }
     }
 
@@ -1258,7 +1256,7 @@ impl CockpitView {
         let settled = page.manual.borrow_mut().finish(reason);
         if let Some((document, revision)) = settled {
             self.cockpit
-                .update(cx, |cockpit, _| cockpit.browser_settled(thread.thread(), owner, document, revision));
+                .update(cx, |cockpit, _| cockpit.browser_settled(thread, owner, document, revision));
         }
     }
 
@@ -1320,14 +1318,14 @@ impl CockpitView {
         }
         for (thread, owner, page) in visibility {
             let tab = page.document.tab;
-            let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_page(thread.thread(), owner, page));
+            let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_page(thread, owner, page));
             self.browsers.threads.get_mut(&thread).unwrap().waiting.push(Waiting::Page {
                 ask,
                 tab,
                 generation: None,
             });
         }
-        let focused = self.focused_thread(cx).map(|thread| self.cockpit.read(cx).thread_key(thread));
+        let focused = self.focused_thread(cx);
         let mut candidates = Vec::new();
         for (thread, browser) in &self.browsers.threads {
             let Some(owner) = browser.owner else { continue };
@@ -1362,7 +1360,7 @@ impl CockpitView {
         // memory budget is imposed. The Server reserves before native release
         // (`answer_browser_ask`).
         for (thread, owner, document, generation) in candidates {
-            let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_reclaim(thread.thread(), owner, document));
+            let ask = self.cockpit.update(cx, |cockpit, _| cockpit.browser_reclaim(thread, owner, document));
             self.browsers.threads.get_mut(&thread).unwrap().waiting.push(Waiting::Reclaim {
                 ask,
                 owner,

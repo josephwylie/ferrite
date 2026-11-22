@@ -27,7 +27,7 @@ use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Su
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::workspace::{BranchStatus, WorkspaceChoice};
-use ferrite_core::{Hunk, RunState, SessionEvent, ThreadId, ToolResult, TurnOutcome};
+use ferrite_core::{Hunk, RunState, SessionEvent, ThreadKey, ToolResult, TurnOutcome};
 use ferrite_reviewr::forge::{
     Check, CheckStatus, Comment, CommentKind, FindingPlace, Merge, PrSnapshot, PrState, PrView,
     Sync,
@@ -88,18 +88,18 @@ pub(crate) enum Pr {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Cast {
     /// Ferrite idle memory usage: the Solo Thread.
-    pub memory: ThreadId,
-    pub hedr: ThreadId,
-    pub chess: ThreadId,
-    pub recipes: ThreadId,
-    pub customers: ThreadId,
+    pub memory: ThreadKey,
+    pub hedr: ThreadKey,
+    pub chess: ThreadKey,
+    pub recipes: ThreadKey,
+    pub customers: ThreadKey,
     /// InvoiceMate Business's two.
-    pub business: ThreadId,
-    pub redesign: ThreadId,
-    pub permission: ThreadId,
-    pub workmate: ThreadId,
-    pub tempo: ThreadId,
-    pub parked: [ThreadId; 3],
+    pub business: ThreadKey,
+    pub redesign: ThreadKey,
+    pub permission: ThreadKey,
+    pub workmate: ThreadKey,
+    pub tempo: ThreadKey,
+    pub parked: [ThreadKey; 3],
 }
 
 /// The built world: a Cockpit over a disposable store, and what a scene
@@ -115,7 +115,7 @@ pub(crate) struct World {
     /// What each open Thread's checkout says (branch, upstream drift,
     /// dirt): what git reads there, for a scene to seed the nav with
     /// before its own reads land.
-    pub branches: Vec<(ThreadId, BranchStatus)>,
+    pub branches: Vec<(ThreadKey, BranchStatus)>,
 }
 
 /// A checkout's branch, and its drift against `origin/main`.
@@ -322,10 +322,10 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
         core.focus_thread(thread);
     }
     let keep = [bb, epicurean, calls, recipes, customers, permission];
-    let dismissed: Vec<_> = core
-        .notifications()
+    let notices = core.notifications();
+    let dismissed: Vec<_> = notices
         .notices()
-        .filter(|notice| !keep.contains(&notice.thread))
+        .filter(|notice| !keep.contains(&notices.key(notice.thread)))
         .map(|notice| notice.id)
         .collect();
     for id in dismissed {
@@ -560,7 +560,7 @@ fn menu() -> Vec<ferrite_core::ModelInfo> {
 /// Ferrite idle memory usage (solo.png): one turn, 5m22s in at capture —
 /// seven commands, the panic found, the fix, the core suite, two reviews
 /// by Subagent (one still running) — the working line `Pondering…`.
-fn crash_fix(s: &mut Script, who: ThreadId) {
+fn crash_fix(s: &mut Script, who: ThreadKey) {
     let start = CAPTURE - (5 * MINUTE + 22);
     s.prompt(start, who, "Oamy ylou killed it again? it keeps dying");
     s.ev(start, who, init("mockup-memory", "claude-opus-5-5"));
@@ -704,7 +704,7 @@ fn context(categories: &[(&str, u64)]) -> SessionEvent {
 fn subagent(
     s: &mut Script,
     at: Secs,
-    who: ThreadId,
+    who: ThreadKey,
     id: &str,
     description: &str,
     state: AgentStatus,
@@ -729,7 +729,7 @@ fn subagent(
 /// Supplier Price Review (group.png, Pane 1): its prompt at 12:20 pm, two
 /// reads and a line of prose, then a wait; it resumed 1m04s before capture
 /// (the working line's clock starts there) and its script is 14s in.
-fn supplier_review(s: &mut Script, who: ThreadId) {
+fn supplier_review(s: &mut Script, who: ThreadKey) {
     let start = hms(12, 20, 0);
     s.prompt(
         start,
@@ -787,7 +787,7 @@ fn supplier_review(s: &mut Script, who: ThreadId) {
 
 /// Find all calls to this API: a Codex search, then, in the Asking look,
 /// its request to write the list out.
-fn find_calls(s: &mut Script, who: ThreadId, look: Look) {
+fn find_calls(s: &mut Script, who: ThreadKey, look: Look) {
     let start = hms(12, 24, 0);
     s.prompt(
         start,
@@ -854,7 +854,7 @@ fn find_calls(s: &mut Script, who: ThreadId, look: Look) {
 /// Epicurean chocolate range (group.png, Pane 3): its prompt at 12:02 pm
 /// and a read, a wait, then the build script failing and the turn with it,
 /// three minutes before capture (`Stopped 3m ago`).
-fn epicurean_range(s: &mut Script, who: ThreadId) {
+fn epicurean_range(s: &mut Script, who: ThreadKey) {
     let start = hms(12, 2, 0);
     let stopped = CAPTURE - 3 * MINUTE;
     s.prompt(
@@ -910,7 +910,7 @@ fn epicurean_range(s: &mut Script, who: ThreadId) {
 
 /// Complete BB supplier list (group.png, Pane 4): asked at 11:58 am,
 /// started 12:00:48 pm, done at 12:09 pm after 8m12s, not yet seen.
-fn bb_list(s: &mut Script, who: ThreadId) {
+fn bb_list(s: &mut Script, who: ThreadKey) {
     let start = hms(11, 58, 0);
     s.prompt(start, who, "Finish the BB supplier list");
     s.ev(start, who, init("mockup-bb", "claude-opus-5-5"));

@@ -380,11 +380,11 @@ impl CockpitView {
     /// in creation order, then its parked Threads. Each Thread once.
     pub(super) fn palette_thread_rows(&self, cx: &gpui::App) -> Vec<PaletteRow> {
         let order = self.thread_order(cx);
-        let project_of = |thread: ThreadId| self.facts.get(self.cockpit.read(cx).thread_key(thread)).and_then(|facts| facts.project);
-        let open_threads: Vec<ThreadId> = {
+        let project_of = |thread: ThreadKey| self.facts.get(thread).and_then(|facts| facts.project);
+        let open_threads: Vec<ThreadKey> = {
             let mut open = self.cockpit.read(cx).threads();
             let side_chat = self.side_chat.read(cx);
-            open.retain(|thread| !side_chat.owns(self.cockpit.read(cx).thread_key(*thread)) && self.cockpit.read(cx).operators(*thread));
+            open.retain(|thread| !side_chat.owns(*thread) && self.cockpit.read(cx).operators(*thread));
             open.sort();
             open
         };
@@ -392,14 +392,14 @@ impl CockpitView {
         // last day. Older ones wait in the nav's parked fold (`show
         // parked`, ⌘⇧P).
         let recent = ferrite_core::clock::system_time();
-        let parked: Vec<ThreadId> = self
+        let parked: Vec<ThreadKey> = self
             .facts
             .parked()
             .iter()
-            .map(|thread| thread.thread())
+            .copied()
             .filter(|thread| !open_threads.contains(thread))
             .filter(|thread| {
-                self.facts.last_used(self.cockpit.read(cx).thread_key(*thread)).is_some_and(|at| {
+                self.facts.last_used(*thread).is_some_and(|at| {
                     recent
                         .duration_since(at)
                         .is_ok_and(|ago| ago < std::time::Duration::from_secs(24 * 60 * 60))
@@ -415,11 +415,11 @@ impl CockpitView {
             .map(|project| Some(project.id))
             .collect();
         projects.push(None);
-        let mut seen: std::collections::HashSet<ThreadId> = std::collections::HashSet::new();
+        let mut seen: std::collections::HashSet<ThreadKey> = std::collections::HashSet::new();
         let mut rows: Vec<PaletteRow> = Vec::new();
         let now = ferrite_core::clock::system_time();
         for project in projects {
-            let mut ordered: Vec<ThreadId> = open_threads
+            let mut ordered: Vec<ThreadKey> = open_threads
                 .iter()
                 .copied()
                 .filter(|thread| project_of(*thread) == project)
@@ -434,17 +434,17 @@ impl CockpitView {
                 if !seen.insert(thread) {
                     continue;
                 }
-                let row = self.thread_row(self.cockpit.read(cx).thread_key(thread), cx);
+                let row = self.thread_row(thread, cx);
                 let age = self
                     .facts
-                    .last_used(self.cockpit.read(cx).thread_key(thread))
+                    .last_used(thread)
                     .map(|at| crate::facts::since_label(at, now))
                     .unwrap_or_default();
                 let word = state_word(&row, age);
                 let ordinal = order.iter().position(|listed| *listed == thread);
                 let scope = self
                     .facts
-                    .get(self.cockpit.read(cx).thread_key(thread))
+                    .get(thread)
                     .and_then(|facts| facts.project_label.clone());
                 let name = if row.status == nav::RowStatus::Parked {
                     SharedString::from(format!("Parked \u{b7} {}", row.name))
@@ -464,7 +464,7 @@ impl CockpitView {
                         .thread_path(thread, cx)
                         .map(|path| SharedString::from(home_relative(&path))),
                     keys,
-                    used: self.facts.last_used(self.cockpit.read(cx).thread_key(thread)),
+                    used: self.facts.last_used(thread),
                     act: Act::Thread(thread),
                 });
             }
@@ -536,22 +536,22 @@ impl CockpitView {
         threads.sort();
         threads
             .into_iter()
-            .filter(|thread| !self.side_chat.read(cx).owns(self.cockpit.read(cx).thread_key(*thread)))
+            .filter(|thread| !self.side_chat.read(cx).owns(*thread))
             .filter(|thread| {
-                self.facts.get(self.cockpit.read(cx).thread_key(*thread)).and_then(|facts| facts.project) == Some(project)
+                self.facts.get(*thread).and_then(|facts| facts.project) == Some(project)
             })
-            .map(|thread| self.thread_row(self.cockpit.read(cx).thread_key(thread), cx))
+            .map(|thread| self.thread_row(thread, cx))
             .collect()
     }
 
     /// Where jumping to a Project lands: its open Thread that most needs
     /// the operator, the first made among equals.
-    fn project_lead(&self, project: ProjectId, cx: &gpui::App) -> Option<ThreadId> {
+    fn project_lead(&self, project: ProjectId, cx: &gpui::App) -> Option<ThreadKey> {
         self.project_rows(project, cx)
             .into_iter()
             .rev()
             .max_by_key(|row| row.status.attention())
-            .map(|row| row.key.thread())
+            .map(|row| row.key)
     }
 
     /// The command table (FL-4), in its fixed order; a row whose act is
@@ -593,7 +593,7 @@ impl CockpitView {
             )
             .is_empty()
         });
-        let facts = focused.and_then(|thread| self.facts.get(self.cockpit.read(cx).thread_key(thread)));
+        let facts = focused.and_then(|thread| self.facts.get(thread));
         // The changes show in the panel, so only where it has a Thread.
         let changed = facts.is_some_and(|facts| !facts.changed_files.is_empty())
             && self.panel_candidate(cx).is_some();
@@ -757,7 +757,6 @@ impl CockpitView {
         );
         add(
             focused
-                .map(|thread| self.cockpit.read(cx).thread_key(thread))
                 .is_some_and(|thread| self.active_surface(thread).is_some() && self.panel_open(thread)),
             "Close surface".into(),
             "the Panel's shown tab",
@@ -768,7 +767,7 @@ impl CockpitView {
             focused.is_some_and(|thread| {
                 self.panel
                     .surfaces
-                    .get(self.cockpit.read(cx).thread_key(thread))
+                    .get(thread)
                     .is_some_and(|state| state.can_reopen())
             }),
             "Reopen closed surface".into(),
@@ -972,11 +971,11 @@ impl CockpitView {
 
     /// Every parked Thread, whatever the nav's filter admits (the palette
     /// is not filtered).
-    pub(super) fn parked_threads_all(&self) -> Vec<ThreadId> {
+    pub(super) fn parked_threads_all(&self) -> Vec<ThreadKey> {
         self.facts
             .parked()
             .iter()
-            .map(|thread| thread.thread())
+            .copied()
             .filter(|thread| self.pane_for(*thread).is_none())
             .collect()
     }
@@ -1127,21 +1126,21 @@ impl CockpitView {
                 if let Some(thread) = thread {
                     match self.opener_unavailable(thread, panel::Opener::Changes, cx) {
                         None => self.run_opener(thread, panel::Opener::Changes, cx),
-                        Some(_) => self.open_panel(self.cockpit.read(cx).thread_key(thread), cx),
+                        Some(_) => self.open_panel(thread, cx),
                     }
                 }
             }
             Command::SurfaceMenu => self.open_surface_menu(cx),
             Command::CloseSurface => {
                 if let Some((thread, id)) =
-                    thread.and_then(|thread| Some((thread, self.active_surface(self.cockpit.read(cx).thread_key(thread))?)))
+                    thread.and_then(|thread| Some((thread, self.active_surface(thread)?)))
                 {
-                    self.close_surface(self.cockpit.read(cx).thread_key(thread), &id, cx);
+                    self.close_surface(thread, &id, cx);
                 }
             }
             Command::ReopenSurface => {
                 if let Some(thread) = thread {
-                    self.apply_surface(self.cockpit.read(cx).thread_key(thread), surfaces::SurfaceAction::Reopen);
+                    self.apply_surface(thread, surfaces::SurfaceAction::Reopen);
                     cx.notify();
                 }
             }

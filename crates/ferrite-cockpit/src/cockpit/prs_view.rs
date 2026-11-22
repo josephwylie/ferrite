@@ -122,7 +122,7 @@ impl CockpitView {
     pub(crate) fn open_prs(&mut self, project: Option<ProjectId>, cx: &mut Context<Self>) {
         let focused = self.focused_thread(cx);
         let from_thread =
-            focused.and_then(|thread| self.facts.get(self.cockpit.read(cx).thread_key(thread)).and_then(|facts| facts.project));
+            focused.and_then(|thread| self.facts.get(thread).and_then(|facts| facts.project));
         let first = self
             .cockpit
             .read(cx)
@@ -147,7 +147,7 @@ impl CockpitView {
     /// repository use the browser rather than the checkout's forge reader.
     pub(crate) fn open_named_pr(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         number: u64,
         url: String,
         cx: &mut Context<Self>,
@@ -158,7 +158,7 @@ impl CockpitView {
             .and_then(|path| origin(&path))
             .or_else(|| {
                 self.facts
-                    .pr(self.cockpit.read(cx).thread_key(thread))
+                    .pr(thread)
                     .and_then(|pr| pr.url.as_ref())
                     .and_then(|url| {
                         url.rsplit_once("/pull/")
@@ -171,9 +171,9 @@ impl CockpitView {
                 ["pull", "issues"].iter().any(|kind| url.starts_with(&format!("{repository}/{kind}/")))
             });
         if same_repository {
-            self.upsert_surface(self.cockpit.read(cx).thread_key(thread), surfaces::SurfaceId::PullRequest(number), cx);
+            self.upsert_surface(thread, surfaces::SurfaceId::PullRequest(number), cx);
         } else {
-            self.browser_action(self.cockpit.read(cx).thread_key(thread), ferrite_core::browser::Action::Open { url }, cx);
+            self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx);
         }
     }
 
@@ -182,7 +182,7 @@ impl CockpitView {
     pub(crate) fn open_prs_from_foot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self
             .focused_thread(cx)
-            .filter(|thread| self.facts.pr(self.cockpit.read(cx).thread_key(*thread)).is_some())
+            .filter(|thread| self.facts.pr(*thread).is_some())
         {
             Some(thread) => {
                 self.open_pr_as(thread, ferrite_pane::link_target::Open::Primary, window, cx)

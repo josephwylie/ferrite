@@ -162,7 +162,7 @@ struct Slide {
 /// shrinks and the cell clips what is not in yet. `None` at rest.
 pub(super) fn reader_pin(
     tree: &Tree,
-    leaf: ThreadId,
+    leaf: super::Leaf,
     drawn: layout::Rect,
     rest: layout::Rect,
 ) -> Option<layout::Rect> {
@@ -269,7 +269,7 @@ impl CockpitView {
         });
         let title = self
             .facts
-            .get(self.cockpit.read(cx).thread_key(thread))
+            .get(thread)
             .and_then(|facts| facts.branch.clone())
             .map_or_else(|| home_relative(&workspace), |branch| branch.to_string());
         let index = self.focused(cx);
@@ -280,7 +280,7 @@ impl CockpitView {
     }
 
     /// The review open beside `thread`'s Pane, if one is.
-    pub(super) fn review_of(&self, thread: ThreadId) -> Option<Entity<ReviewView>> {
+    pub(super) fn review_of(&self, thread: ThreadKey) -> Option<Entity<ReviewView>> {
         self.panes.get(self.pane_for(thread)?)?.review.review()
     }
 
@@ -289,7 +289,7 @@ impl CockpitView {
     /// A read that lands after the operator moved on is dropped.
     fn read_review(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         review: Entity<ReviewView>,
         scope: Scope,
         cx: &mut Context<Self>,
@@ -328,7 +328,7 @@ impl CockpitView {
     /// Read the diff of `pick`, commits listed in the commits scope.
     fn read_commit(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         review: Entity<ReviewView>,
         pick: CommitPick,
         cx: &mut Context<Self>,
@@ -353,7 +353,7 @@ impl CockpitView {
     /// still reads it.
     fn search_review(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         review: Entity<ReviewView>,
         query: String,
         cx: &mut Context<Self>,
@@ -376,7 +376,7 @@ impl CockpitView {
     /// Read file `path` of the checkout for the review's file view.
     fn read_review_file(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         review: Entity<ReviewView>,
         path: String,
         cx: &mut Context<Self>,
@@ -399,7 +399,7 @@ impl CockpitView {
     /// Read the pull request of the branch checked out for `thread`.
     fn read_pull_request(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         review: Entity<ReviewView>,
         cx: &mut Context<Self>,
     ) {
@@ -420,7 +420,7 @@ impl CockpitView {
     /// Read every file of the checkout for the review's all-files list.
     fn read_review_files(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         review: Entity<ReviewView>,
         cx: &mut Context<Self>,
     ) {
@@ -441,7 +441,7 @@ impl CockpitView {
     /// Read the bases the branch scope can read against, for the picker.
     fn read_review_bases(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         review: Entity<ReviewView>,
         cx: &mut Context<Self>,
     ) {
@@ -462,7 +462,7 @@ impl CockpitView {
     /// Make `base` the branch scope's base, then read the branch over it.
     fn pick_review_base(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         review: Entity<ReviewView>,
         base: String,
         cx: &mut Context<Self>,
@@ -494,11 +494,11 @@ impl CockpitView {
 
     /// Whether Pane `index` has a reader slot on the board: a review open
     /// in it, or one sliding shut.
-    pub(super) fn has_reader(&self, index: usize, cx: &gpui::App) -> bool {
+    pub(super) fn has_reader(&self, index: usize) -> bool {
         self.panes.get(index).is_some_and(|pane| {
             pane.review.is_open()
                 || pane.thread().is_some_and(|thread| {
-                    let owner = self.cockpit.read(cx).thread_key(thread);
+                    let owner = thread;
                     self.reader_slides.slides.contains_key(&owner)
                 })
         })
@@ -512,11 +512,10 @@ impl CockpitView {
     pub(super) fn tend_reader_slides(&mut self, cx: &gpui::App) {
         let now = cx.background_executor().now();
         let reduced = ferrite_ui::motion::reduced_motion(cx);
-        let cockpit = self.cockpit.read(cx);
         let panes = &mut self.panes;
         let slides = &mut self.reader_slides;
         let first = !std::mem::replace(&mut slides.tended, true);
-        let owner_of = |pane: &CockpitPane| pane.thread().map(|thread| cockpit.thread_key(thread));
+        let owner_of = |pane: &CockpitPane| pane.thread();
         slides
             .slides
             .retain(|owner, _| panes.iter().any(|pane| owner_of(pane) == Some(*owner)));
@@ -563,14 +562,13 @@ impl CockpitView {
     /// closing one is gone — so the drag starts from the board at rest.
     pub(super) fn land_reader_slides(&mut self, cx: &gpui::App) {
         let now = cx.background_executor().now();
-        let cockpit = self.cockpit.read(cx);
         let panes = &mut self.panes;
         self.reader_slides.slides.retain(|owner, slide| {
             slide.reveal.land(now);
             slide.drawn = 1.0;
             if !slide.reveal.is_open() {
                 let owns = |pane: &&mut CockpitPane| {
-                    pane.thread().map(|thread| cockpit.thread_key(thread)) == Some(*owner)
+                    pane.thread() == Some(*owner)
                 };
                 if let Some(pane) = panes.iter_mut().find(owns) {
                     pane.review.let_go();
@@ -586,12 +584,12 @@ impl CockpitView {
         if self.seam_drag.is_some() {
             return tree;
         }
-        let reveals: Vec<(ThreadId, f32)> = self
+        let reveals: Vec<(super::Leaf, f32)> = self
             .reader_slides
             .slides
             .iter()
             .filter(|(_, slide)| slide.drawn < 1.0)
-            .map(|(owner, slide)| (reader_leaf(owner.thread()), slide.drawn))
+            .map(|(owner, slide)| (reader_leaf(*owner), slide.drawn))
             .collect();
         if !reveals.is_empty() {
             tree.reveal(&reveals, bounds, ferrite_ui::theme::BOARD_SEAM);
@@ -604,7 +602,7 @@ impl CockpitView {
     pub(super) fn rest_tree(&self, mut tree: Tree) -> Tree {
         for (owner, slide) in &self.reader_slides.slides {
             if !slide.reveal.is_open() {
-                tree.remove(reader_leaf(owner.thread()));
+                tree.remove(reader_leaf(*owner));
             }
         }
         tree
@@ -624,8 +622,8 @@ impl CockpitView {
     /// it.
     pub(super) fn reader_cell(
         &self,
-        owner: ThreadId,
-        leaf: ThreadId,
+        owner: ThreadKey,
+        leaf: super::Leaf,
         pin: Option<layout::Rect>,
         cx: &mut Context<Self>,
     ) -> Option<Div> {

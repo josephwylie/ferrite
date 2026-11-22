@@ -450,19 +450,22 @@ impl Machines {
     }
 
     fn attach(&mut self, index: Option<usize>) -> io::Result<Cockpit> {
-        let (store, server) = match index {
+        let (store, server, saved_as) = match index {
             Some(index) if !self.entries[index].disabled(self.local_enabled) => {
-                self.endpoint(index)
+                let (store, server) = self.endpoint(index);
+                (store, server, Some(self.entries[index].key()))
             }
             _ => (
                 self.reach.settings_dir.join("no-environment"),
                 Endpoint::Unavailable,
+                None,
             ),
         };
         Cockpit::attach(Attach {
             browser: cfg!(feature = "cef"),
             store,
             server,
+            saved_as,
             client: self.reach.client.clone(),
             renderer: self.reach.renderer.clone(),
             driven: self.reach.driven,

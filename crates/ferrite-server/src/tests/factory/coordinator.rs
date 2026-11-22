@@ -225,7 +225,7 @@ fn the_coordinator_starts_on_the_first_word_in_the_main_checkout_on_its_settings
             .coordinator(project_id(&project))
             .is_some_and(|c| c.thread == Some(coordinator))
     });
-    assert!(!cockpit_window.operators(coordinator));
+    assert!(!cockpit_window.operators(here(&cockpit_window, coordinator)));
     assert!(cockpit_window.needs_you().is_empty());
 }
 

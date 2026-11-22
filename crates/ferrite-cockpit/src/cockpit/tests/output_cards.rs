@@ -221,7 +221,7 @@ fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     let page = crate::cockpit::surfaces::SurfaceId::File(workspace.join("site/index.html"));
     assert!(panel_tabs(&view, thread, cx).0.contains(&page), "the page is a File tab");
-    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(thread), &page, cx));
+    view.update(cx, |view, cx| view.close_surface(thread, &page, cx));
     tick(cx);
     assert!(!panel_tabs(&view, thread, cx).0.contains(&page));
     assert!(cx.debug_bounds("preview-page-title").is_none());

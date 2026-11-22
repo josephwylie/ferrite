@@ -283,7 +283,7 @@ fn the_nav_moves_a_working_thread_on_the_beat_without_the_window(cx: &mut TestAp
         |_, cx| cx.observe(&view, move |_, _| notified.set(notified.get() + 1))
     });
     let rows = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.nav_state(cx));
-    let ids = |rows: &[crate::nav::ThreadRow]| rows.iter().map(|row| row.key.thread()).collect::<Vec<_>>();
+    let ids = |rows: &[crate::nav::ThreadRow]| rows.iter().map(|row| row.key).collect::<Vec<_>>();
     // Its first event settles what the Session says of itself.
     fake.streams.borrow()[1]
         .send(SessionEvent::TextDelta { text: "working ".into() })
@@ -324,7 +324,7 @@ fn the_nav_moves_a_working_thread_on_the_beat_without_the_window(cx: &mut TestAp
     beat(cx);
     let after = rows(cx);
     assert!(after.working.is_empty(), "done");
-    assert_eq!(after.active.first().map(|row| row.key.thread()), Some(threads[1]), "on top");
+    assert_eq!(after.active.first().map(|row| row.key.thread()), Some(threads[1]).map(|key| key.thread()), "on top");
     eprintln!(
         "WAKES section window_notifies={} nav={}",
         notified.get() - before.0,
@@ -354,7 +354,7 @@ fn the_toast_float_redraws_only_as_its_toast_comes_and_goes(cx: &mut TestAppCont
             .unwrap();
         (threads[at], at)
     });
-    let toast: &'static str = format!("toast-{}", off.get()).leak();
+    let toast: &'static str = format!("toast-{}", off.thread().get()).leak();
     let bare = |cx: &mut gpui::VisualTestContext| {
         let before = drawn::toast_renders();
         for _ in 0..3 {
@@ -421,7 +421,7 @@ fn the_factory_door_counts_what_needs_you_as_the_board_arrives(cx: &mut TestAppC
     let (view, _fake, _panes, cx) = window("wakes-factory-door", 1, cx);
     let project = view.read_with(cx, |view, cx| {
         let model = view.cockpit.read(cx);
-        model.project_id(model.threads()[0]).unwrap()
+        model.project_of(model.threads()[0]).unwrap()
     });
     assert!(cx.debug_bounds("nav-factory").is_some(), "the door");
     assert!(cx.debug_bounds("nav-factory-attention").is_none(), "nothing needs you");
@@ -432,7 +432,7 @@ fn the_factory_door_counts_what_needs_you_as_the_board_arrives(cx: &mut TestAppC
     assert_eq!(drawn::nav_renders(), idle, "an idle door is not redrawn");
     let task: Task = serde_json::from_value(serde_json::json!({
         "id": "t-1",
-        "project": project,
+        "project": project.project(),
         "title": "Task t-1",
         "instructions": "Do the work",
         "status": Status::NeedsHuman,
@@ -488,7 +488,7 @@ fn a_done_toast_comes_and_goes_on_its_own_clock(cx: &mut TestAppContext) {
             .unwrap();
         (threads[at], at)
     });
-    let toast: &'static str = format!("toast-{}", off.get()).leak();
+    let toast: &'static str = format!("toast-{}", off.thread().get()).leak();
     fake.streams.borrow()[at]
         .send(SessionEvent::TextDelta { text: "done ".into() })
         .unwrap();

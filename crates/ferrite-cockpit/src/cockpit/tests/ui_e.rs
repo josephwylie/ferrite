@@ -33,7 +33,7 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
     view.read_with(cx, |view, cx| {
         assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1, "it rings");
     });
-    let selector: &'static str = format!("toast-{}", off_focus.get()).leak();
+    let selector: &'static str = format!("toast-{}", off_focus.thread().get()).leak();
     assert!(
         cx.debug_bounds(selector).is_none(),
         "the nav is open: its row is the queue, nothing toasts"
@@ -106,11 +106,11 @@ fn the_rails_one_toast_clears_the_view_head_and_goes_on_landing(cx: &mut TestApp
     view.read_with(cx, |view, cx| {
         assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1, "one toast, off screen")
     });
-    let selector: &'static str = format!("toast-{}", threads[2].get()).leak();
+    let selector: &'static str = format!("toast-{}", threads[2].thread().get()).leak();
     let toast = cx.debug_bounds(selector).expect("the toast is up");
-    let open: &'static str = format!("toast-open-{}", threads[2].get()).leak();
+    let open: &'static str = format!("toast-open-{}", threads[2].thread().get()).leak();
     assert!(cx.debug_bounds(open).is_some(), "a finish offers `⏎ open`");
-    let allow: &'static str = format!("toast-allow-{}", threads[2].get()).leak();
+    let allow: &'static str = format!("toast-allow-{}", threads[2].thread().get()).leak();
     assert!(cx.debug_bounds(allow).is_none(), "and no answers");
     let head = cx.debug_bounds("view-head").expect("the view's head");
     // Clear of it: under it, or beside it over the panel's column.

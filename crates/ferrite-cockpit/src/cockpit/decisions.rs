@@ -24,47 +24,47 @@ pub(crate) enum DecisionEvent {
     /// moves the Session to that permission mode, read on that Session
     /// generation (`Allow and switch to …`).
     Approve {
-        thread: ThreadId,
+        thread: ThreadKey,
         request: PendingDecision,
         choice: ApprovalChoice,
         switch: Option<(String, u64)>,
     },
     /// This answer, as it stands: a Cancel, a Skip, a Complete.
     Respond {
-        thread: ThreadId,
+        thread: ThreadKey,
         handle: DecisionHandle,
         answer: DecisionAnswer,
     },
     /// A question's Send.
     SendQuestions {
-        thread: ThreadId,
+        thread: ThreadKey,
         handle: DecisionHandle,
     },
     /// An MCP form's Send.
     SendForm {
-        thread: ThreadId,
+        thread: ThreadKey,
         handle: DecisionHandle,
         fields: Vec<ferrite_core::FormField>,
     },
     /// A question's option was picked: its error goes.
     Picked {
-        thread: ThreadId,
+        thread: ThreadKey,
         handle: DecisionHandle,
     },
     /// ⏎ in the amend note.
     SendNote {
-        thread: ThreadId,
+        thread: ThreadKey,
         handle: DecisionHandle,
     },
     /// esc in the amend note.
     CloseNote {
-        thread: ThreadId,
+        thread: ThreadKey,
         handle: DecisionHandle,
     },
     /// ⏎ or a digit answered a question: these answers go, and the note
     /// taken with them becomes the Thread's next prompt once they land.
     Answered {
-        thread: ThreadId,
+        thread: ThreadKey,
         handle: DecisionHandle,
         answers: Vec<ferrite_core::questions::Answer>,
         note: Option<String>,
@@ -91,7 +91,7 @@ pub(super) enum DecisionKey {
 /// keyboard goes as the note closes.
 pub(super) struct KeyTarget {
     pane: PaneIdentity,
-    thread: ThreadId,
+    thread: ThreadKey,
     request: PendingDecision,
     /// An approval's options, each whether it can act; empty for any
     /// other kind.
@@ -596,7 +596,7 @@ impl CockpitView {
     /// next Session and never relabel this one.
     pub(super) fn decision_context(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         cx: &App,
     ) -> (Option<Provider>, Option<SharedString>) {
         let Some(open) = self.cockpit.read(cx).thread(thread) else {
@@ -612,7 +612,7 @@ impl CockpitView {
         (Some(provider), Some(context))
     }
 
-    fn thread_workspace(&self, thread: ThreadId, cx: &App) -> Option<std::path::PathBuf> {
+    fn thread_workspace(&self, thread: ThreadKey, cx: &App) -> Option<std::path::PathBuf> {
         self.cockpit
             .read(cx)
             .thread(thread)?
@@ -622,7 +622,7 @@ impl CockpitView {
 
     /// The approval `thread` waits on: the one its Pane shows, else Main's,
     /// else any.
-    fn pending_approval(&self, thread: ThreadId, cx: &App) -> Option<PendingDecision> {
+    fn pending_approval(&self, thread: ThreadKey, cx: &App) -> Option<PendingDecision> {
         let pending = self.cockpit.read(cx).thread(thread)?.pending_decisions();
         let approval = |request: &&PendingDecision| {
             matches!(request.decision.kind, ferrite_core::DecisionKind::Approval)
@@ -649,7 +649,7 @@ impl CockpitView {
     /// allow.
     pub(crate) fn answer_approval(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         choice: ApprovalChoice,
         note: Option<String>,
         window: &mut Window,
@@ -670,7 +670,7 @@ impl CockpitView {
     /// option cannot act.
     pub(super) fn answer_approval_request(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         request: &PendingDecision,
         choice: ApprovalChoice,
         note: Option<String>,
@@ -701,8 +701,7 @@ impl CockpitView {
                 },
                 None if allows => {
                     let workspace = self.thread_workspace(thread, cx);
-                    let key = self.cockpit.read(cx).thread_key(thread);
-                    rule = Some(ThreadRule::new(key, decision, workspace.as_deref()));
+                    rule = Some(ThreadRule::new(thread, decision, workspace.as_deref()));
                     DecisionAnswer::Allow {
                         input: decision.input.clone(),
                     }
@@ -738,7 +737,7 @@ impl CockpitView {
 
     /// After a denial the operator says what to do instead: the keyboard
     /// lands in that Pane's Composer (Main's, for a child's request).
-    fn steer(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) {
+    fn steer(&mut self, thread: ThreadKey, window: &mut Window, cx: &mut Context<Self>) {
         let Some(index) = self.pane_for(thread) else {
             return;
         };
@@ -763,9 +762,8 @@ impl CockpitView {
         }
         for update in frame {
             let thread = update.thread;
-            let key = self.cockpit.read(cx).thread_key(thread);
             let rules = self.decisions.read(cx);
-            if !rules.covers_any(key) {
+            if !rules.covers_any(thread) {
                 continue;
             }
             let workspace = self.thread_workspace(thread, cx);
@@ -781,7 +779,7 @@ impl CockpitView {
                                 && request.reply_error.is_none()
                                 && request.decision.policy.allow
                                 && !request.decision.policy.interaction_required
-                                && rules.covers(key, &request.decision, workspace.as_deref())
+                                && rules.covers(thread, &request.decision, workspace.as_deref())
                         })
                         .cloned()
                         .collect()
@@ -887,7 +885,7 @@ impl CockpitView {
 
     /// Whether `handle` still waits on the operator (not answered, not in
     /// flight).
-    fn still_waiting(&self, thread: ThreadId, handle: &DecisionHandle, cx: &App) -> bool {
+    fn still_waiting(&self, thread: ThreadKey, handle: &DecisionHandle, cx: &App) -> bool {
         self.cockpit.read(cx).thread(thread).is_some_and(|open| {
             open.pending_decisions()
                 .iter()
@@ -898,7 +896,7 @@ impl CockpitView {
     /// The open note's words, taken (the note closes).
     fn take_decision_note(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         handle: &DecisionHandle,
         cx: &mut Context<Self>,
     ) -> Option<String> {
@@ -910,7 +908,7 @@ impl CockpitView {
     /// ⏎ in the note: the cursor's option goes with the note.
     fn send_decision_note(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         handle: &DecisionHandle,
         window: &mut Window,
         cx: &mut Context<Self>,

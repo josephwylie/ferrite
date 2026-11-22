@@ -55,7 +55,7 @@ fn a_closed_side_chat_is_ended_not_reopened_and_no_fork_is_substituted(cx: &mut 
         .unwrap();
     tick(cx);
     let thread = view.read_with(cx, |view, cx| view.focused_thread(cx).unwrap());
-    view.update(cx, |view, cx| view.open_side_chat(view.cockpit.read(cx).thread_key(thread), cx));
+    view.update(cx, |view, cx| view.open_side_chat(thread, cx));
     tick(cx);
     tick(cx);
     let side = |cx: &mut gpui::VisualTestContext| {
@@ -73,7 +73,7 @@ fn a_closed_side_chat_is_ended_not_reopened_and_no_fork_is_substituted(cx: &mut 
         .iter()
         .position(|id| matches!(id, SurfaceId::SideChat(_)))
         .unwrap();
-    let rows = view.read_with(cx, |view, cx| view.surface_tab_rows(thread, at, cx));
+    let rows = view.read_with(cx, |view, _| view.surface_tab_rows(thread, at));
     assert!(
         rows.iter()
             .flatten()
@@ -106,7 +106,7 @@ fn restart_view<'a>(
     cx: &'a mut TestAppContext,
 ) -> (
     Entity<CockpitView>,
-    ThreadId,
+    ThreadKey,
     &'a mut gpui::VisualTestContext,
 ) {
     let fake = Fake::default();
@@ -145,11 +145,11 @@ fn a_restart_restores_the_files_working_set_selection_and_preferences(cx: &mut T
             view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
             view.open_in_files(thread, checkout.join("README.md"), None, true, cx);
             view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
-            view.files.update(cx, |files, cx| files.run_verb(view.cockpit.read(cx).thread_key(thread), crate::cockpit::tools::FilesVerb::ToggleWrap, cx));
+            view.files.update(cx, |files, cx| files.run_verb(thread, crate::cockpit::tools::FilesVerb::ToggleWrap, cx));
         });
         tick(cx);
         assert_eq!(
-            view.read_with(cx, |view, cx| view.files.read(cx).wraps(view.cockpit.read(cx).thread_key(thread))),
+            view.read_with(cx, |view, cx| view.files.read(cx).wraps(thread)),
             Some(false)
         );
     }
@@ -162,7 +162,7 @@ fn a_restart_restores_the_files_working_set_selection_and_preferences(cx: &mut T
     );
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).tab_names(view.cockpit.read(cx).thread_key(thread))),
+        view.read_with(cx, |view, cx| view.files.read(cx).tab_names(thread)),
         [
             ("lib.rs".to_string(), false),
             ("README.md".to_string(), false)
@@ -170,12 +170,12 @@ fn a_restart_restores_the_files_working_set_selection_and_preferences(cx: &mut T
         "the open files return"
     );
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).active_path(view.cockpit.read(cx).thread_key(thread))),
+        view.read_with(cx, |view, cx| view.files.read(cx).active_path(thread)),
         Some(checkout.join("src/lib.rs")),
         "with the one that was shown"
     );
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).wraps(view.cockpit.read(cx).thread_key(thread))),
+        view.read_with(cx, |view, cx| view.files.read(cx).wraps(thread)),
         Some(false),
         "and its preferences"
     );
@@ -192,7 +192,7 @@ fn a_file_missing_after_restart_says_so_and_can_be_tried_again(cx: &mut TestAppC
         let (view, thread, cx) = restart_view("reopen-missing-a", &dir, &checkout, cx);
         view.update(cx, |view, cx| {
             view.open_in_files(thread, note.clone(), None, true, cx);
-            view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::File(note.clone()), cx);
+            view.upsert_surface(thread, SurfaceId::File(note.clone()), cx);
         });
         tick(cx);
     }
@@ -211,12 +211,12 @@ fn a_file_missing_after_restart_says_so_and_can_be_tried_again(cx: &mut TestAppC
     until(cx, |cx| cx.debug_bounds("files-unshown").is_none());
 
     view.update(cx, |view, cx| {
-        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx)
+        view.upsert_surface(thread, SurfaceId::Files, cx)
     });
     tick(cx);
     std::fs::remove_file(&note).unwrap();
     assert!(view
-        .read_with(cx, |view, cx| view.files.read(cx).tab_names(view.cockpit.read(cx).thread_key(thread)))
+        .read_with(cx, |view, cx| view.files.read(cx).tab_names(thread))
         .iter()
         .any(|(name, _)| name == "note.txt"));
 }

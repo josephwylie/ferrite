@@ -381,16 +381,15 @@ impl MenuHost for PullRequestView {
 impl CockpitView {
     /// The PR row and the `+` menu's Pull request: the branch's PR as a
     /// Surface of `thread`'s Panel. Nothing with no PR on the branch.
-    pub(crate) fn open_pr_surface(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let key = self.cockpit.read(cx).thread_key(thread);
-        if let Some(number) = self.facts.pr(key).map(|pr| pr.number) {
-            self.upsert_surface(key, SurfaceId::PullRequest(number), cx);
+    pub(crate) fn open_pr_surface(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
+        if let Some(number) = self.facts.pr(thread).map(|pr| pr.number) {
+            self.upsert_surface(thread, SurfaceId::PullRequest(number), cx);
         }
     }
 
     /// The Thread's PR tab: the PR it shows, else the one its branch has.
-    fn pr_tab_target(&self, thread: ThreadId, cx: &gpui::App) -> Option<PrTarget> {
-        let tab = self.panel.surfaces.get(self.cockpit.read(cx).thread_key(thread)).and_then(|state| {
+    fn pr_tab_target(&self, thread: ThreadKey) -> Option<PrTarget> {
+        let tab = self.panel.surfaces.get(thread).and_then(|state| {
             state
                 .active
                 .iter()
@@ -400,7 +399,7 @@ impl CockpitView {
                     _ => None,
                 })
         });
-        let number = tab.or_else(|| self.facts.pr(self.cockpit.read(cx).thread_key(thread)).map(|pr| pr.number))?;
+        let number = tab.or_else(|| self.facts.pr(thread).map(|pr| pr.number))?;
         Some(PrTarget::thread(thread, number))
     }
 
@@ -449,12 +448,12 @@ impl CockpitView {
 
     /// Whether an answer for `target` is still wanted: a Thread's tab
     /// closed meanwhile wants none.
-    fn pr_tab_open(&self, target: PrTarget, cx: &gpui::App) -> bool {
+    fn pr_tab_open(&self, target: PrTarget) -> bool {
         match target.source {
             PrSource::Thread(thread) => self
                 .panel
                 .surfaces
-                .get(self.cockpit.read(cx).thread_key(thread))
+                .get(thread)
                 .is_some_and(|state| state.tabs.contains(&SurfaceId::PullRequest(target.number))),
             PrSource::Project(_) => true,
         }
@@ -462,7 +461,7 @@ impl CockpitView {
 
     /// A fixture world's snapshot of `thread`'s PR, as if read.
     #[cfg(any(test, feature = "visual-reference"))]
-    pub(crate) fn fixture_pr_snapshot(&mut self, thread: ThreadId, pr: WirePr, cx: &mut Context<Self>) {
+    pub(crate) fn fixture_pr_snapshot(&mut self, thread: ThreadKey, pr: WirePr, cx: &mut Context<Self>) {
         let target = PrTarget::thread(thread, pr.number);
         self.pull_request
             .update(cx, |reader, _| reader.reads.install(target, pr));
@@ -470,14 +469,14 @@ impl CockpitView {
 
     /// Ask the forge again for `thread`'s open PR tab: its checks and
     /// conversation move without the PR's number or state moving.
-    pub(crate) fn refresh_pr_tab(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let open = self.panel.surfaces.get(self.cockpit.read(cx).thread_key(thread)).is_some_and(|state| {
+    pub(crate) fn refresh_pr_tab(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
+        let open = self.panel.surfaces.get(thread).is_some_and(|state| {
             state
                 .tabs
                 .iter()
                 .any(|id| matches!(id, SurfaceId::PullRequest(_)))
         });
-        if let Some(target) = self.pr_tab_target(thread, cx).filter(|_| open) {
+        if let Some(target) = self.pr_tab_target(thread).filter(|_| open) {
             self.read_pr_snapshot(target, true, cx);
         }
     }
@@ -486,8 +485,8 @@ impl CockpitView {
     /// than the branch's goes, and a snapshot the reading has overtaken (a
     /// merge the agent ran) is let go, until its read lands: the reading
     /// speaks. Any other change asks the forge again, as checks do.
-    pub(crate) fn pr_reading_changed(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(reading) = self.facts.pr(self.cockpit.read(cx).thread_key(thread)) else {
+    pub(crate) fn pr_reading_changed(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
+        let Some(reading) = self.facts.pr(thread) else {
             return;
         };
         let target = PrTarget::thread(thread, reading.number);
@@ -507,27 +506,27 @@ impl CockpitView {
     }
 
     /// The snapshot of `thread`'s PR, once read.
-    pub(crate) fn pr_snapshot<'a>(&self, thread: ThreadId, cx: &'a gpui::App) -> Option<&'a WirePr> {
-        self.pull_request.read(cx).reads.snapshot(self.pr_tab_target(thread, cx)?)
+    pub(crate) fn pr_snapshot<'a>(&self, thread: ThreadKey, cx: &'a gpui::App) -> Option<&'a WirePr> {
+        self.pull_request.read(cx).reads.snapshot(self.pr_tab_target(thread)?)
     }
 
     /// The PR's state: its snapshot's, else the nav's reading's.
-    pub(crate) fn pr_tone(&self, thread: ThreadId, cx: &gpui::App) -> Option<PrTone> {
+    pub(crate) fn pr_tone(&self, thread: ThreadKey, cx: &gpui::App) -> Option<PrTone> {
         self.pr_snapshot(thread, cx)
             .map(PrTone::of_snapshot)
             .or_else(|| {
                 self.facts
-                    .pr(self.cockpit.read(cx).thread_key(thread))
+                    .pr(thread)
                     .map(|pr| PrTone::of_reading(pr.state, pr.draft))
             })
     }
 
     /// Whether `target` is the PR of its Thread's branch.
-    pub(in crate::cockpit) fn branch_pr(&self, target: PrTarget, cx: &gpui::App) -> bool {
+    pub(in crate::cockpit) fn branch_pr(&self, target: PrTarget) -> bool {
         match target.source {
             PrSource::Thread(thread) => self
                 .facts
-                .pr(self.cockpit.read(cx).thread_key(thread))
+                .pr(thread)
                 .is_some_and(|pr| pr.number == target.number),
             PrSource::Project(_) => false,
         }
@@ -543,7 +542,7 @@ impl CockpitView {
         PrShown {
             target,
             tab,
-            branch: self.branch_pr(target, cx),
+            branch: self.branch_pr(target),
             code: (tab == PrTab::Code).then(|| {
                 self.changes_pane(tools::Diff::PullRequest(target), cx)
                     .into_any_element()
@@ -555,17 +554,17 @@ impl CockpitView {
     /// Everything the Panel's PR Surface draws from: the PR the Panel shows.
     fn pr_inputs(&self, cx: &mut Context<Self>) -> Option<PrInputs> {
         let thread = self.panes[self.panel_drawn_pane(cx)?].thread()?;
-        let Some(SurfaceId::PullRequest(number)) = self.active_surface(self.cockpit.read(cx).thread_key(thread)) else {
+        let Some(SurfaceId::PullRequest(number)) = self.active_surface(thread) else {
             return None;
         };
         let tab = self
             .panel
             .surfaces
-            .get(self.cockpit.read(cx).thread_key(thread))
+            .get(thread)
             .map_or(PrTab::Summary, |state| state.pr_tab(number));
         let reading = self
             .facts
-            .pr(self.cockpit.read(cx).thread_key(thread))
+            .pr(thread)
             .map(|pr| (PrTone::of_reading(pr.state, pr.draft), pr.url.clone()));
         Some(PrInputs {
             shown: self.pr_shown(PrTarget::thread(thread, number), tab, cx),
@@ -589,7 +588,7 @@ impl CockpitView {
                 match target.source {
                     PrSource::Thread(thread) => {
                         let number = target.number;
-                        self.apply_surface(self.cockpit.read(cx).thread_key(thread), SurfaceAction::SelectPrTab { number, tab });
+                        self.apply_surface(thread, SurfaceAction::SelectPrTab { number, tab });
                     }
                     PrSource::Project(_) => self.prs.update(cx, |prs, cx| prs.set_tab(tab, cx)),
                 }
@@ -657,7 +656,7 @@ impl PullRequestView {
         let shown = self
             .cockpit
             .upgrade()
-            .is_some_and(|cockpit| cockpit.read(cx).pr_tab_open(target, cx));
+            .is_some_and(|cockpit| cockpit.read(cx).pr_tab_open(target));
         if !shown {
             self.reads.forget(target);
             return;
@@ -714,7 +713,7 @@ impl PullRequestView {
     }
 
     /// Forget what was read of, and done to, the PRs of Threads that are gone.
-    pub(in crate::cockpit) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
+    pub(in crate::cockpit) fn retain_threads(&mut self, keep: impl Fn(ThreadKey) -> bool) {
         let kept = |target: &PrTarget| match target.source {
             PrSource::Thread(thread) => keep(thread),
             PrSource::Project(_) => true,
@@ -724,7 +723,7 @@ impl PullRequestView {
     }
 
     #[cfg(test)]
-    pub(in crate::cockpit) fn held_for_test(&self, thread: ThreadId) -> usize {
+    pub(in crate::cockpit) fn held_for_test(&self, thread: ThreadKey) -> usize {
         self.reads.held_for_test(thread)
     }
 

@@ -101,10 +101,13 @@ impl Panel {
         Self::with_storage(surfaces, super::tools::WorkingSets::load(dir), Default::default())
     }
 
-    /// Hold the Panels of the machine the window is on, `here`, whose
-    /// Threads `cockpit` reaches.
-    pub(crate) fn hold(&mut self, here: ferrite_core::MachineKey, cockpit: &Cockpit) {
-        self.surfaces.hold(here, |thread| cockpit.thread_key(thread));
+    /// Hold the Panels of the machine on screen, as its saved files name
+    /// it: fixed when `cockpit` attached it (F-A8), never as `Machines`
+    /// has one selected now, which a swap moves first.
+    pub(crate) fn hold(&mut self, cockpit: &Cockpit) {
+        let here = cockpit.saved_as(cockpit.on_screen()).cloned();
+        let here = here.unwrap_or(ferrite_core::MachineKey(None));
+        self.surfaces.hold(here, |saved| cockpit.resolve(saved));
     }
 
     fn successor(&mut self) -> Self {
@@ -197,7 +200,7 @@ impl CockpitView {
         let index = self.panel_candidate_index(cx)?;
         let pane = &self.panes[index];
         match pane.thread() {
-            Some(thread) => self.panel_open(self.cockpit.read(cx).thread_key(thread)),
+            Some(thread) => self.panel_open(thread),
             None => pane.preview.is_open(),
         }
         .then_some(index)
@@ -206,7 +209,7 @@ impl CockpitView {
     /// The Thread whose panel shows this frame, if it shows for one.
     pub(super) fn panel_thread(&self, cx: &gpui::App) -> Option<ThreadKey> {
         let thread = self.panes[self.panel_pane(cx)?].thread()?;
-        Some(self.cockpit.read(cx).thread_key(thread))
+        Some(thread)
     }
 
     /// The Pane the panel is for, shown or hidden: the focused Pane's, a
@@ -247,7 +250,7 @@ impl CockpitView {
 
     /// The Surface Pane `index`'s Panel shows this frame, if it shows one.
     pub(super) fn shown_surface(&self, index: usize, cx: &gpui::App) -> Option<SurfaceId> {
-        let thread = self.cockpit.read(cx).thread_key(self.panes.get(index)?.thread()?);
+        let thread = self.panes.get(index)?.thread()?;
         (self.panel_pane(cx) == Some(index))
             .then(|| self.active_surface(thread))
             .flatten()
@@ -267,12 +270,12 @@ impl CockpitView {
                 if self.active_surface(thread) != Some(SurfaceId::Files) {
                     self.files.update(cx, |files, cx| files.refresh(thread, cx));
                 }
-                self.ensure_files(thread.thread(), cx);
+                self.ensure_files(thread, cx);
             }
-            SurfaceId::Changes => self.ensure_diff(tools::Diff::Changes(thread.thread()), cx),
-            SurfaceId::Overview => self.refresh_context(thread.thread(), cx),
+            SurfaceId::Changes => self.ensure_diff(tools::Diff::Changes(thread), cx),
+            SurfaceId::Overview => self.refresh_context(thread, cx),
             SurfaceId::PullRequest(number) => {
-                self.read_pr_snapshot(pr_read::PrTarget::thread(thread.thread(), *number), true, cx)
+                self.read_pr_snapshot(pr_read::PrTarget::thread(thread, *number), true, cx)
             }
             _ => {}
         }
@@ -336,8 +339,8 @@ impl CockpitView {
                 self.terminals.update(cx, |terminals, cx| terminals.end(thread, *number, cx))
             }
             SurfaceId::SideChat(tab) => self.close_side_tab(thread, *tab, cx),
-            SurfaceId::File(path) => self.close_preview_of(thread.thread(), path, cx),
-            SurfaceId::Browser => self.close_preview_of(thread.thread(), std::path::Path::new(preview::BROWSER_PATH), cx),
+            SurfaceId::File(path) => self.close_preview_of(thread, path, cx),
+            SurfaceId::Browser => self.close_preview_of(thread, std::path::Path::new(preview::BROWSER_PATH), cx),
             SurfaceId::Overview
             | SurfaceId::Changes
             | SurfaceId::Files
@@ -369,19 +372,18 @@ impl CockpitView {
     fn forget_gone_threads(&mut self, cx: &mut Context<Self>) {
         let deleted = std::mem::take(&mut self.panel.deleted);
         let cockpit = self.cockpit.read(cx);
-        let machine = cockpit.machine_id();
         let known = cockpit.known_threads();
-        // A Server not yet heard from knows no Thread: absence alone is no
-        // deletion then.
-        let heard = !known.is_empty();
-        let keep_on = |on: ferrite_core::MachineId, thread: ThreadId| {
-            let deleted = deleted.iter().any(|key| key.machine() == on && key.thread() == thread);
-            !deleted && (!heard || (on == machine && known.contains(&thread)))
+        // A machine whose Server has not said which Threads it has
+        // (`Cockpit::heard`) knows none: absence alone is no deletion then.
+        let heard: std::collections::HashSet<ferrite_core::MachineId> = known
+            .iter()
+            .map(|key| key.machine())
+            .filter(|machine| cockpit.heard(*machine))
+            .collect();
+        let keep = |key: ThreadKey| {
+            !deleted.contains(&key) && (!heard.contains(&key.machine()) || known.contains(&key))
         };
-        let keep_key = |key: ThreadKey| keep_on(key.machine(), key.thread());
-        // What is still kept by a bare id is all this machine's.
-        let keep = |thread| keep_on(machine, thread);
-        for (thread, tabs) in self.panel.surfaces.retain(keep_key) {
+        for (thread, tabs) in self.panel.surfaces.retain(keep) {
             // Releasing a side chat deletes its fork, a Thread of its own.
             // Only a Thread this window deleted takes them with it: one
             // merely missing from the list is too thin a reason to delete
@@ -394,40 +396,39 @@ impl CockpitView {
             }
         }
         self.forget_tools(keep, cx);
-        self.overview.update(cx, |overview, _| overview.retain_threads(keep_key));
-        self.panel.focus.retain_threads(keep_key);
+        self.overview.update(cx, |overview, _| overview.retain_threads(keep));
+        self.panel.focus.retain_threads(keep);
         self.pull_request.update(cx, |reader, _| reader.retain_threads(keep));
-        self.background.update(cx, |background, _| background.retain_threads(keep_key));
+        self.background.update(cx, |background, _| background.retain_threads(keep));
         self.browsers.retain_threads(keep);
         self.browser_chrome.update(cx, |chrome, _| chrome.retain_threads(keep));
         self.browser_dialog.update(cx, |dialog, _| dialog.retain_threads(keep));
         self.browser_review.update(cx, |review, _| review.retain_threads(keep));
-        self.facts.retain_threads(keep_key);
-        self.decisions.update(cx, |decisions, _| decisions.retain_threads(keep_key));
+        self.facts.retain_threads(keep);
+        self.decisions.update(cx, |decisions, _| decisions.retain_threads(keep));
         if let Some(archive) = self.factory().map(|view| view.read(cx).archive.clone()) {
-            archive.update(cx, |archive, _| archive.retain_threads(keep_key));
+            archive.update(cx, |archive, _| archive.retain_threads(keep));
         }
         self.pr_reads.retain_threads(keep);
     }
 
     /// How much of `thread`'s state the window holds.
     #[cfg(test)]
-    pub(crate) fn held_for_test(&self, thread: ThreadId, cx: &gpui::App) -> usize {
-        let key = self.cockpit.read(cx).thread_key(thread);
+    pub(crate) fn held_for_test(&self, thread: ThreadKey, cx: &gpui::App) -> usize {
         self.tools_held_for_test(thread, cx)
-            + self.overview.read(cx).held_for_test(key)
-            + self.panel.focus.held_for_test(key)
+            + self.overview.read(cx).held_for_test(thread)
+            + self.panel.focus.held_for_test(thread)
             + self.pull_request.read(cx).held_for_test(thread)
-            + self.background.read(cx).held_for_test(key)
+            + self.background.read(cx).held_for_test(thread)
             + self.browsers.held_for_test(thread)
             + self.browser_chrome.read(cx).held_for_test(thread)
             + self.browser_dialog.read(cx).held_for_test(thread)
             + self.browser_review.read(cx).held_for_test(thread)
-            + usize::from(self.facts.get(key).is_some())
-            + self.decisions.read(cx).rules().iter().filter(|rule| rule.thread == key).count()
+            + usize::from(self.facts.get(thread).is_some())
+            + self.decisions.read(cx).rules().iter().filter(|rule| rule.thread == thread).count()
             + self
                 .factory()
-                .map_or(0, |view| view.read(cx).archive.read(cx).held_for_test(key))
+                .map_or(0, |view| view.read(cx).archive.read(cx).held_for_test(thread))
             + usize::from(self.pr_reads.holds(thread))
     }
 
@@ -517,11 +518,11 @@ impl CockpitView {
             let active = self.active_surface(thread);
             match active {
                 Some(SurfaceId::Files) => {
-                    self.ensure_files(thread.thread(), cx);
+                    self.ensure_files(thread, cx);
                 }
-                Some(SurfaceId::Changes) => self.ensure_diff(tools::Diff::Changes(thread.thread()), cx),
+                Some(SurfaceId::Changes) => self.ensure_diff(tools::Diff::Changes(thread), cx),
                 Some(SurfaceId::PullRequest(number)) => {
-                    let target = pr_read::PrTarget::thread(thread.thread(), number);
+                    let target = pr_read::PrTarget::thread(thread, number);
                     self.read_pr_snapshot(target, false, cx);
                     let tab = self.panel.surfaces.get(thread).map(|state| state.pr_tab(number));
                     if tab == Some(PrTab::Code) {
@@ -535,11 +536,11 @@ impl CockpitView {
 
     /// How wide the panel of Pane `index` rests: its Thread's width, a
     /// draft's preview's reading width.
-    pub(super) fn panel_rest_w(&self, index: usize, cx: &gpui::App) -> f32 {
+    pub(super) fn panel_rest_w(&self, index: usize) -> f32 {
         let window = self.panel.window_w;
         let nav = self.nav_rest_w();
         match self.panes[index].thread() {
-            Some(thread) => match self.panel.surfaces.get(self.cockpit.read(cx).thread_key(thread)) {
+            Some(thread) => match self.panel.surfaces.get(thread) {
                 Some(state) => panel_w(state, window, nav),
                 None => floor_w(Some(&SurfaceId::Overview), window, nav).min(most_w(window, nav)),
             },
@@ -551,7 +552,7 @@ impl CockpitView {
     /// none while it is hidden or sliding shut.
     pub(super) fn panel_target_w(&self, cx: &gpui::App) -> f32 {
         self.panel_pane(cx)
-            .map_or(0., |index| self.panel_rest_w(index, cx))
+            .map_or(0., |index| self.panel_rest_w(index))
     }
 
     /// What the board leaves at its right: the panel's column as far in as
@@ -576,9 +577,8 @@ impl CockpitView {
         };
         let shown = match owner.thread() {
             Some(thread) => {
-                let key = self.cockpit.read(cx).thread_key(thread);
-                let shown = !self.panel_open(key);
-                self.apply_surface(key, SurfaceAction::SetOpen(shown));
+                let shown = !self.panel_open(thread);
+                self.apply_surface(thread, SurfaceAction::SetOpen(shown));
                 if shown {
                     self.refresh_context(thread, cx);
                 }
@@ -604,7 +604,7 @@ impl CockpitView {
     }
 
     /// Ask `thread`'s Session to report its context afresh, when it can.
-    pub(super) fn refresh_context(&mut self, thread: ThreadId, cx: &mut gpui::App) {
+    pub(super) fn refresh_context(&mut self, thread: ThreadKey, cx: &mut gpui::App) {
         let Some(open) = self.cockpit.read(cx).thread(thread) else {
             return;
         };
@@ -696,7 +696,7 @@ impl CockpitView {
         let owner = index.map(|index| self.panes[index].identity);
         let thread = owner
             .and_then(|owner| owner.thread())
-            .map(|thread| self.cockpit.read(cx).thread_key(thread));
+            ;
         self.panel.focus.begin(thread, window, cx);
         let (index, owner) = (index?, owner?);
         let sliding_out = self.panel_pane(cx).is_none();
@@ -768,7 +768,7 @@ impl CockpitView {
                         .top_0()
                         .right_0()
                         .bottom_0()
-                        .w(px(self.panel_rest_w(index, cx)))
+                        .w(px(self.panel_rest_w(index)))
                         .child(column),
                 )
                 .children(edge)
@@ -852,7 +852,7 @@ impl CockpitView {
                     .pr(px(PANEL_PAD_R))
                     .pb(px(PANEL_PAD_B))
                     .child(panel_body(
-                        self.background_inputs(thread.thread(), true, cx)
+                        self.background_inputs(thread, true, cx)
                             .map(|inputs| self.background.update(cx, |background, cx| background.pane(&inputs, cx)))
                             .unwrap_or_else(div)
                             .into_any_element(),
@@ -862,7 +862,7 @@ impl CockpitView {
             }
             Some(SurfaceId::File(_) | SurfaceId::Browser) => padded(self.panel_preview(owner, cx)),
             Some(SurfaceId::Files) => self.files.clone().into_any_element(),
-            Some(SurfaceId::Changes) => filled(self.changes_pane(tools::Diff::Changes(thread.thread()), cx).into_any_element()),
+            Some(SurfaceId::Changes) => filled(self.changes_pane(tools::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(_)) => filled(self.terminals.clone().into_any_element()),
             Some(SurfaceId::SideChat(_)) => filled(self.side_chat.clone().into_any_element()),
             Some(SurfaceId::PullRequest(_)) => filled(self.pull_request.clone().into_any_element()),

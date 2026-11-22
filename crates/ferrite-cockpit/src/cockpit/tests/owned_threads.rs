@@ -19,12 +19,12 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
             ferrite_core::ThreadOwner::Task("t-1".into()),
         )
         .unwrap();
-    let project = core.project_id(mine).unwrap();
+    let project = core.project_of(mine).unwrap();
     let coordinator = core
         .fixture_open_owned(
             Provider::Claude,
             WorkspaceChoice::Main { checkout: here() },
-            ferrite_core::ThreadOwner::Factory(project),
+            ferrite_core::ThreadOwner::Factory(project.project()),
         )
         .unwrap();
     core.park(coordinator).unwrap();
@@ -48,16 +48,16 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
     ring(cx);
     assert_eq!(toasts(cx), 0, "a Worker's request rings nothing");
 
-    let listed = |view: &CockpitView, thread: ThreadId, cx: &gpui::App| {
+    let listed = |view: &CockpitView, thread: ThreadKey, cx: &gpui::App| {
         let state = view.nav_state(cx);
         state
             .open_rows()
             .chain(&state.parked)
-            .any(|row| row.key.thread() == thread)
+            .any(|row| row.key.thread() == thread.thread())
             || view
                 .inbox_rows(&state, cx)
                 .iter()
-                .any(|row| row.thread == thread)
+                .any(|row| row.thread == thread.thread())
     };
     view.read_with(cx, |view, cx| {
         assert!(listed(view, mine, cx), "the operator's own is listed");

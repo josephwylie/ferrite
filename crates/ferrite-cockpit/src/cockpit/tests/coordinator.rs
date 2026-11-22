@@ -19,7 +19,7 @@ fn click(cx: &mut gpui::VisualTestContext, selector: &str) {
 
 /// A fixture world with a live Factory: the core, the Project, and the
 /// operator's own Thread.
-fn world(name: &str) -> (Cockpit, ProjectId, ThreadId) {
+fn world(name: &str) -> (Cockpit, ProjectId, ThreadKey) {
     let fake = Fake::default();
     let dir = scratch(name);
     let mut core = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
@@ -27,9 +27,9 @@ fn world(name: &str) -> (Cockpit, ProjectId, ThreadId) {
         .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, mine);
-    let project = core.project_id(mine).unwrap();
+    let project = core.project_of(mine).unwrap();
     core.fixture_live_factory();
-    (core, project, mine)
+    (core, project.project(), mine)
 }
 
 fn window<'a>(
@@ -130,7 +130,7 @@ fn proposals_are_cards_accepted_or_dismissed_beside_the_conversation(cx: &mut Te
         .unwrap();
     core.fixture_factory_command(Command::CoordinatorStarted {
         project,
-        thread: coordinator,
+        thread: coordinator.thread(),
     });
     for act in [
         Act::Start {
@@ -143,7 +143,7 @@ fn proposals_are_cards_accepted_or_dismissed_beside_the_conversation(cx: &mut Te
         },
     ] {
         core.fixture_factory_command(Command::Propose {
-            coordinator,
+            coordinator: coordinator.thread(),
             act,
             catalog: Catalog::default(),
         });
@@ -208,7 +208,7 @@ fn focusing_a_coordinator_by_id_opens_its_projects_coordinator_tab(cx: &mut Test
         .unwrap();
     core.fixture_factory_command(Command::CoordinatorStarted {
         project,
-        thread: coordinator,
+        thread: coordinator.thread(),
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
@@ -216,7 +216,7 @@ fn focusing_a_coordinator_by_id_opens_its_projects_coordinator_tab(cx: &mut Test
     view.update(cx, |view, cx| {
         view.cockpit
             .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
-                thread: coordinator,
+                thread: coordinator.thread(),
                 fork_of: None,
             }));
         cx.notify();

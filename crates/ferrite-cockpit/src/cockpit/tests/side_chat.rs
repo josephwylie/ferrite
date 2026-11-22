@@ -33,20 +33,20 @@ fn answered<'a>(
 fn open_chat(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| {
         let owner = view.focused_thread(cx).unwrap();
-        view.open_side_chat(view.cockpit.read(cx).thread_key(owner), cx);
+        view.open_side_chat(owner, cx);
     });
     tick(cx);
     tick(cx);
 }
 
-fn owner(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> ferrite_core::ThreadId {
+fn owner(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> ferrite_core::ThreadKey {
     view.read_with(cx, |view, cx| view.focused_thread(cx).unwrap())
 }
 
 /// `owner`'s side chat Surfaces, in tab order.
 pub(super) fn side_tabs(
     view: &Entity<CockpitView>,
-    owner: ThreadId,
+    owner: ThreadKey,
     cx: &mut gpui::VisualTestContext,
 ) -> Vec<u64> {
     panel_tabs(view, owner, cx)
@@ -60,62 +60,54 @@ pub(super) fn side_tabs(
 }
 
 /// `thread` as the side chat keys it.
-fn key(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> ThreadKey {
-    view.cockpit.read(cx).thread_key(thread)
-}
-
 /// What the cases read of the side chat, held here so a move of its
 /// state changes these and not the cases.
-pub(super) fn draft(view: &CockpitView, owner: ThreadId, cx: &gpui::App) -> Option<String> {
-    view.side_chat.read(cx).draft(key(view, owner, cx), cx)
+pub(super) fn draft(view: &CockpitView, owner: ThreadKey, cx: &gpui::App) -> Option<String> {
+    view.side_chat.read(cx).draft(owner, cx)
 }
 
-fn titles(view: &CockpitView, owner: ThreadId, cx: &gpui::App) -> (Vec<SharedString>, usize) {
-    view.side_chat.read(cx).titles(key(view, owner, cx))
+fn titles(view: &CockpitView, owner: ThreadKey, cx: &gpui::App) -> (Vec<SharedString>, usize) {
+    view.side_chat.read(cx).titles(owner)
 }
 
-fn forks(view: &CockpitView, owner: ThreadId, cx: &gpui::App) -> Vec<ThreadId> {
+fn forks(view: &CockpitView, owner: ThreadKey, cx: &gpui::App) -> Vec<ThreadKey> {
     view.side_chat
         .read(cx)
-        .threads(key(view, owner, cx))
-        .into_iter()
-        .map(ThreadKey::thread)
-        .collect()
+        .threads(owner)
 }
 
-fn owns(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> bool {
-    view.side_chat.read(cx).owns(key(view, thread, cx))
+fn owns(view: &CockpitView, thread: ThreadKey, cx: &gpui::App) -> bool {
+    view.side_chat.read(cx).owns(thread)
 }
 
 /// The shown tab's fork, once it has one.
-pub(super) fn shown_fork(view: &CockpitView, owner: ThreadId, cx: &gpui::App) -> Option<ThreadId> {
+pub(super) fn shown_fork(view: &CockpitView, owner: ThreadKey, cx: &gpui::App) -> Option<ThreadKey> {
     view.side_chat
         .read(cx)
-        .shown_fork(key(view, owner, cx))
-        .map(ThreadKey::thread)
+        .shown_fork(owner)
 }
 
 fn field_of(
     view: &CockpitView,
-    owner: ThreadId,
+    owner: ThreadKey,
     index: usize,
     cx: &gpui::App,
 ) -> Option<Entity<ferrite_pane::composer::Composer>> {
-    view.side_chat.read(cx).field_of(key(view, owner, cx), index).cloned()
+    view.side_chat.read(cx).field_of(owner, index).cloned()
 }
 
-fn bring_back_blocked(view: &CockpitView, owner: ThreadId, id: u64, cx: &gpui::App) -> Option<&'static str> {
-    let owner = key(view, owner, cx);
+fn bring_back_blocked(view: &CockpitView, owner: ThreadKey, id: u64, cx: &gpui::App) -> Option<&'static str> {
+    let owner = owner;
     view.bring_back_blocked(owner, view.side_chat.read(cx).fork(owner, id), cx)
 }
 
 fn shown_pane<R>(
     view: &CockpitView,
-    owner: ThreadId,
+    owner: ThreadKey,
     cx: &gpui::App,
     read: impl FnOnce(&PaneView, &gpui::App) -> R,
 ) -> Option<R> {
-    Some(read(view.side_chat.read(cx).pane(key(view, owner, cx))?, cx))
+    Some(read(view.side_chat.read(cx).pane(owner)?, cx))
 }
 
 /// Opened, a side chat is a Panel tab (ADR 0039) at least its token wide,
@@ -202,7 +194,7 @@ fn side_chat_tabs_are_separate_conversations(cx: &mut TestAppContext) {
     // Closing the shown tab leaves the other.
     let forks = view.read_with(cx, |view, cx| forks(view, owner, cx));
     let first = crate::cockpit::surfaces::SurfaceId::SideChat(ids[0]);
-    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(owner), &first, cx));
+    view.update(cx, |view, cx| view.close_surface(owner, &first, cx));
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(titles(view, owner, cx).0, ["Side chat 2"]);
@@ -212,7 +204,7 @@ fn side_chat_tabs_are_separate_conversations(cx: &mut TestAppContext) {
 
     // The last closed, no side chat draws.
     let last = crate::cockpit::surfaces::SurfaceId::SideChat(ids[1]);
-    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(owner), &last, cx));
+    view.update(cx, |view, cx| view.close_surface(owner, &last, cx));
     tick(cx);
     assert!(cx.debug_bounds("side-chat").is_none());
     assert!(view.read_with(cx, |view, cx| titles(view, owner, cx).0.is_empty()));
@@ -393,7 +385,7 @@ fn the_side_chat_tab_shown_takes_the_keys(cx: &mut TestAppContext) {
     assert_eq!(composer_text(&view, cx), "", "nor the Composer");
 
     let shown = crate::cockpit::surfaces::SurfaceId::SideChat(ids[0]);
-    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(owner), &shown, cx));
+    view.update(cx, |view, cx| view.close_surface(owner, &shown, cx));
     tick(cx);
     cx.simulate_input("left");
     view.read_with(cx, |view, cx| {
@@ -526,7 +518,7 @@ fn a_tool_row_in_a_side_chat_unfolds_in_its_tab(cx: &mut TestAppContext) {
 }
 
 /// Whether `thread`'s transcript holds `text` anywhere.
-fn holds(view: &CockpitView, thread: ThreadId, text: &str, cx: &gpui::App) -> bool {
+fn holds(view: &CockpitView, thread: ThreadKey, text: &str, cx: &gpui::App) -> bool {
     view.cockpit.read(cx).thread(thread).is_some_and(|open| {
         ferrite_core::transcript::plain_text(open.transcript().blocks()).contains(text)
     })
@@ -541,7 +533,7 @@ fn a_side_chat_keeps_two_machines_threads_apart(cx: &mut TestAppContext) {
     open_chat(&view, cx);
     view.read_with(cx, |view, cx| {
         let fork = shown_fork(view, owner, cx).expect("the tab took the fork");
-        let elsewhere = |thread: ThreadId| ThreadKey::fixture(u32::MAX, thread.get());
+        let elsewhere = |thread: ThreadKey| ThreadKey::fixture(u32::MAX, thread.thread().get());
         let chat = view.side_chat.read(cx);
         assert_eq!(titles(view, owner, cx).0.len(), 1);
         assert_eq!(chat.titles(elsewhere(owner)), (Vec::new(), 0));
@@ -558,11 +550,11 @@ fn a_side_chat_keeps_two_machines_threads_apart(cx: &mut TestAppContext) {
 fn a_fork_that_lands_after_its_tab_closed_is_retired(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("side-chat-closed-early", cx);
     let owner = owner(&view, cx);
-    view.update(cx, |view, cx| view.open_side_chat(view.cockpit.read(cx).thread_key(owner), cx));
+    view.update(cx, |view, cx| view.open_side_chat(owner, cx));
     let id = side_tabs(&view, owner, cx)[0];
     assert!(view.read_with(cx, |view, cx| shown_fork(view, owner, cx)).is_none(), "not landed yet");
     let tab = crate::cockpit::surfaces::SurfaceId::SideChat(id);
-    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(owner), &tab, cx));
+    view.update(cx, |view, cx| view.close_surface(owner, &tab, cx));
     tick(cx);
     tick(cx);
     assert_eq!(fake.forks.borrow().len(), 1, "the fork was asked");
@@ -599,11 +591,11 @@ fn each_fork_lands_in_the_tab_of_the_thread_it_forks(cx: &mut TestAppContext) {
         assert!(holds(view, first, "alpha", cx) && holds(view, second, "beta", cx));
     });
     view.update(cx, |view, cx| {
-        view.open_side_chat(view.cockpit.read(cx).thread_key(first), cx);
-        view.open_side_chat(view.cockpit.read(cx).thread_key(second), cx);
+        view.open_side_chat(first, cx);
+        view.open_side_chat(second, cx);
     });
     let tab = crate::cockpit::surfaces::SurfaceId::SideChat(side_tabs(&view, first, cx)[0]);
-    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(first), &tab, cx));
+    view.update(cx, |view, cx| view.close_surface(first, &tab, cx));
     tick(cx);
     tick(cx);
     assert_eq!(fake.forks.borrow().len(), 2, "both forks were asked");
@@ -636,10 +628,10 @@ fn a_focus_asked_while_a_fork_is_on_its_way_lands_the_window(cx: &mut TestAppCon
     view.update(cx, |view, cx| {
         view.cockpit
             .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
-                thread: other,
+                thread: other.thread(),
                 fork_of: None,
             }));
-        view.open_side_chat(view.cockpit.read(cx).thread_key(owner), cx);
+        view.open_side_chat(owner, cx);
     });
     tick(cx);
     tick(cx);
@@ -693,8 +685,8 @@ fn a_server_from_before_fork_of_guesses_no_owner_between_two(cx: &mut TestAppCon
         tick(cx);
     }
     view.update(cx, |view, cx| {
-        view.open_side_chat(view.cockpit.read(cx).thread_key(first), cx);
-        view.open_side_chat(view.cockpit.read(cx).thread_key(second), cx);
+        view.open_side_chat(first, cx);
+        view.open_side_chat(second, cx);
     });
     tick(cx);
     tick(cx);
@@ -721,8 +713,8 @@ fn a_failed_fork_leaves_the_next_forks_where_they_belong(cx: &mut TestAppContext
     open_chat(&view, cx);
     let tabs = side_tabs(&view, owner, cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.side_chat.read(cx).fork(view.cockpit.read(cx).thread_key(owner), tabs[0]), None, "the failed fork's tab waits");
-        assert!(view.side_chat.read(cx).fork(view.cockpit.read(cx).thread_key(owner), tabs[1]).is_some(), "the next tab takes its fork");
+        assert_eq!(view.side_chat.read(cx).fork(owner, tabs[0]), None, "the failed fork's tab waits");
+        assert!(view.side_chat.read(cx).fork(owner, tabs[1]).is_some(), "the next tab takes its fork");
     });
 
     *fake.fail_fork.borrow_mut() = true;

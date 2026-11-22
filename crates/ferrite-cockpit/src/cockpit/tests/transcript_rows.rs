@@ -92,7 +92,7 @@ fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContex
     cx.simulate_click(summary.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
-        let text = view.selection.registered(view.panes[0].thread().unwrap());
+        let text = view.selection.registered(view.panes[0].thread().unwrap().thread());
         assert!(
             text.iter().any(|(block, _, _, text)| *block == id
                 && *text == format!("**Checking files**\n\n{body}")),
@@ -129,7 +129,7 @@ fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContex
         .unwrap();
     tick(cx);
     view.read_with(cx, |view, _| {
-        let text = view.selection.registered(view.panes[0].thread().unwrap());
+        let text = view.selection.registered(view.panes[0].thread().unwrap().thread());
         assert!(
             text.iter().any(|(block, _, _, text)| *block == id
                 && *text == format!("**Checking files**\n\n{body} More streamed detail.")),
@@ -170,7 +170,7 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
         assert!(
             !view
                 .selection
-                .registered(thread)
+                .registered(thread.thread())
                 .iter()
                 .any(|(_, _, _, value)| value == &text),
             "reasoning starts collapsed"
@@ -433,7 +433,7 @@ fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAp
     tick(cx);
 
     let chevron = view.read_with(cx, |view, cx| {
-        let runs = view.selection.registered(thread);
+        let runs = view.selection.registered(thread.thread());
         let label = "cat \\<\\<\\'EOF\\' …";
         assert!(
             runs.iter().any(|(_, _, _, text)| text == label),
@@ -469,7 +469,7 @@ fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAp
         assert!(view.panes[0].tool_expanded("multiline"));
         assert!(view
             .selection
-            .registered(thread)
+            .registered(thread.thread())
             .iter()
             .any(|(_, _, _, text)| text == command));
     });
@@ -579,7 +579,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
         );
     });
 
-    let collapsed = view.read_with(cx, |view, _| view.selection.registered(thread));
+    let collapsed = view.read_with(cx, |view, _| view.selection.registered(thread.thread()));
     // Shut, the call line is the call alone: what it printed folds behind
     // it, its first line too.
     assert!(collapsed
@@ -603,7 +603,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
 
     view.read_with(cx, |view, cx| {
         assert!(view.panes[0].tool_expanded("toolu_9"));
-        let runs = view.selection.registered(thread);
+        let runs = view.selection.registered(thread.thread());
         // Large output is one native read-only document, retaining exact
         // hard lines and Unicode without per-character Markdown layout.
         let tool_block = view
@@ -720,7 +720,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
         assert!(!view.panes[0].tool_expanded("toolu_9"));
         assert!(!view
             .selection
-            .registered(thread)
+            .registered(thread.thread())
             .iter()
             .any(|(_, _, _, text)| text.starts_with("first line\n\n")));
     });
@@ -947,10 +947,10 @@ fn native_progress_follows_the_tail_and_metadata_refreshes_the_wall(cx: &mut Tes
         })
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, cx| {
+    view.read_with(cx, |view, _| {
         assert!(view
             .facts
-            .get(view.cockpit.read(cx).thread_key(thread))
+            .get(thread)
             .unwrap()
             .wall
             .working
@@ -1050,7 +1050,7 @@ fn edited_files_are_in_the_panel_and_one_click_away(cx: &mut TestAppContext) {
     cx.simulate_click(link.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).active_path(view.cockpit.read(cx).thread_key(view.panes[0].thread().unwrap()))),
+        view.read_with(cx, |view, cx| view.files.read(cx).active_path(view.panes[0].thread().unwrap())),
         Some(document)
     );
     assert!(
@@ -1068,7 +1068,7 @@ fn edited_files_are_in_the_panel_and_one_click_away(cx: &mut TestAppContext) {
     cx.simulate_click(code.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).active_path(view.cockpit.read(cx).thread_key(view.panes[0].thread().unwrap()))),
+        view.read_with(cx, |view, cx| view.files.read(cx).active_path(view.panes[0].thread().unwrap())),
         Some(source)
     );
 }
@@ -1512,7 +1512,7 @@ fn the_live_row_opens_the_work_it_stands_for(cx: &mut TestAppContext) {
     tick(cx);
     let running_rows = |view: &CockpitView| {
         view.selection
-            .registered(thread)
+            .registered(thread.thread())
             .iter()
             .filter(|(_, _, _, text)| text == "sleep 15 \\&\\& echo done")
             .count()

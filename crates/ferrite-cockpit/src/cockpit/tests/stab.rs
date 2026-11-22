@@ -46,7 +46,7 @@ fn keycaps_and_menu_shortcuts_draw_the_command_glyph(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| {
         view.open_context_menu(
-            MenuTarget::Pane(keyed(view, thread, cx)),
+            MenuTarget::Pane(thread),
             gpui::point(px(400.), px(300.)),
             cx,
         )
@@ -228,8 +228,8 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
         "the Inbox lists every finish"
     );
     for thread in &threads[1..4] {
-        let toast: &'static str = format!("toast-{}", thread.get()).leak();
-        assert!(cx.debug_bounds(toast).is_none(), "no toast for {thread}");
+        let toast: &'static str = format!("toast-{}", thread.thread().get()).leak();
+        assert!(cx.debug_bounds(toast).is_none(), "no toast for {thread:?}");
     }
     assert!(cx.debug_bounds("toast-more").is_none(), "no `+N` bubble");
     assert_eq!(
@@ -349,7 +349,7 @@ fn the_own_answer_is_one_bare_line_on_the_label_column(cx: &mut TestAppContext) 
     });
     let field = cx
         .debug_bounds(Box::leak(
-            format!("request-other-{}-{serial}-0", thread.get()).into_boxed_str(),
+            format!("request-other-{}-{serial}-0", thread.thread().get()).into_boxed_str(),
         ))
         .expect("the own-answer field");
     let choice = cx.debug_bounds("question-choice-0-0").expect("an option");
@@ -534,7 +534,7 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
     .collect::<Vec<_>>()
     .join(" · ");
     view.update(cx, |view, cx| {
-        view.facts.pr_answered(view.cockpit.read(cx).thread_key(thread), Some(pr));
+        view.facts.pr_answered(thread, Some(pr));
         cx.notify();
     });
     tick(cx);
@@ -574,16 +574,16 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
 fn a_project_in_use_keeps_its_remove_verb_disabled(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("remove-project-in-use", 1);
     let thread = core.threads()[0];
-    let project = core.project_id(thread).expect("the Thread's Project");
+    let project = core.project_of(thread).expect("the Thread's Project");
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
-    view.update(cx, |view, cx| view.open_project_editor(project, cx));
+    view.update(cx, |view, cx| view.open_project_editor(project.project(), cx));
     tick(cx);
     let remove = cx.debug_bounds("remove-project").expect("the remove verb");
     cx.simulate_click(remove.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.cockpit.read(cx).registry().project(project).is_some());
+        assert!(view.cockpit.read(cx).registry().project(project.project()).is_some());
         assert!(view.project_card(cx).is_some(), "the sheet stays up");
     });
 }
@@ -992,6 +992,7 @@ fn the_solo_composer_holds_its_place_through_a_decision(cx: &mut TestAppContext)
 fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
     let dir = scratch("no-server");
     let core = Cockpit::attach(ferrite_core::cockpit::Attach {
+            saved_as: Some(ferrite_core::MachineKey(None)),
             browser: false,
             driven: false,
         store: dir.clone(),
@@ -1030,6 +1031,7 @@ fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
 fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
     let dir = scratch("restart-press");
     let core = Cockpit::attach(ferrite_core::cockpit::Attach {
+            saved_as: Some(ferrite_core::MachineKey(None)),
             browser: false,
             driven: false,
         store: dir.clone(),

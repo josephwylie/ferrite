@@ -16,7 +16,9 @@ use ferrite_core::providers::Session;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::transcript::{Body, ToolState, Transcript};
 use ferrite_core::workspace::WorkspaceChoice;
-use ferrite_core::{Decision, DecisionAnswer, SessionEvent, ThreadId, ToolResult, TurnOutcome};
+use ferrite_core::{
+    Decision, DecisionAnswer, SessionEvent, ThreadId, ThreadKey, ToolResult, TurnOutcome,
+};
 use serde_json::json;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -177,7 +179,7 @@ struct Harness {
     // Drop Sessions and writers before deleting their exclusively owned store.
     cockpit: Cockpit,
     control: Control,
-    thread: ThreadId,
+    thread: ThreadKey,
     scratch: Scratch,
 }
 
@@ -551,7 +553,7 @@ fn overlapping_tool_and_message_ids_keep_transcripts_usage_and_resume_isolated()
     h.cockpit.park(h.thread).unwrap();
     let snapshot = Store::open(h.scratch.0.join("store"))
         .unwrap()
-        .load(h.thread)
+        .load(h.thread.thread())
         .unwrap();
     assert_eq!(snapshot.resume_target(), Some("main-0"));
     h.cockpit.revive(h.thread).unwrap();

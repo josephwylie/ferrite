@@ -10,7 +10,7 @@ fn solo<'a>(
     name: &str,
     width: f32,
     cx: &'a mut TestAppContext,
-) -> (Entity<CockpitView>, ThreadId, &'a mut gpui::VisualTestContext) {
+) -> (Entity<CockpitView>, ThreadKey, &'a mut gpui::VisualTestContext) {
     let (core, _fake, _checkout) = bound_cockpit(name, Provider::Claude);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -69,7 +69,7 @@ fn a_drag_of_the_panels_edge_moves_its_left_side_to_the_release(cx: &mut TestApp
 fn a_tab_dragged_five_points_is_a_click_and_onto_another_moves(cx: &mut TestAppContext) {
     let (view, thread, cx) = solo("hands-drag-tab", 1900., cx);
     for id in [SurfaceId::Changes, SurfaceId::Background] {
-        view.update(cx, |view, cx| view.upsert_surface(view.cockpit.read(cx).thread_key(thread), id, cx));
+        view.update(cx, |view, cx| view.upsert_surface(thread, id, cx));
         tick(cx);
     }
     let edge = cx.debug_bounds("panel-edge").unwrap().center();

@@ -326,7 +326,7 @@ fn a_menu_shortcut_is_a_bound_chord(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         let letters: Vec<String> = view
-            .context_rows(MenuTarget::Thread(keyed(view, thread, cx)), cx)
+            .context_rows(MenuTarget::Thread(thread), cx)
             .into_iter()
             .flatten()
             .filter(|(_, verb)| !matches!(verb, MenuVerb::Submenu(_)))
@@ -339,7 +339,7 @@ fn a_menu_shortcut_is_a_bound_chord(cx: &mut TestAppContext) {
         unique.sort();
         unique.dedup();
         assert_eq!(unique.len(), letters.len(), "{letters:?}");
-        for target in [MenuTarget::Pane(keyed(view, thread, cx))] {
+        for target in [MenuTarget::Pane(thread)] {
             for (item, _) in view.context_rows(target, cx).into_iter().flatten() {
                 if let Some(keys) = &item.shortcut {
                     assert!(
@@ -377,7 +377,7 @@ fn a_right_click_summons_the_menu_and_delete_takes_two_presses(cx: &mut TestAppC
         let menu = view
             .context_menu()
             .expect("a right-click opens the menu");
-        assert_eq!(menu.target, MenuTarget::Pane(keyed(view, thread, cx)));
+        assert_eq!(menu.target, MenuTarget::Pane(thread));
         let labels: Vec<&str> = menu
             .rows
             .iter()
@@ -391,7 +391,7 @@ fn a_right_click_summons_the_menu_and_delete_takes_two_presses(cx: &mut TestAppC
         // a Thread is the nav row's act.
         assert!(!labels.contains(&"Delete thread"), "{labels:?}");
         let delete = view
-            .context_rows(MenuTarget::Thread(keyed(view, thread, cx)), cx)
+            .context_rows(MenuTarget::Thread(thread), cx)
             .iter()
             .position(|row| matches!(row, Some((_, MenuVerb::Delete))))
             .expect("the nav row's menu deletes");
@@ -408,7 +408,7 @@ fn a_right_click_summons_the_menu_and_delete_takes_two_presses(cx: &mut TestAppC
 
     view.update_in(cx, |view, window, cx| {
         view.open_context_menu(
-            MenuTarget::Thread(keyed(view, thread, cx)),
+            MenuTarget::Thread(thread),
             gpui::point(px(600.), px(300.)),
             cx,
         );
@@ -760,7 +760,7 @@ fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update_in(cx, |view, window, cx| {
         view.open_context_menu(
-            MenuTarget::Thread(keyed(view, thread, cx)),
+            MenuTarget::Thread(thread),
             gpui::point(px(600.), px(300.)),
             cx,
         );

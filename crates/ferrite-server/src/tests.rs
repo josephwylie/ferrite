@@ -16,7 +16,7 @@ use ferrite_core::protocol::{Peer, Resume, WireAnswer, WireChoice, WireEntry};
 use ferrite_core::providers::Session;
 use ferrite_core::store::Provider;
 use ferrite_core::transcript::Body;
-use ferrite_core::{Decision, DecisionAnswer, SessionEvent};
+use ferrite_core::{Decision, DecisionAnswer, SessionEvent, ThreadKey};
 
 mod browser_annotations;
 mod browser_lifetime;
@@ -1318,6 +1318,7 @@ fn cockpit(harness: &Harness) -> ferrite_core::cockpit::Cockpit {
         server: ferrite_core::cockpit::Endpoint::Local {
             executable: "/bin/false".into(),
         },
+        saved_as: Some(ferrite_core::MachineKey(None)),
         client: Peer {
             name: "test".into(),
             version: "0".into(),
@@ -1328,6 +1329,16 @@ fn cockpit(harness: &Harness) -> ferrite_core::cockpit::Cockpit {
         discovery: Box::new(NoDiscovery),
     })
     .unwrap()
+}
+
+/// `thread` of the harness's Server as `window` names it: this computer's,
+/// which saved files name `MachineKey(None)`.
+fn here(window: &ferrite_core::cockpit::Cockpit, thread: ThreadId) -> ThreadKey {
+    let saved = ferrite_core::SavedThread {
+        machine: ferrite_core::MachineKey(None),
+        thread,
+    };
+    window.resolve(&saved).expect("the window holds this computer")
 }
 
 /// Pump a window until `done` holds, for at most [`PATIENCE`].
@@ -1362,7 +1373,7 @@ fn pump_until_asked(
 }
 
 /// Whether the window's digest of `thread` reads `said` on its wall card.
-fn digest_says(window: &ferrite_core::cockpit::Cockpit, thread: ThreadId, said: &str) -> bool {
+fn digest_says(window: &ferrite_core::cockpit::Cockpit, thread: ThreadKey, said: &str) -> bool {
     window.thread(thread).is_some_and(|open| {
         open.digest()
             .wall
@@ -1372,7 +1383,7 @@ fn digest_says(window: &ferrite_core::cockpit::Cockpit, thread: ThreadId, said: 
     })
 }
 
-fn shows(window: &ferrite_core::cockpit::Cockpit, thread: ThreadId, said: &str) -> bool {
+fn shows(window: &ferrite_core::cockpit::Cockpit, thread: ThreadKey, said: &str) -> bool {
     window.thread(thread).is_some_and(|open| {
         open.transcript()
             .blocks()
@@ -1426,20 +1437,22 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     provider.send(text("on it")).unwrap();
     pump_until(&mut window, |window| shows(window, thread, "on it"));
     let project = window.register_project(&harness.dir).unwrap();
-    assert!(window.registry().project(project).is_some());
+    assert!(window.registry().project(project.project()).is_some());
 
+    // The second window names the same Thread by its own key.
     let mut second = cockpit(&harness);
-    second.draws_transcripts([thread]);
-    pump_until(&mut second, |second| shows(second, thread, "on it"));
+    let theirs = second.resolve(&window.saved(thread).unwrap()).unwrap();
+    second.draws_transcripts([theirs]);
+    pump_until(&mut second, |second| shows(second, theirs, "on it"));
 
     provider.send(decision()).unwrap();
-    let pending = |window: &ferrite_core::cockpit::Cockpit| {
+    let pending = |window: &ferrite_core::cockpit::Cockpit, thread| {
         window
             .thread(thread)
             .is_some_and(|open| open.pending().is_some())
     };
-    pump_until(&mut window, pending);
-    pump_until(&mut second, pending);
+    pump_until(&mut window, |window| pending(window, thread));
+    pump_until(&mut second, |second| pending(second, theirs));
     let handle = window.thread(thread).unwrap().pending_decisions()[0]
         .handle
         .clone();
@@ -1450,17 +1463,17 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
         .respond_decision(thread, &handle, allow.clone())
         .unwrap());
     assert!(
-        !second.respond_decision(thread, &handle, allow).unwrap(),
+        !second.respond_decision(theirs, &handle, allow).unwrap(),
         "already answered"
     );
     assert_eq!(harness.answers.lock().unwrap().len(), 1);
-    pump_until(&mut second, |second| !pending(second));
+    pump_until(&mut second, |second| !pending(second, theirs));
 
     window.park(thread).unwrap();
     assert!(window.thread(thread).is_none());
     // Its row arrives once the Server has read it.
     pump_until(&mut window, |window| window.parked().unwrap() == [thread]);
-    pump_until(&mut second, |second| second.thread(thread).is_none());
+    pump_until(&mut second, |second| second.thread(theirs).is_none());
 }
 
 /// A window never saw the requests answered before it attached. Their
@@ -1488,12 +1501,12 @@ fn a_reopened_window_can_answer_questions() {
             .recv_timeout(PATIENCE)
             .unwrap();
         provider.send(decision()).unwrap();
-        let pending = |window: &ferrite_core::cockpit::Cockpit| {
+        let pending = |window: &ferrite_core::cockpit::Cockpit, thread| {
             window
                 .thread(thread)
                 .is_some_and(|open| open.pending().is_some())
         };
-        pump_until(&mut window, pending);
+        pump_until(&mut window, |window| pending(window, thread));
         let first_handle = window.thread(thread).unwrap().pending_decisions()[0]
             .handle
             .clone();
@@ -1506,7 +1519,7 @@ fn a_reopened_window_can_answer_questions() {
                 }
             )
             .unwrap());
-        pump_until(&mut window, |window| !pending(window));
+        pump_until(&mut window, |window| !pending(window, thread));
 
         let question = SessionEvent::DecisionRequested {
             decision: Decision {
@@ -1535,10 +1548,13 @@ fn a_reopened_window_can_answer_questions() {
         };
         if already_pending {
             provider.send(question.clone()).unwrap();
-            pump_until(&mut window, pending);
+            pump_until(&mut window, |window| pending(window, thread));
         }
         drop(window);
+        // The reopened window is a new Cockpit, which names the Thread by
+        // a key of its own.
         let mut reopened = cockpit(&harness);
+        let thread = here(&reopened, thread.thread());
         reopened.draws_transcripts([thread]);
         pump_until(&mut reopened, |window| {
             window
@@ -1553,7 +1569,7 @@ fn a_reopened_window_can_answer_questions() {
         // lands the window numbers the question itself, so wait for the
         // Server's serial rather than read the first one shown.
         pump_until(&mut reopened, |window| {
-            pending(window)
+            pending(window, thread)
                 && window.thread(thread).unwrap().pending_decisions()[0]
                     .handle
                     .serial
@@ -1597,7 +1613,7 @@ fn a_reopened_window_can_answer_questions() {
                 ))
                 .unwrap();
         }
-        pump_until(&mut reopened, |window| !pending(window));
+        pump_until(&mut reopened, |window| !pending(window, thread));
     }
 }
 
@@ -2670,7 +2686,7 @@ fn a_window_on_this_computer_lists_its_parked_threads_off_the_published_rows() {
     let log = harness
         .dir
         .join("threads")
-        .join(thread.to_string())
+        .join(thread.thread().to_string())
         .join("log.jsonl");
     let moved = harness.dir.join("moved.jsonl");
     std::fs::rename(&log, &moved).unwrap();
@@ -2753,6 +2769,7 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
     let mut window = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
         store: harness.dir.join("box").join("threads"),
         server: ferrite_core::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
+        saved_as: Some(ferrite_core::MachineKey(Some("box".into()))),
         client: peer(),
         renderer: None,
         browser: false,
@@ -2803,6 +2820,7 @@ fn every_window_learns_its_server_names_fork_owners() {
     let mut machine = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
         store: harness.dir.join("box").join("threads"),
         server: ferrite_core::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
+        saved_as: Some(ferrite_core::MachineKey(Some("box".into()))),
         client: peer(),
         renderer: None,
         browser: false,
@@ -2855,7 +2873,7 @@ fn a_machine_off_screen_streams_status_and_never_a_transcript() {
         .recv_timeout(PATIENCE)
         .unwrap();
     until(&mut status, &|rows| {
-        rows.iter().any(|row| row.thread == thread)
+        rows.iter().any(|row| row.thread == thread.thread())
     });
     let _ = window.send(thread, "go".into());
     provider.send(text("on it")).unwrap();
@@ -4409,37 +4427,38 @@ fn a_window_mirrors_only_the_threads_it_draws() {
     let mut other = attach(&harness.address);
     let (thread, provider) = open(&mut other, &harness);
     let mut window = cockpit(&harness);
-    let _ = window.send(thread, "go".into());
+    let key = here(&window, thread);
+    let _ = window.send(key, "go".into());
     provider.send(text("on it\n\n")).unwrap();
     turn_ends(&provider);
 
-    pump_until(&mut window, |window| digest_says(window, thread, "on it"));
+    pump_until(&mut window, |window| digest_says(window, key, "on it"));
     pump_until(&mut window, |window| {
         window
-            .thread(thread)
+            .thread(key)
             .is_some_and(|open| !open.digest().at_work)
     });
     // Held while it worked, and as long after as the Server holds it.
     clock.advance(HELD_AT_REST);
     window.pump();
-    assert!(!shows(&window, thread, "on it"), "no transcript off screen");
+    assert!(!shows(&window, key, "on it"), "no transcript off screen");
 
-    window.draws_transcripts([thread]);
-    pump_until(&mut window, |window| shows(window, thread, "on it"));
+    window.draws_transcripts([key]);
+    pump_until(&mut window, |window| shows(window, key, "on it"));
     clock.advance(Duration::from_secs(31 * 60));
     window.pump();
     assert!(
-        shows(&window, thread, "on it"),
+        shows(&window, key, "on it"),
         "still drawn, however long nothing redraws"
     );
 
     window.draws_transcripts([]);
     clock.advance(Duration::from_secs(5 * 60 - 1));
     window.pump();
-    assert!(shows(&window, thread, "on it"), "kept a while off screen");
+    assert!(shows(&window, key, "on it"), "kept a while off screen");
     clock.advance(Duration::from_secs(1));
     window.pump();
-    assert!(!shows(&window, thread, "on it"), "let go");
+    assert!(!shows(&window, key, "on it"), "let go");
 }
 
 /// A Thread at work stays streamed whole however long it is off screen:
@@ -4452,36 +4471,37 @@ fn a_thread_at_work_stays_mirrored_off_screen() {
     let mut other = attach(&harness.address);
     let (thread, provider) = open(&mut other, &harness);
     let mut window = cockpit(&harness);
-    window.draws_transcripts([thread]);
-    let _ = window.send(thread, "go".into());
+    let key = here(&window, thread);
+    window.draws_transcripts([key]);
+    let _ = window.send(key, "go".into());
     provider.send(text("on it\n\n")).unwrap();
-    pump_until(&mut window, |window| shows(window, thread, "on it"));
+    pump_until(&mut window, |window| shows(window, key, "on it"));
     pump_until(&mut window, |window| {
         window
-            .thread(thread)
+            .thread(key)
             .is_some_and(|open| open.digest().working)
     });
 
     window.draws_transcripts([]);
     clock.advance(Duration::from_secs(20 * 60));
     window.pump();
-    assert!(shows(&window, thread, "on it"), "kept while it works");
+    assert!(shows(&window, key, "on it"), "kept while it works");
 
     turn_ends(&provider);
     pump_until(&mut window, |window| {
         window
-            .thread(thread)
+            .thread(key)
             .is_some_and(|open| !open.digest().at_work)
     });
     clock.advance(Duration::from_secs(5 * 60 - 1));
     window.pump();
     assert!(
-        shows(&window, thread, "on it"),
+        shows(&window, key, "on it"),
         "kept a while after it settles"
     );
     clock.advance(Duration::from_secs(1));
     window.pump();
-    assert!(!shows(&window, thread, "on it"), "let go");
+    assert!(!shows(&window, key, "on it"), "let go");
 }
 
 /// A Thread watched mid-turn reads as it is: working, as its digest said
@@ -4509,8 +4529,9 @@ fn a_thread_watched_mid_turn_reads_working() {
 
     // Attached mid-turn: what it reads of the turn comes in the history.
     let mut window = cockpit(&harness);
-    pump_until(&mut window, |window| shows(window, thread, "thinking"));
-    let status = window.thread(thread).map(|open| open.turn().status);
+    let key = here(&window, thread);
+    pump_until(&mut window, |window| shows(window, key, "thinking"));
+    let status = window.thread(key).map(|open| open.turn().status);
     assert_eq!(status, Some(ferrite_core::transcript::Status::Streaming));
 }
 
@@ -4525,6 +4546,7 @@ fn a_thread_at_work_is_mirrored_though_never_drawn() {
     window.draws_transcripts([]);
     let mut other = attach(&harness.address);
     let (thread, provider) = open(&mut other, &harness);
+    let key = here(&window, thread);
     other.command(
         2,
         Op::Send {
@@ -4535,29 +4557,29 @@ fn a_thread_at_work_is_mirrored_though_never_drawn() {
     provider.send(text("on it\n\n")).unwrap();
     pump_until(&mut window, |window| {
         window
-            .thread(thread)
+            .thread(key)
             .is_some_and(|open| open.digest().working)
     });
 
     clock.advance(Duration::from_secs(20 * 60));
     window.pump();
-    pump_until(&mut window, |window| shows(window, thread, "on it"));
+    pump_until(&mut window, |window| shows(window, key, "on it"));
 
     turn_ends(&provider);
     pump_until(&mut window, |window| {
         window
-            .thread(thread)
+            .thread(key)
             .is_some_and(|open| !open.digest().at_work)
     });
     clock.advance(Duration::from_secs(5 * 60 - 1));
     window.pump();
     assert!(
-        shows(&window, thread, "on it"),
+        shows(&window, key, "on it"),
         "kept a while after it settles"
     );
     clock.advance(Duration::from_secs(1));
     window.pump();
-    assert!(!shows(&window, thread, "on it"), "let go");
+    assert!(!shows(&window, key, "on it"), "let go");
 }
 
 /// A small Thread's history never waits on a big one's: watched together,
@@ -4636,18 +4658,19 @@ fn a_thread_drawn_again_arrives_whole() {
     });
     // A window that comes to it settled holds none of it until it draws it.
     let mut window = cockpit(&harness);
-    pump_until(&mut window, |window| digest_says(window, thread, "latest"));
-    assert!(!shows(&window, thread, "latest"));
+    let key = here(&window, thread);
+    pump_until(&mut window, |window| digest_says(window, key, "latest"));
+    assert!(!shows(&window, key, "latest"));
 
     // Drawn every frame as fast as the window can, as the app draws while
     // the pieces cross.
-    window.draws_transcripts([thread]);
+    window.draws_transcripts([key]);
     let deadline = Instant::now() + PATIENCE;
-    while !shows(&window, thread, "latest") {
+    while !shows(&window, key, "latest") {
         assert!(Instant::now() < deadline, "timed out");
         window.pump();
         assert!(
-            !shows(&window, thread, "oldest") || shows(&window, thread, "latest"),
+            !shows(&window, key, "oldest") || shows(&window, key, "latest"),
             "drew part of its history"
         );
     }
@@ -4670,15 +4693,16 @@ fn a_window_attaching_streams_no_thread_it_does_not_draw() {
     });
 
     let mut window = cockpit(&harness);
+    let key = here(&window, thread);
     pump_until(&mut window, |window| {
-        digest_says(window, thread, "before the window")
+        digest_says(window, key, "before the window")
     });
     for _ in 0..20 {
         window.pump();
         std::thread::sleep(Duration::from_millis(5));
     }
 
-    assert!(!shows(&window, thread, "before the window"));
+    assert!(!shows(&window, key, "before the window"));
 }
 
 /// A window showing a Subagent reads its card in the digest at once, though
@@ -6070,10 +6094,12 @@ fn snooze_is_shared_and_survives_server_restart_without_a_session() {
             .and_then(|open| open.snooze())
             .is_some()
     });
+    // Each window names the Thread by a key of its own.
     let mut second = cockpit(&harness);
+    let theirs = here(&second, thread.thread());
     pump_until(&mut second, |window| {
         window
-            .thread(thread)
+            .thread(theirs)
             .and_then(|open| open.snooze())
             .is_some_and(|snooze| snooze.until == until)
     });
@@ -6086,6 +6112,7 @@ fn snooze_is_shared_and_survives_server_restart_without_a_session() {
     gone(&harness.api);
     let successor = serve_in(harness.dir.clone(), None);
     let mut reopened = cockpit(&successor);
+    let thread = here(&reopened, thread.thread());
     pump_until(&mut reopened, |window| {
         window
             .thread(thread)

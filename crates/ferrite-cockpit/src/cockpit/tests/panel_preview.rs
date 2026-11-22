@@ -73,7 +73,7 @@ fn open(
 fn a_file_at_a_line_opens_wide_and_closes_back_to_the_sections(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window("preview-line", 1, cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.update(cx, |view, cx| view.open_panel(view.cockpit.read(cx).thread_key(thread), cx));
+    view.update(cx, |view, cx| view.open_panel(thread, cx));
     tick(cx);
     assert_eq!(panel_w(cx), Some(least_w()));
     let file = source("preview-line-file", 200);
@@ -350,7 +350,7 @@ fn hiding_the_panel_keeps_its_file_tab(cx: &mut TestAppContext) {
 fn a_plain_text_file_reads_as_prose_not_numbered_mono(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window("preview-prose", 1, cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.update(cx, |view, cx| view.open_panel(view.cockpit.read(cx).thread_key(thread), cx));
+    view.update(cx, |view, cx| view.open_panel(thread, cx));
     tick(cx);
     let dir = scratch("preview-prose-file");
     std::fs::create_dir_all(&dir).unwrap();

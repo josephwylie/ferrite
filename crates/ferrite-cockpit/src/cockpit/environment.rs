@@ -58,7 +58,7 @@ impl CockpitView {
         if !self.cockpit.read(cx).environment_available() {
             return "No environment selected".into();
         }
-        match self.cockpit.read(cx).machine() {
+        match self.bridge_on_screen(cx) {
             Some(machine) => machine.name().to_string().into(),
             None => "this computer".into(),
         }
@@ -77,7 +77,7 @@ impl CockpitView {
 
     /// Read the machine's defaults, unless a read is out.
     pub(super) fn ask_server_defaults(&mut self, cx: &mut gpui::App) {
-        if self.on_machine(cx) && self.environment.defaults_asked.is_empty() {
+        if self.elsewhere(self.on_screen(cx), cx) && self.environment.defaults_asked.is_empty() {
             self.send_defaults(None, cx);
         }
     }
@@ -103,7 +103,7 @@ impl CockpitView {
     /// The defaults Settings shows: this computer's from its own file, or
     /// the machine's once it has said them.
     pub(super) fn shown_defaults(&self, cx: &gpui::App) -> Option<ServerDefaults> {
-        if self.on_machine(cx) {
+        if self.elsewhere(self.on_screen(cx), cx) {
             self.environment.defaults.clone()
         } else {
             Some(self.prefs.settings.server_defaults())
@@ -124,7 +124,7 @@ impl CockpitView {
         change: impl FnOnce(&mut ServerDefaults),
         cx: &mut Context<Self>,
     ) {
-        if !self.on_machine(cx) {
+        if !self.elsewhere(self.on_screen(cx), cx) {
             self.change_settings(
                 |settings| {
                     let mut defaults = settings.server_defaults();

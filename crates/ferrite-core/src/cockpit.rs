@@ -10,7 +10,7 @@
 //! Thread's mirror, and the shared state's copies. The open Threads are
 //! shared: the Roster follows them (`sync_roster`).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
@@ -18,22 +18,24 @@ use std::time::{Duration, Instant};
 
 use crate::activity::{AgentKey, DecisionHandle, Subject};
 pub use crate::engine::{
-    title_from_prompt, Admission, AgentLaunch, BootstrapResult, Bootstrapped, Engine,
-    HistoryDirection, PaneUpdate, Preparation, ProviderChoice, Restart,
-    RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
+    title_from_prompt, Admission, AgentLaunch, Engine, HistoryDirection, Preparation,
+    ProviderChoice, RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
 };
 use crate::notifications::{DecisionNoticeId, NoticeId, Notifications};
 use crate::protocol::{
-    ClientMessage, Command, Done, ErrorCode, NoticeAction, Op, ProjectAction, ServerMessage, When,
-    WireError,
+    Done, ErrorCode, NoticeAction, Op, ProjectAction, ServerMessage, When, WireError,
 };
 use crate::roster::{DraftId, PaneIdentity, Roster};
 use crate::store::{LoadError, Provider, Store};
 use crate::transcript::Input;
 use crate::workspace::registry::{ProjectId, Registry};
 use crate::workspace::WorkspaceChoice;
-use crate::{Decision, DecisionAnswer, MachineId, ModelInfo, ProjectKey, ThreadId, ThreadKey};
+use crate::{
+    Decision, DecisionAnswer, MachineId, MachineKey, ModelInfo, ProjectKey, SavedThread, ThreadId,
+    ThreadKey,
+};
 pub use ask::Ask;
+use held::{commanded, replied, Drawn, Executed, HeldMachine, Link};
 pub use mirror::ThreadView;
 pub use remote::{Attach, Endpoint, ServerRestart, ServerState};
 #[cfg(any(test, feature = "test-support"))]
@@ -42,65 +44,54 @@ pub use status::{ServerStatus, StatusRow};
 
 mod ask;
 mod factory_fixture;
+mod held;
 pub mod mirror;
 mod parked;
 mod remote;
 mod shared;
 mod status;
 
+/// What changed for one of the window's Panes in a frame, its Thread named
+/// by its key.
+pub type PaneUpdate = crate::engine::PaneUpdate<ThreadKey>;
+/// A draft's first send, done: the Thread it became, by its key.
+pub type Bootstrapped = crate::engine::Bootstrapped<ThreadKey>;
+/// A first send settled by `pump`, its Thread named by its key.
+pub type BootstrapResult = crate::engine::BootstrapResult<ThreadKey>;
+/// A Session the watchdog replaced, its Thread named by its key.
+pub type Restart = crate::engine::Restart<ThreadKey>;
+
+/// One window's hold on every machine it holds (ADR 0045): each machine's
+/// link and what its Engine said (`HeldMachine`), and what exists once per
+/// window — the Roster, focus, the Subjects shown, the Composers holding
+/// text. Every Thread is named by its `ThreadKey`, which says whose it is.
 pub struct Cockpit {
-    link: Link,
-    /// The machine `link` reaches, as this run names it: what every key
-    /// this Cockpit hands out carries.
-    machine: MachineId,
-    /// The Server said something since the window last asked
-    /// (`take_arrived`).
-    arrived: bool,
-    /// What a parked Thread says: the rows its Server published.
-    parked: parked::Parked,
-    /// This computer's logs, read-only, for what an open Thread's header
-    /// and last write say, which no message carries; `None` on a machine.
-    logs: Option<Store>,
+    /// Every machine the window holds, by the id its keys carry.
+    machines: BTreeMap<MachineId, HeldMachine>,
+    /// The machine on screen: the one this Cockpit opened on. A read or an
+    /// act that names no Thread and no Project is this machine's, until
+    /// the window holds every machine at once.
+    on_screen: MachineId,
     /// What is on screen (#28): the roster of Panes, focus and park order. Read through `roster()`; changed only by the acts
     /// below, which keep it showing exactly the open Threads plus drafts.
     pub(crate) roster: Roster,
-    /// The open Threads, as the Roster last followed them (`sync_roster`).
-    synced: Vec<ThreadId>,
-    /// Each open Thread as the Engine's messages built it: what `thread`
-    /// reads and `pump` reports.
-    mirrors: mirror::Mirrors,
-    /// What every window shares, as the Engine's messages left it.
-    shared: shared::Shared,
-    bootstrap_results: Vec<BootstrapResult>,
-    browser_messages: Vec<ServerMessage>,
-    allowance_warnings: Vec<crate::providers::limits::AllowanceWarning>,
-    /// What API callers asked of the windows, oldest first.
-    asked: Vec<Asked>,
+    /// What the machines' Servers said for the window to take as it comes.
+    said: Said,
     /// A fixture world's Factory, answering its Factory asks as a
     /// Server's would; a real window has none.
     factory_fixture: Option<factory_fixture::FactoryFixture>,
-    /// The `window.*` actions this window was handed and has not done:
-    /// only a `ferrite --headless` one is (ADR 0038).
-    drives: Vec<(u64, crate::drive::Action)>,
     /// The Subject each Pane shows, where it is not Main: what this window
     /// reads when the operator looks at it.
-    visible_subjects: std::collections::BTreeMap<ThreadId, Subject>,
+    visible_subjects: BTreeMap<ThreadKey, Subject>,
     /// Whether the window has the operator's focus: what is on screen is
     /// seen only while it does (`acknowledge_seen`), so a finish or a
     /// request on screen stays unread until they come back (ADR 0017). True
     /// until the window says otherwise, so a headless Cockpit reads what it
     /// shows.
     window_active: bool,
-    /// What a Server was last told is seen on each visible Thread, so the
-    /// same unread things are told once (`acknowledge_seen`).
-    seen_told: std::collections::BTreeMap<ThreadId, Vec<Unread>>,
     /// The Threads whose Composer in this window holds unsent text, as the
     /// window says (`set_composing`).
-    composing: std::collections::BTreeSet<ThreadId>,
-    /// What the Engine was last told of this window (`tell_window`); `None`
-    /// until told, and again after every attach: a Server forgets a window
-    /// that left.
-    told: Option<Told>,
+    composing: BTreeSet<ThreadKey>,
     /// The self-hosted forges a review's pull request is read from here,
     /// when this window runs its agents itself (`settings_changed`).
     forge: ferrite_reviewr::config::PluginConfig,
@@ -122,143 +113,100 @@ pub struct Cockpit {
     /// A fixture world's Server accepts every browser act
     /// (`fixture_browser_accepts`), answering an empty browser.
     browser_fixture: bool,
-    /// A fixture world's Server is one from before `Capability::ForkOf`
-    /// (`fixture_server_before_fork_of`).
-    server_before_fork_of: bool,
-    /// What this window draws at Transcript level (`draws_transcripts`).
-    /// `None` for an Engine in this process until its window first says:
-    /// until then it streams every open Thread.
-    drawn: Option<Drawn>,
 }
 
-/// How long a Thread off screen and at rest stays streamed whole: as long
-/// as the Server keeps its Session (ADR 0032). One at work stays however
-/// long it works, drawn here or not.
-const UNWATCH_AFTER: Duration = crate::engine::HELD_AT_REST;
-
-/// The Threads a window draws at Transcript level, and since when each
-/// other it holds has been off screen and at rest.
+/// What the machines' Servers said that the window takes as it comes, each
+/// Thread in it named by its key.
 #[derive(Default)]
-struct Drawn {
-    now: std::collections::BTreeSet<ThreadId>,
-    left: HashMap<ThreadId, Instant>,
+struct Said {
+    bootstrap_results: Vec<BootstrapResult>,
+    /// The browser messages, each with the Thread its page is of.
+    browser: Vec<(ThreadKey, ServerMessage)>,
+    allowance_warnings: Vec<crate::providers::limits::AllowanceWarning>,
+    /// What API callers asked of the windows, oldest first.
+    asked: Vec<Asked>,
 }
 
-impl Drawn {
-    fn draws(&mut self, threads: std::collections::BTreeSet<ThreadId>, at: Instant) {
-        for &gone in self.now.difference(&threads) {
-            self.left.insert(gone, at);
-        }
-        for thread in &threads {
-            self.left.remove(thread);
-        }
-        self.now = threads;
-    }
-
-    /// Hold `thread` as if it had just left the screen: one that opened
-    /// while the window is up, which the operator is about to look at, or
-    /// one at work, whose time at rest starts again.
-    fn hold(&mut self, thread: ThreadId, at: Instant) {
-        if !self.now.contains(&thread) {
-            self.left.insert(thread, at);
-        }
-    }
-
-    /// Whether `thread` is drawn, or left the screen within `UNWATCH_AFTER`.
-    fn holds(&self, thread: ThreadId, at: Instant) -> bool {
-        self.now.contains(&thread)
-            || self
-                .left
-                .get(&thread)
-                .is_some_and(|left| at.saturating_duration_since(*left) < UNWATCH_AFTER)
-    }
-
-    fn retain(&mut self, open: &[ThreadId]) {
-        self.now.retain(|thread| open.contains(thread));
-        self.left.retain(|thread, _| open.contains(thread));
-    }
+/// What one machine's Server said that every window shares — its registry,
+/// its Notices, its Factory — read with the machine it is of, so an id read
+/// in it names a Thread or Project of that machine and no other
+/// (`key`, `project_key`). Its own names stay clear of the reading's, which
+/// it derefs to.
+pub struct OnMachine<'a, T> {
+    machine: MachineId,
+    reading: &'a T,
 }
 
-/// What only a window knows and the API reports (ADR 0030): the Thread it
-/// shows the operator, and its Composers holding unsent text.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct Told {
-    focused: Option<ThreadId>,
-    composing: std::collections::BTreeSet<ThreadId>,
-}
+impl<'a, T> OnMachine<'a, T> {
+    pub fn machine(&self) -> MachineId {
+        self.machine
+    }
 
-/// The window number an Engine in this process knows its one window by.
-const IN_PROCESS_WINDOW: u64 = 0;
+    /// The Thread `thread` names in this reading.
+    pub fn key(&self, thread: ThreadId) -> ThreadKey {
+        ThreadKey::new(self.machine, thread)
+    }
 
-/// Where the Engine this window drives runs.
-enum Link {
-    /// In this process, pumped by the window.
-    InProcess(Box<Engine>),
-    /// In the Server, over its socket.
-    Server(Box<remote::Remote>),
-}
+    /// The Project `project` names in this reading.
+    pub fn project_key(&self, project: ProjectId) -> ProjectKey {
+        ProjectKey::new(self.machine, project)
+    }
 
-impl Link {
-    /// One command, carried out where the Engine runs and answered as the
-    /// Server answers it. In debug builds an in-process command and its
-    /// reply cross as their encoded lines, so nothing escapes the contract.
-    fn execute(&mut self, op: Op) -> Executed {
-        match self {
-            Link::InProcess(engine) => replied(engine.execute(&commanded(op))),
-            Link::Server(server) => server.execute(op),
-        }
+    /// The reading itself, for as long as the Cockpit is borrowed.
+    pub fn reading(&self) -> &'a T {
+        self.reading
     }
 }
 
-/// An Op as the Server reads it off the socket.
-fn commanded(op: Op) -> Op {
-    let ClientMessage::Command(Command { op, .. }) =
-        crossed(ClientMessage::Command(Command { id: 0, op }))
-    else {
-        unreachable!("a command decodes as a command")
-    };
-    op
+impl<T> std::ops::Deref for OnMachine<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.reading
+    }
 }
 
-/// A command's outcome as the window reads the Server's reply.
-fn replied(executed: Executed) -> Executed {
-    let (ok, error) = match executed {
-        Ok(ok) => (ok, None),
-        Err(error) => (None, Some(error)),
-    };
-    let ServerMessage::Reply { ok, error, .. } = crossed(ServerMessage::Reply { id: 0, ok, error })
-    else {
-        unreachable!("a reply decodes as a reply")
-    };
-    error.map_or(Ok(ok), Err)
+impl<T> Clone for OnMachine<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
-/// What a command came to, as its reply says.
-type Executed = Result<Option<Done>, WireError>;
+impl<T> Copy for OnMachine<'_, T> {}
 
-/// A message as the other end of a socket reads it: in debug builds, its
-/// encoded line decoded again.
-fn crossed<T: serde::Serialize + serde::de::DeserializeOwned>(message: T) -> T {
-    #[cfg(debug_assertions)]
-    let message = {
-        let line = crate::protocol::encode(&message);
-        crate::protocol::decode(&line[..line.len() - 1])
-            .expect("every message decodes as it encoded")
-    };
-    message
+/// An act on a machine the window no longer holds.
+fn gone() -> WireError {
+    WireError {
+        code: ErrorCode::UnknownThread,
+        message: "that machine is not held".to_string(),
+    }
 }
 
 impl Cockpit {
     /// A window driving an Engine of its own, in this process.
     pub fn try_new(store: Store, spawner: Box<dyn Spawner>) -> io::Result<Self> {
+        let mut cockpit = Self::with(Self::in_process_machine(store, spawner, MachineKey(None))?);
+        cockpit.receive();
+        Ok(cockpit)
+    }
+
+    /// An Engine of its own in this process, saved as `saved_as`.
+    fn in_process_machine(
+        store: Store,
+        spawner: Box<dyn Spawner>,
+        saved_as: MachineKey,
+    ) -> io::Result<HeldMachine> {
         let logs = store.clone();
         let dir = store.dir().to_path_buf();
         let mut engine = Engine::try_new(store, spawner)?;
         // Its window pumps it: a park is listed by the pump that parked it.
         engine.read_parked_in_place();
-        let mut cockpit = Self::with(Link::InProcess(Box::new(engine)), Some(logs), &dir);
-        cockpit.receive();
-        Ok(cockpit)
+        Ok(HeldMachine::new(
+            Link::InProcess(Box::new(engine)),
+            Some(logs),
+            &dir,
+            Some(saved_as),
+        ))
     }
 
     /// Test and embedding convenience. The application uses `try_new` so a
@@ -276,41 +224,29 @@ impl Cockpit {
         let local = matches!(attach.server, Endpoint::Local { .. });
         let logs = local.then(|| Store::reader(&attach.store)).transpose()?;
         let dir = attach.store.clone();
+        let saved_as = attach.saved_as.clone();
         let mut remote = remote::Remote::new(attach);
         let arrived = if local { remote.attach_now() } else { None };
-        let mut cockpit = Self::with(Link::Server(Box::new(remote)), logs, &dir);
+        let mut machine = HeldMachine::new(Link::Server(Box::new(remote)), logs, &dir, saved_as);
         // A window streams only what it draws, from its first attach on: it
         // draws nothing yet (ADR 0032).
-        cockpit.drawn = Some(Drawn::default());
-        cockpit.arrive(arrived.into_iter().collect());
+        machine.drawn = Some(Drawn::default());
+        let mut cockpit = Self::with(machine);
+        cockpit.arrive(cockpit.on_screen, arrived.into_iter().collect());
         Ok(cockpit)
     }
 
-    fn with(link: Link, logs: Option<Store>, dir: &Path) -> Self {
-        let limits = logs
-            .as_ref()
-            .map(Store::activity_limits)
-            .unwrap_or_default();
+    fn with(machine: HeldMachine) -> Self {
+        let on_screen = machine.id;
         Self {
-            link,
-            machine: MachineId::mint(),
-            shared: shared::Shared::new(dir),
-            parked: parked::Parked::default(),
-            logs,
+            machines: BTreeMap::from([(on_screen, machine)]),
+            on_screen,
             roster: Roster::default(),
-            synced: Vec::new(),
-            mirrors: mirror::Mirrors::retaining(limits),
-            bootstrap_results: Vec::new(),
-            browser_messages: Vec::new(),
-            allowance_warnings: Vec::new(),
-            asked: Vec::new(),
+            said: Said::default(),
             factory_fixture: None,
-            drives: Vec::new(),
-            visible_subjects: std::collections::BTreeMap::new(),
+            visible_subjects: BTreeMap::new(),
             window_active: true,
-            seen_told: std::collections::BTreeMap::new(),
-            composing: std::collections::BTreeSet::new(),
-            arrived: false,
+            composing: BTreeSet::new(),
             forge: Default::default(),
             forge_fixture: HashMap::new(),
             forge_numbered: HashMap::new(),
@@ -320,53 +256,118 @@ impl Cockpit {
             held_reads: Vec::new(),
             free_disk_fixture: None,
             browser_fixture: false,
-            server_before_fork_of: false,
-            drawn: None,
-            told: None,
         }
     }
 
-    /// The machine this Cockpit's Threads live on, for this run.
-    pub fn machine_id(&self) -> MachineId {
-        self.machine
+    /// The machine on screen: every key of a Thread the window shows
+    /// carries it, until the window holds every machine at once.
+    pub fn on_screen(&self) -> MachineId {
+        self.on_screen
     }
 
-    /// `thread` on this Cockpit's machine.
-    pub fn thread_key(&self, thread: ThreadId) -> ThreadKey {
-        ThreadKey::new(self.machine, thread)
+    /// `thread` as saved files name it, by its machine's saved name;
+    /// `None` for a machine the window no longer holds, or one with no
+    /// environment, whose Threads nothing saves.
+    pub fn saved(&self, thread: ThreadKey) -> Option<SavedThread> {
+        Some(SavedThread {
+            machine: self.saved_as(thread.machine())?.clone(),
+            thread: thread.thread(),
+        })
     }
 
-    /// `project` on this Cockpit's machine.
-    pub fn project_key(&self, project: ProjectId) -> ProjectKey {
-        ProjectKey::new(self.machine, project)
+    /// What saved files name `machine`, fixed when the window attached it
+    /// (F-A8); `None` as for `saved`.
+    pub fn saved_as(&self, machine: MachineId) -> Option<&MachineKey> {
+        self.machines.get(&machine)?.saved_as.as_ref()
     }
 
-    /// Window adapter receives metadata and actions for its exact owned pages.
-    pub fn take_browser_messages(&mut self) -> Vec<ServerMessage> {
-        std::mem::take(&mut self.browser_messages)
+    /// The Thread a saved file names, if the window holds its machine.
+    pub fn resolve(&self, saved: &SavedThread) -> Option<ThreadKey> {
+        self.machines
+            .values()
+            .find(|machine| machine.saved_as.as_ref() == Some(&saved.machine))
+            .map(|machine| machine.key(saved.thread))
+    }
+
+    /// Whether `machine` is this computer, reached: what it names on disk
+    /// is this computer's. A window on another machine, or with no
+    /// environment, must never stand in local files or defaults for its
+    /// own (ADR 0026).
+    pub fn local(&self, machine: MachineId) -> bool {
+        self.machines.get(&machine).is_some_and(HeldMachine::local)
+    }
+
+    /// Whether `machine`'s Server has said which Threads it has: until it
+    /// has, a Thread missing from `known_threads` is no deletion.
+    pub fn heard(&self, machine: MachineId) -> bool {
+        self.machines
+            .get(&machine)
+            .is_some_and(|machine| machine.known().next().is_some())
+    }
+
+    /// The machine on screen.
+    fn here(&self) -> &HeldMachine {
+        &self.machines[&self.on_screen]
+    }
+
+    fn here_mut(&mut self) -> &mut HeldMachine {
+        self.machines
+            .get_mut(&self.on_screen)
+            .expect("the machine on screen is held")
+    }
+
+    /// The machine `key` is on, and its Thread there: the one place a key
+    /// is split. `None` once the window no longer holds that machine.
+    fn at(&self, key: ThreadKey) -> Option<(&HeldMachine, ThreadId)> {
+        Some((self.machines.get(&key.machine())?, key.thread()))
+    }
+
+    fn at_mut(&mut self, key: ThreadKey) -> Option<(&mut HeldMachine, ThreadId)> {
+        Some((self.machines.get_mut(&key.machine())?, key.thread()))
+    }
+
+    /// A reading of the shared state of the machine on screen.
+    fn on_screen_reading<'a, T>(
+        &'a self,
+        read: impl FnOnce(&'a shared::Shared) -> &'a T,
+    ) -> OnMachine<'a, T> {
+        OnMachine {
+            machine: self.on_screen,
+            reading: read(&self.here().shared),
+        }
+    }
+
+    /// Window adapter receives metadata and actions for its exact owned
+    /// pages, each with the Thread its page is of.
+    pub fn take_browser_messages(&mut self) -> Vec<(ThreadKey, ServerMessage)> {
+        std::mem::take(&mut self.said.browser)
     }
 
     // A Browser's asks of the Server (ADR 0041, 0036): each returns at once
     // and is answered through its `Ask` by the pump, so the window's thread
     // never waits on the Server for its pages.
 
-    pub fn browser_attach(&mut self, thread: ThreadId) -> Ask<crate::browser::State> {
-        self.browser_op(Op::BrowserAttach { thread })
+    pub fn browser_attach(&mut self, thread: ThreadKey) -> Ask<crate::browser::State> {
+        self.browser_op(thread, |thread| Op::BrowserAttach { thread })
     }
 
     pub fn browser(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         action: crate::browser::Action,
     ) -> Ask<crate::browser::State> {
-        self.browser_op(Op::Browser { thread, action })
+        self.browser_op(thread, |thread| Op::Browser { thread, action })
     }
 
-    fn browser_op(&mut self, op: Op) -> Ask<crate::browser::State> {
+    fn browser_op(
+        &mut self,
+        key: ThreadKey,
+        op: impl FnOnce(ThreadId) -> Op,
+    ) -> Ask<crate::browser::State> {
         if self.browser_fixture {
             return Ask::answered(Ok(crate::browser::State::default()));
         }
-        self.browser_ask(op, |done| match done {
+        self.browser_ask(key, op, |done| match done {
             Some(Done::Browser { state }) => Ok(state),
             _ => Err(io::Error::other(
                 "The Server does not support the Conversation browser; update Ferrite",
@@ -378,36 +379,37 @@ impl Cockpit {
     /// Browser, which its `Ask` answers at once.
     fn browser_ask<T: Send + 'static>(
         &mut self,
-        op: Op,
+        key: ThreadKey,
+        op: impl FnOnce(ThreadId) -> Op,
         read: fn(Option<Done>) -> io::Result<T>,
     ) -> Ask<T> {
-        match self.remote() {
-            Ok(remote) => remote.ask_in_time(op, read),
+        match self.remote_of(key) {
+            Ok(remote) => remote.ask_in_time(op(key.thread()), read),
             Err(error) => Ask::answered(Err(error)),
         }
     }
 
     /// One Browser act whose reply nobody reads: the Server's broadcasts
     /// say what it changed.
-    fn browser_tell(&mut self, op: Op) {
-        if let Ok(remote) = self.remote() {
-            remote.tell(op);
+    fn browser_tell(&mut self, key: ThreadKey, op: impl FnOnce(ThreadId) -> Op) {
+        if let Ok(remote) = self.remote_of(key) {
+            remote.tell(op(key.thread()));
         }
     }
 
     pub fn browser_capture(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         owner: crate::browser::Owner,
         lease: crate::browser::Lease,
         capture: crate::browser_annotations::Capture,
         png: Option<crate::protocol::WirePng>,
     ) -> Ask<crate::browser_annotations::Annotation> {
-        match self.remote() {
-            Ok(remote) => match remote.browser_capture(thread, owner, lease, capture, png) {
-                Ok(answer) => Ask::of(answer),
-                Err(error) => Ask::answered(Err(error)),
-            },
+        match self
+            .remote_of(thread)
+            .and_then(|remote| remote.browser_capture(thread.thread(), owner, lease, capture, png))
+        {
+            Ok(answer) => Ask::of(answer),
             Err(error) => Ask::answered(Err(error)),
         }
     }
@@ -416,10 +418,13 @@ impl Cockpit {
     /// returned display cache never replaces the Server-owned provider path.
     pub fn browser_annotation_image(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         annotation: crate::browser_annotations::Annotation,
     ) -> Ask<PathBuf> {
-        match &mut self.link {
+        let Some((machine, thread)) = self.at_mut(thread) else {
+            return Ask::answered(Err(gone().into()));
+        };
+        match &mut machine.link {
             Link::Server(server) => {
                 let Some(hash) = annotation.original_hash() else {
                     return Ask::answered(Err(io::Error::other("This annotation has no screenshot")));
@@ -449,13 +454,14 @@ impl Cockpit {
 
     pub fn browser_protect(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         owner: crate::browser::Owner,
         document: crate::browser::Document,
         protection: crate::browser::Protection,
     ) -> Ask<crate::browser::Lease> {
         self.browser_ask(
-            Op::BrowserProtect {
+            thread,
+            |thread| Op::BrowserProtect {
                 thread,
                 owner,
                 document,
@@ -472,11 +478,11 @@ impl Cockpit {
 
     pub fn browser_release(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         owner: crate::browser::Owner,
         lease: crate::browser::Lease,
     ) {
-        self.browser_tell(Op::BrowserRelease {
+        self.browser_tell(thread, |thread| Op::BrowserRelease {
             thread,
             owner,
             lease,
@@ -485,12 +491,13 @@ impl Cockpit {
 
     pub fn browser_reclaim(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         owner: crate::browser::Owner,
         document: crate::browser::Document,
     ) -> Ask<Option<crate::browser::Lease>> {
         self.browser_ask(
-            Op::BrowserReclaim {
+            thread,
+            |thread| Op::BrowserReclaim {
                 thread,
                 owner,
                 document,
@@ -506,12 +513,12 @@ impl Cockpit {
 
     pub fn browser_reclaimed(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         owner: crate::browser::Owner,
         lease: crate::browser::Lease,
         released: bool,
     ) -> Ask<crate::browser::State> {
-        self.browser_op(Op::BrowserReclaimed {
+        self.browser_op(thread, |thread| Op::BrowserReclaimed {
             thread,
             owner,
             lease,
@@ -521,11 +528,11 @@ impl Cockpit {
 
     pub fn browser_page(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         owner: crate::browser::Owner,
         page: crate::browser::PageState,
     ) -> Ask<crate::browser::State> {
-        self.browser_op(Op::BrowserPage {
+        self.browser_op(thread, |thread| Op::BrowserPage {
             thread,
             owner,
             page,
@@ -536,18 +543,15 @@ impl Cockpit {
         &mut self,
         request: u64,
         boot_id: String,
-        thread: ThreadId,
+        thread: ThreadKey,
         owner: crate::browser::Owner,
         document: crate::browser::Document,
         revision: u64,
     ) -> Ask<u64> {
-        match self.remote() {
-            Ok(remote) => {
-                match remote.browser_dispatch(request, boot_id, thread, owner, document, revision) {
-                    Ok(answer) => Ask::of(answer),
-                    Err(error) => Ask::answered(Err(error)),
-                }
-            }
+        match self.remote_of(thread).and_then(|remote| {
+            remote.browser_dispatch(request, boot_id, thread.thread(), owner, document, revision)
+        }) {
+            Ok(answer) => Ask::of(answer),
             Err(error) => Ask::answered(Err(error)),
         }
     }
@@ -556,17 +560,17 @@ impl Cockpit {
         &mut self,
         request: u64,
         boot_id: Option<String>,
-        thread: ThreadId,
+        thread: ThreadKey,
         owner: crate::browser::Owner,
         document: crate::browser::Document,
         revision: u64,
         outcome: crate::browser::Outcome,
     ) {
-        if let Ok(remote) = self.remote() {
+        if let Ok(remote) = self.remote_of(thread) {
             remote.say(&crate::protocol::ClientMessage::BrowserReply {
                 request,
                 boot_id,
-                thread,
+                thread: thread.thread(),
                 owner,
                 document,
                 revision,
@@ -577,12 +581,12 @@ impl Cockpit {
 
     pub fn browser_settled(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         owner: crate::browser::Owner,
         document: crate::browser::Document,
         revision: u64,
     ) {
-        self.browser_tell(Op::BrowserSettled {
+        self.browser_tell(thread, |thread| Op::BrowserSettled {
             thread,
             owner,
             document,
@@ -592,12 +596,13 @@ impl Cockpit {
 
     pub fn browser_input(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         owner: crate::browser::Owner,
         document: crate::browser::Document,
     ) -> Ask<u64> {
         self.browser_ask(
-            Op::BrowserInput {
+            thread,
+            |thread| Op::BrowserInput {
                 thread,
                 owner,
                 document,
@@ -624,10 +629,10 @@ impl Cockpit {
         answer.expect("answered")
     }
 
-    /// The Server this window is attached to, or why it is not; `None` for
-    /// an Engine in this process.
+    /// The Server the machine on screen is attached to, or why it is not;
+    /// `None` for an Engine in this process.
     pub fn server(&self) -> Option<ServerState> {
-        match &self.link {
+        match &self.here().link {
             Link::InProcess(_) => None,
             Link::Server(server) => Some(server.state()),
         }
@@ -635,15 +640,15 @@ impl Cockpit {
 
     /// Whether this client has an enabled environment to connect to.
     pub fn environment_available(&self) -> bool {
-        match &self.link {
+        match &self.here().link {
             Link::InProcess(_) => true,
             Link::Server(server) => server.available(),
         }
     }
 
-    /// The remote machine, if selected.
-    pub fn machine(&self) -> Option<&std::sync::Arc<crate::machine::Bridge>> {
-        match &self.link {
+    /// The bridge `machine` is reached through; `None` for this computer.
+    pub fn bridge(&self, machine: MachineId) -> Option<&std::sync::Arc<crate::machine::Bridge>> {
+        match &self.machines.get(&machine)?.link {
             Link::InProcess(_) => None,
             Link::Server(server) => server.bridge(),
         }
@@ -651,7 +656,7 @@ impl Cockpit {
 
     /// Attach again now, rather than at the next retry.
     pub fn retry_server(&mut self) {
-        if let Link::Server(server) = &mut self.link {
+        if let Link::Server(server) = &mut self.here_mut().link {
             server.retry();
         }
     }
@@ -665,7 +670,7 @@ impl Cockpit {
     /// an installer is about to replace the executable it runs.
     pub fn stop_server_and_wait(&mut self, within: Duration) -> io::Result<()> {
         let deadline = Instant::now() + within;
-        let server = self.remote()?;
+        let server = self.here_mut().remote()?;
         server
             .execute(Op::Stop { when: When::Now })
             .map_err(io::Error::from)?;
@@ -680,7 +685,7 @@ impl Cockpit {
             return Ok(());
         }
         let result = self.server_command(Op::Restart { when });
-        if let Link::Server(server) = &mut self.link {
+        if let Link::Server(server) = &mut self.here_mut().link {
             match &result {
                 Ok(()) => server.restarting(),
                 Err(error) => server.restart_refused(error.to_string()),
@@ -692,47 +697,63 @@ impl Cockpit {
     /// A restart of the Server, as far as this window has seen it through:
     /// asked for or heard of, back on a new boot, or failed and why.
     pub fn server_restart(&self) -> Option<&ServerRestart> {
-        match &self.link {
+        match &self.here().link {
             Link::Server(server) => server.restart(),
             Link::InProcess(_) => None,
         }
     }
 
     fn server_command(&mut self, op: Op) -> io::Result<()> {
-        self.remote()?
+        self.here_mut()
+            .remote()?
             .execute(op)
             .map(drop)
             .map_err(io::Error::from)
     }
 
-    fn remote(&mut self) -> io::Result<&mut remote::Remote> {
-        match &mut self.link {
-            Link::Server(server) => Ok(server),
-            Link::InProcess(_) => Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "this window runs its agents itself",
-            )),
-        }
+    /// The Server `key`'s machine is attached to.
+    fn remote_of(&mut self, key: ThreadKey) -> io::Result<&mut remote::Remote> {
+        self.machines
+            .get_mut(&key.machine())
+            .ok_or_else(|| io::Error::from(gone()))?
+            .remote()
     }
 
-    /// One act where the Engine runs, as a command: the Engine in this
-    /// process answers it as the Server's does. Either way the window is up
-    /// to date with what it changed when it returns.
+    /// One act where `machine`'s Engine runs, as a command: the Engine in
+    /// this process answers it as the Server's does. Either way the window
+    /// is up to date with what it changed when it returns.
     /// Every act rings the window's bell: what it moved is the pump's to
     /// read, as an arrival is (ADR 0041).
-    fn act(&mut self, op: Op) -> Executed {
-        let executed = self.link.execute(op);
-        self.receive();
+    fn act_at(&mut self, machine: MachineId, op: Op) -> Executed {
+        let executed = match self.machines.get_mut(&machine) {
+            Some(held) => held.link.execute(op),
+            None => Err(gone()),
+        };
+        self.receive_from(machine);
         crate::doorbell::ring();
         executed
     }
 
-    /// One act whose reply nobody reads (ADR 0041): a Server is told and
-    /// what it changed arrives as its messages do, so the window never
-    /// waits for it. An Engine in this process carries it out now.
-    fn tell(&mut self, op: Op) {
-        match &mut self.link {
-            Link::InProcess(_) => said(self.act(op)),
+    /// An act of the machine on screen.
+    fn act(&mut self, op: Op) -> Executed {
+        self.act_at(self.on_screen, op)
+    }
+
+    /// An act on one Thread, where its machine's Engine runs.
+    fn act_on(&mut self, key: ThreadKey, op: impl FnOnce(ThreadId) -> Op) -> Executed {
+        self.act_at(key.machine(), op(key.thread()))
+    }
+
+    /// One act of `machine`'s whose reply nobody reads (ADR 0041): a
+    /// Server is told and what it changed arrives as its messages do, so
+    /// the window never waits for it. An Engine in this process carries it
+    /// out now.
+    fn tell_at(&mut self, machine: MachineId, op: Op) {
+        let Some(held) = self.machines.get_mut(&machine) else {
+            return;
+        };
+        match &mut held.link {
+            Link::InProcess(_) => said(self.act_at(machine, op)),
             Link::Server(remote) => {
                 remote.tell(op);
                 crate::doorbell::ring();
@@ -740,279 +761,111 @@ impl Cockpit {
         }
     }
 
-    /// The Engine in this process: what only `--demo`, `--load` and the
-    /// tests drive — fixtures, injected inputs, the launch-time revival a
-    /// Server does for itself. It rings the bell, as an act does.
+    /// A tell of the machine on screen.
+    fn tell(&mut self, op: Op) {
+        self.tell_at(self.on_screen, op)
+    }
+
+    /// A tell on one Thread, to its machine.
+    fn tell_on(&mut self, key: ThreadKey, op: impl FnOnce(ThreadId) -> Op) {
+        self.tell_at(key.machine(), op(key.thread()))
+    }
+
+    /// The Engine in this process on screen: what only `--demo`, `--load`
+    /// and the tests drive — fixtures, injected inputs, the launch-time
+    /// revival a Server does for itself. It rings the bell, as an act does.
     fn in_process(&mut self) -> &mut Engine {
-        crate::doorbell::ring();
-        match &mut self.link {
-            Link::InProcess(engine) => engine,
-            Link::Server(_) => panic!("only an Engine in this process takes this act"),
-        }
+        self.here_mut().in_process()
     }
 
-    /// The Roster follows the open Threads, whoever changed them — this
-    /// window, another, or an API caller. A Thread that opened gets a Pane
-    /// at the end (a Thread a Draft is starting takes the Draft's slot when
-    /// it settles instead); one that closed loses its Pane.
-    fn sync_roster(&mut self) {
-        let open = self.shared.open.clone();
-        for gone in self.synced.iter().filter(|thread| !open.contains(thread)) {
-            self.roster.remove_thread(*gone);
-        }
-        for thread in open.iter().filter(|thread| !self.synced.contains(thread)) {
-            if !self.mirrors.for_draft(*thread) {
-                self.roster.insert_thread(*thread);
-            }
-        }
-        self.synced = open;
+    /// The Engine in this process that `key`'s Thread runs in.
+    fn in_process_of(&mut self, key: ThreadKey) -> &mut Engine {
+        self.machines
+            .get_mut(&key.machine())
+            .expect("the Thread's machine is held")
+            .in_process()
     }
 
-    /// Bring this window up to the Engine: its mirrors and copies from the
-    /// messages it published, then its Roster. What they moved waits for
-    /// the pump to report, wherever they were received: a Server's message
-    /// can arrive during any of the window's own acts, and its Pane update
-    /// is the only word the window's Facts get of it (a PR watch's digest).
-    /// In debug builds each in-process message crosses as its encoded line,
-    /// so nothing escapes the contract.
+    /// Bring this window up to every machine's Engine.
     fn receive(&mut self) {
-        let before_fork_of = self.server_before_fork_of;
-        let arrived: Vec<remote::Arrival> = match &mut self.link {
-            Link::InProcess(engine) => engine
-                .take_messages()
-                .into_iter()
-                .map(|message| match message {
-                    ServerMessage::Focus { thread, .. } if before_fork_of => ServerMessage::Focus {
-                        thread,
-                        fork_of: None,
-                    },
-                    message => message,
-                })
-                .map(|message| remote::Arrival::Message(crossed(message)))
-                .chain(
-                    engine
-                        .take_bootstrap_results()
-                        .into_iter()
-                        .map(remote::Arrival::Started),
-                )
-                .collect(),
-            Link::Server(server) => server.poll(),
+        let machines: Vec<MachineId> = self.machines.keys().copied().collect();
+        for machine in machines {
+            self.receive_from(machine);
+        }
+    }
+
+    /// Bring this window up to `machine`'s Engine: its mirrors and copies
+    /// from the messages it published, then the Roster. What they moved
+    /// waits for the pump to report, wherever they were received: a
+    /// Server's message can arrive during any of the window's own acts, and
+    /// its Pane update is the only word the window's Facts get of it (a PR
+    /// watch's digest). In debug builds each in-process message crosses as
+    /// its encoded line, so nothing escapes the contract.
+    fn receive_from(&mut self, machine: MachineId) {
+        let Some(held) = self.machines.get_mut(&machine) else {
+            return;
         };
-        self.arrive(arrived);
+        let arrived = held.take_arrivals();
+        self.arrive(machine, arrived);
         #[cfg(test)]
-        self.assert_mirrors_match();
+        self.machines[&machine].assert_mirrors_match();
     }
 
     /// A message a fixture world's Server would have sent.
     fn receive_fixture(&mut self, message: ServerMessage) {
         // It rings as a Server's message does (ADR 0041).
         crate::doorbell::ring();
-        self.arrive(vec![remote::Arrival::Message(message)]);
+        self.arrive(self.on_screen, vec![remote::Arrival::Message(message)]);
     }
 
-    fn arrive(&mut self, arrived: Vec<remote::Arrival>) {
-        self.arrived |= !arrived.is_empty();
-        let open_before = self.shared.open.clone();
-        let attached = arrived
-            .iter()
-            .any(|arrival| matches!(arrival, remote::Arrival::Attached { .. }));
-        let boot = match &self.link {
-            Link::InProcess(engine) => engine.boot(),
-            Link::Server(server) => server.boot(),
+    fn arrive(&mut self, machine: MachineId, arrived: Vec<remote::Arrival>) {
+        let Some(held) = self.machines.get_mut(&machine) else {
+            return;
         };
-        let mut settled = Vec::new();
-        for arrival in arrived {
-            match arrival {
-                remote::Arrival::Message(message) => self.message(message, boot),
-                remote::Arrival::Attached { snapshot, new_boot } => {
-                    self.told = None;
-                    self.seen_told.clear();
-                    if new_boot {
-                        self.mirrors = mirror::Mirrors::retaining(self.mirrors.limits());
-                    }
-                    self.shared.attached(&snapshot);
-                    self.parked.attached(&snapshot);
-                    self.mirrors.retain(&self.shared.open);
-                    self.mirrors.restore_decisions(&snapshot.decisions);
-                    for state in snapshot.threads {
-                        self.mirrors.receive(
-                            ServerMessage::Thread {
-                                revision: snapshot.revision,
-                                state,
-                            },
-                            boot,
-                        );
-                    }
-                    self.mirrors.attached(snapshot.digests, boot);
-                }
-                remote::Arrival::Started(result) => settled.push(result),
-                remote::Arrival::Answered => {}
-            }
-        }
+        let settled = held.arrive(arrived, &mut self.said);
         // A settled first send completes its Draft in this window — its
         // slot becomes the Thread — once the window holds what the Engine
         // said before it.
-        for mut result in settled {
+        for result in settled {
+            let mut result = held.keyed(result);
             if let (Some(draft), Ok(done)) = (result.draft, &result.result) {
                 let thread = done.thread;
-                result.result = Ok(self.complete_draft(draft, thread));
+                result.result = Ok(complete_draft(&mut self.roster, draft, thread));
             }
-            self.bootstrap_results.push(result);
+            self.said.bootstrap_results.push(result);
         }
-        self.sync_roster();
-        // What a Server's snapshot lists is not new.
-        if !attached {
-            let now = crate::clock::instant();
-            if let Some(drawn) = &mut self.drawn {
-                for &thread in &self.shared.open {
-                    if !open_before.contains(&thread) {
-                        drawn.hold(thread, now);
-                    }
-                }
-            }
-        }
-        self.follow_attention();
+        held.sync_roster(&mut self.roster);
     }
 
     /// The window draws exactly these Threads at Transcript level now. It
     /// streams them whole while it does, and each other while it is at work
     /// and for `UNWATCH_AFTER` after (ADR 0032).
-    pub fn draws_transcripts(&mut self, threads: impl IntoIterator<Item = ThreadId>) {
-        self.drawn
-            .get_or_insert_with(Drawn::default)
-            .draws(threads.into_iter().collect(), crate::clock::instant());
-    }
-
-    /// The Threads this window streams whole: those it draws at Transcript
-    /// level, and those drawn or at work within `UNWATCH_AFTER`.
-    /// Until it says what it draws, or while
-    /// its Engine sends no digests to read the rest from, every open one.
-    fn watched(&self) -> Vec<ThreadId> {
-        let open = &self.shared.open;
-        let Some(drawn) = self.drawn.as_ref().filter(|_| self.mirrors.digested()) else {
-            return open.clone();
-        };
-        let now = crate::clock::instant();
-        open.iter()
-            .copied()
-            .filter(|thread| drawn.holds(*thread, now))
-            .collect()
-    }
-
-    /// Stream what the window draws, and let the rest go.
-    fn follow_attention(&mut self) {
-        if let Some(drawn) = &mut self.drawn {
-            let now = crate::clock::instant();
-            for thread in self.mirrors.at_work() {
-                drawn.hold(thread, now);
-            }
-        }
-        let watched = self.watched();
-        if let Some(drawn) = &mut self.drawn {
-            drawn.retain(&self.shared.open);
-        }
-        match &mut self.link {
-            Link::Server(server) => {
-                let mirrors = &self.mirrors;
-                server.watch(&watched, |thread| mirrors.seq(thread));
-                self.mirrors.watch_only(&watched);
-            }
-            Link::InProcess(engine) => {
-                // As the Server streams a watch: what the Engine published
-                // was taken this pump, so the history meets it exactly.
-                let fresh: Vec<ThreadId> = watched
-                    .iter()
-                    .filter(|thread| !self.mirrors.watched(**thread))
-                    .copied()
-                    .collect();
-                self.mirrors.watch_only(&watched);
-                let boot = engine.boot();
-                for thread in fresh {
-                    if let Some(history) = engine.history(thread) {
-                        let mirrors = &mut self.mirrors;
-                        let _ = history.send(&mut |message| {
-                            mirrors.receive(message, boot);
-                            Ok(())
-                        });
-                    }
-                }
-            }
+    pub fn draws_transcripts(&mut self, threads: impl IntoIterator<Item = ThreadKey>) {
+        let threads: Vec<ThreadKey> = threads.into_iter().collect();
+        let at = crate::clock::instant();
+        for machine in self.machines.values_mut() {
+            let drawn = threads
+                .iter()
+                .filter(|key| key.machine() == machine.id)
+                .map(|key| key.thread())
+                .collect();
+            machine
+                .drawn
+                .get_or_insert_with(Drawn::default)
+                .draws(drawn, at);
         }
     }
 
-    fn message(&mut self, message: ServerMessage, boot: Instant) {
-        if let ServerMessage::Drive { request, action } = message {
-            self.drives.push((request, action));
-            return;
-        }
-        if matches!(
-            message,
-            ServerMessage::Browser { .. } | ServerMessage::BrowserRequest { .. }
-        ) {
-            self.browser_messages.push(message);
-            return;
-        }
-        if let ServerMessage::AllowanceWarning {
-            provider,
-            window,
-            threshold,
-            used_fraction,
-        } = &message
-        {
-            if let Ok(window) = (*window).try_into() {
-                self.allowance_warnings
-                    .push(crate::providers::limits::AllowanceWarning {
-                        provider: *provider,
-                        window,
-                        threshold: *threshold,
-                        used_fraction: *used_fraction,
-                    });
-            }
-        }
-        match &message {
-            ServerMessage::Focus { thread, fork_of } => self.asked.push(Asked::Focus {
-                thread: *thread,
-                fork_of: *fork_of,
-            }),
-            ServerMessage::Notification {
-                title,
-                body,
-                sound,
-                important,
-            } => self.asked.push(Asked::Notification {
-                title: title.clone(),
-                body: body.clone(),
-                sound: sound.sound(),
-                important: *important,
-            }),
-            ServerMessage::TaskAlert {
-                project,
-                task,
-                status,
-                title,
-                detail,
-            } => self.asked.push(Asked::TaskAlert {
-                project: *project,
-                task: task.clone(),
-                status: *status,
-                title: title.clone(),
-                detail: detail.clone(),
-            }),
-            _ => {}
-        }
-        self.shared.receive(&message);
-        self.parked.receive(&message);
-        self.mirrors.receive(message, boot);
-    }
-
-    /// One frame: the Engine's pump, then what changed for each Pane of
+    /// One frame: each Engine's pump, then what changed for each Pane of
     /// this window, as its mirrors saw it.
     pub fn pump(&mut self) -> Vec<PaneUpdate> {
-        // Fold highlighter answers from the previous frame first, as the
-        // Engine does for its own.
-        self.mirrors.drain_highlights();
-        if let Link::InProcess(engine) = &mut self.link {
-            engine.pump();
+        for machine in self.machines.values_mut() {
+            // Fold highlighter answers from the previous frame first, as
+            // the Engine does for its own.
+            machine.mirrors.drain_highlights();
+            if let Link::InProcess(engine) = &mut machine.link {
+                engine.pump();
+            }
         }
         self.receive();
         // What is on screen while the window has focus is seen. Here
@@ -1020,13 +873,16 @@ impl Cockpit {
         // view, or a focus moved by a close, reads the same.
         self.acknowledge_seen();
         self.tell_window();
-        self.mirrors.take_updates()
+        self.machines
+            .values_mut()
+            .flat_map(|machine| machine.take_updates().collect::<Vec<_>>())
+            .collect()
     }
 
     /// Whether this window's Composer for `thread` holds text not yet sent:
     /// the window says so as it changes, and the API reports it as the
     /// Thread's `draft` (ADR 0030), so nothing types over the operator.
-    pub fn set_composing(&mut self, thread: ThreadId, unsent: bool) {
+    pub fn set_composing(&mut self, thread: ThreadKey, unsent: bool) {
         let changed = if unsent {
             self.composing.insert(thread)
         } else {
@@ -1038,57 +894,41 @@ impl Cockpit {
         }
     }
 
-    /// Tell the Engine what changed of what only this window knows: the
-    /// Thread its focused Pane shows while it has the operator's focus, and
-    /// its Composers holding unsent text.
+    /// Tell each machine's Engine what changed of what only this window
+    /// knows: the Thread its focused Pane shows while it has the operator's
+    /// focus, and its Composers holding unsent text.
     fn tell_window(&mut self) {
         // A Pane that left took its Composer, and the unsent text with it:
         // a Thread revived later starts with an empty one.
         let roster = &self.roster;
         self.composing
             .retain(|thread| roster.pane_of(*thread).is_some());
-        let now = Told {
-            focused: self
-                .window_active
-                .then(|| self.roster.focused_thread())
-                .flatten(),
-            composing: self.composing.clone(),
-        };
-        let before = self.told.replace(now.clone());
-        let mut said = Vec::new();
-        if before.as_ref().map(|told| told.focused) != Some(now.focused) {
-            said.push(Op::Focused {
-                thread: now.focused,
-            });
-        }
-        let composed = before.map(|told| told.composing).unwrap_or_default();
-        for (threads, unsent) in [
-            (now.composing.difference(&composed), true),
-            (composed.difference(&now.composing), false),
-        ] {
-            said.extend(threads.map(|thread| Op::Composing {
-                thread: *thread,
-                unsent,
-            }));
-        }
-        for op in said {
-            match &mut self.link {
-                Link::InProcess(engine) => engine.window_says(IN_PROCESS_WINDOW, &op),
-                Link::Server(server) => server.tell(op),
-            }
+        let focused = self
+            .window_active
+            .then(|| self.roster.focused_thread())
+            .flatten();
+        for machine in self.machines.values_mut() {
+            machine.tell_window(focused, &self.composing);
         }
     }
 
     /// An open Thread's facts, as this window's mirror holds them.
-    pub fn thread(&self, thread: ThreadId) -> Option<ThreadView<'_>> {
-        self.mirrors.view(thread)
+    pub fn thread(&self, thread: ThreadKey) -> Option<ThreadView<'_>> {
+        let (machine, thread) = self.at(thread)?;
+        machine.mirrors.view(thread)
+    }
+
+    /// Whether `thread` is open on its machine.
+    fn is_open(&self, thread: ThreadKey) -> bool {
+        self.at(thread)
+            .is_some_and(|(machine, thread)| machine.shared.open.contains(&thread))
     }
 
     /// Close a Pane: the Session ends, the log is flushed, and the Thread
     /// keeps nothing in memory until it is opened again.
-    pub fn park(&mut self, thread: ThreadId) -> io::Result<()> {
-        let parked = done(self.act(Op::Park { thread }));
-        if !self.shared.open.contains(&thread) {
+    pub fn park(&mut self, thread: ThreadKey) -> io::Result<()> {
+        let parked = done(self.act_on(thread, |thread| Op::Park { thread }));
+        if !self.is_open(thread) {
             self.roster.remove_thread(thread);
         }
         parked
@@ -1096,19 +936,20 @@ impl Cockpit {
 
     pub fn ensure_subject_history(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         subject: &Subject,
     ) -> io::Result<bool> {
         self.load_subject(thread, subject, false)
     }
 
-    pub fn subject_history_error(&self, thread: ThreadId, subject: &Subject) -> Option<&str> {
-        self.mirrors.history_error(thread, subject)
+    pub fn subject_history_error(&self, thread: ThreadKey, subject: &Subject) -> Option<&str> {
+        let (machine, thread) = self.at(thread)?;
+        machine.mirrors.history_error(thread, subject)
     }
 
     pub fn retry_subject_history(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         subject: &Subject,
     ) -> io::Result<bool> {
         self.load_subject(thread, subject, true)
@@ -1116,11 +957,11 @@ impl Cockpit {
 
     fn load_subject(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         subject: &Subject,
         retry: bool,
     ) -> io::Result<bool> {
-        changed(self.act(Op::LoadSubject {
+        changed(self.act_on(thread, |thread| Op::LoadSubject {
             thread,
             subject: subject.into(),
             retry,
@@ -1134,7 +975,7 @@ impl Cockpit {
         roots: Vec<(Provider, PathBuf)>,
         cap: usize,
     ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::InProcess(engine) => engine.discover_sessions(roots, cap),
             Link::Server(server) if server.available() => {
                 server.discovery().discover_sessions(roots, cap)
@@ -1143,32 +984,33 @@ impl Cockpit {
         }
     }
 
-    /// The operator opened a Notice — from a toast or the bell: it is
-    /// read, and they land on its Thread's Pane in the view that shows
-    /// it, reviving a parked one. The Thread landed on, or None when it
-    /// is gone.
-    pub fn open_notice(&mut self, id: NoticeId) -> Option<ThreadId> {
-        let thread = self.shared.notifications.get(id)?.thread;
+    /// The operator opened a Notice of the machine on screen — from a toast
+    /// or the bell: it is read, and they land on its Thread's Pane in the
+    /// view that shows it, reviving a parked one. The Thread landed on, or
+    /// None when it is gone.
+    pub fn open_notice(&mut self, id: NoticeId) -> Option<ThreadKey> {
+        let thread = self.here().shared.notifications.get(id)?.thread;
         self.tell(Op::Notice {
             action: NoticeAction::Open { notice: id.get() },
         });
-        self.land_on(thread)
+        self.land_on(self.here().key(thread))
     }
 
-    /// Open one live Decision attention record: its Subject is shown, and
-    /// the operator lands on its Thread as `open_notice` does.
-    pub fn open_decision_notice(&mut self, id: &DecisionNoticeId) -> Option<ThreadId> {
-        self.shared.notifications.decision(id)?;
+    /// Open one live Decision attention record of the machine on screen:
+    /// its Subject is shown, and the operator lands on its Thread as
+    /// `open_notice` does.
+    pub fn open_decision_notice(&mut self, id: &DecisionNoticeId) -> Option<ThreadKey> {
+        self.here().shared.notifications.decision(id)?;
         self.tell(Op::Notice {
             action: NoticeAction::OpenDecision {
                 thread: id.thread,
                 handle: (&id.handle).into(),
             },
         });
-        self.land_on(id.thread)
+        self.land_on(self.here().key(id.thread))
     }
 
-    fn land_on(&mut self, thread: ThreadId) -> Option<ThreadId> {
+    fn land_on(&mut self, thread: ThreadKey) -> Option<ThreadKey> {
         if !self.focus_thread(thread) {
             self.reopen(thread).ok()?;
         }
@@ -1202,38 +1044,47 @@ impl Cockpit {
             return false;
         }
         // Only what would read anything is sent: this runs every frame.
-        let unread: Vec<(ThreadId, Vec<Unread>)> = self
+        let unread: Vec<(ThreadKey, Vec<Unread>)> = self
             .visible()
             .into_iter()
             .filter_map(PaneIdentity::thread)
             .map(|thread| (thread, self.unread(thread)))
             .collect();
-        self.seen_told
-            .retain(|thread, _| unread.iter().any(|(shown, unread)| shown == thread && !unread.is_empty()));
+        for machine in self.machines.values_mut() {
+            let id = machine.id;
+            machine.seen_told.retain(|thread, _| {
+                unread.iter().any(|(shown, unread)| {
+                    shown.machine() == id && shown.thread() == *thread && !unread.is_empty()
+                })
+            });
+        }
         let mut read = false;
-        for (thread, unread) in unread {
+        for (key, unread) in unread {
             if unread.is_empty() {
                 continue;
             }
+            let Some((machine, thread)) = self.at_mut(key) else {
+                continue;
+            };
             let op = Op::Notice {
                 action: NoticeAction::Seen { thread },
             };
-            match &mut self.link {
+            match &mut machine.link {
                 Link::InProcess(_) => {
-                    notice(self.link.execute(op));
+                    notice(machine.link.execute(op));
                     read = true;
                 }
                 // A Server is told once for what is unread: its answer is
                 // the Notices it sends back read, a beat or more later.
                 Link::Server(remote) => {
-                    let told = self.seen_told.get(&thread);
+                    let told = machine.seen_told.get(&thread);
                     if !remote.reaches_server()
                         || told.is_some_and(|told| unread.iter().all(|one| told.contains(one)))
                     {
                         continue;
                     }
                     remote.tell(op);
-                    self.seen_told.insert(thread, unread);
+                    machine.seen_told.insert(thread, unread);
                 }
             }
         }
@@ -1243,15 +1094,18 @@ impl Cockpit {
         read
     }
 
-    /// What looking at `thread` reads: its unread Notices, and the unread
-    /// requests of the Subject its Pane shows.
-    fn unread(&self, thread: ThreadId) -> Vec<Unread> {
-        let notifications = &self.shared.notifications;
+    /// What looking at `key`'s Thread reads: its unread Notices, and the
+    /// unread requests of the Subject its Pane shows.
+    fn unread(&self, key: ThreadKey) -> Vec<Unread> {
+        let Some((machine, thread)) = self.at(key) else {
+            return Vec::new();
+        };
+        let notifications = &machine.shared.notifications;
         let shown = self
             .visible_subjects
-            .get(&thread)
+            .get(&key)
             .and_then(|subject| {
-                let view = self.thread(thread)?.activity();
+                let view = machine.mirrors.view(thread)?.activity();
                 let subject = view.canonical_subject(subject);
                 view.subject(&subject).is_some().then_some(subject)
             })
@@ -1279,6 +1133,12 @@ impl Cockpit {
 enum Unread {
     Notice(NoticeId),
     Decision(DecisionNoticeId),
+}
+
+/// The first send made a Thread of `draft`: its slot becomes the Thread.
+fn complete_draft(roster: &mut Roster, draft: DraftId, thread: ThreadKey) -> Bootstrapped {
+    roster.draft_became(draft, thread);
+    Bootstrapped { thread }
 }
 
 /// A git read on a thread of its own, answered as a Server's would be.
@@ -1337,8 +1197,29 @@ fn notice(executed: Executed) {
 impl Cockpit {
     /// A UI test's park that fails: the Engine reports this Thread's park
     /// as refused.
-    pub fn refuse_park(&mut self, thread: ThreadId) {
-        self.in_process().refuse_park.insert(thread);
+    pub fn refuse_park(&mut self, thread: ThreadKey) {
+        self.in_process_of(thread)
+            .refuse_park
+            .insert(thread.thread());
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Cockpit {
+    /// Thread `thread` of the machine on screen, for a test that names one
+    /// by its number, or made it in a Store before the Cockpit held it.
+    pub fn key(&self, thread: ThreadId) -> ThreadKey {
+        self.here().key(thread)
+    }
+
+    /// A window driving an Engine of its own that stands in for the
+    /// machine saved as `saved_as`: a view test's window on that machine.
+    pub fn new_saved_as(store: Store, spawner: Box<dyn Spawner>, saved_as: MachineKey) -> Self {
+        let machine = Self::in_process_machine(store, spawner, saved_as)
+            .expect("the workspace registry opens");
+        let mut cockpit = Self::with(machine);
+        cockpit.receive();
+        cockpit
     }
 }
 
@@ -1346,17 +1227,24 @@ impl Cockpit {
 impl Cockpit {
     pub(crate) fn set_session_project_root(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         root: Option<PathBuf>,
     ) -> Result<(), LoadError> {
-        let set = self.in_process().set_session_project_root(thread, root);
-        self.receive();
+        let set = self
+            .in_process_of(thread)
+            .set_session_project_root(thread.thread(), root);
+        self.receive_from(thread.machine());
         set
     }
 
-    /// The Engine in this process, for a test to reach into.
+    /// The Engine in this process on screen, for a test to reach into.
     pub(crate) fn engine(&self) -> &Engine {
-        match &self.link {
+        self.engine_of(self.on_screen)
+    }
+
+    /// `machine`'s Engine in this process, for a test to reach into.
+    pub(crate) fn engine_of(&self, machine: MachineId) -> &Engine {
+        match &self.machines[&machine].link {
             Link::InProcess(engine) => engine,
             Link::Server(_) => panic!("this window's Engine runs in its Server"),
         }
@@ -1366,46 +1254,19 @@ impl Cockpit {
         self.in_process()
     }
 
-    fn assert_mirrors_match(&self) {
-        let Link::InProcess(engine) = &self.link else {
-            return;
-        };
-        let engine: &Engine = engine;
-        assert_eq!(self.shared.registry.to_wire(), engine.registry().to_wire());
-        assert_eq!(
-            self.shared.notifications.to_wire(),
-            engine.notifications().to_wire()
-        );
-        for provider in [Provider::Claude, Provider::Codex] {
-            assert_eq!(
-                self.shared.announced_models(provider),
-                engine.announced_models(provider)
-            );
-            assert_eq!(
-                self.shared.live_sessions(provider),
-                engine.live_sessions(provider)
-            );
-            assert_eq!(
-                self.shared.account_limits(provider),
-                engine.account_limits(provider)
-            );
-        }
-        for &thread in engine.open_threads() {
-            // A Thread this window does not stream reads from its digest.
-            if !self.mirrors.watched(thread) {
-                continue;
-            }
-            let engine = engine.thread(thread).expect("open in the Engine");
-            let mirror = self
-                .mirrors
-                .view(thread)
-                .unwrap_or_else(|| panic!("thread {thread} has no mirror"));
-            assert_eq!(
-                parity::seen!(mirror),
-                parity::seen!(engine),
-                "thread {thread}: the mirror drifted from the Engine"
-            );
-        }
+    /// Another machine, with an Engine of its own in this process saved as
+    /// `saved_as`: the window holds it beside the one on screen.
+    pub(crate) fn hold_in_process(
+        &mut self,
+        store: Store,
+        spawner: Box<dyn Spawner>,
+        saved_as: MachineKey,
+    ) -> io::Result<MachineId> {
+        let machine = Self::in_process_machine(store, spawner, saved_as)?;
+        let id = machine.id;
+        self.machines.insert(id, machine);
+        self.receive_from(id);
+        Ok(id)
     }
 }
 
@@ -1502,85 +1363,107 @@ mod parity {
 
 /// What the Engine answers, as this window asks it.
 impl Cockpit {
-    pub fn registry(&self) -> &Registry {
-        &self.shared.registry
+    /// The Projects of the machine on screen.
+    pub fn registry(&self) -> OnMachine<'_, Registry> {
+        self.on_screen_reading(|shared| &shared.registry)
     }
 
-    pub fn register_project(&mut self, root: &Path) -> io::Result<ProjectId> {
+    /// Register `root` as a Project of the machine on screen.
+    pub fn register_project(&mut self, root: &Path) -> io::Result<ProjectKey> {
         self.register_project_directories(&[root.to_path_buf()])
     }
 
-    pub fn register_project_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectId> {
-        registered(self.act(Op::Project {
+    pub fn register_project_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectKey> {
+        let project = registered(self.act(Op::Project {
             action: ProjectAction::Register {
                 roots: roots.to_vec(),
             },
-        }))
+        }))?;
+        Ok(self.here().project_key(project))
+    }
+
+    /// One act on a Project, where its machine's Engine runs.
+    fn act_on_project(
+        &mut self,
+        key: ProjectKey,
+        action: impl FnOnce(ProjectId) -> ProjectAction,
+    ) -> io::Result<()> {
+        done(self.act_at(
+            key.machine(),
+            Op::Project {
+                action: action(key.project()),
+            },
+        ))
     }
 
     pub fn add_project_directories(
         &mut self,
-        project: ProjectId,
+        project: ProjectKey,
         roots: &[PathBuf],
     ) -> io::Result<()> {
-        done(self.act(Op::Project {
-            action: ProjectAction::AddDirectories {
-                project,
-                roots: roots.to_vec(),
-            },
-        }))
+        self.act_on_project(project, |project| ProjectAction::AddDirectories {
+            project,
+            roots: roots.to_vec(),
+        })
     }
 
     pub fn replace_project_directory(
         &mut self,
-        project: ProjectId,
+        project: ProjectKey,
         index: usize,
         root: &Path,
     ) -> io::Result<()> {
-        done(self.act(Op::Project {
-            action: ProjectAction::ReplaceDirectory {
-                project,
-                index,
-                root: root.to_path_buf(),
-            },
-        }))
+        self.act_on_project(project, |project| ProjectAction::ReplaceDirectory {
+            project,
+            index,
+            root: root.to_path_buf(),
+        })
     }
 
-    pub fn remove_project_directory(&mut self, project: ProjectId, index: usize) -> io::Result<()> {
-        done(self.act(Op::Project {
-            action: ProjectAction::RemoveDirectory { project, index },
-        }))
+    pub fn remove_project_directory(
+        &mut self,
+        project: ProjectKey,
+        index: usize,
+    ) -> io::Result<()> {
+        self.act_on_project(project, |project| ProjectAction::RemoveDirectory {
+            project,
+            index,
+        })
     }
 
-    pub fn remove_project(&mut self, project: ProjectId) -> io::Result<()> {
-        done(self.act(Op::Project {
-            action: ProjectAction::Remove { project },
-        }))
+    pub fn remove_project(&mut self, project: ProjectKey) -> io::Result<()> {
+        self.act_on_project(project, |project| ProjectAction::Remove { project })
     }
 
-    pub fn rename_project(&mut self, project: ProjectId, title: &str) -> io::Result<()> {
-        done(self.act(Op::Project {
-            action: ProjectAction::Rename {
-                project,
-                title: title.to_string(),
-            },
-        }))
+    pub fn rename_project(&mut self, project: ProjectKey, title: &str) -> io::Result<()> {
+        self.act_on_project(project, |project| ProjectAction::Rename {
+            project,
+            title: title.to_string(),
+        })
     }
 
     /// Watch Session memory in this process. A Server watches its own.
     pub fn watch_memory(&mut self, sampler: Box<dyn RssSampler>, limit: u64) {
         self.in_process().watch_memory(sampler, limit);
-        self.receive();
+        self.receive_from(self.on_screen);
     }
 
     /// Replace any Session grown past the memory limit. A Server sweeps on
     /// its own, so a window attached to one has nothing to do.
     pub fn sweep(&mut self) -> Vec<Restart> {
-        let restarts = match &mut self.link {
+        let here = self.here_mut();
+        let restarts = match &mut here.link {
             Link::InProcess(engine) => engine.sweep(),
             Link::Server(_) => Vec::new(),
         };
-        self.receive();
+        let restarts = restarts
+            .into_iter()
+            .map(|restart| Restart {
+                thread: here.key(restart.thread),
+                rss: restart.rss,
+            })
+            .collect();
+        self.receive_from(self.on_screen);
         restarts
     }
 
@@ -1596,11 +1479,28 @@ impl Cockpit {
         }
     }
 
-    pub fn open(&mut self, provider: Provider, workspace: WorkspaceChoice) -> io::Result<ThreadId> {
-        started(self.act(Op::Open {
+    /// Open a Thread on the machine on screen.
+    pub fn open(
+        &mut self,
+        provider: Provider,
+        workspace: WorkspaceChoice,
+    ) -> io::Result<ThreadKey> {
+        self.open_at(self.on_screen, provider, workspace)
+    }
+
+    /// Open a Thread on `machine`, which the window holds.
+    pub(crate) fn open_at(
+        &mut self,
+        machine: MachineId,
+        provider: Provider,
+        workspace: WorkspaceChoice,
+    ) -> io::Result<ThreadKey> {
+        let op = Op::Open {
             provider,
             workspace: (&workspace).into(),
-        }))
+        };
+        let thread = started(self.act_at(machine, op))?;
+        Ok(self.machines[&machine].key(thread))
     }
 
     /// A first send that blocks until its Thread opens: the tests' own.
@@ -1611,18 +1511,14 @@ impl Cockpit {
         choice: ProviderChoice,
         workspace: WorkspaceChoice,
         prompt: &str,
-    ) -> io::Result<ThreadId> {
+    ) -> io::Result<ThreadKey> {
         let started = self.in_process().bootstrap(choice, workspace, prompt);
-        self.receive();
-        started
+        self.receive_from(self.on_screen);
+        Ok(self.here().key(started?))
     }
 
-    pub fn set_provider(
-        &mut self,
-        thread: ThreadId,
-        choice: ProviderChoice,
-    ) -> io::Result<()> {
-        done(self.act(Op::SetProvider {
+    pub fn set_provider(&mut self, thread: ThreadKey, choice: ProviderChoice) -> io::Result<()> {
+        done(self.act_on(thread, |thread| Op::SetProvider {
             thread,
             provider: choice.provider,
             model: choice.model,
@@ -1631,43 +1527,49 @@ impl Cockpit {
 
     /// Continue a Thread whose provider lost its saved conversation on a
     /// fresh one, the earlier turns going with the next prompt as context.
-    pub fn start_fresh_conversation(&mut self, thread: ThreadId) -> io::Result<()> {
-        done(self.act(Op::StartFresh { thread }))
+    pub fn start_fresh_conversation(&mut self, thread: ThreadKey) -> io::Result<()> {
+        done(self.act_on(thread, |thread| Op::StartFresh { thread }))
     }
 
-    pub fn project_id(&self, thread: ThreadId) -> Option<ProjectId> {
-        self.try_project_id(thread).ok().flatten()
+    /// The Project `thread` is in, on its machine.
+    pub fn project_of(&self, thread: ThreadKey) -> Option<ProjectKey> {
+        self.try_project_of(thread).ok().flatten()
     }
 
-    pub fn try_project_id(&self, thread: ThreadId) -> Result<Option<ProjectId>, LoadError> {
-        match self.thread(thread) {
-            Some(open) => Ok(open.project_id()),
-            None => self.peek(thread).map(|meta| meta.project_id),
-        }
+    pub fn try_project_of(&self, thread: ThreadKey) -> Result<Option<ProjectKey>, LoadError> {
+        let project = match self.thread(thread) {
+            Some(open) => open.project_id(),
+            None => self.peek(thread)?.project_id,
+        };
+        Ok(project.map(|project| ProjectKey::new(thread.machine(), project)))
     }
 
     /// Delete a Thread for good. Its parked row goes at once, not when the
     /// Server next publishes the rows.
-    pub fn delete(&mut self, thread: ThreadId) -> io::Result<()> {
-        let deleted = done(self.act(Op::Delete { thread }));
+    pub fn delete(&mut self, thread: ThreadKey) -> io::Result<()> {
+        let deleted = done(self.act_on(thread, |thread| Op::Delete { thread }));
         if deleted.is_ok() {
-            self.parked.forget(thread);
+            if let Some((machine, thread)) = self.at_mut(thread) {
+                machine.parked.forget(thread);
+            }
         }
         deleted
     }
 
-    pub fn revive(&mut self, thread: ThreadId) -> io::Result<()> {
-        done(self.act(Op::Revive { thread }))
+    pub fn revive(&mut self, thread: ThreadKey) -> io::Result<()> {
+        done(self.act_on(thread, |thread| Op::Revive { thread }))
     }
 
-    pub fn import(&mut self, path: &Path) -> io::Result<ThreadId> {
-        started(self.act(Op::Import {
+    /// Adopt a CLI session file as a Thread of the machine on screen.
+    pub fn import(&mut self, path: &Path) -> io::Result<ThreadKey> {
+        let thread = started(self.act(Op::Import {
             path: path.to_path_buf(),
-        }))
+        }))?;
+        Ok(self.here().key(thread))
     }
 
-    pub fn send(&mut self, thread: ThreadId, text: String) -> Admission {
-        match self.act(Op::Send { thread, text }) {
+    pub fn send(&mut self, thread: ThreadKey, text: String) -> Admission {
+        match self.act_on(thread, |thread| Op::Send { thread, text }) {
             Ok(Some(Done::Held)) => Admission::Held,
             Ok(_) => Admission::Delivered,
             Err(error) if error.code == ErrorCode::Unconfirmed => {
@@ -1681,12 +1583,12 @@ impl Cockpit {
     /// `Err` says why not, in words.
     pub fn rewind(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         prompt: &str,
         files: bool,
         edit: bool,
     ) -> Result<(), String> {
-        self.act(Op::Rewind {
+        self.act_on(thread, |thread| Op::Rewind {
             thread,
             prompt: prompt.to_string(),
             files,
@@ -1700,11 +1602,11 @@ impl Cockpit {
     /// names, or all of it, `draft` in its Composer (`Engine::fork`).
     pub fn fork(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         prompt: Option<&str>,
         draft: Option<String>,
     ) -> Result<(), String> {
-        self.act(Op::Fork {
+        self.act_on(thread, |thread| Op::Fork {
             thread,
             prompt: prompt.map(str::to_string),
             draft,
@@ -1713,20 +1615,20 @@ impl Cockpit {
         .map_err(|error| error.message)
     }
 
-    pub fn interrupt(&mut self, thread: ThreadId) {
-        self.tell(Op::Interrupt { thread });
+    pub fn interrupt(&mut self, thread: ThreadKey) {
+        self.tell_on(thread, |thread| Op::Interrupt { thread });
     }
 
     /// Stop one Subagent of `thread`; Main's turn and the others run on.
-    pub fn stop_subagent(&mut self, thread: ThreadId, key: &AgentKey) {
-        self.tell(Op::StopSubagent {
+    pub fn stop_subagent(&mut self, thread: ThreadKey, key: &AgentKey) {
+        self.tell_on(thread, |thread| Op::StopSubagent {
             thread,
             key: key.as_str().into(),
         });
     }
 
     /// Answer the pending Decision `decision` names, if it still waits.
-    pub fn respond(&mut self, thread: ThreadId, decision: &Decision, answer: DecisionAnswer) {
+    pub fn respond(&mut self, thread: ThreadKey, decision: &Decision, answer: DecisionAnswer) {
         let handle = self.thread(thread).and_then(|open| {
             open.pending_decisions()
                 .iter()
@@ -1743,11 +1645,11 @@ impl Cockpit {
     /// never sent twice.
     pub fn respond_decision(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         handle: &DecisionHandle,
         answer: DecisionAnswer,
     ) -> io::Result<bool> {
-        match self.act(Op::Answer {
+        match self.act_on(thread, |thread| Op::Answer {
             thread,
             handle: handle.into(),
             answer: (&answer).into(),
@@ -1759,31 +1661,36 @@ impl Cockpit {
     }
 
     /// Something only `--demo` and the tests put in a Pane directly.
-    pub fn apply_input(&mut self, thread: ThreadId, input: Input) {
-        self.in_process().apply_input(thread, input);
-        self.receive();
+    pub fn apply_input(&mut self, thread: ThreadKey, input: Input) {
+        self.in_process_of(thread)
+            .apply_input(thread.thread(), input);
+        self.receive_from(thread.machine());
     }
 
     /// Ferrite's own words in a Thread's Pane.
-    pub fn say(&mut self, thread: ThreadId, text: String) {
-        self.tell(Op::Say { thread, text });
+    pub fn say(&mut self, thread: ThreadKey, text: String) {
+        self.tell_on(thread, |thread| Op::Say { thread, text });
     }
 
     pub fn search_files(
         &mut self,
-        thread: ThreadId,
+        key: ThreadKey,
         query: &str,
     ) -> io::Result<Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>> {
-        let asked = match &mut self.link {
+        let (machine, thread) = self.at_mut(key).ok_or_else(|| io::Error::from(gone()))?;
+        let asked = match &mut machine.link {
             Link::InProcess(engine) => engine.search_files(thread, query),
             Link::Server(server) => server.search_files(thread, query),
         };
-        self.receive();
+        self.receive_from(key.machine());
         asked
     }
 
-    pub fn upload_attachment(&mut self, path: PathBuf) -> io::Result<crate::attachment_transfer::Upload> {
-        match &mut self.link {
+    pub fn upload_attachment(
+        &mut self,
+        path: PathBuf,
+    ) -> io::Result<crate::attachment_transfer::Upload> {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.upload_attachment(path),
             Link::InProcess(engine) => {
                 let store = engine.browser_store().dir().to_path_buf();
@@ -1797,7 +1704,7 @@ impl Cockpit {
 
     pub fn read_attachment(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Vec<u8>>>> {
         let path = path.to_path_buf();
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.read_attachment(path),
             Link::InProcess(engine) => {
                 let store = engine.browser_store().dir().to_path_buf();
@@ -1809,9 +1716,16 @@ impl Cockpit {
         }
     }
 
-    pub fn changes(&mut self, root: &Path, scope: crate::changes::Scope) -> io::Result<Receiver<io::Result<crate::changes::Snapshot>>> {
-        let request = crate::changes::Request::Read { root: root.to_path_buf(), scope };
-        match &mut self.link {
+    pub fn changes(
+        &mut self,
+        root: &Path,
+        scope: crate::changes::Scope,
+    ) -> io::Result<Receiver<io::Result<crate::changes::Snapshot>>> {
+        let request = crate::changes::Request::Read {
+            root: root.to_path_buf(),
+            scope,
+        };
+        match &mut self.here_mut().link {
             Link::Server(server) => server.changes(request),
             Link::InProcess(_) => Ok(read_here(move || {
                 crate::changes::execute(request)?.snapshot().ok_or_else(|| "Missing Changes snapshot".into())
@@ -1819,9 +1733,18 @@ impl Cockpit {
         }
     }
 
-    pub fn set_file_staged(&mut self, root: &Path, path: String, staged: bool) -> io::Result<Receiver<io::Result<()>>> {
-        let request = crate::changes::Request::SetStaged { root: root.to_path_buf(), path, staged };
-        match &mut self.link {
+    pub fn set_file_staged(
+        &mut self,
+        root: &Path,
+        path: String,
+        staged: bool,
+    ) -> io::Result<Receiver<io::Result<()>>> {
+        let request = crate::changes::Request::SetStaged {
+            root: root.to_path_buf(),
+            path,
+            staged,
+        };
+        match &mut self.here_mut().link {
             Link::Server(server) => server.set_file_staged(request),
             Link::InProcess(_) => Ok(read_here(move || crate::changes::execute(request).map(|_| ()))),
         }
@@ -1832,7 +1755,7 @@ impl Cockpit {
         &mut self,
         request: crate::file_operations::Request,
     ) -> io::Result<Receiver<io::Result<crate::file_operations::Reply>>> {
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.file_operation(request),
             Link::InProcess(_) => Ok(read_here(move || {
                 crate::file_operations::execute(request).map_err(|error| error.to_string())
@@ -1848,16 +1771,21 @@ impl Cockpit {
         &mut self,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<crate::workspace::Listing>>> {
-        self.remote()?.list_dir(path)
+        self.here_mut().remote()?.list_dir(path)
     }
 
     /// What `project`'s repo holds for the workspace chip, read by git
-    /// where the Server runs (ADR 0026). Answered later, as `list_dir`.
+    /// where its machine's Server runs (ADR 0026). Answered later, as
+    /// `list_dir`.
     pub fn list_repo(
         &mut self,
-        project: ProjectId,
+        project: ProjectKey,
     ) -> io::Result<Receiver<io::Result<crate::workspace::RepoListing>>> {
-        self.remote()?.list_repo(project)
+        self.machines
+            .get_mut(&project.machine())
+            .ok_or_else(|| io::Error::from(gone()))?
+            .remote()?
+            .list_repo(project.project())
     }
 
     /// A review's `read` of the checkout at `path`: its changed files with
@@ -1869,7 +1797,7 @@ impl Cockpit {
         path: &Path,
         read: ferrite_reviewr::ferrite::Read,
     ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::ferrite::FileSides>>>> {
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.review_diff(path, &read),
             Link::InProcess(_) => {
                 let path = path.to_path_buf();
@@ -1886,7 +1814,7 @@ impl Cockpit {
         &mut self,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::git::CommitRow>>>> {
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.review_commits(path),
             Link::InProcess(_) => {
                 let path = path.to_path_buf();
@@ -1902,7 +1830,7 @@ impl Cockpit {
         path: &Path,
         query: &str,
     ) -> io::Result<Receiver<io::Result<ferrite_reviewr::search::SearchResults>>> {
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.search_repo(path, query),
             Link::InProcess(_) => {
                 let (path, query) = (path.to_path_buf(), query.to_string());
@@ -1920,7 +1848,7 @@ impl Cockpit {
         path: &Path,
         file: &str,
     ) -> io::Result<Receiver<io::Result<String>>> {
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.read_review_file(path, file),
             Link::InProcess(_) => {
                 let (path, file) = (path.to_path_buf(), file.to_string());
@@ -1943,7 +1871,7 @@ impl Cockpit {
         if self.has_forge_fixture(path) {
             return Ok(read_here(|| Err("No published diff fixture for this pull request".to_string())));
         }
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.review_pull_request_diff(path, number),
             Link::InProcess(_) => {
                 let (path, forge) = (path.to_path_buf(), self.forge.clone());
@@ -1989,7 +1917,7 @@ impl Cockpit {
                 Ok(crate::protocol::ReviewPullRequest::of(view, "PR"))
             }));
         }
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.review_pull_request(path, number),
             Link::InProcess(_) => {
                 let (path, forge) = (path.to_path_buf(), self.forge.clone());
@@ -2016,7 +1944,7 @@ impl Cockpit {
         if let Some(list) = self.forge_lists.get(&(path.to_path_buf(), filter)).cloned() {
             return Ok(read_here(move || Ok(list)));
         }
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.list_pull_requests(path, filter),
             Link::InProcess(_) => {
                 let (path, forge) = (path.to_path_buf(), self.forge.clone());
@@ -2034,7 +1962,7 @@ impl Cockpit {
         &mut self,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::git::WorktreeEntry>>>> {
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.review_files(path),
             Link::InProcess(_) => {
                 let path = path.to_path_buf();
@@ -2051,7 +1979,7 @@ impl Cockpit {
         &mut self,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<ferrite_reviewr::ferrite::Bases>>> {
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.review_bases(path),
             Link::InProcess(_) => {
                 let path = path.to_path_buf();
@@ -2067,7 +1995,7 @@ impl Cockpit {
         path: &Path,
         base: &str,
     ) -> io::Result<Receiver<io::Result<()>>> {
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.pick_review_base(path, base),
             Link::InProcess(_) => {
                 let (path, base) = (path.to_path_buf(), base.to_string());
@@ -2090,7 +2018,7 @@ impl Cockpit {
             let reading = crate::workspace::PullRequest::of_view(view);
             return Ok(read_here(move || Ok(reading)));
         }
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.pull_request(path),
             Link::InProcess(_) => {
                 let path = path.to_path_buf();
@@ -2099,32 +2027,35 @@ impl Cockpit {
         }
     }
 
-    /// Whether a PR watch can start here: only a Server runs the watcher
-    /// (T3's `canStartWatch`). Any window can stop one.
-    pub fn starts_pr_watches(&self) -> bool {
-        matches!(self.link, Link::Server(_))
+    /// Whether a PR watch can start on `machine`: only a Server runs the
+    /// watcher (T3's `canStartWatch`). Any window can stop one.
+    pub fn starts_pr_watches(&self, machine: MachineId) -> bool {
+        self.machines
+            .get(&machine)
+            .is_some_and(|held| matches!(held.link, Link::Server(_)))
     }
 
-    /// Watch the PR at `url` for `thread`'s agent, or stop watching it
+    /// Watch the PR at `url` for `key`'s agent, or stop watching it
     /// (ADR 0046), as T3's details card and PR menu do: whether it is
-    /// watched once the Server has it. A new watch is the Server's
-    /// watcher's, which reads the PR first; an Engine in this process only
-    /// stops one.
+    /// watched once its machine's Server has it. A new watch is the
+    /// Server's watcher's, which reads the PR first; an Engine in this
+    /// process only stops one.
     pub fn watch_pr(
         &mut self,
-        thread: ThreadId,
+        key: ThreadKey,
         url: &str,
         watching: bool,
     ) -> io::Result<Receiver<io::Result<bool>>> {
+        let (machine, thread) = self.at_mut(key).ok_or_else(|| io::Error::from(gone()))?;
         let op = Op::WatchPr {
             thread,
             url: url.to_string(),
             watching,
         };
-        match &mut self.link {
+        match &mut machine.link {
             Link::Server(server) => server.watch_pr(op),
             Link::InProcess(_) => {
-                let done = self.act(op);
+                let done = self.act_at(key.machine(), op);
                 Ok(read_here(move || match done {
                     Ok(Some(Done::PrWatch { watching })) => Ok(watching),
                     Ok(_) => Err("the server answered something else".to_string()),
@@ -2148,7 +2079,7 @@ impl Cockpit {
         {
             return Ok(read_here(move || Ok(names)));
         }
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.github_names(ask),
             Link::InProcess(_) => Ok(read_here(move || {
                 use crate::server::github::GitHub;
@@ -2162,59 +2093,77 @@ impl Cockpit {
         }
     }
 
-    pub fn control(&mut self, thread: ThreadId, action: crate::SessionControl) -> io::Result<()> {
-        done(self.act(Op::Control {
+    pub fn control(&mut self, thread: ThreadKey, action: crate::SessionControl) -> io::Result<()> {
+        done(self.act_on(thread, |thread| Op::Control {
             thread,
             control: (&action).into(),
         }))
     }
 
-    /// The operator's Threads not open, in creation order, as the Server
-    /// published them: an owned Thread (ADR 0037) is its owner's to list.
-    pub fn parked(&self) -> io::Result<Vec<ThreadId>> {
+    /// The operator's Threads not open, each machine's in creation order,
+    /// as its Server published them: an owned Thread (ADR 0037) is its
+    /// owner's to list.
+    pub fn parked(&self) -> io::Result<Vec<ThreadKey>> {
         Ok(self
-            .parked
-            .thread_ids()
-            .filter(|thread| self.thread(*thread).is_none() && self.parked.owner(*thread).is_none())
+            .machines
+            .values()
+            .flat_map(|machine| {
+                machine
+                    .parked
+                    .thread_ids()
+                    .filter(|thread| {
+                        machine.mirrors.view(*thread).is_none()
+                            && machine.parked.owner(*thread).is_none()
+                    })
+                    .map(|thread| machine.key(thread))
+            })
             .collect())
     }
 
-    /// Every Thread the Server has, open or parked, owned ones included: a
-    /// Thread in none of them is gone.
-    pub fn known_threads(&self) -> std::collections::HashSet<ThreadId> {
-        self.threads().into_iter().chain(self.parked.thread_ids()).collect()
+    /// Every Thread the Servers have, open or parked, owned ones included:
+    /// a Thread in none of them is gone.
+    pub fn known_threads(&self) -> std::collections::HashSet<ThreadKey> {
+        self.machines
+            .values()
+            .flat_map(|machine| machine.known().map(|thread| machine.key(thread)))
+            .collect()
     }
 
     /// Whose `thread` is when not the operator's (ADR 0037), open or
     /// parked: a Worker's Task, a Coordinator's Factory.
-    pub fn owner(&self, thread: ThreadId) -> Option<crate::ThreadOwner> {
+    pub fn owner(&self, thread: ThreadKey) -> Option<crate::ThreadOwner> {
         match self.thread(thread) {
             Some(open) => open.owner().cloned(),
-            None => self.parked.owner(thread),
+            None => {
+                let (machine, thread) = self.at(thread)?;
+                machine.parked.owner(thread)
+            }
         }
     }
 
     /// Whether `thread` is the operator's own: what the nav, the palette's
     /// Thread search, the Inbox, the Attention list and the alerts list.
     /// An owned Thread is reached through its owner instead.
-    pub fn operators(&self, thread: ThreadId) -> bool {
+    pub fn operators(&self, thread: ThreadKey) -> bool {
         self.owner(thread).is_none()
     }
 
     /// Whether some Thread's binding waits on a fresh worktree listing:
     /// the driver's cue to list now rather than on its next tick.
     pub fn wants_worktree_listing(&self) -> bool {
-        self.mirrors.wants_listing()
+        self.machines
+            .values()
+            .any(|machine| machine.mirrors.wants_listing())
     }
 
     pub fn worktrees_listed(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         listed: Vec<PathBuf>,
         taken_at: Instant,
     ) -> bool {
         let age = crate::clock::instant().saturating_duration_since(taken_at);
-        changed(self.act(Op::WorktreesListed {
+        changed(self.act_on(thread, |thread| Op::WorktreesListed {
             thread,
             listed,
             age_ms: age.as_millis() as u64,
@@ -2224,79 +2173,93 @@ impl Cockpit {
 
     /// A Thread's header: a parked one's from its published row; an open
     /// one's off its log's header line, on this computer only.
-    pub fn peek(&self, thread: ThreadId) -> Result<crate::store::ThreadMeta, LoadError> {
-        match self.open_log(thread) {
+    pub fn peek(&self, thread: ThreadKey) -> Result<crate::store::ThreadMeta, LoadError> {
+        let Some((machine, thread)) = self.at(thread) else {
+            return Err(LoadError::Io(gone().into()));
+        };
+        match machine.open_log(thread) {
             Some(logs) => logs.peek(thread),
-            None => self.parked.peek(thread),
+            None => machine.parked.peek(thread),
         }
     }
 
     /// The log of an open Thread, to read its whole history on a worker;
     /// `None` when the log is on another computer.
-    pub fn history_log(&self, thread: ThreadId) -> Option<&Store> {
-        self.open_log(thread)
-    }
-
-    /// This computer's logs, when `thread` is open and its log is here.
-    fn open_log(&self, thread: ThreadId) -> Option<&Store> {
-        self.logs.as_ref().filter(|_| self.thread(thread).is_some())
+    pub fn history_log(&self, thread: ThreadKey) -> Option<&Store> {
+        let (machine, thread) = self.at(thread)?;
+        machine.open_log(thread)
     }
 
     /// The subagents a Thread knows, live or parked: a parked Thread's as
     /// its Server counted them.
-    pub fn subagent_count(&self, thread: ThreadId) -> Option<usize> {
+    pub fn subagent_count(&self, thread: ThreadKey) -> Option<usize> {
         match self.thread(thread) {
             Some(open) => Some(open.subagents()),
-            None => self.parked.subagents(thread),
+            None => {
+                let (machine, thread) = self.at(thread)?;
+                machine.parked.subagents(thread)
+            }
         }
     }
 
     /// The turns a parked Thread holds, as its Server counted them — the
     /// wall's parked tile reads `11 turns`.
-    pub fn parked_turns(&self, thread: ThreadId) -> Option<usize> {
-        self.parked.turns(thread)
+    pub fn parked_turns(&self, thread: ThreadKey) -> Option<usize> {
+        let (machine, thread) = self.at(thread)?;
+        machine.parked.turns(thread)
     }
 
     /// When a Thread was last used, live or parked — the nav's default
     /// order and its "3 days" line. A parked Thread's is in its row; an
     /// open one's is a `stat`, so callers still cache it rather than ask
     /// per frame.
-    pub fn last_used(&self, thread: ThreadId) -> Option<std::time::SystemTime> {
-        match self.open_log(thread) {
+    pub fn last_used(&self, thread: ThreadKey) -> Option<std::time::SystemTime> {
+        let (machine, thread) = self.at(thread)?;
+        match machine.open_log(thread) {
             Some(logs) => logs.last_used(thread),
-            None => self.parked.last_used(thread),
+            None => machine.parked.last_used(thread),
         }
     }
 
     /// When an open Thread last had a prompt sent or a turn end
     /// (`Store::last_activity`): what the bell groups by, not the log's
     /// write time. It reads an idle Thread's log tail, so callers cache it.
-    pub fn last_activity(&self, thread: ThreadId) -> Option<std::time::SystemTime> {
+    pub fn last_activity(&self, key: ThreadKey) -> Option<std::time::SystemTime> {
         // A running Thread's writes are its activity: no tail to read.
-        let working = self.thread(thread).is_some_and(|open| open.busy());
-        match self.open_log(thread) {
+        let working = self.thread(key).is_some_and(|open| open.busy());
+        let (machine, thread) = self.at(key)?;
+        match machine.open_log(thread) {
             Some(logs) if !working => logs.last_activity(thread),
-            _ => self.last_used(thread),
+            _ => self.last_used(key),
         }
     }
 
-    /// The open Threads.
-    pub fn threads(&self) -> Vec<ThreadId> {
-        self.mirrors.threads()
+    /// The open Threads, each machine's in the order its mirrors hold them.
+    pub fn threads(&self) -> Vec<ThreadKey> {
+        self.machines
+            .values()
+            .flat_map(|machine| {
+                machine
+                    .mirrors
+                    .threads()
+                    .into_iter()
+                    .map(|thread| machine.key(thread))
+            })
+            .collect()
     }
 
     /// The Project the operator was last working in: the Project of the
-    /// most recently written Thread the store holds, skipping Threads
-    /// whose Project the registry no longer knows — a Project removed from
-    /// the menu must not come back as a draft's default. `None` when no
-    /// Thread names a registered Project, which is what a fresh
+    /// most recently written Thread the stores hold, skipping Threads
+    /// whose Project their registry no longer knows — a Project removed
+    /// from the menu must not come back as a draft's default. `None` when
+    /// no Thread names a registered Project, which is what a fresh
     /// installation looks like.
     ///
     /// A parked Thread answers from its row; an open one costs a `stat`
     /// and a header line. Launch-time only: callers keep the answer rather
     /// than ask it per frame.
-    pub fn last_worked_project(&self) -> Option<ProjectId> {
-        let mut threads: Vec<(Option<std::time::SystemTime>, ThreadId)> = self
+    pub fn last_worked_project(&self) -> Option<ProjectKey> {
+        let mut threads: Vec<(Option<std::time::SystemTime>, ThreadKey)> = self
             .parked()
             .unwrap_or_default()
             .into_iter()
@@ -2308,34 +2271,44 @@ impl Cockpit {
         threads
             .sort_by_key(|(used, thread)| (std::cmp::Reverse(*used), std::cmp::Reverse(*thread)));
         threads.into_iter().find_map(|(_, thread)| {
-            let project = self.project_id(thread)?;
-            self.shared.registry.project(project).map(|_| project)
+            let project = self.project_of(thread)?;
+            self.machines[&project.machine()]
+                .shared
+                .registry
+                .project(project.project())
+                .map(|_| project)
         })
     }
 
     /// The window is going. Sessions in this process end with it, so no
     /// provider process outlives Ferrite; a Server's keep running.
     pub fn halt_sessions(&mut self) {
-        if let Link::InProcess(engine) = &mut self.link {
-            engine.halt_sessions();
-            self.receive();
+        let machines: Vec<MachineId> = self.machines.keys().copied().collect();
+        for machine in machines {
+            if let Link::InProcess(engine) = &mut self.machines.get_mut(&machine).unwrap().link {
+                engine.halt_sessions();
+                self.receive_from(machine);
+            }
         }
     }
 
     /// The durable operator title, whether this Thread is live or parked.
-    pub fn thread_title(&self, thread: ThreadId) -> Result<Option<String>, LoadError> {
+    pub fn thread_title(&self, thread: ThreadKey) -> Result<Option<String>, LoadError> {
         if let Some(open) = self.thread(thread) {
             return Ok(open.title().map(str::to_string));
         }
-        self.parked.peek(thread).map(|meta| meta.title)
+        let Some((machine, thread)) = self.at(thread) else {
+            return Err(LoadError::Io(gone().into()));
+        };
+        machine.parked.peek(thread).map(|meta| meta.title)
     }
 
     /// What a Thread is called on screen: the title the operator gave it;
     /// else, when `auto` is on, the first line of its first prompt,
     /// shortened; else its number. A parked Thread's is in its row.
-    pub fn display_title(&self, thread: ThreadId, auto: bool) -> String {
-        let numbered = || format!("thread-{}", thread.get());
-        if let Some(open) = self.thread(thread) {
+    pub fn display_title(&self, key: ThreadKey, auto: bool) -> String {
+        let numbered = || format!("thread-{}", key.thread().get());
+        if let Some(open) = self.thread(key) {
             if let Some(title) = open.title() {
                 return title.to_string();
             }
@@ -2344,7 +2317,10 @@ impl Cockpit {
             }
             return open.prompt_title().unwrap_or_else(numbered);
         }
-        let Ok(meta) = self.parked.peek(thread) else {
+        let Some((machine, thread)) = self.at(key) else {
+            return numbered();
+        };
+        let Ok(meta) = machine.parked.peek(thread) else {
             return numbered();
         };
         if let Some(title) = meta.title {
@@ -2353,30 +2329,31 @@ impl Cockpit {
         if !auto {
             return numbered();
         }
-        self.parked.prompt_title(thread).unwrap_or_else(numbered)
+        machine.parked.prompt_title(thread).unwrap_or_else(numbered)
     }
 
     pub fn snooze_thread(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         until: Option<std::time::SystemTime>,
     ) -> io::Result<()> {
-        done(self.act(Op::Snooze { thread, until }))
+        done(self.act_on(thread, |thread| Op::Snooze { thread, until }))
     }
 
-    pub fn rename_thread(&mut self, thread: ThreadId, title: &str) -> io::Result<()> {
-        done(self.act(Op::Rename {
+    pub fn rename_thread(&mut self, thread: ThreadKey, title: &str) -> io::Result<()> {
+        done(self.act_on(thread, |thread| Op::Rename {
             thread,
             title: title.to_string(),
         }))
     }
 
-    pub fn queue(&mut self, thread: ThreadId, text: String) -> bool {
-        self.act(Op::Queue { thread, text }).is_ok()
+    pub fn queue(&mut self, thread: ThreadKey, text: String) -> bool {
+        self.act_on(thread, |thread| Op::Queue { thread, text })
+            .is_ok()
     }
 
-    pub fn unqueue(&mut self, thread: ThreadId) -> Option<String> {
-        match self.act(Op::Unqueue { thread }) {
+    pub fn unqueue(&mut self, thread: ThreadKey) -> Option<String> {
+        match self.act_on(thread, |thread| Op::Unqueue { thread }) {
             Ok(Some(Done::Text { text })) => Some(text),
             _ => None,
         }
@@ -2384,28 +2361,28 @@ impl Cockpit {
 
     /// Remove the queued prompt `id` names (`QueueItem::id`), back to the
     /// Composer when `restore`.
-    pub fn remove_queued_item(&mut self, thread: ThreadId, id: &str, restore: bool) {
+    pub fn remove_queued_item(&mut self, thread: ThreadKey, id: &str, restore: bool) {
         self.take_back_queued(thread, id, restore, false);
     }
 
     /// Send the queued prompt `id` names next (`Engine::send_queued_now`).
-    pub fn send_queued_now(&mut self, thread: ThreadId, id: &str) {
-        self.tell(Op::SendQueuedNow {
+    pub fn send_queued_now(&mut self, thread: ThreadKey, id: &str) {
+        self.tell_on(thread, |thread| Op::SendQueuedNow {
             thread,
             item: id.to_string(),
         });
     }
 
     /// Edit the queued prompt `id` names, ahead of the current draft.
-    pub fn edit_queued_item(&mut self, thread: ThreadId, id: &str) {
+    pub fn edit_queued_item(&mut self, thread: ThreadKey, id: &str) {
         self.take_back_queued(thread, id, true, true);
     }
 
-    fn take_back_queued(&mut self, thread: ThreadId, id: &str, restore: bool, edit: bool) {
+    fn take_back_queued(&mut self, thread: ThreadKey, id: &str, restore: bool, edit: bool) {
         // A Server too old to send ids listed its queue by text alone
         // (`mirror::queue_of`): its items take back the latest.
         let id = (!id.is_empty()).then_some(id);
-        self.tell(Op::CancelQueued {
+        self.tell_on(thread, |thread| Op::CancelQueued {
             thread,
             restore,
             edit,
@@ -2415,10 +2392,10 @@ impl Cockpit {
 
     /// A prompt the provider handed back, for the Composer, and whether it
     /// goes ahead of the draft.
-    pub fn take_retrieved_prompt(&mut self, thread: ThreadId) -> Option<(String, bool)> {
+    pub fn take_retrieved_prompt(&mut self, thread: ThreadKey) -> Option<(String, bool)> {
         // Asked every frame: only a Thread holding one is asked.
         self.thread(thread)?.recovered()?;
-        match self.act(Op::TakeRecovered { thread }) {
+        match self.act_on(thread, |thread| Op::TakeRecovered { thread }) {
             Ok(Some(Done::Recovered { text, prepend })) => Some((text, prepend)),
             _ => None,
         }
@@ -2426,7 +2403,7 @@ impl Cockpit {
 
     pub fn recall_prompt(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         direction: HistoryDirection,
         current_draft: &str,
     ) -> Option<String> {
@@ -2434,7 +2411,7 @@ impl Cockpit {
             HistoryDirection::Older => crate::protocol::WireDirection::Older,
             HistoryDirection::Newer => crate::protocol::WireDirection::Newer,
         };
-        match self.act(Op::Recall {
+        match self.act_on(thread, |thread| Op::Recall {
             thread,
             direction,
             draft: current_draft.to_string(),
@@ -2444,9 +2421,9 @@ impl Cockpit {
         }
     }
 
-    pub fn answer(&mut self, thread: ThreadId, id: &str) -> bool {
-        let answered = self.in_process().answer(thread, id);
-        self.receive();
+    pub fn answer(&mut self, thread: ThreadKey, id: &str) -> bool {
+        let answered = self.in_process_of(thread).answer(thread.thread(), id);
+        self.receive_from(thread.machine());
         answered
     }
 
@@ -2454,11 +2431,12 @@ impl Cockpit {
     /// window attached to a Server says `settings_changed`.
     pub fn set_suggestions_enabled(&mut self, enabled: bool) {
         self.in_process().set_suggestions_enabled(enabled);
-        self.receive();
+        self.receive_from(self.on_screen);
     }
 
-    pub fn deliver_suggestion(&mut self, thread: ThreadId, text: String) {
-        self.in_process().deliver_suggestion(thread, text)
+    pub fn deliver_suggestion(&mut self, thread: ThreadKey, text: String) {
+        self.in_process_of(thread)
+            .deliver_suggestion(thread.thread(), text)
     }
 
     /// Settings changed on disk: whether completed turns predict a
@@ -2466,11 +2444,14 @@ impl Cockpit {
     /// review reads, among them.
     pub fn settings_changed(&mut self, settings: &crate::settings::Settings) {
         self.forge = settings.forge_hosts.review_config();
-        match &mut self.link {
-            Link::InProcess(engine) => engine.apply_settings(settings),
-            Link::Server(server) => server.tell(Op::SettingsChanged),
+        let machines: Vec<MachineId> = self.machines.keys().copied().collect();
+        for machine in machines {
+            match &mut self.machines.get_mut(&machine).unwrap().link {
+                Link::InProcess(engine) => engine.apply_settings(settings),
+                Link::Server(server) => server.tell(Op::SettingsChanged),
+            }
+            self.receive_from(machine);
         }
-        self.receive();
     }
 
     /// The defaults of the Server this window is on, as its own
@@ -2480,7 +2461,7 @@ impl Cockpit {
         &mut self,
         set: Option<crate::settings::ServerDefaults>,
     ) -> io::Result<Receiver<io::Result<crate::settings::ServerDefaults>>> {
-        self.remote()?.server_defaults(set)
+        self.here_mut().remote()?.server_defaults(set)
     }
 
     /// The provider CLIs of the machine whose Sessions this window shows:
@@ -2490,7 +2471,7 @@ impl Cockpit {
         &mut self,
         action: crate::protocol::CliAction,
     ) -> io::Result<Receiver<io::Result<Done>>> {
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::Server(server) => server.cli(action),
             Link::InProcess(_) => Ok(read_here(move || {
                 crate::server::clis::perform(&crate::server::clis::Host, &action)
@@ -2500,57 +2481,66 @@ impl Cockpit {
     }
 
     pub fn live_sessions(&self, provider: Provider) -> usize {
-        self.shared.live_sessions(provider)
+        self.here().shared.live_sessions(provider)
     }
 
     pub fn announced_models(&self, provider: Provider) -> Vec<ModelInfo> {
-        self.shared.announced_models(provider)
+        self.here().shared.announced_models(provider)
     }
 
     pub fn account_limits(&self, provider: Provider) -> crate::transcript::RateLimits {
-        self.shared.account_limits(provider)
+        self.here().shared.account_limits(provider)
     }
 
-    /// Whether the Server said anything since the last ask: a message, a
+    /// Whether a Server said anything since the last ask: a message, a
     /// start's answer, an attach. What a window draws from the mirrors may
     /// have moved even when no Pane's did.
     pub fn take_arrived(&mut self) -> bool {
-        std::mem::take(&mut self.arrived)
+        self.machines.values_mut().fold(false, |arrived, machine| {
+            std::mem::take(&mut machine.arrived) | arrived
+        })
     }
 
-    /// Whether the parked Threads' rows moved since the last ask: the
+    /// Whether the parked Threads' rows moved since the last ask: a
     /// Server published them.
     pub fn take_parked_changed(&mut self) -> bool {
-        self.parked.take_changed()
+        self.machines.values_mut().fold(false, |changed, machine| {
+            machine.parked.take_changed() | changed
+        })
     }
 
     pub fn take_models_changed(&mut self) -> bool {
-        self.shared.take_models_changed() | self.mirrors.take_models_changed()
+        self.machines.values_mut().fold(false, |changed, machine| {
+            machine.shared.take_models_changed() | machine.mirrors.take_models_changed() | changed
+        })
     }
 
     /// The allowance warnings due since the last take, oldest first.
     pub fn take_allowance_warnings(&mut self) -> Vec<crate::providers::limits::AllowanceWarning> {
-        std::mem::take(&mut self.allowance_warnings)
+        std::mem::take(&mut self.said.allowance_warnings)
     }
 
     /// What API callers asked of the windows since the last take.
     pub fn take_asked(&mut self) -> Vec<Asked> {
-        std::mem::take(&mut self.asked)
+        std::mem::take(&mut self.said.asked)
     }
 
     /// Whether API callers asked anything of the windows since the last take.
     pub fn has_asked(&self) -> bool {
-        !self.asked.is_empty()
+        !self.said.asked.is_empty()
     }
 
-    /// Every Factory's Tasks, as the Server last said them (ADR 0037).
-    pub fn factory(&self) -> &crate::factory::Board {
-        &self.shared.factory
+    /// Every Factory's Tasks on the machine on screen, as its Server last
+    /// said them (ADR 0037).
+    pub fn factory(&self) -> OnMachine<'_, crate::factory::Board> {
+        self.on_screen_reading(|shared| &shared.factory)
     }
 
     /// Whether the Tasks changed since the last ask.
     pub fn take_factory_changed(&mut self) -> bool {
-        self.shared.take_factory_changed()
+        self.machines.values_mut().fold(false, |changed, machine| {
+            machine.shared.take_factory_changed() | changed
+        })
     }
 
     /// A Factory command. The Factory runs in the Server: a window that
@@ -2588,19 +2578,23 @@ impl Cockpit {
             }
             return done;
         }
-        let done = self.remote()?.execute(op).map_err(io::Error::from);
-        self.receive();
+        let done = self
+            .here_mut()
+            .remote()?
+            .execute(op)
+            .map_err(io::Error::from);
+        self.receive_from(self.on_screen);
         done
     }
 
     /// The `window.*` actions handed to this window since the last take,
     /// each by its request; [`Self::driven`] answers it.
     pub fn take_drives(&mut self) -> Vec<(u64, crate::drive::Action)> {
-        std::mem::take(&mut self.drives)
+        std::mem::take(&mut self.here_mut().drives)
     }
 
     pub fn driven(&mut self, request: u64, answer: Result<crate::drive::Answer, String>) {
-        if let Link::Server(server) = &mut self.link {
+        if let Link::Server(server) = &mut self.here_mut().link {
             let (ok, error) = match answer {
                 Ok(answer) => (Some(answer), None),
                 Err(error) => (None, Some(error)),
@@ -2615,7 +2609,7 @@ impl Cockpit {
         provider: Provider,
         cwd: &std::path::Path,
     ) -> Option<crate::providers::commands::Discovery> {
-        match &mut self.link {
+        match &mut self.here_mut().link {
             Link::InProcess(engine) => engine.discover_commands(provider, cwd),
             Link::Server(server) if server.available() => {
                 server.discovery().discover_commands(provider, cwd)
@@ -2629,23 +2623,15 @@ impl Cockpit {
         crate::providers::models::catalog(provider, &self.announced_models(provider))
     }
 
-    pub fn set_model(
-        &mut self,
-        thread: ThreadId,
-        model: Option<String>,
-    ) -> io::Result<()> {
-        done(self.act(Op::SetModel { thread, model }))
+    pub fn set_model(&mut self, thread: ThreadKey, model: Option<String>) -> io::Result<()> {
+        done(self.act_on(thread, |thread| Op::SetModel { thread, model }))
     }
 
-    pub fn set_effort(
-        &mut self,
-        thread: ThreadId,
-        effort: Option<String>,
-    ) -> io::Result<()> {
-        done(self.act(Op::SetEffort { thread, effort }))
+    pub fn set_effort(&mut self, thread: ThreadKey, effort: Option<String>) -> io::Result<()> {
+        done(self.act_on(thread, |thread| Op::SetEffort { thread, effort }))
     }
 
-    pub fn next_blocked(&self, from: Option<ThreadId>) -> Option<ThreadId> {
+    pub fn next_blocked(&self, from: Option<ThreadKey>) -> Option<ThreadKey> {
         let queue = self.needs_you();
         let next = from
             .and_then(|from| queue.iter().position(|thread| *thread == from))
@@ -2658,17 +2644,18 @@ impl Cockpit {
     /// bottom, so the strip's first row is exactly what ⌘D and the wall's
     /// `y`/`n`/`a` act on. A Thread whose request has not reached the
     /// notification record yet queues behind the rest, in Thread order.
-    pub fn needs_you(&self) -> Vec<ThreadId> {
+    pub fn needs_you(&self) -> Vec<ThreadKey> {
         let mut queue = self.blocked();
         // An owned Thread's Decision is answered through its owner.
         queue.retain(|thread| self.operators(*thread));
-        queue.sort_by_key(|thread| {
+        queue.sort_by_key(|key| {
             (
-                self.shared
+                self.machines[&key.machine()]
+                    .shared
                     .notifications
-                    .first_request(*thread)
+                    .first_request(key.thread())
                     .map_or(u64::MAX, |notice| notice.seq),
-                *thread,
+                *key,
             )
         });
         queue
@@ -2676,12 +2663,12 @@ impl Cockpit {
 
     /// The Thread the answer keys act on when the focused Pane waits on
     /// nothing: the Needs-you strip's first row.
-    pub fn answer_target(&self) -> Option<ThreadId> {
+    pub fn answer_target(&self) -> Option<ThreadKey> {
         self.needs_you().first().copied()
     }
 
     /// Threads waiting on the operator — what the wall badges.
-    pub fn blocked(&self) -> Vec<ThreadId> {
+    pub fn blocked(&self) -> Vec<ThreadKey> {
         self.threads()
             .into_iter()
             .filter(|thread| {
@@ -2691,17 +2678,18 @@ impl Cockpit {
             .collect()
     }
 
-    pub fn notifications(&self) -> &Notifications {
-        &self.shared.notifications
+    /// The Notices of the machine on screen.
+    pub fn notifications(&self) -> OnMachine<'_, Notifications> {
+        self.on_screen_reading(|shared| &shared.notifications)
     }
 
     pub fn set_notification_grace(&mut self, grace: Duration) {
         self.in_process().set_notification_grace(grace);
-        self.receive();
+        self.receive_from(self.on_screen);
     }
 
     pub fn dismiss_notice(&mut self, id: NoticeId) -> bool {
-        let known = self.shared.notifications.get(id).is_some();
+        let known = self.here().shared.notifications.get(id).is_some();
         self.tell(Op::Notice {
             action: NoticeAction::Dismiss { notice: id.get() },
         });
@@ -2709,7 +2697,7 @@ impl Cockpit {
     }
 
     pub fn dismiss_decision_notice(&mut self, id: &DecisionNoticeId) -> bool {
-        let shown = self.shared.notifications.decision(id).is_some();
+        let shown = self.here().shared.notifications.decision(id).is_some();
         self.tell(Op::Notice {
             action: NoticeAction::DismissDecision {
                 thread: id.thread,
@@ -2732,26 +2720,27 @@ impl Cockpit {
     }
 
     /// Claude's `Mark as unread` (`Notifications::mark_unread`).
-    pub fn mark_unread(&mut self, thread: ThreadId) {
-        self.tell(Op::Notice {
+    pub fn mark_unread(&mut self, thread: ThreadKey) {
+        self.tell_on(thread, |thread| Op::Notice {
             action: NoticeAction::Unseen { thread },
         });
     }
 
     /// A fixture world's PR watches for `thread` (ADR 0046), as the
     /// Server's watcher would have saved them.
-    pub fn fixture_pr_watch(&mut self, thread: ThreadId, fact: crate::pr_watch::WatchFact) {
-        if let Err(error) = self.in_process().set_pr_watch(thread, fact) {
-            crate::log!("thread {thread}: a fixture watch was not saved: {error}");
+    pub fn fixture_pr_watch(&mut self, thread: ThreadKey, fact: crate::pr_watch::WatchFact) {
+        if let Err(error) = self.in_process_of(thread).set_pr_watch(thread.thread(), fact) {
+            crate::log!("thread {}: a fixture watch was not saved: {error}", thread.thread());
         }
         // The digest it sends is left for the window's pump, which reads
         // the watch from it as a window of the Server does.
-        self.receive();
+        self.receive_from(thread.machine());
     }
 
-    pub fn fixture_backdate_notices(&mut self, thread: ThreadId, at: std::time::SystemTime) {
-        self.in_process().fixture_backdate_notices(thread, at);
-        self.receive();
+    pub fn fixture_backdate_notices(&mut self, thread: ThreadKey, at: std::time::SystemTime) {
+        self.in_process_of(thread)
+            .fixture_backdate_notices(thread.thread(), at);
+        self.receive_from(thread.machine());
     }
 
     /// A fixture world's forge: from now on both pull request reads of the
@@ -2817,7 +2806,13 @@ impl Cockpit {
     /// The Server's message about a browser, as a window linked to it
     /// would hear it; an in-process window hears none.
     pub fn fixture_browser_message(&mut self, message: ServerMessage) {
-        self.browser_messages.push(message);
+        let (ServerMessage::Browser { thread, .. } | ServerMessage::BrowserRequest { thread, .. }) =
+            &message
+        else {
+            panic!("a browser message names its Thread");
+        };
+        let key = self.here().key(*thread);
+        self.said.browser.push((key, message));
     }
 
     /// A fixture world's browser acts succeed, as a linked Server's would.
@@ -2828,15 +2823,16 @@ impl Cockpit {
     /// A fixture world's Server is one from before `Capability::ForkOf`:
     /// its focus for a fork that opened names no `fork_of`.
     pub fn fixture_server_before_fork_of(&mut self) {
-        self.server_before_fork_of = true;
+        self.here_mut().before_fork_of = true;
     }
 
-    /// Whether this window's Server names the Thread a fork that opened
-    /// was made from (`Capability::ForkOf`). An Engine in this process is
-    /// this build's, so it does.
+    /// Whether the Server on screen names the Thread a fork that opened was
+    /// made from (`Capability::ForkOf`). An Engine in this process is this
+    /// build's, so it does.
     pub fn names_fork_owners(&self) -> bool {
-        match &self.link {
-            Link::InProcess(_) => !self.server_before_fork_of,
+        let machine = self.here();
+        match &machine.link {
+            Link::InProcess(_) => !machine.before_fork_of,
             Link::Server(server) => server.names_fork_owners(),
         }
     }
@@ -2859,14 +2855,14 @@ impl Cockpit {
         provider: Provider,
         workspace: WorkspaceChoice,
         owner: crate::ThreadOwner,
-    ) -> io::Result<ThreadId> {
+    ) -> io::Result<ThreadKey> {
         let launch = crate::engine::Launch {
             owner: Some(owner),
             ..Default::default()
         };
         let opened = self.in_process().open_with(provider, workspace, launch);
-        self.receive();
-        opened
+        self.receive_from(self.on_screen);
+        Ok(self.here().key(opened?))
     }
 
     /// A fixture world's Factory board, as a Server would say it.
@@ -2919,13 +2915,14 @@ impl Cockpit {
         self.receive_fixture(alert);
     }
 
-    pub fn fixture_notice(&mut self, thread: ThreadId, outcome: crate::TurnOutcome) {
-        self.in_process().fixture_notice(thread, outcome);
-        self.receive();
+    pub fn fixture_notice(&mut self, thread: ThreadKey, outcome: crate::TurnOutcome) {
+        self.in_process_of(thread)
+            .fixture_notice(thread.thread(), outcome);
+        self.receive_from(thread.machine());
     }
 
     pub fn draft_starting(&self, draft: DraftId) -> bool {
-        match &self.link {
+        match &self.here().link {
             Link::InProcess(engine) => engine.draft_starting(draft),
             Link::Server(server) => server.draft_starting(draft),
         }
@@ -2972,8 +2969,8 @@ pub enum Asked {
     /// Land on this Thread (`thread.focus`), or a fork of `fork_of` that
     /// has opened.
     Focus {
-        thread: ThreadId,
-        fork_of: Option<ThreadId>,
+        thread: ThreadKey,
+        fork_of: Option<ThreadKey>,
     },
     /// Show a toast (`notification.show`), ringing its chime; an
     /// important one stays up until dismissed.
@@ -2986,7 +2983,7 @@ pub enum Asked {
     /// A Task needs the operator, stopped or completed (ADR 0037): a
     /// toast, a chime and a system notification.
     TaskAlert {
-        project: ProjectId,
+        project: ProjectKey,
         task: String,
         status: crate::factory::Status,
         title: String,
@@ -2998,7 +2995,7 @@ pub enum Asked {
 /// this exists, and open unless `not_opened` says why not.
 #[derive(Debug)]
 pub struct Adopted {
-    pub thread: ThreadId,
+    pub thread: ThreadKey,
     /// The imported Thread would not open: it is durable and parked, exactly
     /// like a launch-time import that would not open.
     pub not_opened: Option<io::Error>,
@@ -3030,7 +3027,7 @@ impl Cockpit {
     }
 
     /// A running nav row's click (#21): land on that Thread's Pane.
-    pub fn focus_thread(&mut self, thread: ThreadId) -> bool {
+    pub fn focus_thread(&mut self, thread: ThreadKey) -> bool {
         let identity = PaneIdentity::Thread(thread);
         if self.roster.index_of(identity).is_none() {
             return false;
@@ -3043,13 +3040,13 @@ impl Cockpit {
     /// Record the Subject the renderer is actually showing. Invalid or stale
     /// children fall back to Main, so a replacement Session cannot suppress a
     /// later Main request with an old selection.
-    pub fn set_visible_subject(&mut self, thread: ThreadId, subject: Subject) {
+    pub fn set_visible_subject(&mut self, thread: ThreadKey, subject: Subject) {
         if subject == Subject::Main {
             self.visible_subjects.remove(&thread);
         } else {
             self.visible_subjects.insert(thread, subject.clone());
         }
-        self.tell(Op::ShowSubject {
+        self.tell_on(thread, |thread| Op::ShowSubject {
             thread,
             subject: (&subject).into(),
         });
@@ -3058,7 +3055,7 @@ impl Cockpit {
 
     /// Jump to the next Thread waiting on the operator. The Thread landed
     /// on, if any.
-    pub fn next_decision(&mut self) -> Option<ThreadId> {
+    pub fn next_decision(&mut self) -> Option<ThreadKey> {
         let next = self.next_blocked(self.roster.focused_thread())?;
         self.focus_thread(next).then_some(next)
     }
@@ -3066,7 +3063,7 @@ impl Cockpit {
     /// Take an open Thread out of the roster: it stays open and mirrored,
     /// but has no Pane and no focus. A window's side
     /// chat holds the fork it asked for this way.
-    pub fn set_aside(&mut self, thread: ThreadId) {
+    pub fn set_aside(&mut self, thread: ThreadKey) {
         self.roster.remove_thread(thread);
     }
 
@@ -3075,7 +3072,7 @@ impl Cockpit {
     /// second time. The shared tail of cmd-o and a parked nav row's click.
     /// An open Thread is only landed on: one a window has no Pane drawn for
     /// yet (a `thread.focus` from Projects) is not started again.
-    pub fn reopen(&mut self, thread: ThreadId) -> io::Result<()> {
+    pub fn reopen(&mut self, thread: ThreadKey) -> io::Result<()> {
         if self.thread(thread).is_none() {
             self.revive(thread)?;
             self.roster.note_revived(thread);
@@ -3091,7 +3088,7 @@ impl Cockpit {
     /// is next (accepted v1 behavior). A Thread whose revive fails keeps its
     /// park but loses its slot in the order: cmd-o moves on rather than
     /// jamming on it. None with nothing parked at all.
-    pub fn reopen_last(&mut self) -> Option<(ThreadId, io::Result<()>)> {
+    pub fn reopen_last(&mut self) -> Option<(ThreadKey, io::Result<()>)> {
         let thread = self
             .roster
             .pop_park_order()
@@ -3136,7 +3133,7 @@ impl Cockpit {
         };
         // A Server answers a first send that starts at once in its reply,
         // and one still starting as it settles: both as `Done::Thread`.
-        let started = match &mut self.link {
+        let started = match &mut self.here_mut().link {
             Link::InProcess(engine) => {
                 let started = engine
                     .bootstrap_command(draft, &commanded(op))
@@ -3145,23 +3142,20 @@ impl Cockpit {
             }
             Link::Server(server) => server.bootstrap(draft, prompt, op).map(|()| None),
         };
-        self.receive();
-        Ok(started?.map(|thread| self.complete_draft(draft, thread)))
-    }
-
-    fn complete_draft(&mut self, draft: DraftId, thread: ThreadId) -> Bootstrapped {
-        self.roster.draft_became(draft, thread);
-        Bootstrapped { thread }
+        self.receive_from(self.on_screen);
+        let key = |thread| self.here().key(thread);
+        let started = started?.map(key);
+        Ok(started.map(|thread| complete_draft(&mut self.roster, draft, thread)))
     }
 
     /// Cancel a submitted startup before changing a draft's choices. The
     /// draft slot and Composer remain; cancellation emits no completion.
     pub fn cancel_draft_start(&mut self, draft: DraftId) -> io::Result<bool> {
-        let cancelled = match &mut self.link {
+        let cancelled = match &mut self.here_mut().link {
             Link::InProcess(engine) => engine.cancel_draft_start(draft),
             Link::Server(server) => server.cancel_bootstrap(draft),
         };
-        self.receive();
+        self.receive_from(self.on_screen);
         cancelled
     }
 
@@ -3169,7 +3163,7 @@ impl Cockpit {
     /// completed in this window.
     pub fn take_bootstrap_results(&mut self) -> Vec<BootstrapResult> {
         self.receive();
-        std::mem::take(&mut self.bootstrap_results)
+        std::mem::take(&mut self.said.bootstrap_results)
     }
 
     /// Discard a draft Pane (#29): nothing durable dies with it.
@@ -3191,7 +3185,7 @@ impl Cockpit {
     /// log stays, and reopening revives it. Parked even on a flush error —
     /// the Session is gone either way, so cmd-o should still bring this
     /// Thread back first.
-    pub fn park_thread(&mut self, thread: ThreadId) -> io::Result<()> {
+    pub fn park_thread(&mut self, thread: ThreadKey) -> io::Result<()> {
         let parked = self.park(thread);
         self.roster.note_parked(thread);
         parked
@@ -3247,7 +3241,7 @@ impl Cockpit {
     /// parked before this launch keep creation order, and this launch's
     /// parks append below in park order — a fresh park lands at the bottom
     /// of the section instead of re-sorting it.
-    pub fn parked_in_order(&self) -> io::Result<Vec<ThreadId>> {
+    pub fn parked_in_order(&self) -> io::Result<Vec<ThreadKey>> {
         let parked = self.parked()?;
         let order = self.roster.park_order();
         Ok(parked

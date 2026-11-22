@@ -84,12 +84,12 @@ impl Scope {
 /// Code view, keyed by the requested PR and read from its published revisions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Diff {
-    Changes(ThreadId),
+    Changes(ThreadKey),
     PullRequest(PrTarget),
 }
 
 impl Diff {
-    pub(crate) fn local_thread(self) -> Option<ThreadId> {
+    pub(crate) fn local_thread(self) -> Option<ThreadKey> {
         match self {
             Diff::Changes(thread) => Some(thread),
             Diff::PullRequest(_) => None,
@@ -98,7 +98,7 @@ impl Diff {
 
     /// The Thread whose diff this is: its own, or a pull request read in
     /// its checkout. `None` for a Project's pull request.
-    pub(super) fn thread(self) -> Option<ThreadId> {
+    pub(super) fn thread(self) -> Option<ThreadKey> {
         match self {
             Diff::Changes(thread) => Some(thread),
             Diff::PullRequest(target) => match target.source {
@@ -438,7 +438,7 @@ pub(in crate::cockpit) enum ChangesEvent {
     /// A file's stage button: its change into git's index, or out of it.
     Stage { diff: Diff, path: String, stage: bool },
     /// A file's `↗`: it opens in Files.
-    Open { thread: ThreadId, path: String },
+    Open { thread: ThreadKey, path: String },
     /// The scope or the base dropdown, at the press.
     Menu { target: MenuTarget, at: gpui::Point<Pixels> },
     /// A press on the `⋯` button.
@@ -452,7 +452,7 @@ impl CockpitView {
         match diff {
             Diff::Changes(thread) => Some(Origin {
                 root: self.thread_path(thread, cx)?,
-                machine: self.cockpit.read(cx).machine().cloned(),
+                machine: self.cockpit.read(cx).bridge(thread.machine()).cloned(),
             }),
             Diff::PullRequest(target) => Some(Origin {
                 root: self.pr_source_path(target.source, cx)?,
@@ -466,9 +466,9 @@ impl CockpitView {
     pub(in crate::cockpit) fn changes_pane(&self, diff: Diff, cx: &mut Context<Self>) -> Div {
         let thread = diff.local_thread();
         let inputs = ChangesInputs {
-            head: thread.and_then(|thread| self.thread_branch(self.cockpit.read(cx).thread_key(thread))),
+            head: thread.and_then(|thread| self.thread_branch(thread)),
             default_branch: thread
-                .and_then(|thread| self.facts.get(self.cockpit.read(cx).thread_key(thread)))
+                .and_then(|thread| self.facts.get(thread))
                 .and_then(|facts| facts.default_branch.clone()),
             doors: self.doors(),
         };
@@ -537,11 +537,11 @@ impl CockpitView {
     /// its diff unfolded and in view.
     pub(in crate::cockpit) fn show_changes_of(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         path: &str,
         cx: &mut Context<Self>,
     ) {
-        self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Changes, cx);
+        self.upsert_surface(thread, SurfaceId::Changes, cx);
         self.changes
             .update(cx, |changes, cx| changes.reveal(Diff::Changes(thread), path, cx));
     }
@@ -602,7 +602,7 @@ impl ChangesView {
 
     /// Whether the last read of `thread`'s Changes lists the file at `path`
     /// (relative to the checkout).
-    pub(in crate::cockpit) fn lists(&self, thread: ThreadId, path: &str) -> bool {
+    pub(in crate::cockpit) fn lists(&self, thread: ThreadKey, path: &str) -> bool {
         matches!(
             self.diffs.get(&Diff::Changes(thread)).map(|changes| &changes.load),
             Some(Load::Read(files)) if files.iter().any(|file| file.path == path)
@@ -610,7 +610,7 @@ impl ChangesView {
     }
 
     /// Every diff of a Thread `keep` refuses goes.
-    pub(in crate::cockpit) fn forget(&mut self, keep: impl Fn(ThreadId) -> bool) {
+    pub(in crate::cockpit) fn forget(&mut self, keep: impl Fn(ThreadKey) -> bool) {
         self.diffs.retain(|diff, _| diff.thread().is_none_or(&keep));
     }
 
@@ -1476,7 +1476,7 @@ impl ChangesView {
 #[cfg(test)]
 impl ChangesView {
     /// How many of `thread`'s diffs are held.
-    pub(in crate::cockpit) fn held(&self, thread: ThreadId) -> usize {
+    pub(in crate::cockpit) fn held(&self, thread: ThreadKey) -> usize {
         self.diffs.keys().filter(|diff| diff.thread() == Some(thread)).count()
     }
 

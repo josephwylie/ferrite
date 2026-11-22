@@ -1428,7 +1428,7 @@ impl CockpitView {
             return Err(format!("Settings cannot be saved: {error}"));
         }
         let enabled = !self.prefs.settings.local_environment_enabled;
-        if !enabled && !self.on_machine(cx) {
+        if !enabled && !self.elsewhere(self.on_screen(cx), cx) {
             if let Some(error) = self.files_leave_error(cx) {
                 return Err(error.into());
             }

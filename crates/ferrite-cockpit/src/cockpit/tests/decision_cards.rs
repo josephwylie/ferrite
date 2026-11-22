@@ -224,7 +224,7 @@ fn a_titlers_answer_names_only_an_untitled_thread(cx: &mut TestAppContext) {
         (threads[0], threads[1])
     });
     view.update(cx, |view, cx| {
-        let key = |thread| view.cockpit.read(cx).thread_key(thread);
+        let key = |thread| thread;
         let (first_key, second_key) = (key(first), key(second));
         view.adopt_title(first_key, None, cx);
         assert!(view.cockpit.read(cx).thread(first).unwrap().title().is_none());
@@ -233,7 +233,7 @@ fn a_titlers_answer_names_only_an_untitled_thread(cx: &mut TestAppContext) {
             view.cockpit.read(cx).thread(first).unwrap().title(),
             Some("Wire the titler")
         );
-        assert_eq!(view.facts.name(view.cockpit.read(cx).thread_key(first)).as_ref(), "Wire the titler");
+        assert_eq!(view.facts.name(first).as_ref(), "Wire the titler");
 
         view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(second, "Mine").unwrap());
         view.adopt_title(second_key, Some("Model's idea".into()), cx);

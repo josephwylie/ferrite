@@ -35,25 +35,33 @@ impl CockpitView {
             .then(|| machines.rows(self.cockpit.read(cx).server()))
     }
 
-    /// The machine the window is on, as what it saves names it: `None` for
-    /// this computer.
-    pub(super) fn machine_key(&self, cx: &App) -> ferrite_core::MachineKey {
-        self.machines
-            .as_ref()
-            .and_then(|machines| machines.read(cx).selected_key())
-            .unwrap_or(ferrite_core::MachineKey(None))
+    /// The machine on screen: what a window act that names no Thread or
+    /// Project reaches, until the window holds every machine at once.
+    pub(super) fn on_screen(&self, cx: &App) -> ferrite_core::MachineId {
+        self.cockpit.read(cx).on_screen()
     }
 
-    /// Remote and empty clients must never substitute local files or defaults.
-    pub(super) fn on_machine(&self, cx: &App) -> bool {
-        !self.cockpit.read(cx).environment_available() || self.cockpit.read(cx).machine().is_some()
+    /// Whether `machine` is another machine, or none reached: what it
+    /// names on disk is never this computer's, so the window stands in no
+    /// local files or defaults for its own (ADR 0026).
+    pub(super) fn elsewhere(&self, machine: ferrite_core::MachineId, cx: &App) -> bool {
+        !self.cockpit.read(cx).local(machine)
+    }
+
+    /// The bridge to the machine on screen; `None` for this computer.
+    pub(super) fn bridge_on_screen<'a>(
+        &self,
+        cx: &'a App,
+    ) -> Option<&'a std::sync::Arc<ferrite_core::machine::Bridge>> {
+        let cockpit = self.cockpit.read(cx);
+        cockpit.bridge(cockpit.on_screen())
     }
 
     /// The window is on a machine whose Server is not there: what it shows
     /// stays, dimmed, and takes no input until it is back.
     pub(super) fn machine_lost(&self, cx: &App) -> bool {
         self.cockpit.read(cx).environment_available()
-            && self.on_machine(cx)
+            && self.elsewhere(self.on_screen(cx), cx)
             && matches!(self.cockpit.read(cx).server(), Some(ServerState::Detached { .. }))
     }
 
@@ -109,7 +117,7 @@ impl CockpitView {
         }
         match self.landing.take().filter(|_| !expired) {
             Some((Landing::Alert(alert), _))
-                if alert.target.wants(self.cockpit.read(cx).notifications()) =>
+                if alert.target.wants(self.cockpit.read(cx).notifications().reading()) =>
             {
                 self.notice_verb(alert.open_verb(), cx)
             }
@@ -176,7 +184,7 @@ impl CockpitView {
 
     /// Sign in to the machine the window is on, in a terminal.
     pub(super) fn sign_in(&mut self, cx: &mut Context<Self>) {
-        let Some(bridge) = self.cockpit.read(cx).machine() else {
+        let Some(bridge) = self.bridge_on_screen(cx) else {
             return;
         };
         if let Err(error) = bridge.sign_in() {
@@ -212,7 +220,10 @@ impl CockpitView {
     /// An older Server cannot say, and the popover offers the fresh starts
     /// alone.
     pub(super) fn ask_machine_repo(&mut self, project: ProjectId, cx: &mut App) {
-        let reply = self.cockpit.update(cx, |cockpit, _| cockpit.list_repo(project).ok());
+        let reply = self.cockpit.update(cx, |cockpit, _| {
+            let project = cockpit.registry().project_key(project);
+            cockpit.list_repo(project).ok()
+        });
         self.checkouts.listen_machine(project, reply);
     }
 
@@ -236,7 +247,7 @@ impl CockpitView {
     /// machine only its Server can read: ask about the first drafted
     /// Project it has no answer for.
     fn ask_drafted_checkout(&mut self, cx: &mut App) {
-        if !self.on_machine(cx) || self.machine_lost(cx) {
+        if !self.elsewhere(self.on_screen(cx), cx) || self.machine_lost(cx) {
             return;
         }
         let unknown = self

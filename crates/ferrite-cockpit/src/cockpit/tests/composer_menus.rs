@@ -850,7 +850,7 @@ fn a_thread_without_a_binding_opens_no_file_menu(cx: &mut TestAppContext) {
     let fake = Fake::default();
     let store = Store::open(&dir).unwrap();
     let mut core = Cockpit::new(store, Box::new(fake));
-    core.revive(ThreadId::new(9)).unwrap();
+    core.revive(core.key(ThreadId::new(9))).unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -870,7 +870,7 @@ fn local_render_probe(id: u64, cx: &mut TestAppContext) {
     let store = Store::open("/tmp/ferrite-perf.7xYdTK").unwrap();
     let mut core = Cockpit::new(store, Box::new(fake.clone()));
     let revive = std::time::Instant::now();
-    core.revive(ThreadId::new(id)).unwrap();
+    core.revive(core.key(ThreadId::new(id))).unwrap();
     let revive = revive.elapsed();
     bind_production_keys(cx);
     let render = std::time::Instant::now();

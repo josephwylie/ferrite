@@ -83,9 +83,9 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
         .expect("the pill over the box");
     let head = cx.debug_bounds("decision-head").expect("the head");
     let well = cx.debug_bounds("approval-well").expect("the command well");
-    let allow = bounds(cx, format!("request-allow-{}-{serial}", thread.get()));
-    let more = bounds(cx, format!("request-more-{}-{serial}", thread.get()));
-    let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
+    let allow = bounds(cx, format!("request-allow-{}-{serial}", thread.thread().get()));
+    let more = bounds(cx, format!("request-more-{}-{serial}", thread.thread().get()));
+    let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.thread().get()));
     let gap = px(ferrite_ui::theme::DECISION_GAP);
     let pad = px(ferrite_ui::theme::DECISION_PAD);
     assert!(pill.bottom() <= card.top(), "{pill:?} / {card:?}");
@@ -133,11 +133,11 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
     // `Always allow <pattern>` waits in the split button's menu; no body
     // line explains it.
     assert!(cx
-        .debug_bounds(format!("request-always-{}-{serial}", thread.get()).leak())
+        .debug_bounds(format!("request-always-{}-{serial}", thread.thread().get()).leak())
         .is_none());
     cx.simulate_click(more.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    let always = bounds(cx, format!("request-always-{}-{serial}", thread.get()));
+    let always = bounds(cx, format!("request-always-{}-{serial}", thread.thread().get()));
     assert!(
         always.top() >= more.bottom(),
         "the menu hangs under the button"
@@ -227,7 +227,7 @@ fn option_two_without_a_standing_answer_keeps_a_thread_rule(cx: &mut TestAppCont
         "{:?}",
         answered(&fake)
     );
-    let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).thread_key(view.panes[0].thread().unwrap()));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.read_with(cx, |view, cx| {
         assert_eq!(
             view.decisions.read(cx).rules(),
@@ -435,8 +435,8 @@ fn esc_closes_the_allow_menu_then_denies(cx: &mut TestAppContext) {
         let request = view.shown_request(0, cx).unwrap();
         (view.panes[0].thread().unwrap(), request.handle.serial)
     });
-    let always = format!("request-always-{}-{serial}", thread.get()).leak();
-    let more = bounds(cx, format!("request-more-{}-{serial}", thread.get()));
+    let always = format!("request-always-{}-{serial}", thread.thread().get()).leak();
+    let more = bounds(cx, format!("request-more-{}-{serial}", thread.thread().get()));
     cx.simulate_click(more.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds(always).is_some(), "the menu is open");
@@ -466,10 +466,10 @@ fn esc_closes_the_menu_before_the_note(cx: &mut TestAppContext) {
         let request = view.shown_request(0, cx).unwrap();
         (view.panes[0].thread().unwrap(), request.handle.serial)
     });
-    let always = format!("request-always-{}-{serial}", thread.get()).leak();
+    let always = format!("request-always-{}-{serial}", thread.thread().get()).leak();
     cx.dispatch_action(ferrite_pane::decision::Amend);
     tick(cx);
-    let more = bounds(cx, format!("request-more-{}-{serial}", thread.get()));
+    let more = bounds(cx, format!("request-more-{}-{serial}", thread.thread().get()));
     cx.simulate_click(more.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds(always).is_some(), "the menu is open");
@@ -607,8 +607,8 @@ fn a_press_outside_closes_the_allow_menu(cx: &mut TestAppContext) {
         let request = view.shown_request(0, cx).unwrap();
         (view.panes[0].thread().unwrap(), request.handle.serial)
     });
-    let always = format!("request-always-{}-{serial}", thread.get()).leak();
-    let more = bounds(cx, format!("request-more-{}-{serial}", thread.get()));
+    let always = format!("request-always-{}-{serial}", thread.thread().get()).leak();
+    let more = bounds(cx, format!("request-more-{}-{serial}", thread.thread().get()));
     cx.simulate_click(more.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds(always).is_some(), "the menu is open");

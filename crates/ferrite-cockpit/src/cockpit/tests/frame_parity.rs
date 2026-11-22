@@ -67,7 +67,7 @@ fn the_empty_board_answers_a_press(cx: &mut TestAppContext) {
     let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     cx.simulate_keystrokes("cmd-w");
     tick(cx);
-    let recent = bounds(cx, format!("empty-board-recent-{}", thread.get()));
+    let recent = bounds(cx, format!("empty-board-recent-{}", thread.thread().get()));
     cx.simulate_click(recent.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds("empty-board").is_none());
@@ -199,7 +199,7 @@ fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
             gpui::size(px(least_w()), px(960. - HAIRLINE_W))
         )
     );
-    let key = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().get());
+    let key = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().thread().get());
     let root = bounds(cx, format!("pane-root-{key}"));
     assert!((root.left() - px(card.x)).abs() < px(1.) && (root.top() - px(card.y)).abs() < px(1.));
     assert!(cx.debug_bounds("bottom-bar").is_none(), "no bottom bar");
@@ -231,7 +231,7 @@ fn retry_re_sends_the_failed_turns_prompt(cx: &mut TestAppContext) {
             .count()
     };
     assert_eq!(sent(&fake), 1);
-    let key = thread.get();
+    let key = thread.thread().get();
     assert!(
         debug_bounds(cx, format!("failure-strip-{key}")).is_some(),
         "the strip stands under the failed turn"
@@ -264,7 +264,7 @@ fn a_session_closed_mid_turn_leaves_the_strip_without_retry(cx: &mut TestAppCont
         })
         .unwrap();
     tick(cx);
-    let key = thread.get();
+    let key = thread.thread().get();
     assert!(
         debug_bounds(cx, format!("failure-strip-{key}")).is_some(),
         "the strip stands under the unfinished turn"
@@ -290,7 +290,7 @@ fn a_short_transcript_reads_from_the_top(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    let body = bounds(cx, format!("pane-body-{}", thread.get()));
+    let body = bounds(cx, format!("pane-body-{}", thread.thread().get()));
     let prompt = cx.debug_bounds("transcript-prompt").expect("the prompt");
     let answer = cx.debug_bounds("transcript-answer").expect("the answer");
     assert!(

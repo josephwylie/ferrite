@@ -16,7 +16,7 @@ use gpui::{App, WeakEntity};
 
 pub(crate) struct BackgroundDialogView {
     cockpit: WeakEntity<CockpitView>,
-    pub(super) thread: ThreadId,
+    pub(super) thread: ThreadKey,
     pub(super) focus: FocusHandle,
 }
 
@@ -45,7 +45,7 @@ pub(crate) enum BackgroundDialogEvent {
 impl EventEmitter<BackgroundDialogEvent> for BackgroundDialogView {}
 
 impl BackgroundDialogView {
-    pub(super) fn new(cockpit: WeakEntity<CockpitView>, thread: ThreadId, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(cockpit: WeakEntity<CockpitView>, thread: ThreadKey, cx: &mut Context<Self>) -> Self {
         Self {
             cockpit,
             thread,
@@ -195,7 +195,7 @@ impl CockpitView {
     /// Everything the dialog on `thread` draws from, none once that Thread
     /// is not open. It never reads the dialog: the dialog calls it while its
     /// own update is running.
-    fn background_dialog_inputs(&self, thread: ThreadId, cx: &App) -> Option<BackgroundDialogInputs> {
+    fn background_dialog_inputs(&self, thread: ThreadKey, cx: &App) -> Option<BackgroundDialogInputs> {
         let inputs = self.background_inputs(thread, true, cx)?;
         let stop = self.background.read(cx).stop_control(&inputs, &inputs.running);
         let BackgroundInputs { busy, running, calls, .. } = inputs;
@@ -237,7 +237,7 @@ impl CockpitView {
     }
 
     /// `Details` on the line: `thread`'s dialog, in place of any other sheet.
-    pub(super) fn open_background_dialog(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(super) fn open_background_dialog(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         let cockpit = cx.weak_entity();
         let view = cx.new(|cx| BackgroundDialogView::new(cockpit, thread, cx));
         cx.subscribe(&view, Self::on_background_dialog_event).detach();

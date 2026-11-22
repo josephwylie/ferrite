@@ -72,7 +72,7 @@ fn press(cx: &mut gpui::VisualTestContext, selector: String) {
 /// The control a Composer popup opens from: the model chip, the `+`, the
 /// draft's Project chip.
 fn control(view: &Entity<CockpitView>, kind: Kind, cx: &mut gpui::VisualTestContext) -> String {
-    let key = view.read_with(cx, |view, _| view.panes[0].thread().map(|thread| thread.get()));
+    let key = view.read_with(cx, |view, _| view.panes[0].thread().map(|thread| thread.thread().get()));
     match kind {
         Kind::Mode => format!("mode-picker-{}", key.unwrap()),
         Kind::Picker => format!("model-picker-{}", key.unwrap()),
@@ -95,7 +95,7 @@ fn open(view: &Entity<CockpitView>, kind: Kind, cx: &mut gpui::VisualTestContext
     cx.update(|window, cx| {
         view.update(cx, |view, cx| match kind {
             Kind::Menu => view.open_context_menu(
-                MenuTarget::Thread(keyed(view, thread, cx)),
+                MenuTarget::Thread(thread),
                 gpui::point(px(300.), px(200.)),
                 cx,
             ),
@@ -154,7 +154,7 @@ fn window<'a>(
     }
     view.update(cx, |view, cx| {
         for thread in view.cockpit.read(cx).threads().to_vec() {
-            view.facts.pr_answered(view.cockpit.read(cx).thread_key(thread), Some(pr_with_checks()));
+            view.facts.pr_answered(thread, Some(pr_with_checks()));
         }
         cx.notify();
     });
@@ -205,7 +205,7 @@ fn escape_on_the_mode_menu_leaves_a_waiting_decision_unanswered(cx: &mut TestApp
     fake.streams.borrow()[0].send(decision("perm_mode")).unwrap();
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let chip = debug_bounds(cx, format!("mode-picker-{}", thread.get())).expect("the mode chip");
+    let chip = debug_bounds(cx, format!("mode-picker-{}", thread.thread().get())).expect("the mode chip");
     cx.simulate_click(chip.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(up(&view, cx), [Kind::Mode]);
@@ -549,7 +549,7 @@ fn rest_on(cx: &mut gpui::VisualTestContext, at: gpui::Point<gpui::Pixels>) {
 #[gpui::test]
 fn a_control_whose_popup_is_up_shows_no_tooltip(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window(cx, "popups-no-tooltip", 1);
-    let key = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().get());
+    let key = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().thread().get());
     let mut controls = vec![
         format!("mode-picker-{key}"),
         format!("model-picker-{key}"),

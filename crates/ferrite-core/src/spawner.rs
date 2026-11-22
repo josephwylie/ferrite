@@ -819,7 +819,7 @@ mod tests {
         name: &str,
         provider: Provider,
         spawner: Box<Native>,
-    ) -> (crate::cockpit::Cockpit, ThreadId, PathBuf) {
+    ) -> (crate::cockpit::Cockpit, crate::ThreadKey, PathBuf) {
         use crate::{cockpit::Cockpit, store::Store, workspace::WorkspaceChoice};
         let path = std::env::temp_dir().join(format!(
             "ferrite-native-{name}-{}-{provider:?}",

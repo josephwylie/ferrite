@@ -21,7 +21,7 @@ fn frames(cx: &mut gpui::VisualTestContext, ms: u64) {
 struct Board<'a> {
     view: Entity<CockpitView>,
     fake: Fake,
-    threads: Vec<ThreadId>,
+    threads: Vec<ThreadKey>,
     cx: &'a mut gpui::VisualTestContext,
 }
 
@@ -117,7 +117,7 @@ fn a_finish_while_the_window_is_away_is_drawn_done_until_it_returns(cx: &mut Tes
     tick(b.cx);
     frames(b.cx, 300);
     assert!(b.pane(0).unread, "the Pane draws it done");
-    let row = keyed_in(&b.view, b.threads[0], b.cx);
+    let row = b.threads[0];
     assert!(
         drawn::row(row).starts_with("Done "),
         "and its nav row: {}",
@@ -180,7 +180,7 @@ fn leaving_and_returning_to_the_window_reaches_the_panes(cx: &mut TestAppContext
 #[gpui::test]
 fn a_nav_rows_hover_fades_in_and_out(cx: &mut TestAppContext) {
     let b = solo("stale-hover", false, cx);
-    let row = debug_bounds(b.cx, format!("nav-thread-{}", b.threads[0].get())).expect("a row");
+    let row = debug_bounds(b.cx, format!("nav-thread-{}", b.threads[0].thread().get())).expect("a row");
     b.cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
     frames(b.cx, 200);
     let key =

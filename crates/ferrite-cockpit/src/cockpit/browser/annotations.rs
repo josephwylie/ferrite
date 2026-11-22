@@ -103,9 +103,9 @@ impl CockpitView {
     }
 
     fn annotation_send_enabled(&self, thread: ThreadKey, cx: &gpui::App) -> bool {
-        self.focused_thread(cx) == Some(thread.thread())
-            && self.cockpit.read(cx).thread(thread.thread()).is_some()
-            && self.pane_for(thread.thread()).is_some_and(|index| {
+        self.focused_thread(cx) == Some(thread)
+            && self.cockpit.read(cx).thread(thread).is_some()
+            && self.pane_for(thread).is_some_and(|index| {
                 self.panes[index].is_main() && self.panes[index].composer.read(cx).comment_valid(cx)
             })
             && !self.sheet_up(cx)
@@ -125,7 +125,7 @@ impl CockpitView {
             let _ = window.update(cx, |_, window, cx| {
                 let _ = view.update(cx, |this, cx| {
                     if this.annotation_send_enabled(thread, cx)
-                        && this.pane_for(thread.thread()).is_some_and(|index| {
+                        && this.pane_for(thread).is_some_and(|index| {
                             this.panes[index]
                                 .composer
                                 .read(cx)
@@ -192,7 +192,7 @@ impl CockpitView {
             .panes
             .iter()
             .flat_map(|pane| {
-                let thread = pane.thread().map(|thread| self.cockpit.read(cx).thread_key(thread));
+                let thread = pane.thread();
                 pane.preview
                     .take_annotation_edits()
                     .into_iter()
@@ -214,7 +214,7 @@ impl CockpitView {
             }
             let image = self
                 .cockpit
-                .update(cx, |cockpit, _| cockpit.browser_annotation_image(thread.thread(), retained.clone()));
+                .update(cx, |cockpit, _| cockpit.browser_annotation_image(thread, retained.clone()));
             self.browser_review
                 .update(cx, |review, cx| review.load(thread, retained, image, cx));
             cx.notify();
@@ -237,7 +237,7 @@ impl CockpitView {
                 continue;
             };
             let send_enabled = self.annotation_send_enabled(thread, cx);
-            let composer = self.pane_for(thread.thread()).is_some();
+            let composer = self.pane_for(thread).is_some();
             let step = self.cockpit.update(cx, |cockpit, _| {
                 annotation.tend(
                     thread,
@@ -255,7 +255,7 @@ impl CockpitView {
             match step.next {
                 Next::Open(annotation) => browser.annotation = Some(annotation),
                 Next::Attach(annotation, send) => {
-                    if let Some(index) = self.pane_for(thread.thread()) {
+                    if let Some(index) = self.pane_for(thread) {
                         let id = annotation.id().to_owned();
                         self.panes[index].composer.update(cx, |composer, cx| {
                             composer.add_browser_annotation(annotation, cx)

@@ -33,7 +33,7 @@ fn the_launcher_opens_its_highlighted_tool_on_enter(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1900.), px(900.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Overview, cx));
     tick(cx);
     sentinel_draft(&view, cx);
     let head = cx.debug_bounds("panel-empty-head").expect("the launcher shows");
@@ -125,7 +125,7 @@ fn an_open_menu_keeps_its_keys_from_a_pending_approval(cx: &mut TestAppContext) 
     cx.update(|window, cx| window.focus(&composer, cx));
     tick(cx);
     view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::Thread(keyed(view, thread, cx)), gpui::point(px(300.), px(200.)), cx)
+        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(300.), px(200.)), cx)
     });
     tick(cx);
     cx.simulate_keystrokes("down");
@@ -134,7 +134,7 @@ fn an_open_menu_keeps_its_keys_from_a_pending_approval(cx: &mut TestAppContext) 
     assert_eq!(cursor, Some(MenuCursor::Row(0)), "down moved the menu's cursor");
     cx.update(|window, cx| window.focus(&composer, cx));
     view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::Pane(keyed(view, thread, cx)), gpui::point(px(500.), px(400.)), cx)
+        view.open_context_menu(MenuTarget::Pane(thread), gpui::point(px(500.), px(400.)), cx)
     });
     tick(cx);
     cx.simulate_keystrokes("down");
@@ -172,7 +172,7 @@ fn a_menu_from_the_nav_list_gives_the_list_back_its_keys(cx: &mut TestAppContext
     assert!(before && cursor.is_some(), "the list holds the keys");
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::Thread(keyed(view, thread, cx)), gpui::point(px(200.), px(200.)), cx)
+        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(200.), px(200.)), cx)
     });
     tick(cx);
     cx.simulate_keystrokes("escape");
@@ -264,7 +264,7 @@ fn files_keeps_the_keys_typed_into_its_editor_and_filter(cx: &mut TestAppContext
         fake.streams.borrow()[0].send(SessionEvent::TextDelta { text: "…".into() }).unwrap();
         tick(cx);
     }
-    assert_eq!(view.read_with(cx, |view, cx| view.files.read(cx).filter_text_for_test(view.cockpit.read(cx).thread_key(thread), cx)), "lib");
+    assert_eq!(view.read_with(cx, |view, cx| view.files.read(cx).filter_text_for_test(thread, cx)), "lib");
     composer_unchanged(&view, &fake, cx);
 }
 
@@ -338,7 +338,7 @@ fn a_subagent_questions_own_answer_types_its_letters(cx: &mut TestAppContext) {
     let serial = view.read_with(cx, |view, cx| {
         view.cockpit.read(cx).thread(thread).unwrap().pending_decisions()[0].handle.serial
     });
-    let send = bounds(cx, format!("request-submit-{}-{serial}", thread.get()));
+    let send = bounds(cx, format!("request-submit-{}-{serial}", thread.thread().get()));
     cx.simulate_click(send.center(), gpui::Modifiers::none());
     tick(cx);
     let answered = answered(&fake);
@@ -358,7 +358,7 @@ fn a_question_mark_typed_on_the_panel_is_text_for_the_composer(cx: &mut TestAppC
     cx.simulate_resize(gpui::size(px(1900.), px(900.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.update(cx, |view, cx| view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx));
+    view.update(cx, |view, cx| view.upsert_surface(thread, SurfaceId::Files, cx));
     tick(cx);
     cx.simulate_keystrokes("f6");
     tick(cx);

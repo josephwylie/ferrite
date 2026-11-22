@@ -11,7 +11,7 @@ impl CockpitView {
     /// `composer`'s files are going to this window's agents: on this
     /// computer or on its machine, and kept in the app's own store.
     pub(super) fn aim_attachments(&self, composer: &Entity<Composer>, cx: &mut Context<Self>) {
-        let destination = if self.on_machine(cx) {
+        let destination = if self.elsewhere(self.on_screen(cx), cx) {
             Destination::Remote
         } else {
             Destination::Local
@@ -63,7 +63,7 @@ impl CockpitView {
         composer: &Entity<Composer>,
         cx: &mut Context<Self>,
     ) {
-        let Some(machine) = self.cockpit.read(cx).machine().cloned() else {
+        let Some(machine) = self.bridge_on_screen(cx).cloned() else {
             return;
         };
         for (path, attempt) in composer.update(cx, |composer, cx| composer.pending_uploads(cx)) {
@@ -84,9 +84,7 @@ impl CockpitView {
                 loop {
                     let active = this
                         .update(cx, |view, cx| {
-                            view.cockpit
-                                .read(cx)
-                                .machine()
+                            view.bridge_on_screen(cx)
                                 .is_some_and(|current| std::sync::Arc::ptr_eq(current, &machine))
                                 && composer
                                     .update(cx, |composer, _| {
@@ -129,7 +127,7 @@ impl CockpitView {
                     if let Some(result) = result {
                         let _ =
                             this.update(cx, |view, cx| {
-                                if !view.cockpit.read(cx).machine().is_some_and(|current| {
+                                if !view.bridge_on_screen(cx).is_some_and(|current| {
                                     std::sync::Arc::ptr_eq(current, &machine)
                                 }) {
                                     return;
@@ -165,13 +163,14 @@ impl CockpitView {
     }
 
     pub(super) fn fetch_attachment_previews(&mut self, cx: &mut Context<Self>) {
-        let Some(machine) = self.cockpit.read(cx).machine().cloned() else {
+        let Some(machine) = self.bridge_on_screen(cx).cloned() else {
             return;
         };
         let key = self
-            .machines
-            .as_ref()
-            .and_then(|machines| machines.read(cx).selected_key().and_then(|key| key.0))
+            .cockpit
+            .read(cx)
+            .saved_as(self.on_screen(cx))
+            .and_then(|key| key.0.clone())
             .unwrap_or_else(|| format!("session-{:p}", std::sync::Arc::as_ptr(&machine)));
         let store = ferrite_core::machine::dir(&self.prefs.dir, &key).join("attachment-previews");
         let requests: Vec<_> = self
@@ -227,9 +226,7 @@ impl CockpitView {
                 let result = read.await.map_err(|error| error.to_string());
                 let _ = this.update(cx, |view, cx| {
                     if view
-                        .cockpit
-                        .read(cx)
-                        .machine()
+                        .bridge_on_screen(cx)
                         .is_some_and(|current| std::sync::Arc::ptr_eq(current, &machine))
                     {
                         preview.finish_attachment(&path, request, result);
@@ -257,7 +254,7 @@ impl CockpitView {
             (None, Some(draft)) => Some(
                 draft
                     .binding
-                    .resolve(self.cockpit.read(cx).registry(), !self.on_machine(cx))
+                    .resolve(self.cockpit.read(cx).registry().reading(), !self.elsewhere(self.on_screen(cx), cx))
                     .ok()?
                     .source_root()
                     .to_path_buf(),

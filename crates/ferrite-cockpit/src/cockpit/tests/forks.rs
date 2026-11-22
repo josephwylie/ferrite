@@ -140,7 +140,7 @@ fn the_menu_and_the_palette_fork_and_rewind(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("menu-fork", cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     let fork = view.read_with(cx, |view, cx| {
-        view.context_rows(MenuTarget::Thread(keyed(view, thread, cx)), cx)
+        view.context_rows(MenuTarget::Thread(thread), cx)
             .into_iter()
             .flatten()
             .find(|(_, verb)| *verb == MenuVerb::Fork)
@@ -160,7 +160,7 @@ fn the_menu_and_the_palette_fork_and_rewind(cx: &mut TestAppContext) {
     let offered = names(cx);
     assert!(offered.contains(&"Fork thread".to_string()), "{offered:?}");
     view.update_in(cx, |view, window, cx| {
-        view.run_menu_verb(MenuTarget::Thread(keyed(view, thread, cx)), MenuVerb::Fork, window, cx)
+        view.run_menu_verb(MenuTarget::Thread(thread), MenuVerb::Fork, window, cx)
     });
     landed_on_fork(&view, &fake, cx);
 

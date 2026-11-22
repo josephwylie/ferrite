@@ -199,7 +199,7 @@ impl CockpitView {
     /// Redraw the Pane showing `thread`, if one does.
     pub(super) fn notify_thread_pane(
         &self,
-        thread: ferrite_core::ThreadId,
+        thread: ferrite_core::ThreadKey,
         cx: &mut Context<Self>,
     ) {
         if let Some(index) = self.pane_for(thread) {

@@ -13,7 +13,7 @@ fn the_checks_command_opens_the_checks_it_counts(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     view.update(cx, |view, cx| {
-        view.facts.pr_answered(view.cockpit.read(cx).thread_key(thread), Some(pr_with_checks()));
+        view.facts.pr_answered(thread, Some(pr_with_checks()));
         cx.notify();
     });
     tick(cx);
@@ -51,7 +51,7 @@ fn a_pr_without_checks_opens_no_checks_card(cx: &mut TestAppContext) {
         let mut pr = pr_with_checks();
         pr.checks = None;
         pr.runs.clear();
-        view.facts.pr_answered(view.cockpit.read(cx).thread_key(thread), Some(pr));
+        view.facts.pr_answered(thread, Some(pr));
         cx.notify();
     });
     tick(cx);

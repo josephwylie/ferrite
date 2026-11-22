@@ -11,11 +11,11 @@ use ferrite_reviewr::model::{Comment, Rev, Side};
 pub(super) const WORDS: &str = "Please check the quoted passage";
 
 /// A Session grown past any limit: `Some(thread)`'s only, or every one's.
-struct Meter(Option<ThreadId>);
+struct Meter(Option<ThreadKey>);
 
 impl ferrite_core::cockpit::RssSampler for Meter {
     fn sample(&mut self, thread: ThreadId, _: Option<u32>) -> Option<u64> {
-        Some(if self.0.is_none_or(|grown| grown == thread) {
+        Some(if self.0.is_none_or(|grown| grown.thread() == thread) {
             u64::MAX
         } else {
             0
@@ -255,8 +255,8 @@ fn a_held_send_keeps_two_machines_threads_apart(cx: &mut TestAppContext) {
     let (view, _fake, cx) = staged("send-two-machines", None, cx);
     view.update(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
-        let here = view.cockpit.read(cx).thread_key(thread);
-        let there = ferrite_core::ThreadKey::fixture(u32::MAX, thread.get());
+        let here = thread;
+        let there = ferrite_core::ThreadKey::fixture(u32::MAX, thread.thread().get());
         let draft = view.panes[0]
             .composer
             .update(cx, |composer, cx| composer.take_draft(cx));
@@ -281,7 +281,6 @@ fn an_unconfirmed_send_returns_the_draft_and_names_the_request(cx: &mut TestAppC
             .composer
             .update(cx, |composer, cx| composer.take_draft(cx));
         let admission = ferrite_core::cockpit::Admission::Unconfirmed("no reply".into());
-        let thread = view.cockpit.read(cx).thread_key(thread);
         assert!(!view.settle_send(0, thread, draft, admission, cx));
     });
     tick(cx);
@@ -307,7 +306,7 @@ fn gated<'a>(
 ) -> (
     Entity<CockpitView>,
     Fake,
-    [ThreadId; 2],
+    [ThreadKey; 2],
     ferrite_core::doorbell::Sender<String>,
     &'a mut gpui::VisualTestContext,
 ) {
@@ -327,7 +326,7 @@ fn gated<'a>(
 
 fn pane_of(
     view: &Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     cx: &mut gpui::VisualTestContext,
 ) -> usize {
     view.read_with(cx, |view, _| view.pane_for(thread).expect("shown"))
@@ -335,7 +334,7 @@ fn pane_of(
 
 fn composer_of(
     view: &Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     cx: &mut gpui::VisualTestContext,
 ) -> (String, usize, usize, usize, usize) {
     let pane = pane_of(view, thread, cx);
@@ -362,10 +361,10 @@ fn fail_start(gate: &ferrite_core::doorbell::Sender<String>, words: &str, cx: &m
 
 fn held_count(
     view: &Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     cx: &mut gpui::VisualTestContext,
 ) -> usize {
-    view.read_with(cx, |view, cx| view.held_sends.count(view.cockpit.read(cx).thread_key(thread)))
+    view.read_with(cx, |view, _| view.held_sends.count(thread))
 }
 
 #[gpui::test]

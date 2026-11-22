@@ -343,7 +343,7 @@ impl CockpitView {
     pub(super) fn focus_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let shown = self
             .focused_thread(cx)
-            .map(|thread| self.cockpit.read(cx).thread_key(thread));
+            ;
         let nav = self.nav_view.read(cx);
         let start = nav.inputs().and_then(|inputs| {
             nav.items(inputs)
@@ -379,7 +379,7 @@ impl CockpitView {
     pub(super) fn park_nav_cursor(&mut self, cx: &mut Context<Self>) {
         let cursor = self.nav_view.read(cx).cursor.as_ref().map(|cursor| cursor.item);
         if let Some(NavItem::Thread(key)) = cursor {
-            if self.cockpit.read(cx).thread(key.thread()).is_some() {
+            if self.cockpit.read(cx).thread(key).is_some() {
                 self.park_listed(&[key], cx);
             }
         }
@@ -388,14 +388,14 @@ impl CockpitView {
     /// The Threads ⌘{ / ⌘} step through and ⌘1…⌘9 count: the open ones
     /// the sidebar draws, in its order. A parked row is not one of them: a
     /// key that walks must not spend a Session reviving a Thread.
-    pub(super) fn thread_order(&self, cx: &App) -> Vec<ThreadId> {
+    pub(super) fn thread_order(&self, cx: &App) -> Vec<ThreadKey> {
         let nav = self.nav_view.read(cx);
         nav.inputs()
             .map(|inputs| nav.items(inputs))
             .unwrap_or_default()
             .into_iter()
             .filter_map(|cursor| match cursor.item {
-                NavItem::Thread(key) => Some(key.thread()),
+                NavItem::Thread(key) => Some(key),
                 NavItem::Shelf(_) => None,
             })
             .filter(|thread| self.pane_for(*thread).is_some())
@@ -437,12 +437,11 @@ impl CockpitView {
     /// A Thread row's press, and ⏎ on it: an open Thread takes the screen;
     /// a parked one revives.
     pub(super) fn open_nav_row(&mut self, key: ThreadKey, cx: &mut Context<Self>) -> bool {
-        let thread = key.thread();
-        if self.pane_for(thread).is_some() {
-            self.focus_thread(thread, cx);
+        if self.pane_for(key).is_some() {
+            self.focus_thread(key, cx);
             true
         } else {
-            self.revive_thread(thread, cx)
+            self.revive_thread(key, cx)
         }
     }
 }
