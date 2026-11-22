@@ -160,11 +160,11 @@ impl Server {
         match peers::saved_machine(&settings.machines, name) {
             None => Err(ApiError::new(
                 Code::InvalidRequest,
-                format!("This machine is not linked to `{name}`. machine_list lists the linked ones."),
+                format!("This machine is not linked to {name}. `machine.list` lists the linked ones."),
             )),
             Some(saved) if !saved.enabled => Err(ApiError::new(
                 Code::InvalidRequest,
-                format!("`{name}` is turned off here. The user turns it on in Settings → Connections."),
+                format!("{name} is turned off here. The user turns it on in Settings → Connections."),
             )),
             Some(_) => Ok(()),
         }
@@ -207,28 +207,15 @@ impl Server {
             launch.callers.push((caller, id.to_string()));
             return None;
         }
+        let (inherited, reach) = self.inheritance(parent);
         let view = self.engine.thread(parent).expect("open");
-        let defaults = self.defaults.lock().map(|defaults| defaults.clone()).unwrap_or_default();
-        // The parent's own reach caps the Delegate's (G-A6).
-        let reach = RuntimeMode::of_thread(
-            view.provider(),
-            view.permission_mode(),
-            view.sandbox(),
-            &defaults,
-            self.engine.cap(parent).map(|(_, cap)| cap),
-        );
-        let inherited = Runs {
-            provider: view.provider(),
-            model: view.model().map(str::to_string),
-            effort: view.effort().map(str::to_string),
-        };
         let repository = view
             .workspace()
             .and_then(|workspace| ferrite_core::workspace::repository_key(workspace.cwd()));
         let machine = params.machine.clone();
         let chosen = start::mode(params.mode, reach).and_then(|mode| {
-            let runs = start::runs(&inherited, params.provider, params.model, params.effort, &machine)?;
-            let place = Place::of(params.checkout, params.project, repository, &machine)?;
+            let runs = start::runs(&inherited, params.provider, params.model, params.effort)?;
+            let place = Place::of(params.checkout, params.project, repository)?;
             Ok((mode, runs, place))
         });
         let (mode, runs, place) = match chosen {
@@ -284,6 +271,42 @@ impl Server {
         None
     }
 
+    /// `delegate.defaults`: what a Delegate `thread` starts inherits, as
+    /// T3 Code's `orchestrator_capabilities` says it.
+    pub(super) fn api_delegate_defaults(&self, params: &ThreadParams) -> Result<Value, ApiError> {
+        let parent = self.open_thread(params.thread)?;
+        let (runs, reach) = self.inheritance(parent);
+        Ok(json!({
+            "thread": parent,
+            "provider": runs.provider,
+            "model": runs.model,
+            "effort": runs.effort,
+            "mode": reach,
+        }))
+    }
+
+    /// What the open Thread `parent` hands a Delegate that names nothing:
+    /// the provider, model and effort it runs on, and its own reach, which
+    /// caps the Delegate's (G-A6): what its provider announced, else this
+    /// machine's default, never past its own cap.
+    fn inheritance(&self, parent: ThreadId) -> (Runs, RuntimeMode) {
+        let view = self.engine.thread(parent).expect("open");
+        let defaults = self.defaults.lock().map(|defaults| defaults.clone()).unwrap_or_default();
+        let reach = RuntimeMode::of_thread(
+            view.provider(),
+            view.permission_mode(),
+            view.sandbox(),
+            &defaults,
+            self.engine.cap(parent).map(|(_, cap)| cap),
+        );
+        let runs = Runs {
+            provider: view.provider(),
+            model: view.running_model().map(str::to_string),
+            effort: view.effort().map(str::to_string),
+        };
+        (runs, reach)
+    }
+
     /// `delegate.get`: one Delegate. Its parent's own agent reading an
     /// ended one has read its result, so no wake carries it again (T3's
     /// `task_status`).
@@ -296,7 +319,7 @@ impl Server {
         let delegates = self.delegates_of(parent)?;
         let delegate = delegates
             .get(params.delegate)
-            .ok_or_else(|| unknown_delegate(params.delegate))?;
+            .ok_or_else(|| unknown_delegate(params.delegate, parent))?;
         let answer = json!({ "delegate": delegate.info(parent) });
         if from == Some(parent) {
             self.amend_delegates(parent, |delegates| delegates.tell(&[params.delegate]));
@@ -344,7 +367,7 @@ impl Server {
                 done.is_some()
             })
             .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
-        let status = match done.ok_or_else(|| unknown_delegate(id))? {
+        let status = match done.ok_or_else(|| unknown_delegate(id, parent))? {
             Cancel::Requested => "cancel_requested",
             Cancel::Ended(status) => status.word(),
         };
@@ -601,8 +624,12 @@ fn delegating(thread: Option<ThreadId>, from: Option<ThreadId>) -> Result<Thread
     })
 }
 
-fn unknown_delegate(id: DelegateId) -> ApiError {
-    ApiError::new(Code::UnknownDelegate, format!("the Thread started no Delegate {id}"))
+/// T3 Code's `task_not_found`, in its words.
+fn unknown_delegate(id: DelegateId, parent: ThreadId) -> ApiError {
+    ApiError::new(
+        Code::UnknownDelegate,
+        format!("Delegated task {id} does not belong to thread {parent}."),
+    )
 }
 
 /// A start's answer: the Delegate, and what its agent does next.
@@ -768,6 +795,11 @@ fn nap(long: Duration, cancelled: &AtomicBool) {
 fn words(failure: &PeerFailure, machine: &str) -> String {
     match failure {
         PeerFailure::Unreachable(said) => format!("{machine} did not answer: {said}"),
+        PeerFailure::Silent(at) => format!("{machine} did not answer at {at}."),
+        PeerFailure::Expired => format!(
+            "The link to {machine} expired. The user links it again in Settings → Connections, \
+             with a new pairing code from {machine}."
+        ),
         PeerFailure::SignIn => {
             format!("{machine} needs a sign-in: the user signs in to it from a Ferrite window.")
         }

@@ -1,8 +1,9 @@
 //! What a caller asks of the linked machines themselves, answered off the
 //! pump: `machine.list` with `reach`, T3 Code's linked environments list,
 //! which asks every machine at once and gives each [`PROBE`] to answer
-//! (`LIST_PROBE_TIMEOUT`); and `provider.list` of one machine, what T3's
-//! `orchestrator_capabilities` with an `environmentId` lists.
+//! (`LIST_PROBE_TIMEOUT`); and `provider.list` or `project.list` of one
+//! machine, what T3's `orchestrator_capabilities` and `t3_project_list`
+//! with an `environmentId` list.
 
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
@@ -10,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use ferrite_core::api::schema::{MachineListParams, ProviderListParams};
+use ferrite_core::api::schema::MachineListParams;
 use ferrite_core::api::{ApiError, CallerId, Code, Method};
 
 use super::{refusal, words, PeerFailure, Peers, Server};
@@ -47,17 +48,17 @@ impl Server {
         None
     }
 
-    /// `provider.list`: what this machine runs Threads on, or what the
-    /// linked `machine` does (`None`: the answer comes then).
-    pub(crate) fn api_provider_list(
+    /// `own` asked of the linked `machine` itself, as T3's tools with an
+    /// `environmentId` are forwarded there: `provider.list` (what T3's
+    /// `orchestrator_capabilities` lists) and `project.list` (its
+    /// `t3_project_list`). The answer comes then.
+    pub(crate) fn api_ask_machine(
         &mut self,
         caller: CallerId,
         id: &str,
-        params: ProviderListParams,
+        machine: String,
+        own: Method,
     ) -> Option<Result<Value, ApiError>> {
-        let Some(machine) = params.machine else {
-            return Some(Ok(self.providers()));
-        };
         if let Err(refused) = self.linked(Some(&machine)) {
             return Some(Err(refused));
         }
@@ -65,7 +66,6 @@ impl Server {
         self.off_pump(caller, id, move || {
             let failed = |failure: PeerFailure| refusal(&failure, &machine);
             let peer = peers.identify(&machine).map_err(failed)?;
-            let own = Method::ProviderList(ProviderListParams::default());
             peers.call(&peer.server, own).map_err(failed)
         });
         None
@@ -137,6 +137,7 @@ fn reached(peers: &Arc<Peers>, mut listed: Value) -> Value {
         let (status, problem) = match answer {
             Some(Ok(())) => ("reachable", None),
             Some(Err(failure @ PeerFailure::SignIn)) => ("sign_in", Some(words(&failure, &name))),
+            Some(Err(failure @ PeerFailure::Expired)) => ("expired", Some(words(&failure, &name))),
             Some(Err(failure)) => ("unreachable", Some(words(&failure, &name))),
             None => (
                 "unreachable",

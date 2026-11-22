@@ -186,6 +186,9 @@ pub enum Code {
     /// The Thread started no Delegate with that id (T3's
     /// `task_not_found`).
     UnknownDelegate,
+    /// A `delegate.start` left out what it must name there, its `project`
+    /// or `model`; the refusal says which (T3's `target_required`).
+    TargetRequired,
 }
 
 impl From<crate::factory::Refusal> for ApiError {

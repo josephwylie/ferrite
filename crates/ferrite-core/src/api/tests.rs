@@ -250,6 +250,7 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "delegate.get",
             "delegate.list",
             "delegate.cancel",
+            "delegate.defaults",
         ]
     );
 }
@@ -390,7 +391,7 @@ fn samples() -> Vec<Request> {
             decision: "perm_01".into(),
             answer: WireAnswer::Allow { input: json!({}) },
         })),
-        request(Method::ProjectList(Empty {})),
+        request(Method::ProjectList(MachineParams::default())),
         request(Method::ProjectGet(ProjectParams {
             project: "3".into(),
         })),
@@ -636,7 +637,7 @@ fn samples() -> Vec<Request> {
         })),
         request(Method::WindowFocus(Empty {})),
         request(Method::ThreadStop(ThreadParams { thread: thread() })),
-        request(Method::ProviderList(ProviderListParams::default())),
+        request(Method::ProviderList(MachineParams::default())),
         request(Method::AgentResult(ThreadParams { thread: thread() })),
         request(Method::PrWatch(PrWatchParams {
             pr: PrParams {
@@ -676,6 +677,7 @@ fn samples() -> Vec<Request> {
             },
             reason: Some("not needed".into()),
         })),
+        request(Method::DelegateDefaults(ThreadParams { thread: thread() })),
     ]
 }
 
@@ -715,8 +717,17 @@ fn later_samples() -> Vec<(&'static str, Request)> {
                 task: "Fix the flaky login test.".into(),
                 provider: Some(crate::store::Provider::Claude),
                 model: Some("opus".into()),
-                effort: Some("high".into()),
+                effort: Some(Some("high".into())),
                 mode: Some(crate::runtime_mode::RuntimeMode::AutoAcceptEdits),
+                ..DelegateStartParams::default()
+            })),
+        ),
+        (
+            "delegate_start_no_effort",
+            request(Method::DelegateStart(DelegateStartParams {
+                machine: "pc".into(),
+                task: "Fix the flaky login test.".into(),
+                effort: Some(None),
                 ..DelegateStartParams::default()
             })),
         ),
@@ -726,7 +737,13 @@ fn later_samples() -> Vec<(&'static str, Request)> {
         ),
         (
             "provider_list_machine",
-            request(Method::ProviderList(ProviderListParams {
+            request(Method::ProviderList(MachineParams {
+                machine: Some("pc".into()),
+            })),
+        ),
+        (
+            "project_list_machine",
+            request(Method::ProjectList(MachineParams {
                 machine: Some("pc".into()),
             })),
         ),

@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 use super::Server;
 use ferrite_core::api::schema::Callers;
 use ferrite_core::api::schema::{
-    AgentPromptParams, AgentReadParams, AgentWaitParams, DecisionAnswerParams, ThreadReviveParams,
-    ThreadStartParams,
+    AgentPromptParams, AgentReadParams, AgentWaitParams, DecisionAnswerParams, MachineParams,
+    ThreadReviveParams, ThreadStartParams,
 };
 use ferrite_core::api::{
     self, thread_info, thread_parked, thread_result, unknown_thread, ApiError, CallerId, Code,
@@ -214,7 +214,18 @@ impl Server {
                 Ok(json!({ "decisions": decisions }))
             }
             Method::DecisionAnswer(params) => self.answer(caller_id, params),
-            Method::ProjectList(_) => Ok(json!({ "projects": api::project_infos(&self.engine) })),
+            Method::ProjectList(MachineParams { machine: None }) => {
+                Ok(json!({ "projects": api::project_infos(&self.engine) }))
+            }
+            Method::ProjectList(MachineParams {
+                machine: Some(machine),
+            }) => {
+                let own = Method::ProjectList(MachineParams::default());
+                match self.api_ask_machine(caller_id, &id, machine, own) {
+                    Some(result) => result,
+                    None => return,
+                }
+            }
             Method::ProjectGet(params) => self
                 .project(&params.project)
                 .and_then(|project| self.project_result(project)),
@@ -246,10 +257,16 @@ impl Server {
                 None => return,
             },
             Method::IdentityGet(_) => Ok(json!({ "server_id": self.id })),
-            Method::ProviderList(params) => match self.api_provider_list(caller_id, &id, params) {
-                Some(result) => result,
-                None => return,
-            },
+            Method::ProviderList(MachineParams { machine: None }) => Ok(self.providers()),
+            Method::ProviderList(MachineParams {
+                machine: Some(machine),
+            }) => {
+                let own = Method::ProviderList(MachineParams::default());
+                match self.api_ask_machine(caller_id, &id, machine, own) {
+                    Some(result) => result,
+                    None => return,
+                }
+            }
             Method::EventsSubscribe(params) => {
                 self.api
                     .subscribe(&self.engine, caller_id, id, params.threads);
@@ -416,6 +433,7 @@ impl Server {
             Method::DelegateGet(params) => self.api_delegate_get(from, &params),
             Method::DelegateList(params) => self.api_delegate_list(from, &params),
             Method::DelegateCancel(params) => self.api_delegate_cancel(from, &params),
+            Method::DelegateDefaults(params) => self.api_delegate_defaults(&params),
             Method::NotificationShow(params) => {
                 self.say(ServerMessage::Notification {
                     title: params.title,

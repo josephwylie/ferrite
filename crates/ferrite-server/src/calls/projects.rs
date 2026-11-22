@@ -198,7 +198,9 @@ impl Server {
     }
 
     /// The saved machines a command can ask instead (`--machine`), each by
-    /// its name; one turned off is left out, since it is never asked.
+    /// its name, with when a paired link's session ends there; one turned
+    /// off is left out, since it is never asked. `server_id` is this
+    /// machine's own.
     pub(crate) fn machines(&self) -> Result<Value, ApiError> {
         let settings = Settings::load(&self.settings_dir).map_err(failed)?;
         let machines: Vec<Value> = settings
@@ -206,9 +208,17 @@ impl Server {
             .iter()
             .filter(|machine| machine.enabled)
             .map(|machine| {
-                json!({ "id": machine.name, "label": machine.name, "target": machine.target })
+                let expires_at = machine
+                    .expires(&self.settings_dir)
+                    .and_then(ferrite_core::clock::utc_stamp);
+                json!({
+                    "id": machine.name,
+                    "label": machine.name,
+                    "target": machine.target,
+                    "expires_at": expires_at,
+                })
             })
             .collect();
-        Ok(json!({ "machines": machines }))
+        Ok(json!({ "server_id": self.id, "machines": machines }))
     }
 }

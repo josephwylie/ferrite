@@ -123,24 +123,46 @@ and `agent.result`. Peers is the Server's client of a saved machine.
   it again (T3's `task_status`).
 - **The agent tools are T3's.** Every Thread's agent gets
   `orchestrator_capabilities`, `delegate_task`, `task_status`,
-  `task_cancel` and `machine_list` (T3's `t3_environment_links`), with
-  T3's descriptions, parameters and answer shapes. They are Ferrite's own
-  pre-allowed tools (`api::tools`, the mechanism PR watch uses): each call
-  is one or two API requests from the Session's Thread, translated
-  between T3's names and the API's in `api/tools/delegation`.
+  `task_cancel`, `machine_list` (T3's `t3_environment_links`) and
+  `project_list` (T3's `t3_project_list`), with T3's descriptions,
+  parameters, answers and refusals, a machine where T3 says an
+  environment. They are Ferrite's own pre-allowed tools (`api::tools`, the
+  mechanism PR watch uses): each call is a few API requests from the
+  Session's Thread, translated between T3's names and the API's in
+  `api/tools/delegation`.
   - They are offered while this machine's Settings › Labs › Linked
     machines is on when the Session starts, as T3 hides them while links
     are off. The gate is the machine's own (`ServerDefaults`, T3's
     `serverScoped`), so Settings on a machine sets that machine's.
   - A subagent's call acts for its Thread, as T3's does.
-  - `delegate_task` answers T3's task with its `next` (do not poll; end
-    the turn). `machine_list` asks every machine at once and gives each
-    3 s (T3's list probe): `reachable`, `unreachable` or `sign_in`.
-    `orchestrator_capabilities` with a `machineId` is that machine's own
-    `provider.list`.
-  - Refusals are the Server's words, T3's where T3 has them: Linked
-    machines off here or there, a machine not linked, one that did not
-    answer, one that needs a sign-in.
+  - Each answers as T3 answers for a remote task. `delegate_task` answers
+    T3's task with its `next` (do not poll; end the turn); with
+    `mode: "wait"` it reads the Delegate until it ends or `timeoutMs` is
+    up (30 s unasked, 45 s at most; a timeout does not cancel it).
+    `machine_list` asks every machine at once and gives each 3 s (T3's
+    list probe): `reachable`, `unreachable`, `expired` (the paired
+    session there ended or was revoked) or `sign_in`, with this machine's
+    `machineId`, each link's `expiresAt` and an `access` of
+    `full-access`. `orchestrator_capabilities` with a `machineId` is that
+    machine's own `provider.list`, which knows no parent, as T3's peer
+    does; without one it names what this Thread hands on, from
+    `delegate.defaults`: the model its Session announced it runs, so a
+    parent started on a model by its launch arguments hands on that one.
+  - Every tool's schema is closed (`additionalProperties: false` on each
+    object), and one check in `api::tools` refuses, in T3's words, a call
+    naming anything else or a value its schema rules out, for every tool
+    a Thread has. T3 leaves nested objects lenient because its schemas
+    merge unions; Ferrite's do not, so it checks them too.
+  - The Server's refusals name API parameters in backticks and modes by
+    API word; the tool layer says each in the tools' names with T3's code
+    (`widens_cap` is `runtime_mode_escalation_denied`, `unknown_delegate`
+    `task_not_found`, `target_required` T3's own), and a refusal is T3's
+    `{code, message}`.
+  - The agent is told of them as T3 tells its agents, through the
+    Session's standing instructions (Claude's appended system prompt,
+    Codex's developer instructions): T3's PR block, cut to watching, for
+    every Session, and T3's orchestration block, cut to delegating and
+    linked machines, while the tools are offered.
 
 ## Operator decisions
 
@@ -179,14 +201,34 @@ Nothing here fences the link itself, and T3 does not either.
   is recorded once its Thread there exists.
 - **A machine, not an environment.** "On pc" and "the linked machine"
   stand for T3's "in {label}" and "the linked environment".
-- **The tools take only what Ferrite carries out.** A parameter Ferrite
-  cannot honour is not in the schema, never taken and dropped:
-  - `isolation` (a fresh worktree there), `mode: wait` and `timeoutMs`,
-    `interactionMode`, `driverKind` and `search`;
-  - a delegated task always names `target.machineId`: a child on this
-    machine is a Thread of its own, not a Delegate;
-  - the model and effort are not checked against the machine's catalog
-    before the start; its CLI refuses a model it does not know.
+- **What a remote task cannot be is refused, never dropped.** Each is
+  refused before anything starts, in T3's manner:
+  - `isolation: "worktree"`, as T3 refuses it for a remote task, without
+    its pointer to `t3_thread_launch`, which Ferrite has not;
+  - `interactionMode: "plan"`: a start there carries a runtime mode only.
+    The parent's `interactionMode` reads `default`, since Ferrite counts
+    Claude's plan mode as `approval-required`;
+  - a task with no `target.machineId`: a child on this machine is a
+    native subagent or a Thread of its own, not a Delegate.
+
+  `driverKind` names the provider there whose id it is, a Ferrite
+  provider being its own one instance. `search` matches models as T3's
+  does. The model and effort are not checked against the machine's
+  catalog before the start; its CLI refuses a model it does not know.
+- **Answer fields Ferrite has nothing for are left out:** `link` (no
+  thread links), `childRunId` and `latestTerminalRunId` (no runs),
+  `childNodeId` (no nodes), `resultContextTransferId` and
+  `latestTerminalResultContextTransferId` (no context transfers), and a
+  project's settings fields in `project_list`. `executedModel` is null and
+  `hasPendingQuestion`/`pendingApproval` say none, as T3's do for a
+  remote task, whose questions are answered where it runs. `features`
+  says what Ferrite has: no thread management, batches or scheduled
+  tasks. A refusal has no `_tag`.
+- **`task_cancel` stops less.** Its description names what `thread.stop`
+  there stops: the running and queued turns and the task's own
+  Delegates. T3's also names its PR watches and later runs in its child
+  thread, which that stop does not end (only an interrupt ends watches,
+  ADR 0046).
 - **A repository key is read, not asked.** T3 resolves ssh aliases
   (`ssh -G`) and `insteadOf` rewrites; Ferrite reads git's config file
   without running git, so a remote spelled through one keys as written.

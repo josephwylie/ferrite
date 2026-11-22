@@ -528,8 +528,8 @@ fn a_delegate_with_no_one_project_there_is_refused() {
     assert_eq!(
         (&refused["code"], &refused["message"]),
         (
-            &"invalid_request".into(),
-            &"Pass project: this Thread's checkout has no repository to match on pc.".into()
+            &"target_required".into(),
+            &"Pass `project`: this Thread's project has no repository to match there.".into()
         )
     );
     remote(&world.parent.dir, "https://github.com/acme/app.git");
@@ -537,7 +537,10 @@ fn a_delegate_with_no_one_project_there_is_refused() {
     assert_eq!(refused["code"], "project_not_found", "{refused}");
     let message = refused["message"].as_str().unwrap();
     assert!(
-        message.starts_with("No project on pc has this repository (github.com/acme/app). Pass project"),
+        message.starts_with(
+            "No project there has this repository (github.com/acme/app). Pass `project`; \
+             `project.list` with this `machine` lists them."
+        ),
         "{refused}"
     );
     let (one, _) = project_of(&world.peer, &world.peer.dir.join("one"), "git@github.com:acme/app");
@@ -545,7 +548,7 @@ fn a_delegate_with_no_one_project_there_is_refused() {
     let refused = start();
     let message = refused["message"].as_str().unwrap();
     assert!(
-        message.starts_with("Several projects on pc have this repository: ")
+        message.starts_with("Several projects there have this repository: ")
             && message.contains(&format!("({one})"))
             && message.contains(&format!("({two})")),
         "{refused}"
@@ -591,8 +594,14 @@ fn a_delegate_runs_the_model_effort_and_mode_asked() {
         "delegate.start",
         serde_json::json!({ "machine": "pc", "task": "x", "checkout": world.peer.dir, "provider": "codex" }),
     );
-    let message = codex["error"]["message"].as_str().unwrap_or_default();
-    assert!(message.starts_with("Pass model:"), "{codex}");
+    assert_eq!(
+        (&codex["error"]["code"], &codex["error"]["message"]),
+        (
+            &"target_required".into(),
+            &"Pass `model` from `provider.list` with this `machine`.".into()
+        ),
+        "{codex}"
+    );
     let methods = world.link.methods();
     let starts = methods.iter().filter(|method| *method == "thread.start").count();
     assert_eq!(starts, 1);
@@ -626,8 +635,38 @@ fn the_linked_machines_are_asked_whether_they_answer_and_what_they_run() {
     let unknown = world.as_agent("provider.list", serde_json::json!({ "machine": "vps" }));
     assert_eq!(
         unknown["error"]["message"],
-        "This machine is not linked to `vps`. machine_list lists the linked ones."
+        "This machine is not linked to vps. `machine.list` lists the linked ones."
     );
+}
+
+/// AC: a Delegate that names no model runs the one its parent's Session
+/// runs, as its provider announced it, though the parent was started with
+/// none named; `delegate.defaults` says so.
+#[test]
+fn a_delegate_runs_the_model_its_parent_runs() {
+    let world = world("delegates-running-model");
+    let model = "claude-haiku-4-5";
+    world
+        .agent
+        .send(SessionEvent::ModelChanged {
+            model: model.into(),
+        })
+        .unwrap();
+    let defaults = || {
+        world.as_agent("delegate.defaults", serde_json::json!({ "thread": world.thread }))
+            ["result"]
+            .clone()
+    };
+    until("the parent's model", || defaults()["model"] == model);
+    assert_eq!(defaults()["provider"], "claude");
+    world.as_agent(
+        "delegate.start",
+        serde_json::json!({ "machine": "pc", "task": "x", "checkout": world.peer.dir }),
+    );
+    let _provider = world.peer.sessions.recv_timeout(PATIENCE).unwrap();
+    let told = world.peer.told.lock().unwrap();
+    let asked = ["--model", model].map(String::from);
+    assert!(told.args[0].ends_with(&asked), "{:?}", told.args);
 }
 
 /// AC: the agent's own Delegate tools start one on `pc` in the Project
@@ -649,14 +688,22 @@ fn the_agents_own_tools_delegate_to_a_linked_machine() {
         serde_json::from_str::<serde_json::Value>(&text).unwrap()
     };
     let machines = use_tool("machine_list", serde_json::json!({}));
-    assert_eq!(machines["machines"][0]["status"], "reachable", "{machines}");
-    let capabilities = use_tool(
-        "orchestrator_capabilities",
-        serde_json::json!({ "machineId": "pc" }),
-    );
+    assert_eq!(machines["links"][0]["status"], "reachable", "{machines}");
+    let capabilities = use_tool("orchestrator_capabilities", serde_json::json!({}));
     assert_eq!(
         capabilities["inheritedProviderInstanceId"], "claude",
         "{capabilities}"
+    );
+    let there = use_tool(
+        "orchestrator_capabilities",
+        serde_json::json!({ "machineId": "pc" }),
+    );
+    assert_eq!(there["providers"][1]["driverKind"], "codex", "{there}");
+    let projects = use_tool("project_list", serde_json::json!({ "machineId": "pc" }));
+    assert_eq!(
+        projects["projects"][0]["repositoryIdentity"]["canonicalKey"],
+        "github.com/acme/app",
+        "{projects}"
     );
     let task = use_tool(
         "delegate_task",

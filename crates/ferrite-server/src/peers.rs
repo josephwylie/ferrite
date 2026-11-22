@@ -49,6 +49,13 @@ pub enum PeerFailure {
     Unreachable(String),
     /// ssh needs the operator to sign in, from a window.
     SignIn,
+    /// A paired link's address did not answer, at that address (T3's
+    /// "did not answer at").
+    Silent(String),
+    /// The machine no longer takes this paired link: its session expired
+    /// or was revoked there, and only a new pairing undoes it (T3's
+    /// `expired`).
+    Expired,
     /// The machine's shell has no `ferrited`.
     NoFerrited,
     /// The machine's `ferrited` is too old for what was asked.
@@ -208,9 +215,27 @@ impl Peers {
     }
 
     fn connect(&self, machine: &Machine) -> Result<Connection, PeerFailure> {
+        let now = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        };
+        if machine
+            .expires(&self.settings_dir)
+            .is_some_and(|expires| expires <= now())
+        {
+            return Err(PeerFailure::Expired);
+        }
         let tunnel = (self.dial)(machine)().map_err(|error| match machine::failure(&error) {
             Some(failure) => unreached(failure.clone()),
-            None => PeerFailure::Unreachable(error.to_string()),
+            None => match error.kind() {
+                io::ErrorKind::PermissionDenied if machine.is_link() => PeerFailure::Expired,
+                io::ErrorKind::NotConnected if machine.is_link() => {
+                    PeerFailure::Silent(machine.display_target(&self.settings_dir))
+                }
+                _ => PeerFailure::Unreachable(error.to_string()),
+            },
         })?;
         Ok(Connection::new(tunnel))
     }

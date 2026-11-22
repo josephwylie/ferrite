@@ -39,7 +39,10 @@
 //! - `linked_machines_off`: a `thread.start` from another machine's
 //!   Thread (`delegated_from`), or a `delegate.start`, while this
 //!   machine's Settings › Labs › Linked machines is off.
-//! - `unknown_delegate`: the Thread started no Delegate with that id.
+//! - `unknown_delegate`: the Thread started no Delegate with that id
+//!   (T3 Code's `task_not_found`).
+//! - `target_required`: a `delegate.start` left out what it must name
+//!   there, its `project` or `model` (T3 Code's `target_required`).
 //! - `failed`: anything else, in its own words.
 //! - `server_unavailable`: the CLI's own, no Server answered.
 //!
@@ -143,8 +146,8 @@ operations! {
         "The pending Decisions, of every Thread or of one.";
     DecisionAnswer(DecisionAnswerParams) => "decision.answer", ["thread", "decision"], Operator,
         "Answer a pending Decision. Only on the operator's word.";
-    ProjectList(Empty) => "project.list", [], Anyone,
-        "List the Projects, how many open Threads each has, and the focused one.";
+    ProjectList(MachineParams) => "project.list", [], Anyone,
+        "List the Projects, how many open Threads each has, and the focused one; or a saved machine's.";
     ProjectGet(ProjectParams) => "project.get", ["project"], Anyone,
         "One Project.";
     ProjectOpen(ProjectOpenParams) => "project.open", [], Operator,
@@ -261,7 +264,7 @@ operations! {
         "This Server's identity: its server_id, the same over every route to it, ssh or a paired link.";
     ThreadStop(ThreadParams) => "thread.stop", ["thread"], Operator,
         "Stop everything a Thread runs: Main's turn, its subagents and background commands. Its queued prompts go back to the Composer.";
-    ProviderList(ProviderListParams) => "provider.list", [], Anyone,
+    ProviderList(MachineParams) => "provider.list", [], Anyone,
         "The providers this machine, or a saved one, runs Threads on: their models, efforts and the modes a Thread may be capped at.";
     AgentResult(ThreadParams) => "agent.result", ["thread"], Anyone,
         "How a Thread's latest turn ended and its final reply in full, a parked Thread's too.";
@@ -277,6 +280,8 @@ operations! {
         "A Thread's Delegates, or every open Thread's.";
     DelegateCancel(DelegateCancelParams) => "delegate.cancel", ["delegate"], Operator,
         "Cancel a Delegate: it ends here at once, and its Thread there is stopped.";
+    DelegateDefaults(ThreadParams) => "delegate.defaults", ["thread"], Anyone,
+        "What a Delegate a Thread starts runs on when the start names none: the provider, model and effort that Thread runs on, and the mode it may go to.";
 }
 
 /// Who may call an operation (#224). A call that names no Thread is the
@@ -379,9 +384,14 @@ pub struct DelegateStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Its reasoning effort; the delegating Thread's on its own provider
-    /// and model when absent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
+    /// and model when absent. `null` names none: the provider's own
+    /// default there, inheriting nothing (T3 Code's empty `options`).
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub effort: Option<Option<String>>,
     /// The most it may do without asking, never broader than the
     /// delegating Thread may (refused `widens_cap`); that Thread's when
     /// absent.
@@ -392,14 +402,25 @@ pub struct DelegateStartParams {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct MachineListParams {
     /// Ask each one whether it answers now, as T3 Code's linked
-    /// environments list does: `status` is `reachable`, `unreachable` or
-    /// `sign_in`, with `problem` saying why.
+    /// environments list does: `status` is `reachable`, `unreachable`,
+    /// `expired` (a paired link the machine no longer takes) or `sign_in`,
+    /// with `problem` saying why.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reach: bool,
 }
 
+/// What a field given as `null` is, beside one left out: `Some(None)`.
+fn present<'de, D, T>(field: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(field).map(Some)
+}
+
+/// A read of this machine, or of a saved one.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderListParams {
+pub struct MachineParams {
     /// A saved machine (Settings › Connections) to ask, by its name; this
     /// machine when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]

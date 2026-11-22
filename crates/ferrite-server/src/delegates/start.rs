@@ -1,15 +1,19 @@
 //! What a Delegate's Thread there is, before it starts (T3 Code's
-//! `delegate_task` with a target, `orchestrator/delegateTask.ts` at
-//! 0fd48228): where it works, found by its parent's repository as T3 finds
-//! a linked environment's project; the model and effort it runs, inherited
-//! from its parent on the same provider; and how far it goes without
-//! asking, never past its parent.
+//! `delegate_task` with a target, `peer/RemoteDelegation.ts` at 0fd48228):
+//! where it works, found by its parent's repository as T3 finds a linked
+//! environment's project; the model and effort it runs, inherited from its
+//! parent on the same provider; and how far it goes without asking, never
+//! past its parent.
+//!
+//! Each refusal is T3's, naming a parameter by its API name in backticks
+//! and a mode by its API word, which the agent tools say in their own
+//! names (`api::tools`).
 
 use std::path::PathBuf;
 
 use serde_json::Value;
 
-use ferrite_core::api::schema::{Empty, ThreadStartParams};
+use ferrite_core::api::schema::{MachineParams, ThreadStartParams};
 use ferrite_core::api::{ApiError, Code, Method};
 use ferrite_core::runtime_mode::RuntimeMode;
 use ferrite_core::store::Provider;
@@ -36,17 +40,14 @@ impl Place {
         checkout: Option<PathBuf>,
         project: Option<String>,
         repository: Option<String>,
-        machine: &str,
     ) -> Result<Self, ApiError> {
         match (checkout, project, repository) {
             (Some(checkout), project, _) => Ok(Self::Checkout(checkout, project)),
             (None, Some(project), _) => Ok(Self::Project(project)),
             (None, None, Some(repository)) => Ok(Self::Repository(repository)),
             (None, None, None) => Err(ApiError::new(
-                Code::InvalidRequest,
-                format!(
-                    "Pass project: this Thread's checkout has no repository to match on {machine}."
-                ),
+                Code::TargetRequired,
+                "Pass `project`: this Thread's project has no repository to match there.",
             )),
         }
     }
@@ -88,13 +89,13 @@ pub(super) struct Runs {
 /// What the Delegate runs: what was asked, the rest inherited from its
 /// `parent` as T3 does. On the parent's provider it inherits the model,
 /// and on its model the effort too; another provider inherits neither, so
-/// it names its model.
+/// it names its model. An effort asked as `None` is none: the provider's
+/// default there.
 pub(super) fn runs(
     parent: &Runs,
     provider: Option<Provider>,
     model: Option<String>,
-    effort: Option<String>,
-    machine: &str,
+    effort: Option<Option<String>>,
 ) -> Result<Runs, ApiError> {
     let provider = provider.unwrap_or(parent.provider);
     let same = provider == parent.provider;
@@ -103,16 +104,15 @@ pub(super) fn runs(
         None if same => parent.model.clone(),
         None => {
             return Err(ApiError::new(
-                Code::InvalidRequest,
-                format!(
-                    "Pass model: a Delegate on {provider} inherits none from this Thread on {}. \
-                     orchestrator_capabilities with {machine} lists its models.",
-                    parent.provider
-                ),
+                Code::TargetRequired,
+                "Pass `model` from `provider.list` with this `machine`.",
             ))
         }
     };
-    let effort = effort.or_else(|| (same && model == parent.model).then(|| parent.effort.clone())?);
+    let effort = match effort {
+        Some(effort) => effort,
+        None => (same && model == parent.model).then(|| parent.effort.clone()).flatten(),
+    };
     Ok(Runs {
         provider,
         model,
@@ -164,14 +164,16 @@ pub(super) fn launch(
             peers,
             &peer,
             |project| project["id"] == *id,
-            format!("No project on {machine} has the id {id}."),
+            format!("No project there has the id {id}. `project.list` with this `machine` lists them."),
         )?,
         Place::Repository(key) => placed(
             peers,
             &peer,
             |project| project["worktree"]["repository"] == *key,
             format!(
-                "No project on {machine} has this repository ({key}). Pass project: one on                  {machine}; to bring the repository there, clone it on {machine} and open it as a                  Project there."
+                "No project there has this repository ({key}). Pass `project`; `project.list` with \
+                 this `machine` lists them. To bring the repository there, clone it on {machine} \
+                 and open it as a Project there."
             ),
         )?,
     };
@@ -206,7 +208,7 @@ fn placed(
 ) -> Result<(PathBuf, Option<String>), ApiError> {
     let machine = &peer.label;
     let listed = peers
-        .call(&peer.server, Method::ProjectList(Empty {}))
+        .call(&peer.server, Method::ProjectList(MachineParams::default()))
         .map_err(|failure| refusal(&failure, machine))?;
     let projects = listed["projects"].as_array().cloned().unwrap_or_default();
     let found: Vec<&Value> = projects.iter().filter(|project| wanted(project)).collect();
@@ -224,7 +226,7 @@ fn placed(
             return Err(ApiError::new(
                 Code::InvalidRequest,
                 format!(
-                    "Several projects on {machine} have this repository: {}. Pass project.",
+                    "Several projects there have this repository: {}. Pass `project`.",
                     named.join(", ")
                 ),
             ));
@@ -250,7 +252,8 @@ mod tests {
     }
 
     /// T3's inheritance: the model on the same provider, the effort on the
-    /// same model, neither on another provider, which names its model.
+    /// same model, neither on another provider, which names its model; an
+    /// effort asked as none is none (T3's `options: {}`).
     #[test]
     fn a_delegate_inherits_what_it_does_not_name_on_its_parents_provider() {
         let claude = parent(Provider::Claude, Some("opus"), Some("high"));
@@ -259,10 +262,13 @@ mod tests {
                 &claude,
                 provider,
                 model.map(str::to_string),
-                effort.map(str::to_string),
-                "pc",
+                effort.map(|effort| Some(effort.to_string())),
             )
         };
+        assert_eq!(
+            super::runs(&claude, None, None, Some(None)),
+            Ok(parent(Provider::Claude, Some("opus"), None))
+        );
         assert_eq!(runs(None, None, None), Ok(claude.clone()));
         assert_eq!(
             runs(None, Some("haiku"), None),
@@ -277,8 +283,8 @@ mod tests {
             Ok(parent(Provider::Codex, Some("gpt-5.5"), None))
         );
         let refused = runs(Some(Provider::Codex), None, None).unwrap_err();
-        assert_eq!(refused.code, Code::InvalidRequest);
-        assert!(refused.message.starts_with("Pass model:"), "{}", refused.message);
+        assert_eq!(refused.code, Code::TargetRequired);
+        assert_eq!(refused.message, "Pass `model` from `provider.list` with this `machine`.");
     }
 
     /// Each provider's own spelling, which a capped start takes.

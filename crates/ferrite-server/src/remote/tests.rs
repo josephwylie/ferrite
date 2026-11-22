@@ -84,6 +84,7 @@ mod network {
                 ),
                 server_id: granted.server_id.clone(),
                 credential: "test-not-persisted".into(),
+                expires: granted.expires,
             };
             let (stop, stopped) = tokio::sync::oneshot::channel();
             let served = gateway.clone();
@@ -387,11 +388,14 @@ mod network {
                 end,
                 None | Some(Ok(ClientFrame::Close(_))) | Some(Err(_))
             ));
-            assert!(
+            // Refused as revoked, which a Delegate's machine list says is
+            // `expired`, not as a machine that did not answer.
+            let refused =
                 remote::socket::connect(&fixture.profile, &fixture.granted.secret, "/v1/link")
                     .await
-                    .is_err()
-            );
+                    .err()
+                    .expect("a revoked session is refused");
+            assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
             let unauthenticated = fixture.profile.origin.replacen("http", "ws", 1) + "/v1/link";
             assert!(tokio_tungstenite::connect_async(unauthenticated)
                 .await

@@ -58,6 +58,12 @@ impl Machine {
         remote::display_target(self, settings_dir)
     }
 
+    /// When the machine stops taking this paired link, in seconds since
+    /// the epoch; `None` over ssh, or for a pairing that was not told.
+    pub fn expires(&self, settings_dir: &Path) -> Option<u64> {
+        remote::expires(self, settings_dir)
+    }
+
     pub fn from_ssh_fields(host: &str, username: &str, port: &str) -> Result<Self, String> {
         let mut destination = Destination::parse(host.trim())?;
         let username = username.trim();

@@ -28,7 +28,17 @@ pub async fn connect(profile: &Profile, secret: &str, path: &str) -> io::Result<
     config.max_frame_size = Some(FRAME_LIMIT);
     let (socket, response) = tokio::time::timeout(TIMEOUT, tokio_tungstenite::connect_async_with_config(request, Some(config), false)).await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "The remote link timed out."))?
-        .map_err(|_| io::Error::other("The remote link was refused. Check the certificate or pair again if access was revoked."))?;
+        .map_err(|error| {
+            // The machine no longer takes this session: it expired or was
+            // revoked there, which only a new pairing undoes.
+            let kind = match &error {
+                tokio_tungstenite::tungstenite::Error::Http(response) if response.status() == 401 => {
+                    io::ErrorKind::PermissionDenied
+                }
+                _ => io::ErrorKind::Other,
+            };
+            io::Error::new(kind, "The remote link was refused. Check the certificate or pair again if access was revoked.")
+        })?;
     if response
         .headers()
         .get("x-ferrite-environment")
