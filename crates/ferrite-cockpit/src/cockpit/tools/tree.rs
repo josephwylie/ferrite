@@ -8,6 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use ferrite_core::spawn::NoConsoleWindow;
+
 /// Never listed: git's own store.
 const HIDDEN: &[&str] = &[".git"];
 /// Never searched by the filter: what a checkout builds or installs.
@@ -347,6 +349,7 @@ fn git_status(root: &Path) -> Vec<(PathBuf, Status)> {
     let Ok(output) = Command::new("git")
         .args(["status", "--porcelain=v1", "-z"])
         .current_dir(root)
+        .no_console_window()
         .output()
     else {
         return Vec::new();

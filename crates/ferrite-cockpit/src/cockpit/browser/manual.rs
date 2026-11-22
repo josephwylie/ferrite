@@ -119,9 +119,9 @@ impl Manual {
             self.pending = false;
         }
     }
-    pub fn discard(&mut self, sequence: u64) -> Option<(Document, u64)> {
+    pub fn discard(&mut self, sequence: u64, reason: Finish) -> Option<(Document, u64)> {
         if sequence == self.sequence {
-            self.finish()
+            self.finish(reason)
         } else {
             None
         }
@@ -194,8 +194,42 @@ impl Manual {
         }
     }
 
-    pub fn finish(&mut self) -> Option<(Document, u64)> {
+    pub fn finish(&mut self, reason: Finish) -> Option<(Document, u64)> {
+        #[cfg(feature = "browser-smoke")]
+        if self.active {
+            ferrite_pane::visual::hold_trace::record(serde_json::json!({
+                "kind": "finish",
+                "reason": format!("{reason:?}"),
+                "tab": self.peers.as_ref().map(|(_, tab)| *tab),
+                "held": self.held,
+                "settles": self.acknowledged.is_some(),
+            }));
+        }
+        #[cfg(not(feature = "browser-smoke"))]
+        let _ = reason;
         self.cancel();
         self.acknowledged.take()
     }
+}
+
+/// Why a gesture ended (`Manual::finish`), which the boundaries trace
+/// records (`browser-smoke`).
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Finish {
+    /// The page's view said the pointer left it (`Input::Leave`).
+    Leave,
+    /// Quiet since its last input, with nothing held (`Manual::due`).
+    Quiet,
+    /// The page's view is off screen.
+    Hidden,
+    /// The window lost the operator.
+    WindowInactive,
+    /// Its newest input was for a page or engine document since replaced.
+    Stale,
+    /// The Server refused its newest input.
+    Refused,
+    /// The Server moved the tab to another document.
+    Navigated,
+    /// The operator began an annotation on the page.
+    Annotation,
 }

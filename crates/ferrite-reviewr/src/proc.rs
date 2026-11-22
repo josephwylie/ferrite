@@ -10,6 +10,10 @@ use std::thread;
 use std::time::Duration;
 
 use process_wrap::std::CommandWrap;
+// A window process that starts a console program gets a console window for it, which flashes
+// over the window and takes the keyboard from it. No tool here talks to a terminal.
+#[cfg(windows)]
+use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 
 /// Host bin dirs a stripped PATH may omit; none on Windows, where `\\usr\\bin` is plantable.
 #[cfg(unix)]
@@ -61,6 +65,11 @@ pub(crate) fn command(program: impl AsRef<OsStr>) -> Command {
     cmd.env("PATH", host_path());
     // No optional locks for any git the forge CLIs run either: a read never rewrites the index.
     cmd.env("GIT_OPTIONAL_LOCKS", "0");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW.0);
+    }
     cmd
 }
 
@@ -110,8 +119,9 @@ pub(crate) fn run_tree(cmd: Command, stop: impl Fn() -> bool) -> Result<String, 
     cmd.command_mut().stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     cmd.wrap(process_wrap::std::ProcessGroup::leader());
+    // The job object sets the child's creation flags itself, so it is told these.
     #[cfg(windows)]
-    cmd.wrap(process_wrap::std::JobObject);
+    cmd.wrap(process_wrap::std::CreationFlags(CREATE_NO_WINDOW)).wrap(process_wrap::std::JobObject);
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(RunError::NotFound),

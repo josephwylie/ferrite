@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+use crate::spawn::NoConsoleWindow;
+
 use ferrite_reviewr::ferrite::{FileSides, Read};
 use serde::{Deserialize, Serialize};
 
@@ -154,6 +156,7 @@ fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let output = Command::new("git")
         .current_dir(root)
         .args(args)
+        .no_console_window()
         .output()
         .map_err(|error| error.to_string())?;
     if output.status.success() {

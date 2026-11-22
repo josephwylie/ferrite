@@ -32,6 +32,20 @@ impl CockpitView {
             .native
             .browser_viewport()
     }
+    /// The active page's gesture and view as this window holds them, for the
+    /// boundaries trace: whether a gesture is active, and whether the page's
+    /// view is on screen.
+    #[cfg(feature = "browser-smoke")]
+    pub(in crate::cockpit) fn browser_smoke_hold(
+        &self,
+        thread: ThreadId,
+        cx: &gpui::App,
+    ) -> Option<(bool, bool)> {
+        let browser = self.browsers.threads.get(&thread)?;
+        let page = browser.pages.get(&browser.state.active?)?;
+        let active = page.manual.borrow().active;
+        Some((active, page.web.read(cx).browser_visible()))
+    }
     /// None while no annotation session is open.
     #[cfg(feature = "browser-smoke")]
     pub(in crate::cockpit) fn browser_smoke_annotation_ready(
@@ -70,7 +84,13 @@ impl CockpitView {
         let Some(target) = target else {
             return;
         };
-        self.finish_browser_interaction(thread, target.owner, target.document.tab, cx);
+        self.finish_browser_interaction(
+            thread,
+            target.owner,
+            target.document.tab,
+            super::manual::Finish::Annotation,
+            cx,
+        );
         window.focus(&target.focus, cx);
         let send_enabled = self.annotation_send_enabled(thread, cx);
         let begun = self.cockpit.update(cx, |cockpit, _| {
