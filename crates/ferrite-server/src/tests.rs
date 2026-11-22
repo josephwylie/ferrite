@@ -298,6 +298,7 @@ fn serve_configured(
     let (heard, hear) = mpsc::channel();
     let tools = ferrite_core::api::tools::Tools::new(heard.clone());
     let server = std::thread::spawn(move || {
+        let id = server_id::open(&store).unwrap();
         let store = Store::open(&store).unwrap();
         let reopen = launch_threads(&store);
         let mut engine = Engine::try_new(store, Box::new(spawn)).unwrap();
@@ -308,7 +309,7 @@ fn serve_configured(
         };
         let (_, renders) = render::remote();
         let defaults = Arc::new(Mutex::new(SessionDefaults::default()));
-        let mut server = Server::new(engine, info, renders, defaults, settings_dir);
+        let mut server = Server::new(engine, info, id, renders, defaults, settings_dir);
         server.browser_requests = browser_requests;
         disk_ready.send(server.browser_disk.control()).unwrap();
         server.relaunch = Box::new(move |executable: &Path| {
@@ -1351,6 +1352,21 @@ fn shows(window: &ferrite_core::cockpit::Cockpit, thread: ThreadId, said: &str) 
             .iter()
             .any(|block| format!("{:?}", block.body).contains(said))
     })
+}
+
+/// A window knows which Server it is attached to, the one its Store keeps,
+/// and reads its clock as agreeing with its own: they share one.
+#[test]
+fn a_window_attached_to_a_server_knows_its_id_and_clock() {
+    let harness = start("server-id");
+    let window = cockpit(&harness);
+    let Some(ferrite_core::cockpit::ServerState::Attached { id, clock, .. }) = window.server()
+    else {
+        panic!("attached");
+    };
+    let kept = server_id::open(&harness.dir.join("threads")).unwrap();
+    assert_eq!(id, Some(kept));
+    assert_eq!(clock, ferrite_core::clock::ServerClock::default());
 }
 
 /// The app's window over the socket: its acts are commands, what it reads

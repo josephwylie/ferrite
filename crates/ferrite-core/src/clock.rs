@@ -194,6 +194,36 @@ pub fn now_label() -> String {
     label(now())
 }
 
+/// How far a Server's wall clock runs ahead of this computer's, read at
+/// its `welcome` (T3 Code's `recordServerClock`): a time the Server
+/// stamped reads on this computer's clock through [`ServerClock::local_ms`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ServerClock {
+    ahead_ms: i64,
+}
+
+impl ServerClock {
+    /// The Server stamped `server_ms` between this side's `requested_ms`
+    /// and `received_ms`, so the offset lies within that window. The one
+    /// nearest 0 is kept, so clocks that agree read as 0 rather than shift
+    /// every time by the network's latency; a Server that sends no time
+    /// reads as agreeing.
+    pub fn sampled(server_ms: Option<i64>, requested_ms: i64, received_ms: i64) -> Self {
+        let ahead_ms = match server_ms {
+            Some(server) if server > received_ms => server.saturating_sub(received_ms),
+            Some(server) if server < requested_ms => server.saturating_sub(requested_ms),
+            _ => 0,
+        };
+        Self { ahead_ms }
+    }
+
+    /// `server_ms`, milliseconds since the epoch on the Server's clock, on
+    /// this computer's.
+    pub fn local_ms(self, server_ms: i64) -> i64 {
+        server_ms.saturating_sub(self.ahead_ms)
+    }
+}
+
 /// A frozen, steppable clock for scenes and tests. Only one is installed at
 /// a time; dropping it restores the system clock.
 #[must_use = "the fixture holds the clock only while it lives"]
@@ -390,5 +420,24 @@ mod tests {
         assert_eq!(instant(), frozen, "a frozen thread reads one time");
         drop(fixture);
         assert!(instant() > frozen, "back on the system clock");
+    }
+
+    #[test]
+    fn a_server_time_reads_on_this_computers_clock() {
+        // The hello left at 1 000 and its welcome came back at 1 100.
+        let table = [
+            ("no time sent", None, 5_000, 5_000),
+            ("stamped inside the round trip", Some(1_050), 5_000, 5_000),
+            ("stamped as it was asked", Some(1_000), 5_000, 5_000),
+            ("stamped as it answered", Some(1_100), 5_000, 5_000),
+            ("a minute ahead", Some(61_100), 65_000, 5_000),
+            ("a minute behind", Some(-59_000), -55_000, 5_000),
+        ];
+        for (case, server_ms, stamped, local) in table {
+            let clock = ServerClock::sampled(server_ms, 1_000, 1_100);
+            assert_eq!(clock.local_ms(stamped), local, "{case}");
+        }
+        let hostile = ServerClock::sampled(Some(i64::MIN), 1_000, 1_100);
+        assert_eq!(hostile.local_ms(i64::MAX), i64::MAX, "saturates, never panics");
     }
 }

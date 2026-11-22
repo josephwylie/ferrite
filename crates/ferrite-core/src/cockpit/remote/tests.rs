@@ -31,8 +31,12 @@ fn server_answering(
     reply: fn(&Op) -> Option<Result<Done, WireError>>,
 ) -> Receiver<Op> {
     server_welcoming(store, drop_at, reply, |_| {
-        Some(protocol::welcome(1, server_info(), "b-1".into(), 0))
+        Some(protocol::welcome(1, server_info(), "b-1".into(), 0, server_id(), 0))
     })
+}
+
+fn server_id() -> crate::server::ServerId {
+    crate::server::ServerId::new("s-1")
 }
 
 fn server_info() -> ServerInfo {
@@ -81,7 +85,7 @@ fn server_welcoming(
                     let connection = &connections[&id];
                     welcomed += 1;
                     let welcome = welcome(welcomed).unwrap_or_else(|| {
-                        protocol::welcome(1, server_info(), "b-1".into(), 0)
+                        protocol::welcome(1, server_info(), "b-1".into(), 0, server_id(), 0)
                     });
                     connection.send(welcome).unwrap();
                     connection
@@ -296,6 +300,8 @@ fn whether_the_server_names_fork_owners_is_learned_on_every_attach() {
             capabilities: vec![protocol::Capability::BrowserDispatch],
             error: None,
             uptime_ms: Some(0),
+            server_id: None,
+            now_ms: None,
         })
     });
     let mut remote = remote(&store);

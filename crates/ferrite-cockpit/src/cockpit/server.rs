@@ -179,7 +179,7 @@ impl CockpitView {
                     cx,
                 );
             }
-            Some(ServerState::Attached { server, since }) => {
+            Some(ServerState::Attached { server, since, .. }) => {
                 self.server_bands.attached = true;
                 if self.server_bands.detached.take().is_some() {
                     window.remove_notification::<Detached>(cx);
@@ -305,7 +305,7 @@ impl CockpitView {
         match self.cockpit.read(cx).server() {
             None => "This window runs without a separate server".to_string(),
             Some(ServerState::Detached { reason, .. }) => format!("not running \u{b7} {reason}"),
-            Some(ServerState::Attached { server, since }) => {
+            Some(ServerState::Attached { server, since, .. }) => {
                 let up = format!("{} · up {}", server.version, uptime(since.elapsed()));
                 match self.server_build(cx) {
                     Some(Build::Older) => {
@@ -321,7 +321,7 @@ impl CockpitView {
     /// Which build the attached Server runs, as far as this window can
     /// tell: `None` unattached.
     fn server_build(&self, cx: &gpui::App) -> Option<Build> {
-        let Some(ServerState::Attached { server, since }) = self.cockpit.read(cx).server() else {
+        let Some(ServerState::Attached { server, since, .. }) = self.cockpit.read(cx).server() else {
             return None;
         };
         let ours = self.cockpit.read(cx).machine().is_none()

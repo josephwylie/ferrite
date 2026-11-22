@@ -21,6 +21,7 @@ fn a_conversation_progresses_before_incoming_traffic_is_drained() {
             version: "0.9.0".into(),
             executable: "/bin/ferrite".into(),
         },
+        crate::server_id::open(&dir.join("threads")).unwrap(),
         renders,
         Arc::new(Mutex::new(SessionDefaults::default())),
         dir.clone(),

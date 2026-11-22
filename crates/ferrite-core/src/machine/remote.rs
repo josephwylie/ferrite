@@ -93,7 +93,7 @@ impl PairingFields {
     }
 }
 
-pub(crate) fn check_identity(id: &str) -> Result<(), String> {
+pub fn check_identity(id: &str) -> Result<(), String> {
     if id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()) {
         Ok(())
     } else {

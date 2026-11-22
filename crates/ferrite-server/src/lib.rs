@@ -28,7 +28,7 @@ use ferrite_core::protocol::{
 use ferrite_core::roster::DraftId;
 use ferrite_core::server::clis::{Clis, Host};
 use ferrite_core::server::github::{GitHub, Gh};
-use ferrite_core::server::{settings_dir, store_dir};
+use ferrite_core::server::{settings_dir, store_dir, ServerId};
 use ferrite_core::settings::{ServerDefaults, Settings};
 use ferrite_core::spawner::{ProcessRss, SessionDefaults, Spawn, RSS_LIMIT};
 use ferrite_core::store::{Provider, Store};
@@ -44,6 +44,7 @@ mod factory;
 mod github;
 mod render;
 pub mod remote;
+mod server_id;
 mod signals;
 
 /// How long the pump waits for a client while any Thread is open: a frame.
@@ -132,6 +133,13 @@ pub fn run(options: Options) -> i32 {
         ferrite_core::log!("server: not starting: another Ferrite server holds this store");
         return 0;
     }
+    let id = match server_id::open(&options.store) {
+        Ok(id) => id,
+        Err(error) => {
+            ferrite_core::log!("server: cannot keep the Server's id: {error}");
+            return 1;
+        }
+    };
     let reopen = launch_threads(&store);
     let listener = match link::listen(&link::address(&options.store)) {
         Ok(listener) => listener,
@@ -189,7 +197,7 @@ pub fn run(options: Options) -> i32 {
         version: options.version,
         executable: std::env::current_exe().unwrap_or_default(),
     };
-    let mut server = Server::new(engine, info, renders, defaults, options.settings_dir);
+    let mut server = Server::new(engine, info, id, renders, defaults, options.settings_dir);
     server.browser_requests = browser_requests;
     server.apply_settings(&settings);
     revive_launch(&mut server.engine, reopen);
@@ -242,6 +250,7 @@ pub fn fixture_browser_machine(
     let (heard, hear) = mpsc::channel();
     link::accept_all(link::listen(&address)?, heard, link::LAGGED_BYTES)?;
     std::thread::spawn(move || {
+        let id = server_id::open(&store).expect("the Store keeps an id");
         let engine = Engine::try_new(Store::open(&store).expect("the Store opens"), spawner)
             .expect("the registry opens");
         let info = ServerInfo {
@@ -250,7 +259,7 @@ pub fn fixture_browser_machine(
         };
         let (_, renders) = render::remote();
         let settings_dir = store.parent().unwrap_or(&store).to_path_buf();
-        let mut server = Server::new(engine, info, renders, Arc::default(), settings_dir);
+        let mut server = Server::new(engine, info, id, renders, Arc::default(), settings_dir);
         server.browser_requests = browser_requests;
         server.serve(hear)
     });
@@ -338,6 +347,7 @@ type ApiRead = (
 struct Server {
     engine: Engine,
     info: ServerInfo,
+    id: ServerId,
     clients: BTreeMap<ClientId, Client>,
     /// Each watched open Thread's recent inputs, for a client that
     /// reconnects. A Thread no client has watched has none: nobody holds a
@@ -412,7 +422,8 @@ struct Server {
     /// Each Project root's skills per Provider, as the Server last listed
     /// them and when (`None`: it could not), for a Workflow's check (G7).
     skills_seen: Vec<factory::SkillsSeen>,
-    /// The Factory's wall clock, in milliseconds: a test passes its own.
+    /// The Server's wall clock, in milliseconds (the Factory's, and the
+    /// welcome's `now_ms`): a test passes its own.
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
@@ -420,6 +431,7 @@ impl Server {
     fn new(
         engine: Engine,
         info: ServerInfo,
+        id: ServerId,
         renders: render::Renders,
         defaults: Arc<Mutex<SessionDefaults>>,
         settings_dir: PathBuf,
@@ -430,6 +442,7 @@ impl Server {
         Self {
             engine,
             info,
+            id,
             clients: BTreeMap::new(),
             rings: HashMap::new(),
             decisions: BTreeSet::new(),
@@ -580,6 +593,8 @@ impl Server {
                     self.info.clone(),
                     self.engine.boot_id().into(),
                     uptime,
+                    self.id.clone(),
+                    (self.clock)(),
                 );
                 let accepted = !matches!(welcome, ServerMessage::Welcome { error: Some(_), .. });
                 let _ = client.connection.send(welcome);
