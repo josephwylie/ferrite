@@ -21,7 +21,7 @@ use ferrite_core::roster::PaneIdentity;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::transcript::Body;
 use ferrite_core::workspace::WorkspaceChoice;
-use ferrite_core::{DecisionAnswer, SessionEvent, ThreadId, TurnOutcome};
+use ferrite_core::{DecisionAnswer, SessionEvent, ThreadKey, TurnOutcome};
 
 struct Scratch(PathBuf);
 
@@ -106,7 +106,7 @@ impl Spawner for Control {
 struct Harness {
     cockpit: Cockpit,
     control: Control,
-    threads: Vec<ThreadId>,
+    threads: Vec<ThreadKey>,
     _scratch: Scratch,
 }
 
@@ -198,14 +198,14 @@ fn a_finished_thread_the_operator_is_not_on_is_unread_until_they_land_on_it() {
     h.cockpit.pump();
     assert_eq!(h.unread(), 1);
     let notice = h.cockpit.notifications().notices().next().unwrap().clone();
-    assert_eq!(notice.thread, second);
+    assert_eq!(notice.thread, second.thread());
     assert_eq!(notice.outcome, TurnOutcome::Completed);
-    assert!(h.cockpit.notifications().attention(second));
-    assert!(!h.cockpit.notifications().attention(first));
+    assert!(h.cockpit.notifications().attention(second.thread()));
+    assert!(!h.cockpit.notifications().attention(first.thread()));
 
     assert!(h.cockpit.focus_thread(second));
     assert_eq!(h.unread(), 0, "landing on the Pane reads it");
-    assert!(!h.cockpit.notifications().attention(second));
+    assert!(!h.cockpit.notifications().attention(second.thread()));
 }
 
 #[test]
@@ -217,7 +217,7 @@ fn a_finish_on_the_focused_thread_is_born_read() {
     h.cockpit.pump();
     assert_eq!(h.count(), 1);
     assert_eq!(h.unread(), 0);
-    assert!(!h.cockpit.notifications().attention(thread));
+    assert!(!h.cockpit.notifications().attention(thread.thread()));
 }
 
 /// ADR 0017: the focused Pane is only seen while the window has focus. A
@@ -232,7 +232,7 @@ fn a_finish_on_the_focused_thread_waits_while_the_window_is_away() {
     h.control.emit(0, ended());
     h.cockpit.pump();
     assert_eq!(h.unread(), 1, "nobody was looking");
-    assert!(h.cockpit.notifications().attention(thread));
+    assert!(h.cockpit.notifications().attention(thread.thread()));
     h.cockpit.pump();
     assert_eq!(h.unread(), 1, "pumping never reads it");
 
@@ -640,7 +640,7 @@ impl Spawner for Replay {
     }
 }
 
-fn main_text(cockpit: &Cockpit, thread: ThreadId) -> String {
+fn main_text(cockpit: &Cockpit, thread: ThreadKey) -> String {
     cockpit
         .thread(thread)
         .map(|open| {
@@ -720,7 +720,7 @@ fn replay(label: &str, spawner: Replay) -> Vec<TurnOutcome> {
         .notifications()
         .notices()
         .map(|notice| {
-            assert_eq!(notice.thread, watched);
+            assert_eq!(notice.thread, watched.thread());
             notice.outcome.clone()
         })
         .collect();
@@ -798,7 +798,7 @@ fn a_pending_question_requests_attention_and_cancellation_clears_it() {
     h.control.activity(1,ActivityEvent::Decision{subject:Some(Subject::Main),decision:ferrite_core::Decision{kind:ferrite_core::DecisionKind::Questions(vec![]),policy:Default::default(),delivery:Default::default(),id:"question".into(),tool_use_id:"ask".into(),tool_name:"AskUserQuestion".into(),description:"Choose a target".into(),input:serde_json::json!({"questions":[{"question":"Where?","header":"Target","options":[],"multiSelect":false}]}),suggestions:vec![]}});
     h.cockpit.pump();
     assert!(
-        h.cockpit.notifications().attention(second),
+        h.cockpit.notifications().attention(second.thread()),
         "pending question needs attention before the turn ends"
     );
     assert_eq!(h.unread(), 1);
@@ -815,7 +815,7 @@ fn a_pending_question_requests_attention_and_cancellation_clears_it() {
         },
     );
     h.cockpit.pump();
-    assert!(!h.cockpit.notifications().attention(second));
+    assert!(!h.cockpit.notifications().attention(second.thread()));
     assert_eq!(h.unread(), 0);
 }
 
@@ -848,7 +848,7 @@ fn contract_only_the_visible_subjects_requests_are_acknowledged() {
         );
     }
     h.cockpit.pump();
-    let notices: Vec<_> = h.cockpit.notifications().decisions().collect();
+    let notices: Vec<_> = h.cockpit.notifications().reading().decisions().collect();
     assert!(
         notices
             .iter()
@@ -915,7 +915,7 @@ fn an_unseen_end_keeps_the_shown_subject() {
         );
     }
     h.cockpit.pump();
-    let notices: Vec<_> = h.cockpit.notifications().decisions().collect();
+    let notices: Vec<_> = h.cockpit.notifications().reading().decisions().collect();
     assert!(
         notices
             .iter()

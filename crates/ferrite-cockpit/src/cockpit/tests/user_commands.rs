@@ -63,7 +63,7 @@ fn a_user_command_runs_for_the_focused_thread_into_the_reader(cx: &mut TestAppCo
     let pwd = std::fs::canonicalize(&cwd).unwrap();
     assert_eq!(
         &*document.text().unwrap().source,
-        format!("{}\n{thread}", pwd.display())
+        format!("{}\n{}", pwd.display(), thread.thread())
     );
 }
 
