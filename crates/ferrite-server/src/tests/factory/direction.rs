@@ -389,7 +389,7 @@ fn rework_and_a_redirect_reach_their_steps_and_survive_a_restart() {
     told(&mut caller, checker, "Only the docs changed");
     let parked = caller.answer("p", "thread.get", serde_json::json!({ "thread": builder }));
     assert_eq!(
-        parked["error"]["code"], "unknown_thread",
+        parked["error"]["code"], "thread_parked",
         "superseded: {parked}"
     );
 

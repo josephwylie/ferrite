@@ -3545,7 +3545,7 @@ fn a_thread_not_up_in_time_is_not_ready() {
 }
 
 /// A Thread is interrupted and closed by id, as Herdr's `send-keys esc`
-/// and pane close; a closed one is not found.
+/// and pane close; a closed one is found parked.
 #[test]
 fn a_thread_is_interrupted_and_closed_by_id() {
     let harness = start("api-close");
@@ -3569,14 +3569,15 @@ fn a_thread_is_interrupted_and_closed_by_id() {
         serde_json::json!(thread),
         "{closed}"
     );
+    // Closed already: closing it again changes nothing, as stopping it.
     let again = caller.answer("4", "thread.close", serde_json::json!({ "thread": thread }));
-    assert_eq!(again["error"]["code"], "unknown_thread", "{again}");
+    assert_eq!(again["result"]["thread"], serde_json::json!(thread), "{again}");
     let gone = caller.answer(
         "5",
         "agent.interrupt",
         serde_json::json!({ "thread": thread }),
     );
-    assert_eq!(gone["error"]["code"], "unknown_thread", "{gone}");
+    assert_eq!(gone["error"]["code"], "thread_parked", "{gone}");
 }
 
 /// Herdr's `pane quit` then `agent start` in that pane: a closed Thread
@@ -3890,7 +3891,7 @@ fn projects_are_opened_renamed_and_closed() {
     );
     assert_eq!(closed["result"]["project"]["thread_count"], 0, "{closed}");
     let parked = caller.answer("11", "thread.get", serde_json::json!({ "thread": thread }));
-    assert_eq!(parked["error"]["code"], "unknown_thread", "{parked}");
+    assert_eq!(parked["error"]["code"], "thread_parked", "{parked}");
     let missing = caller.answer("12", "project.get", serde_json::json!({ "project": "999" }));
     assert_eq!(missing["error"]["code"], "project_not_found", "{missing}");
 }
@@ -3974,7 +3975,7 @@ fn a_worktree_is_removed_only_when_clean_and_its_branch_stays() {
         .trim()
         .is_empty());
     let parked = caller.answer("6", "thread.get", serde_json::json!({ "thread": thread }));
-    assert_eq!(parked["error"]["code"], "unknown_thread", "{parked}");
+    assert_eq!(parked["error"]["code"], "thread_parked", "{parked}");
     let again = caller.answer("6", "worktree.remove", serde_json::json!({ "path": tree }));
     assert_eq!(again["error"]["code"], "worktree_not_found", "{again}");
     let main = caller.answer("6", "worktree.remove", serde_json::json!({ "path": repo }));

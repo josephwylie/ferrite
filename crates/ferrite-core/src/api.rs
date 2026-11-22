@@ -124,7 +124,8 @@ pub enum Code {
     /// The line is not a request, or its parameters are not valid.
     InvalidRequest,
     UnknownMethod,
-    /// No open Thread has that id (Herdr's `pane_not_found`).
+    /// No Thread has that id: the Store never held it, or it was deleted
+    /// (Herdr's `pane_not_found`). A parked one is `thread_parked`.
     UnknownThread,
     /// No Project has that id.
     ProjectNotFound,
@@ -265,6 +266,49 @@ pub struct ThreadInfo {
     /// The Thread on another machine that delegated it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delegated_from: Option<crate::DelegatedFrom>,
+    /// How its latest turn ended, once it has and nothing follows it
+    /// (`Engine::ended_turn`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn: Option<Outcome>,
+}
+
+/// How a turn ended, as the API says it (T3 Code's turn states).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    Completed,
+    Failed,
+    Interrupted,
+}
+
+impl From<&crate::TurnOutcome> for Outcome {
+    fn from(outcome: &crate::TurnOutcome) -> Self {
+        match outcome {
+            crate::TurnOutcome::Completed => Self::Completed,
+            crate::TurnOutcome::Error(_) => Self::Failed,
+            crate::TurnOutcome::Interrupted => Self::Interrupted,
+        }
+    }
+}
+
+/// `agent.result`'s answer: how `thread`'s latest turn ended and its
+/// final reply in full, or a failed turn's error in its place.
+pub fn turn_answer(
+    thread: ThreadId,
+    outcome: Option<&crate::TurnOutcome>,
+    reply: Option<String>,
+    parked: bool,
+) -> Value {
+    let text = match outcome {
+        Some(crate::TurnOutcome::Error(error)) => Some(error.clone()),
+        _ => reply,
+    };
+    json!({
+        "thread": thread,
+        "outcome": outcome.map(Outcome::from),
+        "text": text,
+        "parked": parked,
+    })
 }
 
 pub fn thread_info(engine: &Engine, thread: ThreadId) -> Option<ThreadInfo> {
@@ -296,6 +340,7 @@ pub fn thread_info(engine: &Engine, thread: ThreadId) -> Option<ThreadInfo> {
             .map(Into::into),
         owner: view.owner().map(owner),
         delegated_from: view.delegated_from().cloned(),
+        turn: engine.ended_turn(thread).as_ref().map(Outcome::from),
     })
 }
 
@@ -376,7 +421,7 @@ pub fn thread_result(engine: &Engine, thread: ThreadId) -> Result<Value, ApiErro
 }
 
 pub fn unknown_thread() -> ApiError {
-    ApiError::new(Code::UnknownThread, "no open Thread has that id")
+    ApiError::new(Code::UnknownThread, "no Thread has that id")
 }
 
 /// `thread` is parked, not gone: its history stays, and `thread.revive`
@@ -470,6 +515,8 @@ pub enum Until {
     /// Up and at work on the prompt it started with: working, blocked on
     /// a Decision, or done (`thread.start --ready --prompt`).
     Taken,
+    /// Its latest turn ended and nothing follows it (`Seen::ended`).
+    TurnEnded,
 }
 
 impl Until {
@@ -482,6 +529,7 @@ impl Until {
                 !seen.starting && matches!(seen.attention, Attention::Idle | Attention::Done)
             }
             Until::Taken => !seen.starting,
+            Until::TurnEnded => seen.ended,
         }
     }
 }
@@ -492,6 +540,9 @@ pub struct Seen {
     pub attention: Attention,
     /// Its Session is starting: a prompt sent now is held until it is up.
     pub starting: bool,
+    /// Its latest turn ended and nothing follows it (`Engine::ended_turn`):
+    /// never for a blocked turn or a Thread never prompted.
+    pub ended: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -918,6 +969,7 @@ fn settle(engine: &Engine, waiting: &mut Waiting, now: Instant) -> Option<Result
     let seen = Seen {
         attention,
         starting: view.starting(),
+        ended: engine.ended_turn(waiting.thread).is_some(),
     };
     Some(match waiting.wait.observe(seen, now)? {
         Settled::Reached => thread_result(engine, waiting.thread),

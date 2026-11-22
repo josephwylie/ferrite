@@ -1,0 +1,1 @@
+{"id":"1","method":"agent.wait","params":{"thread":12,"turn_ended":true,"timeout_ms":600000}}

@@ -1605,6 +1605,15 @@ impl Transcript {
         self.turn_outcome.as_ref()
     }
 
+    /// How the latest turn ended and the answer it ended on
+    /// (`final_reply`).
+    pub fn turn_result(&self) -> TurnResult {
+        TurnResult {
+            outcome: self.turn_outcome.clone(),
+            reply: final_reply(&self.blocks),
+        }
+    }
+
     /// At rest after a successful turn, independent of whether its provider
     /// reported a cost. A closed Session still needs attention.
     pub fn turn_completed(&self) -> bool {
@@ -3406,6 +3415,46 @@ pub fn plain_text(blocks: &[Block]) -> String {
         out.push_str(&piece);
     }
     out
+}
+
+/// How a Thread's latest turn ended and the answer it ended on: what
+/// the API's `agent.result` reads.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TurnResult {
+    pub outcome: Option<TurnOutcome>,
+    pub reply: Option<String>,
+}
+
+/// The answer the latest turn ended on, whole: the Markdown sections after
+/// its last tool call, prompt or page, joined as the Pane joins a run. What
+/// trails an answer (the turn's footer, its plan, a notice, thinking) is
+/// passed over; `None` when the turn ended on no answer.
+pub fn final_reply(blocks: &[Block]) -> Option<String> {
+    let trails = |block: &Block| {
+        block.markdown.is_none()
+            && matches!(
+                block.body,
+                Body::TurnEnd(_)
+                    | Body::Meta(_)
+                    | Body::Plan(_)
+                    | Body::Notice(_)
+                    | Body::Compaction(_)
+                    | Body::Thinking(_)
+            )
+    };
+    let end = blocks.iter().rposition(|block| !trails(block))? + 1;
+    let start = blocks[..end]
+        .iter()
+        .rposition(|block| block.markdown.is_none())
+        .map_or(0, |at| at + 1);
+    let mut reply = String::new();
+    for markdown in blocks[start..end].iter().filter_map(|block| block.markdown.as_ref()) {
+        if !reply.is_empty() && !reply.ends_with('\n') {
+            reply.push_str("\n\n");
+        }
+        reply.push_str(markdown);
+    }
+    (!reply.is_empty()).then_some(reply)
 }
 
 #[cfg(test)]

@@ -116,6 +116,18 @@ Server asks of the other machine's:
 |---|---|
 | `thread.start` | gains `request` (the caller's key, kept in the Thread's header: a start with the same key answers with the Thread the first opened and starts and sends nothing, across a restart too; `thread_parked`, naming it, once it is parked), `prompt` (its first prompt, sent once inside the start, as T3's launch carries `message`), `mode` (T3's runtime modes, `approval_required` < `auto_accept_edits` < `auto` < `full_access`: kept in the header for life: every Session, revived ones too, starts at the narrower of `mode` and this machine's mode, set by the spawner, so a narrower start is never broadened. Under a cap the Server alone sets how far the agent goes: a start or revive whose `args` carry a flag of the provider's table in `runtime_mode` (Claude's `--dangerously-skip-permissions`, `--permission-mode`, `--allowedTools`, `--settings`, `--mcp-config`, …; Codex's `--yolo`, `-s`, `-a`, `-p`, `-c sandbox_mode=…`, …), or any `env` or `launcher`, is refused `widens_cap`, naming it; `decision.answer` on a capped Thread refuses `allow_always` and `choose`, which remember a mode or rule, so only the window widens one. With `prompt`, `ready` answers once the agent is at work on it, blocked on a Decision included) and `delegated_from` (`{server, label, thread, title}`: the starting Thread, kept in the header for life and in every answer about the Thread; a fork drops it, as it drops `owner`; refused `linked_machines_off` while this machine's Settings › Labs › Linked machines is off) |
 | `provider.list` | T3's `orchestrator_capabilities`: each provider with its models (`model`, `label`, `efforts`, `default_effort`), the `modes` a start may cap at, and the `mode` this machine's settings start a Thread at |
+| `agent.wait` | gains `turn_ended`: answers once the Thread's latest turn has ended and nothing follows it (no Decision, held or queued prompt, and its agent not at work; background work is not the turn's), as T3 waits on a run. A blocked turn and a Thread never prompted wait on; refused with `until` |
+| `agent.result` | how the latest turn ended (`outcome`: `completed`, `failed`, `interrupted`, or null while none has) and its final reply in full (`text`: the Markdown after its last tool call or prompt, joined as the Pane joins it; a failed turn's error in its place), with `parked`. A parked Thread's is replayed from its log off the pump |
+
+A Thread's answer gains `turn`, the same `outcome` once the turn has
+ended. A parked Thread is not gone, and `unknown_thread` is kept for a
+Thread the Store does not hold (never made, or deleted). What is already
+so of a parked Thread succeeds, as `thread.stop` does: `thread.close` and
+`thread.stop` answer `{thread}`. What answers with or acts on its live
+agent (`thread.get`, `thread.focus`, `thread.rename`, `agent.prompt`,
+`agent.wait`, `agent.read`, `agent.interrupt`) is refused
+`thread_parked`, naming it, and does nothing. `agent.result` reads it
+from its log, and `thread.revive` starts it again.
 
 `notification.show` gains `sound` (`request`, `done`, `none`) and
 `important`. A Thread's answer gains `focused` and `draft`, which the

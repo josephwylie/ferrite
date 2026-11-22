@@ -2,7 +2,8 @@
 //! Delegate), from this machine's side: one start per key with
 //! its task sent inside it, a mode capped at the narrower of the caller's
 //! and this machine's that nothing the caller sends can widen, the Labs
-//! gate, and what `provider.list` offers.
+//! gate, what `provider.list` offers, and how a follower waits for its
+//! turn to end and reads how it ended.
 
 use super::*;
 use ferrite_core::settings::{Labs, Settings};
@@ -612,4 +613,231 @@ fn a_ready_start_whose_prompt_meets_a_decision_answers_ready() {
     provider.send(super::decision()).unwrap();
     let answer = caller.next();
     assert!(answer.get("result").is_some(), "{answer}");
+}
+
+/// Ask for a wait until `thread`'s turn ends, answered later.
+fn wait_for_the_turn(caller: &mut Caller, id: &str, thread: ThreadId, timeout_ms: u64) {
+    caller.ask(
+        id,
+        "agent.wait",
+        serde_json::json!({ "thread": thread, "turn_ended": true, "timeout_ms": timeout_ms }),
+    );
+}
+
+/// A delegated Thread started with its task, and its provider.
+fn delegate(harness: &Harness, caller: &mut Caller, key: &str) -> (ThreadId, Sender<SessionEvent>) {
+    let before = harness.told.lock().unwrap().prompts.len();
+    let thread = started(&caller.answer("start", "thread.start", delegated(harness, key)));
+    let provider = harness.sessions.recv_timeout(PATIENCE).unwrap();
+    sent(harness, before + 1);
+    (thread, provider)
+}
+
+fn turn_ended_with(provider: &Sender<SessionEvent>, outcome: ferrite_core::TurnOutcome) {
+    provider
+        .send(SessionEvent::TurnEnded {
+            outcome,
+            cost_usd: None,
+        })
+        .unwrap();
+}
+
+/// A follower's wait holds while the task's turn runs and answers once it
+/// ends, saying how; the result is the turn's last answer in full, past
+/// what `agent.read`'s tail holds, and not the narration before its tools.
+#[test]
+fn a_wait_for_the_turn_answers_as_it_ends_and_the_result_is_its_whole_final_reply() {
+    let harness = start("delegated-follow");
+    takes_delegates(&harness);
+    let mut caller = call(&harness);
+    let (thread, provider) = delegate(&harness, &mut caller, "k-1");
+    wait_for_the_turn(&mut caller, "wait", thread, 10_000);
+    caller.quiet();
+
+    provider.send(text("Looking at the test first.")).unwrap();
+    provider
+        .send(SessionEvent::ToolStarted {
+            id: "toolu_1".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "cargo test" }),
+        })
+        .unwrap();
+    let reply: Vec<String> = (1..=120).map(|line| format!("Line {line}.")).collect();
+    let reply = reply.join("\n\n");
+    provider.send(text(&reply)).unwrap();
+    caller.quiet();
+    turn_ends(&provider);
+    let ended = caller.next();
+    assert_eq!(ended["id"], "wait", "{ended}");
+    assert_eq!(ended["result"]["thread"]["turn"], "completed", "{ended}");
+
+    let result = caller.answer("r", "agent.result", serde_json::json!({ "thread": thread }));
+    assert_eq!(
+        result["result"],
+        serde_json::json!({
+            "thread": thread,
+            "outcome": "completed",
+            "text": reply,
+            "parked": false,
+        }),
+        "{result}"
+    );
+}
+
+/// Each way a turn ends is its outcome; a failed turn's result is its
+/// error, not what it said before it failed.
+#[test]
+fn each_way_a_turn_ends_is_its_outcome_and_a_failed_ones_result_is_its_error() {
+    let harness = start("delegated-outcomes");
+    takes_delegates(&harness);
+    let mut caller = call(&harness);
+    for (key, outcome, word) in [
+        ("k-done", ferrite_core::TurnOutcome::Completed, "completed"),
+        (
+            "k-failed",
+            ferrite_core::TurnOutcome::Error("rate limited".into()),
+            "failed",
+        ),
+        (
+            "k-stopped",
+            ferrite_core::TurnOutcome::Interrupted,
+            "interrupted",
+        ),
+    ] {
+        let (thread, provider) = delegate(&harness, &mut caller, key);
+        provider.send(text("Half way.")).unwrap();
+        turn_ended_with(&provider, outcome);
+        wait_for_the_turn(&mut caller, key, thread, 10_000);
+        let ended = caller.next();
+        assert_eq!(ended["result"]["thread"]["turn"], word, "{ended}");
+        let result = caller.answer("r", "agent.result", serde_json::json!({ "thread": thread }));
+        assert_eq!(result["result"]["outcome"], word, "{result}");
+        let text = match word {
+            "failed" => "rate limited",
+            _ => "Half way.",
+        };
+        assert_eq!(result["result"]["text"], text, "{result}");
+    }
+}
+
+/// A Thread never prompted has no turn to end, and a turn a Decision
+/// blocks has not ended: neither answers the wait, which runs out.
+#[test]
+fn a_thread_never_prompted_and_a_blocked_turn_do_not_end_the_wait() {
+    let harness = start("delegated-blocked");
+    let mut caller = call(&harness);
+    let thread = started(&caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir }),
+    ));
+    let provider = harness.sessions.recv_timeout(PATIENCE).unwrap();
+    let unprompted = caller.answer(
+        "2",
+        "agent.wait",
+        serde_json::json!({ "thread": thread, "turn_ended": true, "timeout_ms": 300 }),
+    );
+    assert_eq!(unprompted["error"]["code"], "timeout", "{unprompted}");
+
+    caller.answer(
+        "3",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "Write the file." }),
+    );
+    provider.send(decision()).unwrap();
+    let blocked = caller.answer(
+        "4",
+        "agent.wait",
+        serde_json::json!({ "thread": thread, "until": "blocked" }),
+    );
+    assert_eq!(blocked["result"]["thread"].get("turn"), None, "{blocked}");
+    let waiting = caller.answer(
+        "5",
+        "agent.wait",
+        serde_json::json!({ "thread": thread, "turn_ended": true, "timeout_ms": 300 }),
+    );
+    assert_eq!(waiting["error"]["code"], "timeout", "{waiting}");
+}
+
+/// A parked Thread is not gone: its result still reads from its log;
+/// closing or stopping it changes nothing and answers it, as `thread.stop`
+/// does; what answers with or acts on its live agent is refused
+/// `thread_parked`, naming it, and does nothing; a Thread the Store never
+/// held is `unknown_thread` to every one.
+#[test]
+fn a_parked_threads_result_still_reads_and_only_a_gone_one_is_unknown() {
+    let harness = start("delegated-parked-result");
+    takes_delegates(&harness);
+    let mut caller = call(&harness);
+    let (thread, provider) = delegate(&harness, &mut caller, "k-1");
+    provider.send(text("All fixed.")).unwrap();
+    turn_ends(&provider);
+    wait_for_the_turn(&mut caller, "wait", thread, 10_000);
+    assert_eq!(caller.next()["result"]["thread"]["turn"], "completed");
+    caller.answer(
+        "close",
+        "thread.close",
+        serde_json::json!({ "thread": thread }),
+    );
+
+    let result = caller.answer("r", "agent.result", serde_json::json!({ "thread": thread }));
+    assert_eq!(
+        result["result"],
+        serde_json::json!({
+            "thread": thread,
+            "outcome": "completed",
+            "text": "All fixed.",
+            "parked": true,
+        }),
+        "{result}"
+    );
+    let calls = [
+        ("thread.get", serde_json::json!({})),
+        ("thread.focus", serde_json::json!({})),
+        ("thread.rename", serde_json::json!({ "title": "Renamed" })),
+        ("agent.prompt", serde_json::json!({ "text": "carry on" })),
+        ("agent.wait", serde_json::json!({})),
+        ("agent.wait", serde_json::json!({ "turn_ended": true })),
+        ("agent.read", serde_json::json!({})),
+        ("agent.interrupt", serde_json::json!({})),
+    ];
+    let on = |thread: serde_json::Value, params: &serde_json::Value| {
+        let mut params = params.clone();
+        params["thread"] = thread;
+        params
+    };
+    for (method, params) in &calls {
+        let parked = caller.answer(method, method, on(serde_json::json!(thread), params));
+        assert_eq!(parked["error"]["code"], "thread_parked", "{parked}");
+        assert_eq!(
+            parked["error"]["thread"],
+            serde_json::json!(thread),
+            "{parked}"
+        );
+    }
+    let title = caller.answer("title", "thread.list", serde_json::json!({}));
+    assert!(!title.to_string().contains("Renamed"), "{title}");
+    assert_eq!(
+        harness.told.lock().unwrap().prompts.len(),
+        1,
+        "a prompt was sent"
+    );
+    for method in ["thread.close", "thread.stop"] {
+        let done = caller.answer(method, method, serde_json::json!({ "thread": thread }));
+        assert_eq!(
+            done["result"],
+            serde_json::json!({ "thread": thread }),
+            "{done}"
+        );
+    }
+
+    let more = [
+        ("agent.result", serde_json::json!({})),
+        ("thread.close", serde_json::json!({})),
+        ("thread.stop", serde_json::json!({})),
+    ];
+    for (method, params) in calls.iter().chain(&more) {
+        let gone = caller.answer(method, method, on(serde_json::json!(999), params));
+        assert_eq!(gone["error"]["code"], "unknown_thread", "{method}: {gone}");
+    }
 }

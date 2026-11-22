@@ -248,7 +248,7 @@ fn a_restart_mid_step_and_mid_approval_revives_once_and_waits() {
 
     let parked = caller.answer("g", "thread.get", serde_json::json!({ "thread": builder }));
     assert_eq!(
-        parked["error"]["code"], "unknown_thread",
+        parked["error"]["code"], "thread_parked",
         "parked: {parked}"
     );
     let log = harness.dir.join("threads").join(builder.get().to_string());

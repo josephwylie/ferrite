@@ -225,7 +225,8 @@ prompt was taken, rather than when the turn ends:
 
 `"$F" machine list` names the saved machines `--machine` can ask,
 `"$F" provider list` the providers, models and efforts a Thread here can
-start on, and
+start on, `"$F" agent result 14` how its latest turn ended and its last
+reply in full, and
 `"$F" notification show "Ready" --sound done` rings a chime with the
 toast (`--important` keeps it up).
 
