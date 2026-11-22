@@ -1062,6 +1062,11 @@ pub struct Activity {
     connected: bool,
     limited: bool,
     main_operator_turn: bool,
+    /// What the Server's PR watching holds of the Thread (ADR 0046): not
+    /// the provider's word, so no input carries it. Its owner sets it
+    /// (`set_watching`): the Engine from the Thread's watches, a window
+    /// from the digest.
+    watching: crate::pr_watch::Watching,
 }
 
 impl Default for Activity {
@@ -1087,7 +1092,16 @@ impl Activity {
             connected: false,
             limited: false,
             main_operator_turn: false,
+            watching: Default::default(),
         }
+    }
+
+    /// Say what the Server's watching holds of the Thread. Answers whether
+    /// it moved.
+    pub fn set_watching(&mut self, watching: crate::pr_watch::Watching) -> bool {
+        let moved = self.watching != watching;
+        self.watching = watching;
+        moved
     }
 
     pub fn view(&self) -> ActivityView<'_> {
@@ -2281,6 +2295,10 @@ impl<'a> ActivityView<'a> {
     pub fn limited(self) -> bool {
         self.activity.limited
     }
+    /// What the Server's PR watching holds of the Thread (ADR 0046).
+    pub fn watching(self) -> &'a crate::pr_watch::Watching {
+        &self.activity.watching
+    }
     pub fn working_descendants(self) -> usize {
         self.activity
             .order
@@ -2288,10 +2306,17 @@ impl<'a> ActivityView<'a> {
             .filter(|key| self.activity.agents[*key].working())
             .count()
     }
-    /// Whether work runs behind Main: a Subagent, or a background task (a
-    /// shell, a monitor) of Main's transcript. The Notice waits for it,
-    /// and the nav counts it as working.
+    /// Whether work goes on behind Main: what runs behind it
+    /// ([`Self::running_behind`]), or a PR watch that holds the Thread (T3's
+    /// awaited watch task, ADR 0046). The Notice waits for it, and the nav
+    /// counts it as working.
     pub fn background_work(self) -> bool {
+        self.running_behind() || self.activity.watching.holds()
+    }
+    /// Whether something runs behind Main: a Subagent, or a background task
+    /// (a shell, a monitor) of Main's transcript. Unlike a watch, this cuts
+    /// off if its Session goes.
+    pub fn running_behind(self) -> bool {
         self.working_descendants() > 0
             || self.main().transcript().progress().working_background() > 0
     }

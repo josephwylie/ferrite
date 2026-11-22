@@ -17,6 +17,7 @@ pub mod cadence;
 pub mod cited_sources;
 pub mod clock;
 pub mod cockpit;
+pub mod delegate;
 pub mod diagnostics;
 pub mod digest;
 pub mod disk;

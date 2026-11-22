@@ -973,6 +973,14 @@ impl Remote {
         })
     }
 
+    /// A `watch_pr`: whether the PR is watched once the Server has it.
+    pub(crate) fn watch_pr(&mut self, op: Op) -> io::Result<Receiver<io::Result<bool>>> {
+        self.ask(op, |done| match done {
+            Done::PrWatch { watching } => Some(watching),
+            _ => None,
+        })
+    }
+
     /// What a GitHub start's picker lists (#225).
     pub(crate) fn github_names(
         &mut self,

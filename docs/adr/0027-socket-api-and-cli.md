@@ -136,6 +136,17 @@ Added for PR watching (ADR 0046):
 | `pr.watch` | watch a PR (`url`, or `repository` and `number`) for `thread`, the calling Thread when absent: its agent is woken with the PR's news; `until` is `checks` or `merged`. A PR already merged or closed starts no watch: `{watching: false, state, next}` |
 | `pr.unwatch` | stop watching it; `was_watching` says whether it was |
 
+Added for Delegates (ADR 0047), what a Thread asks of its own Server to
+start and follow one on another machine; `thread` is the calling Thread
+when absent:
+
+| Operation | Does |
+|---|---|
+| `delegate.start` | start a Thread on the saved machine `machine` with `task` as its first prompt, in `checkout` there (and `project`, `title`, `provider`, the caller's when absent), sent as one `thread.start` with the key `delegate:<this ServerId>:<thread>:<request>` and the caller's mode as its `mode`. Answers once it is up there, `{delegate, next}`; the same `request` answers with that Delegate and starts nothing. Refused `linked_machines_off` while this machine's Labs gate is off, and with the machine's own code when it refuses |
+| `delegate.get` | one Delegate: `{delegate, parent, machine, server, thread, title, status, result, problem, stop_owed}`, `status` being T3's (`starting`, `running`, `waiting`, `completed`, `failed`, `cancelled`, `interrupted`). Its parent's own agent reading an ended one takes its result, so no wake carries it; `unknown_delegate` for an id the Thread never gave |
+| `delegate.list` | a Thread's Delegates, or every open Thread's when the call names none and runs in none |
+| `delegate.cancel` | T3's `task_cancel`: an open one ends `cancelled` here at once (`cancel_requested`), with `reason`; an ended one keeps its result and answers its status. Either way it is stopped there, a stop that cannot get there yet retried until one does |
+
 `notification.show` gains `sound` (`request`, `done`, `none`) and
 `important`. A Thread's answer gains `focused` and `draft`, which the
 windows tell the Server (`focused`, `composing`, gen-1 commands only a

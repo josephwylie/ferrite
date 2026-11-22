@@ -274,10 +274,10 @@ pub(in crate::cockpit) fn label(call: &ToolBlock) -> SharedString {
 }
 
 fn glyph(work: &Work) -> &'static str {
-    if work.task.kind == WorkKind::Subagent {
-        icons::SUBAGENTS
-    } else {
-        icons::TERMINAL
+    match work.task.kind {
+        WorkKind::Subagent => icons::SUBAGENTS,
+        WorkKind::Command => icons::TERMINAL,
+        WorkKind::Monitor => icons::EYE,
     }
 }
 

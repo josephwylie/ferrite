@@ -264,6 +264,9 @@ struct Header {
     /// The PRs the Thread's agent watches (ADR 0046). Absent means none.
     #[serde(default, skip_serializing_if = "crate::pr_watch::WatchFact::is_empty")]
     pr_watch: crate::pr_watch::WatchFact,
+    /// The Threads it started on other machines (ADR 0047). Absent means none.
+    #[serde(default, skip_serializing_if = "crate::delegate::Delegates::is_empty")]
+    delegates: crate::delegate::Delegates,
 }
 
 impl Header {
@@ -282,6 +285,7 @@ impl Header {
             request: self.request.clone(),
             cap: self.cap,
             pr_watch: self.pr_watch.clone(),
+            delegates: self.delegates.clone(),
         }
     }
 
@@ -301,6 +305,7 @@ impl Header {
             request: facts.request,
             cap: facts.cap,
             pr_watch: facts.pr_watch,
+            delegates: facts.delegates,
         }
     }
 }
@@ -335,6 +340,8 @@ struct Facts {
     cap: Option<crate::runtime_mode::RuntimeMode>,
     #[serde(default, skip_serializing_if = "crate::pr_watch::WatchFact::is_empty")]
     pr_watch: crate::pr_watch::WatchFact,
+    #[serde(default, skip_serializing_if = "crate::delegate::Delegates::is_empty")]
+    delegates: crate::delegate::Delegates,
 }
 
 impl Facts {
@@ -353,6 +360,7 @@ impl Facts {
             request: self.request,
             cap: self.cap,
             pr_watch: self.pr_watch,
+            delegates: self.delegates,
             summary: None,
         }
     }
@@ -2830,6 +2838,7 @@ impl Store {
             request: origin.request,
             cap: origin.cap,
             pr_watch: Default::default(),
+            delegates: Default::default(),
         };
         let written = line(&header)?;
         file.write_all(written.as_bytes())?;
@@ -2885,8 +2894,9 @@ impl Store {
             })
             .map_or(0, |at| at + 1);
         // A fork is the operator's own, whoever's its source was, and
-        // started here: no other start's key finds it, and
-        // watches nothing: a watch's wakes are its source's agent's.
+        // started here: no other start's key finds it, and it watches
+        // nothing and follows no Delegate: a watch's wakes and a
+        // Delegate's are its source's agent's.
         let facts = Facts {
             snooze: None,
             title: None,
@@ -2895,6 +2905,7 @@ impl Store {
             request: None,
             cap: None,
             pr_watch: Default::default(),
+            delegates: Default::default(),
             ..snapshot.facts()
         };
         let binding = facts
@@ -3546,6 +3557,16 @@ impl Store {
         self.amend(id, writer, |facts| facts.pr_watch = pr_watch)
     }
 
+    /// Save a Thread's Delegates (ADR 0047), open or parked.
+    pub fn set_delegates(
+        &self,
+        id: ThreadId,
+        delegates: crate::delegate::Delegates,
+        writer: Option<&mut ThreadWriter>,
+    ) -> Result<(), LoadError> {
+        self.amend(id, writer, |facts| facts.delegates = delegates)
+    }
+
     pub fn set_title(
         &self,
         id: ThreadId,
@@ -4057,6 +4078,7 @@ pub struct ThreadMeta {
     /// The most its agent may do without asking.
     pub cap: Option<crate::runtime_mode::RuntimeMode>,
     pub pr_watch: crate::pr_watch::WatchFact,
+    pub delegates: crate::delegate::Delegates,
     /// The counts a parked row shows, read off the log's tail; `None` for
     /// a log from before schema 13 (see `Store::summary`).
     pub summary: Option<ThreadSummary>,
@@ -4163,6 +4185,7 @@ pub struct ThreadSnapshot {
     request: Option<String>,
     cap: Option<crate::runtime_mode::RuntimeMode>,
     pr_watch: crate::pr_watch::WatchFact,
+    delegates: crate::delegate::Delegates,
     records: Vec<Record>,
 }
 
@@ -4292,6 +4315,7 @@ impl ThreadSnapshot {
             request: facts.request,
             cap: facts.cap,
             pr_watch: facts.pr_watch,
+            delegates: facts.delegates,
             records,
         }
     }
@@ -4311,6 +4335,7 @@ impl ThreadSnapshot {
             request: self.request.clone(),
             cap: self.cap,
             pr_watch: self.pr_watch.clone(),
+            delegates: self.delegates.clone(),
         }
     }
 
@@ -4351,6 +4376,11 @@ impl ThreadSnapshot {
     /// The PRs its agent watches (ADR 0046).
     pub fn pr_watch(&self) -> &crate::pr_watch::WatchFact {
         &self.pr_watch
+    }
+
+    /// The Threads its agent started on other machines (ADR 0047).
+    pub fn delegates(&self) -> &crate::delegate::Delegates {
+        &self.delegates
     }
 
     /// Whose the Thread is when not the operator's (ADR 0037).
@@ -5341,6 +5371,7 @@ fn parse(id: ThreadId, bytes: &[u8]) -> Result<Parsed, LoadError> {
             request: facts.request,
             cap: facts.cap,
             pr_watch: facts.pr_watch,
+            delegates: facts.delegates,
             records,
         },
         offsets,

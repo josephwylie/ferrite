@@ -729,6 +729,15 @@ pub(crate) fn collect_block_text(
     match &block.body {
         Body::Visual(visual) => crate::visual::collect_text(block.id, visual, selection),
         Body::WrapUp(wrap) => super::wrap_up::collect_text(block.id, wrap, selection),
+        Body::Prompt(text) if block.wake.is_some() => {
+            let summary = block.wake.as_ref().map(|wake| wake.summary.clone()).unwrap_or_default();
+            let _ = selection.line(block.id, summary, Vec::new());
+            if expanded {
+                selection.behind(DisclosureId::Prompt(block.id), || {
+                    let _ = selection.markdown(block.id, text.trim().to_owned());
+                });
+            }
+        }
         Body::Prompt(line) => {
             let collect = || match prompt_text(line, skills).0 {
                 PromptText::Literal(words) => {

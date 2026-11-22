@@ -75,6 +75,11 @@ pub struct Digest {
     /// How Main's latest turn finished, in the bell's words.
     #[serde(default)]
     pub finish: Finish,
+    /// The PRs its agent watches and whether a server wake waits for it
+    /// (ADR 0046): the details card's eye reads it. A Server older than it
+    /// sends none.
+    #[serde(default, skip_serializing_if = "crate::pr_watch::Watching::is_empty")]
+    pub watching: crate::pr_watch::Watching,
 }
 
 /// Main's turn as the state word reads it: what Main does, how its last
@@ -185,6 +190,7 @@ impl Digest {
             subagents: activity.children().len(),
             changed_files: changed_files(activity),
             finish: Finish::of(transcript),
+            watching: activity.watching().clone(),
         }
     }
 
@@ -198,7 +204,7 @@ impl Digest {
     /// Whether `activity` moved past this digest in a way no window should
     /// wait a refold for: Main started or ended a turn or changed phase, a
     /// Decision came or went, a Subagent came or work behind Main started
-    /// or stopped, or the windows show another Subject.
+    /// or stopped, a PR watch moved, or the windows show another Subject.
     pub fn outdated_by(&self, activity: ActivityView<'_>, shown: Option<&Subject>) -> bool {
         let main = activity.main();
         let transcript = main.transcript();
@@ -208,6 +214,7 @@ impl Digest {
             || self.operator_turn != activity.main_operator_turn()
             || self.working_descendants != activity.working_descendants()
             || self.subagents != activity.children().len()
+            || self.watching != *activity.watching()
             || self.wall.working != caption(transcript)
             || self.shown.as_ref().is_some_and(|card| {
                 shown
@@ -346,7 +353,7 @@ pub fn prompt_title(transcript: &Transcript) -> Option<String> {
         .blocks()
         .iter()
         .find_map(|block| match &block.body {
-            Body::Prompt(text) => Some(crate::engine::title_from_prompt(text)),
+            Body::Prompt(text) if block.wake.is_none() => Some(crate::engine::title_from_prompt(text)),
             _ => None,
         })
 }

@@ -627,6 +627,11 @@ struct Thread {
     cap: Option<crate::runtime_mode::RuntimeMode>,
     /// The PRs its agent watches (ADR 0046), as its log holds them.
     pr_watch: crate::pr_watch::WatchFact,
+    /// The Threads it started on other machines (ADR 0047), as its log
+    /// holds them.
+    delegates: crate::delegate::Delegates,
+    /// A server wake waits to be sent to it (`Engine::send_wake`).
+    wake_waiting: bool,
     /// What waits for the Session to take it.
     awaiting: Awaiting,
     /// The Session was started for use (ADR 0032) rather than asked for:
@@ -765,6 +770,8 @@ impl Thread {
             delegated_from: None,
             cap: None,
             pr_watch: Default::default(),
+            delegates: Default::default(),
+            wake_waiting: false,
             awaiting: Awaiting::default(),
             woken: false,
             settled_at: None,
@@ -1060,8 +1067,15 @@ impl Thread {
         self.busy() || self.activity.view().main_operator_turn() || self.native_queue.pending()
     }
 
-    /// Whether work runs behind Main: its Subagents, or its transcript's
-    /// background tasks.
+    /// Tell its Activity what the Server's watching holds of it (ADR 0046):
+    /// a new Activity knows nothing of it. Answers whether that moved.
+    fn sync_watching(&mut self) -> bool {
+        let watching = crate::pr_watch::Watching::of(&self.pr_watch, self.wake_waiting);
+        self.activity.activity.set_watching(watching)
+    }
+
+    /// Whether work goes on behind Main: its Subagents, its transcript's
+    /// background tasks, or a PR watch that holds the Thread.
     fn background_work(&self) -> bool {
         self.activity.view().background_work()
     }
@@ -1069,7 +1083,8 @@ impl Thread {
     /// At rest: no turn, no starting or replacement Session, no change
     /// waiting on the provider, no working Subagent or background task, no
     /// Decision and nothing in the provider's queue. What a Session may be
-    /// replaced at without cutting anything off.
+    /// replaced at without cutting anything off: a PR watch is the
+    /// Server's, so it goes on whatever the Session does.
     fn settled(&self) -> bool {
         let view = self.activity.view();
         !self
@@ -1080,7 +1095,7 @@ impl Thread {
             && self.tuning.is_none()
             && !self.busy()
             && !view.main_operator_turn()
-            && !self.background_work()
+            && !view.running_behind()
             && view.decisions().is_empty()
             && !self.native_queue.pending()
     }
@@ -2298,6 +2313,8 @@ impl Engine {
         }
         // A parked Thread watches nothing: T3's settle ends every watch.
         self.end_pr_watches(thread)?;
+        // And it waits on no Delegate: T3's archive stops them there.
+        self.stop_delegates(thread)?;
         if let Some(pending) = self.bootstraps.remove(&thread) {
             self.rollback_bootstrap(thread)?;
             self.bootstrap_results.push(BootstrapResult {
@@ -2414,6 +2431,7 @@ impl Engine {
         let delegated_from = snapshot.delegated_from().cloned();
         let cap = snapshot.cap();
         let pr_watch = snapshot.pr_watch().clone();
+        let delegates = snapshot.delegates().clone();
         let resume = match &launch {
             Some(launch) => launch.resume.clone(),
             None => snapshot.resume_target().map(str::to_string),
@@ -2472,6 +2490,7 @@ impl Engine {
         state.delegated_from = delegated_from;
         state.cap = cap;
         state.pr_watch = pr_watch;
+        state.delegates = delegates;
         state.project = project;
         state.agent_args = agent_args;
         if let Some(error) = unreadable_args {
@@ -2920,8 +2939,10 @@ impl Engine {
     }
 
     /// How `thread`'s latest turn ended, once it has and nothing follows
-    /// it: no Decision, prompt or queued prompt waits and its agent is not
-    /// at work. Work in the background is not the turn's. `None` while a
+    /// it: no Decision, prompt or queued prompt waits, no Delegate it
+    /// started is open or still to wake it (T3's
+    /// `untilDelegatedWorkSettled`), and its agent is not at work. Work in
+    /// the background is not the turn's. `None` while a
     /// turn runs or is blocked, and for a Thread never prompted. A let-go
     /// Thread answers from the digest it was let go with.
     pub fn ended_turn(&self, thread: ThreadId) -> Option<crate::TurnOutcome> {
@@ -2930,6 +2951,7 @@ impl Engine {
             || view.working()
             || view.activity().main_operator_turn()
             || view.queue_pending()
+            || view.state.delegates.holding()
             || self.holds_prompt(thread);
         if busy {
             return None;
@@ -3145,7 +3167,47 @@ impl Engine {
             .set_pr_watch(thread, pr_watch.clone(), Some(&mut state.writer))
             .map_err(io::Error::other)?;
         state.pr_watch = pr_watch;
+        self.watching_moved(thread);
         Ok(())
+    }
+
+    /// A Thread's watches or its waiting wake moved: its digest is refolded
+    /// at once when what it says of them moved, a let-go Thread's held
+    /// again for it.
+    fn watching_moved(&mut self, thread: ThreadId) {
+        let Some(state) = self.threads.get(&thread) else {
+            return;
+        };
+        let told = self
+            .published
+            .get(&thread)
+            .and_then(|published| published.digest.as_ref())
+            .map(|digest| &digest.watching);
+        if !state.held
+            && told == Some(&crate::pr_watch::Watching::of(&state.pr_watch, state.wake_waiting))
+        {
+            return;
+        }
+        self.hold(thread);
+        if self
+            .threads
+            .get_mut(&thread)
+            .is_some_and(Thread::sync_watching)
+        {
+            self.published.entry(thread).or_default().digest_owed = true;
+        }
+    }
+
+    /// Stop watching `target` for `thread`, keeping what its watch told as
+    /// the PR's ended watch (T3's unwatch). Answers whether it was watched.
+    pub fn unwatch_pr(&mut self, thread: ThreadId, target: &crate::pr_watch::Target) -> io::Result<bool> {
+        let mut fact = self
+            .pr_watch(thread)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Thread is not open"))?
+            .clone();
+        let was = fact.end(&target.repository, target.number, None, None);
+        self.set_pr_watch(thread, fact)?;
+        Ok(was)
     }
 
     /// End every PR watch on `thread` with no wake, as stopping or parking
@@ -3160,6 +3222,68 @@ impl Engine {
         Ok(())
     }
 
+    /// Every open Thread that started a Delegate, with its Delegates as
+    /// its log holds them.
+    pub fn all_delegates(
+        &self,
+    ) -> impl Iterator<Item = (ThreadId, &crate::delegate::Delegates)> {
+        self.threads
+            .iter()
+            .map(|(id, state)| (*id, &state.delegates))
+            .filter(|(_, delegates)| !delegates.is_empty())
+    }
+
+    /// A Thread's Delegates, open or parked.
+    pub fn delegates(&self, thread: ThreadId) -> io::Result<crate::delegate::Delegates> {
+        match self.threads.get(&thread) {
+            Some(state) => Ok(state.delegates.clone()),
+            None => self
+                .store
+                .peek(thread)
+                .map(|meta| meta.delegates)
+                .map_err(io::Error::other),
+        }
+    }
+
+    /// Change a Thread's Delegates, open or parked, and save them before
+    /// anything acts on the change (persist, then act), so a restarted
+    /// Server follows and stops what the log says. `change` answers
+    /// whether it changed anything; so does this.
+    pub fn amend_delegates(
+        &mut self,
+        thread: ThreadId,
+        change: impl FnOnce(&mut crate::delegate::Delegates) -> bool,
+    ) -> io::Result<bool> {
+        let Some(state) = self.threads.get_mut(&thread) else {
+            let mut delegates = self.delegates(thread)?;
+            if !change(&mut delegates) {
+                return Ok(false);
+            }
+            self.store
+                .set_delegates(thread, delegates, None)
+                .map_err(io::Error::other)?;
+            return Ok(true);
+        };
+        let mut delegates = state.delegates.clone();
+        if !change(&mut delegates) {
+            return Ok(false);
+        }
+        self.store
+            .set_delegates(thread, delegates.clone(), Some(&mut state.writer))
+            .map_err(io::Error::other)?;
+        state.delegates = delegates;
+        // What it waits on decides its Attention.
+        state.state_changed = true;
+        Ok(true)
+    }
+
+    /// Stop every Delegate `thread` started, as stopping or parking it does
+    /// (T3's `stopDelegatedTasks`); the Server carries each stop there.
+    fn stop_delegates(&mut self, thread: ThreadId) -> io::Result<()> {
+        self.amend_delegates(thread, crate::delegate::Delegates::stop_with_parent)
+            .map(drop)
+    }
+
     /// Whether a Decision waits on the operator in `thread`.
     pub fn decision_pending(&self, thread: ThreadId) -> bool {
         self.threads
@@ -3172,6 +3296,24 @@ impl Engine {
     /// and its Session is up. One with no Session starts it, and the wake
     /// waits with its sender for the next try.
     pub fn send_wake(&mut self, thread: ThreadId, wake: &crate::wake::Wake) -> WakeTaken {
+        let taken = self.try_wake(thread, wake);
+        self.set_wake_waiting(thread, taken == WakeTaken::NotYet);
+        taken
+    }
+
+    /// Whether a server wake still waits for `thread`: its sender says
+    /// when it dropped one that went stale.
+    pub fn set_wake_waiting(&mut self, thread: ThreadId, waiting: bool) {
+        let Some(state) = self.threads.get_mut(&thread) else {
+            return;
+        };
+        if state.wake_waiting != waiting {
+            state.wake_waiting = waiting;
+            self.watching_moved(thread);
+        }
+    }
+
+    fn try_wake(&mut self, thread: ThreadId, wake: &crate::wake::Wake) -> WakeTaken {
         let Some(state) = self.threads.get(&thread) else {
             return WakeTaken::Gone;
         };
@@ -3458,6 +3600,9 @@ impl Engine {
         // says its Pane changed (below, after the walk).
         for (id, thread) in self.threads.walk_mut() {
             let mut update = PaneUpdate::new(*id);
+            if thread.held && thread.sync_watching() {
+                self.published.entry(*id).or_default().digest_owed = true;
+            }
             if let Some(session) = thread.session.as_ref().and_then(SessionLifecycle::session) {
                 thread.state_changed |= thread.announced.ask(session);
             }
@@ -3756,6 +3901,7 @@ impl Engine {
                         activity: thread.activity.view(),
                         settled,
                         resumed: thread.native_queue.pending(),
+                        delegated: thread.delegates.holding(),
                     },
                     crate::clock::instant(),
                 );
@@ -4745,6 +4891,7 @@ impl Engine {
             || view.activity().main_operator_turn()
             || view.queue_pending()
             || view.background_work()
+            || view.state.delegates.holding()
             || (view.starting() && self.holds_prompt(thread))
         {
             Attention::Working
@@ -5642,8 +5789,8 @@ impl<'a> ThreadView<'a> {
         self.state.busy()
     }
 
-    /// Whether work runs behind Main: its Subagents, or its transcript's
-    /// background tasks.
+    /// Whether work goes on behind Main: its Subagents, its transcript's
+    /// background tasks, or a PR watch that holds the Thread.
     pub fn background_work(&self) -> bool {
         self.state.background_work()
     }

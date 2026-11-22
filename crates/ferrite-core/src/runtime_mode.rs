@@ -58,6 +58,27 @@ impl RuntimeMode {
         }
     }
 
+    /// What a Thread on `provider` may do now: what its provider announced
+    /// (Claude's permission mode, Codex's approval policy and sandbox),
+    /// else what it starts at under `defaults`, and never more than its own
+    /// `cap`. What a Delegate it starts is capped at (G-A6).
+    pub fn of_thread(
+        provider: Provider,
+        announced: Option<&str>,
+        sandbox: Option<&str>,
+        defaults: &SessionDefaults,
+        cap: Option<Self>,
+    ) -> Self {
+        let mode = match (provider, announced) {
+            (_, None) => Self::of_defaults(provider, defaults),
+            (Provider::Claude, Some(mode)) => Self::of_claude(mode),
+            (Provider::Codex, Some(policy)) => {
+                Self::of_codex(policy, sandbox.or(defaults.codex_sandbox.as_deref()))
+            }
+        };
+        cap.map_or(mode, |cap| mode.min(cap))
+    }
+
     /// Claude's permission mode, by its word. A word this scale does not
     /// know counts as full access, so a cap still narrows it.
     fn of_claude(mode: &str) -> Self {
@@ -303,6 +324,28 @@ mod tests {
 
     fn words(words: &[&str]) -> Vec<String> {
         words.iter().map(|word| word.to_string()).collect()
+    }
+
+    #[test]
+    fn a_threads_mode_is_what_it_announced_else_its_defaults_and_never_past_its_cap() {
+        let defaults = SessionDefaults::default();
+        let claude = |announced, cap| {
+            RuntimeMode::of_thread(Provider::Claude, announced, None, &defaults, cap)
+        };
+        assert_eq!(claude(Some("acceptEdits"), None), RuntimeMode::AutoAcceptEdits);
+        assert_eq!(claude(None, None), RuntimeMode::ApprovalRequired);
+        assert_eq!(
+            claude(Some("bypassPermissions"), Some(RuntimeMode::Auto)),
+            RuntimeMode::Auto
+        );
+        let codex = RuntimeMode::of_thread(
+            Provider::Codex,
+            Some("never"),
+            Some("workspace-write"),
+            &defaults,
+            None,
+        );
+        assert_eq!(codex, RuntimeMode::Auto);
     }
 
     #[test]

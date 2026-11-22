@@ -63,7 +63,7 @@ impl BackgroundDialogView {
             .ok()??;
         let mut sections = div().flex().flex_col().gap(px(BACKGROUND_DIALOG_SECTION_GAP));
         for (work, call) in &work {
-            sections = sections.child(Self::work_section(work, call.as_ref(), waiting, cx));
+            sections = sections.child(Self::work_section(work, call.as_ref(), waiting && work.holds, cx));
         }
         if work.is_empty() {
             sections = sections.child(

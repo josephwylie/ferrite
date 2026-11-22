@@ -18,7 +18,7 @@ from T3 and why.
 - **The Server watches, not a window.** A watch is the agent's, and the
   agent runs on the Server (ADR 0025). So the Server reads the PR with its
   own `gh` account, and a watch goes on while no window is attached. The
-  window's own PR reading for the nav (`PrWatch`, ADR 0041) is a different
+  window's own PR reading for the nav (`PrReads`, ADR 0041) is a different
   thing and stays.
 - **A watch is a header fact on its Thread.** `WatchFact` (`pr_watch`)
   keeps each watch that is on and the last ended one per PR. It is amended
@@ -48,7 +48,8 @@ from T3 and why.
   log record (schema 19), and its transcript block is a prompt marked with
   a `WakeNote` (its `summary` and outcome), so a window can draw T3's
   compact row. It is never stored as a `prompt` and never goes through
-  `Op::Send`. It is general: a Delegate's result will be the next one.
+  `Op::Send`. It is general: a Delegate's result is the other kind
+  (ADR 0047), held in the same one-per-Thread slot.
 - **When a wake goes.** It waits while a turn runs or prompts are queued,
   and starts an ended Session. While a Decision is pending, or a wake
   already waits for the Thread, the pass saves nothing for that Thread, so
@@ -61,10 +62,32 @@ from T3 and why.
   named the PR (T3's `agentEnds`). That command counts while it runs. If it
   succeeds, it counts until the read made at its end is done, so a later
   `--auto` merge is still news. Interrupting the agent or parking its
-  Thread ends every watch with no wake. Ten comment-only wakes in a row
+  Thread ends every watch with no wake. Escape interrupts only while a
+  turn runs, as T3's Stop does (`canInterruptRunningThread`), so at rest
+  it leaves the watch on. Ten comment-only wakes in a row
   end it, as in T3. A rate limit pauses the watch. A lost connection is
   tried again without counting. Any other failed read counts, and eight
   in a row give up with T3's give-up wake.
+- **A watch that holds is background work.** `ActivityView::background_work`
+  counts it, so the Thread sits on the Working shelf, its Notice waits
+  until the watch lets go, and the background line lists `Watching pull
+  request #N` (T3's `monitor` task), `Waiting` while it holds. A Session's
+  rest (`settled`) does not count it: the watch is the Server's, so it
+  keeps no Session and holds back no restart.
+- **A wake draws as T3's notification row.** Its Block's `WakeNote` makes
+  the transcript draw a work row (its summary, an eye, or the alert for a
+  failure) that opens to the whole text, where a prompt draws a bubble. It
+  opens a turn as a prompt does, and is never the Thread's title, the
+  prompt `Copy prompt` reads, or one `Retry` sends again.
+- **The window hears a watch through the Thread's digest.** `Digest`
+  carries `Watching`: each PR watched, by URL and number, whether it holds
+  the Thread working (T3's `awaited`: `until: merged`, or checks still
+  running on the head), and whether a wake waits. The Server sends a new
+  digest when any of it changes, for a held Thread. The pump copies it
+  into the window's Facts, the one copy the card's eye, the palette, the
+  PR menu and the background line read. A digest received during one of
+  the window's own acts still waits for the pump: a watch that holds
+  nothing has no later message to bring it.
 - **`pr.watch` and `pr.unwatch`** start and stop a watch over the API
   (ADR 0027), for the calling Thread unless one is named. Anyone may call
   them: a watch changes only what news a Thread's agent hears. A new watch is
@@ -108,6 +131,9 @@ from T3 and why.
   watches through `ferrite pr watch`.
 - **The API answers in snake_case** (`was_watching`), as every operation
   of ADR 0027 does.
-- **What the window draws is not here.** The notice row, the Working
-  shelf hold for `until`, and deferring a Notice belong to the window,
-  and come with it.
+- **The operator stops a watch, and starts one where a Server runs.**
+  T3's details card stops a watch from its eye, and its PR menu starts and
+  stops one (`Watch for changes`, `Stop watching`). Ferrite's do the same,
+  and the palette has `Watch PR for changes` and `Stop watching PR`. They
+  ask through `Op::WatchPr` for the window's Thread. A start needs the
+  Server's watcher, so a window with no Server shows only the stop.

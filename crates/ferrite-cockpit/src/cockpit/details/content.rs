@@ -50,7 +50,7 @@ impl Row {
     /// its title at two lines.
     fn height(&self) -> f32 {
         match &self.pr {
-            Some(block) if block.mark.is_some() => {
+            Some(block) if block.quiet_line() => {
                 PR_TITLE_TOP + PR_TITLE_LH * 2. + PR_TITLE_BOTTOM + PR_META_H + PR_GAP_BELOW
             }
             _ => 32.,
@@ -240,7 +240,13 @@ impl Content {
                     .rounded(px(8.))
                     .text_color(rgba(0xffffffcc));
                 let mut control = match &row.pr {
-                    Some(block) => pr_view(control, block),
+                    Some(block) => {
+                        let eye = block
+                            .watched
+                            .clone()
+                            .map(|url| watch_eye(thread, block.number, url, cx));
+                        pr_view(control, block, eye)
+                    }
                     None => control
                         .flex()
                         .items_center()
@@ -382,8 +388,9 @@ impl CockpitView {
             row.tooltip = Some(branch.to_string());
             rows.push(row);
         }
-        if let Some(pr) = self.facts.pr(self.cockpit.read(cx).thread_key(thread)) {
-            let block = pr_block(pr);
+        let key = self.cockpit.read(cx).thread_key(thread);
+        if let Some(pr) = self.facts.pr(key) {
+            let block = pr_block(pr, self.facts.watched_pr(key));
             let mut row = Row::new(Item::Branch, block.title.clone(), block.glyph);
             row.tooltip = Some(block.tooltip.clone());
             row.action = Some(Action::Surface(SurfaceId::PullRequest(pr.number)));
@@ -571,13 +578,77 @@ struct PrBlock {
     /// T3's hover: the title in full and `#N`, the state, then the checks
     /// in words while it is open.
     tooltip: String,
+    /// The watch's URL while the Server watches this PR for the agent and
+    /// it is open (ADR 0046): the quiet line ends with T3's eye, whose
+    /// press stops the watch.
+    watched: Option<String>,
+}
+
+impl PrBlock {
+    /// Whether it draws the quiet line under its title: a mark to show,
+    /// or the eye of a watch.
+    fn quiet_line(&self) -> bool {
+        self.mark.is_some() || self.watched.is_some()
+    }
+}
+
+/// T3's tooltip on a watched PR's eye, word for word.
+pub(super) const WATCHING_TIP: &str = "Watching: the agent wakes when checks finish, someone comments, or the branch conflicts. Click to stop.";
+
+/// A watched PR's eye, as T3's `ThreadDetailsPrRow` draws it: an eye,
+/// slashed while the pointer is on it, whose press only stops the watch.
+fn watch_eye(
+    thread: ThreadId,
+    number: u64,
+    url: String,
+    cx: &mut Context<CockpitView>,
+) -> AnyElement {
+    let group = SharedString::from("details-pr-watch");
+    let glyph = |path, shown: bool| {
+        let layer = div().absolute().inset_0().child(icon(path, 14., INK_SUBTLE));
+        match shown {
+            true => layer.group_hover(group.clone(), |style| style.invisible()),
+            false => layer.invisible().group_hover(group.clone(), |style| style.visible()),
+        }
+    };
+    div()
+        .id("details-pr-watch-tip")
+        .group(group.clone())
+        .flex_shrink_0()
+        .tooltip(ferrite_ui::menu::tooltip(WATCHING_TIP))
+        .child(
+            ferrite_ui::components::button("details-pr-watch")
+                .debug_selector(|| "details-pr-watch".into())
+                .accessibility_label(format!("Stop watching #{number}"))
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(PR_META_H))
+                .child(
+                    div()
+                        .relative()
+                        .size(px(14.))
+                        .child(glyph(icons::EYE, true))
+                        .child(glyph(icons::EYE_OFF, false)),
+                )
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.watch_pr(thread, url.clone(), false, cx);
+                })),
+        )
+        .into_any_element()
 }
 
 /// Draws a [`PrBlock`] into its row's control: the glyph and the title
-/// over the quiet line, or with no mark one row, `#N: title`.
-fn pr_view(control: gpui::Stateful<Div>, block: &PrBlock) -> gpui::Stateful<Div> {
+/// over the quiet line (`#N`, the mark, the `eye` of a watch), or with
+/// neither a mark nor a watch one row, `#N: title`.
+fn pr_view(
+    control: gpui::Stateful<Div>,
+    block: &PrBlock,
+    eye: Option<AnyElement>,
+) -> gpui::Stateful<Div> {
     let glyph = icon(block.glyph, 16., block.ink);
-    let Some(mark) = &block.mark else {
+    if !block.quiet_line() {
         return control
             .flex()
             .items_center()
@@ -591,15 +662,17 @@ fn pr_view(control: gpui::Stateful<Div>, block: &PrBlock) -> gpui::Stateful<Div>
                     .truncate()
                     .child(format!("#{}: {}", block.number, block.title)),
             );
-    };
-    let words = mark.words.clone().map(|words| {
-        div()
-            .min_w_0()
-            .truncate()
-            .when(mark.glyph.is_none(), |words| {
-                words.text_color(rgb(mark.ink))
-            })
-            .child(words)
+    }
+    let mark = block.mark.as_ref();
+    let words = mark.and_then(|mark| {
+        let words = mark.words.clone()?;
+        Some(
+            div()
+                .min_w_0()
+                .truncate()
+                .when(mark.glyph.is_none(), |words| words.text_color(rgb(mark.ink)))
+                .child(words),
+        )
     });
     control
         .flex()
@@ -638,8 +711,9 @@ fn pr_view(control: gpui::Stateful<Div>, block: &PrBlock) -> gpui::Stateful<Div>
                         .mr(px(4.))
                         .child(format!("#{}", block.number)),
                 )
-                .children(mark.glyph.map(|ring| icon(ring, 14., mark.ink)))
-                .children(words),
+                .children(mark.and_then(|mark| Some(icon(mark.glyph?, 14., mark.ink))))
+                .children(words)
+                .children(eye),
         )
 }
 
@@ -655,8 +729,12 @@ struct PrMark {
 
 /// The block a pull request draws as (see [`PrBlock`]), as T3 Code's
 /// `ThreadDetailsPrRow` decides it: conflicts replace the checks, a draft
-/// shows none, and a pull request with no checks has no quiet line.
-fn pr_block(pr: &ferrite_core::workspace::PullRequest) -> PrBlock {
+/// shows none, a watch shows its eye while the PR is open, and a pull
+/// request with neither checks nor a watch has no quiet line.
+fn pr_block(
+    pr: &ferrite_core::workspace::PullRequest,
+    watch: Option<&ferrite_core::pr_watch::WatchedPr>,
+) -> PrBlock {
     use ferrite_core::workspace::PrState;
     let title = pr
         .title
@@ -692,6 +770,7 @@ fn pr_block(pr: &ferrite_core::workspace::PullRequest) -> PrBlock {
         ink,
         mark,
         tooltip,
+        watched: watch.filter(|_| open).map(|watch| watch.url.clone()),
     }
 }
 
@@ -895,7 +974,7 @@ mod tests {
         let awaiting = (Failing, "action_required");
         let skipped = (Skipped, "skipped");
 
-        let block = pr_block(&pr(&[passed, passed, passed, passed, passed, running]));
+        let block = pr_block(&pr(&[passed, passed, passed, passed, passed, running]), None);
         assert_eq!(
             (block.number, block.title.as_str(), block.glyph, block.ink),
             (
@@ -915,7 +994,7 @@ mod tests {
             "feat(details): the card #418\nOpen\n1 of 6 running"
         );
 
-        let block = pr_block(&pr(&[passed, passed, passed, passed, failed, failed]));
+        let block = pr_block(&pr(&[passed, passed, passed, passed, failed, failed]), None);
         assert_eq!(
             line(&block),
             Some((Some(icons::X_CIRCLE), RED, words("2 failed"))),
@@ -926,7 +1005,7 @@ mod tests {
             "feat(details): the card #418\nOpen\n2 of 6 failing"
         );
 
-        let block = pr_block(&pr(&[passed, failed, running]));
+        let block = pr_block(&pr(&[passed, failed, running]), None);
         assert_eq!(
             line(&block),
             Some((Some(icons::X_CIRCLE), RED, words("2/3 checks"))),
@@ -937,7 +1016,7 @@ mod tests {
             "feat(details): the card #418\nOpen\n1 of 3 running · 1 failed"
         );
 
-        let block = pr_block(&pr(&[passed, passed, passed, passed, passed, awaiting]));
+        let block = pr_block(&pr(&[passed, passed, passed, passed, passed, awaiting]), None);
         assert_eq!(
             line(&block),
             Some((Some(icons::CIRCLE_DOT), YELLOW, words("5/6 checks"))),
@@ -948,7 +1027,7 @@ mod tests {
             "feat(details): the card #418\nOpen\n1 of 6 awaiting action"
         );
 
-        let block = pr_block(&pr(&[passed, passed, skipped]));
+        let block = pr_block(&pr(&[passed, passed, skipped]), None);
         assert_eq!(
             line(&block),
             Some((Some(icons::CHECK_CIRCLE), GREEN, None)),
@@ -958,20 +1037,20 @@ mod tests {
             block.tooltip,
             "feat(details): the card #418\nOpen\n2 of 3 passing"
         );
-        let block = pr_block(&pr(&[passed, passed]));
+        let block = pr_block(&pr(&[passed, passed]), None);
         assert_eq!(
             block.tooltip,
             "feat(details): the card #418\nOpen\nAll checks passed"
         );
 
         for runs in [&[][..], &[skipped][..]] {
-            let block = pr_block(&pr(runs));
+            let block = pr_block(&pr(runs), None);
             assert_eq!(line(&block), None, "no checks to count: one row");
         }
 
         let mut draft = pr(&[passed, running]);
         draft.draft = true;
-        let block = pr_block(&draft);
+        let block = pr_block(&draft, None);
         assert_eq!(
             (block.glyph, block.ink),
             (icons::GIT_PULL_REQUEST_DRAFT, INK_SUBTLE)
@@ -985,14 +1064,14 @@ mod tests {
         let mut clash = pr(&[passed, running]);
         clash.conflicting = true;
         assert_eq!(
-            line(&pr_block(&clash)),
+            line(&pr_block(&clash, None)),
             Some((None, RED, words("Conflicts"))),
             "conflicts replace the checks"
         );
 
         let mut merged = pr(&[passed]);
         merged.state = PrState::Merged;
-        let block = pr_block(&merged);
+        let block = pr_block(&merged, None);
         assert_eq!((block.glyph, block.ink), (icons::GIT_MERGE, MAGENTA));
         assert_eq!(line(&block), Some((Some(icons::CHECK_CIRCLE), GREEN, None)));
         assert_eq!(block.tooltip, "feat(details): the card #418\nMerged");
@@ -1000,12 +1079,50 @@ mod tests {
         let mut closed = pr(&[]);
         closed.state = PrState::Closed;
         closed.title = None;
-        let block = pr_block(&closed);
+        let block = pr_block(&closed, None);
         assert_eq!(
             (block.glyph, block.ink),
             (icons::GIT_PULL_REQUEST_CLOSED, RED)
         );
         assert_eq!(block.title, "Pull request #418");
+    }
+
+    /// T3's eye: a PR the Server watches shows it while open, a draft and
+    /// one with no checks included, and its quiet line comes for it; a
+    /// merged or closed PR, or one nobody watches, shows none.
+    #[test]
+    fn a_watched_open_pr_shows_the_eye() {
+        use ferrite_core::pr_watch::WatchedPr;
+        use ferrite_core::workspace::{PrState, PullRequest};
+        let url = "https://github.com/o/r/pull/7";
+        let watch = WatchedPr {
+            url: url.into(),
+            number: 7,
+            holds: true,
+        };
+        let pr = |state, draft| PullRequest {
+            number: 7,
+            state,
+            draft,
+            url: Some(url.into()),
+            title: Some("Keep rows tall".into()),
+            checks: None,
+            runs: Vec::new(),
+            conflicting: false,
+        };
+        let open = pr_block(&pr(PrState::Open, false), Some(&watch));
+        assert_eq!(open.watched.as_deref(), Some(url));
+        assert!(open.quiet_line(), "no checks, and the eye still has its line");
+        let draft = pr_block(&pr(PrState::Open, true), Some(&watch));
+        assert_eq!(draft.watched.as_deref(), Some(url), "a draft is open");
+        for state in [PrState::Merged, PrState::Closed] {
+            let ended = pr_block(&pr(state, false), Some(&watch));
+            assert_eq!(ended.watched, None, "{state:?}");
+            assert!(!ended.quiet_line(), "{state:?}");
+        }
+        let unwatched = pr_block(&pr(PrState::Open, false), None);
+        assert_eq!(unwatched.watched, None);
+        assert!(!unwatched.quiet_line(), "one row, `#7: Keep rows tall`");
     }
 
     #[test]

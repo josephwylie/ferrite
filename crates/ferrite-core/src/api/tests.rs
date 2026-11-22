@@ -246,6 +246,10 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "agent.result",
             "pr.watch",
             "pr.unwatch",
+            "delegate.start",
+            "delegate.get",
+            "delegate.list",
+            "delegate.cancel",
         ]
     );
 }
@@ -280,6 +284,9 @@ fn sample_value(schema: &Value, defs: &Value) -> Value {
     }
     if let Some(value) = schema.get("const") {
         return value.clone();
+    }
+    if let Some(example) = schema["examples"].get(0) {
+        return example.clone();
     }
     if let Some(values) = schema["enum"].as_array() {
         return values[0].clone();
@@ -643,6 +650,30 @@ fn samples() -> Vec<Request> {
             repository: Some("acme/app".into()),
             number: Some(7),
             ..PrParams::default()
+        })),
+        request(Method::DelegateStart(DelegateStartParams {
+            thread: Some(ThreadId::new(14)),
+            machine: "pc".into(),
+            task: "Fix the flaky login test.".into(),
+            checkout: "/home/me/app".into(),
+            project: Some("p-1".into()),
+            title: Some("Login test".into()),
+            provider: Some(crate::store::Provider::Codex),
+            request: Some("k-1".into()),
+        })),
+        request(Method::DelegateGet(DelegateParams {
+            thread: Some(ThreadId::new(14)),
+            delegate: crate::delegate::DelegateId::new(1),
+        })),
+        request(Method::DelegateList(DelegateListParams {
+            thread: Some(ThreadId::new(14)),
+        })),
+        request(Method::DelegateCancel(DelegateCancelParams {
+            delegate: DelegateParams {
+                thread: None,
+                delegate: crate::delegate::DelegateId::new(1),
+            },
+            reason: Some("not needed".into()),
         })),
     ]
 }
@@ -2014,6 +2045,38 @@ fn an_owed_answer_reaches_a_caller_that_hung_up() {
         Err(std::sync::mpsc::TryRecvError::Disconnected),
         "let go once answered"
     );
+}
+
+/// `ferrite delegate start <machine> <task> --checkout <dir>` and
+/// `ferrite delegate cancel <delegate>`: for the Thread the call runs in
+/// unless `--thread` names one, and the checkout is the machine's, never
+/// resolved here.
+#[test]
+fn a_delegate_is_started_on_a_machine_and_named_by_its_id() {
+    assert_eq!(
+        parse(
+            "delegate.start",
+            &["pc", "Fix the test.", "--checkout", "srv/app", "--title", "Test"]
+        ),
+        Ok(Method::DelegateStart(DelegateStartParams {
+            machine: "pc".into(),
+            task: "Fix the test.".into(),
+            checkout: "srv/app".into(),
+            title: Some("Test".into()),
+            ..DelegateStartParams::default()
+        }))
+    );
+    assert_eq!(
+        parse("delegate.cancel", &["d2", "--reason", "done elsewhere"]),
+        Ok(Method::DelegateCancel(DelegateCancelParams {
+            delegate: DelegateParams {
+                thread: None,
+                delegate: crate::delegate::DelegateId::new(2),
+            },
+            reason: Some("done elsewhere".into()),
+        }))
+    );
+    assert!(parse("delegate.get", &["2"]).is_err(), "an id reads d2");
 }
 
 /// `ferrite pr watch <url> --until merged`: the PR by its url, for the

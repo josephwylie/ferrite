@@ -401,6 +401,15 @@ impl Server {
                 None => return,
             },
             Method::PrUnwatch(params) => self.api_pr_unwatch(from, &params),
+            Method::DelegateStart(params) => {
+                match self.api_delegate_start(caller_id, &id, from, params) {
+                    Some(result) => result,
+                    None => return,
+                }
+            }
+            Method::DelegateGet(params) => self.api_delegate_get(from, &params),
+            Method::DelegateList(params) => self.api_delegate_list(from, &params),
+            Method::DelegateCancel(params) => self.api_delegate_cancel(from, &params),
             Method::NotificationShow(params) => {
                 self.say(ServerMessage::Notification {
                     title: params.title,
@@ -445,7 +454,7 @@ impl Server {
     }
 
     /// An open Thread, or why not (`not_open`).
-    fn open_thread(&self, thread: ThreadId) -> Result<ThreadId, ApiError> {
+    pub(super) fn open_thread(&self, thread: ThreadId) -> Result<ThreadId, ApiError> {
         self.engine
             .thread(thread)
             .map(|_| thread)
@@ -454,7 +463,7 @@ impl Server {
 
     /// Whether `thread` is open (`true`) or parked (`false`); `unknown_thread`
     /// for an id the Store does not hold.
-    fn is_open(&self, thread: ThreadId) -> Result<bool, ApiError> {
+    pub(super) fn is_open(&self, thread: ThreadId) -> Result<bool, ApiError> {
         if self.engine.thread(thread).is_some() {
             return Ok(true);
         }
@@ -615,7 +624,7 @@ impl Server {
 
     /// Whether this machine takes a Thread from another machine's: its
     /// Settings › Labs › Linked machines, as its `settings.json` says now.
-    fn takes_delegates(&self) -> Result<bool, ApiError> {
+    pub(super) fn takes_delegates(&self) -> Result<bool, ApiError> {
         Settings::load(&self.settings_dir)
             .map(|settings| settings.labs.linked_machines)
             .map_err(|error| ApiError::new(Code::Failed, error.to_string()))

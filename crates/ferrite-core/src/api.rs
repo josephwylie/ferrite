@@ -174,14 +174,18 @@ pub enum Code {
     ProposeInstead,
     /// The Thread is parked, not gone: the refusal names it.
     ThreadParked,
-    /// A Thread from another machine (`delegated_from`) while this
-    /// machine's Settings › Labs › Linked machines is off.
+    /// A Thread from another machine (`delegated_from`), or a Delegate
+    /// to start, while this machine's Settings › Labs › Linked machines is
+    /// off.
     LinkedMachinesOff,
     /// A capped Thread (`thread.start`'s `mode`) was asked to carry or
     /// take what would widen how far its agent goes without asking: an
     /// argument, an `env`, a `launcher`, or an answer that remembers a
     /// choice. The refusal names it; nothing was started or answered.
     WidensCap,
+    /// The Thread started no Delegate with that id (T3's
+    /// `task_not_found`).
+    UnknownDelegate,
 }
 
 impl From<crate::factory::Refusal> for ApiError {

@@ -1,7 +1,7 @@
 //! A whole Thread stopped, as another Server's `thread.stop` asks: T3
 //! Code's `thread.stop`, which its `task_cancel` sends to a delegated
-//! task's thread. Unlike Main's interrupt, it ends the Subagents and the
-//! background commands too.
+//! task's thread. Unlike Main's interrupt, it ends the Subagents, the
+//! background commands and the Delegates too.
 
 use super::*;
 use crate::activity::AgentStatus;
@@ -12,13 +12,18 @@ impl Engine {
     /// Stop everything `thread` runs: its Subagents, its background
     /// commands and Main's turn. What waits in its queue goes back to the
     /// Composer first, as T3's Stop holds its queue, so nothing the stop
-    /// ends starts again by itself. A Thread with nothing running is left
-    /// as it is. A stop that fails is said on the Thread, as an
-    /// interrupt's is.
+    /// ends starts again by itself. Its Delegates are stopped too, depth
+    /// first, as T3's Stop stops its delegated tasks. A Thread with nothing
+    /// running is left as it is. A stop that fails is said on the Thread,
+    /// as an interrupt's is.
     pub fn stop(&mut self, thread: ThreadId) {
+        let stopped = self.stop_delegates(thread);
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
         };
+        if let Err(error) = stopped {
+            state.apply(Input::Notice(format!("stop failed: {error}")));
+        }
         let turn = state.busy();
         state.hold_queue();
         let (agents, commands) = state.running_work();

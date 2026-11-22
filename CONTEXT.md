@@ -24,7 +24,8 @@ _Avoid_: process (when meaning the conversation), instance.
 **Activity**
 The Main and subagent activity observed within one Thread: their transcripts,
 relationships, latest outcomes, and Decisions. Observation does not create
-additional Ferrite Sessions or Threads.
+additional Ferrite Sessions or Threads; a Delegate is a Thread started on
+purpose, on another Machine, and is not observed here.
 
 **Digest**
 What every window knows of a Thread it does not draw: what Main is doing,
@@ -40,12 +41,14 @@ Subagent. Switching Subject changes the view, not the Thread or its Title.
 **Main**
 The Thread's primary agent context, addressed by its Composer and interrupt
 control. Main can be idle while a Subagent is working; interrupting Main
-stops its turn alone, never a Subagent or background task.
+stops its turn alone, never a Subagent, a Delegate or background task.
 
 **Subagent**
 A provider-managed agent delegated within Main's ancestry, observed through
 the owning Session. It may delegate further or work again after completion;
 its transcript and Decisions remain its own. Escape on its tab stops it alone.
+Work handed to another Machine is not a Subagent: it is a Delegate, a
+Thread of its own there.
 _Avoid_: Thread, Session, worker Pane.
 
 **Provider**
@@ -233,7 +236,9 @@ beside Thread (no Thread opens beside another).
 **Notice**
 Ferrite's own record that a Thread's Main finished for good: its turn ended
 and no Subagent or background task (a shell, a monitor) is still working,
-so the operator is wanted back. Unread
+no Delegate is open or still to wake it, and no PR watch holds it (checks
+still running, or waiting for the merge), so the operator is wanted back.
+Unread
 until it is **seen** — its Thread on screen while the window has focus —
 or opened from the Inbox; shown there, by a toast, a chime, the
 Thread's done mark, and a system notification
@@ -245,7 +250,7 @@ _Avoid_: alert, ping, notification (the system's own surface is that).
 **Attention**
 Which of four states a Thread is in, most urgent first: **blocked** (a
 Decision waits), **done** (a Notice not yet seen), **working** (Main, or
-only its Subagents or background tasks), **idle**. What the nav sorts and
+only its Subagents, background tasks or Delegates), **idle**. What the nav sorts and
 rolls up by and the palette filters by; Ferrite's finer states (failing,
 background, failed, parked) are faces within these.
 _Avoid_: status (too broad), unread (that is the Notice's).
@@ -256,7 +261,8 @@ Project's badge, for the open Threads awaiting the operator. Pending
 Decisions come first, oldest request first, then the Thread that came
 back latest: a Thread done with its work returns at the top, and nothing
 else moves a card. Threads executing Main, Subagent, background or
-queued work sit on the Working shelf, the latest to start first; Snoozed and
+queued work, or held by a PR watch, sit on the Working shelf, the latest to
+start first; Snoozed and
 Parked Threads on their own shelves; the shelves fold to a head and count
 at the foot of the list. The rest stay in Inbox until sent back to work or
 Parked. Reading or dismissing a Notice changes presentation, never queue
@@ -273,13 +279,17 @@ comments or reviews, conflicts, and once when the PR merges or closes,
 unless the agent merged or closed it itself. The Server reads it every two
 minutes with its own `gh` account and keeps the watch on the Thread, so it
 outlives windows and restarts. Stopping the agent or parking the Thread
-ends it. A fork watches nothing.
+ends it. A fork watches nothing. While the PR's checks run, or until it
+merges when the agent asked so, the watch holds its Thread working; the
+operator stops one from the details card's eye, the PR's menu or the
+palette, and starts one from the last two.
 _Avoid_: subscription, PR monitor.
 
 **Server wake**
-A prompt the Server sends a Thread's agent on its own, such as a PR watch's
-news. It is never the operator's prompt: the log keeps it as a wake, and a
-window draws it as a short notice. It waits while a Decision is pending or a
+A prompt the Server sends a Thread's agent on its own: a PR watch's news,
+or a Delegate's result. It is never the operator's prompt: the log keeps it
+as a wake, and a window draws it as a one-line notice row with its summary,
+which opens to its whole text. It waits while a Decision is pending or a
 turn runs, and starts an ended Session.
 _Avoid_: notification (a toast), message.
 
@@ -328,6 +338,17 @@ A saved Machine's Server as this Server asks it (`peers::Peers`): through
 the machine's API, as the Server's own caller, never a Thread's. Known by
 its `ServerId`, so a machine pointed elsewhere is never taken for it.
 _Avoid_: linked environment (T3 Code's word), remote.
+
+**Delegate**
+A Thread one Thread's agent started on another Machine to do one piece of
+work (T3 Code's delegated task in a linked environment). The starting
+Thread's Server keeps its record on that Thread, follows it there through
+its Peer until it ends, and wakes the agent with its result. Until then
+its Thread counts as working. A cancel, or stopping or parking its Thread,
+ends it here at once and stops it there, retrying a stop that cannot get
+there yet; interrupting Main does not. It may start Delegates of its own.
+_Avoid_: child, subagent (a Provider's), task (the Factory's), remote
+thread.
 
 **API**
 The Server's automation surface: requests and answers as JSON lines on a

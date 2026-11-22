@@ -23,6 +23,7 @@ mod browser_lifetime;
 #[cfg(unix)]
 mod browser_providers;
 mod delegated;
+mod delegates;
 mod drive;
 mod environment;
 mod factory;

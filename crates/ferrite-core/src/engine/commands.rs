@@ -187,6 +187,22 @@ impl Engine {
                 .rename_thread(*thread, title)
                 .map(|()| None)
                 .map_err(failed),
+            // A new watch is the Server's watcher's (ADR 0046): it reads
+            // the PR first. Stopping one is the Thread's own.
+            Op::WatchPr {
+                watching: true, ..
+            } => Err(failed("Watching a pull request needs the Ferrite server.")),
+            Op::WatchPr {
+                thread,
+                url,
+                watching: false,
+            } => {
+                let target = crate::pr_watch::Target::of_url(url)
+                    .ok_or_else(|| failed("Name the pull request by its GitHub url."))?;
+                self.unwatch_pr(*thread, &target)
+                    .map(|_| Some(Done::PrWatch { watching: false }))
+                    .map_err(failed)
+            }
             Op::Park { thread } => self.park(*thread).map(|()| None).map_err(failed),
             Op::Revive { thread } => self.revive(*thread).map(|()| None).map_err(failed),
             Op::Delete { thread } => self.delete(*thread).map(|()| None).map_err(failed),

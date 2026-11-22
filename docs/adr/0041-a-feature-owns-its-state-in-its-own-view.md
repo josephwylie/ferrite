@@ -627,7 +627,11 @@ write, its focus and scroll, its density measurements, and where its
 canvas, card and opener were laid out. Whether it stands beside the
 transcript, and whether its `Previous agents` is unfolded, are the
 Thread's saved Surfaces (`details_inline_open`, `previous_agents_open`). Its rows the root builds in `details_content`
-into plain values that draw themselves (`cockpit/details/content.rs`).
+into plain values that draw themselves (`cockpit/details/content.rs`); a
+watched PR's eye is one more value on its `PrBlock`, the watch's URL from
+the Thread's digest (`Facts::watched_pr`), and its press calls the root's
+`watch_pr` (`cockpit/pr_watching.rs`), as the palette and the PR's context
+menu do.
 What stays on the root is the root's: moving the keyboard between the card
 and the Composer, fitting the card to the Pane's width as the columns
 move, and closing a card whose Pane lost the focus. A view would move
@@ -767,16 +771,23 @@ anyway. The Project and Workspace menus, their rows and their picks stay
 the root's, in the popup slot (ADR 0043). A Thread's checkout labels are
 the Facts' (`refresh_branches`).
 
-The PR watch is the eleventh. `PrWatch` (`cockpit/pr_watch.rs`) keeps
+The PR reads are the eleventh. `PrReads` (`cockpit/pr_reads.rs`) keeps
 what the window remembers to ask `gh` for a Thread's PR on its own: the
 Thread the pump last saw focused, and each Thread's
 `Transcript::published` as last seen, so a commit or a push reads the PR
-again at once (HD27). Only the pump writes it (`watch_prs`), and a gone
+again at once (HD27). Only the pump writes it (`pace_pr_reads`), and a gone
 Thread's count goes in `forget_gone_threads`. The ask (`check_pr`), which
 the palette, the context menu and opening a Thread make too, and its
 answer (`pr_landed`) stay the root's, and the reading is the Facts'
 (`ask_pr`, `pr_answered`). A view would add events for asks the root makes
-anyway.
+anyway. It stays beside the Server's watch (ADR 0046) because the two read
+different PRs: the card and the nav show a Thread's branch PR whether or
+not its agent watches it, and the Server reads only watched PRs, on its
+own two-minute clock. Serving every Thread's PR from the Server would be a
+`gh` read per open Thread on a clock, where `PrReads` reads on focus and
+on a push. A watched Thread's card follows the watcher without a second
+clock: when the Thread's digest says its watch started, ended or stopped
+holding (`Facts::streamed`), the pump reads the PR again (`check_pr`).
 
 The titler's names on their way are the twelfth. `Titling`
 (`cockpit/titling.rs`) keeps the Threads the titler is naming from their
@@ -1044,8 +1055,10 @@ arrives or when a clock it owns is due.
   reads, and a quarter second on it goes unseen. A test that moves the
   wall clock moves the window's clock by `PUMP_FALLBACK` too, for the
   pump that reads it.
-- **An ask finds the Panes the roster has.** An act's settle can take
-  what the Server said before the pump runs, a Focus with it. The render
+- **An ask finds the Panes the roster has.** An act can receive what
+  the Server said before the pump runs, a Focus with it. What that moved
+  waits for the pump to report, as if the pump had received it: a PR
+  watch's digest is the only word the window's Facts get of it. The render
   that presents the Focus has the Panes follow the roster first
   (`follow_roster`, as the pump does), so a Thread the CLI just opened
   is focused, not reopened. Seen once in a real run on the new pump:

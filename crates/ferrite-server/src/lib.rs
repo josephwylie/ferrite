@@ -39,6 +39,7 @@ mod browser;
 mod calls;
 mod clis;
 mod coordinator;
+mod delegates;
 mod drive;
 mod factory;
 mod github;
@@ -266,10 +267,26 @@ pub fn fixture_browser_machine(
         server.browser_requests = browser_requests;
         server.serve(hear)
     });
+    /// The Server's words, each read held back by `FERRITE_FIXTURE_LINK_DELAY_MS`
+    /// when a run sets it: a slow link, which shows a test that acts on
+    /// the window before the window has what the Server said.
+    struct Slow(link::Stream, Option<Duration>);
+    impl io::Read for Slow {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if let Some(delay) = self.1 {
+                std::thread::sleep(delay);
+            }
+            self.0.read(buf)
+        }
+    }
+    let delay = std::env::var("FERRITE_FIXTURE_LINK_DELAY_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map(Duration::from_millis);
     Ok(Box::new(move || {
         let stream = link::connect(&address)?;
         Ok(ferrite_core::machine::Tunnel {
-            from: Box::new(link::TryClone::try_clone(&stream)?),
+            from: Box::new(Slow(link::TryClone::try_clone(&stream)?, delay)),
             to: Box::new(Upload(stream)),
             ended: Box::new(|| None),
         })
@@ -432,6 +449,9 @@ struct Server {
     watcher: pr_watch::Watcher,
     /// Server wakes waiting for their Thread.
     wakes: wake::Wakes,
+    /// The Delegates this Server follows (ADR 0047), through its client
+    /// of the saved machines: the machines' own, or a test's.
+    delegation: delegates::Delegation,
 }
 
 impl Server {
@@ -475,7 +495,6 @@ impl Server {
             next_start: 0,
             swept: Instant::now(),
             defaults,
-            settings_dir,
             stopping: None,
             restarting: None,
             api: Api::default(),
@@ -496,6 +515,8 @@ impl Server {
             clock: Arc::new(|| ferrite_core::clock::now().timestamp_millis()),
             watcher: Default::default(),
             wakes: Default::default(),
+            delegation: delegates::Delegation::new(peers::Peers::new(settings_dir.clone())),
+            settings_dir,
         }
     }
 
@@ -526,6 +547,8 @@ impl Server {
             self.engine.pump();
             self.step_factory();
             self.serve_pr_watches();
+            self.serve_delegates();
+            self.serve_wakes();
             if self.swept.elapsed() >= SWEEP_INTERVAL {
                 self.swept = Instant::now();
                 self.engine.sweep();
@@ -1052,6 +1075,14 @@ impl Server {
                         json: ferrite_core::workspace::pr_view(&path),
                     }))
                 });
+                return;
+            }
+            Op::WatchPr {
+                thread,
+                url,
+                watching: true,
+            } => {
+                self.window_watch_pr(id, request, *thread, url);
                 return;
             }
             Op::Focused { .. } | Op::Composing { .. } => {

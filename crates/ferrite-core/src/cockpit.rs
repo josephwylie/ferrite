@@ -722,7 +722,7 @@ impl Cockpit {
     /// read, as an arrival is (ADR 0041).
     fn act(&mut self, op: Op) -> Executed {
         let executed = self.link.execute(op);
-        self.settle();
+        self.receive();
         crate::doorbell::ring();
         executed
     }
@@ -768,18 +768,13 @@ impl Cockpit {
         self.synced = open;
     }
 
-    /// Bring this window up to the Engine after one of its own acts. What
-    /// the act changed is the window's to show, as it always was: only the
-    /// pump reports Pane updates.
-    fn settle(&mut self) {
-        self.receive();
-        self.mirrors.take_updates();
-    }
-
     /// Bring this window up to the Engine: its mirrors and copies from the
-    /// messages it published, then its Roster. In debug builds each
-    /// in-process message crosses as its encoded line, so nothing escapes
-    /// the contract.
+    /// messages it published, then its Roster. What they moved waits for
+    /// the pump to report, wherever they were received: a Server's message
+    /// can arrive during any of the window's own acts, and its Pane update
+    /// is the only word the window's Facts get of it (a PR watch's digest).
+    /// In debug builds each in-process message crosses as its encoded line,
+    /// so nothing escapes the contract.
     fn receive(&mut self) {
         let before_fork_of = self.server_before_fork_of;
         let arrived: Vec<remote::Arrival> = match &mut self.link {
@@ -1243,7 +1238,6 @@ impl Cockpit {
             }
         }
         if read {
-            // Received, not settled: the frame being pumped keeps its updates.
             self.receive();
         }
         read
@@ -1356,7 +1350,7 @@ impl Cockpit {
         root: Option<PathBuf>,
     ) -> Result<(), LoadError> {
         let set = self.in_process().set_session_project_root(thread, root);
-        self.settle();
+        self.receive();
         set
     }
 
@@ -1576,7 +1570,7 @@ impl Cockpit {
     /// Watch Session memory in this process. A Server watches its own.
     pub fn watch_memory(&mut self, sampler: Box<dyn RssSampler>, limit: u64) {
         self.in_process().watch_memory(sampler, limit);
-        self.settle();
+        self.receive();
     }
 
     /// Replace any Session grown past the memory limit. A Server sweeps on
@@ -1586,7 +1580,7 @@ impl Cockpit {
             Link::InProcess(engine) => engine.sweep(),
             Link::Server(_) => Vec::new(),
         };
-        self.settle();
+        self.receive();
         restarts
     }
 
@@ -1619,7 +1613,7 @@ impl Cockpit {
         prompt: &str,
     ) -> io::Result<ThreadId> {
         let started = self.in_process().bootstrap(choice, workspace, prompt);
-        self.settle();
+        self.receive();
         started
     }
 
@@ -1767,7 +1761,7 @@ impl Cockpit {
     /// Something only `--demo` and the tests put in a Pane directly.
     pub fn apply_input(&mut self, thread: ThreadId, input: Input) {
         self.in_process().apply_input(thread, input);
-        self.settle();
+        self.receive();
     }
 
     /// Ferrite's own words in a Thread's Pane.
@@ -1784,7 +1778,7 @@ impl Cockpit {
             Link::InProcess(engine) => engine.search_files(thread, query),
             Link::Server(server) => server.search_files(thread, query),
         };
-        self.settle();
+        self.receive();
         asked
     }
 
@@ -2105,6 +2099,41 @@ impl Cockpit {
         }
     }
 
+    /// Whether a PR watch can start here: only a Server runs the watcher
+    /// (T3's `canStartWatch`). Any window can stop one.
+    pub fn starts_pr_watches(&self) -> bool {
+        matches!(self.link, Link::Server(_))
+    }
+
+    /// Watch the PR at `url` for `thread`'s agent, or stop watching it
+    /// (ADR 0046), as T3's details card and PR menu do: whether it is
+    /// watched once the Server has it. A new watch is the Server's
+    /// watcher's, which reads the PR first; an Engine in this process only
+    /// stops one.
+    pub fn watch_pr(
+        &mut self,
+        thread: ThreadId,
+        url: &str,
+        watching: bool,
+    ) -> io::Result<Receiver<io::Result<bool>>> {
+        let op = Op::WatchPr {
+            thread,
+            url: url.to_string(),
+            watching,
+        };
+        match &mut self.link {
+            Link::Server(server) => server.watch_pr(op),
+            Link::InProcess(_) => {
+                let done = self.act(op);
+                Ok(read_here(move || match done {
+                    Ok(Some(Done::PrWatch { watching })) => Ok(watching),
+                    Ok(_) => Err("the server answered something else".to_string()),
+                    Err(error) => Err(error.message),
+                }))
+            }
+        }
+    }
+
     /// What a GitHub start's picker lists, read by `gh` where the Server
     /// runs (or here, when this window runs its agents itself).
     pub fn github_names(
@@ -2289,7 +2318,7 @@ impl Cockpit {
     pub fn halt_sessions(&mut self) {
         if let Link::InProcess(engine) = &mut self.link {
             engine.halt_sessions();
-            self.settle();
+            self.receive();
         }
     }
 
@@ -2417,7 +2446,7 @@ impl Cockpit {
 
     pub fn answer(&mut self, thread: ThreadId, id: &str) -> bool {
         let answered = self.in_process().answer(thread, id);
-        self.settle();
+        self.receive();
         answered
     }
 
@@ -2425,7 +2454,7 @@ impl Cockpit {
     /// window attached to a Server says `settings_changed`.
     pub fn set_suggestions_enabled(&mut self, enabled: bool) {
         self.in_process().set_suggestions_enabled(enabled);
-        self.settle();
+        self.receive();
     }
 
     pub fn deliver_suggestion(&mut self, thread: ThreadId, text: String) {
@@ -2441,7 +2470,7 @@ impl Cockpit {
             Link::InProcess(engine) => engine.apply_settings(settings),
             Link::Server(server) => server.tell(Op::SettingsChanged),
         }
-        self.settle();
+        self.receive();
     }
 
     /// The defaults of the Server this window is on, as its own
@@ -2560,7 +2589,7 @@ impl Cockpit {
             return done;
         }
         let done = self.remote()?.execute(op).map_err(io::Error::from);
-        self.settle();
+        self.receive();
         done
     }
 
@@ -2668,7 +2697,7 @@ impl Cockpit {
 
     pub fn set_notification_grace(&mut self, grace: Duration) {
         self.in_process().set_notification_grace(grace);
-        self.settle();
+        self.receive();
     }
 
     pub fn dismiss_notice(&mut self, id: NoticeId) -> bool {
@@ -2709,9 +2738,20 @@ impl Cockpit {
         });
     }
 
+    /// A fixture world's PR watches for `thread` (ADR 0046), as the
+    /// Server's watcher would have saved them.
+    pub fn fixture_pr_watch(&mut self, thread: ThreadId, fact: crate::pr_watch::WatchFact) {
+        if let Err(error) = self.in_process().set_pr_watch(thread, fact) {
+            crate::log!("thread {thread}: a fixture watch was not saved: {error}");
+        }
+        // The digest it sends is left for the window's pump, which reads
+        // the watch from it as a window of the Server does.
+        self.receive();
+    }
+
     pub fn fixture_backdate_notices(&mut self, thread: ThreadId, at: std::time::SystemTime) {
         self.in_process().fixture_backdate_notices(thread, at);
-        self.settle();
+        self.receive();
     }
 
     /// A fixture world's forge: from now on both pull request reads of the
@@ -2825,7 +2865,7 @@ impl Cockpit {
             ..Default::default()
         };
         let opened = self.in_process().open_with(provider, workspace, launch);
-        self.settle();
+        self.receive();
         opened
     }
 
@@ -2881,7 +2921,7 @@ impl Cockpit {
 
     pub fn fixture_notice(&mut self, thread: ThreadId, outcome: crate::TurnOutcome) {
         self.in_process().fixture_notice(thread, outcome);
-        self.settle();
+        self.receive();
     }
 
     pub fn draft_starting(&self, draft: DraftId) -> bool {
@@ -3105,7 +3145,7 @@ impl Cockpit {
             }
             Link::Server(server) => server.bootstrap(draft, prompt, op).map(|()| None),
         };
-        self.settle();
+        self.receive();
         Ok(started?.map(|thread| self.complete_draft(draft, thread)))
     }
 
@@ -3121,7 +3161,7 @@ impl Cockpit {
             Link::InProcess(engine) => engine.cancel_draft_start(draft),
             Link::Server(server) => server.cancel_bootstrap(draft),
         };
-        self.settle();
+        self.receive();
         cancelled
     }
 

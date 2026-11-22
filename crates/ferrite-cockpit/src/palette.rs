@@ -180,6 +180,10 @@ pub(crate) enum Command {
     ShowChecks,
     RefreshPr,
     OpenPr,
+    /// Watch the Thread's PR for changes, or stop (ADR 0046): T3's PR menu
+    /// `Watch for changes` and `Stop watching`.
+    WatchPr,
+    UnwatchPr,
     ShowPlan,
     UpdateClis,
     UpdateFerrite,
@@ -226,6 +230,8 @@ impl Command {
             Command::ShowChanges | Command::ReviewChanges => FILE,
             Command::RefreshPr | Command::RefreshMcp | Command::ReconnectMcp => REFRESH,
             Command::OpenPr => EXTERNAL,
+            Command::WatchPr => EYE,
+            Command::UnwatchPr => EYE_OFF,
             _ => return None,
         })
     }

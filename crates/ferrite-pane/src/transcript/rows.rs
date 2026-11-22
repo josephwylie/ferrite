@@ -48,6 +48,9 @@ pub(crate) enum RowId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RowKind {
     Prompt,
+    /// A prompt the Server sent on its own (`Block::wake`): T3's
+    /// notification, a work row that opens a turn as a prompt does.
+    Wake,
     /// A muted line a row's owner adds that no block says
     /// (`RowShape::note`), standing a line under the prompt it follows.
     Note,
@@ -149,12 +152,14 @@ pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32)
     let line = theme::prose_line_height(reading);
     let pad = |step| theme::tx_scaled(step, reading);
     let Some(previous) = previous else {
-        return if kind == Prompt { 0. } else { line };
+        return if matches!(kind, Prompt | Wake) { 0. } else { line };
     };
     // T3's work log: its rows touch, and the run stands `WORK_LOG_PAD_B`
-    // off what follows it.
-    let log = |kind| matches!(kind, Activity | Group | Reasoning | Notice | LiveTail);
+    // off what follows it. A wake is a row of it that opens a turn.
+    let log = |kind| matches!(kind, Activity | Group | Reasoning | Notice | LiveTail | Wake);
     match (previous, kind) {
+        (Divider | Boundary, Wake) => line,
+        (_, Wake) => theme::tx_turn_gap(line),
         (previous, kind) if log(previous) && log(kind) => 0.,
         (_, TurnEnd | Meta) => 0.,
         (Divider | Boundary, _) => line,
@@ -720,13 +725,14 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 }
                 in_turn = true;
                 let first = rows.iter().all(|row| row.kind != RowKind::Prompt);
+                let wake = block.wake.is_some();
                 rows.push(row(
                     RowId::Block(block.id),
                     std::slice::from_ref(block),
                     None,
-                    RowKind::Prompt,
+                    if wake { RowKind::Wake } else { RowKind::Prompt },
                 ));
-                if let Some(note) = shape.note.as_ref().filter(|_| first) {
+                if let Some(note) = shape.note.as_ref().filter(|_| first && !wake) {
                     rows.push(row(RowId::Note, &[], Some(note.as_ref().into()), RowKind::Note));
                 }
                 if let Some(fold) = folds.get(&block.id) {
@@ -794,7 +800,7 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 moved_on = true;
             }
             RowKind::Activity | RowKind::Group | RowKind::Visual => work_after = true,
-            RowKind::Prompt => {
+            RowKind::Prompt | RowKind::Wake => {
                 work_after = false;
                 moved_on = true;
             }

@@ -209,10 +209,20 @@ impl Mirror {
     }
 
     /// An empty Activity: what a history rebuilds from, and what a window
-    /// holds of a Thread it lets go.
+    /// holds of a Thread it lets go. It keeps what the digest said of the
+    /// Server's watching, which no history carries.
     fn start_over(&mut self) {
         self.activity = Activity::new(self.limits);
         self.generation = 0;
+        self.watching_from_digest();
+    }
+
+    /// What the Server's PR watching holds of the Thread (ADR 0046) comes
+    /// with its digest, never with its inputs.
+    fn watching_from_digest(&mut self) {
+        if let Some(held) = &self.digest {
+            self.activity.set_watching(held.digest.watching.clone());
+        }
     }
 
     fn apply(&mut self, input: ActivityInput, update: &mut PaneUpdate) {
@@ -384,6 +394,7 @@ impl Mirrors {
                     .entry(thread)
                     .or_insert_with(|| Mirror::new(limits));
                 mirror.digest = Some(HeldDigest::of(digest, boot));
+                mirror.watching_from_digest();
                 self.digested = true;
                 updated(&mut self.updates, thread).activity_changed = true;
             }
@@ -792,8 +803,8 @@ impl<'a> ThreadView<'a> {
         }
     }
 
-    /// Whether work runs behind Main: its Subagents, or its transcript's
-    /// background tasks.
+    /// Whether work goes on behind Main: its Subagents, its transcript's
+    /// background tasks, or a PR watch that holds the Thread.
     pub fn background_work(&self) -> bool {
         match self.stand_in {
             Some(held) => held.digest.background_work,

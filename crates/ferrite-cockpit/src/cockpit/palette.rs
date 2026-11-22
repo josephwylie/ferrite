@@ -599,6 +599,7 @@ impl CockpitView {
             && self.panel_candidate(cx).is_some();
         let pr = facts.and_then(|facts| facts.pr.reading.as_ref());
         let checks = pr.is_some_and(|pr| pr.checks.is_some());
+        let watch = focused.and_then(|thread| self.pr_watch_target(thread, cx));
         let plan = open.is_some_and(|open| open.transcript().todos().is_some());
         let size = self.prefs.settings.reading_size;
         let mut rows: Vec<PaletteRow> = Vec::new();
@@ -921,6 +922,20 @@ impl CockpitView {
             bound_chord("cockpit::OpenPrInBrowser"),
             Command::OpenPr,
         );
+        add(
+            watch.as_ref().is_some_and(|(_, watched)| !watched),
+            "Watch PR for changes".into(),
+            "",
+            None,
+            Command::WatchPr,
+        );
+        add(
+            watch.as_ref().is_some_and(|(_, watched)| *watched),
+            "Stop watching PR".into(),
+            "",
+            None,
+            Command::UnwatchPr,
+        );
         add(plan, "Show plan".into(), "", None, Command::ShowPlan);
         add(
             !self.cli_updates.ready().is_empty(),
@@ -1139,6 +1154,13 @@ impl CockpitView {
             Command::OpenPr => {
                 if let Some(thread) = thread {
                     self.open_pr(thread, cx);
+                }
+            }
+            Command::WatchPr | Command::UnwatchPr => {
+                if let Some((thread, (url, _))) =
+                    thread.and_then(|thread| Some((thread, self.pr_watch_target(thread, cx)?)))
+                {
+                    self.watch_pr(thread, url, command == Command::WatchPr, cx);
                 }
             }
             Command::ShowPlan => self.open_plan(window, cx),

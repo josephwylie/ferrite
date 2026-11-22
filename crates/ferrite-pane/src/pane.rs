@@ -154,7 +154,8 @@ pub enum DisclosureId {
     Group(String),
     Turn(BlockId),
     Live(BlockId),
-    /// A long prompt's clamp, opened (`pane::prompt_clamps`).
+    /// A long prompt's clamp, opened (`pane::prompt_clamps`), or a wake's
+    /// row, opened to its whole text.
     Prompt(BlockId),
     /// A changed-files card's `Expand all`, by its turn's end.
     Changes(BlockId),
@@ -1952,7 +1953,10 @@ pub(crate) fn render_block(
         Body::WrapUp(wrap) => {
             wrap_up::render_wrap_up(block.id, wrap, row_cx, WrapUpFace::Steps(Vec::new()))
         }
-        Body::Prompt(line) => prompt_row(block, line, row_cx, PromptFace::default(), None),
+        Body::Prompt(text) => match &block.wake {
+            Some(wake) => wake_row(block, wake, text, row_cx, expanded, disclosure),
+            None => prompt_row(block, text, row_cx, PromptFace::default(), None),
+        },
         // Fallback prose (a block with no Markdown source) reads as the
         // answer does, on the content column.
         Body::Paragraph { spans } => row
@@ -2481,6 +2485,63 @@ pub(crate) fn prompt_clamps(line: &str) -> bool {
     !words.trim().is_empty()
         && (words.chars().count() > theme::PROMPT_CLAMP_CHARS
             || words.split('\n').count() > theme::PROMPT_CLAMP_LINES)
+}
+
+/// A prompt the Server sent on its own (T3's notification work row,
+/// `WorkEntryLogRow`): never the operator's bubble. Its summary on one line
+/// (`#412: checks failed, new comments`) in an update's ink, by the eye of
+/// a watch, or the alert when the news is a failure; opened, the whole
+/// text it woke the agent with, past the icon gutter.
+fn wake_row(
+    block: &Block,
+    wake: &ferrite_core::wake::WakeNote,
+    text: &str,
+    row_cx: &RowCx,
+    expanded: bool,
+    disclosure: Option<Disclosure>,
+) -> AnyElement {
+    use ferrite_core::transcript::tools::ToolIcon;
+    let selection = row_cx.selection;
+    let (overlay, _, targeted) = disclosure_parts(disclosure);
+    let summary = SharedString::from(wake.summary.clone());
+    let header = work_row::work_row(work_row::WorkRow {
+        key: SharedString::from(format!("wake-row-{:?}", block.id)),
+        icon: match wake.outcome {
+            ferrite_core::wake::Outcome::Failed => ToolIcon::Alert,
+            _ => ToolIcon::Eye,
+        },
+        failed: false,
+        error: false,
+        label: div()
+            .debug_selector(|| "wake-summary".into())
+            .min_w_0()
+            .truncate()
+            .child(selection.line(block.id, summary, Vec::new()))
+            .into_any_element(),
+        ink: work_row::update_ink(),
+        at: block.sent_at.clone().or_else(|| block.at.clone()),
+        slot: work_row::Slot::Chevron { open: expanded },
+        listed: false,
+        press: overlay,
+    })
+    .group(DISCLOSURE_ROW);
+    let header = Disclosure::ground(targeted, header);
+    let body = expanded.then(|| {
+        div()
+            .debug_selector(|| "wake-body".into())
+            .ml(px(theme::WORK_DETAIL_INDENT))
+            .px(px(theme::WORK_ROW_PAD_X))
+            .py(px(theme::SPACE_1))
+            .text_color(rgb(INK_STRONG))
+            .child(selection.markdown(block.id, text.trim().to_owned()))
+    });
+    div()
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .child(header)
+        .children(body)
+        .into_any_element()
 }
 
 pub(crate) fn prompt_row(
@@ -4015,6 +4076,42 @@ mod tests {
         );
     }
 
+    /// A wake the Server sent is T3's notification row, never the
+    /// operator's bubble: its summary by the alert of a failure, and its
+    /// whole text only once it is opened.
+    #[gpui::test]
+    fn a_wake_draws_as_a_notice_row_that_opens_to_its_text(cx: &mut TestAppContext) {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Wake(ferrite_core::wake::Wake {
+            text: "Update on pull request #412 (https://github.com/o/r/pull/412), which Ferrite is watching for you:\n- Checks failed on abc1234:\n  - test".into(),
+            outcome: ferrite_core::wake::Outcome::Failed,
+            summary: "#412: checks failed, new comments".into(),
+        }));
+        let blocks: Vec<Block> = transcript.blocks().to_vec();
+        let wake = blocks.iter().find(|block| block.wake.is_some()).unwrap().id;
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            shows_blocks(blocks.clone(), cx)
+        });
+        cx.simulate_resize(size(px(640.), px(400.)));
+        cx.run_until_parked();
+        let row = Box::leak(format!("wake-row-{wake:?}").into_boxed_str());
+        assert!(cx.debug_bounds(row).is_some(), "the wake's row");
+        assert!(cx.debug_bounds("wake-summary").is_some());
+        assert!(cx.debug_bounds("wake-body").is_none(), "shut, it is one line");
+        assert!(
+            cx.debug_bounds("transcript-prompt").is_none(),
+            "no bubble: the operator sent nothing"
+        );
+
+        view.update(cx, |view, cx| {
+            view.wakes_open = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("wake-body").is_some(), "opened, its whole text");
+    }
+
     /// `Starting` holds the working line's own row, Solo's and a side
     /// chat's, so the line never moves when the turn's words replace it.
     #[gpui::test]
@@ -4168,6 +4265,8 @@ mod tests {
         /// Groups open, by their first call.
         groups: HashSet<String>,
         reasoning_expanded: bool,
+        /// Every wake's row opened to its text.
+        wakes_open: bool,
         transcript: Entity<crate::transcript::TranscriptView>,
         display_revision: u64,
     }
@@ -4194,6 +4293,11 @@ mod tests {
                 expanded.extend(self.blocks.iter().filter_map(|block| {
                     matches!(&block.body, Body::Thinking(_))
                         .then_some(DisclosureId::Reasoning(block.id))
+                }));
+            }
+            if self.wakes_open {
+                expanded.extend(self.blocks.iter().filter_map(|block| {
+                    block.wake.is_some().then_some(DisclosureId::Prompt(block.id))
                 }));
             }
             let (presentation, body) = (
@@ -4258,6 +4362,7 @@ mod tests {
             expanded: HashSet::new(),
             groups: HashSet::new(),
             reasoning_expanded: false,
+            wakes_open: false,
             transcript,
             display_revision: 0,
         }

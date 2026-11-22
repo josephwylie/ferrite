@@ -1313,7 +1313,7 @@ impl TranscriptView {
                 .iter()
                 .rev()
                 .find_map(|block| match &block.body {
-                    Body::Prompt(line) => Some(line.clone()),
+                    Body::Prompt(line) if block.wake.is_none() => Some(line.clone()),
                     _ => None,
                 })
         })
@@ -1423,6 +1423,7 @@ impl TranscriptView {
             let expanded = match &block.body {
                 Body::Tool(tool) => shown(DisclosureId::Tool(tool.call.clone())),
                 Body::Thinking(_) => shown(DisclosureId::Reasoning(block.id)),
+                Body::Prompt(_) if block.wake.is_some() => shown(DisclosureId::Prompt(block.id)),
                 _ => false,
             };
             pane::collect_block_text(
@@ -1759,7 +1760,7 @@ impl TranscriptView {
         if row.kind() == RowKind::Group {
             return self.render_group(row, &row_cx, view, window);
         }
-        if let Body::Prompt(line) = &block.body {
+        if let (Body::Prompt(line), None) = (&block.body, &block.wake) {
             // Its send time, Edit, Rewind, Fork and `Copy`, under the
             // bubble's right edge. The three
             // that cut need the id it was sent as and an agent that can.
@@ -1862,8 +1863,11 @@ impl TranscriptView {
         if let Body::Tool(tool) = &block.body {
             return self.render_call(block, tool, row_cx, view, grouped);
         }
-        let call = matches!(&block.body, Body::Thinking(text) if !text.trim().is_empty())
-            .then_some(DisclosureId::Reasoning(block.id));
+        let call = match &block.body {
+            Body::Thinking(text) if !text.trim().is_empty() => Some(DisclosureId::Reasoning(block.id)),
+            Body::Prompt(_) if block.wake.is_some() => Some(DisclosureId::Prompt(block.id)),
+            _ => None,
+        };
         // Still being thought: the running turn's last block.
         let live = self.input.presentation.working.is_some()
             && self
@@ -2135,6 +2139,11 @@ impl TranscriptView {
                 RowKind::Activity | RowKind::Reasoning => {
                     if let Some(block) = row.blocks().first() {
                         call(&mut stops, block);
+                    }
+                }
+                RowKind::Wake => {
+                    if let Some(block) = row.blocks().first() {
+                        stops.push(DisclosureId::Prompt(block.id));
                     }
                 }
                 _ => {}

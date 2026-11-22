@@ -197,15 +197,19 @@ pub fn wait_past(seen: u64) -> bool {
 /// Every landing gets two looks after it: a window's pump may already be
 /// past the queue a landing fills when it runs, so the look that starts
 /// its run may not yet be the one that reads it.
-/// Panics with `lost` when nothing lands for [`LOST_AFTER`].
+/// Panics with `lost` when nothing lands for [`LOST_AFTER`], or when it
+/// has looked for twice that: a look that rings the bell itself would
+/// otherwise never be lost.
 #[cfg(any(test, feature = "test-support"))]
 pub fn until(lost: &str, mut look: impl FnMut() -> bool) {
+    let started = std::time::Instant::now();
     let mut seen = None;
     loop {
         let before = rung();
         if look() {
             return;
         }
+        assert!(started.elapsed() < LOST_AFTER * 2, "{lost}");
         if let Some(seen) = seen {
             assert!(wait_past(seen), "{lost}");
         }

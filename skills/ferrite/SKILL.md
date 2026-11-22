@@ -175,6 +175,24 @@ closed starts no watch: the answer's `state` and `next` say so. After the
 call, end your turn; do not watch again on a wake. `pr unwatch` stops it.
 Stopping the agent or parking its Thread ends its watches.
 
+## Delegate work to another machine
+
+```bash
+"$F" delegate start pc "Fix the flaky login test." --checkout /home/me/app --title "Login test"
+"$F" delegate get d1
+"$F" delegate list
+"$F" delegate cancel d1 --reason "not needed"
+```
+
+`delegate start` starts a Thread on the saved machine `pc` to do the task,
+in `--checkout` there, for the Thread you run in (`--thread` for another),
+capped at your mode. Settings › Labs › Linked machines must be on on both
+machines. Its result wakes you when it ends: do not wait on it or poll it,
+and end your turn once no other work is left. `delegate get` reads one (its
+result once ended), `delegate list` all of yours, and `delegate cancel`
+stops it there. Stopping or parking your Thread stops them too; an
+interrupt does not.
+
 ## Stop, close and clean up
 
 ```bash
