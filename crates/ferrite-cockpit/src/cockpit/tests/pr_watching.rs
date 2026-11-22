@@ -60,6 +60,49 @@ fn the_eye_shows_while_the_pr_is_watched_and_its_press_stops_the_watch(cx: &mut 
     );
 }
 
+/// A watch that holds nothing (every check finished) brings no message
+/// after its digest. When that digest lands while the window acts — every
+/// two seconds it tells its Server what git listed — the card, the palette,
+/// the PR menu and the background line still read it, together.
+#[gpui::test]
+fn a_watch_whose_digest_lands_while_the_window_acts_still_reaches_the_card(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("pr-watch-acted", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| view.pr_landed(thread, Some(pr_with_checks()), cx));
+    cx.simulate_keystrokes("cmd-shift-b");
+    tick(cx);
+    assert!(cx.debug_bounds("details-pr-watch").is_none(), "the premise: unwatched");
+
+    let mut fact = WatchFact::default();
+    let target = Target::of_url("https://github.com/o/r/pull/48").unwrap();
+    fact.watch(target, None, Some(false), 0);
+    view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| {
+            cockpit.fixture_pr_watch(thread, fact);
+            cockpit.worktrees_listed(thread, vec![here()], std::time::Instant::now());
+        })
+    });
+    until(cx, |cx| cx.debug_bounds("details-pr-watch").is_some());
+    assert!(palette(&view, cx).contains(&"Stop watching PR".to_string()));
+    let menu: Vec<String> = view.read_with(cx, |view, cx| {
+        view.context_rows(MenuTarget::PrLink(keyed(view, thread, cx)), cx)
+            .into_iter()
+            .flatten()
+            .map(|(item, _)| item.label.to_string())
+            .collect()
+    });
+    assert!(menu.contains(&"Stop watching".to_string()), "{menu:?}");
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.background_work_title(0, cx)),
+        Some("Running \u{b7} Watching pull request #48".into())
+    );
+}
+
 /// A watch is background work (T3's `Watching pull request #N`): while it
 /// holds, the Thread is on the Working shelf and its line waits on it;
 /// once every check finished it still runs, holding nothing, unless it
