@@ -239,6 +239,7 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "window.text",
             "window.focus",
             "identity.get",
+            "thread.stop",
         ]
     );
 }
@@ -620,6 +621,7 @@ fn samples() -> Vec<Request> {
             selector: "composer-block".into(),
         })),
         request(Method::WindowFocus(Empty {})),
+        request(Method::ThreadStop(ThreadParams { thread: thread() })),
     ]
 }
 

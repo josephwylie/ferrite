@@ -251,6 +251,8 @@ operations! {
         "What holds the headless window's keyboard: its key contexts, nearest debug selector and name.";
     IdentityGet(Empty) => "identity.get", [], Anyone,
         "This Server's identity: its server_id, the same over every route to it, ssh or a paired link.";
+    ThreadStop(ThreadParams) => "thread.stop", ["thread"], Operator,
+        "Stop everything a Thread runs: Main's turn, its subagents and background commands. Its queued prompts go back to the Composer.";
 }
 
 /// Who may call an operation (#224). A call that names no Thread is the

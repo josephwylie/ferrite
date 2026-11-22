@@ -129,6 +129,14 @@ Every act that changes a Thread is the window's own command through
 and `notification` are new gen-1 server messages; a window too old for them
 ignores them, as the contract allows.
 
+Added so another machine's Server can stop a Thread it started here (a
+Delegate, copied from T3 Code, whose `task_cancel` sends its `thread.stop`
+to the delegated task's thread):
+
+| Operation | Does |
+|---|---|
+| `thread.stop` | stop everything the Thread runs, unlike `agent.interrupt`, which stops Main's turn alone: its queued prompts go back to the Composer (T3's Stop holds the queue), then its background commands, its Subagents and Main's turn are stopped (`Engine::stop`, which no window asks). A Thread with nothing running, and a parked one, is already stopped: answered `{thread}` with nothing sent. Only a Thread the Store does not hold is `unknown_thread` |
+
 ### Attention is the API's state
 
 The API reports and waits on **Attention** (ADR 0015), computed by the
