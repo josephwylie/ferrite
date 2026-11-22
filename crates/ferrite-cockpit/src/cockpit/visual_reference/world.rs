@@ -23,7 +23,7 @@ use ferrite_core::store::Provider;
 use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{
     Decision, DecisionAnswer, DecisionChoice, DecisionKind, Hunk, ModelInfo, PermissionModeChoice,
-    QueueEvent, QueuedPrompt, RateLimitWindow, SessionEvent, ThreadId, ToolResult, TurnOutcome,
+    QueueEvent, QueuedPrompt, RateLimitWindow, SessionEvent, ThreadId, ThreadKey, ToolResult, TurnOutcome,
     UsageDetails, UsageScope,
 };
 
@@ -162,7 +162,7 @@ impl Sessions {
         provider: Provider,
         workspace: WorkspaceChoice,
         title: &str,
-    ) -> ThreadId {
+    ) -> ThreadKey {
         let thread = core
             .open(provider, workspace)
             .expect("open a fixture Thread");
@@ -172,10 +172,10 @@ impl Sessions {
     }
 
     /// The provider side of `thread`'s latest Session.
-    pub(crate) fn feed(&self, thread: ThreadId) -> ferrite_core::doorbell::Sender<SessionEvent> {
+    pub(crate) fn feed(&self, thread: ThreadKey) -> ferrite_core::doorbell::Sender<SessionEvent> {
         self.sides
             .borrow()
-            .get(&thread)
+            .get(&thread.thread())
             .cloned()
             .expect("every fixture Thread has a Session")
     }
@@ -281,7 +281,7 @@ pub(crate) enum Act {
 
 pub(crate) struct Beat {
     pub(crate) at: Secs,
-    pub(crate) who: ThreadId,
+    pub(crate) who: ThreadKey,
     pub(crate) act: Act,
 }
 
@@ -292,7 +292,7 @@ pub(crate) struct Script {
 }
 
 impl Script {
-    pub(crate) fn prompt(&mut self, at: Secs, who: ThreadId, text: impl Into<String>) {
+    pub(crate) fn prompt(&mut self, at: Secs, who: ThreadKey, text: impl Into<String>) {
         self.beats.push(Beat {
             at,
             who,
@@ -300,7 +300,7 @@ impl Script {
         });
     }
 
-    pub(crate) fn ev(&mut self, at: Secs, who: ThreadId, event: SessionEvent) {
+    pub(crate) fn ev(&mut self, at: Secs, who: ThreadKey, event: SessionEvent) {
         self.beats.push(Beat {
             at,
             who,
@@ -308,7 +308,7 @@ impl Script {
         });
     }
 
-    pub(crate) fn park(&mut self, at: Secs, who: ThreadId) {
+    pub(crate) fn park(&mut self, at: Secs, who: ThreadKey) {
         self.beats.push(Beat {
             at,
             who,
@@ -320,7 +320,7 @@ impl Script {
     pub(crate) fn tool(
         &mut self,
         (start, end): (Secs, Secs),
-        who: ThreadId,
+        who: ThreadKey,
         id: &str,
         name: &str,
         input: serde_json::Value,
@@ -335,7 +335,7 @@ impl Script {
     pub(crate) fn bash(
         &mut self,
         start: Secs,
-        who: ThreadId,
+        who: ThreadKey,
         id: &str,
         description: &str,
         command: &str,
@@ -362,7 +362,7 @@ impl Script {
     }
 
     /// An edit the provider applied, with its structured patch.
-    pub(crate) fn edit(&mut self, at: Secs, who: ThreadId, id: &str, path: &str, hunks: Vec<Hunk>) {
+    pub(crate) fn edit(&mut self, at: Secs, who: ThreadKey, id: &str, path: &str, hunks: Vec<Hunk>) {
         self.tool(
             (at, at + 1),
             who,
@@ -381,7 +381,7 @@ impl Script {
     }
 
     /// A completed turn: the provider's accounting, then its end.
-    pub(crate) fn end(&mut self, at: Secs, who: ThreadId) {
+    pub(crate) fn end(&mut self, at: Secs, who: ThreadKey) {
         self.ev(
             at,
             who,
@@ -709,8 +709,8 @@ pub(crate) fn play(
     core: &mut Cockpit,
     mut script: Script,
     clock: Clock,
-    feed: impl Fn(ThreadId) -> ferrite_core::doorbell::Sender<SessionEvent>,
-) -> HashMap<ThreadId, Secs> {
+    feed: impl Fn(ThreadKey) -> ferrite_core::doorbell::Sender<SessionEvent>,
+) -> HashMap<ThreadKey, Secs> {
     script.beats.sort_by_key(|beat| beat.at);
     let mut last = HashMap::new();
     for beat in script.beats {
@@ -724,7 +724,8 @@ pub(crate) fn play(
                 if feed(beat.who).send(event).is_err() {
                     panic!(
                         "thread {}'s scripted Session stopped listening by {}s",
-                        beat.who, beat.at
+                        beat.who.thread(),
+                        beat.at
                     );
                 }
             }
@@ -738,8 +739,8 @@ pub(crate) fn play(
 
 /// Stamp `thread`'s log as last written at `at`: recency is the log's
 /// mtime (`Store::last_used`).
-pub(crate) fn last_used(store: &Path, thread: ThreadId, at: SystemTime) {
-    let log = store.join(thread.to_string()).join("log.jsonl");
+pub(crate) fn last_used(store: &Path, thread: ThreadKey, at: SystemTime) {
+    let log = store.join(thread.thread().to_string()).join("log.jsonl");
     if let Ok(file) = std::fs::File::options().append(true).open(&log) {
         let _ = file.set_modified(at);
     }

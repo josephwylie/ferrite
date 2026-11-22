@@ -4,11 +4,11 @@
 use super::*;
 
 /// The Threads the sidebar lists, top to bottom, as drawn.
-fn listed(threads: &[ThreadId], cx: &mut gpui::VisualTestContext) -> Vec<ThreadId> {
-    let mut rows: Vec<(Pixels, ThreadId)> = threads
+fn listed(threads: &[ThreadKey], cx: &mut gpui::VisualTestContext) -> Vec<ThreadKey> {
+    let mut rows: Vec<(Pixels, ThreadKey)> = threads
         .iter()
         .filter_map(|thread| {
-            debug_bounds(cx, format!("nav-thread-{}", thread.get()))
+            debug_bounds(cx, format!("nav-thread-{}", thread.thread().get()))
                 .map(|row| (row.origin.y, *thread))
         })
         .collect();
@@ -17,18 +17,18 @@ fn listed(threads: &[ThreadId], cx: &mut gpui::VisualTestContext) -> Vec<ThreadI
 }
 
 /// The Threads whose Pane is on screen.
-fn shown(threads: &[ThreadId], cx: &mut gpui::VisualTestContext) -> Vec<ThreadId> {
+fn shown(threads: &[ThreadKey], cx: &mut gpui::VisualTestContext) -> Vec<ThreadKey> {
     threads
         .iter()
         .copied()
-        .filter(|thread| debug_bounds(cx, format!("pane-root-{}", thread.get())).is_some())
+        .filter(|thread| debug_bounds(cx, format!("pane-root-{}", thread.thread().get())).is_some())
         .collect()
 }
 
 fn three_threads<'a>(
     name: &str,
     cx: &'a mut TestAppContext,
-) -> (Entity<CockpitView>, Vec<ThreadId>, &'a mut gpui::VisualTestContext) {
+) -> (Entity<CockpitView>, Vec<ThreadKey>, &'a mut gpui::VisualTestContext) {
     bind_production_keys(cx);
     let (core, _fake) = cockpit(name, 3);
     let threads = core.threads();
@@ -104,7 +104,7 @@ fn the_walk_steps_over_a_parked_thread(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.set_shelf_open(nav::Shelf::Parked, true, cx));
     tick(cx);
     assert!(
-        debug_bounds(cx, format!("nav-thread-{}", threads[1].get())).is_some(),
+        debug_bounds(cx, format!("nav-thread-{}", threads[1].thread().get())).is_some(),
         "the parked row is listed"
     );
     let open = listed(&[threads[0], threads[2]], cx);
@@ -114,8 +114,8 @@ fn the_walk_steps_over_a_parked_thread(cx: &mut TestAppContext) {
     for _ in 0..3 {
         cx.simulate_keystrokes("cmd-}");
         tick(cx);
-        view.read_with(cx, |view, cx| {
-            assert!(view.facts.parked().contains(&view.cockpit.read(cx).thread_key(threads[1])), "still parked");
+        view.read_with(cx, |view, _| {
+            assert!(view.facts.parked().contains(&threads[1]), "still parked");
         });
     }
     assert_eq!(shown(&threads, cx), [open[1]], "three steps over two Threads");

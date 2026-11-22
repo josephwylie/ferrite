@@ -108,9 +108,7 @@ impl CockpitView {
                     window.remove_notification::<Updating>(cx);
                 }
                 let machine = self
-                    .cockpit
-                    .read(cx)
-                    .machine()
+                    .bridge_on_screen(cx)
                     .map(|bridge| bridge.name().to_string());
                 let gone = match (&machine, attention) {
                     (None, _) => Gone::NoServer,
@@ -324,7 +322,7 @@ impl CockpitView {
         let Some(ServerState::Attached { server, since, .. }) = self.cockpit.read(cx).server() else {
             return None;
         };
-        let ours = self.cockpit.read(cx).machine().is_none()
+        let ours = self.bridge_on_screen(cx).is_none()
             && std::env::current_exe().is_ok_and(|exe| exe == server.executable);
         Some(if !ours {
             Build::Other
@@ -357,7 +355,7 @@ impl CockpitView {
         since: std::time::Instant,
         cx: &gpui::App,
     ) -> bool {
-        if self.cockpit.read(cx).machine().is_some() {
+        if self.bridge_on_screen(cx).is_some() {
             return false;
         }
         std::env::current_exe().is_ok_and(|executable| {
@@ -483,7 +481,7 @@ impl CockpitView {
         // A development build never installs the LaunchAgent (main), and
         // must not point the operator's at itself. A machine's Server is
         // not this computer's to start.
-        if !crate::DEV && self.cockpit.read(cx).machine().is_none() {
+        if !crate::DEV && self.bridge_on_screen(cx).is_none() {
             rows.push(settings::toggle(
                 "settings-start-at-login",
                 "Start at login",

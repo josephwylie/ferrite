@@ -10,7 +10,7 @@ use ferrite_ui::theme::*;
 fn solo<'a>(
     name: &str,
     cx: &'a mut TestAppContext,
-) -> (Entity<CockpitView>, ThreadId, &'a mut gpui::VisualTestContext) {
+) -> (Entity<CockpitView>, ThreadKey, &'a mut gpui::VisualTestContext) {
     let (core, _fake, _checkout) = bound_cockpit(name, Provider::Claude);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -21,8 +21,8 @@ fn solo<'a>(
     (view, thread, cx)
 }
 
-fn upsert(view: &Entity<CockpitView>, thread: ThreadId, id: SurfaceId, cx: &mut gpui::VisualTestContext) {
-    view.update(cx, |view, cx| view.upsert_surface(view.cockpit.read(cx).thread_key(thread), id, cx));
+fn upsert(view: &Entity<CockpitView>, thread: ThreadKey, id: SurfaceId, cx: &mut gpui::VisualTestContext) {
+    view.update(cx, |view, cx| view.upsert_surface(thread, id, cx));
     tick(cx);
 }
 
@@ -200,7 +200,7 @@ fn the_plus_menu_lists_every_surface_with_its_letter(cx: &mut TestAppContext) {
 #[gpui::test]
 fn an_empty_panel_says_open_a_surface_and_takes_its_keys(cx: &mut TestAppContext) {
     let (view, thread, cx) = solo("surfaces-empty", cx);
-    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Overview, cx));
     tick(cx);
     assert!(cx.debug_bounds("panel").is_some(), "the Panel stays on");
     assert!(cx.debug_bounds("panel-empty-head").is_some(), "Open a surface");
@@ -222,7 +222,7 @@ fn an_empty_panel_says_open_a_surface_and_takes_its_keys(cx: &mut TestAppContext
     tick(cx);
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Overview));
     // A bare letter fires its row.
-    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Overview, cx));
     view.update(cx, |view, cx| {
         view.surface_empty_key(thread, &gpui::Keystroke::parse("d").unwrap(), cx);
     });
@@ -240,7 +240,7 @@ fn maximize_covers_all_but_the_boards_least_and_restores(cx: &mut TestAppContext
     tick(cx);
     let wide = cx.debug_bounds("panel").unwrap().size.width;
     assert_eq!(wide, px(1900. - NAV_COLUMN_W - DOCK_THREAD_MIN_W));
-    assert!(view.read_with(cx, |view, cx| view.panel.surfaces.get(view.cockpit.read(cx).thread_key(thread)).unwrap().maximized));
+    assert!(view.read_with(cx, |view, _| view.panel.surfaces.get(thread).unwrap().maximized));
     let door = cx.debug_bounds("panel-restore").unwrap();
     cx.simulate_click(door.center(), gpui::Modifiers::none());
     tick(cx);
@@ -309,7 +309,7 @@ fn the_tabs_survive_a_restart(cx: &mut TestAppContext) {
         SurfaceAction::Resize(700.),
         SurfaceAction::ToggleMaximized,
     ] {
-        surfaces.apply(ferrite_core::ThreadKey::fixture(0, thread.get()), true, action);
+        surfaces.apply(ferrite_core::ThreadKey::fixture(0, thread.thread().get()), true, action);
     }
     surfaces.save(&dir).unwrap();
     let prefs = Preferences {
@@ -339,7 +339,7 @@ fn overflowing_tabs_show_chevrons_that_scroll_the_strip(cx: &mut TestAppContext)
     for at in 0..12 {
         upsert(&view, thread, SurfaceId::File(format!("/tmp/overflowing-tab-{at}.rs").into()), cx);
     }
-    view.update(cx, |view, cx| view.activate_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
     settles(cx);
     assert!(cx.debug_bounds("panel-tabs-left").is_none(), "nothing left of the first");
     let right = cx.debug_bounds("panel-tabs-right").expect("more to the right");
@@ -366,7 +366,7 @@ fn the_plus_stays_in_view_past_overflowing_tabs(cx: &mut TestAppContext) {
     for at in 0..12 {
         upsert(&view, thread, SurfaceId::File(format!("/tmp/overflowing-plus-{at}.rs").into()), cx);
     }
-    view.update(cx, |view, cx| view.activate_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
     tick(cx);
     tick(cx);
     let head = cx.debug_bounds("panel-head").unwrap();
@@ -430,7 +430,7 @@ fn the_shown_tab_scrolls_into_view(cx: &mut TestAppContext) {
         shows(&view, &selector, cx);
     }
     assert!(cx.debug_bounds("panel-tabs-right-spent").is_some(), "the strip overflows");
-    view.update(cx, |view, cx| view.activate_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
     settles(cx);
     shows(&view, "panel-tab-Overview", cx);
 }
@@ -444,7 +444,7 @@ fn a_spent_chevron_takes_no_press(cx: &mut TestAppContext) {
     for at in 0..12 {
         upsert(&view, thread, SurfaceId::File(format!("/tmp/spent-tab-{at}.rs").into()), cx);
     }
-    view.update(cx, |view, cx| view.activate_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
     tick(cx);
     tick(cx);
     let scrolled = |cx: &mut gpui::VisualTestContext| {
@@ -473,7 +473,7 @@ fn a_chevron_eases_the_strip(cx: &mut TestAppContext) {
     for at in 0..12 {
         upsert(&view, thread, SurfaceId::File(format!("/tmp/easing-tab-{at}.rs").into()), cx);
     }
-    view.update(cx, |view, cx| view.activate_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
     tick(cx);
     tick(cx);
     let visible = view.read_with(cx, |view, _| f32::from(view.panel.tabs_scroll.bounds().size.width));
@@ -503,7 +503,7 @@ fn a_chevron_eases_the_strip(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_empty_panels_letters_work_from_the_keyboard(cx: &mut TestAppContext) {
     let (view, thread, cx) = solo("empty-keys", cx);
-    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Overview, cx));
     tick(cx);
     let head = cx.debug_bounds("panel-empty-head").expect("Open a surface");
     cx.simulate_click(head.center(), gpui::Modifiers::none());
@@ -533,20 +533,20 @@ fn the_plus_menus_letter_picks_its_row(cx: &mut TestAppContext) {
 fn an_agents_reveal_does_not_undo_a_hide_or_a_maximize(cx: &mut TestAppContext) {
     let (view, thread, cx) = solo("reveal-hidden", cx);
     upsert(&view, thread, SurfaceId::Overview, cx);
-    let seen = view.read_with(cx, |view, cx| view.surface_revision(view.cockpit.read(cx).thread_key(thread)));
+    let seen = view.read_with(cx, |view, _| view.surface_revision(thread));
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     tick(cx);
     assert!(cx.debug_bounds("panel").is_none(), "the operator hid the Panel");
-    let revealed = view.update(cx, |view, cx| view.reveal_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Browser, seen));
+    let revealed = view.update(cx, |view, _| view.reveal_surface(thread, SurfaceId::Browser, seen));
     tick(cx);
     assert!(!revealed, "the reveal is refused");
     assert!(cx.debug_bounds("panel").is_none(), "the Panel stays hidden");
 
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     tick(cx);
-    let seen = view.read_with(cx, |view, cx| view.surface_revision(view.cockpit.read(cx).thread_key(thread)));
-    view.update(cx, |view, cx| view.toggle_panel_maximized(view.cockpit.read(cx).thread_key(thread), cx));
-    let revealed = view.update(cx, |view, cx| view.reveal_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Browser, seen));
+    let seen = view.read_with(cx, |view, _| view.surface_revision(thread));
+    view.update(cx, |view, cx| view.toggle_panel_maximized(thread, cx));
+    let revealed = view.update(cx, |view, _| view.reveal_surface(thread, SurfaceId::Browser, seen));
     assert!(!revealed, "a maximize is acting too");
 }
 
@@ -554,16 +554,16 @@ fn an_agents_reveal_does_not_undo_a_hide_or_a_maximize(cx: &mut TestAppContext) 
 /// Changes section hold for it, with its browser, its PR read, a turned
 /// background card and, when its Panel is the one shown, the stop F6 put
 /// the keyboard on.
-fn hold_tools(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> usize {
+fn hold_tools(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) -> usize {
     view.update(cx, |view, cx| {
         let file = view.thread_path(thread, cx).unwrap().join("src/lib.rs");
         view.open_in_files(thread, file, None, true, cx);
-        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Changes, cx);
+        view.upsert_surface(thread, SurfaceId::Changes, cx);
         view.ensure_diff(crate::cockpit::tools::Diff::PullRequest(crate::cockpit::panel::pr_read::PrTarget::thread(thread, 1)), cx);
-        view.overview.update(cx, |overview, cx| overview.toggle_file(view.cockpit.read(cx).thread_key(thread), "src/lib.rs".to_string(), cx));
-        view.ensure_browser(view.cockpit.read(cx).thread_key(thread), cx);
+        view.overview.update(cx, |overview, cx| overview.toggle_file(thread, "src/lib.rs".to_string(), cx));
+        view.ensure_browser(thread, cx);
         view.fixture_pr_snapshot(thread, super::pr::snapshot(ferrite_core::protocol::WirePrState::Open), cx);
-        view.background.update(cx, |background, cx| background.turn(view.cockpit.read(cx).thread_key(thread), "call-1".into(), cx));
+        view.background.update(cx, |background, cx| background.turn(thread, "call-1".into(), cx));
     });
     tick(cx);
     super::panel_focus::press("f6", cx);

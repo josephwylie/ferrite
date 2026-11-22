@@ -39,15 +39,15 @@ fn workflows_window<'a>(
         .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, thread);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     core.fixture_live_factory();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
-    view.update(cx, |view, cx| view.open_factory(project, cx));
+    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
     tick(cx);
-    (view, cx, fake, project)
+    (view, cx, fake, project.project())
 }
 
 fn names(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<String> {

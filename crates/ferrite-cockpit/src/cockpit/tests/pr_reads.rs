@@ -47,7 +47,7 @@ fn held<'a>(
     cx: &'a mut TestAppContext,
 ) -> (
     Entity<CockpitView>,
-    Vec<ThreadId>,
+    Vec<ThreadKey>,
     &'a mut gpui::VisualTestContext,
 ) {
     let (core, _fake) = cockpit(name, count);
@@ -69,7 +69,7 @@ fn held<'a>(
     (view, threads, cx)
 }
 
-fn open(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
+fn open(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| {
         view.focus_thread(thread, cx);
         view.open_pr_surface(thread, cx);
@@ -83,7 +83,7 @@ fn waiting(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<
 
 fn title(
     view: &Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     cx: &mut gpui::VisualTestContext,
 ) -> Option<String> {
     view.read_with(cx, |view, cx| {
@@ -101,14 +101,14 @@ fn click(selector: &'static str, cx: &mut gpui::VisualTestContext) {
 
 fn tab_open(
     view: &Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     number: u64,
     cx: &mut gpui::VisualTestContext,
 ) -> bool {
-    view.read_with(cx, |view, cx| {
+    view.read_with(cx, |view, _| {
         view.panel
             .surfaces
-            .get(view.cockpit.read(cx).thread_key(thread))
+            .get(thread)
             .is_some_and(|state| state.tabs.contains(&SurfaceId::PullRequest(number)))
     })
 }
@@ -197,7 +197,7 @@ fn a_pr_that_moved_on_mid_read_does_not_come_back(cx: &mut TestAppContext) {
         "an explicitly opened PR remains available"
     );
     assert!(tab_open(&view, thread, 49, cx));
-    let shown = view.read_with(cx, |view, cx| view.active_surface(view.cockpit.read(cx).thread_key(thread)));
+    let shown = view.read_with(cx, |view, _| view.active_surface(thread));
 
     late.answer(read_of(pr_at(48, "o/r", "The old PR")));
     tick(cx);
@@ -207,7 +207,7 @@ fn a_pr_that_moved_on_mid_read_does_not_come_back(cx: &mut TestAppContext) {
         "the prior PR remains available"
     );
     assert_eq!(
-        view.read_with(cx, |view, cx| view.active_surface(view.cockpit.read(cx).thread_key(thread))),
+        view.read_with(cx, |view, _| view.active_surface(thread)),
         shown
     );
     assert_eq!(title(&view, thread, cx), None, "#49 has not been read");
@@ -222,7 +222,7 @@ fn closing_the_tab_drops_a_late_answer(cx: &mut TestAppContext) {
     open(&view, thread, cx);
     let late = waiting(&view, cx).pop().unwrap();
     view.update(cx, |view, cx| {
-        view.close_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::PullRequest(48), cx)
+        view.close_surface(thread, &SurfaceId::PullRequest(48), cx)
     });
     tick(cx);
 

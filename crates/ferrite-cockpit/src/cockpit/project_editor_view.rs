@@ -590,7 +590,7 @@ impl CockpitView {
     /// reads the card: the card calls it while its own update is running.
     fn project_editor_inputs(&self, target: Option<ProjectId>, cx: &App) -> ProjectEditorInputs {
         let project = target
-            .and_then(|project| self.cockpit.read(cx).registry().project(project))
+            .and_then(|project| self.cockpit.read(cx).registry().reading().project(project))
             .map(|project| {
                 (
                     project.title.clone(),
@@ -603,9 +603,7 @@ impl CockpitView {
             project,
             in_use: target.is_some_and(|project| self.project_in_use(project, cx)),
             machine: self
-                .cockpit
-                .read(cx)
-                .machine()
+                .bridge_on_screen(cx)
                 .map_or_else(String::new, |bridge| bridge.name().to_string()),
         }
     }
@@ -621,7 +619,10 @@ impl CockpitView {
             ProjectEditorEvent::RemoveDirectory(project, index) => {
                 let refusal = self
                     .cockpit
-                    .update(cx, |cockpit, _| cockpit.remove_project_directory(project, index))
+                    .update(cx, |cockpit, _| {
+                        let project = cockpit.registry().project_key(project);
+                        cockpit.remove_project_directory(project, index)
+                    })
                     .err()
                     .map(|error| SharedString::from(format!("directory unchanged · {error}")));
                 card.update(cx, |card, cx| card.set_error(refusal, cx));
@@ -631,7 +632,10 @@ impl CockpitView {
                 if self.project_in_use(project, cx) {
                     return;
                 }
-                match self.cockpit.update(cx, |cockpit, _| cockpit.remove_project(project)) {
+                let removed = self.cockpit.update(cx, |cockpit, _| {
+                    cockpit.remove_project(cockpit.registry().project_key(project))
+                });
+                match removed {
                     Err(error) => {
                         let error = Some(format!("not removed · {error}").into());
                         card.update(cx, |card, cx| card.set_error(error, cx));
@@ -687,7 +691,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         let cockpit = cx.weak_entity();
-        let on_machine = self.on_machine(cx);
+        let on_machine = self.elsewhere(self.on_screen(cx), cx);
         let card =
             cx.new(|cx| ProjectEditorView::new(cockpit, target, title, on_machine, cx));
         cx.subscribe(&card, Self::on_project_editor_event).detach();
@@ -717,7 +721,8 @@ impl CockpitView {
                     Ok(project)
                 } else {
                     self.cockpit.update(cx, |cockpit, _| {
-                        cockpit.rename_project(project, typed).map(|()| project)
+                        let key = cockpit.registry().project_key(project);
+                        cockpit.rename_project(key, typed).map(|()| project)
                     })
                 }
             }
@@ -727,7 +732,7 @@ impl CockpitView {
                         Some(name) => cockpit.rename_project(project, &name),
                         None => Ok(()),
                     }
-                    .map(|()| project)
+                    .map(|()| project.project())
                 })
             }),
         };
@@ -746,7 +751,7 @@ impl CockpitView {
                     );
                 }
                 self.nav_notice.clear();
-                self.refresh_names(cx);
+                self.refresh_names();
             }
             Err(error) => {
                 let error = Some(format!("project unchanged · {error}").into());
@@ -767,7 +772,10 @@ impl CockpitView {
             Some(project) => {
                 let refusal = self
                     .cockpit
-                    .update(cx, |cockpit, _| cockpit.add_project_directories(project, &[path]))
+                    .update(cx, |cockpit, _| {
+                        let project = cockpit.registry().project_key(project);
+                        cockpit.add_project_directories(project, &[path])
+                    })
                     .err()
                     .map(|error| format!("directory unchanged · {error}").into());
                 card.update(cx, |card, cx| card.set_error(refusal, cx));

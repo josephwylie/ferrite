@@ -23,7 +23,7 @@ fn board<'a>(
 ) -> (
     Entity<CockpitView>,
     Fake,
-    ThreadId,
+    ThreadKey,
     &'a mut gpui::VisualTestContext,
 ) {
     let (core, fake) = cockpit(name, 1);
@@ -95,9 +95,8 @@ fn a_sent_image_opens_in_the_lightbox(cx: &mut TestAppContext) {
     let (wide, small) = (dir.join("wide.png"), dir.join("small.png"));
     png(&wide, 1600, 1000);
     png(&small, 120, 80);
-    let (core, _fake) = cockpit("viewer-sent", 1);
+    let (mut core, _fake) = cockpit("viewer-sent", 1);
     let thread = core.threads()[0];
-    let mut core = core;
     let _ = core.send(
         thread,
         ferrite_core::prompt_files::compose("compare these", &[wide.clone(), small.clone()]),
@@ -525,9 +524,8 @@ fn the_lightbox_grows_from_the_pressed_picture(cx: &mut TestAppContext) {
     let dir = scratch("viewer-origin-files");
     let image = dir.join("one.png");
     png(&image, 400, 300);
-    let (core, _fake) = cockpit("viewer-origin", 1);
+    let (mut core, _fake) = cockpit("viewer-origin", 1);
     let thread = core.threads()[0];
-    let mut core = core;
     let _ = core.send(
         thread,
         ferrite_core::prompt_files::compose("look", &[image]),

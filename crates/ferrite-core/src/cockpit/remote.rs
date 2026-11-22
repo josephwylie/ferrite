@@ -74,6 +74,9 @@ pub struct Attach {
     /// Either's parked Threads are what its Server publishes (ADR 0026).
     pub store: PathBuf,
     pub server: Endpoint,
+    /// What saved files name the machine (ADR 0045); `None` with no
+    /// environment, whose Threads nothing saves.
+    pub saved_as: Option<crate::MachineKey>,
     pub client: Peer,
     /// Draws the Visuals the Server's agents ask for; none, and this window
     /// does not offer to.

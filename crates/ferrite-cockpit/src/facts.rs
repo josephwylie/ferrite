@@ -16,7 +16,7 @@ use ferrite_core::pr_watch::{WatchedPr, Watching};
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::{BranchStatus, PullRequest, WorkspaceBinding};
-use ferrite_core::{ThreadId, ThreadKey};
+use ferrite_core::ThreadKey;
 use ferrite_pane::pane::WallCard;
 use gpui::SharedString;
 
@@ -154,9 +154,8 @@ impl Facts {
     /// Project's default branch. Those are returned for the caller to run
     /// off the UI thread (`looked_up`); the branch refresh then keeps the
     /// label current, with its status.
-    pub fn opened(&mut self, cockpit: &Cockpit, thread: ThreadId) -> Lookups {
+    pub fn opened(&mut self, cockpit: &Cockpit, thread: ThreadKey) -> Lookups {
         let open = cockpit.thread(thread);
-        let thread = cockpit.thread_key(thread);
         self.refresh_metadata(cockpit, thread);
         self.refresh_wall(cockpit, thread);
         let cwd = ferrite_core::workspace::effective_cwd(
@@ -182,9 +181,8 @@ impl Facts {
     /// turn just ended, for the caller to re-read it off the UI thread, and
     /// whether a watch started, ended or stopped holding, which moves the
     /// PR the caller reads again.
-    pub fn streamed(&mut self, cockpit: &Cockpit, thread: ThreadId) -> Streamed {
+    pub fn streamed(&mut self, cockpit: &Cockpit, thread: ThreadKey) -> Streamed {
         let busy = cockpit.thread(thread).is_some_and(|open| open.busy());
-        let thread = cockpit.thread_key(thread);
         let facts = self.threads.entry(thread).or_default();
         let settled = facts.main_busy && !busy;
         facts.main_busy = busy;
@@ -206,8 +204,8 @@ impl Facts {
     /// The operator's own act — a prompt, an interrupt, an answer, a
     /// re-aim — or the watchdog's restart notice changed the transcript:
     /// the wall card refolds, at once.
-    pub fn acted(&mut self, cockpit: &Cockpit, thread: ThreadId) {
-        self.refresh_wall(cockpit, cockpit.thread_key(thread));
+    pub fn acted(&mut self, cockpit: &Cockpit, thread: ThreadKey) {
+        self.refresh_wall(cockpit, thread);
     }
 
     /// The watchdog's tick: the checkout labels ride its slow cadence (#29)
@@ -218,7 +216,6 @@ impl Facts {
         cockpit
             .threads()
             .into_iter()
-            .map(|thread| cockpit.thread_key(thread))
             .filter(|thread| self.refresh_metadata(cockpit, *thread))
             .collect()
     }
@@ -304,17 +301,15 @@ impl Facts {
             .parked_in_order()
             .unwrap_or_default()
             .into_iter()
-            .map(|thread| cockpit.thread_key(thread))
             .collect();
         let mut lookups = Lookups::default();
         for key in &ordered {
-            let thread = key.thread();
-            let last_used = cockpit.last_activity(thread);
+            let last_used = cockpit.last_activity(*key);
             let facts = self.threads.entry(*key).or_default();
             facts.last_used = last_used;
-            facts.name = display_name(cockpit, thread, self.auto_title);
-            facts.subagents = cockpit.subagent_count(thread).unwrap_or_default();
-            let Ok(meta) = cockpit.peek(thread) else {
+            facts.name = display_name(cockpit, *key, self.auto_title);
+            facts.subagents = cockpit.subagent_count(*key).unwrap_or_default();
+            let Ok(meta) = cockpit.peek(*key) else {
                 facts.provider = None;
                 facts.project = None;
                 facts.project_label = None;
@@ -390,8 +385,7 @@ impl Facts {
     /// default branch, read once). This path stays in the pump, so it must
     /// never launch Git. Answers whether any of these facts moved.
     fn refresh_metadata(&mut self, cockpit: &Cockpit, key: ThreadKey) -> bool {
-        let thread = key.thread();
-        let (project, project_label, worktree) = match cockpit.peek(thread) {
+        let (project, project_label, worktree) = match cockpit.peek(key) {
             Ok(meta) => (
                 meta.project_id,
                 project_label(cockpit, meta.project_id, meta.workspace.as_ref()),
@@ -399,8 +393,8 @@ impl Facts {
             ),
             Err(_) => (None, None, None),
         };
-        let name = display_name(cockpit, thread, self.auto_title);
-        let last_used = cockpit.last_activity(thread);
+        let name = display_name(cockpit, key, self.auto_title);
+        let last_used = cockpit.last_activity(key);
         let facts = self.threads.entry(key).or_default();
         let changed = facts.last_used != last_used
             || facts.project != project
@@ -417,9 +411,9 @@ impl Facts {
 
     /// The name alone — after a first prompt or a rename, the one fact
     /// that moved.
-    pub fn renamed(&mut self, cockpit: &Cockpit, thread: ThreadId) {
+    pub fn renamed(&mut self, cockpit: &Cockpit, thread: ThreadKey) {
         let name = display_name(cockpit, thread, self.auto_title);
-        self.threads.entry(cockpit.thread_key(thread)).or_default().name = name;
+        self.threads.entry(thread).or_default().name = name;
     }
 
     /// What a Thread is called, from the cache; `New thread` until a moment
@@ -456,8 +450,8 @@ impl Facts {
     /// Copy in one Thread's Wall card, counts and changed files from its
     /// digest, wherever its transcript can change.
     fn refresh_wall(&mut self, cockpit: &Cockpit, key: ThreadKey) {
-        let open = cockpit.thread(key.thread());
-        let last_used = cockpit.last_activity(key.thread());
+        let open = cockpit.thread(key);
+        let last_used = cockpit.last_activity(key);
         let facts = self.threads.entry(key).or_default();
         if let Some(open) = open {
             let digest = open.digest();
@@ -506,7 +500,7 @@ fn project_label(
     workspace: Option<&WorkspaceBinding>,
 ) -> Option<SharedString> {
     if let Some(title) = project
-        .and_then(|id| cockpit.registry().project(id))
+        .and_then(|id| cockpit.registry().reading().project(id))
         .map(|project| SharedString::from(project.title.clone()))
     {
         return Some(title);
@@ -593,7 +587,7 @@ pub const NEW_THREAD: &str = "New thread";
 /// What a Thread is called (rule 2.11): its real title when it has one;
 /// before that, the first prompt cut at a word boundary (`auto`, the
 /// operator's setting); with no prompt, `New thread`. Never `thread-{id}`.
-fn display_name(cockpit: &Cockpit, thread: ThreadId, auto: bool) -> SharedString {
+fn display_name(cockpit: &Cockpit, thread: ThreadKey, auto: bool) -> SharedString {
     let shown = cockpit.display_title(thread, auto);
     let titled = cockpit
         .thread(thread)
@@ -602,7 +596,7 @@ fn display_name(cockpit: &Cockpit, thread: ThreadId, auto: bool) -> SharedString
     if titled {
         return shown.into();
     }
-    if shown == format!("thread-{}", thread.get()) {
+    if shown == format!("thread-{}", thread.thread().get()) {
         return NEW_THREAD.into();
     }
     at_word_boundary(&shown).into()
@@ -788,7 +782,7 @@ mod tests {
             .unwrap();
         drop(writer);
         let cockpit = Cockpit::new(store, Box::new(crate::demo::Spawn::new(false)));
-        let thread = cockpit.thread_key(thread);
+        let thread = cockpit.key(thread);
         let mut facts = Facts::default();
 
         let lookups = facts.parked_changed(&cockpit);
@@ -843,7 +837,7 @@ mod tests {
         writer.flush().unwrap();
         writer.park();
         let cockpit = Cockpit::new(store, Box::new(crate::demo::Spawn::new(false)));
-        let (titled, untitled) = (cockpit.thread_key(titled), cockpit.thread_key(untitled));
+        let (titled, untitled) = (cockpit.key(titled), cockpit.key(untitled));
         let mut facts = Facts::default();
 
         facts.parked_changed(&cockpit);
@@ -885,18 +879,18 @@ mod tests {
             .unwrap();
         drop(writer);
         let mut cockpit = Cockpit::new(store, Box::new(crate::demo::Spawn::new(false)));
+        let thread = cockpit.key(thread);
         cockpit.revive(thread).unwrap();
-        let thread = cockpit.thread_key(thread);
         let mut facts = Facts::default();
 
-        let lookups = facts.opened(&cockpit, thread.thread());
+        let lookups = facts.opened(&cockpit, thread);
         assert_eq!(lookups.branches, vec![(thread, checkout.clone())]);
         assert_eq!(lookups.default_branches, vec![(project, checkout.clone())]);
         let opened = facts.get(thread).unwrap();
         assert_eq!(opened.branch, None, "no git ran here");
         assert_eq!(opened.default_branch, None, "no git ran here");
         assert!(
-            facts.opened(&cockpit, thread.thread()).default_branches.is_empty(),
+            facts.opened(&cockpit, thread).default_branches.is_empty(),
             "a Project's default branch is asked once"
         );
 

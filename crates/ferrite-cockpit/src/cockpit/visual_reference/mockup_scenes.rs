@@ -8,7 +8,7 @@
 //! view: open the panel, or the palette with a query.
 
 use ferrite_core::workspace::BranchStatus;
-use ferrite_core::ThreadId;
+use ferrite_core::ThreadKey;
 use gpui::{Context, Window};
 
 use super::{CockpitView, HeldLoops, Home, Scene, Setup};
@@ -145,7 +145,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
     let setup: Setup = Box::new(move |view, window, cx| {
         prepare(view, branches, window, cx);
         if shot.panel() {
-            view.open_panel(view.cockpit.read(cx).thread_key(cast.memory), cx);
+            view.open_panel(cast.memory, cx);
         }
         if shot == Shot::SoloChanges {
             unfold_file(view, cast.memory, "scheduled_work.rs", cx);
@@ -163,7 +163,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
 /// window opened, and a window that has the keyboard.
 fn prepare(
     view: &mut CockpitView,
-    branches: Vec<(ThreadId, BranchStatus)>,
+    branches: Vec<(ThreadKey, BranchStatus)>,
     window: &mut Window,
     cx: &mut Context<CockpitView>,
 ) {
@@ -177,7 +177,7 @@ fn prepare(
     view.facts.set_branches(
         branches
             .into_iter()
-            .map(|(thread, status)| (view.cockpit.read(cx).thread_key(thread), Some(status)))
+            .map(|(thread, status)| (thread, Some(status)))
             .collect(),
     );
     use gpui::component::WindowExt as _;
@@ -190,11 +190,11 @@ fn prepare(
 /// `scheduled_work.rs`: its hunks read from the crash fix's worktree.
 fn unfold_file(
     view: &mut CockpitView,
-    thread: ThreadId,
+    thread: ThreadKey,
     name: &str,
     cx: &mut Context<CockpitView>,
 ) {
-    let path = view.facts.get(view.cockpit.read(cx).thread_key(thread)).and_then(|facts| {
+    let path = view.facts.get(thread).and_then(|facts| {
         facts
             .changed_files
             .iter()
@@ -203,7 +203,6 @@ fn unfold_file(
     });
     match path {
         Some(path) => {
-            let thread = view.cockpit.read(cx).thread_key(thread);
             view.overview.update(cx, |overview, cx| overview.toggle_file(thread, path, cx))
         }
         None => eprintln!("ferrite: refresh scene: no changed file {name} to unfold"),

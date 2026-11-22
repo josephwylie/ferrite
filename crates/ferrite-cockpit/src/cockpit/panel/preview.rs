@@ -183,7 +183,7 @@ pub(in crate::cockpit) struct FileSurfaceInputs {
 /// What a frame's tend found.
 pub(in crate::cockpit) struct Tended {
     /// Each document a Thread's preview opened, as the Surface it is.
-    opened: Vec<(ThreadId, SurfaceId)>,
+    opened: Vec<(ThreadKey, SurfaceId)>,
     /// A Browser annotation's capture is still being read.
     waiting: bool,
 }
@@ -760,7 +760,7 @@ impl CockpitView {
             self.open_in_files(thread, path, line, true, cx);
             return;
         }
-        if self.on_machine(cx) {
+        if self.elsewhere(self.on_screen(cx), cx) {
             self.nav_notice.hint("Start a Thread in this remote workspace before opening its files.");
             cx.notify();
             return;
@@ -798,7 +798,7 @@ impl CockpitView {
         match (pane.thread(), pane.preview.document()) {
             (Some(thread), Some(document)) => {
                 let id = document_surface(&document);
-                self.close_surface(self.cockpit.read(cx).thread_key(thread), &id, cx);
+                self.close_surface(thread, &id, cx);
             }
             _ => pane.preview.close(),
         }
@@ -808,7 +808,7 @@ impl CockpitView {
 
     /// A File (or the Browser) tab of `thread` closed: the preview puts its
     /// document away if it shows it, and forgets it.
-    pub(in crate::cockpit) fn close_preview_of(&mut self, thread: ThreadId, path: &Path, cx: &mut Context<Self>) {
+    pub(in crate::cockpit) fn close_preview_of(&mut self, thread: ThreadKey, path: &Path, cx: &mut Context<Self>) {
         let Some(index) = self.pane_for(thread) else {
             return;
         };
@@ -825,7 +825,7 @@ impl CockpitView {
     /// one, else the file's.
     pub(in crate::cockpit) fn file_surface_title(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         path: &Path,
         cx: &gpui::App,
     ) -> SharedString {
@@ -898,7 +898,6 @@ impl CockpitView {
             .detach();
         }
         for (thread, id) in tended.opened {
-            let thread = self.cockpit.read(cx).thread_key(thread);
             if self.active_surface(thread).as_ref() != Some(&id) || !self.panel_open(thread) {
                 self.apply_surface(thread, SurfaceAction::Open(id));
             }
@@ -917,7 +916,7 @@ impl CockpitView {
             let Some(thread) = self.panes[index].thread() else {
                 continue;
             };
-            let wanted = match self.active_surface(self.cockpit.read(cx).thread_key(thread)) {
+            let wanted = match self.active_surface(thread) {
                 Some(SurfaceId::File(path)) => path,
                 Some(SurfaceId::Browser) => PathBuf::from(BROWSER_PATH),
                 _ => continue,
@@ -946,7 +945,7 @@ impl CockpitView {
             }
         }
         for (thread, id) in unfillable {
-            self.forget_surface(self.cockpit.read(cx).thread_key(thread), &id);
+            self.forget_surface(thread, &id);
         }
     }
 
@@ -955,7 +954,7 @@ impl CockpitView {
     /// review is rebuilt from the prompt in history that sent it.
     fn sent_annotation(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         original: &Path,
         cx: &gpui::App,
     ) -> Option<ferrite_core::browser_annotations::Annotation> {
@@ -997,7 +996,7 @@ impl CockpitView {
             .preview
             .document()
             .is_some_and(|document| matches!(document.body, Body::Browser))
-            .then(|| self.browser_body(pane.thread().map(|thread| self.cockpit.read(cx).thread_key(thread)), cx));
+            .then(|| self.browser_body(pane.thread(), cx));
         Some(FileSurfaceInputs {
             owner,
             preview: pane.preview.clone(),

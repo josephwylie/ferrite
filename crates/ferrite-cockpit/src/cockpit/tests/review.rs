@@ -388,7 +388,7 @@ fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
     view.update_in(cx, |view, window, cx| view.press_menu_row(open, window, cx));
     tick(cx);
     let path = view
-        .read_with(cx, |view, cx| view.files.read(cx).active_path(view.cockpit.read(cx).thread_key(view.panes[0].thread().unwrap())))
+        .read_with(cx, |view, cx| view.files.read(cx).active_path(view.panes[0].thread().unwrap()))
         .expect("the file opens in Files");
     assert!(path.ends_with("src/nav.rs"), "{path:?}");
     assert!(
@@ -511,8 +511,8 @@ fn unfolding_a_panel_file_reads_its_hunks_off_the_ui_thread(cx: &mut TestAppCont
     cx.simulate_click(fold.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let path = view.read_with(cx, |view, cx| {
-        view.facts.get(view.cockpit.read(cx).thread_key(thread)).unwrap().changed_files[0]
+    let path = view.read_with(cx, |view, _| {
+        view.facts.get(thread).unwrap().changed_files[0]
             .path
             .clone()
     });

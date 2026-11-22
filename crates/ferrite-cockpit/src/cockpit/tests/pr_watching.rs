@@ -90,7 +90,7 @@ fn a_watch_whose_digest_lands_while_the_window_acts_still_reaches_the_card(cx: &
     until(cx, |cx| cx.debug_bounds("details-pr-watch").is_some());
     assert!(palette(&view, cx).contains(&"Stop watching PR".to_string()));
     let menu: Vec<String> = view.read_with(cx, |view, cx| {
-        view.context_rows(MenuTarget::PrLink(keyed(view, thread, cx)), cx)
+        view.context_rows(MenuTarget::PrLink(thread), cx)
             .into_iter()
             .flatten()
             .map(|(item, _)| item.label.to_string())
@@ -126,7 +126,7 @@ fn a_watch_holds_the_thread_working_while_checks_run_or_until_merged(cx: &mut Te
     let seen = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             (
-                view.nav_state(cx).working.iter().any(|row| row.key.thread() == thread),
+                view.nav_state(cx).working.iter().any(|row| row.key == thread),
                 view.background_work_title(0, cx),
             )
         })

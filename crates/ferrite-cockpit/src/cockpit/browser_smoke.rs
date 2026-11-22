@@ -12,12 +12,12 @@ use std::time::{Duration, Instant};
 /// the reply (ADR 0041): `None` until the ask is answered, then asked again.
 fn served(
     view: &Entity<CockpitView>,
-    thread: ferrite_core::ThreadId,
+    thread: ferrite_core::ThreadKey,
     cx: &mut App,
 ) -> Result<Option<ferrite_core::browser::State>, String> {
     thread_local! {
         static ASKED: std::cell::RefCell<std::collections::BTreeMap<
-            ferrite_core::ThreadId,
+            ferrite_core::ThreadKey,
             ferrite_core::cockpit::Ask<ferrite_core::browser::State>,
         >> = Default::default();
     }
@@ -122,7 +122,7 @@ impl CockpitView {
                                 std::fs::write(output.join("lifecycle-before-restoration.json"),serde_json::to_vec_pretty(&state.tabs).unwrap()).map_err(|e|e.to_string())?;
                                 if let Some(tab)=state.tabs.iter().find(|tab|Some(tab.id)!=state.active && !tab.live) {
                                     restoring_page=Some((tab.document(),tab.url.clone()));
-                                    view.update(cx,|view,cx|view.browser_action(view.cockpit.read(cx).thread_key(thread),ferrite_core::browser::Action::Select{tab:tab.id},cx));
+                                    view.update(cx,|view,cx|view.browser_action(thread,ferrite_core::browser::Action::Select{tab:tab.id},cx));
                                     phase(&output,"restored-page");quiet_started=Some(Instant::now());return Ok(false);
                                 }
                             }
@@ -210,7 +210,7 @@ impl CockpitView {
                             { preview_expanded=true; }
                             return Ok(false);
                         }
-                        let viewport=view.read(cx).browser_smoke_viewport(view.read(cx).cockpit.read(cx).thread_key(scenario_thread.expect("scenario Thread")));
+                        let viewport=view.read(cx).browser_smoke_viewport(scenario_thread.expect("scenario Thread"));
                         let Some(viewport)=viewport else{return Ok(false);};
                         if viewport.width==0 || viewport.height==0 { return Ok(false); }
                         std::fs::write(output.join("browser-viewport.json"),serde_json::to_vec_pretty(&serde_json::json!({"width_css":viewport.width,"height_css":viewport.height,"device_scale":viewport.scale})).unwrap()).map_err(|e|e.to_string())?;
@@ -316,7 +316,7 @@ impl CockpitView {
                 "success": error.is_none(), "error": error,
                 "normal_native_window": true, "preview_operator_route": opened,
                 "window_pointer_input": clicked, "rendered_frames": frames,
-                "provider_requested": provider, "annotations": annotate, "boundaries": boundaries, "annotation_history": history, "held_screenshot": held_screenshot, "scenario_thread": scenario_thread, "work_orders": work_orders, "provider_started": provider_started,
+                "provider_requested": provider, "annotations": annotate, "boundaries": boundaries, "annotation_history": history, "held_screenshot": held_screenshot, "scenario_thread": scenario_thread.map(|thread| thread.thread()), "work_orders": work_orders, "provider_started": provider_started,
                 "elapsed_ms": started.elapsed().as_millis(),
                 "scope": if boundaries { "actual provider/manual/stale/uncertain/recovery boundaries with independent page oracle" } else if history { "restart and native history review of original annotation evidence with zero eager pages" } else if annotate { "in-page annotation editor stroke, element and region capture, review/remove/batch Composer send and native provider PNG delivery" } else if work_orders { "one prescribed work order through actual provider and owning Preview; annotations are not tested" } else if held_screenshot { "first provider Screenshot during a held operator gesture; no mutation receipt permitted" } else { "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested" },
             });

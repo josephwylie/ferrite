@@ -127,8 +127,8 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
         cx.simulate_resize(gpui::size(px(width), px(1200.)));
         tick(cx);
         let island = cx.debug_bounds("question-island").unwrap();
-        let other = bounds(cx, format!("request-other-{}-{serial}-0", thread.get()));
-        let submit = bounds(cx, format!("request-submit-{}-{serial}", thread.get()));
+        let other = bounds(cx, format!("request-other-{}-{serial}-0", thread.thread().get()));
+        let submit = bounds(cx, format!("request-submit-{}-{serial}", thread.thread().get()));
         assert!(
             (submit.left() >= island.left()
                 && submit.top() >= island.top()
@@ -183,11 +183,11 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
     assert!(first.right() <= island.right() && second.top() >= first.bottom());
     cx.simulate_click(first.center(), gpui::Modifiers::none());
     cx.simulate_click(second.center(), gpui::Modifiers::none());
-    let other_point = bounds(cx, format!("request-other-{}-{serial}-0", thread.get())).center();
+    let other_point = bounds(cx, format!("request-other-{}-{serial}-0", thread.thread().get())).center();
     cx.simulate_click(other_point, gpui::Modifiers::none());
     let note = "  keep  two   spaces  ";
     cx.simulate_input(note);
-    let submit_point = bounds(cx, format!("request-submit-{}-{serial}", thread.get())).center();
+    let submit_point = bounds(cx, format!("request-submit-{}-{serial}", thread.thread().get())).center();
     cx.simulate_click(submit_point, gpui::Modifiers::none());
     tick(cx);
     assert!(
@@ -211,7 +211,7 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
         .unwrap();
     tick(cx);
     assert!(cx.debug_bounds("question-island").is_some());
-    let submit_point = bounds(cx, format!("request-submit-{}-{serial}", thread.get())).center();
+    let submit_point = bounds(cx, format!("request-submit-{}-{serial}", thread.thread().get())).center();
     cx.simulate_click(submit_point, gpui::Modifiers::none());
     tick(cx);
     assert_eq!(fake.answered.borrow().len(), 2);
@@ -527,7 +527,7 @@ fn received_reasoning_is_shown_once_during_live_to_settled_handoff(cx: &mut Test
     let historical_count = |cx: &gpui::VisualTestContext, source: &str| {
         view.read_with(cx, |view, _| {
             view.selection
-                .registered(view.panes[0].thread().unwrap())
+                .registered(view.panes[0].thread().unwrap().thread())
                 .iter()
                 .filter(|(_, _, _, value)| value == source)
                 .count()
@@ -698,9 +698,9 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
         tick(cx);
         let island = cx.debug_bounds("question-island").unwrap();
         let input = cx.debug_bounds("approval-input").unwrap();
-        let allow = bounds(cx, format!("request-allow-{}-{serial}", thread.get()));
-        let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
-        let title = bounds(cx, format!("request-title-{}-{serial}", thread.get()));
+        let allow = bounds(cx, format!("request-allow-{}-{serial}", thread.thread().get()));
+        let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.thread().get()));
+        let title = bounds(cx, format!("request-title-{}-{serial}", thread.thread().get()));
         assert!(
             title.size.height >= px(ferrite_ui::theme::LH_UI * 3.),
             "the repro must retain a title spanning at least three lines: {title:?}"

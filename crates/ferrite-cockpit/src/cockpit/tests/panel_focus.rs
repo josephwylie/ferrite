@@ -54,7 +54,7 @@ fn with_tabs<'a>(
     cx: &'a mut TestAppContext,
 ) -> (
     Entity<CockpitView>,
-    ThreadId,
+    ThreadKey,
     &'a mut gpui::VisualTestContext,
 ) {
     let (core, _fake, _checkout) = bound_cockpit(name, Provider::Claude);
@@ -65,8 +65,8 @@ fn with_tabs<'a>(
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
-        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx);
-        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Changes, cx);
+        view.upsert_surface(thread, SurfaceId::Files, cx);
+        view.upsert_surface(thread, SurfaceId::Changes, cx);
         view.panes[0]
             .composer
             .update(cx, |composer, cx| composer.set(SENTINEL.into(), cx));
@@ -157,10 +157,10 @@ fn enter_presses_a_control_and_escape_gives_the_keyboard_back(cx: &mut TestAppCo
     press("end", cx);
     activate("enter", cx);
     assert!(
-        view.read_with(cx, |view, cx| view
+        view.read_with(cx, |view, _| view
             .panel
             .surfaces
-            .get(view.cockpit.read(cx).thread_key(thread))
+            .get(thread)
             .unwrap()
             .maximized),
         "⏎ maximizes"
@@ -196,7 +196,7 @@ fn arrowing_along_overflowing_tabs_scrolls_each_stop_into_view(cx: &mut TestAppC
     view.update(cx, |view, cx| {
         for n in 0..14 {
             let path = std::path::PathBuf::from(format!("/work/a-long-file-name-{n}.rs"));
-            view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::File(path), cx);
+            view.upsert_surface(thread, SurfaceId::File(path), cx);
         }
     });
     tick(cx);
@@ -398,7 +398,7 @@ fn a_focus_the_server_asks_for_leaves_the_keyboard_to_the_new_composer(cx: &mut 
     view.update(cx, |view, cx| {
         view.cockpit
             .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
-                thread: second,
+                thread: second.thread(),
                 fork_of: None,
             }));
     });
@@ -450,7 +450,7 @@ fn with_marked_file<'a>(
     cx: &'a mut TestAppContext,
 ) -> (
     Entity<CockpitView>,
-    ThreadId,
+    ThreadKey,
     std::path::PathBuf,
     &'a mut gpui::VisualTestContext,
 ) {
@@ -488,7 +488,7 @@ fn find_in_files_searches_the_file_not_the_transcript(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_in_files(thread, file, None, true, cx));
     tick(cx);
     let editor = view.read_with(cx, |view, cx| {
-        view.files.read(cx).shown_editor(view.cockpit.read(cx).thread_key(thread)).expect("a code file")
+        view.files.read(cx).shown_editor(thread).expect("a code file")
     });
 
     press("f6", cx);
@@ -525,7 +525,7 @@ fn the_first_find_hit_in_a_long_file_is_in_view(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_in_files(thread, file, None, true, cx));
     tick(cx);
     let editor = view.read_with(cx, |view, cx| {
-        view.files.read(cx).shown_editor(view.cockpit.read(cx).thread_key(thread)).expect("a code file")
+        view.files.read(cx).shown_editor(thread).expect("a code file")
     });
 
     press("f6", cx);
@@ -553,7 +553,7 @@ fn a_find_hit_past_unseen_lines_is_in_view(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_in_files(thread, file, None, true, cx));
     tick(cx);
     let editor = view.read_with(cx, |view, cx| {
-        view.files.read(cx).shown_editor(view.cockpit.read(cx).thread_key(thread)).expect("a code file")
+        view.files.read(cx).shown_editor(thread).expect("a code file")
     });
 
     press("f6", cx);
@@ -584,7 +584,7 @@ fn command_arrows_go_to_the_ends_of_a_code_file(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_in_files(thread, file, None, true, cx));
     tick(cx);
     let editor = view.read_with(cx, |view, cx| {
-        view.files.read(cx).shown_editor(view.cockpit.read(cx).thread_key(thread)).expect("a code file")
+        view.files.read(cx).shown_editor(thread).expect("a code file")
     });
     press("f6", cx);
     let top = |cx: &mut gpui::VisualTestContext| editor.read_with(cx, |e, _| e.top_line_for_test());
@@ -626,7 +626,7 @@ fn find_in_a_prose_file_searches_the_document_and_shows_the_hit(cx: &mut TestApp
         tick(cx);
     }
     let (count, painted) = view
-        .update(cx, |view, cx| view.files.update(cx, |files, cx| files.prose_find_for_test(view.cockpit.read(cx).thread_key(thread))))
+        .update(cx, |view, cx| view.files.update(cx, |files, _| files.prose_find_for_test(thread)))
         .expect("the bar is open");
     assert_eq!(count.as_deref(), Some("1/1"));
     let painted = painted.expect("the hit painted");
@@ -675,7 +675,7 @@ fn find_after_opening_a_file_from_the_tree_searches_the_file(cx: &mut TestAppCon
         tick(cx);
     }
     let editor = view.read_with(cx, |view, cx| {
-        view.files.read(cx).shown_editor(view.cockpit.read(cx).thread_key(thread)).expect("the press opened lib.rs")
+        view.files.read(cx).shown_editor(thread).expect("the press opened lib.rs")
     });
 
     press("cmd-f", cx);
@@ -702,7 +702,7 @@ fn find_from_the_controls_over_another_surface_searches_the_transcript(cx: &mut 
             .update(cx, |composer, cx| composer.set(SENTINEL.into(), cx));
     });
     tick(cx);
-    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(view.cockpit.read(cx).thread_key(thread)).unwrap());
+    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread).unwrap());
     let overview = cx.debug_bounds("panel-tab-Overview").expect("the Overview tab");
     cx.simulate_click(overview.center(), gpui::Modifiers::none());
     tick(cx);
@@ -734,7 +734,7 @@ fn command_arrows_go_to_the_ends_of_a_prose_file(cx: &mut TestAppContext) {
     press("f6", cx);
     let offset = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
-            view.files.read(cx).prose_scroll(view.cockpit.read(cx).thread_key(thread)).unwrap().offset().y
+            view.files.read(cx).prose_scroll(thread).unwrap().offset().y
         })
     };
     assert_eq!(offset(&view, cx), px(0.));

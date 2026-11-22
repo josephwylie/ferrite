@@ -94,12 +94,12 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if self.cockpit.read(cx).thread(thread.thread()).is_none() {
+        if self.cockpit.read(cx).thread(thread).is_none() {
             return div().into_any_element();
         }
-        let folder = self.thread_path(thread.thread(), cx);
+        let folder = self.thread_path(thread, cx);
         let background = self
-            .background_inputs(thread.thread(), false, cx)
+            .background_inputs(thread, false, cx)
             .and_then(|inputs| self.background.update(cx, |background, cx| background.section(&inputs, cx)));
         // The model is lent, not written: the Overview draws what it
         // borrows of it under its own update.
@@ -121,27 +121,26 @@ impl CockpitView {
         folder: Option<std::path::PathBuf>,
         background: Option<Div>,
     ) -> Option<OverviewInputs<'a>> {
-        let thread = key.thread();
-        let open = model.thread(thread)?;
+        let open = model.thread(key)?;
         let transcript = open.transcript();
-        let facts = self.facts.get(model.thread_key(thread));
+        let facts = self.facts.get(key);
         Some(OverviewInputs {
             thread: key,
-            machine: model.machine().map_or_else(
+            machine: model.bridge(key.machine()).map_or_else(
                 || "This computer".to_string(),
                 |bridge| bridge.name().to_string(),
             ),
             folder,
-            branch: self.thread_branch(model.thread_key(thread)),
+            branch: self.thread_branch(key),
             facts,
             files: facts.map(|facts| facts.changed_files.as_slice()).unwrap_or_default(),
-            pr: self.facts.pr(model.thread_key(thread)),
+            pr: self.facts.pr(key),
             usage: transcript.usage(),
             context_details: transcript.context_details(),
             usage_details: transcript.usage_details(),
             session_error: self
                 .session_control_error
-                .of(thread, open.generation())
+                .of(key, open.generation())
                 .map(str::to_string),
             servers: transcript.mcp_servers(),
             background,
@@ -159,14 +158,14 @@ impl CockpitView {
             OverviewEvent::ReadHunks { thread, path, stat } => {
                 self.read_overview_hunks(*thread, path.clone(), *stat, cx)
             }
-            OverviewEvent::CreatePr(thread) => self.create_pr(thread.thread(), cx),
+            OverviewEvent::CreatePr(thread) => self.create_pr(*thread, cx),
             OverviewEvent::Preview(path) => self.open_preview(path.clone(), None, window, cx),
             OverviewEvent::Review => self.open_beside(
                 beside::Beside::Review(ferrite_reviewr::model::Scope::Uncommitted),
                 window,
                 cx,
             ),
-            OverviewEvent::OpenPr(thread) => self.open_pr_surface(thread.thread(), cx),
+            OverviewEvent::OpenPr(thread) => self.open_pr_surface(*thread, cx),
         }
     }
 
@@ -183,7 +182,7 @@ impl CockpitView {
         if !self.overview.read(cx).wants_read(thread, &path, stat) {
             return;
         }
-        let Some(workspace) = self.thread_path(thread.thread(), cx) else {
+        let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
         let answer = self
@@ -198,14 +197,14 @@ impl CockpitView {
     /// branch and open the pull request (`create_pr_prompt`), queued behind
     /// a running turn, as Claude's button does. The PR's row takes the
     /// button's place once the forge reports it.
-    pub(in crate::cockpit) fn create_pr(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(in crate::cockpit) fn create_pr(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         let Some(index) = self.pane_for(thread) else {
             return;
         };
-        let branch = self.thread_branch(self.cockpit.read(cx).thread_key(thread));
+        let branch = self.thread_branch(thread);
         let base = self
             .facts
-            .get(self.cockpit.read(cx).thread_key(thread))
+            .get(thread)
             .and_then(|facts| facts.default_branch.clone());
         let prompt = super::changes::create_pr_prompt(branch.as_deref(), base.as_deref());
         self.send_again(index, thread, prompt, cx).ok();
@@ -227,11 +226,11 @@ impl CockpitView {
     #[cfg(test)]
     pub(crate) fn panel_hunks(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         path: &str,
         cx: &gpui::App,
     ) -> Option<super::hunks::Shown> {
-        self.overview.read(cx).hunks_for_test(self.cockpit.read(cx).thread_key(thread), path).cloned()
+        self.overview.read(cx).hunks_for_test(thread, path).cloned()
     }
 }
 

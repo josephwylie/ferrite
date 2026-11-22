@@ -82,12 +82,12 @@ fn the_list_scrolls_to_and_opens_its_last_card(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(1080.)));
     tick(cx);
-    let active: Vec<ThreadId> = view.read_with(cx, |view, cx| {
-        view.nav_state(cx).active.iter().map(|row| row.key.thread()).collect()
+    let active: Vec<ThreadKey> = view.read_with(cx, |view, cx| {
+        view.nav_state(cx).active.iter().map(|row| row.key).collect()
     });
     assert_eq!(active.len(), THREADS, "one card per Thread");
-    let card = |thread: ThreadId| -> &'static str {
-        format!("nav-thread-{}", thread.get()).leak()
+    let card = |thread: ThreadKey| -> &'static str {
+        format!("nav-thread-{}", thread.thread().get()).leak()
     };
     let first = cx.debug_bounds(card(active[0])).unwrap();
     cx.simulate_event(gpui::ScrollWheelEvent {
@@ -134,8 +134,8 @@ fn a_finished_thread_needs_you_until_it_is_seen(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         let notifications = view.cockpit.read(cx).notifications();
         assert_eq!(notifications.unread(), 1);
-        assert!(notifications.attention(threads[1]), "off the screen");
-        assert!(!notifications.attention(threads[0]));
+        assert!(notifications.attention(threads[1].thread()), "off the screen");
+        assert!(!notifications.attention(threads[0].thread()));
         assert!(
             view.toasts.read(cx).needs_you.toasts().is_empty(),
             "with the nav open, a finish toasts nothing"
@@ -147,7 +147,7 @@ fn a_finished_thread_needs_you_until_it_is_seen(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         let notifications = view.cockpit.read(cx).notifications();
         assert_eq!(notifications.unread(), 0, "landing on the Pane reads it");
-        assert!(!notifications.attention(threads[1]));
+        assert!(!notifications.attention(threads[1].thread()));
         assert_eq!(
             notifications.notices().count(),
             1,
@@ -178,7 +178,7 @@ fn a_finish_is_done_until_it_is_seen(cx: &mut TestAppContext) {
     finish(1);
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let finished = view.thread_row(keyed(view, threads[1], cx), cx);
+        let finished = view.thread_row(threads[1], cx);
         assert_eq!(finished.status, nav::RowStatus::Done, "off the screen");
         assert_eq!(finished.tail, nav::NavTail::Done);
         assert_eq!(
@@ -186,13 +186,13 @@ fn a_finish_is_done_until_it_is_seen(cx: &mut TestAppContext) {
             ferrite_ui::theme::INK_SUBTLE,
             "a dim check, never ochre"
         );
-        assert_eq!(view.thread_row(keyed(view, threads[0], cx), cx).status, nav::RowStatus::Idle);
+        assert_eq!(view.thread_row(threads[0], cx).status, nav::RowStatus::Idle);
     });
 
     view.update(cx, |view, cx| view.land_on_thread(threads[1], cx));
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let read = view.thread_row(keyed(view, threads[1], cx), cx);
+        let read = view.thread_row(threads[1], cx);
         assert_eq!(read.status, nav::RowStatus::Idle, "seen on its Pane");
         assert_ne!(read.tail, nav::NavTail::Done);
     });
@@ -203,7 +203,7 @@ fn a_finish_is_done_until_it_is_seen(cx: &mut TestAppContext) {
     finish(1);
     tick(cx);
     let status = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| view.thread_row(keyed(view, threads[1], cx), cx).status)
+        view.read_with(cx, |view, cx| view.thread_row(threads[1], cx).status)
     };
     assert_eq!(
         status(&view, cx),
@@ -231,7 +231,7 @@ fn a_window_opened_unfocused_sees_nothing_until_focused(cx: &mut TestAppContext)
     tick(cx);
     let status = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
-            view.thread_row(keyed(view, view.cockpit.read(cx).threads()[0], cx), cx).status
+            view.thread_row(view.cockpit.read(cx).threads()[0], cx).status
         })
     };
     assert_eq!(status(&view, cx), nav::RowStatus::Done, "not yet seen");
@@ -434,7 +434,7 @@ fn a_request_off_the_board_posts_while_the_window_is_frontmost(cx: &mut TestAppC
             .iter()
             .map(|notification| notification.tag.to_string())
             .collect::<Vec<_>>(),
-        [system_tag(&ferrite_core::MachineKey(None), threads[off])]
+        [system_tag(&ferrite_core::MachineKey(None), threads[off].thread())]
     );
 }
 
@@ -467,18 +467,18 @@ fn away_from_the_window_the_shown_thread_s_finish_posts_a_notification(
     };
     assert_eq!(
         tags(cx),
-        [system_tag(&home, thread)],
+        [system_tag(&home, thread.thread())],
         "the Thread is on screen, but nobody is looking"
     );
     view.read_with(cx, |view, _| assert_eq!(view.chimed, [Sound::Done]));
 
     cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
-        tag: system_tag(&home, thread).into(),
+        tag: system_tag(&home, thread.thread()).into(),
         action_id: None,
     });
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(!view.cockpit.read(cx).notifications().attention(thread));
+        assert!(!view.cockpit.read(cx).notifications().attention(thread.thread()));
     });
     assert!(
         tags(cx).is_empty(),
@@ -506,17 +506,17 @@ fn clicking_a_request_s_system_notification_opens_it(cx: &mut TestAppContext) {
             .map(|notification| notification.tag.to_string())
             .collect::<Vec<_>>()
     };
-    assert_eq!(tags(cx), [system_tag(&home, threads[1])]);
+    assert_eq!(tags(cx), [system_tag(&home, threads[1].thread())]);
     view.read_with(cx, |view, _| assert_eq!(view.chimed, [Sound::NeedsYou]));
 
     cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
-        tag: system_tag(&home, threads[1]).into(),
+        tag: system_tag(&home, threads[1].thread()).into(),
         action_id: None,
     });
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.focused(cx), 1, "the click landed on its Thread");
-        let request = view.cockpit.read(cx).notifications().decisions().next().unwrap();
+        let request = view.cockpit.read(cx).notifications().reading().decisions().next().unwrap();
         assert!(request.read);
         assert!(view.toasts.read(cx).needs_you.toasts().is_empty());
     });
@@ -690,7 +690,7 @@ fn inbox_tracks_open_threads_independently_of_notices(cx: &mut TestAppContext) {
         2,
         "idle open Threads need handling without Notices"
     );
-    view.update(cx, |view, cx| view.facts.fixture_forget_last_used(view.cockpit.read(cx).thread_key(threads[0])));
+    view.update(cx, |view, _| view.facts.fixture_forget_last_used(threads[0]));
     assert_eq!(inbox(cx).len(), 2, "an unknown age cannot hide Inbox work");
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
@@ -698,7 +698,7 @@ fn inbox_tracks_open_threads_independently_of_notices(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    assert_eq!(inbox(cx), vec![threads[1]]);
+    assert_eq!(inbox(cx), vec![threads[1].thread()]);
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
             outcome: ferrite_core::TurnOutcome::Completed,
@@ -714,7 +714,7 @@ fn inbox_tracks_open_threads_independently_of_notices(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(inbox(cx).len(), 2, "reading and leaving is not finishing");
     view.update(cx, |view, cx| {
-        let keys: Vec<ThreadKey> = threads.iter().map(|thread| keyed(view, *thread, cx)).collect();
+        let keys: Vec<ThreadKey> = threads.iter().map(|thread| *thread).collect();
         view.park_listed(&keys, cx)
     });
     tick(cx);
@@ -746,7 +746,7 @@ fn the_list_empty_over_working_then_a_decision_parks_from_the_keyboard(cx: &mut 
     view.update(cx, |view, cx| {
         let rows = view.needs_you_rows(cx);
         assert_eq!(rows.len(), 1, "Decision takes precedence over work");
-        assert_eq!(rows[0].thread, threads[1]);
+        assert_eq!(rows[0].thread, threads[1].thread());
         if let RowTarget::Decision(id) = &rows[0].target {
             view.notice_verb(Verb::DismissDecision(id.clone()), cx);
         }
@@ -777,8 +777,8 @@ fn the_keyboard_parks_the_cursors_card_and_the_cursor_follows_it(cx: &mut TestAp
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let active: Vec<ThreadId> = view.read_with(cx, |view, cx| {
-        view.nav_state(cx).active.iter().map(|row| row.key.thread()).collect()
+    let active: Vec<ThreadKey> = view.read_with(cx, |view, cx| {
+        view.nav_state(cx).active.iter().map(|row| row.key).collect()
     });
     assert_eq!(active.len(), 3);
     cx.simulate_keystrokes("cmd-i down cmd-w");
@@ -788,7 +788,7 @@ fn the_keyboard_parks_the_cursors_card_and_the_cursor_follows_it(cx: &mut TestAp
         assert_eq!(view.needs_you_rows(cx).len(), 2);
         assert_eq!(
             view.nav_view.read(cx).cursor.as_ref().map(|cursor| cursor.item),
-            Some(nav::NavItem::Thread(keyed(view, active[1], cx))),
+            Some(nav::NavItem::Thread(active[1])),
             "the cursor follows its Thread into the Parked shelf"
         );
     });
@@ -952,8 +952,8 @@ fn pressing_a_card_opens_its_thread_and_the_list_stays(cx: &mut TestAppContext) 
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let card = |thread: ThreadId| -> &'static str {
-        format!("nav-thread-{}", thread.get()).leak()
+    let card = |thread: ThreadKey| -> &'static str {
+        format!("nav-thread-{}", thread.thread().get()).leak()
     };
     cx.simulate_keystrokes("cmd-i");
     tick(cx);
@@ -996,7 +996,7 @@ fn snooze_hides_a_thread_until_woken_and_new_decisions_wake_it(cx: &mut TestAppC
         assert!(!view
             .needs_you_rows(cx)
             .iter()
-            .any(|row| row.thread == threads[0]));
+            .any(|row| row.thread == threads[0].thread()));
         assert_eq!(view.nav_state(cx).snoozed.len(), 1);
     });
     fake.streams.borrow()[0]
@@ -1007,7 +1007,7 @@ fn snooze_hides_a_thread_until_woken_and_new_decisions_wake_it(cx: &mut TestAppC
         assert!(view
             .needs_you_rows(cx)
             .iter()
-            .any(|row| row.thread == threads[0]));
+            .any(|row| row.thread == threads[0].thread()));
         assert!(view.nav_state(cx).snoozed.is_empty());
     });
 }
@@ -1026,7 +1026,7 @@ fn working_shelf_starts_folded_and_opens_to_cards(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_keystrokes("cmd-i");
     tick(cx);
-    let key: &'static str = format!("nav-thread-{}", thread.get()).leak();
+    let key: &'static str = format!("nav-thread-{}", thread.thread().get()).leak();
     assert!(
         cx.debug_bounds(key).is_none(),
         "Working is hidden by default"
@@ -1083,7 +1083,7 @@ fn custom_snooze_keeps_invalid_input_and_closes_when_leaving_inbox(cx: &mut Test
     tick(cx);
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
-            let key = keyed(view, thread, cx);
+            let key = thread;
             view.nav_view
                 .update(cx, |nav, cx| nav.edit_snooze(key, window, cx))
         })
@@ -1112,7 +1112,7 @@ fn custom_snooze_keeps_invalid_input_and_closes_when_leaving_inbox(cx: &mut Test
     assert!(view.read_with(cx, |view, cx| view.nav_view.read(cx).snooze.is_none()));
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
-            let key = keyed(view, thread, cx);
+            let key = thread;
             view.nav_view
                 .update(cx, |nav, cx| nav.edit_snooze(key, window, cx))
         })

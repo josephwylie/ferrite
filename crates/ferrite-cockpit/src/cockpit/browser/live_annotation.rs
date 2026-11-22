@@ -150,7 +150,7 @@ impl LiveAnnotation {
         } = target;
         manual.borrow_mut().protect_local();
         manual.borrow_mut().capture_pause(true);
-        let input = cockpit.browser_input(thread.thread(), owner, document);
+        let input = cockpit.browser_input(thread, owner, document);
         Self {
             guard: None,
             phase: Phase::Beginning(Beginning {
@@ -187,7 +187,7 @@ impl LiveAnnotation {
                     Ok(revision) => {
                         beginning.manual.borrow_mut().revision = revision;
                         let lease = cockpit.browser_protect(
-                            thread.thread(),
+                            thread,
                             beginning.owner,
                             beginning.document,
                             Protection::Annotation,
@@ -201,7 +201,7 @@ impl LiveAnnotation {
             Begin::Protect { revision, lease } => match lease.answer()? {
                 Ok(lease) => Ok((*revision, lease)),
                 Err(error) => {
-                    cockpit.browser_settled(thread.thread(), beginning.owner, beginning.document, *revision);
+                    cockpit.browser_settled(thread, beginning.owner, beginning.document, *revision);
                     Err(error)
                 }
             },
@@ -528,7 +528,7 @@ impl LiveAnnotation {
                         if let Some((capture, png)) = ready.take() {
                             let guard = self.guard.as_ref().unwrap();
                             self.phase = Phase::Retaining(cockpit.browser_capture(
-                                thread.thread(),
+                                thread,
                                 guard.owner,
                                 guard.lease,
                                 capture,
@@ -604,8 +604,8 @@ impl LiveAnnotation {
     /// Server's lease and lift the pause.
     fn release(&mut self, thread: ThreadKey, cockpit: &mut Cockpit) {
         if let Some(guard) = self.guard.take() {
-            cockpit.browser_settled(thread.thread(), guard.owner, guard.document, guard.revision);
-            cockpit.browser_release(thread.thread(), guard.owner, guard.lease);
+            cockpit.browser_settled(thread, guard.owner, guard.document, guard.revision);
+            cockpit.browser_release(thread, guard.owner, guard.lease);
             guard.manual.borrow_mut().capture_pause(false);
             guard.manual.borrow_mut().release_local();
             guard.manual.borrow().restore_pause();

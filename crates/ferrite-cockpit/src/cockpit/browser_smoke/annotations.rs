@@ -17,18 +17,18 @@ impl Scenario {
     pub fn started(&self) -> bool { self.stage != 0 || self.round > 0 }
     /// Rounds draw a stroke, pick the fixture button and mark a region, each
     /// in its own guest session, then the region is removed before sending.
-    pub fn step(&mut self, view: &Entity<CockpitView>, thread: ferrite_core::ThreadId, window: &mut Window, cx: &mut App, output: &Path) -> Result<bool, String> {
+    pub fn step(&mut self, view: &Entity<CockpitView>, thread: ferrite_core::ThreadKey, window: &mut Window, cx: &mut App, output: &Path) -> Result<bool, String> {
         match self.stage {
             0 => {
                 let Some(ready)=super::served(view,thread,cx)? else { return Ok(false); };
                 if !ready.tabs.iter().any(|tab|Some(tab.id)==ready.active && tab.live && tab.visible && !tab.loading && tab.error.is_none()) { return Ok(false); }
-                if view.read(cx).browser_smoke_annotation_ready(view.read(cx).cockpit.read(cx).thread_key(thread)).is_some() { return Ok(false); }
+                if view.read(cx).browser_smoke_annotation_ready(thread).is_some() { return Ok(false); }
                 // Composer thumbnails repeat the button's colour after the first round.
                 if self.button.is_none() { self.button=fixture_button(window)?; }
                 if self.button.is_some() && click(window,cx,"browser-annotate") { self.stage = 1; }
             }
             1 => {
-                if view.read(cx).browser_smoke_annotation_ready(view.read(cx).cockpit.read(cx).thread_key(thread))!=Some(true) { return Ok(false); }
+                if view.read(cx).browser_smoke_annotation_ready(thread)!=Some(true) { return Ok(false); }
                 match self.round { 0=>type_text(window,cx,"d"), 2=>type_text(window,cx,"r"), _=>{} }
                 self.stage = 2;
             }
@@ -112,7 +112,7 @@ fn fixture_button(window:&mut Window)->Result<Option<gpui::Bounds<gpui::Pixels>>
     let corner=|x:u32,y:u32|point(px(x as f32/scale),px(y as f32/scale));
     Ok(Some(gpui::Bounds::from_corners(corner(left,top),corner(right,bottom))))
 }
-fn collected(view:&Entity<CockpitView>,thread:ferrite_core::ThreadId,cx:&App)->Result<Vec<Annotation>,String> {
+fn collected(view:&Entity<CockpitView>,thread:ferrite_core::ThreadKey,cx:&App)->Result<Vec<Annotation>,String> {
     let view=view.read(cx);let index=view.pane_for(thread).ok_or("missing owning Composer")?;
     Ok(view.panes[index].composer.read(cx).browser_annotations().to_vec())
 }
@@ -147,6 +147,9 @@ pub(super) fn history(view:&Entity<CockpitView>,window:&mut Window,cx:&mut App,o
     let expected:Vec<Annotation>=serde_json::from_slice(&std::fs::read(std::env::var_os("FERRITE_BROWSER_WINDOW_EXPECTED_ANNOTATIONS").ok_or("missing original annotation evidence")?).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
     let original:serde_json::Value=serde_json::from_slice(&std::fs::read(output.parent().ok_or("missing original output directory")?.join("window-result.json")).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
     let owning_thread:ferrite_core::ThreadId=serde_json::from_value(original["scenario_thread"].clone()).map_err(|e|e.to_string())?;
+    // The first run saved it as a Thread of this computer.
+    let saved=ferrite_core::SavedThread{machine:ferrite_core::MachineKey(None),thread:owning_thread};
+    let owning_thread=view.read(cx).cockpit.read(cx).resolve(&saved).ok_or("the restarted window does not hold the scenario Thread")?;
     // History follows the drawn Thread; a fresh Codex Thread is not the
     // imported Thread initially focused by the restarted window. Once only:
     // focus_thread also leaves whatever destination is open.

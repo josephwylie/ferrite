@@ -139,6 +139,7 @@ fn remote(store: &std::path::Path) -> Remote {
         server: Endpoint::Local {
             executable: "/bin/false".into(),
         },
+        saved_as: Some(crate::MachineKey(None)),
         client: Peer {
             name: "test".into(),
             version: "0".into(),
@@ -346,6 +347,7 @@ fn a_machine_waiting_for_a_sign_in_is_not_asked_again_until_then() {
     let mut remote = Remote::new(Attach {
         store: store.clone(),
         server: Endpoint::Machine(Arc::clone(&bridge)),
+        saved_as: Some(crate::MachineKey(Some("box".into()))),
         client: Peer {
             name: "test".into(),
             version: "0".into(),
@@ -501,6 +503,7 @@ fn unavailable_environment_never_attaches_even_after_retry() {
     let mut remote = Remote::new(Attach {
         store: scratch("unavailable-environment"),
         server: Endpoint::Unavailable,
+        saved_as: None,
         client: Peer {
             name: "test".into(),
             version: "0".into(),

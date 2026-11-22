@@ -10,7 +10,7 @@ fn live(fake: &Fake) -> Sender<SessionEvent> {
 
 /// The prompts `thread`'s Main transcript shows, with the ids they were
 /// sent under.
-fn prompts(cockpit: &Cockpit, thread: ThreadId) -> Vec<(String, Option<String>)> {
+fn prompts(cockpit: &Cockpit, thread: ThreadKey) -> Vec<(String, Option<String>)> {
     cockpit
         .thread(thread)
         .unwrap()
@@ -25,7 +25,7 @@ fn prompts(cockpit: &Cockpit, thread: ThreadId) -> Vec<(String, Option<String>)>
 }
 
 /// Two finished turns, `one` and `two`, on Session `sess-1`.
-fn two_turns(name: &str) -> (Cockpit, Fake, ThreadId) {
+fn two_turns(name: &str) -> (Cockpit, Fake, ThreadKey) {
     let (mut cockpit, fake) = cockpit(name);
     *fake.rewindable.borrow_mut() = true;
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();

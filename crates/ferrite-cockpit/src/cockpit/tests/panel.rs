@@ -29,8 +29,8 @@ fn own_settings(view: &Entity<CockpitView>, name: &str, cx: &mut gpui::VisualTes
 }
 
 /// The Thread the panel shows for this frame.
-fn shown(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<ThreadId> {
-    view.read_with(cx, |view, cx| view.panel_thread(cx).map(|thread| thread.thread()))
+fn shown(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<ThreadKey> {
+    view.read_with(cx, |view, cx| view.panel_thread(cx))
 }
 
 /// The Solo card's right edge, as the board laid it out.
@@ -221,7 +221,7 @@ fn the_overview_is_one_scroll_of_sections(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     tick(cx);
     assert!(cx.debug_bounds("panel").is_none());
-    view.update(cx, |view, cx| view.open_panel(view.cockpit.read(cx).thread_key(thread), cx));
+    view.update(cx, |view, cx| view.open_panel(thread, cx));
     tick(cx);
     assert!(cx.debug_bounds("panel").is_some(), "opening it shows it");
 }
@@ -235,7 +235,7 @@ fn the_pull_request_is_a_row_in_changes(cx: &mut TestAppContext) {
     let (view, cx) = solo("panel-pr-row", 1, 1600., cx);
     let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     view.update(cx, |view, cx| {
-        view.facts.pr_answered(view.cockpit.read(cx).thread_key(thread), Some(pr_with_checks()));
+        view.facts.pr_answered(thread, Some(pr_with_checks()));
         cx.notify();
     });
     tick(cx);
@@ -396,7 +396,7 @@ fn the_head_says_the_branch_while_the_panel_is_hidden(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         view.facts.set_branches(vec![(
-            view.cockpit.read(cx).thread_key(thread),
+            thread,
             Some(ferrite_core::workspace::BranchStatus {
                 branch: Some("lane-p".into()),
                 ..Default::default()

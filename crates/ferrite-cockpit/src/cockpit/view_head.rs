@@ -37,7 +37,7 @@ impl CockpitView {
             let prs = self.prs.read(cx);
             let project = prs
                 .project
-                .and_then(|project| self.cockpit.read(cx).registry().project(project))
+                .and_then(|project| self.cockpit.read(cx).registry().reading().project(project))
                 .map(|project| SharedString::from(project.title.clone()));
             parts.extend(prs.head(project));
         } else if !self.empty_board_shown(cx) {
@@ -49,7 +49,7 @@ impl CockpitView {
         let menu_thread = self
             .focused_thread(cx)
             .filter(|_| !self.empty_board_shown(cx) && !self.destination_shown())
-            .map(|thread| self.cockpit.read(cx).thread_key(thread));
+            ;
         div()
             .debug_selector(|| "view-head".into())
             .when_some(menu_thread, |head, thread| {
@@ -294,7 +294,7 @@ impl CockpitView {
         if let Some(project) = self.head_project(thread, cx) {
             crumbs.extend([project, separator()]);
         }
-        let parent = self.side_chat.read(cx).owner_of(self.cockpit.read(cx).thread_key(thread)).map(|parent| parent.thread());
+        let parent = self.side_chat.read(cx).owner_of(thread);
         if let Some(parent) = parent {
             crumbs.extend([self.head_parent(parent, cx), separator()]);
         }
@@ -308,13 +308,13 @@ impl CockpitView {
             .gap(px(theme::HEAD_CRUMB_GAP))
             .children(crumbs)
             .into_any_element()];
-        if let Some(machine) = self.cockpit.read(cx).machine() {
+        if let Some(machine) = self.cockpit.read(cx).bridge(thread.machine()) {
             parts.push(environment_badge(machine.name()));
         }
         let branch = self
             .panel_pane(cx)
             .is_none()
-            .then(|| self.head_branch(thread, cx))
+            .then(|| self.head_branch(thread))
             .flatten();
         parts.extend(branch);
         let spare = div().flex_1().h_full();
@@ -328,15 +328,15 @@ impl CockpitView {
     /// The breadcrumb's Project: its badge at `HEAD_BADGE` then its name,
     /// at most `HEAD_PROJECT_MAX_W`, in `INK_SUBTLE` lifting to
     /// `INK_STRONG` under the pointer. A click starts a new Thread there.
-    fn head_project(&self, thread: ThreadId, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let facts = self.facts.get(self.cockpit.read(cx).thread_key(thread))?;
+    fn head_project(&self, thread: ThreadKey, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let facts = self.facts.get(thread)?;
         let (project, name) = (facts.project?, facts.project_label.clone()?);
         let badge = ferrite_ui::project_badge::project_badge(&name)
             .size(px(theme::HEAD_BADGE))
             .rounded(px(theme::HEAD_BADGE / 4.0));
         Some(
             div()
-                .id(("view-head-project", thread.get() as usize))
+                .id(("view-head-project", thread.thread().get() as usize))
                 .debug_selector(|| "view-head-project".into())
                 .occlude()
                 .flex()
@@ -364,8 +364,8 @@ impl CockpitView {
     /// overflows it collapses to a literal `...` (T3's), its room measured
     /// as the row's width changes (`ParentRoom`); its tooltip keeps the
     /// whole title.
-    fn head_parent(&self, parent: ThreadId, cx: &mut Context<Self>) -> AnyElement {
-        let title = self.facts.name(self.cockpit.read(cx).thread_key(parent)).clone();
+    fn head_parent(&self, parent: ThreadKey, cx: &mut Context<Self>) -> AnyElement {
+        let title = self.facts.name(parent).clone();
         let mut room = self.head_parent_room.get();
         room.collapsed = room.collapses(self.parent_title_w(parent, cx));
         self.head_parent_room.set(room);
@@ -378,7 +378,7 @@ impl CockpitView {
         };
         let probe = self.head_parent_room.clone();
         div()
-            .id(("view-head-parent", parent.get() as usize))
+            .id(("view-head-parent", parent.thread().get() as usize))
             .debug_selector(|| "view-head-parent".into())
             .relative()
             .occlude()
@@ -413,14 +413,14 @@ impl CockpitView {
     }
 
     /// The parent's title drawn whole, as wide as the head would draw it.
-    fn parent_title_w(&self, parent: ThreadId, cx: &gpui::App) -> f32 {
-        crate::nav::Measure::Text(cx, self.nav_expanded_width()).ui(self.facts.name(self.cockpit.read(cx).thread_key(parent)).as_ref(), theme::FS_TITLE, theme::W_LABEL)
+    fn parent_title_w(&self, parent: ThreadKey, cx: &gpui::App) -> f32 {
+        crate::nav::Measure::Text(cx, self.nav_expanded_width()).ui(self.facts.name(parent).as_ref(), theme::FS_TITLE, theme::W_LABEL)
     }
 
     /// The head's spare width after the breadcrumb, laid out: once it says
     /// the parent should show otherwise than it does, the frame is drawn
     /// again.
-    fn parent_room_probe(&self, parent: ThreadId, cx: &gpui::App) -> impl IntoElement {
+    fn parent_room_probe(&self, parent: ThreadKey, cx: &gpui::App) -> impl IntoElement {
         let need = self.parent_title_w(parent, cx);
         let probe = self.head_parent_room.clone();
         gpui::canvas(
@@ -439,8 +439,8 @@ impl CockpitView {
 
     /// The Thread's branch in the quiet ink, for a head whose panel is
     /// hidden. None while its checkout says no branch.
-    fn head_branch(&self, thread: ThreadId, cx: &gpui::App) -> Option<AnyElement> {
-        let branch = Self::checkout_branch(self.facts.get(self.cockpit.read(cx).thread_key(thread))?)?;
+    fn head_branch(&self, thread: ThreadKey) -> Option<AnyElement> {
+        let branch = Self::checkout_branch(self.facts.get(thread)?)?;
         Some(
             div()
                 .debug_selector(|| "view-branch".into())
@@ -458,7 +458,7 @@ impl CockpitView {
     /// item, at least `VIEW_TITLE_MIN_W`, its chevron shown only under the
     /// pointer (T3's). A click opens the Thread's menu under the chevron;
     /// a double-click renames it in place.
-    fn view_title(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
+    fn view_title(&self, thread: ThreadKey, cx: &mut Context<Self>) -> AnyElement {
         if let Some((RenameTarget::ViewTitle(editing), editor)) = self.rename.shown() {
             if editing == thread {
                 return rename_field(editor.clone(), true)
@@ -470,12 +470,11 @@ impl CockpitView {
                     .into_any_element();
             }
         }
-        let key = self.cockpit.read(cx).thread_key(thread);
-        let name = self.facts.name(key).clone();
-        let hover = SharedString::from(format!("view-title-hover-{}", thread.get()));
+        let name = self.facts.name(thread).clone();
+        let hover = SharedString::from(format!("view-title-hover-{}", thread.thread().get()));
         let shown = ferrite_ui::motion::hover_t(&hover) > 0.0;
         let title = div()
-            .id(("view-title", thread.get() as usize))
+            .id(("view-title", thread.thread().get() as usize))
             .debug_selector(|| "view-title".into())
             .min_w(px(theme::VIEW_TITLE_MIN_W))
             .truncate()
@@ -495,12 +494,12 @@ impl CockpitView {
                         // The chevron's menu, hung under it: at the pointer
                         // it would lie over the title and take a
                         // double-click's second press.
-                        view.toggle_door(title_door(key), cx);
+                        view.toggle_door(title_door(thread), cx);
                     }
                 }),
             );
         div()
-            .id(("view-title-item", thread.get() as usize))
+            .id(("view-title-item", thread.thread().get() as usize))
             .occlude()
             .flex()
             .flex_shrink(1.)
@@ -512,11 +511,11 @@ impl CockpitView {
                 MouseButton::Right,
                 cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.open_context_menu(MenuTarget::Thread(key), event.position, cx);
+                    view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
                 }),
             )
             .child(title)
-            .child(title_menu(&self.doors(), key, shown, cx))
+            .child(title_menu(&self.doors(), thread, shown, cx))
             .into_any_element()
     }
 }

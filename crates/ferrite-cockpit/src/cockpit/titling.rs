@@ -48,7 +48,7 @@ impl CockpitView {
         let Some(provider) = self
             .cockpit
             .read(cx)
-            .thread(thread.thread())
+            .thread(thread)
             .filter(|open| open.title().is_none())
             .map(|open| open.provider())
         else {
@@ -93,14 +93,14 @@ impl CockpitView {
         if self
             .cockpit
             .read(cx)
-            .thread(thread.thread())
+            .thread(thread)
             .is_none_or(|open| open.title().is_some())
         {
             return;
         }
-        if self.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(thread.thread(), &title).is_ok()) {
-            self.facts.renamed(self.cockpit.read(cx), thread.thread());
-            self.refresh_names(cx);
+        if self.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(thread, &title).is_ok()) {
+            self.facts.renamed(self.cockpit.read(cx), thread);
+            self.refresh_names();
             cx.notify();
         }
     }

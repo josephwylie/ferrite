@@ -980,13 +980,13 @@ fn model_row(
 
 impl CockpitView {
     /// The model chip's door: the picker on its model list.
-    pub(super) fn open_provider_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(super) fn open_provider_picker(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         self.open_model_picker(PaneIdentity::Thread(thread), Column::List, cx);
     }
 
     /// `/effort`'s and the palette's door: the same picker, the keyboard in
     /// its Reasoning column.
-    pub(super) fn open_effort_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(super) fn open_effort_picker(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         self.open_model_picker(PaneIdentity::Thread(thread), Column::Reasoning, cx);
     }
 
@@ -1361,7 +1361,7 @@ impl CockpitView {
     }
 
     /// Open the permission mode menu over the footer's button, or shut it.
-    fn toggle_picker_mode(&mut self, thread: ThreadId, generation: u64, cx: &mut Context<Self>) {
+    fn toggle_picker_mode(&mut self, thread: ThreadKey, generation: u64, cx: &mut Context<Self>) {
         if let Some(open) = self.model_picker_mut() {
             open.mode = match open.mode.take() {
                 Some(_) => None,

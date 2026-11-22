@@ -3,7 +3,7 @@
 use super::*;
 use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject};
 
-fn shown(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<ThreadId> {
+fn shown(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<ThreadKey> {
     view.read_with(cx, |view, cx| view.focused_thread(cx))
 }
 
@@ -231,7 +231,7 @@ fn the_title_tools_stand_against_the_panel(cx: &mut TestAppContext) {
 fn the_solo_head_is_a_project_then_title_breadcrumb(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("head-breadcrumb", 1);
     let thread = core.threads()[0];
-    let here = core.project_id(thread).expect("a bound Thread");
+    let here = core.project_of(thread).expect("a bound Thread");
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     tick(cx);
@@ -259,10 +259,10 @@ fn the_solo_head_is_a_project_then_title_breadcrumb(cx: &mut TestAppContext) {
 
     cx.simulate_mouse_down(title.center(), gpui::MouseButton::Right, gpui::Modifiers::none());
     tick(cx);
-    view.read_with(cx, |view, cx| {
+    view.read_with(cx, |view, _| {
         assert!(
             view.context_menu()
-                .is_some_and(|menu| menu.target == MenuTarget::Thread(keyed(view, thread, cx))),
+                .is_some_and(|menu| menu.target == MenuTarget::Thread(thread)),
             "right-click opens the Thread's menu"
         );
     });
@@ -275,7 +275,7 @@ fn the_solo_head_is_a_project_then_title_breadcrumb(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         let draft = view.panes[view.focused(cx)].draft().expect("a new Thread");
-        assert_eq!(draft.binding.project(), here, "in the head's project");
+        assert_eq!(draft.binding.project(), here.project(), "in the head's project");
     });
 }
 
@@ -299,9 +299,9 @@ fn deferred_preview_follows_its_pane_after_reflow(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         assert_eq!(view.cockpit.read(cx).roster().focused(), Some(source));
         let thread = source.thread().unwrap();
-        assert_eq!(view.files.read(cx).active_path(view.cockpit.read(cx).thread_key(thread)), Some(path));
+        assert_eq!(view.files.read(cx).active_path(thread), Some(path));
         assert_eq!(
-            view.active_surface(view.cockpit.read(cx).thread_key(thread)),
+            view.active_surface(thread),
             Some(super::super::surfaces::SurfaceId::Files)
         );
         assert!(view
@@ -311,7 +311,7 @@ fn deferred_preview_follows_its_pane_after_reflow(cx: &mut TestAppContext) {
             .all(|pane| !pane.preview.is_open()
                 && pane
                     .thread()
-                    .is_none_or(|thread| view.files.read(cx).active_path(view.cockpit.read(cx).thread_key(thread)).is_none())));
+                    .is_none_or(|thread| view.files.read(cx).active_path(thread).is_none())));
     });
 }
 
@@ -336,7 +336,7 @@ fn deferred_preview_for_a_closed_pane_is_dropped(cx: &mut TestAppContext) {
         assert!(view.panes.iter().all(|pane| !pane.preview.is_open()
             && pane
                 .thread()
-                .is_none_or(|thread| view.files.read(cx).active_path(view.cockpit.read(cx).thread_key(thread)).is_none())));
+                .is_none_or(|thread| view.files.read(cx).active_path(thread).is_none())));
     });
 }
 
@@ -354,7 +354,7 @@ fn a_focus_the_server_asks_for_shows_at_once(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.cockpit
             .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
-                thread: second,
+                thread: second.thread(),
                 fork_of: None,
             }));
     });
@@ -379,7 +379,7 @@ fn the_shown_thread_is_drawn_by_its_id_and_no_other(cx: &mut TestAppContext) {
     let drawn = |cx: &mut gpui::VisualTestContext| {
         order
             .iter()
-            .map(|thread| debug_bounds(cx, format!("view-thread-{}", thread.get())).is_some())
+            .map(|thread| debug_bounds(cx, format!("view-thread-{}", thread.thread().get())).is_some())
             .collect::<Vec<_>>()
     };
     assert_eq!(drawn(cx), [true, false]);
@@ -387,7 +387,7 @@ fn the_shown_thread_is_drawn_by_its_id_and_no_other(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.cockpit
             .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
-                thread: order[1],
+                thread: order[1].thread(),
                 fork_of: None,
             }));
     });
@@ -424,10 +424,10 @@ fn a_double_click_on_the_view_title_renames_the_thread(cx: &mut TestAppContext) 
     let at = cx.debug_bounds("view-title").expect("the title").center();
 
     click_at(cx, at, 1);
-    view.read_with(cx, |view, cx| {
+    view.read_with(cx, |view, _| {
         assert!(
             view.context_menu()
-                .is_some_and(|menu| menu.target == MenuTarget::Thread(keyed(view, thread, cx))),
+                .is_some_and(|menu| menu.target == MenuTarget::Thread(thread)),
             "a click opens the Thread's menu"
         );
     });

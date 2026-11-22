@@ -15,12 +15,12 @@ use ferrite_core::{ControlKind, McpStatus, SessionControl};
 /// ↑'s act and remove ⌫'s — neither while Codex steers it.
 pub(super) fn queue_acts(
     index: usize,
-    thread: ThreadId,
+    thread: ThreadKey,
     model: &Entity<Cockpit>,
     running: bool,
     cx: &mut Context<CockpitView>,
 ) -> Vec<Vec<AnyElement>> {
-    type Act = fn(&mut Cockpit, ThreadId, &str);
+    type Act = fn(&mut Cockpit, ThreadKey, &str);
     // What each queued item offers, read before the buttons are made.
     let queue: Vec<_> = model
         .read(cx)
@@ -145,7 +145,7 @@ pub(super) struct AttachMenu {
 /// one, else open the Panel, where Connectors live — as `Manage connectors`
 /// does.
 struct Connectors {
-    thread: ThreadId,
+    thread: ThreadKey,
     generation: u64,
     choices: Vec<ferrite_ui::components::Choice>,
     acts: Vec<Option<SessionControl>>,
@@ -167,7 +167,7 @@ impl AttachMenu {
         open: Option<FocusHandle>,
         return_focus: FocusHandle,
         place: ferrite_ui::components::FloatPlace,
-        thread: Option<(ThreadId, &ThreadView)>,
+        thread: Option<(ThreadKey, &ThreadView)>,
     ) -> Self {
         let connectors = thread.and_then(|(thread, open)| {
             let servers = open.transcript().mcp_servers();
@@ -343,7 +343,7 @@ fn submenus(
                 let _ = view.update(cx, |view, cx| {
                     match act {
                         Some(act) => view.run_session_control(thread, generation, act, cx),
-                        None => view.open_panel(view.cockpit.read(cx).thread_key(thread), cx),
+                        None => view.open_panel(thread, cx),
                     }
                     cx.notify();
                 });
@@ -421,7 +421,7 @@ fn submenus(
 /// switch modes shows the chip without a menu.
 pub(super) struct ModeChip {
     index: usize,
-    thread: ThreadId,
+    thread: ThreadKey,
     generation: u64,
     mode: String,
     label: SharedString,
@@ -435,7 +435,7 @@ impl ModeChip {
     /// The chip on Pane `index` for `open`, the Pane's Thread.
     pub(super) fn of(
         index: usize,
-        thread: ThreadId,
+        thread: ThreadKey,
         open: &ThreadView,
         menu_up: bool,
     ) -> Option<Self> {
@@ -468,7 +468,7 @@ impl ModeChip {
             generation,
             ..
         } = self;
-        let key = thread.get() as usize;
+        let key = thread.thread().get() as usize;
         let trigger = pane::toolbar_chip(("mode-picker", key), cx)
             .debug_selector(move || format!("mode-picker-{key}"))
             .tip_unless_open(self.menu_up, "Permission mode")

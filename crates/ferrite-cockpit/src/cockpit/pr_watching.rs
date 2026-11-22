@@ -10,16 +10,15 @@ impl CockpitView {
     /// The URL a watch of the Thread's open PR names, and whether the
     /// Server watches it now. `None` for a PR that is not open, and for one
     /// not watched that cannot start a watch: it has no URL, or no Server
-    /// runs a watcher for this window.
-    pub(super) fn pr_watch_target(&self, thread: ThreadId, cx: &gpui::App) -> Option<(String, bool)> {
-        let key = self.cockpit.read(cx).thread_key(thread);
-        let pr = self.facts.pr(key)?;
+    /// runs a watcher on its machine.
+    pub(super) fn pr_watch_target(&self, thread: ThreadKey, cx: &gpui::App) -> Option<(String, bool)> {
+        let pr = self.facts.pr(thread)?;
         if pr.state != ferrite_core::workspace::PrState::Open {
             return None;
         }
-        match self.facts.watched_pr(key) {
+        match self.facts.watched_pr(thread) {
             Some(watch) => Some((watch.url.clone(), true)),
-            None if self.cockpit.read(cx).starts_pr_watches() => Some((pr.url.clone()?, false)),
+            None if self.cockpit.read(cx).starts_pr_watches(thread.machine()) => Some((pr.url.clone()?, false)),
             None => None,
         }
     }
@@ -29,7 +28,7 @@ impl CockpitView {
     /// meanwhile, no Server) is said in the nav's notice.
     pub(super) fn watch_pr(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         url: String,
         watching: bool,
         cx: &mut Context<Self>,

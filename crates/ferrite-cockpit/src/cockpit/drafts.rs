@@ -7,7 +7,7 @@ use ferrite_core::draft_content::DraftContent;
 use ferrite_core::drafts::Drafts;
 use ferrite_core::replies::Reply;
 use ferrite_core::roster::DraftId;
-use ferrite_core::{MachineKey, SavedThread, ThreadKey};
+use ferrite_core::ThreadKey;
 
 /// How long after the last keystroke the drafts are written: a burst of
 /// typing is one write.
@@ -89,25 +89,15 @@ impl CockpitView {
         let content = pane.composer.read(cx).content();
         match (identity, pane.draft()) {
             (PaneIdentity::Thread(thread), _) => {
-                let thread = self.saved_thread(self.cockpit.read(cx).thread_key(thread), cx);
+                let Some(thread) = self.cockpit.read(cx).saved(thread) else {
+                    return false;
+                };
                 self.unsent.drafts.keep_thread(thread, content)
             }
             (PaneIdentity::Draft(id), Some(draft)) => {
                 self.unsent.drafts.keep_fresh(id, &draft.binding, content)
             }
             (PaneIdentity::Draft(_), None) => false,
-        }
-    }
-
-    /// `thread` as the drafts file names it. Until the window holds every
-    /// machine at once (ADR 0045), each key it has is of the one machine
-    /// its core is on, which the view took with its core: never the one
-    /// `Machines` has selected now, which a swap moves first.
-    fn saved_thread(&self, thread: ThreadKey, cx: &gpui::App) -> SavedThread {
-        debug_assert_eq!(thread.machine(), self.cockpit.read(cx).machine_id());
-        SavedThread {
-            machine: self.machine_key.clone().unwrap_or(MachineKey(None)),
-            thread: thread.thread(),
         }
     }
 
@@ -123,17 +113,13 @@ impl CockpitView {
         .detach();
     }
 
-    /// `thread` as `cited-sources.json` names it: a Thread of the machine
-    /// the window is on.
-    pub(super) fn cited_thread(&self, thread: ThreadId, cx: &gpui::App) -> SavedThread {
-        let machine = self.machines.as_ref().and_then(|machines| machines.read(cx).selected_key());
-        SavedThread { machine: machine.unwrap_or(MachineKey(None)), thread }
-    }
-
     /// `replies` went out on `thread`: their quotes keep the Blocks they
     /// were cited from, for the sent rows' Go to source.
-    pub(super) fn keep_cited_sources(&mut self, thread: ThreadId, replies: &[Reply], cx: &gpui::App) {
-        if self.cited_sources.record(&self.cited_thread(thread, cx), replies) {
+    pub(super) fn keep_cited_sources(&mut self, thread: ThreadKey, replies: &[Reply], cx: &gpui::App) {
+        let Some(saved) = self.cockpit.read(cx).saved(thread) else {
+            return;
+        };
+        if self.cited_sources.record(&saved, replies) {
             if let Err(error) = self.cited_sources.save(&self.prefs.dir) {
                 ferrite_core::log!("cited sources were not saved: {error}");
             }
@@ -144,12 +130,13 @@ impl CockpitView {
     /// and, at the next frame, its Panel.
     pub(super) fn delete_thread(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         cx: &mut gpui::App,
     ) -> std::io::Result<()> {
         self.cockpit.update(cx, |cockpit, _| cockpit.delete(thread))?;
-        self.panel.deleted.push(self.cockpit.read(cx).thread_key(thread));
-        if self.cited_sources.forget(&self.cited_thread(thread, cx)) {
+        self.panel.deleted.push(thread);
+        let saved = self.cockpit.read(cx).saved(thread);
+        if saved.is_some_and(|saved| self.cited_sources.forget(&saved)) {
             if let Err(error) = self.cited_sources.save(&self.prefs.dir) {
                 ferrite_core::log!("cited sources were not saved: {error}");
             }
@@ -165,7 +152,8 @@ impl CockpitView {
         composer: &Entity<Composer>,
         cx: &mut Context<Self>,
     ) {
-        if let Some(content) = self.unsent.drafts.thread(&self.saved_thread(thread, cx)).cloned() {
+        let saved = self.cockpit.read(cx).saved(thread);
+        if let Some(content) = saved.and_then(|saved| self.unsent.drafts.thread(&saved).cloned()) {
             composer.update(cx, |composer, cx| composer.load(content, cx));
         }
     }
@@ -198,7 +186,7 @@ impl CockpitView {
 
     /// Draft Pane `index` became `thread`'s: it keeps what the File
     /// Surface kept of its preview, and its Decision forms.
-    pub(super) fn adopt_thread(&mut self, index: usize, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(super) fn adopt_thread(&mut self, index: usize, thread: ThreadKey, cx: &mut Context<Self>) {
         let draft = self.panes[index].identity;
         self.panes[index].adopt_thread(thread);
         self.file_surface
@@ -213,12 +201,14 @@ impl CockpitView {
         let Some(pane) = self
             .panes
             .iter()
-            .find(|pane| pane.identity == PaneIdentity::Thread(thread.thread()))
+            .find(|pane| pane.identity == PaneIdentity::Thread(thread))
         else {
             return;
         };
         let content = pane.composer.read(cx).content();
-        let thread = self.saved_thread(thread, cx);
+        let Some(thread) = self.cockpit.read(cx).saved(thread) else {
+            return;
+        };
         if self.unsent.drafts.promote(id, thread, content) {
             self.save_drafts_soon(cx);
         }

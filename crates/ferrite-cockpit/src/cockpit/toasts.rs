@@ -151,8 +151,8 @@ impl ToastsView {
         // its alerts by them would drop the ones the window brought along.
         let here = view.attached(cx).then(|| model.notifications());
         if let Some(here) = here {
-            let operators = |thread: ThreadId| model.operators(thread);
-            let (fresh, requests) = news(here, needs_you.presented(None), &operators);
+            let operators = |thread: ThreadId| model.operators(here.key(thread));
+            let (fresh, requests) = news(here.reading(), needs_you.presented(None), &operators);
             needs_you.hear(None, fresh, requests, now);
         }
         for away in machines.iter().flat_map(|machines| machines.off_screen()) {
@@ -164,7 +164,13 @@ impl ToastsView {
             );
             needs_you.hear(Some(away.key), fresh, requests, now);
         }
-        let live = |alert: &Alert| super::machines::wanted(alert, here, machines);
+        let live = |alert: &Alert| {
+            super::machines::wanted(alert, here.map(|here| here.reading()), machines)
+        };
+        // An alert of the machine on screen names a Thread of its Notices.
+        let on_screen = |alert: &Alert| {
+            (alert.away.is_none()).then(|| model.notifications().key(alert.thread))
+        };
         // A system notification the operator has since read, or whose
         // request resolved, is taken back out of the notification centre.
         let withdraw: Vec<String> = needs_you
@@ -176,13 +182,13 @@ impl ToastsView {
         let (mut sound, mut post) = (None, Vec::new());
         if needs_you.busy() {
             let present = model.window_active();
-            let on_board: std::collections::HashSet<ThreadId> = view
+            let on_board: std::collections::HashSet<ThreadKey> = view
                 .visible_indices(cx)
                 .into_iter()
                 .filter_map(|index| view.panes[index].thread())
                 .collect();
             let in_view = |alert: &Alert| {
-                present && alert.away.is_none() && on_board.contains(&alert.thread)
+                present && on_screen(alert).is_some_and(|thread| on_board.contains(&thread))
             };
             let ring = needs_you.ring(now, &live, &in_view);
             // Alerts that ring together chime once, needs-you over done.
@@ -209,7 +215,7 @@ impl ToastsView {
                     .rang
                     .into_iter()
                     .filter(|alert| {
-                        let focused = alert.away.is_none() && focused == Some(alert.thread);
+                        let focused = focused.is_some() && on_screen(alert) == focused;
                         crate::system_notifications::wanted(focused, present)
                     })
                     .filter_map(|alert| Some((view.system_posting(&alert, machines, wall, cx)?, alert)))

@@ -292,7 +292,7 @@ pub(super) struct StopControl {
 /// them apart in the line and in the dialog.
 pub(super) fn stop_elements(
     control: &StopControl,
-    thread: ThreadId,
+    thread: ThreadKey,
     prefix: &'static str,
     on_stop: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
 ) -> Vec<AnyElement> {
@@ -313,7 +313,7 @@ pub(super) fn stop_elements(
     } else {
         "Stop"
     };
-    let button = pane::inline_button(SharedString::from(format!("{prefix}-stop-all-{}", thread.get())), label);
+    let button = pane::inline_button(SharedString::from(format!("{prefix}-stop-all-{}", thread.thread().get())), label);
     let button = if control.stopping {
         button.debug_selector(move || format!("{prefix}-stopping"))
     } else {
@@ -437,7 +437,7 @@ impl BackgroundView {
                 if let Some(control) = &stop {
                     actions.extend(stop_elements(
                         control,
-                        thread.thread(),
+                        thread,
                         "background",
                         emit(BackgroundEvent::StopLine(thread)),
                     ));
@@ -578,11 +578,10 @@ impl BackgroundView {
 impl CockpitView {
     /// What the background work draws of `thread`, none once it is not
     /// open. `outputs`: with the blocks of its calls, for their output.
-    pub(super) fn background_inputs(&self, thread: ThreadId, outputs: bool, cx: &App) -> Option<BackgroundInputs> {
+    pub(super) fn background_inputs(&self, thread: ThreadKey, outputs: bool, cx: &App) -> Option<BackgroundInputs> {
         let open = self.cockpit.read(cx).thread(thread)?;
-        let key = self.cockpit.read(cx).thread_key(thread);
         let transcript = open.transcript();
-        let watched = self.facts.get(key).map_or(&[][..], |facts| &facts.watching.prs);
+        let watched = self.facts.get(thread).map_or(&[][..], |facts| &facts.watching.prs);
         let running = running_work(&open, watched);
         let refusals = running
             .iter()
@@ -619,7 +618,7 @@ impl CockpitView {
             HashMap::new()
         };
         Some(BackgroundInputs {
-            thread: key,
+            thread,
             generation: open.generation(),
             busy: open.busy(),
             stops_tasks: open.supports_control(ferrite_core::ControlKind::StopTask),
@@ -694,11 +693,11 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match event.clone() {
-            BackgroundEvent::Details(thread) => self.open_background_dialog(thread.thread(), cx),
-            BackgroundEvent::Open(thread) => self.open_background(thread.thread(), cx),
-            BackgroundEvent::OpenAgent { thread, call } => self.open_background_agent(thread.thread(), &call, cx),
+            BackgroundEvent::Details(thread) => self.open_background_dialog(thread, cx),
+            BackgroundEvent::Open(thread) => self.open_background(thread, cx),
+            BackgroundEvent::OpenAgent { thread, call } => self.open_background_agent(thread, &call, cx),
             BackgroundEvent::StopLine(thread) => {
-                self.stop_background_work(thread.thread(), BackgroundInputs::line_work, cx)
+                self.stop_background_work(thread, BackgroundInputs::line_work, cx)
             }
             BackgroundEvent::Stop { thread, generation, target } => {
                 self.send_stop(thread, generation, target, cx)
@@ -710,7 +709,7 @@ impl CockpitView {
     /// Session can stop.
     pub(super) fn stop_background_work(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         work_of: fn(&BackgroundInputs) -> Vec<Work>,
         cx: &mut Context<Self>,
     ) {
@@ -726,8 +725,7 @@ impl CockpitView {
     /// Stop `target` of `thread`'s Session `generation`, if that very
     /// Session still runs it: a press that lands as the work is handed back
     /// stops nothing else.
-    fn send_stop(&mut self, key: ThreadKey, generation: u64, target: StopTarget, cx: &mut Context<Self>) {
-        let thread = key.thread();
+    fn send_stop(&mut self, thread: ThreadKey, generation: u64, target: StopTarget, cx: &mut Context<Self>) {
         let Some(inputs) = self
             .background_inputs(thread, false, cx)
             .filter(|inputs| inputs.generation == generation)
@@ -737,7 +735,7 @@ impl CockpitView {
         if !inputs.targets(&inputs.running).contains(&target) {
             return;
         }
-        let stop = (key, generation, target.clone());
+        let stop = (thread, generation, target.clone());
         let refused = inputs.refusal(&target).map_or(0, |(count, _)| count);
         self.background
             .update(cx, |background, cx| background.sent(stop.clone(), refused, cx));
@@ -766,7 +764,7 @@ impl CockpitView {
     pub(super) fn prune_background_stops(&mut self, cx: &mut Context<Self>) {
         self.background.update(cx, |background, cx| {
             background.prune(|thread| {
-                let inputs = self.background_inputs(thread.thread(), false, cx)?;
+                let inputs = self.background_inputs(thread, false, cx)?;
                 Some((inputs.generation, inputs.targets(&inputs.running)))
             })
         });
@@ -775,7 +773,7 @@ impl CockpitView {
     /// `Open subagent` in the dialog, or `Open` on an agent's card in the
     /// Background Surface: the agent the call started, its full chat in the
     /// Pane.
-    pub(super) fn open_background_agent(&mut self, thread: ThreadId, call: &str, cx: &mut Context<Self>) {
+    pub(super) fn open_background_agent(&mut self, thread: ThreadKey, call: &str, cx: &mut Context<Self>) {
         if self.background_dialog(cx).is_some() {
             self.hide_sheet(cx);
         }

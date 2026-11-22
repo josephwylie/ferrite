@@ -356,7 +356,7 @@ fn nav_inputs(
         .open_rows()
         .chain(&state.parked)
         .filter_map(|row| {
-            let open = model.thread(row.key.thread())?;
+            let open = model.thread(row.key)?;
             Some((
                 row.key,
                 OpenThread {
@@ -366,9 +366,9 @@ fn nav_inputs(
             ))
         })
         .collect();
-    let shown = view.focused_thread(cx).map(|thread| model.thread_key(thread));
+    let shown = view.focused_thread(cx);
     let provider = shown
-        .and_then(|key| model.thread(key.thread()))
+        .and_then(|key| model.thread(key))
         .map(|open| open.provider())
         .unwrap_or(view.launch_provider);
     let update = match view.ferrite_update.state() {
@@ -386,14 +386,14 @@ fn nav_inputs(
         notice: view.nav_notice.text().cloned(),
         filtered: view
             .nav_filter
-            .and_then(|project| model.registry().project(project))
+            .and_then(|project| model.registry().reading().project(project))
             .map(|project| project.title.clone().into()),
         factory,
         menu: view.context_menu().map(|menu| menu.target),
         doors: view.doors(),
         open,
         rename: match view.rename.shown() {
-            Some((RenameTarget::Thread(thread), editor)) => Some((model.thread_key(thread), editor.clone())),
+            Some((RenameTarget::Thread(thread), editor)) => Some((thread, editor.clone())),
             _ => None,
         },
         limits: model.account_limits(provider),
@@ -454,7 +454,7 @@ fn nav_state(
     let shown = (!view.empty_board_shown(cx))
         .then(|| roster.focused_thread())
         .flatten()
-        .map(|thread| model.thread_key(thread));
+        ;
     let row = |key: ThreadKey| nav::ThreadRow {
         selected: shown == Some(key),
         ..view.thread_row(key, cx)
@@ -466,12 +466,12 @@ fn nav_state(
     let mut pinned = Vec::new();
     let mut snoozed = Vec::new();
     for &(key, section, _) in listed {
-        if !view.admitted(key.thread(), cx) {
+        if !view.admitted(key, cx) {
             continue;
         }
         match section {
             Section::Snoozed => {
-                let until = model.thread(key.thread())
+                let until = model.thread(key)
                     .and_then(|open| open.snooze())
                     .map(|snooze| snooze.until);
                 snoozed.push((until, row(key)));
@@ -493,7 +493,7 @@ fn nav_state(
         (
             queue
                 .iter()
-                .position(|id| *id == row.key.thread())
+                .position(|id| *id == row.key)
                 .unwrap_or(usize::MAX),
             latest(row),
         )
@@ -502,7 +502,7 @@ fn nav_state(
     state.parked = view
         .parked_threads(cx)
         .into_iter()
-        .map(|thread| row(model.thread_key(thread)))
+        .map(|thread| row(thread))
         .collect();
     state
 }
@@ -518,7 +518,7 @@ fn listed_threads(
     use nav::Section;
     #[cfg(test)]
     drawn::listed();
-    let mut threads: Vec<ThreadId> = view
+    let mut threads: Vec<ThreadKey> = view
         .panes
         .iter()
         .filter_map(|pane| pane.thread())
@@ -534,11 +534,10 @@ fn listed_threads(
     threads
         .into_iter()
         .map(|thread| {
-            let key = model.thread_key(thread);
             let open = model.thread(thread);
             let section = if open.is_some_and(|open| open.snooze().is_some()) {
                 Section::Snoozed
-            } else if pins.contains(&key) {
+            } else if pins.contains(&thread) {
                 Section::Pinned
             } else if open.is_some_and(|open| {
                 open.pending_decisions().is_empty()
@@ -548,7 +547,7 @@ fn listed_threads(
             } else {
                 Section::Active
             };
-            (key, section, view.facts.last_used(key))
+            (thread, section, view.facts.last_used(thread))
         })
         .collect()
 }
@@ -573,13 +572,13 @@ impl CockpitView {
             }
             NavEvent::Notice(verb) => self.notice_verb(verb, cx),
             NavEvent::Revive(key) => {
-                self.revive_thread(key.thread(), cx);
+                self.revive_thread(key, cx);
             }
             NavEvent::Wake(key) => self.snooze_thread(key, None, cx),
             NavEvent::Park(keys) => self.park_listed(&keys, cx),
             NavEvent::Unpin(key) => self.set_pinned(key, false, cx),
-            NavEvent::Rename(key) => self.start_rename(RenameTarget::Thread(key.thread()), cx),
-            NavEvent::OpenPr(key, how) => self.open_pr_as(key.thread(), how, window, cx),
+            NavEvent::Rename(key) => self.start_rename(RenameTarget::Thread(key), cx),
+            NavEvent::OpenPr(key, how) => self.open_pr_as(key, how, window, cx),
             NavEvent::Menu(target, at) => match at {
                 MenuAt::Point(at) => self.open_context_menu(target, at, cx),
                 MenuAt::Under(row) => self.open_context_menu_under(target, row, cx),
@@ -597,7 +596,7 @@ impl CockpitView {
                 open: None,
             }),
             NavEvent::Snooze(key, until) => {
-                let refused = match self.cockpit.update(cx, |cockpit, _| cockpit.snooze_thread(key.thread(), Some(until))) {
+                let refused = match self.cockpit.update(cx, |cockpit, _| cockpit.snooze_thread(key, Some(until))) {
                     Ok(()) => {
                         self.nav_notice.clear();
                         None

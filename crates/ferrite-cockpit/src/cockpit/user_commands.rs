@@ -99,7 +99,7 @@ impl CockpitView {
             let command = command.clone();
             let cwd = cwd.clone();
             move || {
-                let _ = done.send(command.run(&cwd, thread, &stop));
+                let _ = done.send(command.run(&cwd, thread.thread(), &stop));
             }
         });
         cx.spawn(async move |this, cx| loop {

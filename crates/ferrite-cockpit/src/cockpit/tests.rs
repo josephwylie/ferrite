@@ -434,18 +434,18 @@ fn hold_wall_clock() -> ferrite_core::clock::ThreadFixture {
 
 /// A turn that ended just now, dated as the log dates them: what the bell
 /// lists a Thread for (`Store::last_activity`); an unused Thread has none.
-fn did_something_now(store: &std::path::Path, thread: ThreadId) {
+fn did_something_now(store: &std::path::Path, thread: ThreadKey) {
     did_something_at(store, thread, &ferrite_core::clock::now_stamp());
 }
 
-fn did_something_at(store: &std::path::Path, thread: ThreadId, stamp: &str) {
+fn did_something_at(store: &std::path::Path, thread: ThreadKey, stamp: &str) {
     use std::io::Write;
     let record = format!(
         r#"{{"type":"completion_observation","elapsed_ms":1,"completed_at":"{stamp}"}}"#
     );
     let mut log = std::fs::OpenOptions::new()
         .append(true)
-        .open(store.join(thread.to_string()).join("log.jsonl"))
+        .open(store.join(thread.thread().to_string()).join("log.jsonl"))
         .unwrap();
     writeln!(log, "{record}").unwrap();
 }
@@ -456,7 +456,7 @@ fn without_checkouts(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContex
     view.update(cx, |view, cx| {
         let threads = view.cockpit.read(cx).threads();
         view.facts
-            .set_branches(threads.into_iter().map(|thread| (view.cockpit.read(cx).thread_key(thread), None)).collect());
+            .set_branches(threads.into_iter().map(|thread| (thread, None)).collect());
         view.notify_part(parts::Part::Nav, cx);
     });
     cx.run_until_parked();
@@ -671,20 +671,6 @@ fn quotes(replies: &[ferrite_core::replies::Reply]) -> Vec<(&str, &str)> {
         .collect()
 }
 
-/// `thread` as the window names it: a Thread of its Cockpit's machine.
-fn keyed(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> ThreadKey {
-    view.cockpit.read(cx).thread_key(thread)
-}
-
-/// [`keyed`], from outside the window's updates.
-fn keyed_in(
-    view: &Entity<CockpitView>,
-    thread: ThreadId,
-    cx: &mut gpui::VisualTestContext,
-) -> ThreadKey {
-    view.read_with(cx, |view, cx| keyed(view, thread, cx))
-}
-
 fn tick(cx: &mut gpui::VisualTestContext) {
     cx.executor()
         .advance_clock(Duration::from_millis(PUMP_MS * 4));
@@ -706,17 +692,17 @@ fn settles(cx: &mut gpui::VisualTestContext) {
 /// press only arms it.
 fn press_nav_verb(
     view: &Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     verb: MenuVerb,
     cx: &mut gpui::VisualTestContext,
 ) {
     view.update_in(cx, |view, window, cx| {
         let row = view
-            .context_rows(MenuTarget::Thread(keyed(view, thread, cx)), cx)
+            .context_rows(MenuTarget::Thread(thread), cx)
             .iter()
             .position(|row| matches!(row, Some((_, listed)) if *listed == verb))
             .expect("the nav row's menu has the verb");
-        view.open_context_menu(MenuTarget::Thread(keyed(view, thread, cx)), gpui::point(px(600.), px(300.)), cx);
+        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(600.), px(300.)), cx);
         view.press_menu_row(row, window, cx);
         if view.context_menu().is_some() {
             view.press_menu_row(row, window, cx);
@@ -785,16 +771,16 @@ fn connection_removal(
 /// `thread`'s Panel tabs, in order, and the one it shows (ADR 0039).
 fn panel_tabs(
     view: &gpui::Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     cx: &mut gpui::VisualTestContext,
 ) -> (Vec<super::surfaces::SurfaceId>, Option<super::surfaces::SurfaceId>) {
-    view.read_with(cx, |view, cx| {
+    view.read_with(cx, |view, _| {
         let tabs = view
             .panel
             .surfaces
-            .get(view.cockpit.read(cx).thread_key(thread))
+            .get(thread)
             .map_or_else(|| vec![super::surfaces::SurfaceId::Overview], |state| state.tabs.clone());
-        (tabs, view.active_surface(view.cockpit.read(cx).thread_key(thread)))
+        (tabs, view.active_surface(thread))
     })
 }
 
@@ -802,7 +788,7 @@ fn panel_tabs(
 /// Panel's one door (`upsert_surface`).
 fn opens_once(
     view: &gpui::Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     id: super::surfaces::SurfaceId,
     cx: &mut gpui::VisualTestContext,
     mut open: impl FnMut(&gpui::Entity<CockpitView>, &mut gpui::VisualTestContext),
@@ -962,9 +948,9 @@ fn question(id: &str) -> SessionEvent {
 fn created(
     view: &gpui::Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
-) -> (ThreadId, ThreadId) {
+) -> (ThreadKey, ThreadKey) {
     view.read_with(cx, |view, _| {
-        let mut ids: Vec<ThreadId> = view.panes.iter().filter_map(|pane| pane.thread()).collect();
+        let mut ids: Vec<ThreadKey> = view.panes.iter().filter_map(|pane| pane.thread()).collect();
         ids.sort();
         (ids[0], ids[1])
     })
@@ -1088,7 +1074,7 @@ fn caret(
         } else {
             let text = view
                 .selection
-                .registered(thread)
+                .registered(thread.thread())
                 .into_iter()
                 .find(|(id, ordinal, _, _)| *id == current.id && *ordinal == 0)
                 .unwrap()
@@ -1168,11 +1154,20 @@ fn checkout_with_files(base: &std::path::Path) -> std::path::PathBuf {
 
 /// One Thread of `provider` bound to a checkout with files to mention.
 fn bound_cockpit(name: &str, provider: Provider) -> (Cockpit, Fake, std::path::PathBuf) {
+    bound_cockpit_as(name, provider, ferrite_core::MachineKey(None))
+}
+
+/// `bound_cockpit`, standing in for the machine saved as `saved_as`.
+fn bound_cockpit_as(
+    name: &str,
+    provider: Provider,
+    saved_as: ferrite_core::MachineKey,
+) -> (Cockpit, Fake, std::path::PathBuf) {
     let base = scratch(name);
     let checkout = checkout_with_files(&base);
     let fake = Fake::default();
     let store = Store::open(base.join("threads")).unwrap();
-    let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
+    let mut cockpit = Cockpit::new_saved_as(store, Box::new(fake.clone()), saved_as);
     cockpit
         .open(
             provider,

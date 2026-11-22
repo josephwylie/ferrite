@@ -14,20 +14,20 @@ use ferrite_ui::theme::*;
 
 /// The open menu: the Session it is on and which mode it previews.
 pub(super) struct ModeMenu {
-    pub(super) thread: ThreadId,
+    pub(super) thread: ThreadKey,
     pub(super) generation: u64,
     /// The mode under the pointer; else the menu names the mode in force.
     pub(super) preview: Option<String>,
 }
 
 /// The key a Thread's mode chip records its bounds under.
-pub(super) fn chip_trigger(thread: ThreadId) -> SharedString {
-    format!("mode-chip-{}", thread.get()).into()
+pub(super) fn chip_trigger(thread: ThreadKey) -> SharedString {
+    format!("mode-chip-{}", thread.thread().get()).into()
 }
 
 impl CockpitView {
     /// Open the permission menu on `thread`'s Session, or shut it.
-    pub(super) fn toggle_mode_menu(&mut self, thread: ThreadId, generation: u64, cx: &mut Context<Self>) {
+    pub(super) fn toggle_mode_menu(&mut self, thread: ThreadKey, generation: u64, cx: &mut Context<Self>) {
         if self
             .mode_menu()
             .is_some_and(|open| (open.thread, open.generation) == (thread, generation))
@@ -106,7 +106,7 @@ impl CockpitView {
 /// first), the mode in force and the mode it names, the one under the
 /// pointer or else the one in force.
 struct ModeSegments {
-    thread: ThreadId,
+    thread: ThreadKey,
     generation: u64,
     modes: Vec<ferrite_core::PermissionModeChoice>,
     current: String,

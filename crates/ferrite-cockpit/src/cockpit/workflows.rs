@@ -216,7 +216,7 @@ impl CockpitView {
     /// first.
     fn chosen_workflow<'a>(&self, chosen: Option<&str>, cx: &'a gpui::App) -> Option<&'a Workflow> {
         let project = self.factory_project()?;
-        let board = self.cockpit.read(cx).factory();
+        let board = self.cockpit.read(cx).factory().reading();
         chosen
             .and_then(|id| board.workflow(id))
             .filter(|workflow| workflow.project == project)

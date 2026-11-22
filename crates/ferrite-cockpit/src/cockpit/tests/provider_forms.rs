@@ -450,7 +450,7 @@ fn contract_the_standing_native_choice_is_option_two(cx: &mut TestAppContext) {
         (thread, serial)
     });
     // A forbidden plain Allow: the split's `Allow once` face cannot act.
-    let allow = debug_bounds(cx, format!("request-allow-{}-{serial}", thread.get()))
+    let allow = debug_bounds(cx, format!("request-allow-{}-{serial}", thread.thread().get()))
         .expect("the split button's face");
     cx.simulate_click(allow.center(), gpui::Modifiers::none());
     cx.run_until_parked();
@@ -458,11 +458,11 @@ fn contract_the_standing_native_choice_is_option_two(cx: &mut TestAppContext) {
         fake.answered.borrow().is_empty(),
         "a forbidden plain Allow cannot act"
     );
-    let more = debug_bounds(cx, format!("request-more-{}-{serial}", thread.get()))
+    let more = debug_bounds(cx, format!("request-more-{}-{serial}", thread.thread().get()))
         .expect("the split button's menu");
     cx.simulate_click(more.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    let choice = debug_bounds(cx, format!("request-always-{}-{serial}", thread.get()))
+    let choice = debug_bounds(cx, format!("request-always-{}-{serial}", thread.thread().get()))
         .expect("option 2 carries the standing answer");
     cx.simulate_click(choice.center(), gpui::Modifiers::none());
     cx.run_until_parked();
@@ -575,7 +575,7 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
             if let Some(created) = created {
                 assert_eq!(project, created, "Done must edit the same Project");
             }
-            let record = view.cockpit.read(app).registry().project(project).unwrap();
+            let record = view.cockpit.read(app).registry().reading().project(project).unwrap();
             assert_eq!(record.title, title);
             assert_eq!(record.root, directories[0]);
             assert_eq!(record.additional_roots, directories[1..]);

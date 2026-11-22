@@ -40,13 +40,13 @@ impl EventEmitter<BrowserReviewEvent> for BrowserReviewView {}
 
 impl BrowserReviewView {
     /// Every Thread `keep` refuses takes its review with it.
-    pub(in crate::cockpit) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
-        self.threads.retain(|key, _| keep(key.thread()));
+    pub(in crate::cockpit) fn retain_threads(&mut self, keep: impl Fn(ThreadKey) -> bool) {
+        self.threads.retain(|key, _| keep(*key));
     }
 
     #[cfg(test)]
-    pub(in crate::cockpit) fn held_for_test(&self, thread: ThreadId) -> usize {
-        self.threads.keys().filter(|key| key.thread() == thread).count()
+    pub(in crate::cockpit) fn held_for_test(&self, thread: ThreadKey) -> usize {
+        self.threads.keys().filter(|key| **key == thread).count()
     }
 
     /// A review is open for `thread`, its capture read or not.
@@ -174,7 +174,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         let BrowserReviewEvent::Add(thread, annotation) = event;
-        let Some(index) = self.pane_for(thread.thread()) else {
+        let Some(index) = self.pane_for(*thread) else {
             return;
         };
         match annotation {

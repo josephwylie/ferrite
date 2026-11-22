@@ -7,10 +7,10 @@ use ferrite_core::drafts::Drafts;
 use ferrite_core::replies::Reply;
 
 /// `thread` as the drafts file names this computer's.
-pub(super) fn saved_here(thread: ThreadId) -> ferrite_core::SavedThread {
+pub(super) fn saved_here(thread: ThreadKey) -> ferrite_core::SavedThread {
     ferrite_core::SavedThread {
         machine: ferrite_core::MachineKey(None),
-        thread,
+        thread: thread.thread(),
     }
 }
 
@@ -108,6 +108,8 @@ fn a_whole_draft_comes_back_after_a_restart(cx: &mut TestAppContext) {
     drop(view);
 
     let (core, _fake) = cockpit("drafts-restart-again", 1);
+    // The relaunch holds its machine under a new id.
+    let thread = core.key(thread.thread());
     assert_eq!(core.threads()[0], thread);
     let (view, cx) = window_with(core, prefs_at(&dir), cx);
     assert_eq!(held(&view, cx), before, "the same words and attachments");
@@ -191,6 +193,8 @@ fn a_closed_new_pane_is_not_reopened(
         "the file forgot the discarded pane"
     );
     let (core, _fake) = cockpit(&format!("{name}-again"), 1);
+    // The relaunch holds its machine under a new id.
+    let thread = core.key(thread.thread());
     assert_eq!(core.threads()[0], thread);
     let (view, _cx) = window_with(core, prefs_at(&dir), cx);
     view.read_with(_cx, |view, _| {

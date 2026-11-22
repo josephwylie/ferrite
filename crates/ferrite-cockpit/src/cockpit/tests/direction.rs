@@ -79,14 +79,14 @@ fn window<'a>(
     recorded: bool,
 ) -> (Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
     let (mut core, _fake) = cockpit(name, 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     if recorded {
         core.fixture_record_tasks();
     }
     bind_production_keys(cx);
     core.fixture_factory(Board {
         workflows: Vec::new(),
-        tasks: vec![task(project, status, extra)],
+        tasks: vec![task(project.project(), status, extra)],
         ..Default::default()
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -643,13 +643,13 @@ fn approval_settings_choose_who_approves_and_list_what_completes(cx: &mut TestAp
         .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, thread);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     core.fixture_live_factory();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
-    view.update(cx, |view, cx| view.open_factory(project, cx));
+    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
     tick(cx);
     click(cx, "factory-tab-workflows");
     click(cx, "workflow-new");

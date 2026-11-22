@@ -167,7 +167,7 @@ fn a_pending_new_tab_can_be_left_by_its_page_tab_or_escape(cx: &mut TestAppConte
 pub(super) type Window<'a> = (
     std::rc::Rc<ferrite_pane::visual::web::fake::FakeEngine>,
     Entity<CockpitView>,
-    ThreadId,
+    ThreadKey,
     &'a mut gpui::VisualTestContext,
 );
 
@@ -195,27 +195,24 @@ pub(super) fn browser_window<'a>(cx: &'a mut TestAppContext, name: &str) -> Wind
 /// active tab is live and loaded, and has drawn it: its controls act on
 /// the page only from then. The word comes as a message, a beat or more
 /// after the Server has it.
-pub(super) fn page_shown(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
+pub(super) fn page_shown(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) {
     page_shown_where(view, thread, cx, |_| true);
 }
 
 /// `page_shown`, for the page at `url`: after a navigation or a new tab,
 /// the window still has the page before it as loaded.
-pub(super) fn page_shown_at(view: &Entity<CockpitView>, thread: ThreadId, url: &str, cx: &mut gpui::VisualTestContext) {
+pub(super) fn page_shown_at(view: &Entity<CockpitView>, thread: ThreadKey, url: &str, cx: &mut gpui::VisualTestContext) {
     page_shown_where(view, thread, cx, |tab| tab.url == url);
 }
 
 fn page_shown_where(
     view: &Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     cx: &mut gpui::VisualTestContext,
     is: impl Fn(&ferrite_core::browser::Tab) -> bool,
 ) {
     until(cx, |cx| {
-        view.read_with(cx, |view, cx| {
-            view.browsers
-                .shown_for_test(view.cockpit.read(cx).thread_key(thread))
-        })
+        view.read_with(cx, |view, _| view.browsers.shown_for_test(thread))
         .is_some_and(|(state, _)| {
             state.tabs.iter().any(|tab| Some(tab.id) == state.active && tab.live && !tab.loading && is(tab))
         })
@@ -223,7 +220,7 @@ fn page_shown_where(
     tick(cx);
 }
 
-fn tab_count(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> usize {
+fn tab_count(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) -> usize {
     view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| served(cockpit, thread).tabs.len()))
 }
 
@@ -381,16 +378,16 @@ fn a_right_click_on_a_link_offers_the_page_menu(cx: &mut TestAppContext) {
 
 fn open_second_page(
     view: &Entity<CockpitView>,
-    first: ThreadId,
+    first: ThreadKey,
     url: &str,
     cx: &mut gpui::VisualTestContext,
-) -> ThreadId {
+) -> ThreadKey {
     let second = view.update(cx, |view, cx| {
         let second = view
             .cockpit
             .update(cx, |cockpit, _| cockpit.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() }))
             .unwrap();
-        view.browser_action(view.cockpit.read(cx).thread_key(second), ferrite_core::browser::Action::Open { url: url.into() }, cx);
+        view.browser_action(second, ferrite_core::browser::Action::Open { url: url.into() }, cx);
         view.focus_thread(first, cx);
         second
     });
@@ -441,7 +438,7 @@ fn a_dialog_that_arrives_under_an_open_menu_closes_it_and_takes_the_keys(cx: &mu
     use crate::cockpit::context_menu::MenuTarget;
     let (engine, view, thread, cx) = browser_window(cx, "bnt-dialog-menu");
     view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::Thread(keyed(view, thread, cx)), gpui::point(px(200.), px(200.)), cx)
+        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(200.), px(200.)), cx)
     });
     tick(cx);
     engine.raise_dialog_at("http://localhost:5173/start", alert("Over a menu"));
@@ -490,9 +487,9 @@ fn a_dialog_is_modal_to_its_page_and_two_dialogs_each_wait_for_their_thread(
     until(cx, |cx| cx.debug_bounds("browser-dialog").is_none());
 }
 
-fn address_text(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> String {
+fn address_text(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) -> String {
     view.read_with(cx, |view, cx| {
-        view.browser_chrome.read(cx).address_for_test(view.cockpit.read(cx).thread_key(thread), cx)
+        view.browser_chrome.read(cx).address_for_test(thread, cx)
     })
 }
 
@@ -508,7 +505,7 @@ fn an_address_draft_survives_the_pages_own_navigation(cx: &mut TestAppContext) {
     });
     view.update(cx, |view, cx| {
         view.browser_action(
-            view.cockpit.read(cx).thread_key(thread),
+            thread,
             ferrite_core::browser::Action::Navigate { document, url: "http://localhost:5173/moved".into() },
             cx,
         )

@@ -50,7 +50,7 @@ fn world<'a>(
     ProjectId,
 ) {
     let (mut core, _fake) = cockpit(name, 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     core.fixture_record_tasks();
     let parked = core
         .fixture_open_owned(
@@ -64,22 +64,22 @@ fn world<'a>(
         tasks: vec![
             task(
                 "t-2",
-                project,
+                project.project(),
                 Status::Completed,
                 serde_json::json!({ "result": "Bumped", "completed_ms": 3_000 }),
             ),
-            task("t-3", project, Status::Working, serde_json::json!({})),
+            task("t-3", project.project(), Status::Working, serde_json::json!({})),
         ],
         archive: Some(vec![task(
             "t-1",
-            project,
+            project.project(),
             Status::Completed,
             serde_json::json!({
                 "result": "Fixed the race in setup",
                 "instructions": "Fix the flaky login test\nIt fails one run in ten.",
                 "title": "Fix the flaky login test",
-                "worker": parked,
-                "workers": [{"step": "s-1", "thread": 40}, {"step": "s-2", "thread": parked}],
+                "worker": parked.thread(),
+                "workers": [{"step": "s-1", "thread": 40}, {"step": "s-2", "thread": parked.thread()}],
                 "completed_ms": 1_000,
                 "archived_ms": 2_000,
             }),
@@ -89,9 +89,9 @@ fn world<'a>(
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
-    view.update(cx, |view, cx| view.open_factory(project, cx));
+    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
     tick(cx);
-    (view, cx, project)
+    (view, cx, project.project())
 }
 
 /// AC: an archived Task is off the board; Clear completed, in the board's
@@ -161,10 +161,11 @@ fn the_archive_is_searched_and_opens_a_task_read_only(cx: &mut TestAppContext) {
     // G4: an earlier Worker's transcript opens to be read, with nothing
     // to type into, and goes back to being parked.
     let (parked, row) = view.read_with(cx, |view, cx| {
-        let task = view.cockpit.read(cx).factory().task("t-1").unwrap();
+        let board = view.cockpit.read(cx).factory();
+        let task = board.task("t-1").unwrap();
         let parked = task.worker.unwrap();
         let row = task.every_worker().iter().position(|each| *each == parked);
-        (parked, row.unwrap())
+        (board.key(parked), row.unwrap())
     });
     click(cx, &format!("task-worker-history-{row}"));
     assert!(shows(cx, "task-worker-read"), "its transcript, to read");
@@ -188,7 +189,7 @@ fn the_archive_is_searched_and_opens_a_task_read_only(cx: &mut TestAppContext) {
 #[gpui::test]
 fn an_unreadable_store_is_said_on_the_board(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("archive-trouble", 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     core.fixture_factory(Board {
         trouble: Some("The Factory's store at /x/factory.json could not be read".into()),
         ..Default::default()
@@ -196,7 +197,7 @@ fn an_unreadable_store_is_said_on_the_board(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
-    view.update(cx, |view, cx| view.open_factory(project, cx));
+    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
     tick(cx);
     assert!(shows(cx, "factory-trouble"));
 }

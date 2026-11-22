@@ -1182,17 +1182,18 @@ impl CockpitView {
         self.cockpit
             .read(cx)
             .factory()
+            .reading()
             .task(view.open.as_deref()?)
             .filter(|task| task.archived() == view.archive_shown)
     }
 
     /// The open Task's Worker's Pane in this window.
     fn open_worker_pane(&self, cx: &gpui::App) -> Option<usize> {
-        self.pane_for_worker(self.open_task_now(cx)?)
+        self.pane_for_worker(self.open_task_now(cx)?, cx)
     }
 
     /// The Worker drawn in the open panel's Worker tab, which streams whole.
-    pub(super) fn factory_worker_drawn(&self, cx: &gpui::App) -> Option<ThreadId> {
+    pub(super) fn factory_worker_drawn(&self, cx: &gpui::App) -> Option<ThreadKey> {
         let view = self.factory()?.read(cx);
         if let Some(coordinator) = self.coordinator_drawn(cx) {
             return Some(coordinator);
@@ -1204,7 +1205,8 @@ impl CockpitView {
         if let Some(reading) = self.worker_reading(task, cx) {
             return Some(reading);
         }
-        task.worker.filter(|_| self.pane_for_worker(task).is_some())
+        let worker = self.cockpit.read(cx).factory().key(task.worker?);
+        self.pane_for_worker(task, cx).is_some().then_some(worker)
     }
 
     /// The Tasks changed: the open panel's Task may be gone.
@@ -1276,7 +1278,7 @@ impl CockpitView {
     ) {
         use gpui::component::WindowExt as _;
         use gpui::component::notification::{Notification, NotificationType};
-        let found = self.cockpit.read(cx).factory().task(&task);
+        let found = self.cockpit.read(cx).factory().reading().task(&task);
         let provider = found.map(|found| found.agent.provider);
         let cwd = found.and_then(|found| found.worktree.clone());
         let detail = detail.unwrap_or_else(|| title.clone());
@@ -1389,7 +1391,7 @@ impl CockpitView {
     /// Coordinator, on its Project's Coordinator tab.
     pub(super) fn land_on_owned(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         owner: ferrite_core::ThreadOwner,
         cx: &mut Context<Self>,
     ) {
@@ -1398,7 +1400,7 @@ impl CockpitView {
                 self.open_task(&task, cx);
                 if self
                     .open_task_now(cx)
-                    .is_some_and(|task| task.worker == Some(thread))
+                    .is_some_and(|task| task.worker == Some(thread.thread()))
                 {
                     self.task_tab(TaskTab::Worker, cx);
                 } else {
@@ -1507,7 +1509,7 @@ impl CockpitView {
         let tab = self.factory()?.read(cx).tab;
         let task = self.open_task_now(cx)?.clone();
         let worker = if tab == TaskTab::Worker {
-            match self.pane_for_worker(&task) {
+            match self.pane_for_worker(&task, cx) {
                 Some(index) => Some(
                     div()
                         .debug_selector(|| "task-worker".into())
@@ -1531,11 +1533,11 @@ impl CockpitView {
 
     /// The Worker's live Pane, for a Task whose Workers are not parked:
     /// a parked one's is only read (G4).
-    fn pane_for_worker(&self, task: &Task) -> Option<usize> {
+    fn pane_for_worker(&self, task: &Task, cx: &gpui::App) -> Option<usize> {
         if task.archived() || task.keeping.parked {
             return None;
         }
-        self.pane_for(task.worker?)
+        self.pane_for(self.cockpit.read(cx).factory().key(task.worker?))
     }
 }
 

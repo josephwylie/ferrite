@@ -295,7 +295,7 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     cx.simulate_click(card.center(), gpui::Modifiers::none());
     assert_eq!(cx.opened_url(), None);
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).active_path(view.cockpit.read(cx).thread_key(view.panes[0].thread().unwrap()))),
+        view.read_with(cx, |view, cx| view.files.read(cx).active_path(view.panes[0].thread().unwrap())),
         Some(file.clone()),
         "the file card opens the Thread-workspace file in the preview"
     );
@@ -305,8 +305,8 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     // is put away: the measure below is of the Pane with the window to itself.
     view.update(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
-        view.close_surface(view.cockpit.read(cx).thread_key(thread), &crate::cockpit::surfaces::SurfaceId::Files, cx);
-        if view.panel_open(view.cockpit.read(cx).thread_key(thread)) {
+        view.close_surface(thread, &crate::cockpit::surfaces::SurfaceId::Files, cx);
+        if view.panel_open(thread) {
             view.toggle_panel_now(cx);
         }
     });
@@ -1503,7 +1503,7 @@ fn a_nav_row_hover_snaps_and_asks_for_no_frames(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     settle(cx);
-    let row = debug_bounds(cx, format!("nav-thread-{}", thread.get())).expect("the row");
+    let row = debug_bounds(cx, format!("nav-thread-{}", thread.thread().get())).expect("the row");
     cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
     cx.run_until_parked();
     let hovered = cx
@@ -1582,7 +1582,7 @@ fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestApp
     );
     let rows: Vec<_> = threads
         .iter()
-        .map(|thread| debug_bounds(cx, format!("nav-thread-{}", thread.get())).expect("a nav row"))
+        .map(|thread| debug_bounds(cx, format!("nav-thread-{}", thread.thread().get())).expect("a nav row"))
         .collect();
     // The transcript's scrollbar, shown by the stream, fades out first,
     // and the off-board finishes' toasts come and go.
@@ -1807,7 +1807,7 @@ fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut Test
 
 // ----------------------------------------------- the parts each change builds
 
-fn pane_builds(threads: &[ThreadId]) -> Vec<usize> {
+fn pane_builds(threads: &[ThreadKey]) -> Vec<usize> {
     threads
         .iter()
         .map(|thread| {
@@ -1824,7 +1824,7 @@ fn solo_board<'a>(
 ) -> (
     Entity<CockpitView>,
     Fake,
-    Vec<ThreadId>,
+    Vec<ThreadKey>,
     &'a mut gpui::VisualTestContext,
 ) {
     ferrite_ui::motion::testing::drive();
@@ -1872,7 +1872,7 @@ fn an_open_palette_does_not_rebuild_the_cockpit(cx: &mut TestAppContext) {
 // ----------------------------------------------- what an entrance redraws
 
 /// Pane builds since `before`, Pane by Pane.
-fn built_since(threads: &[ThreadId], before: &[usize]) -> Vec<usize> {
+fn built_since(threads: &[ThreadKey], before: &[usize]) -> Vec<usize> {
     pane_builds(threads)
         .iter()
         .zip(before)
@@ -1899,7 +1899,7 @@ fn a_menu_eases_open_and_rebuilds_no_pane(cx: &mut TestAppContext) {
     let (view, _fake, threads, cx) = solo_board("menu-entrance", cx);
     view.update(cx, |view, cx| {
         view.open_context_menu(
-            MenuTarget::Pane(keyed(view, threads[0], cx)),
+            MenuTarget::Pane(threads[0]),
             gpui::point(px(400.), px(300.)),
             cx,
         )
@@ -1921,7 +1921,7 @@ fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
     let (view, _fake, threads, cx) = solo_board("menu-row-hover", cx);
     view.update(cx, |view, cx| {
         view.open_context_menu(
-            MenuTarget::Pane(keyed(view, threads[0], cx)),
+            MenuTarget::Pane(threads[0]),
             gpui::point(px(400.), px(300.)),
             cx,
         )
@@ -2101,7 +2101,7 @@ fn needs_you_toast_comes_and_goes(
             display_frame(&view, true, cx);
         }
     }
-    let toast: &'static str = format!("toast-{}", threads[2].get()).leak();
+    let toast: &'static str = format!("toast-{}", threads[2].thread().get()).leak();
 
     // It rings once the finish has waited out its delay.
     cx.executor()
@@ -2140,7 +2140,7 @@ fn needs_you_toast_comes_and_goes(
         cx.debug_bounds("toast-leaving").is_some(),
         "its face fades out where it stood"
     );
-    let open: &'static str = format!("toast-open-{}", threads[2].get()).leak();
+    let open: &'static str = format!("toast-open-{}", threads[2].thread().get()).leak();
     assert!(cx.debug_bounds(open).is_none(), "with nothing to press");
     let mut leaving = 0;
     for _ in 0..(theme::MOTION_TOAST_OUT_MS + 32) / 16 {
@@ -2392,7 +2392,7 @@ fn a_read_rows_path_opens_in_files_and_its_verb_unfolds_the_row(cx: &mut TestApp
         gpui::Modifiers::none(),
     );
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, cx| view.files.read(cx).active_path(view.cockpit.read(cx).thread_key(thread))), None);
+    assert_eq!(view.read_with(cx, |view, cx| view.files.read(cx).active_path(thread)), None);
 
     cx.simulate_click(
         gpui::point(path.left() + px(6.), path.center().y),
@@ -2400,7 +2400,7 @@ fn a_read_rows_path_opens_in_files_and_its_verb_unfolds_the_row(cx: &mut TestApp
     );
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).active_path(view.cockpit.read(cx).thread_key(thread))),
+        view.read_with(cx, |view, cx| view.files.read(cx).active_path(thread)),
         Some(file),
         "the path opened in Files"
     );

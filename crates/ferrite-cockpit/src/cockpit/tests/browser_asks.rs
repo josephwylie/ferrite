@@ -46,7 +46,7 @@ impl std::io::Write for Silencing {
 /// A window attached to a machine's Server through a link that goes silent
 /// for Browser commands when told, with one Thread whose Browser has one
 /// tab open on a local page.
-fn silenceable_browser(name: &str) -> (Cockpit, ThreadId, Arc<AtomicBool>) {
+fn silenceable_browser(name: &str) -> (Cockpit, ThreadKey, Arc<AtomicBool>) {
     let dir = scratch(name);
     let dial = ferrite_server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
     let silent = Arc::new(AtomicBool::new(false));
@@ -60,6 +60,7 @@ fn silenceable_browser(name: &str) -> (Cockpit, ThreadId, Arc<AtomicBool>) {
         store: dir.join("window"), server: Endpoint::Machine(bridge),
         client: ferrite_core::protocol::Peer { name: name.into(), version: "0".into() },
         renderer: None, browser: true, driven: false, discovery: Box::new(Fake::default()),
+        saved_as: Some(ferrite_core::MachineKey(Some("box".into()))),
     }).unwrap();
     ferrite_core::doorbell::until("browser window did not attach", || {
         core.pump(); matches!(core.server(), Some(ServerState::Attached { .. }))
@@ -71,11 +72,11 @@ fn silenceable_browser(name: &str) -> (Cockpit, ThreadId, Arc<AtomicBool>) {
 }
 
 /// The Browser's tabs as the window has them, and its notice.
-fn shown(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> (State, Option<String>) {
-    view.read_with(cx, |view, cx| view.browsers.shown_for_test(view.cockpit.read(cx).thread_key(thread))).unwrap_or_default()
+fn shown(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) -> (State, Option<String>) {
+    view.read_with(cx, |view, _| view.browsers.shown_for_test(thread)).unwrap_or_default()
 }
 
-fn loaded(view: &Entity<CockpitView>, thread: ThreadId, url: &str, cx: &mut gpui::VisualTestContext) -> bool {
+fn loaded(view: &Entity<CockpitView>, thread: ThreadKey, url: &str, cx: &mut gpui::VisualTestContext) -> bool {
     let (state, _) = shown(view, thread, cx);
     state.tabs.iter().any(|tab| Some(tab.id) == state.active && tab.url == url && tab.live && !tab.loading)
 }
@@ -129,7 +130,7 @@ fn a_browsers_asks_never_wait_on_the_windows_thread(cx: &mut TestAppContext) {
     waits::start();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
-    view.update(cx, |view, cx| view.open_browser(view.cockpit.read(cx).thread_key(thread), cx));
+    view.update(cx, |view, cx| view.open_browser(thread, cx));
     step(cx, "the first page loads", |cx| engine.live_views() == 1 && loaded(&view, thread, "http://localhost:5173/start", cx));
 
     let address = cx.debug_bounds("browser-address").unwrap().center();
@@ -261,7 +262,7 @@ fn typed_keys_reach_the_page(name: &str, window_active: bool, cx: &mut TestAppCo
     cx.update(|cx| Visuals::install(engine.clone(), cx));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
-    view.update(cx, |view, cx| view.open_browser(view.cockpit.read(cx).thread_key(thread), cx));
+    view.update(cx, |view, cx| view.open_browser(thread, cx));
     step(cx, "the first page loads", |cx| engine.live_views() == 1 && loaded(&view, thread, "http://localhost:5173/start", cx));
     let page = cx.debug_bounds("browser-preview").unwrap().center();
     cx.simulate_click(page, gpui::Modifiers::none());

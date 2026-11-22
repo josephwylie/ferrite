@@ -796,9 +796,9 @@ fn a_turn_end_rereads_the_checkout_off_the_ui_thread(cx: &mut TestAppContext) {
         "the premise: a turn is under way"
     );
     let branch = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| {
+        view.read_with(cx, |view, _| {
             view.facts
-                .get(view.cockpit.read(cx).thread_key(thread))
+                .get(thread)
                 .and_then(|facts| facts.branch.as_ref())
                 .map(|branch| branch.to_string())
         })

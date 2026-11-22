@@ -64,7 +64,7 @@ use ferrite_core::transcript::{
     Block, BlockId, Body, Diff, Span, Status, Style, Token, ToolBlock, ToolState, Transcript,
 };
 use ferrite_core::workspace::{Check, CheckState, PullRequest, WorkspaceBinding};
-use ferrite_core::{Decision, ThreadId};
+use ferrite_core::{Decision, ThreadId, ThreadKey};
 use gpui::prelude::*;
 use gpui::{
     deferred, div, px, relative, rgb, rgba, AnyElement, Context, Div, Entity, FocusHandle,
@@ -224,7 +224,10 @@ impl BandChip {
 }
 
 impl PaneView {
-    pub fn new<T: 'static>(thread: ThreadId, cx: &mut Context<T>) -> Self {
+    pub fn new<T: 'static>(key: ThreadKey, cx: &mut Context<T>) -> Self {
+        // The transcript and the Pane's names are its machine's own:
+        // its key is what tells it apart from another machine's.
+        let thread = key.thread();
         let preview = crate::preview::Preview::new(cx);
         let rich = crate::rich::TextCache::default();
         let transcript_preview = preview.clone();
@@ -240,7 +243,7 @@ impl PaneView {
         });
         let transcript_focus = transcript.read(cx).transcript_focus();
         Self {
-            identity: PaneIdentity::Thread(thread),
+            identity: PaneIdentity::Thread(key),
             draft: None,
             name: SharedString::from(format!("thread-{thread:02}")),
             composer: cx.new(Composer::new),
@@ -317,7 +320,7 @@ impl PaneView {
     }
 
     /// The Thread this Pane shows, or None while it is still a draft.
-    pub fn thread(&self) -> Option<ThreadId> {
+    pub fn thread(&self) -> Option<ThreadKey> {
         self.identity.thread()
     }
 
@@ -331,10 +334,10 @@ impl PaneView {
 
     /// The lock's visible half (#29): the first send made a Thread of this
     /// draft, and the band disappears with the Pane's next frame.
-    pub fn adopt_thread(&mut self, thread: ThreadId) {
+    pub fn adopt_thread(&mut self, thread: ThreadKey) {
         self.identity = PaneIdentity::Thread(thread);
         self.draft = None;
-        self.name = SharedString::from(format!("thread-{thread:02}"));
+        self.name = SharedString::from(format!("thread-{:02}", thread.thread()));
     }
 
     pub fn is_main(&self) -> bool {
@@ -342,7 +345,7 @@ impl PaneView {
     }
 
     pub fn text_namespace(&self) -> SharedString {
-        let thread = self.thread().map(|id| id.get()).unwrap_or(0);
+        let thread = self.thread().map_or(0, |key| key.thread().get());
         match &self.selected {
             Subject::Main => format!("{thread}-main-{}", self.generation).into(),
             Subject::Subagent(key) => {
@@ -371,7 +374,7 @@ impl PaneView {
         &mut self,
         cx: &mut Context<T>,
     ) -> Option<Entity<crate::transcript::TranscriptView>> {
-        let thread = self.thread()?;
+        let thread = self.thread()?.thread();
         let subject = self.selected.clone();
         let namespace = self.text_namespace();
         if !self.transcripts.contains_key(&subject) {
@@ -431,7 +434,7 @@ impl PaneView {
         from: &ferrite_core::activity::AgentKey,
         to: &ferrite_core::activity::AgentKey,
     ) {
-        let thread = self.thread().map(|id| id.get()).unwrap_or(0);
+        let thread = self.thread().map_or(0, |key| key.thread().get());
         self.rich.redirect_namespace(
             &format!("{thread}-{}-", from.as_str()),
             &format!("{thread}-{}-", to.as_str()),
@@ -752,7 +755,7 @@ pub fn render_pane(
     // The Decision is the transcript's tail now (`decision_tail`): no card
     // is laid over the body or docked above the Composer at this level.
     let _ = activity_decisions;
-    let key = view.thread().map_or(0, ThreadId::get);
+    let key = view.thread().map_or(0, |key| key.thread().get());
     let shell = record_card(pane_shell(plane), view);
     // A selected subagent the Activity no longer holds has no transcript
     // to draw: the Pane stays an empty shell for the frame.

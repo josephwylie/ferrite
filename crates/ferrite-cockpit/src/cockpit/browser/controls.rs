@@ -391,7 +391,7 @@ impl Controls {
                                 .dispatch
                                 .clone()
                                 .expect("dispatch capability checked before attachment"),
-                            request.thread.thread(),
+                            request.thread,
                             request.owner,
                             request.document,
                             request.revision,
@@ -536,7 +536,7 @@ fn reply_browser_control(
     cockpit.browser_reply(
         request.request,
         request.dispatch,
-        request.thread.thread(),
+        request.thread,
         request.owner,
         request.document,
         request.revision,

@@ -73,11 +73,11 @@ fn panel<'a>(
     status: Status,
 ) -> (Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
     let (mut core, _fake) = cockpit(name, 1);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     core.fixture_record_tasks();
     core.fixture_factory(Board {
         workflows: Vec::new(),
-        tasks: vec![task(project, status)],
+        tasks: vec![task(project.project(), status)],
         ..Default::default()
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -186,14 +186,14 @@ fn a_step_routes_by_merge_result_with_a_route_per_result(cx: &mut TestAppContext
         .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, thread);
-    let project = core.project_id(core.threads()[0]).unwrap();
+    let project = core.project_of(core.threads()[0]).unwrap();
     core.fixture_live_factory();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     view.update(cx, |view, cx| {
-        view.open_factory(project, cx);
+        view.open_factory(project.project(), cx);
         view.factory_surface(Surface::Workflows, cx);
         view.create_workflow(Template::IssueToReviewedPr, cx);
     });

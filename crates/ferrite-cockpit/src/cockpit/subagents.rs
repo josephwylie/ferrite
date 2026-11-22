@@ -401,7 +401,7 @@ pub(crate) fn agent_name(info: &AgentInfo) -> String {
 
 impl CockpitView {
     /// The agent's Subject, from the call that started it.
-    pub(super) fn agent_of_call(&self, thread: ThreadId, call: &str, cx: &gpui::App) -> Option<Subject> {
+    pub(super) fn agent_of_call(&self, thread: ThreadKey, call: &str, cx: &gpui::App) -> Option<Subject> {
         self.cockpit.read(cx).thread(thread)?.activity().invocations().find_map(
             |(native, agent)| (native == call).then(|| agent.subject()),
         )
@@ -413,7 +413,7 @@ impl CockpitView {
     /// makes comes through here.
     pub(super) fn select_subject(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         subject: Subject,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -449,7 +449,7 @@ impl CockpitView {
     /// Give `thread`'s Pane `subject`'s full chat and the focus, from
     /// wherever the agent is named: its row, Background work, the details
     /// card's Lineage. A subagent has no other view.
-    pub(super) fn open_subagent(&mut self, thread: ThreadId, subject: Subject, cx: &mut Context<Self>) {
+    pub(super) fn open_subagent(&mut self, thread: ThreadKey, subject: Subject, cx: &mut Context<Self>) {
         if let Some(index) = self.take_subject(thread, subject, cx) {
             self.cockpit.update(cx, |cockpit, _| cockpit.focus_thread(thread));
             self.focus_pane(index, cx);
@@ -460,7 +460,7 @@ impl CockpitView {
     /// Subject without synthesizing a window input event or answering it.
     pub(super) fn select_subject_from_notice(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         subject: Subject,
         cx: &mut Context<Self>,
     ) {
@@ -471,7 +471,7 @@ impl CockpitView {
     /// without resuming the provider.
     fn take_subject(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         subject: Subject,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
@@ -491,7 +491,7 @@ impl CockpitView {
 
     /// `subject`'s ancestors by each agent's recorded parent, the
     /// immediate parent last (Main, which every chain ends in, first).
-    pub(super) fn agent_lineage(&self, thread: ThreadId, subject: &Subject, cx: &gpui::App) -> Vec<Subject> {
+    pub(super) fn agent_lineage(&self, thread: ThreadKey, subject: &Subject, cx: &gpui::App) -> Vec<Subject> {
         let Some(open) = self.cockpit.read(cx).thread(thread) else {
             return vec![Subject::Main];
         };
@@ -514,7 +514,7 @@ impl CockpitView {
 
     pub(super) fn respond_exact(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         handle: &DecisionHandle,
         answer: DecisionAnswer,
         cx: &mut Context<Self>,
@@ -679,7 +679,7 @@ impl CockpitView {
 
     pub(super) fn send_form(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         handle: &DecisionHandle,
         fields: &[ferrite_core::FormField],
         cx: &mut Context<Self>,
@@ -704,7 +704,7 @@ impl CockpitView {
         self.respond_exact(thread, handle, DecisionAnswer::Form { values }, cx);
     }
 
-    pub(super) fn clear_request_error(&mut self, thread: ThreadId, handle: &DecisionHandle) {
+    pub(super) fn clear_request_error(&mut self, thread: ThreadKey, handle: &DecisionHandle) {
         if let Some(index) = self.pane_for(thread) {
             if self.panes[index]
                 .request_error
@@ -721,7 +721,7 @@ impl CockpitView {
     /// flagging it. Returns whether an answer went out.
     pub(super) fn send_question_form(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         handle: &DecisionHandle,
         quiet: bool,
         cx: &mut Context<Self>,
@@ -791,7 +791,7 @@ impl CockpitView {
 
     /// Ask core for `subject`'s saved history (it never resumes the
     /// provider); the reason it could not be had.
-    pub(super) fn load_subject_history(&mut self, thread: ThreadId, subject: &Subject, cx: &mut gpui::App) -> Option<String> {
+    pub(super) fn load_subject_history(&mut self, thread: ThreadKey, subject: &Subject, cx: &mut gpui::App) -> Option<String> {
         self.cockpit.update(cx, |cockpit, _| {
             cockpit
                 .ensure_subject_history(thread, subject)
@@ -842,7 +842,7 @@ impl CockpitView {
     /// one answer path; a question, form or link takes only a deny.
     pub(super) fn answer_request(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         request: PendingDecision,
         answer: Answer,
         cx: &mut Context<Self>,
@@ -880,7 +880,7 @@ pub(super) struct Cards {
     pub(super) owner: gpui::WeakEntity<decisions::DecisionsView>,
     /// The diff each approval's gated call names, by the call's id.
     pub(super) asked: Vec<(String, ferrite_core::transcript::Diff)>,
-    pub(super) thread: ThreadId,
+    pub(super) thread: ThreadKey,
     pub(super) provider: Option<Provider>,
     /// The head's last detail: Codex's sandbox, Claude's permission mode.
     pub(super) context: Option<SharedString>,
@@ -995,7 +995,7 @@ impl Cards {
                 } else {
                     "decision-tail"
                 },
-                self.thread.get(),
+                self.thread.thread().get(),
             ))
             .w_full()
             .min_w_0()
@@ -1115,7 +1115,7 @@ impl Cards {
         let serial = request.handle.serial;
         let title = title.map(|title| {
             decision::prose(title)
-                .debug_selector(move || format!("request-title-{}-{serial}", thread.get()))
+                .debug_selector(move || format!("request-title-{}-{serial}", thread.thread().get()))
         });
         let error = request
             .reply_error
@@ -1168,7 +1168,7 @@ impl Cards {
             format!(
                 "approval-input-{}-{}-{}-{}",
                 if self.overlay { "overlay" } else { "tail" },
-                thread.get(),
+                thread.thread().get(),
                 handle.generation,
                 serial
             )
@@ -1204,12 +1204,12 @@ impl Cards {
         };
         let stacked = self.narrow;
         let deny = decision::deny_button(
-            SharedString::from(format!("request-deny-{}-{serial}", thread.get())),
+            SharedString::from(format!("request-deny-{}-{serial}", thread.thread().get())),
             stacked,
             !enabled(decision::ApprovalChoice::DenyAndSteer),
             cx,
         )
-        .debug_selector(move || format!("request-deny-{}-{serial}", thread.get()))
+        .debug_selector(move || format!("request-deny-{}-{serial}", thread.thread().get()))
         .on_click(answer(decision::ApprovalChoice::DenyAndSteer))
         .relative()
         // The deny control has always answered to this name.
@@ -1220,12 +1220,12 @@ impl Cards {
                 .debug_selector(|| "decision-deny".into()),
         );
         let allow = decision::allow_button(
-            SharedString::from(format!("request-allow-{}-{serial}", thread.get())),
+            SharedString::from(format!("request-allow-{}-{serial}", thread.thread().get())),
             stacked,
             !enabled(decision::ApprovalChoice::Allow),
             cx,
         )
-        .debug_selector(move || format!("request-allow-{}-{serial}", thread.get()))
+        .debug_selector(move || format!("request-allow-{}-{serial}", thread.thread().get()))
         .on_click(answer(decision::ApprovalChoice::Allow));
         let open = self.forms.menu(&handle);
         let forms = self.forms.clone();
@@ -1236,11 +1236,11 @@ impl Cards {
         let door: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>> = Rc::default();
         let submitting = request.submitting;
         let more = decision::more_button(
-            SharedString::from(format!("request-more-{}-{serial}", thread.get())),
+            SharedString::from(format!("request-more-{}-{serial}", thread.thread().get())),
             submitting,
             cx,
         )
-        .debug_selector(move || format!("request-more-{}-{serial}", thread.get()))
+        .debug_selector(move || format!("request-more-{}-{serial}", thread.thread().get()))
         .menu_button(
             open,
             |button| button,
@@ -1267,12 +1267,12 @@ impl Cards {
                 ));
                 rows.push(
                     decision::allow_menu_row(
-                        SharedString::from(format!("request-always-{}-{serial}", thread.get())),
+                        SharedString::from(format!("request-always-{}-{serial}", thread.thread().get())),
                         label,
                         decision::decision_chord("cockpit::AlwaysAllow"),
                         Some(note),
                     )
-                    .debug_selector(move || format!("request-always-{}-{serial}", thread.get()))
+                    .debug_selector(move || format!("request-always-{}-{serial}", thread.thread().get()))
                     .on_click(move |event, window, cx| {
                         forms.set_menu(&closing, false);
                         always(event, window, cx);
@@ -1291,12 +1291,12 @@ impl Cards {
                 let what = ferrite_ui::theme::mode_note(&mode).map(SharedString::from);
                 rows.push(
                     decision::allow_menu_row(
-                        SharedString::from(format!("request-switch-{}-{serial}", thread.get())),
+                        SharedString::from(format!("request-switch-{}-{serial}", thread.thread().get())),
                         format!("Allow and switch to {label}"),
                         None,
                         what,
                     )
-                    .debug_selector(move || format!("request-switch-{}-{serial}", thread.get()))
+                    .debug_selector(move || format!("request-switch-{}-{serial}", thread.thread().get()))
                     .on_click({
                         let act = self.act(move || DecisionEvent::Approve {
                             thread,
@@ -1459,7 +1459,7 @@ impl Cards {
             );
         }
         let submit_handle = handle.clone();
-        let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
+        let selector = format!("request-submit-{}-{}", thread.thread().get(), handle.serial);
         let mut body = div()
             .w_full()
             .flex()
@@ -1909,7 +1909,7 @@ impl Cards {
                 // the options' grid — an option row high, its digit where
                 // theirs stand, its text on their labels' column, in their
                 // face — that the digit one past the options arms.
-                let selector = format!("request-other-{}-{}-{qi}", thread.get(), handle.serial);
+                let selector = format!("request-other-{}-{}-{qi}", thread.thread().get(), handle.serial);
                 section = section.child(
                     div()
                         .w_full()
@@ -2010,7 +2010,7 @@ impl Cards {
         // questions, several picks, typed words); the rows carry their digits.
         let skip_handle = handle.clone();
         let submit_handle = handle.clone();
-        let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
+        let selector = format!("request-submit-{}-{}", thread.thread().get(), handle.serial);
         children.push(
             decision::section(decision::footer([
                 decision::skip_button("question-skip", "Skip", cx)

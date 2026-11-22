@@ -12,19 +12,19 @@ use super::*;
 pub(super) struct PrReads {
     /// The Thread the pump last saw focused: focusing another asks for its
     /// PR.
-    focus: Option<ThreadId>,
+    focus: Option<ThreadKey>,
     /// Each Thread's `Transcript::published` as last seen: when it moves,
     /// its PR is read again at once.
-    published: std::collections::HashMap<ThreadId, u64>,
+    published: std::collections::HashMap<ThreadKey, u64>,
     /// The PR reads `check_pr` would have sent `gh`: (Thread, manual).
     #[cfg(test)]
-    pub(crate) asked: Vec<(ThreadId, bool)>,
+    pub(crate) asked: Vec<(ThreadKey, bool)>,
 }
 
 impl PrReads {
     /// `focused` is the Thread focused now: it, when it is not the one last
     /// seen.
-    fn focus_moved(&mut self, focused: Option<ThreadId>) -> Option<ThreadId> {
+    fn focus_moved(&mut self, focused: Option<ThreadKey>) -> Option<ThreadKey> {
         if focused == self.focus {
             return None;
         }
@@ -34,20 +34,20 @@ impl PrReads {
 
     /// `thread`'s work has published `count` times: whether that moved
     /// since it was last seen. First sight only notes the count.
-    fn published_moved(&mut self, thread: ThreadId, count: u64) -> bool {
+    fn published_moved(&mut self, thread: ThreadKey, count: u64) -> bool {
         self.published
             .insert(thread, count)
             .is_some_and(|seen| seen != count)
     }
 
     /// Forget every Thread `keep` lets go.
-    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
+    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadKey) -> bool) {
         self.published.retain(|thread, _| keep(*thread));
     }
 
     /// Whether it holds anything of `thread`'s.
     #[cfg(test)]
-    pub(super) fn holds(&self, thread: ThreadId) -> bool {
+    pub(super) fn holds(&self, thread: ThreadKey) -> bool {
         self.published.contains_key(&thread)
     }
 }
@@ -67,7 +67,7 @@ impl CockpitView {
     /// `manual`, else at most once per `pr::AUTO_EVERY`. The row's symbol
     /// turns until the answer lands. A manual ask reads the open PR tab
     /// again too: its checks and conversation move without the reading.
-    pub(crate) fn check_pr(&mut self, thread: ThreadId, manual: bool, cx: &mut Context<Self>) {
+    pub(crate) fn check_pr(&mut self, thread: ThreadKey, manual: bool, cx: &mut Context<Self>) {
         if manual {
             self.refresh_pr_tab(thread, cx);
         }
@@ -76,7 +76,7 @@ impl CockpitView {
         };
         if !self
             .facts
-            .ask_pr(self.cockpit.read(cx).thread_key(thread), cx.background_executor().now(), manual)
+            .ask_pr(thread, cx.background_executor().now(), manual)
         {
             return;
         }
@@ -105,7 +105,7 @@ impl CockpitView {
     /// follows (HD27). First sight only notes the count: opening a Thread
     /// asks already.
     fn refresh_published(&mut self, cx: &mut Context<Self>) {
-        let moved: Vec<ThreadId> = self
+        let moved: Vec<ThreadKey> = self
             .cockpit
             .read(cx)
             .threads()
@@ -130,11 +130,11 @@ impl CockpitView {
     /// Adopt what `gh` said about the Thread's PR.
     pub(super) fn pr_landed(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         reading: Option<ferrite_core::workspace::PullRequest>,
         cx: &mut Context<Self>,
     ) {
-        if self.facts.pr_answered(self.cockpit.read(cx).thread_key(thread), reading) {
+        if self.facts.pr_answered(thread, reading) {
             self.notify_part(parts::Part::Nav, cx);
             self.pr_reading_changed(thread, cx);
         }

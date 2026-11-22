@@ -3,22 +3,22 @@
 use super::*;
 use crate::palette::{Act, Command};
 
-fn asked(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<(ThreadId, bool)> {
+fn asked(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<(ThreadKey, bool)> {
     view.update(cx, |view, _| std::mem::take(&mut view.pr_reads.asked))
 }
 
 /// The number of the PR the Thread's last reading names.
 fn reading(
     view: &Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     cx: &mut gpui::VisualTestContext,
 ) -> Option<u64> {
-    view.read_with(cx, |view, cx| view.facts.pr(view.cockpit.read(cx).thread_key(thread)).map(|pr| pr.number))
+    view.read_with(cx, |view, _| view.facts.pr(thread).map(|pr| pr.number))
 }
 
 fn land(
     view: &Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     reading: Option<ferrite_core::workspace::PullRequest>,
     cx: &mut gpui::VisualTestContext,
 ) {
@@ -72,7 +72,7 @@ fn focusing_a_thread_asks_at_most_every_thirty_seconds(cx: &mut TestAppContext) 
     for thread in &threads {
         land(&view, *thread, None, cx);
     }
-    let focus = |thread: ThreadId, cx: &mut gpui::VisualTestContext| {
+    let focus = |thread: ThreadKey, cx: &mut gpui::VisualTestContext| {
         view.update(cx, |view, cx| view.focus_thread(thread, cx));
         tick(cx);
     };
@@ -95,7 +95,7 @@ fn the_menu_and_the_palette_offer_the_pr_actions(cx: &mut TestAppContext) {
     tick(cx);
     let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     let menu = |view: &CockpitView, cx: &gpui::App| -> Vec<String> {
-        view.context_rows(MenuTarget::Thread(keyed(view, thread, cx)), cx)
+        view.context_rows(MenuTarget::Thread(thread), cx)
             .into_iter()
             .flatten()
             .map(|(item, _)| item.label.to_string())
@@ -127,7 +127,7 @@ fn the_menu_and_the_palette_offer_the_pr_actions(cx: &mut TestAppContext) {
     asked(&view, cx);
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
-            view.run_menu_verb(MenuTarget::Thread(keyed(view, thread, cx)), MenuVerb::RefreshPr, window, cx)
+            view.run_menu_verb(MenuTarget::Thread(thread), MenuVerb::RefreshPr, window, cx)
         })
     });
     assert_eq!(asked(&view, cx), [(thread, true)]);
@@ -158,7 +158,7 @@ fn a_push_reads_the_pr_again(cx: &mut TestAppContext) {
             result: ferrite_core::ToolResult::Opaque,
         });
         tick(cx);
-        let expected: &[(ThreadId, bool)] = if id == "push" { &[(thread, true)] } else { &[] };
+        let expected: &[(ThreadKey, bool)] = if id == "push" { &[(thread, true)] } else { &[] };
         assert_eq!(asked(&view, cx), expected, "after {command}");
     }
 }
@@ -218,7 +218,7 @@ pub(super) fn with_pr<'a>(
     cx: &'a mut TestAppContext,
 ) -> (
     Entity<CockpitView>,
-    ThreadId,
+    ThreadKey,
     Fake,
     &'a mut gpui::VisualTestContext,
 ) {
@@ -295,7 +295,7 @@ fn the_pr_surface_keeps_its_view(cx: &mut TestAppContext) {
     click("pr-tab-Timeline", cx);
     assert!(cx.debug_bounds("pr-timeline").is_some(), "the conversation");
     view.update(cx, |view, cx| {
-        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Overview, cx)
+        view.upsert_surface(thread, SurfaceId::Overview, cx)
     });
     tick(cx);
     view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
@@ -304,8 +304,8 @@ fn the_pr_surface_keeps_its_view(cx: &mut TestAppContext) {
         cx.debug_bounds("pr-timeline").is_some(),
         "kept on the Surface"
     );
-    let kept = view.read_with(cx, |view, cx| {
-        view.panel.surfaces.get(view.cockpit.read(cx).thread_key(thread)).unwrap().pr_tab(48)
+    let kept = view.read_with(cx, |view, _| {
+        view.panel.surfaces.get(thread).unwrap().pr_tab(48)
     });
     assert_eq!(kept, PrTab::Timeline);
     click("pr-tab-Guide", cx);
@@ -438,7 +438,7 @@ fn an_armed_merge_does_not_outlive_its_surface(cx: &mut TestAppContext) {
     let (view, thread, fake, cx) = with_pr("pr-armed", WirePrState::Open, cx);
     let back = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.update(cx, |view, cx| {
-            view.activate_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::PullRequest(48), cx)
+            view.activate_surface(thread, &SurfaceId::PullRequest(48), cx)
         });
         tick(cx);
     };
@@ -448,7 +448,7 @@ fn an_armed_merge_does_not_outlive_its_surface(cx: &mut TestAppContext) {
 
     click("pr-primary", cx);
     view.update(cx, |view, cx| {
-        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Overview, cx)
+        view.upsert_surface(thread, SurfaceId::Overview, cx)
     });
     tick(cx);
     back(&view, cx);
@@ -480,7 +480,7 @@ fn a_restored_tab_for_another_pr_keeps_its_identity(cx: &mut TestAppContext) {
     std::fs::create_dir_all(&dir).unwrap();
     let mut surfaces = crate::cockpit::surfaces::Surfaces::default();
     surfaces.apply(
-        ferrite_core::ThreadKey::fixture(0, thread.get()),
+        ferrite_core::ThreadKey::fixture(0, thread.thread().get()),
         true,
         crate::cockpit::surfaces::SurfaceAction::Open(SurfaceId::PullRequest(47)),
     );
@@ -499,8 +499,8 @@ fn a_restored_tab_for_another_pr_keeps_its_identity(cx: &mut TestAppContext) {
         view.fixture_pr_snapshot(thread, snapshot(WirePrState::Open), cx)
     });
     tick(cx);
-    let tabs = view.read_with(cx, |view, cx| {
-        view.panel.surfaces.get(view.cockpit.read(cx).thread_key(thread)).unwrap().tabs.clone()
+    let tabs = view.read_with(cx, |view, _| {
+        view.panel.surfaces.get(thread).unwrap().tabs.clone()
     });
     assert!(tabs.contains(&SurfaceId::PullRequest(47)), "{tabs:?}");
     assert!(cx.debug_bounds("panel-tab-PullRequest-47").is_some());
@@ -533,7 +533,7 @@ fn a_thread_pr_restored_on_code_reads_its_diff(cx: &mut TestAppContext) {
     let dir = scratch("pr-restored-code-prefs");
     std::fs::create_dir_all(&dir).unwrap();
     let mut surfaces = Surfaces::default();
-    let key = ferrite_core::ThreadKey::fixture(0, thread.get());
+    let key = ferrite_core::ThreadKey::fixture(0, thread.thread().get());
     surfaces.apply(key, true, SurfaceAction::Open(SurfaceId::PullRequest(48)));
     surfaces.apply(key, true, SurfaceAction::SelectPrTab { number: 48, tab: PrTab::Code });
     surfaces.save(&dir).unwrap();
@@ -608,7 +608,7 @@ fn a_prs_code_view_reads_the_published_diff(cx: &mut TestAppContext) {
         let path = view.thread_path(thread, cx).unwrap();
         let files = ferrite_core::protocol::sides_of_unified("diff --git a/published.rs b/published.rs\n--- a/published.rs\n+++ b/published.rs\n@@ -1 +1 @@\n-old\n+published\n");
         view.cockpit.update(cx, |cockpit, _| cockpit.fixture_forge_diff(path, 48, files));
-        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Changes, cx);
+        view.upsert_surface(thread, SurfaceId::Changes, cx);
     });
     tick(cx);
     view.update(cx, |view, cx| view.open_pr_surface(thread, cx));

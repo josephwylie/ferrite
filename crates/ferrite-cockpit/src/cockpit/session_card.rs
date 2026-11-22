@@ -12,7 +12,7 @@ use ferrite_ui::theme::*;
 
 /// The card as it reads, for one Session: a Thread and its generation.
 pub(super) struct SessionCard {
-    thread: ThreadId,
+    thread: ThreadKey,
     generation: u64,
     /// Why the Session refused the last control.
     error: Option<String>,
@@ -55,7 +55,7 @@ impl SessionCard {
     /// The card for `open`'s Session `generation`, with `error` its last
     /// refusal; none once another Session runs.
     pub(super) fn of(
-        thread: ThreadId,
+        thread: ThreadKey,
         generation: u64,
         open: &ThreadView,
         error: Option<&str>,
@@ -434,7 +434,7 @@ impl SessionCard {
 
 /// Whether `thread`'s Session `generation` still runs and still reports
 /// the MCP server `name`, as a press on its row finds it.
-fn has_server(view: &CockpitView, thread: ThreadId, generation: u64, name: &str, cx: &gpui::App) -> bool {
+fn has_server(view: &CockpitView, thread: ThreadKey, generation: u64, name: &str, cx: &gpui::App) -> bool {
     view.cockpit.read(cx).thread(thread).is_some_and(|open| {
         open.generation() == generation
             && open

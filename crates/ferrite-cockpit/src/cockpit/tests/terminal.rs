@@ -6,7 +6,7 @@ use crate::cockpit::surfaces::SurfaceId;
 fn window<'a>(
     name: &str,
     cx: &'a mut TestAppContext,
-) -> (Entity<CockpitView>, ThreadId, &'a mut gpui::VisualTestContext) {
+) -> (Entity<CockpitView>, ThreadKey, &'a mut gpui::VisualTestContext) {
     let (core, _fake, _checkout) = bound_cockpit(name, Provider::Claude);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -27,24 +27,24 @@ fn opened(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     tick(cx);
 }
 
-fn numbers(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> Vec<u64> {
-    view.read_with(cx, |view, cx| view.terminals.read(cx).numbers(view.cockpit.read(cx).thread_key(thread)))
+fn numbers(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) -> Vec<u64> {
+    view.read_with(cx, |view, cx| view.terminals.read(cx).numbers(thread))
 }
 
 /// The shell the Thread's Panel shows.
 fn shown_shell(
     view: &Entity<CockpitView>,
-    thread: ThreadId,
+    thread: ThreadKey,
     cx: &mut gpui::VisualTestContext,
 ) -> Option<Entity<ferrite_terminal::TerminalView>> {
-    view.read_with(cx, |view, cx| match view.active_surface(view.cockpit.read(cx).thread_key(thread))? {
-        SurfaceId::Terminal(number) => view.terminals.read(cx).shell(view.cockpit.read(cx).thread_key(thread), number),
+    view.read_with(cx, |view, cx| match view.active_surface(thread)? {
+        SurfaceId::Terminal(number) => view.terminals.read(cx).shell(thread, number),
         _ => None,
     })
 }
 
 /// Run `command` in the shown shell and wait for `needle` to be on screen.
-fn run(view: &Entity<CockpitView>, thread: ThreadId, command: &'static [u8], cx: &mut gpui::VisualTestContext) {
+fn run(view: &Entity<CockpitView>, thread: ThreadKey, command: &'static [u8], cx: &mut gpui::VisualTestContext) {
     let shell = shown_shell(&view, thread, cx).unwrap();
     shell.update(cx, |shell, _| shell.write(command));
 }
@@ -58,7 +58,7 @@ fn the_door_opens_a_shell_in_a_panel_tab_and_closing_it_ends_it(cx: &mut TestApp
     assert!(cx.debug_bounds("panel-tab-Terminal-1").is_some(), "its tab");
     assert_eq!(numbers(&view, thread, cx), [1]);
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)));
-    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Terminal(1), cx));
+    view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Terminal(1), cx));
     leap(cx, std::time::Duration::from_secs(1));
     assert!(cx.debug_bounds("terminal-pane").is_none());
     assert!(numbers(&view, thread, cx).is_empty(), "its shell ended with it");
@@ -180,13 +180,13 @@ fn a_second_terminal_is_a_second_tab_and_cmd_j_shows_the_last(cx: &mut TestAppCo
     opened(&view, cx);
     assert_eq!(numbers(&view, thread, cx), [1, 2]);
     assert!(cx.debug_bounds("panel-tab-Terminal-2").is_some());
-    view.update(cx, |view, cx| view.activate_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
     tick(cx);
     cx.simulate_keystrokes("cmd-j");
     tick(cx);
     assert_eq!(numbers(&view, thread, cx), [1, 2], "no third shell");
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(2)));
-    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Terminal(2), cx));
+    view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Terminal(2), cx));
     tick(cx);
     assert_eq!(numbers(&view, thread, cx), [1]);
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)), "its neighbour");
@@ -268,7 +268,7 @@ fn cmd_j_back_to_an_open_shell_gives_it_the_keyboard(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-cmd-j-focus", cx);
     opened(&view, cx);
     let shell = shown_shell(&view, thread, cx).unwrap();
-    view.update(cx, |view, cx| view.activate_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
     let composer = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).focus_handle(cx));
     cx.update(|window, cx| window.focus(&composer, cx));
     tick(cx);
@@ -551,7 +551,7 @@ fn an_agents_open_after_a_refused_one_still_shows_the_browser(cx: &mut TestAppCo
     opened(&view, cx);
     view.update(cx, |view, cx| {
         view.browser_action(
-            view.cockpit.read(cx).thread_key(thread),
+            thread,
             ferrite_core::browser::Action::Open { url: "http://user:pw@localhost:5173/".into() },
             cx,
         )
@@ -584,10 +584,10 @@ fn back_to_shell(cx: &mut gpui::VisualTestContext) {
 
 /// What a Server linked to this window sends back for the open it was asked:
 /// the same action, read a frame later than the operator's next click.
-fn hear_own_open_echoed(view: &gpui::Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
+fn hear_own_open_echoed(view: &gpui::Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| {
         view.cockpit.update(cx, |cockpit, _| cockpit.fixture_browser_message(ferrite_core::protocol::ServerMessage::Browser {
-            thread,
+            thread: thread.thread(),
             owner: None,
             state: Default::default(),
             action: Some(ferrite_core::browser::Action::Open { url: "http://localhost:5173/app".into() }),
@@ -660,8 +660,8 @@ fn cmd_click_opens_what_the_shell_printed(cx: &mut TestAppContext) {
     back_to_shell(cx);
     cmd_click(cx, 2, 5);
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Files));
-    assert!(view.read_with(cx, |view, cx| view.files.read(cx).tab_names(view.cockpit.read(cx).thread_key(thread))).contains(&("main.rs".to_string(), true)));
-    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(view.cockpit.read(cx).thread_key(thread)).expect("the editor"));
+    assert!(view.read_with(cx, |view, cx| view.files.read(cx).tab_names(thread)).contains(&("main.rs".to_string(), true)));
+    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread).expect("the editor"));
     let (text, caret) = editor.read_with(cx, |editor, _| (editor.text().to_string(), editor.caret_for_test()));
     assert_eq!(text[..caret].matches('\n').count(), 2, "the caret is on line 3");
 }
@@ -672,7 +672,7 @@ fn cmd_click_opens_what_the_shell_printed(cx: &mut TestAppContext) {
 fn a_terminal_keeps_two_machines_threads_apart(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-two-machines", cx);
     opened(&view, cx);
-    let there = ferrite_core::ThreadKey::fixture(u32::MAX, thread.get());
+    let there = ferrite_core::ThreadKey::fixture(u32::MAX, thread.thread().get());
     let numbers_there = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| view.terminals.read(cx).numbers(there))
     };

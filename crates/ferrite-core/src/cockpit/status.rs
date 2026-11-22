@@ -58,6 +58,7 @@ impl ServerStatus {
         let remote = Remote::new(Attach {
             store,
             server,
+            saved_as: None,
             client,
             renderer: None,
             browser: false,

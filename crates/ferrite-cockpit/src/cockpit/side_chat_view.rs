@@ -148,7 +148,7 @@ impl CockpitView {
     /// Reply or Decisions, as they have no Pane's Composer to reply into.
     pub(super) fn sync_compact_transcript(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         subject: &Subject,
         pane: &PaneView,
         skip: usize,
@@ -171,7 +171,7 @@ impl CockpitView {
             let transcript = subject_view.transcript();
             let working = pane::working_tail(pane::WorkingFacts {
                 transcript,
-                thread,
+                thread: thread.thread(),
                 starting: open.starting(),
                 solo: false,
                 focused: true,
@@ -181,7 +181,7 @@ impl CockpitView {
                 ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
                     .map(std::path::Path::to_path_buf);
             let presentation = ferrite_pane::transcript::TranscriptPresentation {
-                thread,
+                thread: thread.thread(),
                 selection_scope: pane.selection_scope,
                 disclosure_focus: pane.tool_focus(),
                 namespace,
@@ -236,7 +236,7 @@ impl CockpitView {
     /// The Panel's `+` Side chat: open `owner`'s side chat, or add a tab to
     /// it, asking the agent for the fork that holds the conversation.
     pub(super) fn open_side_chat(&mut self, owner: ThreadKey, cx: &mut Context<Self>) {
-        let asked = self.ask_side_fork(owner.thread(), cx);
+        let asked = self.ask_side_fork(owner, cx);
         let id = self
             .side_chat
             .update(cx, |chat, cx| chat.open(owner, asked, cx));
@@ -246,7 +246,7 @@ impl CockpitView {
 
     /// Ask `owner`'s agent for a fork of the whole conversation, or say
     /// why it cannot make one now.
-    fn ask_side_fork(&mut self, owner: ThreadId, cx: &mut gpui::App) -> Result<(), SharedString> {
+    fn ask_side_fork(&mut self, owner: ThreadKey, cx: &mut gpui::App) -> Result<(), SharedString> {
         let open = self
             .cockpit
             .read(cx)
@@ -297,14 +297,14 @@ impl CockpitView {
         let inherited = self
             .cockpit
             .read(cx)
-            .thread(thread.thread())
+            .thread(thread)
             .map_or(0, |open| open.transcript().blocks().len());
         let fork = Fork { thread, inherited };
         let Some(taken) = self.side_chat.update(cx, |chat, cx| chat.bind(owner, fork, cx)) else {
             return false;
         };
         // The fork joined the roster as any open Thread does: it leaves it.
-        self.cockpit.update(cx, |cockpit, _| cockpit.set_aside(thread.thread()));
+        self.cockpit.update(cx, |cockpit, _| cockpit.set_aside(thread));
         self.sync_panes(cx);
         if !taken {
             // Its tab closed while the agent worked: nothing wants it.
@@ -318,14 +318,17 @@ impl CockpitView {
     /// behind — but a fork that works in a legacy worktree would take the
     /// operator's checkout with it, so that one is only parked.
     fn retire(&mut self, fork: ThreadKey, cx: &mut gpui::App) {
-        let thread = fork.thread();
+        let thread = fork;
         let worktree = self.cockpit.read(cx).thread(thread).is_some_and(|open| {
             matches!(open.workspace(), Some(WorkspaceBinding::Worktree { .. }))
         });
         if worktree {
             let _ = self.cockpit.update(cx, |cockpit, _| cockpit.park(thread));
         } else if let Err(error) = self.delete_thread(thread, cx) {
-            ferrite_core::log!("side chat thread {thread} could not be deleted: {error:?}");
+            ferrite_core::log!(
+                "side chat thread {} could not be deleted: {error:?}",
+                thread.thread()
+            );
         }
     }
 
@@ -340,7 +343,6 @@ impl CockpitView {
     /// closes its tab (`close_panel_in_focus`).
     pub(super) fn side_chat_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         self.focused_thread(cx).is_some_and(|owner| {
-            let owner = self.cockpit.read(cx).thread_key(owner);
             self.side_chat.read(cx).holds_focus(owner, window, cx)
         })
     }
@@ -364,7 +366,6 @@ impl CockpitView {
     /// A tab's question goes to its fork (queued behind an answer still
     /// running); one the fork does not take goes back to the field.
     fn ask_side_chat(&mut self, tab: u64, fork: ThreadKey, draft: &SentDraft, cx: &mut Context<Self>) {
-        let fork = fork.thread();
         let text = draft.prompt().trim().to_string();
         let admitted = if self
             .cockpit
@@ -395,19 +396,19 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<SideChatInputs> {
         let thread = self.panes[self.panel_drawn_pane(cx)?].thread()?;
-        let owner = self.cockpit.read(cx).thread_key(thread);
+        let owner = thread;
         let Some(SurfaceId::SideChat(tab)) = self.active_surface(owner) else {
             return None;
         };
         let conversation = conversation(owner, tab);
         if let Some((fork, pane)) = conversation {
-            self.sync_compact_transcript(fork.thread.thread(), &Subject::Main, pane, fork.inherited, cx);
+            self.sync_compact_transcript(fork.thread, &Subject::Main, pane, fork.inherited, cx);
         }
         let fork = conversation.map(|(fork, _)| fork);
         let answered = fork.is_some_and(|fork| {
             self.cockpit
                 .read(cx)
-                .thread(fork.thread.thread())
+                .thread(fork.thread)
                 .is_some_and(|open| open.transcript().blocks().len() > fork.inherited)
         });
         Some(SideChatInputs {
@@ -428,7 +429,7 @@ impl CockpitView {
         let busy = |thread: ThreadKey| {
             self.cockpit
                 .read(cx)
-                .thread(thread.thread())
+                .thread(thread)
                 .is_none_or(|open| matches!(open.transcript().status(), Status::Streaming | Status::Blocked))
         };
         if busy(owner) {
@@ -444,7 +445,7 @@ impl CockpitView {
     /// while the fork is answering or has not answered.
     fn side_run(&self, fork: Fork, cx: &gpui::App) -> Option<String> {
         use ferrite_core::transcript::{Body, Status};
-        let open = self.cockpit.read(cx).thread(fork.thread.thread())?;
+        let open = self.cockpit.read(cx).thread(fork.thread)?;
         let transcript = open.transcript();
         if transcript.status() != Status::Idle {
             return None;
@@ -466,7 +467,7 @@ impl CockpitView {
         if self.bring_back_blocked(owner, Some(fork), cx).is_some() {
             return;
         }
-        let (Some(run), Some(index)) = (self.side_run(fork, cx), self.pane_for(owner.thread())) else {
+        let (Some(run), Some(index)) = (self.side_run(fork, cx), self.pane_for(owner)) else {
             return;
         };
         let quote = ferrite_core::replies::compose(&[Reply::new(format!("From a side chat:\n{run}"), "")], "");
@@ -487,7 +488,7 @@ impl CockpitView {
         self.side_chat
             .read(cx)
             .fork(owner, id)
-            .and_then(|fork| self.cockpit.read(cx).thread(fork.thread.thread()))
+            .and_then(|fork| self.cockpit.read(cx).thread(fork.thread))
             .is_some_and(|open| open.transcript().status() == ferrite_core::transcript::Status::Streaming)
     }
 }
@@ -622,7 +623,7 @@ impl SideChatView {
         if self.tab_mut(id).is_none() {
             return Some(false);
         }
-        let pane = PaneView::new(fork.thread.thread(), cx);
+        let pane = PaneView::new(fork.thread, cx);
         if let Some(entity) = pane.transcript() {
             cx.subscribe(&entity, Self::on_transcript_event).detach();
         }

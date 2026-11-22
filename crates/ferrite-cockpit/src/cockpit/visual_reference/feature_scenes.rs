@@ -243,7 +243,7 @@ fn review(staged: Staged) -> (Scene, Setup) {
 /// The fix the conversation made, as the uncommitted scope reads it.
 fn changed_files() -> Vec<FileSides> {
     let nav_old = "\
-fn thread_row(&self, thread: ThreadId, cx: &App) -> Div {
+fn thread_row(&self, thread: ThreadKey, cx: &App) -> Div {
     let facts = state.facts(thread);
     let mut row = div().h(px(theme::ROW_H));
     if let Some(summary) = facts.summary.clone() {
@@ -253,7 +253,7 @@ fn thread_row(&self, thread: ThreadId, cx: &App) -> Div {
 }
 ";
     let nav_new = "\
-fn thread_row(&self, thread: ThreadId, cx: &App) -> Div {
+fn thread_row(&self, thread: ThreadKey, cx: &App) -> Div {
     let facts = state.facts(thread);
     let mut row = div().h(px(theme::ROW_H));
     let summary = facts
@@ -508,7 +508,7 @@ pub(crate) struct ThreadRow {
 }
 
 impl NavState {
-    fn thread_row(&self, thread: ThreadId) -> Div {
+    fn thread_row(&self, thread: ThreadKey) -> Div {
         let facts = self.facts.get(thread);
         let mut row = div().h(px(ROW_H));
         let summary = facts
@@ -520,7 +520,7 @@ impl NavState {
     }
 
     /// A parked Thread keeps its compact height: it has no live facts.
-    fn parked_row(&self, thread: ThreadId) -> Div {
+    fn parked_row(&self, thread: ThreadKey) -> Div {
         div().h(px(ROW_H)).child(self.title(thread))
     }
 }
@@ -658,12 +658,12 @@ fn panel(state: &str, staged: PanelStaged) -> (Scene, Setup) {
         for opener in [Opener::Changes, Opener::Files, Opener::Terminal] {
             view.run_opener(thread, opener, cx);
         }
-        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Changes, cx);
+        view.upsert_surface(thread, SurfaceId::Changes, cx);
         match staged {
             PanelStaged::Tabs => {}
             PanelStaged::PlusMenu => view.open_surface_menu(cx),
-            PanelStaged::Empty => view.close_surfaces(view.cockpit.read(cx).thread_key(thread), crate::cockpit::surfaces::CloseSelection::All, cx),
-            PanelStaged::Maximized => view.toggle_panel_maximized(view.cockpit.read(cx).thread_key(thread), cx),
+            PanelStaged::Empty => view.close_surfaces(thread, crate::cockpit::surfaces::CloseSelection::All, cx),
+            PanelStaged::Maximized => view.toggle_panel_maximized(thread, cx),
         }
     });
     (scene, setup)
@@ -697,7 +697,7 @@ fn panel_pr(label: &'static str, staged: PrStaged) -> (Scene, Setup) {
             pr.state = WirePrState::Merged;
         }
         view.facts.pr_answered(
-            view.cockpit.read(cx).thread_key(thread),
+            thread,
             Some(PullRequest {
                 number: pr.number,
                 state: if merged {
@@ -734,7 +734,7 @@ fn side_chat() -> (Scene, Setup) {
     let scene = conversation("side-chat");
     let setup: Setup = Box::new(|view, _, cx| {
         if let Some(owner) = view.focused_thread(cx) {
-            view.fixture_side_chat(view.cockpit.read(cx).thread_key(owner), cx);
+            view.fixture_side_chat(owner, cx);
         }
     });
     (scene, setup)
@@ -800,13 +800,13 @@ fn nav_states() -> (Scene, Setup) {
             })
         };
         let facts = &mut view.facts;
-        facts.pr_answered(view.cockpit.read(cx).thread_key(working), pr(12, PrState::Open, Some(CheckState::Passing)));
-        facts.pr_answered(view.cockpit.read(cx).thread_key(blocked), pr(31, PrState::Open, Some(CheckState::Failing)));
-        facts.pr_answered(view.cockpit.read(cx).thread_key(done), pr(48, PrState::Open, Some(CheckState::Pending)));
-        facts.pr_answered(view.cockpit.read(cx).thread_key(merged), pr(40, PrState::Merged, None));
-        facts.pr_answered(view.cockpit.read(cx).thread_key(closed), pr(22, PrState::Closed, None));
-        facts.pr_answered(view.cockpit.read(cx).thread_key(checking), pr(53, PrState::Open, Some(CheckState::Passing)));
-        facts.ask_pr(view.cockpit.read(cx).thread_key(checking), cx.background_executor().now(), true);
+        facts.pr_answered(working, pr(12, PrState::Open, Some(CheckState::Passing)));
+        facts.pr_answered(blocked, pr(31, PrState::Open, Some(CheckState::Failing)));
+        facts.pr_answered(done, pr(48, PrState::Open, Some(CheckState::Pending)));
+        facts.pr_answered(merged, pr(40, PrState::Merged, None));
+        facts.pr_answered(closed, pr(22, PrState::Closed, None));
+        facts.pr_answered(checking, pr(53, PrState::Open, Some(CheckState::Passing)));
+        facts.ask_pr(checking, cx.background_executor().now(), true);
         cx.notify();
     });
     (scene, setup)
@@ -875,7 +875,7 @@ fn factory() -> (Scene, Setup) {
     let mut scene = Scene::new("factory");
     let ferrite = scene.project("ferrite");
     let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
-    let project = scene.core.project_id(mine).expect("a Project");
+    let project = scene.core.project_of(mine).expect("a Project").project();
     let worker = scene
         .core
         .fixture_open_owned(
@@ -902,7 +902,7 @@ fn factory() -> (Scene, Setup) {
             "status": status,
             "agent": {"provider": "claude", "model": model},
             "branch": format!("factory/{id}"),
-            "worker": (id == "t-2").then_some(worker),
+            "worker": (id == "t-2").then_some(worker.thread()),
             "worktree": format!("~/work/ferrite/.worktrees/factory/{id}"),
             "result": result,
             "reason": reason,
@@ -1180,7 +1180,7 @@ fn head_breadcrumb() -> (Scene, Setup) {
     let scene = conversation("head-breadcrumb");
     let setup: Setup = Box::new(|view, window, cx| {
         if let Some(thread) = view.focused_thread(cx) {
-            ferrite_ui::motion::hover_listener(format!("view-title-hover-{}", thread.get()).into())(
+            ferrite_ui::motion::hover_listener(format!("view-title-hover-{}", thread.thread().get()).into())(
                 &true, window, cx,
             );
         }
@@ -1268,7 +1268,7 @@ fn factory_workflows() -> (Scene, Setup) {
     let mut scene = Scene::new("factory-workflows");
     let ferrite = scene.project("ferrite");
     let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
-    let project = scene.core.project_id(mine).expect("a Project");
+    let project = scene.core.project_of(mine).expect("a Project").project();
     scene.core.focus_thread(mine);
     scene.core.fixture_live_factory();
     let setup: Setup = Box::new(move |view, _, cx| {
@@ -1294,7 +1294,7 @@ fn factory_start(kind: ferrite_core::factory::StartKind) -> (Scene, Setup) {
     });
     let ferrite = scene.project("ferrite");
     let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
-    let project = scene.core.project_id(mine).expect("a Project");
+    let project = scene.core.project_of(mine).expect("a Project").project();
     scene.core.focus_thread(mine);
     scene.core.fixture_live_factory();
     scene.core.fixture_github(vec![(
@@ -1342,7 +1342,7 @@ fn factory_coordinator() -> (Scene, Setup) {
     let mut scene = Scene::new("factory-coordinator");
     let ferrite = scene.project("ferrite");
     let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
-    let project = scene.core.project_id(mine).expect("a Project");
+    let project = scene.core.project_of(mine).expect("a Project").project();
     let root = scene
         .core
         .registry()
@@ -1369,7 +1369,7 @@ fn factory_coordinator() -> (Scene, Setup) {
     for command in [
         Command::CoordinatorStarted {
             project,
-            thread: coordinator,
+            thread: coordinator.thread(),
         },
         Command::CreateWorkflow {
             project,
@@ -1439,7 +1439,7 @@ fn factory_coordinator() -> (Scene, Setup) {
         },
     ] {
         core.fixture_factory_command(Command::Propose {
-            coordinator,
+            coordinator: coordinator.thread(),
             act,
             catalog: Catalog::default(),
         });
@@ -1487,7 +1487,7 @@ fn annotation_editor() -> (Scene, Setup) {
     )
     .unwrap();
     let setup: Setup = Box::new(move |view, _, cx| {
-        let thread = view.cockpit.read(cx).thread_key(view.panes[view.focused(cx)].thread().unwrap());
+        let thread = view.panes[view.focused(cx)].thread().unwrap();
         view.fixture_annotation_editor(thread, annotation, image, cx);
     });
     (scene, setup)

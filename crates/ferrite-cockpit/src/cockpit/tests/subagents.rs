@@ -80,9 +80,9 @@ fn child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder(cx: &mu
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     assert_eq!(
-        view.read_with(cx, |view, cx| view
+        view.read_with(cx, |view, _| view
             .facts
-            .get(view.cockpit.read(cx).thread_key(thread))
+            .get(thread)
             .map_or(0, |facts| facts.subagents)),
         2,
         "the Thread card counts the discovered children"
@@ -310,7 +310,7 @@ fn core_eviction_releases_a_hidden_retained_transcript_entity(cx: &mut TestAppCo
         })
     });
     tick(cx);
-    view.read_with(cx, |view, cx| {
+    view.read_with(cx, |view, _| {
         assert!(!view.panes[0].transcripts.contains_key(&atlas));
         assert!(view.panes[0].transcripts.contains_key(&tail));
         assert!(!view.transcript_entities.contains(&atlas_entity));
@@ -566,9 +566,9 @@ fn native_child_progress_uses_the_shared_pinned_row(
     assert!(cx
         .debug_bounds("live-phase")
         .is_some());
-    view.read_with(cx, |view, cx| {
+    view.read_with(cx, |view, _| {
         let pane = &view.panes[0];
-        let facts = view.facts.get(view.cockpit.read(cx).thread_key(pane.thread().unwrap())).unwrap();
+        let facts = view.facts.get(pane.thread().unwrap()).unwrap();
         assert!(!facts.wall.working.contains("Server busy"));
     });
     emit(
@@ -1189,7 +1189,7 @@ fn the_thread_card_opens_main_not_the_pending_child(cx: &mut TestAppContext) {
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
-        view.notice_verb(crate::notifications::Verb::OpenThread(thread), cx)
+        view.notice_verb(crate::notifications::Verb::OpenThread(thread.thread()), cx)
     });
     tick(cx);
     assert!(selected(&view, cx) == Subject::Main);
