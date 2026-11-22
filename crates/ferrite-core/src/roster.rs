@@ -11,7 +11,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::ThreadId;
+use crate::ThreadKey;
 
 /// A draft Pane's identity (#29): a Composer and a pre-prompt band with no
 /// Thread yet. Minted here, stable until the first send makes a Thread of
@@ -31,15 +31,16 @@ impl DraftId {
     }
 }
 
-/// Stable Pane identity across grid reflow: a Thread, or a draft.
+/// Stable Pane identity across grid reflow: a Thread, by its key (ADR
+/// 0045), or a draft.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PaneIdentity {
-    Thread(ThreadId),
+    Thread(ThreadKey),
     Draft(DraftId),
 }
 
 impl PaneIdentity {
-    pub fn thread(self) -> Option<ThreadId> {
+    pub fn thread(self) -> Option<ThreadKey> {
         match self {
             PaneIdentity::Thread(thread) => Some(thread),
             PaneIdentity::Draft(_) => None,
@@ -62,10 +63,10 @@ pub struct Roster {
     /// the tail, the one just closed. In memory only, deliberately: the
     /// store keeps no park order, so a relaunch forgets it and reopen falls
     /// back to creation order (accepted v1 behavior).
-    park_order: Vec<ThreadId>,
+    park_order: Vec<ThreadKey>,
     /// The Thread focus last left: while a draft holds focus, the operator
     /// is still in that Thread's Project.
-    left_thread: Option<ThreadId>,
+    left_thread: Option<ThreadKey>,
     drafts: BTreeSet<DraftId>,
     next_draft: u64,
 }
@@ -86,13 +87,13 @@ impl Roster {
         self.panes.get(self.focused).copied()
     }
 
-    pub fn focused_thread(&self) -> Option<ThreadId> {
+    pub fn focused_thread(&self) -> Option<ThreadKey> {
         self.focused().and_then(PaneIdentity::thread)
     }
 
     /// The Thread the operator is in: the focused one, else the open one
     /// focus last left.
-    pub fn current_thread(&self) -> Option<ThreadId> {
+    pub fn current_thread(&self) -> Option<ThreadKey> {
         self.focused_thread().or(self
             .left_thread
             .filter(|thread| self.pane_of(*thread).is_some()))
@@ -102,7 +103,7 @@ impl Roster {
         self.panes.iter().position(|pane| *pane == identity)
     }
 
-    pub fn pane_of(&self, thread: ThreadId) -> Option<usize> {
+    pub fn pane_of(&self, thread: ThreadKey) -> Option<usize> {
         self.index_of(PaneIdentity::Thread(thread))
     }
 
@@ -110,7 +111,7 @@ impl Roster {
         self.drafts.contains(&draft)
     }
 
-    pub fn park_order(&self) -> &[ThreadId] {
+    pub fn park_order(&self) -> &[ThreadKey] {
         &self.park_order
     }
 
@@ -141,7 +142,7 @@ impl Roster {
     // ------------------------------------------------------------- panes
 
     /// A Thread became open: it takes the next Pane, and focus stays put.
-    pub(crate) fn insert_thread(&mut self, thread: ThreadId) {
+    pub(crate) fn insert_thread(&mut self, thread: ThreadKey) {
         let identity = PaneIdentity::Thread(thread);
         if !self.panes.contains(&identity) {
             self.panes.push(identity);
@@ -150,7 +151,7 @@ impl Roster {
 
     /// A Thread stopped being open: its Pane goes, and a surviving focused
     /// Pane keeps focus.
-    pub(crate) fn remove_thread(&mut self, thread: ThreadId) {
+    pub(crate) fn remove_thread(&mut self, thread: ThreadKey) {
         self.remove(PaneIdentity::Thread(thread));
     }
 
@@ -180,7 +181,7 @@ impl Roster {
     /// The first send made a Thread of the draft: the Thread takes the
     /// draft's own slot, not a new one at the end. False for a draft the
     /// roster no longer holds.
-    pub(crate) fn draft_became(&mut self, draft: DraftId, thread: ThreadId) -> bool {
+    pub(crate) fn draft_became(&mut self, draft: DraftId, thread: ThreadKey) -> bool {
         if !self.drafts.remove(&draft) {
             return false;
         }
@@ -208,15 +209,15 @@ impl Roster {
 
     // -------------------------------------------------------- park order
 
-    pub(crate) fn note_parked(&mut self, thread: ThreadId) {
+    pub(crate) fn note_parked(&mut self, thread: ThreadKey) {
         self.park_order.push(thread);
     }
 
-    pub(crate) fn note_revived(&mut self, thread: ThreadId) {
+    pub(crate) fn note_revived(&mut self, thread: ThreadKey) {
         self.park_order.retain(|parked| *parked != thread);
     }
 
-    pub(crate) fn pop_park_order(&mut self) -> Option<ThreadId> {
+    pub(crate) fn pop_park_order(&mut self) -> Option<ThreadKey> {
         self.park_order.pop()
     }
 }
@@ -225,7 +226,7 @@ impl Roster {
 mod tests {
     use super::*;
 
-    fn roster(threads: &[ThreadId]) -> Roster {
+    fn roster(threads: &[ThreadKey]) -> Roster {
         let mut roster = Roster::default();
         for thread in threads {
             roster.insert_thread(*thread);
@@ -235,7 +236,9 @@ mod tests {
 
     #[test]
     fn only_the_focused_pane_is_on_screen() {
-        let threads: Vec<ThreadId> = (1..=3).map(ThreadId::new).collect();
+        let threads: Vec<ThreadKey> = (1..=3)
+            .map(|thread| ThreadKey::fixture(0, thread))
+            .collect();
         let mut roster = roster(&threads);
         assert_eq!(roster.visible(), [PaneIdentity::Thread(threads[0])]);
         roster.focus(PaneIdentity::Thread(threads[2]));
@@ -247,7 +250,9 @@ mod tests {
 
     #[test]
     fn a_draft_becomes_a_thread_in_its_own_slot() {
-        let threads: Vec<ThreadId> = (1..=3).map(ThreadId::new).collect();
+        let threads: Vec<ThreadKey> = (1..=3)
+            .map(|thread| ThreadKey::fixture(0, thread))
+            .collect();
         let mut roster = roster(&threads[..2]);
         let draft = roster.open_draft();
         // `open` gives the new Thread a Pane at the end first.

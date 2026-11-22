@@ -245,10 +245,12 @@ pub struct Restart {
 }
 
 /// What one frame changed for one Pane. Threads that produced nothing are
-/// absent: a quiet Pane costs the renderer nothing.
+/// absent: a quiet Pane costs the renderer nothing. The Engine names its
+/// Thread by id; a Cockpit, which holds several machines, by its key
+/// (`cockpit::PaneUpdate`, ADR 0045).
 #[derive(Debug, Clone, PartialEq)]
-pub struct PaneUpdate {
-    pub thread: ThreadId,
+pub struct PaneUpdate<T = ThreadId> {
+    pub thread: T,
     /// Exactly the Blocks whose content moved.
     pub dirty: Vec<BlockId>,
     /// Blocks that fell off the far end and no longer exist.
@@ -267,8 +269,8 @@ pub struct SubjectUpdate {
     pub content_changed: bool,
 }
 
-impl PaneUpdate {
-    pub(crate) fn new(thread: ThreadId) -> Self {
+impl<T> PaneUpdate<T> {
+    pub(crate) fn new(thread: T) -> Self {
         Self {
             thread,
             dirty: Vec::new(),
@@ -520,10 +522,10 @@ struct PendingBootstrap {
 
 /// A deferred first send settled by `pump`. The draft and submitted text
 /// identify the original Pane even if the operator has since moved focus.
-pub struct BootstrapResult {
+pub struct BootstrapResult<T = ThreadId> {
     pub draft: Option<DraftId>,
     pub prompt: String,
-    pub result: io::Result<Bootstrapped>,
+    pub result: io::Result<Bootstrapped<T>>,
 }
 
 /// A Thread's Activity, and every input applied to it since the Engine
@@ -5879,8 +5881,8 @@ impl<'a> ThreadView<'a> {
 
 /// A draft's first send, done: the Thread it became.
 #[derive(Debug)]
-pub struct Bootstrapped {
-    pub thread: ThreadId,
+pub struct Bootstrapped<T = ThreadId> {
+    pub thread: T,
 }
 
 fn megabytes(bytes: u64) -> String {

@@ -172,7 +172,7 @@ fn lab_store_costs_on_a_real_log() {
         .unwrap();
     let fake = Fake::default();
     let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
-    let thread = ThreadId::new(3);
+    let thread = cockpit.key(ThreadId::new(3));
     let ms = |since: Instant| since.elapsed().as_secs_f64() * 1000.0;
 
     let started = Instant::now();
@@ -248,7 +248,7 @@ fn parked_lookups_read_the_tail_of_a_parked_thread() {
             .engine()
             .store
             .dir()
-            .join(thread.to_string())
+            .join(thread.thread().to_string())
             .join("log.jsonl"),
     )
     .unwrap()
@@ -326,7 +326,7 @@ fn a_failed_sync_holds_the_session_until_it_succeeds() {
         .engine()
         .store
         .dir()
-        .join(thread.to_string())
+        .join(thread.thread().to_string())
         .join("log.jsonl");
     assert!(!std::fs::read_to_string(&log).unwrap().contains("held"));
 
@@ -361,7 +361,7 @@ fn quitting_writes_every_accepted_record() {
         .engine()
         .store
         .dir()
-        .join(thread.to_string())
+        .join(thread.thread().to_string())
         .join("log.jsonl");
     let written = std::fs::read_to_string(&log).unwrap();
     assert!(written.contains("still streaming"), "lost at quit");
@@ -382,7 +382,7 @@ fn quitting_writes_every_accepted_record() {
     }
     assert_eq!(
         cockpit.engine().store.open_threads().unwrap(),
-        vec![thread],
+        vec![thread.thread()],
         "reopened next launch"
     );
 }
@@ -397,9 +397,11 @@ fn what_quitting_cannot_write_is_kept_and_reported() {
     live(&fake).send(text("unsaved words")).unwrap();
     cockpit.pump();
     // A descriptor that cannot write: every append fails.
-    cockpit.engine().threads[&thread].writer.break_writes();
+    cockpit.engine().threads[&thread.thread()]
+        .writer
+        .break_writes();
     cockpit.halt_sessions();
-    let kept = cockpit.engine().store.pending_records(thread);
+    let kept = cockpit.engine().store.pending_records(thread.thread());
     assert_eq!(kept.len(), 1);
     assert!(std::fs::read_to_string(&kept[0])
         .unwrap()
@@ -490,7 +492,7 @@ fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
             .engine()
             .store
             .dir()
-            .join(thread.to_string())
+            .join(thread.thread().to_string())
             .join("log.jsonl"),
     )
     .unwrap();
@@ -515,7 +517,7 @@ fn an_unreadable_saved_queue_is_said_not_silently_dropped() {
             .engine()
             .store
             .dir()
-            .join(thread.to_string())
+            .join(thread.thread().to_string())
             .join("queue.json"),
         "{ not json",
     )
