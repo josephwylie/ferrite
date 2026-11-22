@@ -1726,7 +1726,7 @@ impl CockpitView {
                 skills: open.commands().into(),
                 cited: self
                     .cited_sources
-                    .of(thread)
+                    .of(&self.cited_thread(thread, cx))
                     .map(std::borrow::Cow::Borrowed)
                     .unwrap_or_default(),
                 note: None,
@@ -3964,7 +3964,7 @@ impl CockpitView {
             admitted
         };
         if admitted {
-            self.keep_cited_sources(thread, &cited);
+            self.keep_cited_sources(thread, &cited, cx);
         }
         self.facts.acted(self.cockpit.read(cx), thread);
         // A first prompt names an untitled Thread.
