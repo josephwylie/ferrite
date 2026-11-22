@@ -40,8 +40,11 @@ and a window that holds every machine at once.
   `MachineKey(Option<String>)` is the machine's target as Settings saves
   it, `None` for this computer. It moved into core from `ferrite-cockpit`,
   where it named the machines alerts come from (ADR 0017). A Thread saved
-  before this change is a bare id, and it reads as this computer's. The
-  pins change that reads them owns that reading (P3). A Delegate on a
+  before this change is a bare id, and it reads as this computer's: most
+  were, and a wrong one is harmless, a pin passed over until it is
+  unpinned. Pins (`Settings::pinned_threads`) are saved this way, and a
+  pin made while the window is on a machine names that machine. A
+  Delegate on a
   linked machine will save its child the same way (ADR 0047, to come).
   Its design called the type `ThreadRef`; there is one name,
   `SavedThread`.
@@ -95,9 +98,15 @@ Each lands green and proves something.
    Panels, the window holds those of the machine it is on, and writes
    the others back as it read them.
 3. **P3** `refactor(cockpit): the nav, board and menus speak ThreadKey`:
-   `NavKey`, `NavEvent`, `MenuTarget`, `ThreadRow`, drag and drop,
-   `Arrivals` and `Alert`, whose `away` folds into the key. Saved pins
-   become `SavedThread`s. In parallel with P2.
+   `NavKey`, `NavEvent`, the nav's and the board's `MenuTarget`s,
+   `ThreadRow`, `Arrivals` and the nav's picks. Saved pins become
+   `SavedThread`s. In parallel with P2. Three things the design listed
+   stay: drag and drop holds a board's layout leaves, which name readers
+   as well as Threads, so it moves with the layout (P4/P5);
+   `Notifications.phases` lives in each Server's Store, where an id is
+   whole; and `Alert.away` names a machine off screen, which has no
+   `MachineId` until the window holds every machine, so it folds into the
+   key in P6.
 4. **P4** `refactor(core): one Cockpit holds a Server per machine`: the
    split inside core only, with the `ThreadId` API and the single attach
    kept. In parallel with P2 and P3.

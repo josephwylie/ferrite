@@ -1899,7 +1899,7 @@ fn a_menu_eases_open_and_rebuilds_no_pane(cx: &mut TestAppContext) {
     let (view, _fake, threads, cx) = solo_board("menu-entrance", cx);
     view.update(cx, |view, cx| {
         view.open_context_menu(
-            MenuTarget::Pane(threads[0]),
+            MenuTarget::Pane(keyed(view, threads[0], cx)),
             gpui::point(px(400.), px(300.)),
             cx,
         )
@@ -1921,7 +1921,7 @@ fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
     let (view, _fake, threads, cx) = solo_board("menu-row-hover", cx);
     view.update(cx, |view, cx| {
         view.open_context_menu(
-            MenuTarget::Pane(threads[0]),
+            MenuTarget::Pane(keyed(view, threads[0], cx)),
             gpui::point(px(400.), px(300.)),
             cx,
         )

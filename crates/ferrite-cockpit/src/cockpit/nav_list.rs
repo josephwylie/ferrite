@@ -17,8 +17,8 @@ use std::time::Instant;
 /// A row of the list as its motion keys it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum NavKey {
-    Card(ThreadId),
-    Slim(ThreadId),
+    Card(ThreadKey),
+    Slim(ThreadKey),
 }
 
 /// What a row last looked like, for its ghost.
@@ -196,7 +196,7 @@ impl NavView {
             let local = notice
                 .away
                 .is_none()
-                .then(|| state.active.iter().find(|row| row.thread == notice.thread))
+                .then(|| state.active.iter().find(|row| row.key.thread() == notice.thread))
                 .flatten();
             rows.push(match local {
                 Some(row) => self.card(inputs, row, Some(notice.open_verb()), &mut faces, cx),
@@ -365,7 +365,7 @@ impl NavView {
         faces: &mut Vec<(NavKey, NavFace)>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let thread = row.thread;
+        let thread = row.key;
         faces.push((NavKey::Card(thread), NavFace::Card(row.clone())));
         let title = self.thread_title(inputs, thread, row.name.clone(), true, cx);
         let card = nav::thread_card(
@@ -408,7 +408,7 @@ impl NavView {
     /// whose press opens the PR in the Panel's preview (⌘-press, in the
     /// browser). Pin stays in the context menu.
     fn card_doors(&self, inputs: &NavInputs, row: &nav::ThreadRow, cx: &mut Context<Self>) -> nav::CardDoors {
-        let thread = row.thread;
+        let thread = row.key;
         let held = inputs.menu == Some(MenuTarget::Snooze(thread));
         let strip = inputs.open.get(&thread).map(|open| {
             let mut buttons = Vec::new();
@@ -481,7 +481,7 @@ impl NavView {
     fn thread_title(
         &self,
         inputs: &NavInputs,
-        thread: ThreadId,
+        thread: ThreadKey,
         title: SharedString,
         hint: bool,
         cx: &mut Context<Self>,
@@ -515,7 +515,7 @@ impl NavView {
     /// A card's hover detail, while the pointer rests on it — never during
     /// a drag or with its Snooze menu open.
     fn hover_card(&self, inputs: &NavInputs, row: &nav::ThreadRow, cx: &gpui::App) -> Option<AnyElement> {
-        let thread = row.thread;
+        let thread = row.key;
         let snoozing = matches!(inputs.menu, Some(MenuTarget::Snooze(_)));
         if snoozing
             || cx.has_active_drag()
@@ -554,7 +554,7 @@ impl NavView {
         faces: &mut Vec<(NavKey, NavFace)>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let thread = row.thread;
+        let thread = row.key;
         let wall = ferrite_core::clock::system_time();
         let (time, action) = match shelf {
             Shelf::Snoozed => {
@@ -672,6 +672,6 @@ impl NavView {
 }
 
 /// Whether the rename field is open on `thread`'s title.
-fn renaming(inputs: &NavInputs, thread: ThreadId) -> bool {
+fn renaming(inputs: &NavInputs, thread: ThreadKey) -> bool {
     inputs.rename.as_ref().is_some_and(|(editing, _)| *editing == thread)
 }

@@ -127,7 +127,7 @@ use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::RepoListing;
 #[cfg(test)]
 use ferrite_core::workspace::WorkspaceChoice;
-use ferrite_core::{DecisionAnswer, ThreadId, ThreadKey};
+use ferrite_core::{DecisionAnswer, SavedThread, ThreadId, ThreadKey};
 use gpui::prelude::*;
 use gpui::{
     actions, anchored, deferred, div, px, rgb, rgba, AnyElement, ClickEvent, ClipboardItem,
@@ -933,7 +933,7 @@ pub(crate) mod drawn {
     use std::collections::HashMap;
 
     use ferrite_core::roster::PaneIdentity;
-    use ferrite_core::ThreadId;
+    use ferrite_core::ThreadKey;
 
     /// One Pane as its last build drew it.
     #[derive(Clone, Debug, Default, PartialEq)]
@@ -955,7 +955,7 @@ pub(crate) mod drawn {
         static TOAST_RENDERS: Cell<usize> = const { Cell::new(0) };
         static HEAD_RENDERS: Cell<usize> = const { Cell::new(0) };
         static HEARINGS: Cell<usize> = const { Cell::new(0) };
-        static NAV_ROWS: RefCell<HashMap<ThreadId, String>> = RefCell::new(HashMap::new());
+        static NAV_ROWS: RefCell<HashMap<ThreadKey, String>> = RefCell::new(HashMap::new());
         static PUMPS: Cell<usize> = const { Cell::new(0) };
         static LISTS: Cell<usize> = const { Cell::new(0) };
     }
@@ -1020,8 +1020,8 @@ pub(crate) mod drawn {
         TOAST_RENDERS.with(Cell::get)
     }
 
-    pub(crate) fn record_row(thread: ThreadId, row: String) {
-        NAV_ROWS.with(|rows| rows.borrow_mut().insert(thread, row));
+    pub(crate) fn record_row(key: ThreadKey, row: String) {
+        NAV_ROWS.with(|rows| rows.borrow_mut().insert(key, row));
     }
 
     /// The Pane as last drawn.
@@ -1039,10 +1039,10 @@ pub(crate) mod drawn {
         NAV_RENDERS.with(Cell::get)
     }
 
-    /// The nav row for `thread` as last drawn: its status, unread, tail
-    /// and name.
-    pub(crate) fn row(thread: ThreadId) -> String {
-        NAV_ROWS.with(|rows| rows.borrow().get(&thread).cloned().unwrap_or_default())
+    /// The nav row for `key` as last drawn: its status, unread, tail and
+    /// name.
+    pub(crate) fn row(key: ThreadKey) -> String {
+        NAV_ROWS.with(|rows| rows.borrow().get(&key).cloned().unwrap_or_default())
     }
 }
 
@@ -1587,7 +1587,7 @@ impl CockpitView {
     /// shown stays put.
     fn show_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         if self.focused_thread(cx) != Some(thread) || self.destination_shown() {
-            self.open_nav_row(thread, cx);
+            self.open_nav_row(self.cockpit.read(cx).thread_key(thread), cx);
         }
     }
 
@@ -3012,9 +3012,9 @@ impl CockpitView {
     /// A Thread's effective cwd.
     fn target_path(&self, target: MenuTarget, cx: &gpui::App) -> Option<std::path::PathBuf> {
         match target {
-            MenuTarget::Thread(thread)
-            | MenuTarget::Pane(thread)
-            | MenuTarget::Snooze(thread) => self.thread_path(thread, cx),
+            MenuTarget::Thread(key)
+            | MenuTarget::Pane(key)
+            | MenuTarget::Snooze(key) => self.thread_path(key.thread(), cx),
             MenuTarget::File(thread) => self.files.read(cx).pressed(self.cockpit.read(cx).thread_key(thread)),
             MenuTarget::FilesMore(_)
             | MenuTarget::ChangesScope(_)
@@ -4991,18 +4991,35 @@ impl CockpitView {
 
     /// Pin or unpin a Thread (the row menu's `Pin` / `Unpin`): a pinned
     /// Thread is listed under `Pinned`, newest pin last. Saved with the
-    /// settings.
-    pub(crate) fn set_pinned(&mut self, thread: ThreadId, pinned: bool, cx: &mut Context<Self>) {
+    /// settings as the window's machine's Thread.
+    pub(crate) fn set_pinned(&mut self, key: ThreadKey, pinned: bool, cx: &mut Context<Self>) {
+        let pin = SavedThread {
+            machine: self.machine_key(cx),
+            thread: key.thread(),
+        };
         self.change_settings(
             |settings| {
-                settings.pinned_threads.retain(|pin| *pin != thread);
+                settings.pinned_threads.retain(|saved| *saved != pin);
                 if pinned {
-                    settings.pinned_threads.push(thread);
+                    settings.pinned_threads.push(pin);
                 }
             },
             cx,
         );
         cx.notify();
+    }
+
+    /// The pinned Threads on the window's machine, in pin order.
+    pub(super) fn pins(&self, cx: &gpui::App) -> Vec<ThreadKey> {
+        let here = self.machine_key(cx);
+        let cockpit = self.cockpit.read(cx);
+        self.prefs
+            .settings
+            .pinned_threads
+            .iter()
+            .filter(|pin| pin.machine == here)
+            .map(|pin| cockpit.thread_key(pin.thread))
+            .collect()
     }
 
     /// Show the parked Threads (N-18): the nav unfolds if it is folded
@@ -5918,7 +5935,8 @@ impl CockpitView {
     /// is no display name), its state, the cached Project and checkout
     /// facts, and its word. Not selected: `nav_state` decides what carries
     /// the selection.
-    fn thread_row(&self, thread: ThreadId, cx: &gpui::App) -> nav::ThreadRow {
+    fn thread_row(&self, key: ThreadKey, cx: &gpui::App) -> nav::ThreadRow {
+        let thread = key.thread();
         let facts = self.facts.get(thread);
         let open = self.cockpit.read(cx).thread(thread);
         let now = ferrite_core::clock::system_time();
@@ -5959,7 +5977,7 @@ impl CockpitView {
             nav::RowStatus::Working | nav::RowStatus::Failing
         );
         let row = nav::ThreadRow {
-            thread,
+            key,
             name: self.facts.name(thread),
             status,
             project: facts.and_then(|facts| facts.project_label.clone()),
@@ -5975,14 +5993,14 @@ impl CockpitView {
             working_since: open
                 .filter(|_| working)
                 .and_then(|open| open.turn().started),
-            pinned: self.prefs.settings.pinned_threads.contains(&thread),
+            pinned: self.pins(cx).contains(&key),
             retitling: self.titling.naming(thread),
             // The nav wears its own picks (`NavView::card_picked`).
             picked: false,
         };
         #[cfg(test)]
         drawn::record_row(
-            thread,
+            key,
             format!(
                 "{:?} {:?} branch={:?} pr={:?} provider={:?} receded={} {}",
                 row.status,
@@ -7385,7 +7403,8 @@ impl CockpitView {
                         .to_string();
                     view.native_copy = (!copied.is_empty()).then_some(copied);
                     view.focus_pane(index, cx);
-                    view.open_context_menu(MenuTarget::Pane(thread), event.position, cx);
+                    let key = view.cockpit.read(cx).thread_key(thread);
+                    view.open_context_menu(MenuTarget::Pane(key), event.position, cx);
                 }),
             );
         let cell = self.slot_drop_target(cell, pane_leaf(pane.identity), cx);
@@ -8431,7 +8450,7 @@ impl CockpitView {
             .active
             .iter()
             .map(|entry| {
-                let thread = entry.thread;
+                let thread = entry.key.thread();
                 if let Some(decision) = notifications.first_request(thread) {
                     self.decision_row(decision, now, cx)
                 } else if let Some(notice) = notifications

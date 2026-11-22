@@ -25,7 +25,7 @@ fn a_bulk_park_of_loose_threads_names_the_thread_that_failed(cx: &mut TestAppCon
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     tick(cx);
-    let both = [threads[0], threads[2]];
+    let both = [keyed_in(&view, threads[0], cx), keyed_in(&view, threads[2], cx)];
     view.update(cx, |view, cx| {
         view.nav_view.update(cx, |nav, _| nav.picked = both.to_vec());
         view.park_listed(&both, cx);
@@ -38,7 +38,7 @@ fn a_bulk_park_of_loose_threads_names_the_thread_that_failed(cx: &mut TestAppCon
     assert_eq!(said.matches(';').count(), 0, "one failure, one entry: {said}");
     assert!(cx.debug_bounds("nav-notice").is_some(), "drawn in the list");
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.nav_view.read(cx).picked, vec![threads[0]], "the failed one stays picked");
+        assert_eq!(view.nav_view.read(cx).picked, vec![both[0]], "the failed one stays picked");
         assert!(view.facts.parked().contains(&threads[2]));
     });
 
@@ -97,7 +97,7 @@ fn a_refused_park_reaches_the_log(cx: &mut TestAppContext) {
     ferrite_core::diagnostics::open(&dir);
     tick(cx);
 
-    view.update(cx, |view, cx| view.park_listed(&[threads[0]], cx));
+    view.update(cx, |view, cx| view.park_listed(&[keyed(view, threads[0], cx)], cx));
     tick(cx);
     let said = notice(&view, cx).expect("the failure is reported");
     view.update(cx, |view, cx| view.copy_diagnostics(cx));

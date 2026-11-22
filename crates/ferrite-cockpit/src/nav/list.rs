@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use ferrite_core::ThreadId;
+use ferrite_core::ThreadKey;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, AnyElement, Div, Hsla, RenderImage, SharedString, Stateful};
 
@@ -172,7 +172,7 @@ fn slim(
     measure: &Measure,
     live: bool,
 ) -> Stateful<Div> {
-    let thread = row.thread;
+    let thread = row.key;
     let key = card::card_key(thread);
     let fade_key = slim_fade_key(&key);
     let hover = if live { motion::hover_t(&key) } else { 0.0 };
@@ -252,8 +252,8 @@ fn slim(
         }));
     let frame = if live {
         div()
-            .id(("nav-slim", thread.get() as usize))
-            .debug_selector(move || format!("nav-thread-{}", thread.get()))
+            .id(("nav-slim", thread.thread().get() as usize))
+            .debug_selector(move || format!("nav-thread-{}", thread.thread().get()))
             .on_hover({
                 let snap = motion::hover_snap(key.clone());
                 let fade =
@@ -264,7 +264,7 @@ fn slim(
                 }
             })
     } else {
-        div().id(("nav-slim-ghost", thread.get() as usize))
+        div().id(("nav-slim-ghost", thread.thread().get() as usize))
     };
     frame
         .relative()
@@ -289,23 +289,23 @@ fn slim(
 
 
 /// A parked row's Revive (T3's Un-settle): `Undo2` at 14px.
-pub fn revive_button(thread: ThreadId) -> Stateful<Div> {
+pub fn revive_button(thread: ThreadKey) -> Stateful<Div> {
     slim_action("nav-revive", thread, icons::UNDO_2, NAV_REVIVE_GLYPH, "Revive")
 }
 
 /// A snoozed row's Wake: `AlarmClockOff` at 12px.
-pub fn wake_button(thread: ThreadId) -> Stateful<Div> {
+pub fn wake_button(thread: ThreadKey) -> Stateful<Div> {
     slim_action("nav-wake", thread, icons::ALARM_CLOCK_OFF, NAV_WAKE_GLYPH, "Wake thread")
 }
 
 fn slim_action(
     name: &'static str,
-    thread: ThreadId,
+    thread: ThreadKey,
     glyph: &'static str,
     size: f32,
     tip: &'static str,
 ) -> Stateful<Div> {
-    let key = SharedString::from(format!("{name}-{}", thread.get()));
+    let key = SharedString::from(format!("{name}-{}", thread.thread().get()));
     let selector = key.clone();
     let t = motion::hover_t(&key);
     div()

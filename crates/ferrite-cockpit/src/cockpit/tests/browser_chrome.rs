@@ -406,7 +406,7 @@ fn a_dialog_that_arrives_under_an_open_menu_closes_it_and_takes_the_keys(cx: &mu
     use crate::cockpit::context_menu::MenuTarget;
     let (engine, view, thread, cx) = browser_window(cx, "bnt-dialog-menu");
     view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(200.), px(200.)), cx)
+        view.open_context_menu(MenuTarget::Thread(keyed(view, thread, cx)), gpui::point(px(200.), px(200.)), cx)
     });
     tick(cx);
     engine.raise_dialog_at("http://localhost:5173/start", alert("Over a menu"));

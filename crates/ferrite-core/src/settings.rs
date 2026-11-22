@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::sound::Sound;
 use crate::store::Provider;
+use crate::{MachineKey, SavedThread, ThreadId};
 
 /// The operator's preferences. Every field has a default, and the file is
 /// read with `#[serde(default)]`: a field missing from the file takes its
@@ -59,10 +60,11 @@ pub struct Settings {
     /// a saved choice is kept.
     pub panel_shown: bool,
     pub context_card_preferences: ContextCardPreferences,
-    /// The Threads pinned to the top of the nav's list, in the order they
-    /// were pinned (the row menu's `Pin`). An id whose Thread is gone is
-    /// passed over. Default: none.
-    pub pinned_threads: Vec<crate::ThreadId>,
+    /// The Threads pinned to the top of the nav's list, each with its
+    /// machine, in the order they were pinned (the row menu's `Pin`). A
+    /// pin whose Thread is gone is passed over. Default: none.
+    #[serde(deserialize_with = "saved_pins")]
+    pub pinned_threads: Vec<SavedThread>,
     /// The nav's shelves the operator opened (ADR 0040). Default: none, as
     /// every shelf starts folded.
     pub open_shelves: Vec<NavShelf>,
@@ -566,6 +568,27 @@ impl Settings {
     }
 }
 
+/// Pins as saved: each a `SavedThread`, or a bare id from before pins
+/// named their machine, which reads as this computer's (ADR 0045).
+fn saved_pins<'de, D: serde::Deserializer<'de>>(pins: D) -> Result<Vec<SavedThread>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Pin {
+        Saved(SavedThread),
+        Bare(ThreadId),
+    }
+    Ok(Vec::<Pin>::deserialize(pins)?
+        .into_iter()
+        .map(|pin| match pin {
+            Pin::Saved(saved) => saved,
+            Pin::Bare(thread) => SavedThread {
+                machine: MachineKey(None),
+                thread,
+            },
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,7 +631,10 @@ mod tests {
                 ("environment".to_string(), false),
                 ("usage".to_string(), true),
             ])),
-            pinned_threads: vec![crate::ThreadId::new(7)],
+            pinned_threads: vec![SavedThread {
+                machine: MachineKey(Some("me@box".into())),
+                thread: ThreadId::new(7),
+            }],
             open_shelves: vec![NavShelf::Working, NavShelf::Parked],
             confirm_delete: false,
             auto_title: false,
@@ -681,6 +707,31 @@ mod tests {
 
         fs::write(dir.join(Settings::FILE), "{}").unwrap();
         assert!(!Settings::load(&dir).unwrap().panel_shown);
+    }
+
+    /// A pin saved as a bare id, before pins named their machine, is this
+    /// computer's Thread; one saved since keeps its machine.
+    #[test]
+    fn pins_saved_before_machines_read_as_this_computers() {
+        let dir = scratch("bare-pins");
+        fs::write(
+            dir.join(Settings::FILE),
+            r#"{"pinned_threads": [7, {"machine": "me@box", "thread": 3}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            Settings::load(&dir).unwrap().pinned_threads,
+            [
+                SavedThread {
+                    machine: MachineKey(None),
+                    thread: ThreadId::new(7),
+                },
+                SavedThread {
+                    machine: MachineKey(Some("me@box".into())),
+                    thread: ThreadId::new(3),
+                },
+            ]
+        );
     }
 
     /// A file from before the one list (its Project folds, its sort and

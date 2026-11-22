@@ -35,6 +35,15 @@ impl CockpitView {
             .then(|| machines.rows(self.cockpit.read(cx).server()))
     }
 
+    /// The machine the window is on, as what it saves names it: `None` for
+    /// this computer.
+    pub(super) fn machine_key(&self, cx: &App) -> ferrite_core::MachineKey {
+        self.machines
+            .as_ref()
+            .and_then(|machines| machines.read(cx).selected_key())
+            .unwrap_or(ferrite_core::MachineKey(None))
+    }
+
     /// Remote and empty clients must never substitute local files or defaults.
     pub(super) fn on_machine(&self, cx: &App) -> bool {
         !self.cockpit.read(cx).environment_available() || self.cockpit.read(cx).machine().is_some()

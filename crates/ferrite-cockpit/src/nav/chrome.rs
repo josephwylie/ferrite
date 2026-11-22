@@ -154,7 +154,7 @@ pub fn results(rows: Vec<AnyElement>) -> Div {
 /// One result (T3's `SidebarSearchResultRow`): the badge, the title, the
 /// PR's number, and the age in a fixed 32px column at 12px, muted at 55%.
 pub fn result_row(row: &ThreadRow, age: SharedString, lit: bool) -> Stateful<Div> {
-    let thread = row.thread.get();
+    let thread = row.key.thread().get();
     let key = SharedString::from(format!("nav-result-{thread}"));
     let hovered = motion::hover_t(&key) > 0.0;
     let selector = key.clone();

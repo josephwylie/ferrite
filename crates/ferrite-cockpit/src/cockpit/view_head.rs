@@ -48,7 +48,8 @@ impl CockpitView {
         let right = self.view_head_end(cx);
         let menu_thread = self
             .focused_thread(cx)
-            .filter(|_| !self.empty_board_shown(cx) && !self.destination_shown());
+            .filter(|_| !self.empty_board_shown(cx) && !self.destination_shown())
+            .map(|thread| self.cockpit.read(cx).thread_key(thread));
         div()
             .debug_selector(|| "view-head".into())
             .when_some(menu_thread, |head, thread| {
@@ -470,6 +471,7 @@ impl CockpitView {
             }
         }
         let name = self.facts.name(thread).clone();
+        let key = self.cockpit.read(cx).thread_key(thread);
         let hover = SharedString::from(format!("view-title-hover-{}", thread.get()));
         let shown = ferrite_ui::motion::hover_t(&hover) > 0.0;
         let title = div()
@@ -493,7 +495,7 @@ impl CockpitView {
                         // The chevron's menu, hung under it: at the pointer
                         // it would lie over the title and take a
                         // double-click's second press.
-                        view.toggle_door(title_door(thread), cx);
+                        view.toggle_door(title_door(key), cx);
                     }
                 }),
             );
@@ -510,11 +512,11 @@ impl CockpitView {
                 MouseButton::Right,
                 cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
+                    view.open_context_menu(MenuTarget::Thread(key), event.position, cx);
                 }),
             )
             .child(title)
-            .child(title_menu(&self.doors(), thread, shown, cx))
+            .child(title_menu(&self.doors(), key, shown, cx))
             .into_any_element()
     }
 }
@@ -543,12 +545,12 @@ fn history_arrow(
 /// seen only while the title is under the pointer (`shown`) or its menu
 /// is up.
 /// The title's chevron, which opens the Thread's menu under itself.
-fn title_door(thread: ThreadId) -> Door {
-    Door::new(MenuTarget::Thread(thread), Edge::Left)
+fn title_door(key: ThreadKey) -> Door {
+    Door::new(MenuTarget::Thread(key), Edge::Left)
 }
 
-fn title_menu(doors: &Doors, thread: ThreadId, shown: bool, cx: &mut Context<CockpitView>) -> AnyElement {
-    let door = title_door(thread);
+fn title_menu(doors: &Doors, key: ThreadKey, shown: bool, cx: &mut Context<CockpitView>) -> AnyElement {
+    let door = title_door(key);
     let shown = shown || doors.is_up(door);
     let chevron = icon_button(
         "view-title-menu",

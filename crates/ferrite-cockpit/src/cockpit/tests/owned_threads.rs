@@ -53,7 +53,7 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
         state
             .open_rows()
             .chain(&state.parked)
-            .any(|row| row.thread == thread)
+            .any(|row| row.key.thread() == thread)
             || view
                 .inbox_rows(&state, cx)
                 .iter()

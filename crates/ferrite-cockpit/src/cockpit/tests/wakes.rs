@@ -283,7 +283,7 @@ fn the_nav_moves_a_working_thread_on_the_beat_without_the_window(cx: &mut TestAp
         |_, cx| cx.observe(&view, move |_, _| notified.set(notified.get() + 1))
     });
     let rows = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.nav_state(cx));
-    let ids = |rows: &[crate::nav::ThreadRow]| rows.iter().map(|row| row.thread).collect::<Vec<_>>();
+    let ids = |rows: &[crate::nav::ThreadRow]| rows.iter().map(|row| row.key.thread()).collect::<Vec<_>>();
     // Its first event settles what the Session says of itself.
     fake.streams.borrow()[1]
         .send(SessionEvent::TextDelta { text: "working ".into() })
@@ -324,7 +324,7 @@ fn the_nav_moves_a_working_thread_on_the_beat_without_the_window(cx: &mut TestAp
     beat(cx);
     let after = rows(cx);
     assert!(after.working.is_empty(), "done");
-    assert_eq!(after.active.first().map(|row| row.thread), Some(threads[1]), "on top");
+    assert_eq!(after.active.first().map(|row| row.key.thread()), Some(threads[1]), "on top");
     eprintln!(
         "WAKES section window_notifies={} nav={}",
         notified.get() - before.0,

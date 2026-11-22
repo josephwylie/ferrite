@@ -83,7 +83,7 @@ fn the_list_scrolls_to_and_opens_its_last_card(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1440.), px(1080.)));
     tick(cx);
     let active: Vec<ThreadId> = view.read_with(cx, |view, cx| {
-        view.nav_state(cx).active.iter().map(|row| row.thread).collect()
+        view.nav_state(cx).active.iter().map(|row| row.key.thread()).collect()
     });
     assert_eq!(active.len(), THREADS, "one card per Thread");
     let card = |thread: ThreadId| -> &'static str {
@@ -178,7 +178,7 @@ fn a_finish_is_done_until_it_is_seen(cx: &mut TestAppContext) {
     finish(1);
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let finished = view.thread_row(threads[1], cx);
+        let finished = view.thread_row(keyed(view, threads[1], cx), cx);
         assert_eq!(finished.status, nav::RowStatus::Done, "off the screen");
         assert_eq!(finished.tail, nav::NavTail::Done);
         assert_eq!(
@@ -186,13 +186,13 @@ fn a_finish_is_done_until_it_is_seen(cx: &mut TestAppContext) {
             ferrite_ui::theme::INK_SUBTLE,
             "a dim check, never ochre"
         );
-        assert_eq!(view.thread_row(threads[0], cx).status, nav::RowStatus::Idle);
+        assert_eq!(view.thread_row(keyed(view, threads[0], cx), cx).status, nav::RowStatus::Idle);
     });
 
     view.update(cx, |view, cx| view.land_on_thread(threads[1], cx));
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let read = view.thread_row(threads[1], cx);
+        let read = view.thread_row(keyed(view, threads[1], cx), cx);
         assert_eq!(read.status, nav::RowStatus::Idle, "seen on its Pane");
         assert_ne!(read.tail, nav::NavTail::Done);
     });
@@ -203,7 +203,7 @@ fn a_finish_is_done_until_it_is_seen(cx: &mut TestAppContext) {
     finish(1);
     tick(cx);
     let status = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| view.thread_row(threads[1], cx).status)
+        view.read_with(cx, |view, cx| view.thread_row(keyed(view, threads[1], cx), cx).status)
     };
     assert_eq!(
         status(&view, cx),
@@ -231,7 +231,7 @@ fn a_window_opened_unfocused_sees_nothing_until_focused(cx: &mut TestAppContext)
     tick(cx);
     let status = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
-            view.thread_row(view.cockpit.read(cx).threads()[0], cx).status
+            view.thread_row(keyed(view, view.cockpit.read(cx).threads()[0], cx), cx).status
         })
     };
     assert_eq!(status(&view, cx), nav::RowStatus::Done, "not yet seen");
@@ -713,7 +713,10 @@ fn inbox_tracks_open_threads_independently_of_notices(cx: &mut TestAppContext) {
     });
     tick(cx);
     assert_eq!(inbox(cx).len(), 2, "reading and leaving is not finishing");
-    view.update(cx, |view, cx| view.park_listed(&threads, cx));
+    view.update(cx, |view, cx| {
+        let keys: Vec<ThreadKey> = threads.iter().map(|thread| keyed(view, *thread, cx)).collect();
+        view.park_listed(&keys, cx)
+    });
     tick(cx);
     assert!(inbox(cx).is_empty(), "Park finishes handling");
 }
@@ -775,7 +778,7 @@ fn the_keyboard_parks_the_cursors_card_and_the_cursor_follows_it(cx: &mut TestAp
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
     let active: Vec<ThreadId> = view.read_with(cx, |view, cx| {
-        view.nav_state(cx).active.iter().map(|row| row.thread).collect()
+        view.nav_state(cx).active.iter().map(|row| row.key.thread()).collect()
     });
     assert_eq!(active.len(), 3);
     cx.simulate_keystrokes("cmd-i down cmd-w");
@@ -785,7 +788,7 @@ fn the_keyboard_parks_the_cursors_card_and_the_cursor_follows_it(cx: &mut TestAp
         assert_eq!(view.needs_you_rows(cx).len(), 2);
         assert_eq!(
             view.nav_view.read(cx).cursor.as_ref().map(|cursor| cursor.item),
-            Some(nav::NavItem::Thread(active[1])),
+            Some(nav::NavItem::Thread(keyed(view, active[1], cx))),
             "the cursor follows its Thread into the Parked shelf"
         );
     });
@@ -1080,8 +1083,9 @@ fn custom_snooze_keeps_invalid_input_and_closes_when_leaving_inbox(cx: &mut Test
     tick(cx);
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
+            let key = keyed(view, thread, cx);
             view.nav_view
-                .update(cx, |nav, cx| nav.edit_snooze(thread, window, cx))
+                .update(cx, |nav, cx| nav.edit_snooze(key, window, cx))
         })
     });
     tick(cx);
@@ -1108,8 +1112,9 @@ fn custom_snooze_keeps_invalid_input_and_closes_when_leaving_inbox(cx: &mut Test
     assert!(view.read_with(cx, |view, cx| view.nav_view.read(cx).snooze.is_none()));
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
+            let key = keyed(view, thread, cx);
             view.nav_view
-                .update(cx, |nav, cx| nav.edit_snooze(thread, window, cx))
+                .update(cx, |nav, cx| nav.edit_snooze(key, window, cx))
         })
     });
     tick(cx);

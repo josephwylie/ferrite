@@ -44,7 +44,7 @@ impl NavView {
                 .pinned
                 .iter()
                 .chain(&state.active)
-                .map(|row| NavCursor::thread(row.thread)),
+                .map(|row| NavCursor::thread(row.key)),
         );
         for shelf in SHELVES {
             if state.shelf(shelf).is_empty() {
@@ -54,7 +54,7 @@ impl NavView {
             items.extend(
                 self.shelf_rows(inputs, shelf)
                     .into_iter()
-                    .map(|row| NavCursor::thread(row.thread)),
+                    .map(|row| NavCursor::thread(row.key)),
             );
         }
         items
@@ -200,7 +200,7 @@ impl NavView {
                     return;
                 };
                 let Some(shelf) = SHELVES.into_iter().find(|shelf| {
-                    inputs.state.shelf(*shelf).iter().any(|row| row.thread == thread)
+                    inputs.state.shelf(*shelf).iter().any(|row| row.key == thread)
                 }) else {
                     return;
                 };
@@ -319,7 +319,7 @@ impl NavView {
     /// (a focus move from the board, the palette, a toast), a scroll that
     /// shows it whole (#231).
     pub(super) fn shown_reveal(&self, row: &nav::ThreadRow) -> Option<impl IntoElement> {
-        let thread = row.thread;
+        let thread = row.key;
         let shown = self.shown.clone();
         let scroll = self.scroll.clone();
         (row.selected && shown.get() != Some(thread)).then(move || {
@@ -341,7 +341,9 @@ impl CockpitView {
     /// ⌘⇧E: the list takes the keyboard, its cursor on the row the board
     /// shows (else the first card).
     pub(super) fn focus_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let shown = self.focused_thread(cx);
+        let shown = self
+            .focused_thread(cx)
+            .map(|thread| self.cockpit.read(cx).thread_key(thread));
         let nav = self.nav_view.read(cx);
         let start = nav.inputs().and_then(|inputs| {
             nav.items(inputs)
@@ -376,9 +378,9 @@ impl CockpitView {
     /// the cursor stays on it, now in the Parked shelf.
     pub(super) fn park_nav_cursor(&mut self, cx: &mut Context<Self>) {
         let cursor = self.nav_view.read(cx).cursor.as_ref().map(|cursor| cursor.item);
-        if let Some(NavItem::Thread(thread)) = cursor {
-            if self.cockpit.read(cx).thread(thread).is_some() {
-                self.park_listed(&[thread], cx);
+        if let Some(NavItem::Thread(key)) = cursor {
+            if self.cockpit.read(cx).thread(key.thread()).is_some() {
+                self.park_listed(&[key], cx);
             }
         }
     }
@@ -393,7 +395,7 @@ impl CockpitView {
             .unwrap_or_default()
             .into_iter()
             .filter_map(|cursor| match cursor.item {
-                NavItem::Thread(thread) => Some(thread),
+                NavItem::Thread(key) => Some(key.thread()),
                 NavItem::Shelf(_) => None,
             })
             .filter(|thread| self.pane_for(*thread).is_some())
@@ -434,7 +436,8 @@ impl CockpitView {
 
     /// A Thread row's press, and ⏎ on it: an open Thread takes the screen;
     /// a parked one revives.
-    pub(super) fn open_nav_row(&mut self, thread: ThreadId, cx: &mut Context<Self>) -> bool {
+    pub(super) fn open_nav_row(&mut self, key: ThreadKey, cx: &mut Context<Self>) -> bool {
+        let thread = key.thread();
         if self.pane_for(thread).is_some() {
             self.focus_thread(thread, cx);
             true

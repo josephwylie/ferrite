@@ -25,7 +25,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::{PrState, PullRequest};
-use ferrite_core::ThreadId;
+use ferrite_core::ThreadKey;
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, App, Div, FontWeight, Hsla, SharedString, Stateful, Window,
@@ -367,8 +367,8 @@ pub(crate) fn card_hover(
 
 /// The blend key a Thread's row's hover reads, its card's or its slim
 /// row's (`NavCursor::thread` mirrors it).
-pub(crate) fn card_key(thread: ThreadId) -> SharedString {
-    format!("nav-thread-{}", thread.get()).into()
+pub(crate) fn card_key(thread: ThreadKey) -> SharedString {
+    format!("nav-thread-{}", thread.thread().get()).into()
 }
 
 /// What the cockpit wires into a card.
@@ -407,12 +407,12 @@ pub fn ghost_card(row: &ThreadRow, measure: &Measure) -> Stateful<Div> {
 
 /// `debug_selector(name-thread)` on a live card's part; nothing on a
 /// ghost's.
-fn tag<E: Styled>(element: E, live: bool, name: &'static str, thread: ThreadId) -> E
+fn tag<E: Styled>(element: E, live: bool, name: &'static str, thread: ThreadKey) -> E
 where
     E: gpui::InteractiveElement,
 {
     if live {
-        element.debug_selector(move || format!("{name}-{}", thread.get()))
+        element.debug_selector(move || format!("{name}-{}", thread.thread().get()))
     } else {
         element
     }
@@ -426,7 +426,7 @@ fn card(
     measure: &Measure,
     live: bool,
 ) -> Stateful<Div> {
-    let thread = row.thread;
+    let thread = row.key;
     let key = card_key(thread);
     let active = row.selected;
     let hover = if live { motion::hover_t(&key) } else { 0.0 };
@@ -583,8 +583,8 @@ fn card(
                     None => format!("Worktree: {path}"),
                 };
                 div()
-                    .id(("nav-card-worktree", thread.get() as usize))
-                    .debug_selector(move || format!("nav-card-worktree-{}", thread.get()))
+                    .id(("nav-card-worktree", thread.thread().get() as usize))
+                    .debug_selector(move || format!("nav-card-worktree-{}", thread.thread().get()))
                     .flex_shrink_0()
                     .nav_tooltip(tip)
                     .child(glyph)
@@ -614,11 +614,11 @@ fn card(
     });
     let frame = if live {
         div()
-            .id(("nav-thread", thread.get() as usize))
-            .debug_selector(move || format!("nav-thread-{}", thread.get()))
+            .id(("nav-thread", thread.thread().get() as usize))
+            .debug_selector(move || format!("nav-thread-{}", thread.thread().get()))
             .on_hover(card_hover(key, row.dims_whole(), None))
     } else {
-        div().id(("nav-ghost", thread.get() as usize))
+        div().id(("nav-ghost", thread.thread().get() as usize))
     };
     frame
         .relative()
@@ -648,7 +648,7 @@ fn card(
 
 /// The status slot's label: its glyph, then its words in tabular
 /// figures, in the state's ink.
-fn status_face(thread: ThreadId, label: &StatusLabel, live: bool) -> Div {
+fn status_face(thread: ThreadKey, label: &StatusLabel, live: bool) -> Div {
     tag(div(), live, "nav-state", thread)
         .flex()
         .items_center()
@@ -683,12 +683,12 @@ fn provider_logo(provider: Provider) -> Div {
 
 /// The pin on line 1 of a pinned card; under the pointer it turns to
 /// `PinOff`, whose press (the cockpit's) unpins.
-pub fn pin_glyph(thread: ThreadId, hover_unpin: bool) -> Stateful<Div> {
-    let key = SharedString::from(format!("nav-card-pin-{}", thread.get()));
+pub fn pin_glyph(thread: ThreadKey, hover_unpin: bool) -> Stateful<Div> {
+    let key = SharedString::from(format!("nav-card-pin-{}", thread.thread().get()));
     let over = hover_unpin && hovered(&key);
     div()
         .id(key.clone())
-        .debug_selector(move || format!("nav-card-pin-{}", thread.get()))
+        .debug_selector(move || format!("nav-card-pin-{}", thread.thread().get()))
         .flex()
         .flex_shrink_0()
         .on_hover(motion::hover_snap(key))
@@ -726,27 +726,27 @@ fn strip_button(key: SharedString, selector: String) -> Stateful<Div> {
 
 /// The strip's Snooze: a 12px clock, the face of the button that opens
 /// its menu.
-pub fn snooze_button(thread: ThreadId) -> Stateful<Div> {
-    let key = SharedString::from(format!("nav-card-snooze-{}", thread.get()));
+pub fn snooze_button(thread: ThreadKey) -> Stateful<Div> {
+    let key = SharedString::from(format!("nav-card-snooze-{}", thread.thread().get()));
     let ink = if hovered(&key) {
         INK_STRONG
     } else {
         INK_SUBTLE
     };
-    strip_button(key, format!("nav-card-snooze-{}", thread.get()))
+    strip_button(key, format!("nav-card-snooze-{}", thread.thread().get()))
         .child(icon(icons::CLOCK, NAV_SNOOZE_GLYPH, ink))
 }
 
 /// The strip's Park: a 14px check and the word, which meets the card's
 /// right padding. The cockpit parks.
-pub fn park_button(thread: ThreadId) -> Stateful<Div> {
-    let key = SharedString::from(format!("nav-card-park-{}", thread.get()));
+pub fn park_button(thread: ThreadKey) -> Stateful<Div> {
+    let key = SharedString::from(format!("nav-card-park-{}", thread.thread().get()));
     let ink = if hovered(&key) {
         INK_STRONG
     } else {
         INK_SUBTLE
     };
-    strip_button(key, format!("nav-card-park-{}", thread.get()))
+    strip_button(key, format!("nav-card-park-{}", thread.thread().get()))
         .gap(px(SPACE_1))
         .mr(px(-NAV_PARK_PULL))
         .nav_tooltip("Park thread")
@@ -784,13 +784,13 @@ pub fn strip_w(snooze: bool, measure: &Measure) -> f32 {
 /// The PR chip on line 3: the state's glyph in its tint, then the number
 /// (no `#`), underlined under the pointer. Its hover popover names the PR
 /// and opens it in the browser. The cockpit wires the chip's press.
-pub fn pr_chip(thread: ThreadId, pr: &NavPr) -> Stateful<Div> {
-    let key = SharedString::from(format!("nav-card-pr-{}", thread.get()));
+pub fn pr_chip(thread: ThreadKey, pr: &NavPr) -> Stateful<Div> {
+    let key = SharedString::from(format!("nav-card-pr-{}", thread.thread().get()));
     let over = hovered(&key);
     let popover = pr.clone();
     div()
         .id(key.clone())
-        .debug_selector(move || format!("nav-card-pr-{}", thread.get()))
+        .debug_selector(move || format!("nav-card-pr-{}", thread.thread().get()))
         .flex()
         .flex_shrink_0()
         .items_center()

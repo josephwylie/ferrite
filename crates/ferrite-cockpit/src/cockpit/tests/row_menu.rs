@@ -5,7 +5,7 @@
 use super::*;
 
 fn labels(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> Vec<String> {
-    view.context_rows(MenuTarget::Thread(thread), cx)
+    view.context_rows(MenuTarget::Thread(keyed(view, thread, cx)), cx)
         .into_iter()
         .flatten()
         .map(|(item, _)| item.label.to_string())
@@ -41,7 +41,7 @@ fn the_row_menu_reads_in_claudes_order(cx: &mut TestAppContext) {
                 "Delete thread",
             ]
         );
-        let rows = view.context_rows(MenuTarget::Thread(thread), cx);
+        let rows = view.context_rows(MenuTarget::Thread(keyed(view, thread, cx)), cx);
         assert!(rows[1].is_none(), "a rule under `Open in`");
         assert!(rows
             .windows(2)
@@ -67,7 +67,7 @@ fn open_in_opens_its_submenu_beside_the_menu(cx: &mut TestAppContext) {
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
         view.open_context_menu(
-            MenuTarget::Thread(thread),
+            MenuTarget::Thread(keyed(view, thread, cx)),
             gpui::point(px(300.), px(200.)),
             cx,
         )
@@ -123,7 +123,7 @@ fn a_closed_menu_fades_out_and_takes_no_input(cx: &mut TestAppContext) {
     let open = |cx: &mut gpui::VisualTestContext| {
         view.update(cx, |view, cx| {
             view.open_context_menu(
-                MenuTarget::Thread(thread),
+                MenuTarget::Thread(keyed(view, thread, cx)),
                 gpui::point(px(300.), px(200.)),
                 cx,
             )
@@ -178,7 +178,7 @@ fn the_row_menu_is_walked_with_the_arrow_keys(cx: &mut TestAppContext) {
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(300.), px(200.)), cx)
+        view.open_context_menu(MenuTarget::Thread(keyed(view, thread, cx)), gpui::point(px(300.), px(200.)), cx)
     });
     tick(cx);
     let cursor = |cx: &mut gpui::VisualTestContext| {
@@ -218,7 +218,7 @@ fn the_row_menu_is_walked_with_the_arrow_keys(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(cursor(cx), None, "enter pressed the row and closed the menu");
     view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(300.), px(200.)), cx)
+        view.open_context_menu(MenuTarget::Thread(keyed(view, thread, cx)), gpui::point(px(300.), px(200.)), cx)
     });
     tick(cx);
     cx.simulate_keystrokes("down escape");
@@ -239,7 +239,7 @@ fn an_open_menu_joins_the_root_context_and_global_chords_still_act(cx: &mut Test
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(300.), px(200.)), cx)
+        view.open_context_menu(MenuTarget::Thread(keyed(view, thread, cx)), gpui::point(px(300.), px(200.)), cx)
     });
     tick(cx);
     let root = cx.update(|window, _| window.context_stack());
@@ -278,7 +278,7 @@ fn a_menu_from_a_button_stays_in_the_window(cx: &mut TestAppContext) {
         let button =
             gpui::Bounds::new(gpui::point(px(300.), px(top)), gpui::size(px(24.), px(24.)));
         view.update(cx, |view, cx| {
-            view.open_context_menu_under(MenuTarget::Thread(thread), button, cx)
+            view.open_context_menu_under(MenuTarget::Thread(keyed(view, thread, cx)), button, cx)
         });
         tick(cx);
         let menu = cx.debug_bounds("context-menu").expect("the menu");
@@ -352,7 +352,7 @@ fn mark_as_unread_brings_back_a_read_threads_notice(cx: &mut TestAppContext) {
     assert!(
         row_of(
             &view.read_with(cx, |view, cx| view
-                .context_rows(MenuTarget::Thread(threads[2]), cx)),
+                .context_rows(MenuTarget::Thread(keyed(view, threads[2], cx)), cx)),
             MenuVerb::MarkUnread
         )
         .is_none(),
@@ -363,14 +363,14 @@ fn mark_as_unread_brings_back_a_read_threads_notice(cx: &mut TestAppContext) {
     let row = view.read_with(cx, |view, cx| {
         assert!(!view.cockpit.read(cx).notifications().attention(threads[2]), "read");
         row_of(
-            &view.context_rows(MenuTarget::Thread(threads[2]), cx),
+            &view.context_rows(MenuTarget::Thread(keyed(view, threads[2], cx)), cx),
             MenuVerb::MarkUnread,
         )
         .expect("offered once read")
     });
     view.update_in(cx, |view, window, cx| {
         view.open_context_menu(
-            MenuTarget::Thread(threads[2]),
+            MenuTarget::Thread(keyed(view, threads[2], cx)),
             gpui::point(px(10.), px(10.)),
             cx,
         );
@@ -394,7 +394,7 @@ fn copy_link_copies_the_cli_form(cx: &mut TestAppContext) {
     tick(cx);
     view.update_in(cx, |view, window, cx| {
         view.run_menu_verb(
-            MenuTarget::Thread(threads[2]),
+            MenuTarget::Thread(keyed(view, threads[2], cx)),
             MenuVerb::CopyLink,
             window,
             cx,

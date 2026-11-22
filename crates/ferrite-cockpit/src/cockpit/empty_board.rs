@@ -312,7 +312,7 @@ impl Render for EmptyBoardView {
 
         let any_recent = !recent.is_empty();
         let recent_rows = recent.into_iter().map(|RecentRow { row, age, open }| {
-            let thread = row.thread;
+            let thread = row.key.thread();
             home_row(
                 ("empty-board-recent", thread.get() as usize),
                 nav::mark(row.status, false),
@@ -439,7 +439,7 @@ impl CockpitView {
         let recent = recent
             .into_iter()
             .map(|thread| RecentRow {
-                row: self.thread_row(thread, cx),
+                row: self.thread_row(self.cockpit.read(cx).thread_key(thread), cx),
                 age: self
                     .facts
                     .last_used(thread)

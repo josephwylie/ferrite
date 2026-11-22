@@ -14,13 +14,14 @@ impl CockpitView {
     /// Park each of `threads` (reversible: the Parked shelf holds them,
     /// and ⌘Z takes it back while the foot's notice stands). A Thread that
     /// would not park is named and stays picked; Undo holds only the rest.
-    pub(super) fn park_listed(&mut self, threads: &[ThreadId], cx: &mut Context<Self>) {
+    pub(super) fn park_listed(&mut self, keys: &[ThreadKey], cx: &mut Context<Self>) {
         let mut parked = Vec::new();
         let mut outcomes = Vec::new();
-        for &thread in threads {
+        for &key in keys {
+            let thread = key.thread();
             let result = self.cockpit.update(cx, |cockpit, _| cockpit.park_thread(thread).map_err(|e| e.to_string()));
             if result.is_ok() {
-                parked.push(thread);
+                parked.push(key);
             }
             outcomes.push(Outcome { thread, result });
         }
@@ -54,13 +55,13 @@ impl CockpitView {
     }
 
     /// ⌘Z on a Park: the Threads revive, last parked first.
-    pub(super) fn undo_parked(&mut self, parked: Vec<ThreadId>, cx: &mut Context<Self>) {
+    pub(super) fn undo_parked(&mut self, parked: Vec<ThreadKey>, cx: &mut Context<Self>) {
         let outcomes: Vec<Outcome> = parked
             .into_iter()
             .rev()
-            .map(|thread| Outcome {
-                thread,
-                result: self.try_revive(thread, cx).map_err(|e| e.to_string()),
+            .map(|key| Outcome {
+                thread: key.thread(),
+                result: self.try_revive(key.thread(), cx).map_err(|e| e.to_string()),
             })
             .collect();
         self.report_failures("undo", &outcomes);

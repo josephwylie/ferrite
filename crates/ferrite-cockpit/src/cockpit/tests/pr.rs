@@ -95,7 +95,7 @@ fn the_menu_and_the_palette_offer_the_pr_actions(cx: &mut TestAppContext) {
     tick(cx);
     let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     let menu = |view: &CockpitView, cx: &gpui::App| -> Vec<String> {
-        view.context_rows(MenuTarget::Thread(thread), cx)
+        view.context_rows(MenuTarget::Thread(keyed(view, thread, cx)), cx)
             .into_iter()
             .flatten()
             .map(|(item, _)| item.label.to_string())
@@ -127,7 +127,7 @@ fn the_menu_and_the_palette_offer_the_pr_actions(cx: &mut TestAppContext) {
     asked(&view, cx);
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
-            view.run_menu_verb(MenuTarget::Thread(thread), MenuVerb::RefreshPr, window, cx)
+            view.run_menu_verb(MenuTarget::Thread(keyed(view, thread, cx)), MenuVerb::RefreshPr, window, cx)
         })
     });
     assert_eq!(asked(&view, cx), [(thread, true)]);

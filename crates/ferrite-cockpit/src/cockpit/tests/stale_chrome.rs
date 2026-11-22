@@ -117,19 +117,20 @@ fn a_finish_while_the_window_is_away_is_drawn_done_until_it_returns(cx: &mut Tes
     tick(b.cx);
     frames(b.cx, 300);
     assert!(b.pane(0).unread, "the Pane draws it done");
+    let row = keyed_in(&b.view, b.threads[0], b.cx);
     assert!(
-        drawn::row(b.threads[0]).starts_with("Done "),
+        drawn::row(row).starts_with("Done "),
         "and its nav row: {}",
-        drawn::row(b.threads[0])
+        drawn::row(row)
     );
     b.cx.update(|window, _| window.activate_window());
     tick(b.cx);
     frames(b.cx, 300);
     assert!(!b.pane(0).unread, "seen: the Pane redraws it read");
     assert!(
-        drawn::row(b.threads[0]).starts_with("Idle "),
+        drawn::row(row).starts_with("Idle "),
         "and so does its nav row: {}",
-        drawn::row(b.threads[0])
+        drawn::row(row)
     );
 }
 

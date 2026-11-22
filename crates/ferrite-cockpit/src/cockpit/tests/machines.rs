@@ -203,7 +203,10 @@ fn a_pin_made_on_a_machine_saves_that_machine(cx: &mut TestAppContext) {
     let (root, cx) = machine_window(cx, core, machines);
     tick(cx);
     let view = shown(&root, cx);
-    view.update(cx, |view, cx| view.set_pinned(ThreadId::new(1), true, cx));
+    view.update(cx, |view, cx| {
+        let key = keyed(view, ThreadId::new(1), cx);
+        view.set_pinned(key, true, cx)
+    });
     view.read_with(cx, |view, _| {
         assert_eq!(
             serde_json::to_value(&view.prefs.settings).unwrap()["pinned_threads"],
