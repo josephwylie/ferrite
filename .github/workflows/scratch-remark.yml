@@ -1,0 +1,14 @@
+name: scratch-remark
+on:
+  pull_request:
+    types: [synchronize]
+permissions:
+  pull-requests: write
+jobs:
+  remark:
+    if: startsWith(github.head_ref, 'verify/pr-watch-')
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh pr comment ${{ github.event.pull_request.number }} -R ${{ github.repository }} --body "Scratch remark from the Actions bot for a watch check."
+        env:
+          GH_TOKEN: ${{ github.token }}
