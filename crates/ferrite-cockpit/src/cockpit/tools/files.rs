@@ -249,7 +249,7 @@ pub(crate) struct FilesView {
     /// Files whose Thread is gone, kept while a buffer holds an edit the
     /// disk does not have: auto save still writes it, a quit still flushes
     /// it, and leaving still names it.
-    orphaned: Vec<Files>,
+    orphaned: Vec<(ThreadKey, Files)>,
 }
 
 /// What Files draws from, as the Cockpit has it this frame.
@@ -314,7 +314,7 @@ impl CockpitView {
     }
 
     /// The Files state for `thread`, made the first time it is asked for:
-    /// in the Thread's checkout, on the window's machine, with the tabs and
+    /// in the Thread's checkout, on its machine, with the tabs and
     /// settings it was left with.
     pub(in crate::cockpit) fn ensure_files(&self, thread: ThreadKey, cx: &mut Context<Self>) {
         if self.files.read(cx).holds(thread) {
@@ -363,16 +363,23 @@ impl CockpitView {
         self.elsewhere(thread.machine(), cx) || self.files.read(cx).is_remote(thread)
     }
 
-    pub(crate) fn files_leave_error(&self, cx: &gpui::App) -> Option<&'static str> {
+    /// Why the window cannot let `machine` go now: edited files of its
+    /// Threads that letting it go would lose.
+    pub(crate) fn files_leave_error(
+        &self,
+        machine: ferrite_core::MachineId,
+        cx: &gpui::App,
+    ) -> Option<&'static str> {
         self.files
             .read(cx)
-            .unsaved_at_leaving(cx)
-            .map(|_| "Save or close edited files before switching environments.")
+            .unsaved_at_leaving(machine, cx)
+            .map(|_| "Save or close edited files before turning this environment off.")
     }
 
     /// The Panel's stored working sets take the live Files' tabs and
     /// settings, for files.json, each as its Thread's machine's saved name
-    /// says: the machine on screen's Thread list prunes only its own sets.
+    /// says. Each machine's Thread list prunes only its own sets, and only
+    /// once its Server has said which Threads it has (F-A5).
     pub(in crate::cockpit) fn sync_working_sets(&mut self, cx: &gpui::App) {
         let cockpit = self.cockpit.read(cx);
         let live = self
@@ -383,17 +390,18 @@ impl CockpitView {
         if !self.panel.working_sets.sync(live) {
             return;
         }
-        let here = cockpit.on_screen();
-        let Some(machine) = cockpit.saved_as(here) else {
-            return;
-        };
-        let known = cockpit
-            .known_threads()
-            .into_iter()
-            .filter(|key| key.machine() == here)
-            .map(|key| key.thread())
-            .collect();
-        self.panel.working_sets.retain(machine, &known);
+        let known = cockpit.known_threads();
+        for machine in cockpit.machines().filter(|machine| cockpit.heard(*machine)) {
+            let Some(saved_as) = cockpit.saved_as(machine) else {
+                continue;
+            };
+            let threads = known
+                .iter()
+                .filter(|key| key.machine() == machine)
+                .map(|key| key.thread())
+                .collect();
+            self.panel.working_sets.retain(saved_as, &threads);
+        }
     }
 
     /// Every way a file reaches the right pane: a file opened in a Pane's
@@ -526,8 +534,9 @@ impl FilesView {
         self.files_ref(thread).is_some_and(|files| files.remote.is_some())
     }
 
-    /// `thread`'s Files, rooted at its checkout `root`, on `machine` when
-    /// the window is on one, with the tabs and settings `stored` kept.
+    /// `thread`'s Files, rooted at its checkout `root`, read through
+    /// `machine` when its Thread is on another machine, with the tabs and
+    /// settings `stored` kept.
     fn make(
         &mut self,
         thread: ThreadKey,
@@ -536,7 +545,9 @@ impl FilesView {
         stored: Option<WorkingSet>,
         cx: &mut Context<Self>,
     ) {
-        let remote = machine.map(|machine| RemoteFiles::new(root.clone(), self.cockpit.clone(), machine));
+        let remote = machine.map(|bridge| {
+            RemoteFiles::new(root.clone(), self.cockpit.clone(), thread.machine(), bridge)
+        });
         let filter = cx.new(|cx| {
             let mut field = Composer::new(cx);
             field.set_role(Role::Field(Some(FILTER_CONTEXT)), cx);
@@ -937,16 +948,19 @@ impl FilesView {
         self.threads.values().any(|files| files.tab_scroll.running(cx))
     }
 
-    /// Every Files, a gone Thread's included.
-    fn every_files(&self) -> impl Iterator<Item = &Files> {
-        self.threads.values().chain(&self.orphaned)
+    /// Every Files and its Thread, a gone Thread's included.
+    fn every_files(&self) -> impl Iterator<Item = (ThreadKey, &Files)> {
+        self.threads
+            .iter()
+            .chain(self.orphaned.iter().map(|(thread, files)| (thread, files)))
+            .map(|(thread, files)| (*thread, files))
     }
 
     /// A quit's last chance for text auto save has not yet written.
     pub(in crate::cockpit) fn flush_for_quit(&mut self, cx: &mut Context<Self>) {
         let editors: Vec<_> = self
             .every_files()
-            .flat_map(|files| files.tabs.iter())
+            .flat_map(|(_, files)| files.tabs.iter())
             .filter_map(|tab| match &tab.body {
                 TabBody::Code(editor) => Some(editor.clone()),
                 TabBody::Unshown(_) => None,
@@ -957,11 +971,17 @@ impl FilesView {
         }
     }
 
-    /// How many open buffers leaving would lose, or `None` when none.
-    pub(in crate::cockpit) fn unsaved_at_leaving(&self, cx: &gpui::App) -> Option<usize> {
+    /// How many of `machine`'s Threads' buffers hold edits that letting
+    /// the machine go (or leaving) would lose, or `None` when none.
+    pub(in crate::cockpit) fn unsaved_at_leaving(
+        &self,
+        machine: ferrite_core::MachineId,
+        cx: &gpui::App,
+    ) -> Option<usize> {
         let lost = self
             .every_files()
-            .flat_map(|files| files.tabs.iter())
+            .filter(|(thread, _)| thread.machine() == machine)
+            .flat_map(|(_, files)| files.tabs.iter())
             .filter(|tab| match &tab.body {
                 TabBody::Code(editor) => editor.read(cx).lost_by_leaving(),
                 TabBody::Unshown(_) => false,
@@ -999,9 +1019,9 @@ impl FilesView {
     pub(in crate::cockpit) fn forget(&mut self, keep: impl Fn(ThreadKey) -> bool, cx: &gpui::App) {
         let gone: Vec<ThreadKey> = self.threads.keys().copied().filter(|&thread| !keep(thread)).collect();
         for thread in gone {
-            self.orphaned.extend(self.threads.remove(&thread));
+            self.orphaned.extend(self.threads.remove(&thread).map(|files| (thread, files)));
         }
-        self.orphaned.retain(|files| files.holds_edits(cx));
+        self.orphaned.retain(|(_, files)| files.holds_edits(cx));
     }
 
     /// ⌘P: the tree's filter takes the keyboard.

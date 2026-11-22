@@ -20,7 +20,7 @@ use ferrite_core::cockpit::{Cockpit, ProviderChoice};
 use ferrite_core::settings::Settings;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::transcript::{Body, ToolState};
-use ferrite_core::workspace::registry::ProjectId;
+use ferrite_core::ProjectKey;
 use ferrite_core::ThreadKey;
 use gpui::{
     Context, Focusable as _, Modifiers, MouseButton, MouseMoveEvent, PlatformInput, Point, Window,
@@ -289,10 +289,10 @@ pub fn capture(output: String) {
     )
     .expect("open the throwaway registry");
     core.set_suggestions_enabled(false);
+    let here = core.this_computer().expect("this computer");
     let project = core
-        .register_project(&repo)
-        .expect("register the throwaway repo")
-        .project();
+        .register_project(here, &repo)
+        .expect("register the throwaway repo");
 
     let cx = crate::headless::app(ferrite_ui::keymap::bindings(
         ferrite_ui::keymap::PLATFORM,
@@ -353,7 +353,7 @@ pub fn capture(output: String) {
 /// throwaway repo's checkout.
 fn aim_draft(
     live: &mut Live,
-    project: ProjectId,
+    project: ProjectKey,
     provider: Provider,
     model: &str,
     effort: Option<&str>,
@@ -361,7 +361,7 @@ fn aim_draft(
     let model = model.to_string();
     let effort = effort.map(str::to_string);
     live.act(move |view, _, cx| {
-        let announced = view.cockpit.read(cx).announced_models(provider);
+        let announced = view.cockpit.read(cx).announced_models(project.machine(), provider);
         if let Some(draft) = view.focused_draft_mut(cx) {
             draft.binding.choose_checkout(project);
             draft.binding.choose_provider(
@@ -488,7 +488,7 @@ fn focus_thread(live: &mut Live, thread: ThreadKey) {
 
 fn scenario(
     live: &mut Live,
-    project: ProjectId,
+    project: ProjectKey,
     claude_model: &str,
     codex_model: &str,
     codex_effort: &str,

@@ -328,7 +328,13 @@ impl CockpitView {
             draft: workflow.draft.clone(),
             models: Provider::ALL
                 .into_iter()
-                .map(|provider| (provider, self.cockpit.read(cx).model_catalog(provider)))
+                .map(|provider| {
+                    let catalog = self
+                        .factory_machine()
+                        .map(|machine| self.cockpit.read(cx).model_catalog(machine, provider))
+                        .unwrap_or_default();
+                    (provider, catalog)
+                })
                 .collect(),
             installed: provider
                 .and_then(|provider| view.skills.installed(provider))

@@ -42,7 +42,7 @@ mod sections;
 mod strip;
 pub(in crate::cockpit) mod controls;
 
-use super::surfaces::{Close, CloseSelection, PrTab, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
+use super::surfaces::{Close, CloseSelection, PrTab, Rehold, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
 use ferrite_ui::icons::{self, icon};
 use super::*;
 
@@ -101,23 +101,32 @@ impl Panel {
         Self::with_storage(surfaces, super::tools::WorkingSets::load(dir), Default::default())
     }
 
-    /// Hold the Panels of the machine on screen, as its saved files name
-    /// it: fixed when `cockpit` attached it (F-A8), never as `Machines`
-    /// has one selected now, which a swap moves first.
-    pub(crate) fn hold(&mut self, cockpit: &Cockpit) {
-        let here = cockpit.saved_as(cockpit.on_screen()).cloned();
-        let here = here.unwrap_or(ferrite_core::MachineKey(None));
-        self.surfaces.hold(here, |saved| cockpit.resolve(saved));
-    }
-
-    fn successor(&mut self) -> Self {
-        let mut surfaces = std::mem::take(&mut self.surfaces);
-        surfaces.leave();
-        Self::with_storage(
-            surfaces,
-            std::mem::take(&mut self.working_sets),
-            std::mem::replace(&mut self.persistence, persistence::Persistence::retired()),
-        )
+    /// Hold the Panels of every machine `cockpit` holds, as its saved
+    /// files name it (F-A8), and put away those of every machine it let go.
+    /// The machines it holds again, for what else the window keeps by
+    /// their Threads' keys.
+    #[must_use]
+    pub(crate) fn hold(&mut self, cockpit: &Cockpit) -> Vec<Rehold> {
+        let gone: Vec<ferrite_core::MachineId> = self
+            .surfaces
+            .machines()
+            .filter(|machine| !cockpit.machines().any(|held| held == *machine))
+            .collect();
+        for machine in gone {
+            self.surfaces.let_go(machine);
+        }
+        let mut reheld = Vec::new();
+        for machine in cockpit.machines() {
+            if self.surfaces.machines().any(|held| held == machine) {
+                continue;
+            }
+            let Some(saved_as) = cockpit.saved_as(machine).cloned() else {
+                continue;
+            };
+            let reading = cockpit.registry(machine);
+            reheld.extend(self.surfaces.hold(machine, saved_as, |thread| reading.key(thread)));
+        }
+        reheld
     }
 
     fn with_storage(
@@ -374,14 +383,19 @@ impl CockpitView {
         let cockpit = self.cockpit.read(cx);
         let known = cockpit.known_threads();
         // A machine whose Server has not said which Threads it has
-        // (`Cockpit::heard`) knows none: absence alone is no deletion then.
-        let heard: std::collections::HashSet<ferrite_core::MachineId> = known
+        // (`Cockpit::heard`) knows none: absence alone is no deletion then,
+        // and it loses nothing (F-A5). A machine the window let go keeps
+        // what it saved (`Panel::hold`), and the window forgets the rest.
+        let held: std::collections::HashSet<ferrite_core::MachineId> = cockpit.machines().collect();
+        let heard: std::collections::HashSet<ferrite_core::MachineId> = held
             .iter()
-            .map(|key| key.machine())
+            .copied()
             .filter(|machine| cockpit.heard(*machine))
             .collect();
         let keep = |key: ThreadKey| {
-            !deleted.contains(&key) && (!heard.contains(&key.machine()) || known.contains(&key))
+            !deleted.contains(&key)
+                && held.contains(&key.machine())
+                && (!heard.contains(&key.machine()) || known.contains(&key))
         };
         for (thread, tabs) in self.panel.surfaces.retain(keep) {
             // Releasing a side chat deletes its fork, a Thread of its own.
@@ -430,11 +444,6 @@ impl CockpitView {
                 .factory()
                 .map_or(0, |view| view.read(cx).archive.read(cx).held_for_test(thread))
             + usize::from(self.pr_reads.holds(thread))
-    }
-
-    pub(crate) fn successor_panel(&mut self, cx: &gpui::App) -> Panel {
-        self.sync_working_sets(cx);
-        self.panel.successor()
     }
 
     pub(super) fn pump_panel_persistence(&mut self, cx: &mut Context<Self>) {

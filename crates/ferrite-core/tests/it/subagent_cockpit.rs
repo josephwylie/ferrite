@@ -194,7 +194,7 @@ impl Harness {
             Box::new(control.clone()),
         );
         let thread = cockpit
-            .open(Provider::Codex, WorkspaceChoice::Main { checkout })
+            .open(cockpit.this_computer().unwrap(), Provider::Codex, WorkspaceChoice::Main { checkout })
             .unwrap();
         cockpit.pump();
         Self {

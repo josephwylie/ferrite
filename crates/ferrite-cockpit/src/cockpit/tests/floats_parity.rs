@@ -430,7 +430,7 @@ fn cmd_i_walks_the_list_requests_first(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.read(cx).notifications().unread_requests(),
+            view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).unread_requests(),
             2,
             "2 waiting; 3 unread completions never count"
         );
@@ -444,10 +444,7 @@ fn cmd_i_walks_the_list_requests_first(cx: &mut TestAppContext) {
         "in the nav: {list:?} / {column:?}"
     );
     let rows = view.read_with(cx, |view, cx| view.needs_you_rows(cx));
-    let keys: Vec<ThreadKey> = view.read_with(cx, |view, cx| {
-        let notices = view.cockpit.read(cx).notifications();
-        rows.iter().map(|row| notices.key(row.thread)).collect()
-    });
+    let keys: Vec<ThreadKey> = rows.iter().map(|row| row.thread).collect();
     assert_eq!(rows.len(), 6, "idle open Thread is also in Inbox");
     assert!(rows[0].request() && rows[1].request(), "requests first");
     assert_eq!(
@@ -607,14 +604,14 @@ fn palette_states<'a>(
     cx: &'a mut TestAppContext,
 ) -> (
     Entity<CockpitView>,
-    ProjectId,
+    ProjectKey,
     Vec<ThreadKey>,
     &'a mut gpui::VisualTestContext,
 ) {
     let (mut core, fake) = cockpit(name, 0);
-    let project = core.register_project(&here()).unwrap();
+    let project = core.register_project(core.first_machine(), &here()).unwrap();
     for _ in 0..3 {
-        core.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        core.open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
             .unwrap();
     }
     let mut threads = core.threads();
@@ -634,7 +631,7 @@ fn palette_states<'a>(
         .send(bash("perm_3", "cargo test"))
         .unwrap();
     tick(cx);
-    (view, project.project(), threads, cx)
+    (view, project, threads, cx)
 }
 
 /// The Threads the open palette shows, in order.

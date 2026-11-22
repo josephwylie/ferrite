@@ -53,9 +53,9 @@ Ferrite: `delegated_from` in `cockpit/details/lineage.rs`, from a
 `Delegator` (`cockpit/delegates.rs`): the parent's title as its machine
 says it now, else as it was sent, and its machine by its saved name, else
 the label its Server sent, never the nav's `local`. The press is
-`open_delegator`: the machine's status link says whether its Server still
-has the Thread (`ServerStatus::holds`), and the nav's notice says T3's
-words as a problem or a hint.
+`open_delegator`: the held machine says whether its Server still has the
+Thread (`Cockpit::holds`), and the nav's notice says T3's words as a
+problem or a hint.
 
 ## The parent's timeline row
 
@@ -102,9 +102,9 @@ children's titles as inline buttons, and `Open approval` (else `Open
 question`). Hidden while the parent itself waits on the user.
 
 Ferrite: `delegate_waiting_tail` (`cockpit/delegates.rs`) over
-`waiting_delegates`, which reads each machine's Notices and, off screen,
-its digests for nested Delegates, drawn with `pane::now_line`. Each press
-opens the Delegate's Thread at its request on its machine (`go_to_alert`).
+`waiting_delegates`, which reads each held machine's Notices and its
+digests for nested Delegates, drawn with `pane::now_line`. Each press opens
+the Delegate's Thread at its request, in place on its machine.
 
 ## Working while one is open
 

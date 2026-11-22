@@ -15,7 +15,7 @@ use super::workflows::{Pick, Trigger};
 use super::*;
 use ferrite_core::draft_content::DraftContent;
 use ferrite_core::factory::{Destination, Status, StepId, Task, TaskId, ThenReturn};
-use ferrite_core::workspace::registry::ProjectId;
+use ferrite_core::ProjectKey;
 use ferrite_pane::composer::{Composer, Role};
 use gpui::{App, WeakEntity};
 use std::rc::Rc;
@@ -71,7 +71,7 @@ impl KeptDirection {
 pub(crate) struct DirectView {
     cockpit: WeakEntity<CockpitView>,
     /// The Project whose Factory opened it: the sheet is that Factory's.
-    pub(super) project: ProjectId,
+    pub(super) project: ProjectKey,
     pub(super) task: TaskId,
     pub(super) choice: Choice,
     /// Its one text field, which holds the keyboard while it is up: the
@@ -99,7 +99,7 @@ impl EventEmitter<DirectEvent> for DirectView {}
 impl DirectView {
     fn new(
         cockpit: WeakEntity<CockpitView>,
-        project: ProjectId,
+        project: ProjectKey,
         task: TaskId,
         sheet: DirectSheet,
         kept: &mut KeptDirection,
@@ -477,13 +477,13 @@ impl CockpitView {
     /// now: none once that Factory no longer shows, or the Task left the
     /// board or runs no Workflow. It never reads the sheet: the sheet calls
     /// it while its own update is running.
-    pub(super) fn direct_inputs(&self, project: ProjectId, task: &str, cx: &App) -> Option<Task> {
+    pub(super) fn direct_inputs(&self, project: ProjectKey, task: &str, cx: &App) -> Option<Task> {
         if self.factory_project()? != project {
             return None;
         }
         self.cockpit
             .read(cx)
-            .factory()
+            .factory(project.machine())
             .task(task)
             .filter(|task| task.workflow.is_some())
             .cloned()

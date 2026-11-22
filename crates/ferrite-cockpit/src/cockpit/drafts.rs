@@ -19,6 +19,9 @@ pub(super) struct Unsent {
     saving: bool,
     /// The draft a walk through prompt history started from.
     walk: Option<Walk>,
+    /// The new Panes that went with a machine the window let go, kept to
+    /// reopen once it holds that machine again (`put_away_drafts`).
+    away: Vec<DraftId>,
 }
 
 /// History hands back as text the draft it was given, so the typed parts of
@@ -37,6 +40,7 @@ impl Unsent {
             drafts: Drafts::load(dir),
             saving: false,
             walk: None,
+            away: Vec::new(),
         }
     }
 
@@ -95,7 +99,12 @@ impl CockpitView {
                 self.unsent.drafts.keep_thread(thread, content)
             }
             (PaneIdentity::Draft(id), Some(draft)) => {
-                self.unsent.drafts.keep_fresh(id, &draft.binding, content)
+                let cockpit = self.cockpit.read(cx);
+                let Some(machine) = cockpit.saved_as(draft.binding.project().machine()) else {
+                    return false;
+                };
+                let binding = draft.binding.saved(machine.clone());
+                self.unsent.drafts.keep_fresh(id, &binding, content)
             }
             (PaneIdentity::Draft(_), None) => false,
         }
@@ -160,7 +169,8 @@ impl CockpitView {
 
     /// The launch's own Panes are up: reopen the new Panes the last launch
     /// left unsent, each aimed where it was, and leave the focus where the
-    /// launch put it.
+    /// launch put it. One whose machine the window does not hold has
+    /// nowhere to open.
     pub(super) fn reopen_unsent_drafts(&mut self, cx: &mut Context<Self>) {
         let kept = self.unsent.drafts.take_fresh();
         if kept.is_empty() {
@@ -168,19 +178,73 @@ impl CockpitView {
         }
         let focused = self.cockpit.read(cx).roster().focused();
         for fresh in kept {
-            let id = self.spawn_draft_pane(fresh.binding, cx);
-            if let Some(pane) = self
-                .panes
-                .iter()
-                .find(|pane| pane.identity.draft() == Some(id))
-            {
-                pane.composer
-                    .update(cx, |composer, cx| composer.load(fresh.content, cx));
-            }
+            // One whose machine the window does not hold is dropped.
+            let _ = self.reopen_draft(fresh, cx);
         }
         if let Some(focused) = focused {
             self.cockpit.update(cx, |cockpit, _| cockpit.focus(focused));
             self.sync_panes(cx);
+        }
+    }
+
+    /// A new Pane as `fresh` kept it, aimed where it was, when the window
+    /// holds that machine and Project: whether it did.
+    fn reopen_draft(&mut self, fresh: ferrite_core::drafts::FreshDraft, cx: &mut Context<Self>) -> bool {
+        let Some(project) = self
+            .cockpit
+            .read(cx)
+            .resolve_project(fresh.binding.machine(), fresh.binding.project())
+        else {
+            return false;
+        };
+        let id = self.spawn_draft_pane(fresh.binding.bind(project), cx);
+        if let Some(pane) = self
+            .panes
+            .iter()
+            .find(|pane| pane.identity.draft() == Some(id))
+        {
+            pane.composer
+                .update(cx, |composer, cx| composer.load(fresh.content, cx));
+        }
+        true
+    }
+
+    /// The window let go of `gone`: each new Pane aimed at one of their
+    /// Projects goes with its machine, as its Threads' Panes do, and is
+    /// no draft to re-aim or send. Its words stay kept under that machine
+    /// (the last `save_drafts` took them), to reopen when the window holds
+    /// it again.
+    pub(super) fn put_away_drafts(&mut self, gone: &[ferrite_core::MachineId], cx: &mut Context<Self>) {
+        let away: Vec<DraftId> = self
+            .panes
+            .iter()
+            .filter(|pane| {
+                pane.draft()
+                    .is_some_and(|draft| gone.contains(&draft.binding.project().machine()))
+            })
+            .filter_map(|pane| pane.identity.draft())
+            .collect();
+        for draft in away {
+            if let Err(error) = self.cockpit.update(cx, |cockpit, _| cockpit.discard_draft(draft)) {
+                ferrite_core::log!("draft {draft:?} did not close cleanly: {error}");
+            }
+            self.unsent.away.push(draft);
+        }
+    }
+
+    /// Machines let go are held again: each new Pane put away with one of
+    /// them reopens, its words as they were.
+    pub(super) fn reopen_put_away_drafts(&mut self, cx: &mut Context<Self>) {
+        for draft in std::mem::take(&mut self.unsent.away) {
+            // One that held no words has none to bring back.
+            let Some(fresh) = self.unsent.drafts.fresh(draft).cloned() else {
+                continue;
+            };
+            if self.reopen_draft(fresh, cx) {
+                self.unsent.drafts.discard_fresh(draft);
+            } else {
+                self.unsent.away.push(draft);
+            }
         }
     }
 

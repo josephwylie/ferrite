@@ -273,7 +273,7 @@ impl CockpitView {
             Some(Sheet::ProjectEditor(card)) => card
                 .read(cx)
                 .target
-                .is_some_and(|project| self.cockpit.read(cx).registry().project(project).is_none()),
+                .is_some_and(|project| self.cockpit.read(cx).project(project).is_none()),
             Some(Sheet::BackgroundDialog(dialog)) => {
                 self.cockpit.read(cx).thread(dialog.read(cx).thread).is_none()
             }

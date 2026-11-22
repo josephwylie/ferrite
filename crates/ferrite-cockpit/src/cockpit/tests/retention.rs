@@ -100,7 +100,7 @@ fn a_transcript_at_its_retention_cap_keeps_its_text_identity_as_it_streams(
     let store = Store::open(&dir).unwrap().with_activity_limits(limits);
     let mut core = Cockpit::new(store, Box::new(fake.clone()));
     let thread = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, thread);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -153,7 +153,7 @@ fn a_thread_past_its_cap_says_where_its_history_starts_and_copies_all_of_it(
     let store = Store::open(&dir).unwrap().with_activity_limits(limits);
     let mut core = Cockpit::new(store, Box::new(fake.clone()));
     let thread = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, thread);
     assert_eq!(core.send(thread, "the very first question".into()), ferrite_core::cockpit::Admission::Delivered);

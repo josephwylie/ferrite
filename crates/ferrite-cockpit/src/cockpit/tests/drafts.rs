@@ -150,7 +150,12 @@ fn a_new_pane_comes_back_with_its_words_and_binding(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         let pane = &view.panes[view.focused(cx)];
         assert_eq!(pane.composer.read(cx).text(), "> first thoughts");
-        assert_eq!(pane.draft().map(|draft| &draft.binding), Some(&binding));
+        // Each run keys this computer anew: the binding is the one saved,
+        // its Project this run's.
+        let here = ferrite_core::MachineKey(None);
+        let restored = pane.draft().map(|draft| &draft.binding).unwrap();
+        assert_eq!(restored.saved(here.clone()), binding.saved(here));
+        assert_eq!(Some(restored.project().machine()), view.cockpit.read(cx).this_computer());
     });
 }
 

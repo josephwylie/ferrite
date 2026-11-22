@@ -233,7 +233,7 @@ fn the_windows_are_alerted_on_the_four_task_events_and_not_between_steps() {
     ok(&harness, "task.stop", serde_json::json!({ "task": asked }));
 
     let status = |window: &ferrite_core::cockpit::Cockpit, task: &str| {
-        window.factory().task(task).map(|task| task.status)
+        window.factory(window.first_machine()).task(task).map(|task| task.status)
     };
     pump_until(&mut window, |window| {
         status(window, &shipped) == Some(Status::Completed)
@@ -467,7 +467,7 @@ fn a_workers_provider_decision_needs_the_operator_in_the_task_not_the_inbox() {
     let project_id: ferrite_core::workspace::registry::ProjectId =
         serde_json::from_value(serde_json::json!(project.parse::<u64>().unwrap())).unwrap();
     pump_until(&mut window, |window| {
-        window.factory().needs_you(project_id) == 1 && window.blocked().len() == 1
+        window.factory(window.first_machine()).needs_you(project_id) == 1 && window.blocked().len() == 1
     });
     assert!(window.needs_you().is_empty(), "never in the Inbox");
     pump_until_asked(&mut window, |asked| {

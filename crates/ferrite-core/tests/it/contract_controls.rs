@@ -106,6 +106,7 @@ fn exercise_model_control(reject: bool) {
     );
     let thread = cockpit
         .open(
+            cockpit.this_computer().unwrap(),
             Provider::Claude,
             WorkspaceChoice::Main {
                 checkout: path.clone(),
@@ -172,6 +173,7 @@ fn shared_cockpit_routes_capability_controls_without_replacing_or_finishing_sess
     );
     let thread = cockpit
         .open(
+            cockpit.this_computer().unwrap(),
             Provider::Claude,
             WorkspaceChoice::Main {
                 checkout: path.clone(),

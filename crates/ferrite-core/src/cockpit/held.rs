@@ -26,8 +26,8 @@ const IN_PROCESS_WINDOW: u64 = 0;
 pub(super) struct HeldMachine {
     /// What every key of this machine's Threads carries.
     pub(super) id: MachineId,
-    /// What saved files name this machine; `None` with no environment.
-    pub(super) saved_as: Option<MachineKey>,
+    /// What saved files name this machine.
+    pub(super) saved_as: MachineKey,
     pub(super) link: Link,
     /// The Server said something since the window last asked
     /// (`take_arrived`).
@@ -69,7 +69,7 @@ impl HeldMachine {
         link: Link,
         logs: Option<Store>,
         dir: &std::path::Path,
-        saved_as: Option<MachineKey>,
+        saved_as: MachineKey,
     ) -> Self {
         let limits = logs
             .as_ref()
@@ -103,12 +103,11 @@ impl HeldMachine {
     }
 
     /// Whether this machine is this computer, reached: a path it names is
-    /// a path on this disk. A machine's and a window with no environment's
-    /// are not (ADR 0026).
+    /// a path on this disk. A machine's is not (ADR 0026).
     pub(super) fn local(&self) -> bool {
         match &self.link {
             Link::InProcess(_) => true,
-            Link::Server(server) => server.available() && server.bridge().is_none(),
+            Link::Server(server) => server.bridge().is_none(),
         }
     }
 
@@ -305,18 +304,28 @@ impl HeldMachine {
     }
 
     /// The Threads this window streams whole from this machine: those it
-    /// draws at Transcript level, and those drawn or at work within
-    /// `UNWATCH_AFTER`. Until it says what it draws, or while its Engine
-    /// sends no digests to read the rest from, every open one.
+    /// draws at Transcript level, and on this computer those drawn or at
+    /// work within `UNWATCH_AFTER`. Another machine is a round trip and a
+    /// link away, so its Threads stream whole only while drawn (F-A2):
+    /// their status, Decisions and Notices arrive all the same. Until the
+    /// window says what it draws, or while its Engine sends no digests to
+    /// read the rest from, every open one.
     fn watched(&self) -> Vec<ThreadId> {
         let open = &self.shared.open;
         let Some(drawn) = self.drawn.as_ref().filter(|_| self.mirrors.digested()) else {
             return open.clone();
         };
         let now = crate::clock::instant();
+        let lingers = self.local();
         open.iter()
             .copied()
-            .filter(|thread| drawn.holds(*thread, now))
+            .filter(|thread| {
+                if lingers {
+                    drawn.holds(*thread, now)
+                } else {
+                    drawn.shows(*thread)
+                }
+            })
             .collect()
     }
 
@@ -581,6 +590,11 @@ impl Drawn {
         if !self.now.contains(&thread) {
             self.left.insert(thread, at);
         }
+    }
+
+    /// Whether `thread` is drawn now.
+    fn shows(&self, thread: ThreadId) -> bool {
+        self.now.contains(&thread)
     }
 
     /// Whether `thread` is drawn, or left the screen within `UNWATCH_AFTER`.

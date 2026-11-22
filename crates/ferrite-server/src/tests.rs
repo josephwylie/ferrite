@@ -670,7 +670,7 @@ fn an_invalid_answer_leaves_the_decision_pending() {
     assert_eq!(window.closed(), vec![ClosedBy::Answered { client: 1 }]);
 }
 
-/// A window on a machine browses the machine's folders through its Server
+/// A window holding a machine browses the machine's folders through its Server
 /// (ADR 0026): `list_dir` answers the directory's entries in name order,
 /// each saying whether it is a directory.
 #[test]
@@ -718,7 +718,7 @@ fn list_dir_answers_a_directory_on_the_servers_computer() {
     assert!(refused_with(&reply, ErrorCode::Failed), "{reply:?}");
 }
 
-/// A window on a machine offers the machine's worktrees and branches
+/// A window holding a machine offers the machine's worktrees and branches
 /// (ADR 0026): `list_repo` reads the Project's repo with git where the
 /// Server runs, off its pump, naming the main checkout's branch apart.
 #[test]
@@ -730,7 +730,7 @@ fn list_repo_answers_a_projects_worktrees_and_branches_read_by_the_server() {
     git(&["worktree", "add", "-q", "-b", "fix", tree.to_str().unwrap()]);
     git(&["branch", "spare"]);
     let mut window = cockpit(&harness);
-    let project = window.register_project(&repo).unwrap();
+    let project = window.register_project(window.first_machine(), &repo).unwrap();
 
     let answer = window.list_repo(project).unwrap();
     let listed = std::cell::RefCell::new(None);
@@ -796,7 +796,7 @@ fn a_review_is_read_by_git_where_the_server_runs() {
     }
 
     use ferrite_reviewr::ferrite::Read;
-    let asked = window.review_diff(&repo, Read::Uncommitted);
+    let asked = window.review_diff(window.first_machine(), &repo, Read::Uncommitted);
     let uncommitted = landed(&mut window, asked).unwrap();
     assert_eq!(uncommitted.len(), 1);
     assert_eq!(uncommitted[0].file.path, "notes.md");
@@ -805,35 +805,35 @@ fn a_review_is_read_by_git_where_the_server_runs() {
         Ok((String::new(), "fresh\n".to_string()))
     );
 
-    let asked = window.review_commits(&repo);
+    let asked = window.review_commits(window.first_machine(), &repo);
     let commits = landed(&mut window, asked).unwrap();
     assert_eq!(commits.len(), 1);
     assert_eq!(commits[0].subject, "reviewed");
     assert_eq!(commits[0].author, "test");
     let pick = ferrite_reviewr::model::CommitPick::single(&commits[0].sha);
-    let asked = window.review_diff(&repo, Read::Commits(pick));
+    let asked = window.review_diff(window.first_machine(), &repo, Read::Commits(pick));
     let files = landed(&mut window, asked).unwrap();
     assert_eq!(files[0].file.path, "README.md");
     let (old, new) = files[0].sides.clone().unwrap();
     assert_eq!(new, "app, reviewed\n");
     assert_ne!(old, new);
 
-    let asked = window.read_review_file(&repo, "notes.md");
+    let asked = window.read_review_file(window.first_machine(), &repo, "notes.md");
     assert_eq!(landed(&mut window, asked).unwrap(), "fresh\n");
-    let asked = window.read_review_file(&repo, "../elsewhere");
+    let asked = window.read_review_file(window.first_machine(), &repo, "../elsewhere");
     assert!(
         landed(&mut window, asked).is_err(),
         "only inside the checkout"
     );
 
-    let asked = window.search_repo(&repo, "reviewed");
+    let asked = window.search_repo(window.first_machine(), &repo, "reviewed");
     let found = landed(&mut window, asked).unwrap();
     assert!(
         found.code.iter().any(|hit| hit.path == "README.md"),
         "{found:?}"
     );
 
-    let asked = window.review_pull_request(&repo, None);
+    let asked = window.review_pull_request(window.first_machine(), &repo, None);
     let pr = landed(&mut window, asked).unwrap();
     assert!(
         pr.pr
@@ -841,7 +841,7 @@ fn a_review_is_read_by_git_where_the_server_runs() {
         "no forge remote, so the note says what the PR tab needs"
     );
 
-    let asked = window.review_diff(&harness.dir, Read::Branch);
+    let asked = window.review_diff(window.first_machine(), &harness.dir, Read::Branch);
     let refused = landed(&mut window, asked).unwrap_err();
     assert!(
         refused.to_string().contains("not a git repository"),
@@ -857,7 +857,7 @@ fn a_pull_request_is_read_by_gh_where_the_server_runs() {
     let harness = start("pull-request");
     let mut window = cockpit(&harness);
     let answer = window
-        .pull_request(&harness.dir.join("no-such-checkout"))
+        .pull_request(window.first_machine(), &harness.dir.join("no-such-checkout"))
         .unwrap();
     let landed = std::cell::RefCell::new(None);
     pump_until(&mut window, |_| {
@@ -1318,7 +1318,7 @@ fn cockpit(harness: &Harness) -> ferrite_core::cockpit::Cockpit {
         server: ferrite_core::cockpit::Endpoint::Local {
             executable: "/bin/false".into(),
         },
-        saved_as: Some(ferrite_core::MachineKey(None)),
+        saved_as: ferrite_core::MachineKey(None),
         client: Peer {
             name: "test".into(),
             version: "0".into(),
@@ -1372,15 +1372,21 @@ fn pump_until_asked(
     asked
 }
 
-/// Whether the window's digest of `thread` reads `said` on its wall card.
+/// Whether the window's digest of `thread` reads `said` as the answer of
+/// its latest turn, the one row of words the bell says.
 fn digest_says(window: &ferrite_core::cockpit::Cockpit, thread: ThreadKey, said: &str) -> bool {
-    window.thread(thread).is_some_and(|open| {
-        open.digest()
-            .wall
-            .lines
-            .iter()
-            .any(|line| line.text.contains(said))
-    })
+    window
+        .thread(thread)
+        .is_some_and(|open| answered(&open.digest(), said))
+}
+
+/// Whether `digest` reads `said` as its latest turn's answer.
+fn answered(digest: &ferrite_core::digest::Digest, said: &str) -> bool {
+    digest
+        .finish
+        .answer
+        .as_deref()
+        .is_some_and(|answer| answer.contains(said))
 }
 
 fn shows(window: &ferrite_core::cockpit::Cockpit, thread: ThreadKey, said: &str) -> bool {
@@ -1398,7 +1404,7 @@ fn shows(window: &ferrite_core::cockpit::Cockpit, thread: ThreadKey, said: &str)
 fn a_window_attached_to_a_server_knows_its_id_and_clock() {
     let harness = start("server-id");
     let window = cockpit(&harness);
-    let Some(ferrite_core::cockpit::ServerState::Attached { id, clock, .. }) = window.server()
+    let Some(ferrite_core::cockpit::ServerState::Attached { id, clock, .. }) = window.server(window.first_machine())
     else {
         panic!("attached");
     };
@@ -1415,11 +1421,12 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     let harness = start("cockpit");
     let mut window = cockpit(&harness);
     assert!(matches!(
-        window.server(),
+        window.server(window.first_machine()),
         Some(ferrite_core::cockpit::ServerState::Attached { .. })
     ));
     let thread = window
         .open(
+            window.first_machine(),
             Provider::Claude,
             ferrite_core::workspace::WorkspaceChoice::Main {
                 checkout: harness.dir.clone(),
@@ -1436,8 +1443,8 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     let _ = window.send(thread, "go".into());
     provider.send(text("on it")).unwrap();
     pump_until(&mut window, |window| shows(window, thread, "on it"));
-    let project = window.register_project(&harness.dir).unwrap();
-    assert!(window.registry().project(project.project()).is_some());
+    let project = window.register_project(window.first_machine(), &harness.dir).unwrap();
+    assert!(window.registry(window.first_machine()).project(project.project()).is_some());
 
     // The second window names the same Thread by its own key.
     let mut second = cockpit(&harness);
@@ -1490,6 +1497,7 @@ fn a_reopened_window_can_answer_questions() {
         let mut window = cockpit(&harness);
         let thread = window
             .open(
+                window.first_machine(),
                 Provider::Claude,
                 ferrite_core::workspace::WorkspaceChoice::Main {
                     checkout: harness.dir.clone(),
@@ -2669,6 +2677,7 @@ fn a_window_on_this_computer_lists_its_parked_threads_off_the_published_rows() {
     let mut window = cockpit(&harness);
     let thread = window
         .open(
+            window.first_machine(),
             Provider::Claude,
             ferrite_core::workspace::WorkspaceChoice::Main {
                 checkout: harness.dir.clone(),
@@ -2759,7 +2768,7 @@ fn said(sent: &Arc<Mutex<Vec<u8>>>) -> Vec<String> {
         .collect()
 }
 
-/// ADR 0026: a window on a machine is a window on its Server, through the
+/// ADR 0026: a window holding a machine is a window on its Server, through the
 /// bridge — attached in the background, then driving its Threads exactly
 /// as a window on this computer's does.
 #[test]
@@ -2769,7 +2778,7 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
     let mut window = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
         store: harness.dir.join("box").join("threads"),
         server: ferrite_core::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
-        saved_as: Some(ferrite_core::MachineKey(Some("box".into()))),
+        saved_as: ferrite_core::MachineKey(Some("box".into())),
         client: peer(),
         renderer: None,
         browser: false,
@@ -2779,25 +2788,28 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
     .unwrap();
     assert!(
         matches!(
-            window.server(),
+            window.server(window.first_machine()),
             Some(ferrite_core::cockpit::ServerState::Detached { .. })
         ),
         "a machine is connected to in the background"
     );
     pump_until(&mut window, |window| {
         matches!(
-            window.server(),
+            window.server(window.first_machine()),
             Some(ferrite_core::cockpit::ServerState::Attached { .. })
         )
     });
     let thread = window
         .open(
+            window.first_machine(),
             Provider::Claude,
             ferrite_core::workspace::WorkspaceChoice::Main {
                 checkout: harness.dir.clone(),
             },
         )
         .unwrap();
+    // A machine's Thread streams whole only while the window draws it.
+    window.draws_transcripts([thread]);
     let provider = harness
         .sessions
         .recv_timeout(PATIENCE)
@@ -2815,12 +2827,12 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
 fn every_window_learns_its_server_names_fork_owners() {
     let harness = start("fork-of");
     let local = cockpit(&harness);
-    assert!(local.names_fork_owners(), "this computer's Server says it");
+    assert!(local.names_fork_owners(local.first_machine()), "this computer's Server says it");
     let sent = Arc::default();
     let mut machine = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
         store: harness.dir.join("box").join("threads"),
         server: ferrite_core::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
-        saved_as: Some(ferrite_core::MachineKey(Some("box".into()))),
+        saved_as: ferrite_core::MachineKey(Some("box".into())),
         client: peer(),
         renderer: None,
         browser: false,
@@ -2830,62 +2842,89 @@ fn every_window_learns_its_server_names_fork_owners() {
     .unwrap();
     pump_until(&mut machine, |window| {
         matches!(
-            window.server(),
+            window.server(window.first_machine()),
             Some(ferrite_core::cockpit::ServerState::Attached { .. })
         )
     });
-    assert!(machine.names_fork_owners(), "a machine's Server says it");
+    assert!(machine.names_fork_owners(machine.first_machine()), "a machine's Server says it");
 }
 
-/// Only the machine on screen streams transcripts: the others' links say
-/// hello and nothing else, and still hear each open Thread's state and
-/// every Decision.
+/// A machine other than this computer is a link away: the window streams
+/// one of its Threads whole only while it is drawn, and lets it go as it
+/// leaves the screen though it still works (F-A2). Every one of its
+/// Threads' state, Decisions and Notices arrive all the same, drawn or not.
 #[test]
-fn a_machine_off_screen_streams_status_and_never_a_transcript() {
-    let harness = start("machine-status");
+fn a_machine_streams_a_thread_whole_only_while_drawn() {
+    let harness = start("machine-drawn");
     let sent = Arc::default();
-    let mut status = ferrite_core::cockpit::ServerStatus::new(
-        harness.dir.join("box").join("threads"),
-        ferrite_core::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
-        peer(),
-    );
-    let deadline = Instant::now() + PATIENCE;
-    let until = |status: &mut ferrite_core::cockpit::ServerStatus,
-                 done: &dyn Fn(&[ferrite_core::cockpit::StatusRow]) -> bool| {
-        while !done(&status.rows()) {
-            assert!(Instant::now() < deadline, "timed out");
-            status.poll();
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    };
-
-    let mut window = cockpit(&harness);
-    let thread = window
-        .open(
-            Provider::Claude,
-            ferrite_core::workspace::WorkspaceChoice::Main {
-                checkout: harness.dir.clone(),
-            },
+    let mut window = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
+        store: harness.dir.join("box").join("threads"),
+        server: ferrite_core::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
+        saved_as: ferrite_core::MachineKey(Some("box".into())),
+        client: peer(),
+        renderer: None,
+        browser: false,
+        driven: false,
+        discovery: Box::new(NoDiscovery),
+    })
+    .unwrap();
+    let machine = window.first_machine();
+    pump_until(&mut window, |window| {
+        matches!(
+            window.server(machine),
+            Some(ferrite_core::cockpit::ServerState::Attached { .. })
         )
-        .unwrap();
-    let provider = harness
-        .sessions
-        .recv_timeout(PATIENCE)
-        .unwrap();
-    until(&mut status, &|rows| {
-        rows.iter().any(|row| row.thread == thread.thread())
     });
-    let _ = window.send(thread, "go".into());
-    provider.send(text("on it")).unwrap();
-    until(&mut status, &|rows| rows.iter().any(|row| row.working));
-    provider.send(decision()).unwrap();
-    until(&mut status, &|rows| rows.iter().any(|row| row.waiting));
+    let mut other = attach(&harness.address);
+    let (drawn, drawn_provider) = open(&mut other, &harness);
+    let (undrawn, undrawn_provider) = open(&mut other, &harness);
+    let on_box = |thread| ferrite_core::SavedThread {
+        machine: ferrite_core::MachineKey(Some("box".into())),
+        thread,
+    };
+    let drawn = window.resolve(&on_box(drawn)).unwrap();
+    let undrawn = window.resolve(&on_box(undrawn)).unwrap();
+    window.draws_transcripts([drawn]);
 
-    assert!(matches!(
-        status.server(),
-        ferrite_core::cockpit::ServerState::Attached { .. }
-    ));
-    assert_eq!(said(&sent), vec!["hello".to_string()]);
+    let _ = window.send(drawn, "go".into());
+    drawn_provider.send(text("on it\n\n")).unwrap();
+    pump_until(&mut window, |window| shows(window, drawn, "on it"));
+
+    let _ = window.send(undrawn, "go".into());
+    undrawn_provider.send(text("far off\n\n")).unwrap();
+    turn_ends(&undrawn_provider);
+    pump_until(&mut window, |window| {
+        window
+            .notifications(machine)
+            .reading()
+            .notices()
+            .any(|notice| notice.thread == undrawn.thread())
+    });
+    let _ = window.send(undrawn, "again".into());
+    undrawn_provider.send(decision()).unwrap();
+    pump_until(&mut window, |window| {
+        window
+            .notifications(machine)
+            .reading()
+            .decisions()
+            .any(|decision| decision.id.thread == undrawn.thread())
+            && window
+                .thread(undrawn)
+                .is_some_and(|open| !open.digest().pending.is_empty())
+    });
+    assert!(
+        !shows(&window, undrawn, "far off"),
+        "an undrawn Thread on a machine is never streamed whole"
+    );
+
+    window.draws_transcripts([]);
+    pump_until(&mut window, |window| !shows(window, drawn, "on it"));
+    assert!(
+        window
+            .thread(drawn)
+            .is_some_and(|open| open.digest().working),
+        "its state still arrives"
+    );
 }
 
 // ------------------------------------------------------------- the API
@@ -4332,10 +4371,8 @@ fn a_window_that_watches_nothing_reads_each_thread_from_its_digest() {
     });
 
     let digest = window.digest(thread).unwrap();
-    assert_eq!(
-        digest.wall.lines.first().map(|line| line.text.as_str()),
-        Some("\u{25cf} Reading the spike notes")
-    );
+    assert_eq!(digest.wall.context, "Write \u{b7} ferrite-perm.txt");
+    assert!(!format!("{digest:?}").contains("spike notes"), "none of its words");
     assert_eq!(window.histories, 0, "no history crossed");
     assert!(window.said(thread).is_empty(), "no input crossed");
     let late = attach(&harness.address);
@@ -4345,10 +4382,81 @@ fn a_window_that_watches_nothing_reads_each_thread_from_its_digest() {
     window.until(|window| window.digest(thread).is_none());
 }
 
-/// A Thread's digest goes out as it changes: a stream at most four times
-/// a second, as the Wall card always refolded, and a Decision at once.
+/// A Thread at work that no window watches costs the link its digest
+/// alone, and the digest carries none of its transcript (F-A2): a long
+/// answer streamed through it leaves the digest as small as a short one,
+/// only what its rows and the bell read.
 #[test]
-fn a_stream_digests_four_times_a_second_and_a_decision_at_once() {
+fn an_unwatched_thread_at_work_sends_none_of_its_transcript() {
+    let harness = start("unwatched-cost");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    let paragraph = "streamed words ".repeat(64);
+    for _ in 0..32 {
+        provider.send(text(&format!("{paragraph}
+
+"))).unwrap();
+    }
+    window.until(|window| {
+        window
+            .digest(thread)
+            .is_some_and(|digest| digest.working && digest.at_work)
+    });
+    turn_ends(&provider);
+    window.until(|window| window.digest(thread).is_some_and(|digest| !digest.at_work));
+
+    let digest = window.digest(thread).unwrap();
+    assert!(
+        !format!("{digest:?}").contains("streamed words"),
+        "the digest holds no transcript: {digest:?}"
+    );
+    let bytes = serde_json::to_vec(&ServerMessage::Digest { thread, digest }).unwrap().len();
+    assert!(bytes < 512, "a digest of {bytes} bytes");
+    assert_eq!(window.histories, 0, "no history crossed");
+    assert!(window.said(thread).is_empty(), "no input crossed");
+}
+
+/// A window that does not watch a Thread is not sent what its Session
+/// offers a Composer (F-A2): its `/` commands and models are tens of KB,
+/// and the state that holds them moves with every turn. Watching brings
+/// them, and a window attaching later is sent none until it watches.
+#[test]
+fn a_sessions_catalog_goes_only_to_the_windows_watching() {
+    let harness = start("catalog-cost");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    for event in announcements() {
+        provider.send(event).unwrap();
+    }
+    window.until(|window| {
+        window
+            .mirrors
+            .view(thread)
+            .is_some_and(|view| view.permission_mode() == Some("plan"))
+    });
+    let view = window.mirrors.view(thread).unwrap();
+    assert!(view.commands().is_empty(), "{:?}", view.commands());
+    assert!(view.models().is_empty(), "{:?}", view.models());
+
+    let later = attach(&harness.address);
+    let view = later.mirrors.view(thread).unwrap();
+    assert!(view.commands().is_empty(), "nor in a snapshot");
+    assert!(view.models().is_empty(), "nor in a snapshot");
+
+    window.watch(thread, None);
+    window.until(|window| {
+        window.mirrors.view(thread).is_some_and(|view| {
+            view.commands().first().is_some_and(|command| command.name == "review")
+                && view.models().first().is_some_and(|model| model.value == "opus")
+        })
+    });
+}
+
+/// A Thread's digest goes out as it changes, and the words a turn streams
+/// do not change it (F-A2): what does change mid-turn, a test run's
+/// count, goes at most four times a second, and a Decision at once.
+#[test]
+fn a_digest_refolds_four_times_a_second_and_a_decision_at_once() {
     let (spawner, providers) = spawn();
     let (mut engine, thread, agent, clock) = at_rest("digest-pace", spawner, &providers);
     let holds = |engine: &Engine, said: &str| {
@@ -4370,39 +4478,57 @@ fn a_stream_digests_four_times_a_second_and_a_decision_at_once() {
             })
             .collect()
     };
-    let first_line =
-        |digest: &ferrite_core::digest::Digest| digest.wall.lines.first().map(|line| line.text.clone());
-    let streamed = |engine: &mut Engine, said: &str| {
-        agent.send(text(said)).unwrap();
-        pump_engine_until(engine, "the text never landed", |engine| {
-            holds(engine, said)
-        });
+    let failing = |digest: &ferrite_core::digest::Digest| digest.wall.failing_count;
+    let ran = |engine: &mut Engine, run: usize| {
+        let id = format!("run-{run}");
+        agent
+            .send(SessionEvent::ToolStarted {
+                id: id.clone(),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": "cargo test" }),
+            })
+            .unwrap();
+        let output = format!("test result: FAILED. 10 passed; {run} failed");
+        agent
+            .send(SessionEvent::ToolCompleted {
+                id,
+                output: output.clone(),
+                is_error: true,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+        pump_engine_until(engine, "the run never landed", |engine| holds(engine, &output));
     };
-    streamed(&mut engine, "Reading");
+    agent.send(text("Reading the notes")).unwrap();
+    pump_engine_until(&mut engine, "the text never landed", |engine| {
+        holds(engine, "Reading the notes")
+    });
     clock.advance(Duration::from_millis(250));
     engine.pump();
-    assert_eq!(
-        digests(&mut engine).last().and_then(first_line).as_deref(),
-        Some("\u{25cf} Reading")
+    assert!(
+        digests(&mut engine).iter().all(|digest| !format!("{digest:?}").contains("Reading")),
+        "the stream's words are in no digest"
     );
 
+    ran(&mut engine, 1);
     clock.advance(Duration::from_millis(250));
-    streamed(&mut engine, " the notes");
+    engine.pump();
+    assert_eq!(digests(&mut engine).last().and_then(failing), Some(1));
+
+    clock.advance(Duration::from_millis(250));
+    ran(&mut engine, 2);
     assert_eq!(
-        digests(&mut engine).last().and_then(first_line).as_deref(),
-        Some("\u{25cf} Reading the notes"),
+        digests(&mut engine).last().and_then(failing),
+        Some(2),
         "a quarter second since the last: at once"
     );
-    streamed(&mut engine, " again");
+    ran(&mut engine, 3);
     clock.advance(Duration::from_millis(249));
     engine.pump();
     assert_eq!(digests(&mut engine), Vec::new(), "not yet a quarter second");
     clock.advance(Duration::from_millis(1));
     engine.pump();
-    assert_eq!(
-        digests(&mut engine).last().and_then(first_line).as_deref(),
-        Some("\u{25cf} Reading the notes again")
-    );
+    assert_eq!(digests(&mut engine).last().and_then(failing), Some(3));
 
     agent.send(decision()).unwrap();
     pump_engine_until(&mut engine, "the Decision never landed", |engine| {
@@ -4518,15 +4644,7 @@ fn a_thread_watched_mid_turn_reads_working() {
         })
         .unwrap();
     provider.send(text("thinking\n\n")).unwrap();
-    other.until(|other| {
-        other.digest(thread).is_some_and(|digest| {
-            digest
-                .wall
-                .lines
-                .iter()
-                .any(|line| line.text.contains("thinking"))
-        })
-    });
+    other.until(|other| other.digest(thread).is_some_and(|digest| digest.working));
 
     // Attached mid-turn: what it reads of the turn comes in the history.
     let mut window = cockpit(&harness);
@@ -4602,7 +4720,7 @@ fn a_small_history_never_waits_on_a_big_one() {
         [big, small].iter().all(|thread| {
             other
                 .digest(*thread)
-                .is_some_and(|digest| !digest.at_work && !digest.wall.lines.is_empty())
+                .is_some_and(|digest| !digest.at_work && digest.outcome.is_some())
         })
     });
 
@@ -4646,21 +4764,37 @@ fn a_thread_drawn_again_arrives_whole() {
     }
     turn_ends(&provider);
     provider.send(text("latest\n\n")).unwrap();
+    // The digest holds none of those words: its test run says the last
+    // turn has landed.
+    provider
+        .send(SessionEvent::ToolStarted {
+            id: "run".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "cargo test" }),
+        })
+        .unwrap();
+    provider
+        .send(SessionEvent::ToolCompleted {
+            id: "run".into(),
+            output: "test result: FAILED. 10 passed; 3 failed".into(),
+            is_error: true,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
     turn_ends(&provider);
     other.until(|other| {
-        other.digest(thread).is_some_and(|digest| {
-            !digest.at_work
-                && digest
-                    .wall
-                    .lines
-                    .iter()
-                    .any(|line| line.text.contains("latest"))
-        })
+        other
+            .digest(thread)
+            .is_some_and(|digest| !digest.at_work && digest.wall.failing_count == Some(3))
     });
     // A window that comes to it settled holds none of it until it draws it.
     let mut window = cockpit(&harness);
     let key = here(&window, thread);
-    pump_until(&mut window, |window| digest_says(window, key, "latest"));
+    pump_until(&mut window, |window| {
+        window
+            .thread(key)
+            .is_some_and(|open| open.digest().wall.failing_count == Some(3))
+    });
     assert!(!shows(&window, key, "latest"));
 
     // Drawn every frame as fast as the window can, as the app draws while
@@ -4690,7 +4824,7 @@ fn a_window_attaching_streams_no_thread_it_does_not_draw() {
     other.until(|other| {
         other
             .digest(thread)
-            .is_some_and(|digest| !digest.wall.lines.is_empty())
+            .is_some_and(|digest| answered(&digest, "before the window"))
     });
 
     let mut window = cockpit(&harness);
@@ -4796,10 +4930,7 @@ fn a_thread_nobody_uses_holds_only_its_digest_until_used() {
     let_go(&mut engine);
     assert!(said(&engine).is_empty(), "nothing held but the digest");
     let digest = engine.snapshot().digests.unwrap().remove(0).digest;
-    assert_eq!(
-        digest.wall.lines.first().map(|line| line.text.as_str()),
-        Some("\u{25cf} All done here.")
-    );
+    assert_eq!(digest.finish.answer.as_deref(), Some("All done here."));
 
     engine.set_watched([thread].into());
     assert_eq!(said(&engine), before, "watched, it reads as it did");
@@ -5101,15 +5232,16 @@ fn a_window_sees_its_restart_through() {
     use ferrite_core::cockpit::ServerRestart;
     let harness = start("restart-seen");
     let mut window = cockpit(&harness);
+    let here = window.first_machine();
     pump_until(&mut window, |window| {
         matches!(
-            window.server(),
+            window.server(here),
             Some(ferrite_core::cockpit::ServerState::Attached { .. })
         )
     });
 
-    window.restart_server(When::Now).unwrap();
-    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+    window.restart_server(here, When::Now).unwrap();
+    assert_eq!(window.server_restart(here), Some(&ServerRestart::Restarting));
     harness
         .relaunched
         .recv_timeout(PATIENCE)
@@ -5117,24 +5249,24 @@ fn a_window_sees_its_restart_through() {
     assert_eq!(harness.server.join().unwrap(), 0);
     pump_until(&mut window, |window| {
         matches!(
-            window.server(),
+            window.server(here),
             Some(ferrite_core::cockpit::ServerState::Detached { .. })
         )
     });
-    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+    assert_eq!(window.server_restart(here), Some(&ServerRestart::Restarting));
     // Pressed again while it is down: the restart under way is the one.
-    window.restart_server(When::Now).unwrap();
-    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+    window.restart_server(here, When::Now).unwrap();
+    assert_eq!(window.server_restart(here), Some(&ServerRestart::Restarting));
 
     // `exec` closes the old Server's sockets; this thread's stay open.
     gone(&harness.address);
     gone(&harness.api);
     let _successor = serve_in(harness.dir.clone(), None);
     pump_until(&mut window, |window| {
-        window.server_restart() != Some(&ServerRestart::Restarting)
+        window.server_restart(here) != Some(&ServerRestart::Restarting)
     });
     assert_eq!(
-        window.server_restart(),
+        window.server_restart(here),
         Some(&ServerRestart::Restarted {
             version: "0.9.0".into()
         })
@@ -5153,27 +5285,28 @@ fn a_restart_not_back_in_time_reads_failed_until_it_is() {
     let clock = ferrite_core::clock::ThreadFixture::install(chrono::Local::now());
     let harness = start("restart-lost");
     let mut window = cockpit(&harness);
+    let here = window.first_machine();
     pump_until(&mut window, |window| {
         matches!(
-            window.server(),
+            window.server(here),
             Some(ferrite_core::cockpit::ServerState::Attached { .. })
         )
     });
 
-    window.restart_server(When::Now).unwrap();
+    window.restart_server(here, When::Now).unwrap();
     harness
         .relaunched
         .recv_timeout(PATIENCE)
         .unwrap();
     clock.advance(Duration::from_secs(29));
     window.pump();
-    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+    assert_eq!(window.server_restart(here), Some(&ServerRestart::Restarting));
     clock.advance(Duration::from_secs(1));
     window.pump();
     assert!(
-        matches!(window.server_restart(), Some(ServerRestart::Failed { .. })),
+        matches!(window.server_restart(here), Some(ServerRestart::Failed { .. })),
         "{:?}",
-        window.server_restart()
+        window.server_restart(here)
     );
 
     // Back at last on a new boot: it did restart, and now reads so.
@@ -5183,7 +5316,7 @@ fn a_restart_not_back_in_time_reads_failed_until_it_is() {
     let _successor = serve_in(harness.dir.clone(), None);
     pump_until(&mut window, |window| {
         matches!(
-            window.server_restart(),
+            window.server_restart(here),
             Some(ServerRestart::Restarted { .. })
         )
     });
@@ -6077,6 +6210,7 @@ fn snooze_is_shared_and_survives_server_restart_without_a_session() {
     let mut first = cockpit(&harness);
     let thread = first
         .open(
+            first.first_machine(),
             Provider::Claude,
             ferrite_core::workspace::WorkspaceChoice::Main {
                 checkout: harness.dir.clone(),

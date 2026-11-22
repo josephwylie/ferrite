@@ -18,7 +18,7 @@ fn last_resume(fake: &Fake) -> Option<String> {
 #[test]
 fn invariant_resume_ids_persist_exactly() {
     let (mut cockpit, fake) = cockpit("invariant-resume");
-    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let _ = cockpit.send(thread, "one".into());
     live(&fake)
         .send(SessionEvent::Init {
@@ -80,7 +80,7 @@ fn invariant_resume_ids_persist_exactly() {
 #[test]
 fn parking_syncs_the_log_through_the_drive_cache() {
     let (mut cockpit, fake) = cockpit("park-full-sync");
-    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let _ = cockpit.send(thread, "one".into());
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
@@ -104,7 +104,7 @@ fn invariant_a_hand_over_after_revive_carries_the_whole_history() {
         .unwrap()
         .scaled(16 * 1024, limits);
     let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
-    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let answer = |n: usize| format!("answer {n} {}", "z".repeat(20_000));
     assert!(8 * answer(0).len() > limits.content_bytes_per_subject);
     let mut exchanges = Vec::new();
@@ -215,7 +215,7 @@ fn lab_store_costs_on_a_real_log() {
 fn parked_lookups_read_the_tail_of_a_parked_thread() {
     use crate::activity::{ActivityEvent, AgentInfo, AgentKey};
     let (mut cockpit, fake) = cockpit("parked-lookups");
-    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let _ = cockpit.send(thread, "start".into());
     live(&fake)
         .send(SessionEvent::Init {
@@ -268,7 +268,7 @@ fn parked_lookups_read_the_tail_of_a_parked_thread() {
 #[test]
 fn parking_never_waits_for_the_drive() {
     let (mut cockpit, fake) = cockpit("park-async");
-    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let _ = cockpit.send(thread, "one".into());
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
@@ -298,7 +298,7 @@ fn parking_never_waits_for_the_drive() {
 fn a_failed_sync_holds_the_session_until_it_succeeds() {
     use std::sync::atomic::Ordering;
     let (mut cockpit, fake) = cockpit("sync-failure");
-    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let _ = cockpit.send(thread, "one".into());
     cockpit
         .engine()
@@ -351,7 +351,7 @@ fn a_failed_sync_holds_the_session_until_it_succeeds() {
 #[test]
 fn quitting_writes_every_accepted_record() {
     let (mut cockpit, fake) = cockpit("quit-writes");
-    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let _ = cockpit.send(thread, "one".into());
     live(&fake).send(text("still streaming")).unwrap();
     cockpit.pump();
@@ -392,7 +392,7 @@ fn quitting_writes_every_accepted_record() {
 #[test]
 fn what_quitting_cannot_write_is_kept_and_reported() {
     let (mut cockpit, fake) = cockpit("quit-pending");
-    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let _ = cockpit.send(thread, "one".into());
     live(&fake).send(text("unsaved words")).unwrap();
     cockpit.pump();
@@ -441,7 +441,7 @@ fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
         .unwrap()
         .hold_exchange_reads(hold.clone());
     let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
-    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let mut exchanges = Vec::new();
     for n in 0..4 {
         let answer = format!("answer {n} {}", "v".repeat(800_000));
@@ -509,7 +509,7 @@ fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
 #[test]
 fn an_unreadable_saved_queue_is_said_not_silently_dropped() {
     let (mut cockpit, fake) = cockpit("queue-unreadable");
-    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let _ = cockpit.send(thread, "one".into());
     live(&fake).send(ended()).unwrap();
     cockpit.pump();

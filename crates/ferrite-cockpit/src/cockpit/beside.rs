@@ -273,7 +273,10 @@ impl CockpitView {
             .and_then(|facts| facts.branch.clone())
             .map_or_else(|| home_relative(&workspace), |branch| branch.to_string());
         let index = self.focused(cx);
-        self.panes[index].review.show(review.clone(), title);
+        let Some(pane) = self.panes.get_mut(index) else {
+            return;
+        };
+        pane.review.show(review.clone(), title);
         window.focus(&review.focus_handle(cx), cx);
         review.update(cx, |review, cx| review.pick_scope(scope, cx));
         cx.notify();
@@ -299,7 +302,7 @@ impl CockpitView {
         };
         let read = match scope {
             Scope::Commits => {
-                let commits = self.cockpit.update(cx, |cockpit, _| cockpit.review_commits(&workspace));
+                let commits = self.cockpit.update(cx, |cockpit, _| cockpit.review_commits(thread.machine(), &workspace));
                 land(
                     review,
                     commits,
@@ -314,7 +317,7 @@ impl CockpitView {
             Scope::Branch => Read::Branch,
             Scope::LastTurn => Read::LastTurn,
         };
-        let files = self.cockpit.update(cx, |cockpit, _| cockpit.review_diff(&workspace, read));
+        let files = self.cockpit.update(cx, |cockpit, _| cockpit.review_diff(thread.machine(), &workspace, read));
         land(
             review,
             files,
@@ -338,7 +341,7 @@ impl CockpitView {
         };
         let files = self
             .cockpit
-            .update(cx, |cockpit, _| cockpit.review_diff(&workspace, Read::Commits(pick.clone())));
+            .update(cx, |cockpit, _| cockpit.review_diff(thread.machine(), &workspace, Read::Commits(pick.clone())));
         land(
             review,
             files,
@@ -361,7 +364,7 @@ impl CockpitView {
         let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
-        let found = self.cockpit.update(cx, |cockpit, _| cockpit.search_repo(&workspace, &query));
+        let found = self.cockpit.update(cx, |cockpit, _| cockpit.search_repo(thread.machine(), &workspace, &query));
         let (shown, failed) = (query.clone(), query.clone());
         land(
             review,
@@ -384,7 +387,7 @@ impl CockpitView {
         let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
-        let text = self.cockpit.update(cx, |cockpit, _| cockpit.read_review_file(&workspace, &path));
+        let text = self.cockpit.update(cx, |cockpit, _| cockpit.read_review_file(thread.machine(), &workspace, &path));
         let opened = path.clone();
         land(
             review,
@@ -406,7 +409,7 @@ impl CockpitView {
         let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
-        let pr = self.cockpit.update(cx, |cockpit, _| cockpit.review_pull_request(&workspace, None));
+        let pr = self.cockpit.update(cx, |cockpit, _| cockpit.review_pull_request(thread.machine(), &workspace, None));
         land(
             review,
             pr,
@@ -427,7 +430,7 @@ impl CockpitView {
         let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
-        let files = self.cockpit.update(cx, |cockpit, _| cockpit.review_files(&workspace));
+        let files = self.cockpit.update(cx, |cockpit, _| cockpit.review_files(thread.machine(), &workspace));
         land(
             review,
             files,
@@ -448,7 +451,7 @@ impl CockpitView {
         let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
-        let bases = self.cockpit.update(cx, |cockpit, _| cockpit.review_bases(&workspace));
+        let bases = self.cockpit.update(cx, |cockpit, _| cockpit.review_bases(thread.machine(), &workspace));
         land(
             review,
             bases,
@@ -470,7 +473,7 @@ impl CockpitView {
         let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
-        let picked = self.cockpit.update(cx, |cockpit, _| cockpit.pick_review_base(&workspace, &base));
+        let picked = self.cockpit.update(cx, |cockpit, _| cockpit.pick_review_base(thread.machine(), &workspace, &base));
         land(
             review,
             picked,

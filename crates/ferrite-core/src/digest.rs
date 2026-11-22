@@ -2,22 +2,17 @@
 //! Server folds it from the Thread's Activity and sends it to every window;
 //! only a Thread drawn at Transcript level is mirrored whole.
 
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::activity::{ActivityView, Subject, ToolTiming};
-use crate::docview::{is_test_run, passed_count, FileChange, Instruments, Tests};
+use crate::activity::{ActivityView, Subject};
+use crate::docview::{FileChange, Instruments, Tests};
 use crate::progress::ROW_CHARS;
 use crate::protocol::{PendingEntry, WireHandle, WireOutcome, WireStatus, WireSubject};
-use crate::transcript::{Block, Body, Span, Status, ToolBlock, ToolState, Transcript};
+use crate::transcript::{Block, Body, Span, Status, Transcript};
 use crate::{Decision, ThreadId, TurnOutcome};
 
-/// The agent's and a tool call's bullet: Geist Mono's own `●`.
-pub const BULLET: &str = "\u{25cf}";
-/// The result elbow: Geist Mono's own `└`.
-pub const ELBOW: &str = "\u{2514}";
 /// A turn or an agent failed.
 pub const FAILED: &str = "failed";
 
@@ -176,11 +171,7 @@ impl Digest {
                     decision: (&pending.decision).into(),
                 })
                 .collect(),
-            wall: WallCard::of(
-                transcript,
-                pending.first().map(|pending| &pending.decision),
-                Some(main.tool_timings()),
-            ),
+            wall: WallCard::of(transcript, pending.first().map(|pending| &pending.decision)),
             // A Subagent the Thread no longer holds has an empty card: the
             // digest still says which one it is, so it is not refolded for it.
             shown: shown
@@ -189,7 +180,7 @@ impl Digest {
                     subject: subject.into(),
                     wall: activity
                         .subject(subject)
-                        .map(|view| WallCard::of(view.transcript(), None, None))
+                        .map(|view| WallCard::of(view.transcript(), None))
                         .unwrap_or_default(),
                 }),
             prompt_title: prompt_title(transcript),
@@ -253,6 +244,12 @@ impl Finish {
             .iter()
             .rposition(|block| matches!(block.body, Body::Prompt(_)))
             .unwrap_or(0);
+        // A turn still running has not finished: the bell has nothing of it
+        // to say yet, and its words stay out of the digest while they
+        // stream (F-A2).
+        if transcript.turn_started().is_some() {
+            return Self::default();
+        }
         let turn = &blocks[start..];
         // The turn's last test run, and what it said: a failing summary,
         // or nothing for a green run.
@@ -417,48 +414,30 @@ pub struct WallCard {
     pub context: String,
     /// How long the last completed turn worked (`3m 12s`): `done · 3m 12s`.
     pub done_after: Option<String>,
-    /// The transcript's last lines as the tile prints them, oldest first,
-    /// a pending Decision's lines last. Prose is cut to the rows it can fill (`ROW_CHARS` each).
+    /// Generation 1's tile lines, a transcript's tail in words. This build
+    /// sends none and reads none: a digest carries no transcript (F-A2).
+    /// Kept for the frozen gen1 messages, which round-trip byte for byte.
     pub lines: Vec<WallLine>,
 }
 
-/// One line of a wall tile: one `INK_STRONG` run, its glyph included —
-/// `● Update(canvas.rs) +31 −9`, `  └ 212/357 tests`, `◆ Bash wants to
-/// run`, `  $ gh issue close 212`, `? Which fix do you want?`.
+/// One of generation 1's tile lines (`WallCard::lines`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WallLine {
     pub text: String,
-    /// Agent prose: wider than the tile it wraps once, its continuation
-    /// hanging under the first word; every other line truncates.
     pub wraps: bool,
 }
 
-impl WallLine {
-    fn line(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            wraps: false,
-        }
-    }
-}
-
-/// How many Blocks a wall card reaches back for — more than any tile can
-/// show.
+/// How many Blocks a wall card reaches back for its last finished turn.
 const WALL_TAIL_BLOCKS: usize = 16;
 
-/// `◆`, typed: the tile's lines are one run each, glyph included (F-6).
-const DIAMOND_GLYPH: &str = "\u{25c6}";
-
 impl WallCard {
-    /// Fold one Thread's wall reading, with its calls' clocks: a settled
-    /// call's line carries its time (`● Bash(cargo test) 1m 1s`). The
-    /// activity phrase stays a status word — naming the running tool would
-    /// put `Instruments::of` on every tile every rebuild during streaming.
-    pub fn of(
-        transcript: &Transcript,
-        decision: Option<&Decision>,
-        timings: Option<&HashMap<String, ToolTiming>>,
-    ) -> Self {
+    /// Fold one Thread's wall reading. It holds none of the transcript's
+    /// words: a window that does not draw the Thread is sent its digest
+    /// alone (ADR 0032), and a word of the stream in it would refold it
+    /// with every beat. The activity phrase stays a status word — naming
+    /// the running tool would put `Instruments::of` on every tile every
+    /// rebuild during streaming.
+    pub fn of(transcript: &Transcript, decision: Option<&Decision>) -> Self {
         let working = caption(transcript);
         let context = match decision {
             Some(decision) => decision_subject(decision),
@@ -494,7 +473,7 @@ impl WallCard {
             working,
             context,
             done_after,
-            lines: wall_lines(tail, decision, timings),
+            lines: Vec::new(),
         }
     }
 }
@@ -514,240 +493,6 @@ pub fn worked_label(elapsed: Duration) -> String {
         crate::progress::settled_duration_label(elapsed)
     } else {
         format!("{}m {}s", secs / 60, secs % 60)
-    }
-}
-
-/// A transcript tail as the tile prints it, oldest first (F-6): agent
-/// prose behind `●` (it may wrap once); every call behind `●` with its
-/// trail inline after one space (`+31 −9`, a settled time, `ok` for a
-/// passed test run); under a test run its progress (`  └ 212/357 tests`)
-/// or, settled red, its result (`  └ 357 passed; 2 failed`); a failed
-/// call's reason; a notice behind `◆`. Prompts, reasoning, code, meta and
-/// a completed turn's end leave no line (the state word says `done`). A
-/// pending approval drops the call it gates and closes the list with
-/// `◆ Bash wants to run` and `  $ <command>`; a question with `? <text>`.
-fn wall_lines(
-    tail: &[Block],
-    decision: Option<&Decision>,
-    timings: Option<&HashMap<String, ToolTiming>>,
-) -> Vec<WallLine> {
-    let first_line = |text: &str| -> String {
-        text.lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or_default()
-            .trim()
-            .to_string()
-    };
-    let gated = decision
-        .map(|decision| decision.tool_use_id.as_str())
-        .filter(|id| !id.is_empty());
-    let mut lines = Vec::new();
-    for block in tail {
-        match &block.body {
-            Body::Paragraph { spans } | Body::Bullet { spans } | Body::Heading { spans, .. } => {
-                // Two source lines at most: a line break in the prose is
-                // where its continuation starts. The head may wrap to the
-                // second row, so it keeps two rows of characters.
-                let mut source = spans.iter().flat_map(|span| span.text.chars());
-                let Some(head) = source_line(&mut source, 2 * ROW_CHARS) else {
-                    continue;
-                };
-                let text = match source_line(&mut source, ROW_CHARS) {
-                    Some(next) => format!("{BULLET} {head}\n{next}"),
-                    None => format!("{BULLET} {head}"),
-                };
-                lines.push(WallLine { text, wraps: true });
-            }
-            Body::Notice(text)
-                if decision.is_none() && !crate::transcript::is_opened_notice(text) =>
-            {
-                let text = first_line(text);
-                if !text.is_empty() {
-                    lines.push(WallLine::line(format!("{DIAMOND_GLYPH} {text}")));
-                }
-            }
-            Body::TurnEnd(end) if !end.completed() => {
-                lines.push(WallLine::line(format!("  {ELBOW} {}", end.text())));
-            }
-            Body::Tool(tool) => {
-                if gated == Some(tool.call.as_str()) {
-                    continue;
-                }
-                lines.push(WallLine::line(wall_call_line(tool, timings)));
-                if let Some(result) = wall_result_line(tool) {
-                    lines.push(WallLine::line(format!("  {ELBOW} {result}")));
-                }
-            }
-            _ => {}
-        }
-    }
-    if let Some(decision) = decision {
-        lines.extend(wall_decision_lines(decision));
-    }
-    lines
-}
-
-/// The next non-blank line of `source`, trimmed and cut to `max`
-/// characters: a reply streaming as one long paragraph puts no more of
-/// itself in every digest than a row can show (#173). `None` at its end.
-fn source_line(source: &mut impl Iterator<Item = char>, max: usize) -> Option<String> {
-    loop {
-        let first = source.next()?;
-        let mut line = std::iter::once(first)
-            .chain(source.by_ref())
-            .take_while(|c| *c != '\n');
-        let text = row(&mut line, max);
-        line.for_each(drop);
-        if !text.is_empty() {
-            return Some(text);
-        }
-    }
-}
-
-/// `● Name(args) trail`: the call as the transcript names it, its trail
-/// one space after it — the change (`+31 −9`), `ok` for a passed test run,
-/// else a settled time from two seconds up (`DURATION_MIN_MS`). A running call has no trail:
-/// the state line's clock is ticking.
-fn wall_call_line(tool: &ToolBlock, timings: Option<&HashMap<String, ToolTiming>>) -> String {
-    let label = tool.label();
-    let trail = match &tool.state {
-        ToolState::Running => None,
-        ToolState::Ok if !tool.diffs.is_empty() => {
-            let added: usize = tool.diffs.iter().map(|diff| diff.added).sum();
-            let removed: usize = tool.diffs.iter().map(|diff| diff.removed).sum();
-            Some(format!("+{added} \u{2212}{removed}"))
-        }
-        ToolState::Ok if is_test_run(tool) => Some("ok".to_string()),
-        _ => match timings.and_then(|map| map.get(&tool.call)) {
-            Some(ToolTiming::Done(total))
-                if total.as_millis() >= crate::progress::DURATION_MIN_MS =>
-            {
-                Some(crate::progress::live_seconds(*total))
-            }
-            _ => None,
-        },
-    };
-    match trail {
-        Some(trail) => format!("{BULLET} {label} {trail}"),
-        None => format!("{BULLET} {label}"),
-    }
-}
-
-/// What hangs under a call on its tile: a running test run's progress
-/// (`212/357 tests`, `ToolBlock::progress`), a red run's result (`357
-/// passed; 2 failed`), a failed call's reason. A passed run says `ok` on
-/// its own line, and nothing else hangs.
-fn wall_result_line(tool: &ToolBlock) -> Option<String> {
-    match &tool.state {
-        ToolState::Running => tool.progress.as_ref().map(|progress| {
-            if progress.known() {
-                format!("{}/{} tests", progress.done, progress.total)
-            } else {
-                format!("{} tests", progress.done)
-            }
-        }),
-        ToolState::Failed(message) => {
-            if is_test_run(tool) {
-                if let Some(summary) = test_summary(tool) {
-                    return Some(summary);
-                }
-            }
-            let reason = message
-                .lines()
-                .find(|line| !line.trim().is_empty())
-                .map(str::trim)
-                .unwrap_or_default();
-            Some(if reason.is_empty() {
-                FAILED.to_string()
-            } else {
-                format!("{} \u{b7} {reason}", FAILED)
-            })
-        }
-        _ => None,
-    }
-}
-
-/// A red test run's own count line, `357 passed; 2 failed`, read from the
-/// last line of its output that reports both.
-fn test_summary(tool: &ToolBlock) -> Option<String> {
-    let failure = match &tool.state {
-        ToolState::Failed(message) => Some(message.as_str()),
-        _ => None,
-    };
-    let texts = [
-        failure,
-        tool.result_line.as_deref(),
-        tool.output.as_ref().map(|output| output.text.as_str()),
-    ];
-    texts.into_iter().flatten().find_map(|text| {
-        text.lines().rev().find_map(|line| {
-            let passed = passed_count(line)?;
-            let failed = count_before(line, "failed")?;
-            Some(format!("{passed} passed; {failed} failed"))
-        })
-    })
-}
-
-/// The number standing directly before `word` (`2 failed` → 2).
-fn count_before(line: &str, word: &str) -> Option<usize> {
-    let lower = line.to_lowercase();
-    let tokens: Vec<&str> = lower
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .collect();
-    tokens
-        .windows(2)
-        .find_map(|pair| (pair[1] == word).then(|| pair[0].parse().ok()).flatten())
-}
-
-/// A pending Decision's lines at the foot of its tile: an approval names
-/// what it would run (`◆ Bash wants to run`, then `  $ <command>`), else
-/// what it asks; a question is `? <its text>`.
-fn wall_decision_lines(decision: &Decision) -> Vec<WallLine> {
-    if let Some(questions) = questions_of(decision) {
-        let text = questions
-            .first()
-            .map(|question| question.question.trim().to_string())
-            .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| crate::questions::summary(questions));
-        let text = text.lines().next().unwrap_or_default().trim().to_string();
-        return vec![WallLine::line(format!("? {text}"))];
-    }
-    let tool = crate::transcript::display_tool_name(&decision.tool_name).to_string();
-    let command = decision
-        .input
-        .get("command")
-        .and_then(serde_json::Value::as_str)
-        .filter(|command| !command.trim().is_empty());
-    match (tool.is_empty(), command) {
-        (false, Some(command)) => {
-            let command = crate::providers::shell::unwrap_shell(command).to_string();
-            let command = command
-                .lines()
-                .find(|line| !line.trim().is_empty())
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            vec![
-                WallLine::line(format!("{DIAMOND_GLYPH} {tool} wants to run")),
-                WallLine::line(format!("  $ {command}")),
-            ]
-        }
-        (false, None) => {
-            let mut lines = vec![WallLine::line(format!(
-                "{DIAMOND_GLYPH} {tool} wants approval"
-            ))];
-            let description = decision.description.trim();
-            if !description.is_empty() {
-                let description = description.lines().next().unwrap_or_default().trim();
-                lines.push(WallLine::line(format!("  {description}")));
-            }
-            lines
-        }
-        (true, _) => vec![WallLine::line(format!(
-            "{DIAMOND_GLYPH} {}",
-            decision_subject(decision)
-        ))],
     }
 }
 

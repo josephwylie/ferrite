@@ -282,7 +282,11 @@ impl CockpitView {
     ) {
         self.open_palette(PaletteScope::Sessions, "", window, cx);
         let roots = self.session_file_roots.clone();
-        match self.cockpit.update(cx, |cockpit, _| cockpit.discover_sessions(roots, IMPORT_ROWS_MAX)) {
+        let asked = self.import_machine(into, cx).and_then(|machine| {
+            self.cockpit
+                .update(cx, |cockpit, _| cockpit.discover_sessions(machine, roots, IMPORT_ROWS_MAX))
+        });
+        match asked {
             Some(reply) => {
                 if let Some(palette) = self.floats.palette.clone() {
                     palette.update(cx, |palette, _| palette.listen(into, reply));
@@ -406,13 +410,10 @@ impl CockpitView {
                 })
             })
             .collect();
-        let mut projects: Vec<Option<ProjectId>> = self
-            .cockpit
-            .read(cx)
-            .registry()
-            .projects()
-            .iter()
-            .map(|project| Some(project.id))
+        let mut projects: Vec<Option<ProjectKey>> = self
+            .every_project(cx)
+            .into_iter()
+            .map(|(key, _, _)| Some(key))
             .collect();
         projects.push(None);
         let mut seen: std::collections::HashSet<ThreadKey> = std::collections::HashSet::new();
@@ -446,10 +447,13 @@ impl CockpitView {
                     .facts
                     .get(thread)
                     .and_then(|facts| facts.project_label.clone());
+                // Another machine's Thread is named after its machine, as
+                // in the Inbox.
+                let title = self.row_title(thread, cx);
                 let name = if row.status == nav::RowStatus::Parked {
-                    SharedString::from(format!("Parked \u{b7} {}", row.name))
+                    SharedString::from(format!("Parked \u{b7} {title}"))
                 } else {
-                    row.name.clone()
+                    title
                 };
                 let keys = ordinal
                     .filter(|at| *at < 9)
@@ -476,25 +480,22 @@ impl CockpitView {
     /// each with its open Threads' roll-up and how many there are. A
     /// Project with no open Thread has nowhere to land.
     fn palette_project_rows(&self, cx: &gpui::App) -> Vec<PaletteRow> {
-        self.cockpit
-            .read(cx)
-            .registry()
-            .projects()
-            .iter()
-            .filter_map(|project| {
-                let rows = self.project_rows(project.id, cx);
+        self.every_project(cx)
+            .into_iter()
+            .filter_map(|(key, _, title)| {
+                let rows = self.project_rows(key, cx);
                 let count = rows.len();
                 let status = nav::roll_up(&rows)?;
                 let noun = if count == 1 { "thread" } else { "threads" };
                 Some(PaletteRow {
                     section: PaletteSection::Projects,
-                    name: project.title.clone().into(),
+                    name: title.into(),
                     context: format!("{count} {noun}").into(),
                     status: Some(status),
                     detail: None,
                     keys: None,
                     used: None,
-                    act: Act::Project(project.id),
+                    act: Act::Project(key),
                 })
             })
             .collect()
@@ -503,17 +504,14 @@ impl CockpitView {
     /// Every Project's Factory (`Act::Factory`), `Factory: <Project>`,
     /// an empty one's too: the nav lists only the busy ones.
     fn palette_factory_rows(&self, cx: &gpui::App) -> Vec<PaletteRow> {
-        let board = self.cockpit.read(cx).factory();
-        self.cockpit
-            .read(cx)
-            .registry()
-            .projects()
-            .iter()
-            .map(|project| {
-                let tasks = board.on_board(project.id).count();
+        let cockpit = self.cockpit.read(cx);
+        self.every_project(cx)
+            .into_iter()
+            .map(|(key, _, title)| {
+                let tasks = cockpit.factory(key.machine()).on_board(key.project()).count();
                 PaletteRow {
                     section: PaletteSection::Projects,
-                    name: format!("Factory: {}", project.title).into(),
+                    name: format!("Factory: {title}").into(),
                     context: match tasks {
                         0 => "No tasks".to_string(),
                         1 => "1 task".to_string(),
@@ -524,14 +522,14 @@ impl CockpitView {
                     detail: None,
                     keys: None,
                     used: None,
-                    act: Act::Factory(project.id),
+                    act: Act::Factory(key),
                 }
             })
             .collect()
     }
 
     /// A Project's open Threads' rows, in creation order.
-    fn project_rows(&self, project: ProjectId, cx: &gpui::App) -> Vec<nav::ThreadRow> {
+    fn project_rows(&self, project: ProjectKey, cx: &gpui::App) -> Vec<nav::ThreadRow> {
         let mut threads = self.cockpit.read(cx).threads();
         threads.sort();
         threads
@@ -546,7 +544,7 @@ impl CockpitView {
 
     /// Where jumping to a Project lands: its open Thread that most needs
     /// the operator, the first made among equals.
-    fn project_lead(&self, project: ProjectId, cx: &gpui::App) -> Option<ThreadKey> {
+    fn project_lead(&self, project: ProjectKey, cx: &gpui::App) -> Option<ThreadKey> {
         self.project_rows(project, cx)
             .into_iter()
             .rev()
@@ -674,13 +672,10 @@ impl CockpitView {
             bound_chord("cockpit::ReopenThread"),
             Command::ReopenLast,
         );
-        let projects: Vec<(ProjectId, String)> = self
-            .cockpit
-            .read(cx)
-            .registry()
-            .projects()
-            .iter()
-            .map(|project| (project.id, project.title.clone()))
+        let projects: Vec<(ProjectKey, String)> = self
+            .every_project(cx)
+            .into_iter()
+            .map(|(key, _, title)| (key, title))
             .collect();
         for (project, title) in &projects {
             add(

@@ -1,5 +1,5 @@
-//! Which machine the window is on, and which stream only status. Nothing
-//! here connects: a link attaches only when polled.
+//! Which machines the window holds. Nothing here connects: a machine's
+//! link attaches only when polled.
 
 use super::*;
 
@@ -31,175 +31,147 @@ fn saved() -> Vec<Machine> {
     ]
 }
 
-/// Off screen and enabled: a status link. On screen or disabled: none.
-fn streaming(machines: &Machines) -> Vec<bool> {
+/// Which entries the Cockpit holds.
+fn holding(machines: &Machines) -> Vec<bool> {
     machines
         .entries
         .iter()
-        .map(|entry| entry.status.is_some())
+        .map(|entry| entry.held.is_some())
         .collect()
 }
 
 #[test]
-fn a_cockpit_that_cannot_be_built_is_not_gone_to() {
+fn a_store_that_cannot_be_read_builds_no_cockpit() {
     let reach = reach("unbuilt");
-    // A file where this computer's Threads would go. A machine's are its
-    // Server's, so only this computer's Store can stop a go-to.
+    // A file where this computer's Threads would go.
     std::fs::create_dir_all(&reach.settings_dir).unwrap();
     std::fs::write(&reach.store, "").unwrap();
-    let mut machines = Machines::new(reach, &saved(), Some("me@build"));
-    assert!(machines.go_to(Some(0)).unwrap().is_err());
-    assert_eq!(
-        machines.selected().unwrap().target,
-        "me@build",
-        "still on the machine"
-    );
-    assert_eq!(streaming(&machines), [true, false, false]);
-    assert!(machines.go_to(Some(1)).is_none(), "already on it");
+    let mut machines = Machines::new(reach, &saved(), None, true);
+    assert!(machines.cockpit().is_err());
 }
 
 #[test]
 fn this_computer_alone_lists_no_machines() {
-    let machines = Machines::new(reach("alone"), &[], None);
+    let mut machines = Machines::new(reach("alone"), &[], None, true);
+    let cockpit = machines.cockpit().unwrap();
     assert!(!machines.listed());
-    assert!(machines.selected().is_none());
+    assert_eq!(holding(&machines), [true]);
+    assert_eq!(cockpit.machines().count(), 1);
+    assert_eq!(cockpit.this_computer(), machines.held(0));
 }
 
 #[test]
-fn only_the_machine_on_screen_streams_more_than_status() {
-    let mut machines = Machines::new(reach("status"), &saved(), None);
+fn every_enabled_machine_is_held_at_once() {
+    let mut machines = Machines::new(reach("every"), &saved(), None, true);
+    let cockpit = machines.cockpit().unwrap();
     assert!(machines.listed());
-    assert_eq!(streaming(&machines), [false, true, false]);
-
-    assert!(machines.select(1));
-    assert_eq!(machines.selected().unwrap().target, "me@build");
-    assert_eq!(streaming(&machines), [true, false, false]);
-
-    assert!(!machines.select(1), "already on it");
-    assert!(
-        !machines.select(2),
-        "a disabled machine is never connected to"
-    );
-    let rows = machines.rows(None);
-    assert_eq!(rows[2].connection, Connection::Disabled);
-    assert!(rows[1].selected);
+    assert_eq!(holding(&machines), [true, true, false]);
+    assert_eq!(cockpit.machines().count(), 2);
+    let rows = machines.rows(&cockpit);
     assert_eq!(rows[0].name, LOCAL);
+    assert_eq!(rows[1].connection, Connection::Connecting, "not polled yet");
+    assert_eq!(rows[2].connection, Connection::Disabled);
+    assert_eq!(
+        cockpit.machine_saved_as(&MachineKey(Some("me@build".into()))),
+        machines.held(1),
+        "held under the name its saved files use"
+    );
 }
 
 #[test]
-fn a_remote_launch_starts_on_its_machine_saved_or_not() {
-    let machines = Machines::new(reach("by-name"), &saved(), Some("me@build"));
-    assert_eq!(machines.selected().unwrap().name, "me@build");
-    assert!(machines.unsaved().is_none());
+fn a_driven_window_answers_only_the_first_machine_enabled() {
+    let driven = |name| Reach {
+        driven: true,
+        ..reach(name)
+    };
+    let mut machines = Machines::new(driven("driven"), &saved(), None, true);
+    assert!(machines.attach(0).driven);
+    assert!(!machines.attach(1).driven, "a paired machine's API");
 
-    let mut machines = Machines::new(reach("unsaved"), &saved(), Some("me@new"));
-    assert_eq!(machines.selected().unwrap().target, "me@new");
+    let mut machines = Machines::new(driven("driven-off"), &saved(), None, false);
+    assert!(machines.attach(1).driven, "with this computer off");
+}
+
+#[test]
+fn a_remote_launch_is_held_beside_the_rest_saved_or_not() {
+    let mut machines = Machines::new(reach("by-name"), &saved(), Some("me@build"), true);
+    machines.cockpit().unwrap();
+    assert!(machines.unsaved().is_none());
+    assert_eq!(holding(&machines), [true, true, false]);
+
+    let mut machines = Machines::new(reach("unsaved"), &saved(), Some("me@new"), true);
+    let mut cockpit = machines.cockpit().unwrap();
     assert_eq!(machines.unsaved().unwrap().target, "me@new");
+    assert_eq!(holding(&machines), [true, true, false, true]);
 
     let mut kept = saved();
     kept.push(Machine::new("me@new"));
-    machines.settings_changed(&kept);
+    let held = machines.held(3);
+    machines.settings_changed(&kept, &mut cockpit);
     assert!(machines.unsaved().is_none(), "saved now");
-    assert_eq!(machines.selected().unwrap().target, "me@new");
+    assert_eq!(machines.held(3), held, "still the machine it was");
+
+    assert!(!machines.forget_unsaved("me@new", &mut cockpit), "saved");
 }
 
 #[test]
-fn removing_the_saved_selection_returns_to_local_and_drops_its_status_link() {
-    let mut machines = Machines::new(reach("dropped"), &saved(), Some("me@build"));
-    assert!(machines.settings_changed(&[]));
-    assert!(machines.unsaved().is_none());
-    assert_eq!(streaming(&machines), [true, false]);
-    assert!(machines.select(0));
-    assert!(machines.selected().is_none());
+fn forgetting_the_unsaved_machine_lets_it_go() {
+    let mut machines = Machines::new(reach("forget"), &[], Some("me@new"), true);
+    let mut cockpit = machines.cockpit().unwrap();
+    let held = machines.held(1).unwrap();
+    assert!(machines.forget_unsaved("me@new", &mut cockpit));
     assert!(!machines.listed());
-    assert_eq!(streaming(&machines), [false]);
+    assert!(!cockpit.machines().any(|machine| machine == held));
+}
+
+#[test]
+fn turning_a_machine_on_and_off_holds_it_and_lets_it_go() {
+    let mut machines = Machines::new(reach("turned"), &saved(), None, true);
+    let mut cockpit = machines.cockpit().unwrap();
+    let build = machines.held(1).unwrap();
+
+    let mut changed = saved();
+    changed[0].enabled = false;
+    changed[1].enabled = true;
+    machines.settings_changed(&changed, &mut cockpit);
+    assert_eq!(holding(&machines), [true, false, true]);
+    assert!(!cockpit.machines().any(|machine| machine == build));
+    assert_eq!(cockpit.machines().count(), 2);
+
+    machines.settings_changed(&[], &mut cockpit);
+    assert_eq!(holding(&machines), [true]);
+    assert_eq!(cockpit.machines().count(), 1, "the removed machine is let go");
 }
 
 #[test]
 fn a_machine_whose_target_is_an_option_is_never_listed() {
-    let machines = Machines::new(reach("option"), &[Machine::new("-oProxyCommand=x")], None);
+    let machines = Machines::new(reach("option"), &[Machine::new("-oProxyCommand=x")], None, true);
     assert!(!machines.listed());
 }
 
 #[test]
-fn a_remote_launch_on_a_turned_off_machine_starts_here() {
-    let machines = Machines::new(reach("off"), &saved(), Some("gpu"));
-    assert!(machines.selected().is_none(), "this computer");
-    assert_eq!(machines.rows(None)[2].connection, Connection::Disabled);
-    assert_eq!(streaming(&machines), [false, true, false]);
-}
-
-#[test]
-fn turning_off_the_machine_on_screen_says_the_window_must_leave() {
-    let mut machines = Machines::new(reach("turned-off"), &saved(), Some("me@build"));
-    assert!(!machines.settings_changed(&saved()));
-    let mut off = saved();
-    off[0].enabled = false;
-    assert!(machines.settings_changed(&off));
-    assert!(machines.select(0));
-    assert_eq!(streaming(&machines), [false, false, false]);
-}
-
-#[test]
-fn local_environment_disabled_without_remotes_has_no_selection_or_local_access() {
-    let reach = reach("local-environment-empty");
+fn this_computer_turned_off_is_never_opened() {
+    let reach = reach("local-off");
     let store = reach.store.clone();
-    let mut machines = Machines::with_local_environment(reach, &[], None, false);
-    assert_eq!(machines.selected_key(), None);
-    assert_eq!(machines.fallback(), None);
-    assert!(machines.rows(None).is_empty());
-    assert_eq!(streaming(&machines), [false]);
-    assert!(machines.go_to(Some(0)).is_none());
+    let mut machines = Machines::new(reach, &saved(), None, false);
     let mut cockpit = machines.cockpit().unwrap();
-    assert!(!cockpit.environment_available());
-    cockpit.retry_server();
-    cockpit.pump();
-    assert!(!store.exists(), "disabled Local never opens its store");
-    assert!(cockpit.discover_sessions(Vec::new(), 10).is_none());
-    assert!(cockpit
-        .discover_commands(
-            ferrite_core::store::Provider::Codex,
-            std::path::Path::new("/")
-        )
-        .is_none());
-}
-
-#[test]
-fn local_environment_disabled_selects_remote_and_never_streams_local() {
-    let mut machines =
-        Machines::with_local_environment(reach("local-environment-remote"), &saved(), None, false);
-    assert_eq!(machines.selected().unwrap().target, "me@build");
-    assert_eq!(streaming(&machines), [false, false, false]);
+    assert_eq!(holding(&machines), [false, true, false]);
+    assert_eq!(cockpit.this_computer(), None);
     assert_eq!(
         machines
-            .rows(None)
+            .rows(&cockpit)
             .iter()
             .map(|row| row.index)
             .collect::<Vec<_>>(),
-        [1, 2]
+        [1, 2],
+        "this computer is not listed"
     );
-    assert!(machines.settings_changed(&[]));
-    assert_eq!(machines.fallback(), None);
-    let cockpit = machines.go_to(None).unwrap().unwrap();
-    assert!(!cockpit.environment_available());
-    assert_eq!(machines.selected_key(), None);
-    assert!(machines.rows(None).is_empty(), "the removed remote is gone");
-    machines.set_local_enabled(true);
-    assert_eq!(machines.fallback(), Some(0));
-    assert!(machines.select(0));
-    assert_eq!(machines.selected_key(), Some(MachineKey(None)));
-    assert_eq!(streaming(&machines), [false]);
-}
+    cockpit.pump();
+    assert!(!store.exists(), "a disabled computer never opens its store");
 
-#[test]
-fn local_environment_disable_keeps_an_existing_remote_selected() {
-    let mut machines = Machines::new(
-        reach("local-environment-selected"),
-        &saved(),
-        Some("me@build"),
-    );
-    machines.set_local_enabled(false);
-    assert!(!machines.settings_changed(&saved()));
-    assert_eq!(machines.selected().unwrap().target, "me@build");
-    assert_eq!(streaming(&machines), [false, false, false]);
+    machines.settings_changed(&[], &mut cockpit);
+    assert!(!cockpit.environment_available(), "nothing held");
+    machines.set_local_enabled(true, &mut cockpit);
+    assert_eq!(cockpit.this_computer(), machines.held(0));
+    assert!(cockpit.environment_available());
 }

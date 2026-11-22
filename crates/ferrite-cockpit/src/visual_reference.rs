@@ -364,9 +364,10 @@ impl Scene {
         workspace: WorkspaceChoice,
         title: &str,
     ) -> (ThreadKey, Feed) {
+        let here = self.core.this_computer().expect("this computer");
         let thread = self
             .core
-            .open(provider, workspace)
+            .open(here, provider, workspace)
             .expect("open fixture Thread");
         if !title.is_empty() {
             self.core
@@ -2539,19 +2540,18 @@ fn menu() -> (Scene, Setup) {
 fn projecteditor() -> (Scene, Setup) {
     let mut scene = conversation("projecteditor");
     let extra = scene.project("ferrite-docs");
-    let project = scene
-        .core
-        .registry()
+    let here = scene.core.this_computer().expect("this computer");
+    let registry = scene.core.registry(here);
+    let key = registry
         .projects()
         .first()
-        .map(|project| project.id)
+        .map(|project| registry.project_key(project.id))
         .expect("a fixture Project");
-    let key = scene.core.registry().project_key(project);
     scene
         .core
         .add_project_directories(key, &[extra])
         .expect("add fixture directory");
-    let setup: Setup = Box::new(move |view, _, cx| view.open_project_editor(project, cx));
+    let setup: Setup = Box::new(move |view, _, cx| view.open_project_editor(key, cx));
     (scene, setup)
 }
 

@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use ferrite_core::{MachineKey, SavedThread, ThreadId, ThreadKey};
+use ferrite_core::{MachineId, MachineKey, SavedThread, ThreadId, ThreadKey};
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// What one tab shows. Singletons per Thread, then one per resource.
@@ -361,26 +361,36 @@ pub(crate) enum SurfaceAction {
 }
 
 /// Every Thread's Panel. Mutations keep their persistence revision here.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct Surfaces {
-    /// The Panels of the machine the window is on, `here`.
+    /// The Panels of the machines the window holds.
     threads: HashMap<ThreadKey, ThreadSurfaces>,
-    here: MachineKey,
-    /// Every other machine's Panels, as saved: written back as they were
-    /// read, and held again when the window is on their machine.
+    /// What saved files call each machine the window holds.
+    held: HashMap<MachineId, MachineKey>,
+    /// The Panels of machines the window does not hold, as saved: written
+    /// back as they were read, and held again when the window holds their
+    /// machine.
     elsewhere: BTreeMap<SavedThread, ThreadSurfaces>,
+    /// What each machine the window let go of was held as, until it holds
+    /// that machine again (`Rehold`).
+    let_go: HashMap<MachineKey, MachineId>,
     revision: u64,
 }
 
-/// No Panels, on this computer.
-impl Default for Surfaces {
-    fn default() -> Self {
-        Self {
-            threads: HashMap::new(),
-            here: MachineKey(None),
-            elsewhere: BTreeMap::new(),
-            revision: 0,
-        }
+/// A machine the window holds again, after it let go of it: held as `now`,
+/// it was `was`. A machine's Thread ids are its Store's, which a new attach
+/// does not change, so what the window keeps by a Thread's key moves to
+/// the same Thread's new key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Rehold {
+    pub(crate) was: MachineId,
+    pub(crate) now: MachineId,
+}
+
+impl Rehold {
+    /// `thread`'s key now, when it was a Thread of the machine let go.
+    pub(crate) fn key(self, thread: ThreadKey) -> Option<ThreadKey> {
+        (thread.machine() == self.was).then(|| thread.held_again(self.now))
     }
 }
 
@@ -400,49 +410,66 @@ impl Surfaces {
         self.revision
     }
 
-    /// Hold the Panels of the machine the window is on, `here`, each by the
-    /// key `resolve` finds its Thread under. The Panels held before are put
-    /// away as the window leaving their machine puts them (`leave`).
+    /// Hold the Panels of `machine`, which saved files call `saved_as`,
+    /// each by the key `key` gives its Thread there. The machine it was,
+    /// when the window let it go.
     pub(crate) fn hold(
         &mut self,
-        here: MachineKey,
-        resolve: impl Fn(&SavedThread) -> Option<ThreadKey>,
-    ) {
-        self.leave();
-        self.here = here;
-        let held: Vec<(SavedThread, ThreadKey)> = self
+        machine: MachineId,
+        saved_as: MachineKey,
+        key: impl Fn(ThreadId) -> ThreadKey,
+    ) -> Option<Rehold> {
+        let was = self.let_go.remove(&saved_as);
+        let held: Vec<SavedThread> = self
             .elsewhere
             .keys()
-            .filter(|saved| saved.machine == self.here)
-            .filter_map(|saved| Some((saved.clone(), resolve(saved)?)))
+            .filter(|saved| saved.machine == saved_as)
+            .cloned()
             .collect();
-        for (saved, key) in held {
+        for saved in held {
             let surfaces = self.elsewhere.remove(&saved).unwrap();
-            self.threads.insert(key, surfaces);
+            self.threads.insert(key(saved.thread), surfaces);
         }
+        self.held.insert(machine, saved_as);
+        was.map(|was| Rehold { was, now: machine })
     }
 
-    /// The window leaves its machine: what each of its Panels showed is
-    /// built again from its subject, as at a restart, and the Panels are
-    /// kept as saved until the window is on that machine again.
-    pub(crate) fn leave(&mut self) {
-        if self.threads.is_empty() {
+    /// The window let go of `machine`: its Panels are kept as they are,
+    /// every tab, until the window holds that machine again. The window
+    /// did not restart, so a tab whose resource ended with the machine (a
+    /// shell) says so in its place; only a restart drops those tabs.
+    pub(crate) fn let_go(&mut self, machine: MachineId) {
+        let Some(saved_as) = self.held.remove(&machine) else {
             return;
-        }
-        let before = self.persisted();
-        for (key, surfaces) in std::mem::take(&mut self.threads) {
-            let saved = self.saved(key);
-            let stored = PersistedThread::of(saved.clone(), &surfaces);
-            let surfaces = restored(stored, |id| id.lifecycle().restart == Restart::Restore);
+        };
+        let gone: Vec<(ThreadKey, ThreadSurfaces)> = self
+            .threads
+            .extract_if(|key, _| key.machine() == machine)
+            .collect();
+        for (key, surfaces) in gone {
+            let saved = SavedThread {
+                machine: saved_as.clone(),
+                thread: key.thread(),
+            };
             self.elsewhere.insert(saved, surfaces);
         }
-        self.revision += u64::from(before != self.persisted());
+        self.let_go.insert(saved_as, machine);
     }
 
-    /// `thread` as it is saved.
+    /// The machines whose Panels are held.
+    pub(crate) fn machines(&self) -> impl Iterator<Item = MachineId> + '_ {
+        self.held.keys().copied()
+    }
+
+    /// `thread` as it is saved; a Thread of a machine not held (a test's)
+    /// is this computer's.
     fn saved(&self, thread: ThreadKey) -> SavedThread {
         SavedThread {
-            machine: self.here.clone(),
+            machine: self
+                .held
+                .get(&thread.machine())
+                .cloned()
+                .unwrap_or_default(),
             thread: thread.thread(),
         }
     }
@@ -875,10 +902,10 @@ mod tests {
         ThreadKey::fixture(0, thread.get())
     }
 
-    /// `dir`'s Panels, as a window on this computer holds them.
+    /// `dir`'s Panels, as a window holding this computer holds them.
     fn held(dir: &Path) -> Surfaces {
         let mut surfaces = Surfaces::load(dir, |_| true).unwrap();
-        surfaces.hold(MachineKey(None), |saved| Some(here(saved.thread)));
+        surfaces.hold(here(ThreadId::new(1)).machine(), MachineKey(None), here);
         surfaces
     }
 
@@ -969,7 +996,7 @@ mod tests {
         surfaces.save(&dir).unwrap();
 
         let mut loaded = Surfaces::load(&dir, |id| *id != file("deleted")).unwrap();
-        loaded.hold(MachineKey(None), |saved| Some(here(saved.thread)));
+        loaded.hold(here(ThreadId::new(1)).machine(), MachineKey(None), here);
         let panel = loaded.get(kept).unwrap();
         assert_eq!(panel.tabs, [SurfaceId::Overview, file("a"), file("c")]);
         assert_eq!(panel.active, Some(file("c")), "the nearest tab left");
@@ -1004,8 +1031,8 @@ mod tests {
     }
 
     /// Thread 3 here and Thread 3 on box are two Threads: each keeps its
-    /// own Panel, held while the window is on its machine and written back
-    /// as it was while the window is not.
+    /// own Panel, held while the window holds its machine and written back
+    /// as it was while the window does not.
     #[test]
     fn a_panel_keeps_two_machines_threads_apart() {
         let dir = scratch("two-machines");
@@ -1021,23 +1048,35 @@ mod tests {
         let mut surfaces = held(&dir);
         let (mine, boxes) = (here(ThreadId::new(3)), ThreadKey::fixture(1, 3));
         assert_eq!(surfaces.get(mine).unwrap().active, Some(SurfaceId::Changes));
-        assert!(surfaces.get(boxes).is_none(), "box's Thread 3 is not held here");
+        assert!(surfaces.get(boxes).is_none(), "box is not held yet");
         surfaces.apply(mine, true, SurfaceAction::Open(SurfaceId::Background));
-        surfaces.save(&dir).unwrap();
 
-        let mut on_box = Surfaces::load(&dir, |_| true).unwrap();
-        on_box.hold(MachineKey(Some("me@box".into())), |saved| {
-            Some(ThreadKey::fixture(1, saved.thread.get()))
-        });
-        let panel = on_box.get(boxes).expect("box's Panel, as box left it");
+        let on_box = |thread: ThreadId| ThreadKey::fixture(1, thread.get());
+        surfaces.hold(boxes.machine(), MachineKey(Some("me@box".into())), on_box);
+        let panel = surfaces.get(boxes).expect("box's Panel, as box left it");
         assert_eq!(panel.tabs, [SurfaceId::Files]);
         assert!(panel.maximized && !panel.open);
-        assert!(on_box.get(mine).is_none());
-        on_box.save(&dir).unwrap();
         assert_eq!(
-            held(&dir).get(mine).unwrap().active,
+            surfaces.get(mine).unwrap().active,
             Some(SurfaceId::Background),
-            "this computer's Panel came back untouched"
+            "both held at once"
+        );
+        surfaces.apply(boxes, true, SurfaceAction::Open(SurfaceId::Changes));
+
+        surfaces.let_go(boxes.machine());
+        assert!(surfaces.get(boxes).is_none(), "box let go");
+        surfaces.save(&dir).unwrap();
+        let mut loaded = held(&dir);
+        assert_eq!(
+            loaded.get(mine).unwrap().active,
+            Some(SurfaceId::Background),
+            "this computer's Panel saved"
+        );
+        loaded.hold(boxes.machine(), MachineKey(Some("me@box".into())), on_box);
+        assert_eq!(
+            loaded.get(boxes).unwrap().active,
+            Some(SurfaceId::Changes),
+            "box's saved as it was let go"
         );
     }
 

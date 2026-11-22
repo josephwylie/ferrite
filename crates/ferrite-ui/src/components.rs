@@ -223,6 +223,25 @@ impl MenuButton for gpui::Stateful<Div> {
     }
 }
 
+/// A row's context menu, as a right click opens one on macOS: `press` runs
+/// as the right button goes down, given where, and the press goes no
+/// further, so a row under it opens no menu of its own.
+pub trait ContextPress: InteractiveElement + Sized {
+    fn context_press(
+        mut self,
+        press: impl Fn(gpui::Point<gpui::Pixels>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.interactivity()
+            .on_mouse_down(gpui::MouseButton::Right, move |event, window, cx| {
+                cx.stop_propagation();
+                press(event.position, window, cx)
+            });
+        self
+    }
+}
+
+impl<E: InteractiveElement> ContextPress for E {}
+
 /// A form action: nothing at rest, `paint::HOVER` under the pointer
 /// (blended), `paint::PRESS` pressed.
 pub fn form_button(id: impl Into<ElementId>, cx: &App) -> Button {
@@ -3078,6 +3097,43 @@ mod tests {
         cx.simulate_mouse_down(beside, MouseButton::Left, Modifiers::none());
         cx.simulate_mouse_move(beside + gpui::point(px(0.), px(40.)), MouseButton::Left, Modifiers::none());
         assert!(dragging(cx), "the same press beside it picks the head up");
+    }
+
+    /// A context press answers the right button going down, where it went
+    /// down, and neither the left button nor the row under it.
+    #[gpui::test]
+    fn a_context_press_answers_the_right_button_where_it_went_down(cx: &mut gpui::TestAppContext) {
+        use std::{cell::RefCell, rc::Rc};
+
+        use gpui::{Modifiers, MouseButton, Pixels, Point};
+
+        type Pressed = Rc<RefCell<Vec<(&'static str, Point<Pixels>)>>>;
+        struct Row(Pressed);
+        impl gpui::Render for Row {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                let (row, heading) = (self.0.clone(), self.0.clone());
+                div().p(px(10.)).context_press(move |at, _, _| row.borrow_mut().push(("row", at))).child(
+                    div()
+                        .id("heading-under-test")
+                        .debug_selector(|| "heading-under-test".into())
+                        .size(px(40.))
+                        .context_press(move |at, _, _| heading.borrow_mut().push(("heading", at))),
+                )
+            }
+        }
+
+        let pressed = Pressed::default();
+        let (_, cx) = cx.add_window_view({
+            let pressed = pressed.clone();
+            move |_, _| Row(pressed)
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let heading = cx.debug_bounds("heading-under-test").expect("the heading");
+        cx.simulate_mouse_down(heading.center(), MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(heading.center(), MouseButton::Left, Modifiers::none());
+        assert!(pressed.borrow().is_empty(), "the left button is no context press");
+        cx.simulate_mouse_down(heading.center(), MouseButton::Right, Modifiers::none());
+        assert_eq!(*pressed.borrow(), [("heading", heading.center())], "the heading's, where it went down");
     }
 
     /// A menu's icon button opens it as the pointer goes down, once for the

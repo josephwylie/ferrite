@@ -186,6 +186,7 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
         let thread = view
             .cockpit
             .update(cx, |cockpit, _| cockpit.open(
+                cockpit.first_machine(),
                 Provider::Claude,
                 WorkspaceChoice::NewWorktree {
                     repo: repo_two.clone(),
@@ -231,7 +232,6 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
         assert_eq!(
             view.cockpit
                 .read(cx)
-                .registry()
                 .project(draft.binding.project())
                 .unwrap()
                 .title,
@@ -388,9 +388,9 @@ fn picking_an_existing_worktree_binds_the_thread_to_its_path(cx: &mut TestAppCon
             .cwd()
             .to_path_buf();
         assert_eq!(std::fs::canonicalize(cwd).unwrap(), worktree);
-        let project = view.cockpit.read(cx).registry().projects()[0].id;
+        let project = view.cockpit.read(cx).registry(view.cockpit.read(cx).first_machine()).projects()[0].id;
         assert!(
-            view.cockpit.read(cx).registry().worktrees(project).is_empty(),
+            view.cockpit.read(cx).registry(view.cockpit.read(cx).first_machine()).worktrees(project).is_empty(),
             "adoption minted nothing"
         );
         assert_eq!(
@@ -778,6 +778,7 @@ fn a_turn_end_rereads_the_checkout_off_the_ui_thread(cx: &mut TestAppContext) {
     let mut core = Cockpit::new(store, Box::new(fake.clone()));
     let thread = core
         .open(
+            core.first_machine(),
             Provider::Claude,
             WorkspaceChoice::Main {
                 checkout: repo.clone(),

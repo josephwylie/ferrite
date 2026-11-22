@@ -203,8 +203,8 @@ and `agent.result`. Peers is the Server's client of a saved machine.
     keep the order they were started in, as T3 lists a thread's remote
     tasks by when they started.
   - Its press opens the Thread there by its Server and id, on the machine
-    of this window that answers as that Server: on screen, or by going to
-    it as an alert does (`CockpitView::open_elsewhere`). A row no machine
+    of this window that answers as that Server, in place, as any row of
+    that machine opens (`CockpitView::open_elsewhere`). A row no machine
     of this window answers for is drawn but cannot be pressed, as T3
     disables it.
   - An open one has a stop: `Op::CancelDelegate`, the agent's

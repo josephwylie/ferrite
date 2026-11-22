@@ -112,7 +112,7 @@ pub enum Capability {
     /// Browser controls require a server grant at the native Ready boundary.
     BrowserDispatch,
     /// This client lists the Server's parked Threads off its `parked`
-    /// message: a window on a machine, whose logs stay there (ADR 0026).
+    /// message: a window holding a machine, whose logs stay there (ADR 0026).
     ParkedThreads,
     /// This client is a `ferrite --headless` window: the API's `window.*`
     /// actions are for it (ADR 0038).
@@ -478,7 +478,7 @@ pub enum Op {
         path: PathBuf,
     },
     /// What a Project's repo holds for a Draft's workspace chip, read by
-    /// git on the Server's computer: how a window on a machine offers the
+    /// git on the Server's computer: how a window holding a machine offers the
     /// machine's worktrees and branches (ADR 0026). Replied `repo_listing`.
     ListRepo {
         project: ProjectId,
@@ -1923,6 +1923,18 @@ pub struct ThreadState {
     /// Subagent histories that could not be read back from the log.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history_errors: Vec<WireHistoryError>,
+}
+
+impl ThreadState {
+    /// The state as a window that does not watch the Thread is sent it:
+    /// without what its Session offers a Composer. Those lists are nearly
+    /// all of its bytes and only a drawn Thread reads them, so they come
+    /// with the watch (ADR 0032).
+    pub fn unwatched(mut self) -> Self {
+        self.commands = Vec::new();
+        self.models = Vec::new();
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

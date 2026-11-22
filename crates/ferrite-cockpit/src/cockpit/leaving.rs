@@ -65,33 +65,56 @@ impl CockpitView {
     /// What leaving now would interrupt or lose, or `None` when nothing
     /// would.
     pub(crate) fn leaving_warning(&self, cx: &App) -> Option<String> {
-        let agents = if self.cockpit.read(cx).server().is_some() {
-            None
-        } else {
-            self.in_flight(cx).map(|what| {
-                format!("{what}. Leaving stops them; their Threads reopen next launch.")
-            })
+        let cockpit = self.cockpit.read(cx);
+        // Only an Engine of the window's own stops with it: a Server's
+        // agents work on.
+        let agents = self
+            .in_flight(|machine| cockpit.server(machine).is_none(), cx)
+            .map(|what| format!("{what}. Leaving stops them; their Threads reopen next launch."));
+        let files = self.files.read(cx);
+        let unsaved: usize = cockpit
+            .machines()
+            .filter_map(|machine| files.unsaved_at_leaving(machine, cx))
+            .sum();
+        let files = match unsaved {
+            0 => None,
+            1 => Some("1 file has unsaved changes. Leaving discards them.".to_string()),
+            count => Some(format!("{count} files have unsaved changes. Leaving discards them.")),
         };
-        let files = self.files.read(cx).unsaved_at_leaving(cx).map(|count| match count {
-            1 => "1 file has unsaved changes. Leaving discards them.".to_string(),
-            count => format!("{count} files have unsaved changes. Leaving discards them."),
-        });
         match (agents, files) {
             (Some(agents), Some(files)) => Some(format!("{agents} {files}")),
             (warning, None) | (None, warning) => warning,
         }
     }
 
+    /// `in_flight` on this computer: what an update of this computer's
+    /// Ferrite stops or cuts off.
+    pub(crate) fn in_flight_here(&self, cx: &App) -> Option<String> {
+        let cockpit = self.cockpit.read(cx);
+        self.in_flight(|machine| cockpit.local(machine), cx)
+    }
+
     /// Who is working and who waits on a Decision, or `None` when every
-    /// agent is idle. Work behind Main (its Subagents, its background
+    /// agent `on` a machine it names is idle. Work behind Main (its Subagents, its background
     /// tasks) counts: it outlives Main's turn, and leaving ends it too.
-    pub(crate) fn in_flight(&self, cx: &App) -> Option<String> {
-        let waiting = self.cockpit.read(cx).blocked().len();
+    pub(crate) fn in_flight(
+        &self,
+        on: impl Fn(ferrite_core::MachineId) -> bool,
+        cx: &App,
+    ) -> Option<String> {
+        let waiting = self
+            .cockpit
+            .read(cx)
+            .blocked()
+            .into_iter()
+            .filter(|thread| on(thread.machine()))
+            .count();
         let working = self
             .cockpit
             .read(cx)
             .threads()
             .into_iter()
+            .filter(|thread| on(thread.machine()))
             .filter_map(|thread| self.cockpit.read(cx).thread(thread))
             .filter(|thread| {
                 (thread.working() || thread.background_work()) && thread.pending().is_none()

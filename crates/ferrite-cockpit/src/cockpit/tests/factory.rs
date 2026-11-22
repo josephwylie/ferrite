@@ -82,7 +82,7 @@ fn the_factory_button_lists_each_project_and_a_fresh_one_is_empty(cx: &mut TestA
     assert!(!shows(cx, "factory-columns"));
     assert_eq!(fake.streams.borrow().len(), streams, "nothing started");
     view.read_with(cx, |view, cx| {
-        assert!(view.cockpit.read(cx).factory().tasks.is_empty());
+        assert!(view.cockpit.read(cx).factory(view.cockpit.read(cx).first_machine()).tasks.is_empty());
         assert_eq!(view.cockpit.read(cx).threads().len(), 1);
     });
 }
@@ -130,8 +130,8 @@ fn the_board_lays_cards_in_their_columns(cx: &mut TestAppContext) {
     tick(cx);
     assert!(shows(cx, "nav-factory-attention"), "one needs you");
     view.update(cx, |view, cx| {
-        assert_eq!(view.cockpit.read(cx).factory().needs_you(project.project()), 1);
-        view.open_factory(project.project(), cx);
+        assert_eq!(view.cockpit.read(cx).factory(view.cockpit.read(cx).first_machine()).needs_you(project.project()), 1);
+        view.open_factory(project, cx);
     });
     tick(cx);
     for column in [
@@ -191,7 +191,7 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     let streams = fake.streams.borrow().len();
-    view.update(cx, |view, cx| view.open_task("t-1", cx));
+    view.update(cx, |view, cx| view.open_task(view.cockpit.read(cx).first_machine(), "t-1", cx));
     tick(cx);
     assert!(shows(cx, "task-panel"));
     assert!(shows(cx, "task-status"));
@@ -229,7 +229,7 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
                 tasks: vec![task("t-1", project.project(), status, Some(worker), None, None)],
                 ..Default::default()
             }));
-            view.open_task("t-1", cx);
+            view.open_task(view.cockpit.read(cx).first_machine(), "t-1", cx);
         });
         tick(cx);
         assert_eq!(shows(cx, "task-delete"), delete, "{status:?}");
@@ -268,8 +268,7 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
     };
     let before = toasts(cx);
     let inbox_len = |view: &CockpitView, cx: &gpui::App| {
-        let state = view.nav_state(cx);
-        view.inbox_rows(&state, cx).len()
+        view.needs_you_rows(cx).len()
     };
     let inbox_before = view.read_with(cx, |view, cx| inbox_len(view, cx));
     view.update(cx, |view, cx| {
@@ -302,8 +301,32 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
             .iter()
             .map(|notification| notification.tag.to_string())
             .collect::<Vec<_>>(),
-        [crate::cockpit::factory::task_tag("t-1")]
+        [crate::cockpit::factory::task_tag(&ferrite_core::MachineKey(None), "t-1")]
     );
+    // Its click lands on the Task, on its machine.
+    let tag = cx.delivered_system_notifications()[0].tag.to_string();
+    view.update(cx, |view, cx| view.open_system_notification(&tag, cx));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.open_task_now(cx).map(|task| task.id.as_str()), Some("t-1"));
+    });
+}
+
+/// A Task's notification tag names its machine, as a Thread's does: Task
+/// ids count from 1 on each machine, so `t-1` here and `t-1` on box are
+/// two Tasks, and a click reads back which.
+#[test]
+fn a_tasks_tag_names_its_machine() {
+    use crate::cockpit::factory::{task_tag, tagged_task};
+    use ferrite_core::MachineKey;
+    let here = MachineKey(None);
+    let on_box = MachineKey(Some("me@box".into()));
+    assert_eq!(task_tag(&here, "t-1"), "ferrite-task-t-1");
+    assert_eq!(task_tag(&on_box, "t-1"), "ferrite-task-t-1@me@box");
+    assert_ne!(task_tag(&here, "t-1"), task_tag(&on_box, "t-1"));
+    for machine in [here, on_box] {
+        assert_eq!(tagged_task(&task_tag(&machine, "t-1")), Some((machine, "t-1")));
+    }
+    assert_eq!(tagged_task("ferrite-thread-1@me@box"), None, "a Thread's is not a Task's");
 }
 
 /// A Task's toast says the event it announced, from the alert itself,
@@ -413,14 +436,14 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
 fn an_empty_projects_factory_opens_from_the_nav(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("factory-empty-project", 1);
     let repo = repo_in(&scratch("factory-empty-project-repo"));
-    let empty = core.register_project(&repo).unwrap();
+    let empty = core.register_project(core.first_machine(), &repo).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     view.update_in(cx, |view, window, cx| {
         view.run_menu_verb(
             MenuTarget::NavFilter,
-            MenuVerb::FilterProject(Some(empty.project())),
+            MenuVerb::FilterProject(Some(empty)),
             window,
             cx,
         )
@@ -434,7 +457,7 @@ fn an_empty_projects_factory_opens_from_the_nav(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| {
         assert_eq!(
             view.factory_project(),
-            Some(empty).map(|key| key.project())
+            Some(empty)
         );
     });
 }

@@ -344,10 +344,25 @@ impl Group {
 pub struct Page {
     pub key: PageKey,
     pub groups: Vec<Group>,
+    /// What the page's settings apply to, said atop it (T3 Code's scope
+    /// sentence, `Applying settings on box`); a group that alone applies
+    /// to a machine says it in its own `Applies to` row.
+    pub scope: Option<SharedString>,
 }
 
 pub fn page(key: PageKey, groups: Vec<Group>) -> Page {
-    Page { key, groups }
+    Page {
+        key,
+        groups,
+        scope: None,
+    }
+}
+
+impl Page {
+    pub fn scope(mut self, scope: Option<SharedString>) -> Self {
+        self.scope = scope;
+        self
+    }
 }
 
 /// `options`' labels and chosen flags, and a pick by index that changes

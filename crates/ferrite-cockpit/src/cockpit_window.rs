@@ -3,7 +3,7 @@
 
 use gpui::{div, prelude::*, AnyView, Context, Entity, StyleRefinement, Window};
 
-use crate::cockpit::{CockpitView, GoToMachine};
+use crate::cockpit::CockpitView;
 use ferrite_ui::loops_overlay::{self, LoopsOverlay};
 
 /// Whether the overlay runs: on unless `FERRITE_LOOPS_OVERLAY=0`.
@@ -18,20 +18,12 @@ fn enabled() -> bool {
     })
 }
 
-/// How long an alert the window went to another machine for waits for that
-/// machine to answer: more than ssh takes to reach one that is up. Later,
-/// the operator has moved on, and focus is not taken from them.
-const LANDING_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
-
 /// The kit Root's view: the Cockpit, cached, and the loops over it. It
 /// also brings the window forward for a clicked system notification (ADR
-/// 0017), and puts the window on another machine (ADR 0026) by building
-/// the Cockpit afresh on it.
+/// 0017).
 pub struct CockpitWindow {
     cockpit: Entity<CockpitView>,
     overlay: Option<Entity<LoopsOverlay>>,
-    /// The Cockpit asking to be on another machine.
-    _going: gpui::Subscription,
 }
 
 impl CockpitWindow {
@@ -64,89 +56,11 @@ impl CockpitWindow {
             },
             cx,
         );
-        let going = Self::follow(&cockpit, window, cx);
         let overlay = overlay.then(|| loops_overlay::overlay(window, cx));
-        Self {
-            cockpit,
-            overlay,
-            _going: going,
-        }
+        Self { cockpit, overlay }
     }
 
-    fn follow(
-        cockpit: &Entity<CockpitView>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::Subscription {
-        cx.subscribe_in(
-            cockpit,
-            window,
-            |this, _, going: &GoToMachine, window, cx| {
-                this.go_to(going.index, going.open.clone(), window, cx)
-            },
-        )
-    }
-
-    /// Put the window on machine `index`: a Cockpit attached there, with
-    /// the settings the window has now, which opens `open` once attached.
-    /// The one it leaves lets its machine's Threads go; that machine
-    /// streams status from here on.
-    fn go_to(
-        &mut self,
-        index: Option<usize>,
-        open: Option<crate::cockpit::Landing>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let (machines, prefs, provider) = {
-            let view = self.cockpit.read(cx);
-            let Some(machines) = view.machines() else {
-                return;
-            };
-            (
-                machines,
-                view.successor_preferences(),
-                view.launch_provider(),
-            )
-        };
-        if let Some(error) = self.cockpit.read(cx).files_leave_error(cx) {
-            use gpui::component::{notification::Notification, WindowExt};
-            window.push_notification(Notification::warning(error), cx);
-            return;
-        }
-        let left = machines.read(cx).selected_key();
-        let core = match machines.update(cx, |machines, _| machines.go_to(index)) {
-            Some(Ok(core)) => core,
-            Some(Err(error)) => {
-                ferrite_core::log!("the window could not go to that machine: {error}");
-                return;
-            }
-            None => return,
-        };
-        let arrived = machines.read(cx).selected_key();
-        let needs_you = self
-            .cockpit
-            .update(cx, |view, cx| {
-                view.toasts
-                    .update(cx, |toasts, _| std::mem::take(&mut toasts.needs_you))
-            })
-            .moved(left.as_ref(), arrived.as_ref());
-        let panel = self.cockpit.update(cx, |view, cx| view.successor_panel(cx));
-        let until = cx.background_executor().now() + LANDING_WAIT;
-        let view = cx.new(|cx| {
-            CockpitView::new_with_panel(core, provider, prefs, panel, Some(machines), cx)
-                .with_needs_you(needs_you, cx)
-                .with_landing(open, until)
-        });
-        view.update(cx, |view, cx| view.set_parts(self.overlay.is_some(), cx));
-        self.cockpit
-            .update(cx, |left, cx| left.take_server_bands(window, cx));
-        self._going = Self::follow(&view, window, cx);
-        self.cockpit = view;
-        cx.notify();
-    }
-
-    /// The Cockpit this window shows now.
+    /// The window's view: one for its whole run, holding every machine.
     pub fn cockpit(&self) -> &Entity<CockpitView> {
         &self.cockpit
     }

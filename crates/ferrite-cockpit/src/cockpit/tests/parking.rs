@@ -20,7 +20,7 @@ fn closing_a_pane_parks_the_thread_rather_than_losing_it(cx: &mut TestAppContext
         assert!(!view
             .needs_you_rows(cx)
             .iter()
-            .any(|row| row.thread == closed.thread()));
+            .any(|row| row.thread == closed));
         assert_eq!(view.panes.len(), 1, "the Pane is gone");
         assert!(
             view.cockpit.read(cx).thread(closed).is_none(),
@@ -56,7 +56,7 @@ fn reopening_brings_a_parked_thread_back_with_its_history(cx: &mut TestAppContex
         assert!(view
             .needs_you_rows(cx)
             .iter()
-            .any(|row| row.thread == closed.thread()));
+            .any(|row| row.thread == closed));
         assert_eq!(view.panes.len(), 2, "the Pane is back");
         assert!(
             view.panes.iter().any(|pane| pane.thread() == Some(closed)),
@@ -147,10 +147,10 @@ fn reopening_falls_back_to_creation_order_for_threads_parked_before_launch(
     let store = Store::open(scratch("park-order-fallback")).unwrap();
     let mut core = Cockpit::new(store, Box::new(fake.clone()));
     let a = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     let b = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     // Parked before the view exists — a previous launch, as far as the
     // view can know.

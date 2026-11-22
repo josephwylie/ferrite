@@ -163,8 +163,9 @@ impl Sessions {
         workspace: WorkspaceChoice,
         title: &str,
     ) -> ThreadKey {
+        let machine = core.this_computer().expect("the fixture world is this computer");
         let thread = core
-            .open(provider, workspace)
+            .open(machine, provider, workspace)
             .expect("open a fixture Thread");
         core.rename_thread(thread, title)
             .expect("name a fixture Thread");

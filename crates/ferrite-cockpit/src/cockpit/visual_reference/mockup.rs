@@ -322,14 +322,15 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
         core.focus_thread(thread);
     }
     let keep = [bb, epicurean, calls, recipes, customers, permission];
-    let notices = core.notifications();
+    let machine = core.this_computer().expect("the mockup is this computer");
+    let notices = core.notifications(machine);
     let dismissed: Vec<_> = notices
         .notices()
         .filter(|notice| !keep.contains(&notices.key(notice.thread)))
         .map(|notice| notice.id)
         .collect();
     for id in dismissed {
-        core.dismiss_notice(id);
+        core.dismiss_notice(machine, id);
     }
 
     match look {
@@ -1483,7 +1484,7 @@ mod tests {
         let core = &world.core;
         assert_eq!(core.threads().len(), 14, "fourteen Threads are open");
         assert_eq!(core.parked().unwrap().len(), 3, "three are parked");
-        assert_eq!(core.registry().projects().len(), 7);
+        assert_eq!(core.registry(core.this_computer().unwrap()).projects().len(), 7);
         let asking = core.needs_you();
         assert_eq!(asking.len(), 4, "four need you");
         for thread in [

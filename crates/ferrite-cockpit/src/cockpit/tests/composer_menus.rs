@@ -694,6 +694,7 @@ fn draft_mentions_follow_the_selected_workspace(cx: &mut TestAppContext) {
         let thread = view
             .cockpit
             .update(cx, |cockpit, _| cockpit.open(
+                cockpit.first_machine(),
                 Provider::Claude,
                 WorkspaceChoice::NewWorktree { repo: repo.clone() },
             ))
@@ -701,7 +702,7 @@ fn draft_mentions_follow_the_selected_workspace(cx: &mut TestAppContext) {
         view.cockpit.update(cx, |cockpit, _| cockpit.park(thread).unwrap());
         let focused = view.focused(cx);
         let entry = view.panes[focused].draft().unwrap().binding.project();
-        let worktree = view.cockpit.read(cx).registry().worktrees(entry)[0].clone();
+        let worktree = view.cockpit.read(cx).registry(entry.machine()).worktrees(entry.project())[0].clone();
         std::fs::write(worktree.path.join("worktree-only.txt"), "tree\n").unwrap();
         view.panes[focused]
             .draft_mut()
@@ -762,7 +763,7 @@ fn draft_mentions_follow_the_selected_workspace(cx: &mut TestAppContext) {
             .update(cx, |composer, cx| composer.set(String::new(), cx));
         let focused = view.focused(cx);
         let project = view.panes[focused].draft().unwrap().binding.project();
-        let worktree = view.cockpit.read(cx).registry().worktrees(project)[0].clone();
+        let worktree = view.cockpit.read(cx).registry(project.machine()).worktrees(project.project())[0].clone();
         view.panes[focused]
             .draft_mut()
             .unwrap()

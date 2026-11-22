@@ -78,7 +78,7 @@ fn the_popover_keeps_its_keyboard_cursor_in_view(cx: &mut TestAppContext) {
     for n in 0..24 {
         let dir = base.join(format!("project-{n:02}"));
         std::fs::create_dir_all(&dir).unwrap();
-        core.register_project(&dir).unwrap();
+        core.register_project(core.first_machine(), &dir).unwrap();
     }
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -223,7 +223,7 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
         );
     });
     assert_eq!(
-        view.read_with(cx, |view, cx| view.cockpit.read(cx).notifications().unread()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).unread()),
         3,
         "the Inbox lists every finish"
     );
@@ -292,7 +292,7 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
     let (mut core, _fake) = cockpit("narrow-draft-controls", 1);
     let dir = scratch("narrow-draft-controls-a-rather-long-project-directory-name");
     std::fs::create_dir_all(&dir).unwrap();
-    core.register_project(&dir).unwrap();
+    core.register_project(core.first_machine(), &dir).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(720.), px(900.)));
     view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
@@ -577,13 +577,13 @@ fn a_project_in_use_keeps_its_remove_verb_disabled(cx: &mut TestAppContext) {
     let project = core.project_of(thread).expect("the Thread's Project");
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
-    view.update(cx, |view, cx| view.open_project_editor(project.project(), cx));
+    view.update(cx, |view, cx| view.open_project_editor(project, cx));
     tick(cx);
     let remove = cx.debug_bounds("remove-project").expect("the remove verb");
     cx.simulate_click(remove.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.cockpit.read(cx).registry().project(project.project()).is_some());
+        assert!(view.cockpit.read(cx).registry(view.cockpit.read(cx).first_machine()).project(project.project()).is_some());
         assert!(view.project_card(cx).is_some(), "the sheet stays up");
     });
 }
@@ -992,7 +992,7 @@ fn the_solo_composer_holds_its_place_through_a_decision(cx: &mut TestAppContext)
 fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
     let dir = scratch("no-server");
     let core = Cockpit::attach(ferrite_core::cockpit::Attach {
-            saved_as: Some(ferrite_core::MachineKey(None)),
+            saved_as: ferrite_core::MachineKey(None),
             browser: false,
             driven: false,
         store: dir.clone(),
@@ -1008,7 +1008,7 @@ fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
     })
     .unwrap();
     assert!(matches!(
-        core.server(),
+        core.server(core.first_machine()),
         Some(ferrite_core::cockpit::ServerState::Detached { .. })
     ));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -1031,7 +1031,7 @@ fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
 fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
     let dir = scratch("restart-press");
     let core = Cockpit::attach(ferrite_core::cockpit::Attach {
-            saved_as: Some(ferrite_core::MachineKey(None)),
+            saved_as: ferrite_core::MachineKey(None),
             browser: false,
             driven: false,
         store: dir.clone(),
@@ -1067,7 +1067,7 @@ fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         assert!(
             matches!(
-                view.cockpit.read(cx).server_restart(),
+                view.cockpit.read(cx).server_restart(view.cockpit.read(cx).first_machine()),
                 Some(ferrite_core::cockpit::ServerRestart::Failed { .. })
             ),
             "a Server that does not answer cannot restart, and the window says so"

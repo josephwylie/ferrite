@@ -50,27 +50,25 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
     ));
     let mut cx = app(keys);
     cx.update(|cx| cx.set_http_client(http));
-    let machines = cx.new(|_| {
-        Machines::with_local_environment(
-            Reach {
-                settings_dir: settings_dir.clone(),
-                store: store.clone(),
-                executable: std::env::current_exe().unwrap_or_default(),
-                client: ferrite_core::protocol::Peer {
-                    name: "ferrite".into(),
-                    version: env!("CARGO_PKG_VERSION").into(),
-                },
-                renderer: None,
-                driven: true,
-                defaults: defaults.clone(),
-                bridge: ferrite_core::machine::Bridge::for_machine,
+    let mut machines = Machines::new(
+        Reach {
+            settings_dir: settings_dir.clone(),
+            store: store.clone(),
+            executable: std::env::current_exe().unwrap_or_default(),
+            client: ferrite_core::protocol::Peer {
+                name: "ferrite".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
             },
-            &settings.machines,
-            None,
-            settings.local_environment_enabled,
-        )
-    });
-    let core = match cx.update(|cx| machines.update(cx, |machines, _| machines.cockpit())) {
+            renderer: None,
+            driven: true,
+            defaults: defaults.clone(),
+            bridge: ferrite_core::machine::Bridge::for_machine,
+        },
+        &settings.machines,
+        None,
+        settings.local_environment_enabled,
+    );
+    let core = match machines.cockpit() {
         Ok(core) => core,
         Err(e) => {
             eprintln!("ferrite --headless: cannot reach the Ferrite server: {e}");
@@ -103,10 +101,12 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
         let requests = driver.cx.update(|cx| {
             source.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.take_drives()))
         });
-        for (request, action) in requests {
+        for (machine, request, action) in requests {
             let answer = act(&mut driver, action);
             driver.cx.update(|cx| {
-                source.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.driven(request, answer)));
+                source.update(cx, |view, cx| {
+                    view.cockpit.update(cx, |cockpit, _| cockpit.driven(machine, request, answer))
+                });
             });
         }
     }

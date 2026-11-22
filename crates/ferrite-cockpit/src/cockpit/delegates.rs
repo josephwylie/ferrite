@@ -13,7 +13,7 @@ use ferrite_core::delegate::{self, DelegateId, Delegated};
 use ferrite_core::notifications::{DecisionNoticeId, RequestKind};
 use ferrite_core::server::ServerId;
 use ferrite_core::transcript::{Body, Transcript};
-use ferrite_core::{DelegatedFrom, MachineKey};
+use ferrite_core::{DelegatedFrom, MachineId};
 use ferrite_pane::pane::{AgentClock, AgentFace, AgentRun, Elsewhere};
 use ferrite_pane::transcript::{ParentLink, TranscriptTail};
 use gpui::App;
@@ -23,8 +23,8 @@ pub(super) struct Serving {
     /// The name this window saved it by; `None` for this computer, which
     /// the nav calls `local` and its Server calls by its own label.
     pub(super) name: Option<String>,
-    /// Off screen, by its key; `None` for the machine on screen.
-    pub(super) away: Option<MachineKey>,
+    /// The machine, as the window holds it.
+    pub(super) machine: MachineId,
 }
 
 /// The Thread on another machine that delegated one of this window's (T3's
@@ -58,28 +58,25 @@ impl Delegator {
 }
 
 impl CockpitView {
-    /// The machine whose Server answers as `server` now: the one on
-    /// screen, or one off screen the window has heard from.
+    /// The machine of this window whose Server answers as `server` now.
     pub(super) fn serving(&self, server: &ServerId, cx: &App) -> Option<Serving> {
-        let answers = |state: Option<ServerState>| {
-            matches!(state, Some(ServerState::Attached { id: Some(id), .. }) if id == *server)
-        };
         let cockpit = self.cockpit.read(cx);
-        if answers(cockpit.server()) {
-            let name = cockpit
-                .bridge(cockpit.on_screen())
-                .map(|bridge| bridge.name().to_string());
-            return Some(Serving { name, away: None });
-        }
-        self.machines
-            .as_ref()?
-            .read(cx)
-            .off_screen()
-            .find(|away| answers(Some(away.status.server())))
-            .map(|away| Serving {
-                name: away.key.0.is_some().then_some(away.name),
-                away: Some(away.key),
-            })
+        let machine = cockpit.machines().find(|machine| {
+            matches!(
+                cockpit.server(*machine),
+                Some(ServerState::Attached { id: Some(id), .. }) if id == *server
+            )
+        })?;
+        Some(Serving {
+            name: self.machine_label(machine, cx),
+            machine,
+        })
+    }
+
+    /// Thread `thread` of the machine whose Server answers as `server`.
+    fn key_on(&self, server: &ServerId, thread: ThreadId, cx: &App) -> Option<ThreadKey> {
+        let machine = self.serving(server, cx)?.machine;
+        Some(self.cockpit.read(cx).registry(machine).key(thread))
     }
 
     /// The Thread that delegated one of this window's, from what it was
@@ -87,18 +84,12 @@ impl CockpitView {
     /// says of it now.
     pub(super) fn delegator(&self, from: &DelegatedFrom, cx: &App) -> Delegator {
         let serving = self.serving(&from.server, cx);
-        let machines = self.machines.as_ref().map(|machines| machines.read(cx));
-        let title = serving
-            .as_ref()
-            .and_then(|serving| serving.away.as_ref())
-            .zip(machines.as_ref())
-            .and_then(|(away, machines)| {
-                machines
-                    .off_screen()
-                    .find(|there| there.key == *away)?
-                    .status
-                    .title(from.thread)
-            });
+        let cockpit = self.cockpit.read(cx);
+        let title = serving.as_ref().and_then(|serving| {
+            cockpit
+                .thread(cockpit.registry(serving.machine).key(from.thread))?
+                .title()
+        });
         Delegator::of(from, serving, title)
     }
 
@@ -119,34 +110,17 @@ impl CockpitView {
     /// `DelegatedFromRow`): it opens when its machine still has it, and
     /// says in T3's words when not, or when that machine is gone.
     pub(super) fn open_delegator(&mut self, server: &ServerId, thread: ThreadId, cx: &mut Context<Self>) {
-        let holds = match self.serving(server, cx).map(|serving| serving.away) {
-            None => Err("Could not open the parent thread"),
-            // On screen, an open that finds nothing says so itself.
-            Some(None) => Ok(true),
-            Some(Some(away)) => Ok(self
-                .machines
-                .as_ref()
-                .and_then(|machines| {
-                    machines
-                        .read(cx)
-                        .off_screen()
-                        .find(|there| there.key == away)?
-                        .status
-                        .holds(thread)
-                })
-                // Until its Server says what it parked, the open tries.
-                .unwrap_or(true)),
+        let Some(key) = self.key_on(server, thread, cx) else {
+            self.nav_notice.problem("Could not open the parent thread");
+            cx.notify();
+            return;
         };
-        match holds {
-            Ok(true) => self.open_elsewhere(server, thread, cx),
-            Ok(false) => {
-                self.nav_notice.hint("The parent thread was deleted");
-                cx.notify();
-            }
-            Err(why) => {
-                self.nav_notice.problem(why);
-                cx.notify();
-            }
+        // Until its Server says what it parked, the open tries.
+        if self.cockpit.read(cx).holds(key).unwrap_or(true) {
+            self.notice_verb(Verb::OpenThread(key), cx);
+        } else {
+            self.nav_notice.hint("The parent thread was deleted");
+            cx.notify();
         }
     }
 
@@ -206,21 +180,11 @@ impl CockpitView {
         Some((delegated.server.clone(), delegated.thread))
     }
 
-    /// Open Thread `thread` of the machine whose Server is `server`: here
-    /// when it is on screen, else by going to it first, as an alert's open
-    /// does. A machine no longer reached opens nothing.
+    /// Open Thread `thread` of the machine whose Server is `server`, in
+    /// place. A machine no longer reached opens nothing.
     pub(super) fn open_elsewhere(&mut self, server: &ServerId, thread: ThreadId, cx: &mut Context<Self>) {
-        match self.serving(server, cx).map(|serving| serving.away) {
-            Some(None) => self.notice_verb(Verb::OpenThread(thread), cx),
-            Some(Some(away)) => self.go_to_alert(
-                Alert {
-                    away: Some(away),
-                    target: RowTarget::Thread(thread),
-                    thread,
-                },
-                cx,
-            ),
-            None => {}
+        if let Some(key) = self.key_on(server, thread, cx) {
+            self.notice_verb(Verb::OpenThread(key), cx);
         }
     }
 
@@ -257,12 +221,13 @@ pub(super) struct WaitingDelegate {
 
 /// What this window reads of one Delegate's Thread on its machine.
 pub(super) struct Seen {
-    pub(super) away: Option<MachineKey>,
+    /// Its Thread, on its machine.
+    pub(super) thread: ThreadKey,
     /// Its oldest request there.
     pub(super) request: Option<(DecisionNoticeId, RequestKind)>,
     /// Its title as its machine says it now.
     pub(super) title: Option<String>,
-    /// Its own Delegates, where its digest is read here.
+    /// Its own Delegates, as its digest names them.
     pub(super) delegates: Vec<Delegated>,
 }
 
@@ -295,9 +260,8 @@ pub(super) fn waiting_delegates(
                     .unwrap_or_else(|| "Delegate".to_owned()),
                 kind,
                 alert: Alert {
-                    away: there.away,
                     target: RowTarget::Decision(id),
-                    thread: delegate.thread,
+                    thread: there.thread,
                 },
             });
         }
@@ -328,34 +292,25 @@ pub(super) fn waiting_title(waiting: &[WaitingDelegate]) -> String {
 
 impl CockpitView {
     /// What `waiting_delegates` reads of `thread` on the machine whose
-    /// Server is `server`: its Notices, and off screen its status link's
-    /// title and digest.
+    /// Server is `server`: its Notices, its title and its digest's
+    /// Delegates.
     fn seen(&self, server: &ServerId, thread: ThreadId, cx: &App) -> Option<Seen> {
-        let away = self.serving(server, cx)?.away;
-        let request = |notifications: &ferrite_core::notifications::Notifications| {
-            notifications
-                .first_request(thread)
-                .map(|notice| (notice.id.clone(), notice.kind))
-        };
-        let Some(key) = away else {
-            return Some(Seen {
-                away: None,
-                request: request(self.cockpit.read(cx).notifications().reading()),
-                title: None,
-                delegates: Vec::new(),
-            });
-        };
-        let machines = self.machines.as_ref()?.read(cx);
-        let there = machines.off_screen().find(|there| there.key == key)?;
+        let key = self.key_on(server, thread, cx)?;
+        let cockpit = self.cockpit.read(cx);
         Some(Seen {
-            request: request(there.notifications),
-            title: there.status.title(thread).map(str::to_owned),
-            delegates: there
-                .status
-                .digest(thread)
-                .map(|digest| digest.delegating.delegates.clone())
+            thread: key,
+            request: cockpit
+                .notifications(key.machine())
+                .first_request(thread)
+                .map(|notice| (notice.id.clone(), notice.kind)),
+            title: cockpit
+                .thread(key)
+                .and_then(|open| open.title().map(str::to_owned)),
+            delegates: self
+                .facts
+                .get(key)
+                .map(|facts| facts.delegating.delegates.clone())
                 .unwrap_or_default(),
-            away: Some(key),
         })
     }
 
@@ -380,7 +335,7 @@ impl CockpitView {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             ("delegate-waiting", thread, &title).hash(&mut hasher);
             for delegate in &waiting {
-                (&delegate.title, delegate.alert.thread, &delegate.alert.away).hash(&mut hasher);
+                (&delegate.title, delegate.alert.thread).hash(&mut hasher);
             }
             hasher.finish()
         };
@@ -391,7 +346,7 @@ impl CockpitView {
                 let open = |alert: &Alert| {
                     let (owner, alert) = (owner.clone(), alert.clone());
                     move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                        let _ = owner.update(cx, |view, cx| view.open_waiting(alert.clone(), cx));
+                        let _ = owner.update(cx, |view, cx| view.notice_verb(alert.open_verb(), cx));
                     }
                 };
                 let last = waiting.len() - 1;
@@ -442,14 +397,6 @@ impl CockpitView {
                 .into_any_element()
             }),
         })
-    }
-
-    /// Open a waiting Delegate's Thread at its request, on its machine.
-    fn open_waiting(&mut self, alert: Alert, cx: &mut Context<Self>) {
-        match alert.away {
-            Some(_) => self.go_to_alert(alert, cx),
-            None => self.notice_verb(alert.open_verb(), cx),
-        }
     }
 }
 
@@ -528,22 +475,22 @@ mod tests {
     /// What `pc` says of its Threads: 1 asks a permission and delegated 3
     /// back to this computer, which asks a question; 2 waits on nothing.
     fn seen(server: &ServerId, thread: ThreadId) -> Option<Seen> {
-        let pc = || Some(MachineKey(Some("pc".into())));
+        let pc = |thread| ThreadKey::fixture(1, thread);
         match (server.as_str(), thread.get()) {
             ("s-pc", 1) => Some(Seen {
-                away: pc(),
+                thread: pc(1),
                 request: Some((request(1, 4), RequestKind::Permission)),
                 title: Some("Fix the tests today".into()),
                 delegates: vec![delegated(3, "s-here", None, Status::Waiting)],
             }),
             ("s-pc", 2) => Some(Seen {
-                away: pc(),
+                thread: pc(2),
                 request: None,
                 title: None,
                 delegates: vec![],
             }),
             ("s-here", 3) => Some(Seen {
-                away: None,
+                thread: ThreadKey::fixture(0, 3),
                 request: Some((request(3, 9), RequestKind::Question)),
                 title: None,
                 delegates: vec![],
@@ -573,18 +520,16 @@ mod tests {
                     title: "Fix the tests today".into(),
                     kind: RequestKind::Permission,
                     alert: Alert {
-                        away: Some(MachineKey(Some("pc".into()))),
                         target: RowTarget::Decision(request(1, 4)),
-                        thread: ThreadId::new(1),
+                        thread: ThreadKey::fixture(1, 1),
                     },
                 },
                 WaitingDelegate {
                     title: "Delegate".into(),
                     kind: RequestKind::Question,
                     alert: Alert {
-                        away: None,
                         target: RowTarget::Decision(request(3, 9)),
-                        thread: ThreadId::new(3),
+                        thread: ThreadKey::fixture(0, 3),
                     },
                 },
             ]

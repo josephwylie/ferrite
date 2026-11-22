@@ -125,7 +125,7 @@ fn full_pr() -> WirePr {
 
 struct World {
     view: Entity<CockpitView>,
-    project: ProjectId,
+    project: ProjectKey,
     path: std::path::PathBuf,
 }
 
@@ -140,10 +140,10 @@ fn world<'a>(
 ) -> (World, &'a mut gpui::VisualTestContext) {
     let (mut core, _fake) = cockpit(name, panes);
     let repo = repo_in(&scratch(&format!("{name}-repo")));
-    let project = core.register_project(&repo).unwrap();
-    let path = core.registry().project(project.project()).unwrap().root.clone();
+    let project = core.register_project(core.first_machine(), &repo).unwrap();
+    let path = core.registry(core.first_machine()).project(project.project()).unwrap().root.clone();
     let roots: Vec<_> = core
-        .registry()
+        .registry(core.first_machine())
         .projects()
         .iter()
         .map(|project| project.root.clone())
@@ -170,7 +170,7 @@ fn world<'a>(
     (
         World {
             view,
-            project: project.project(),
+            project,
             path,
         },
         cx,
@@ -687,7 +687,14 @@ fn choosing_another_project_reads_its_list_and_lets_the_mark_go(cx: &mut TestApp
     click(cx, "nav-pull-requests");
     lands(cx, "prs-row-3");
     cx.simulate_keystrokes("down");
-    click(cx, &format!("prs-project-{}", world.project.get()));
+    click(
+        cx,
+        &format!(
+            "prs-project-{}-{}",
+            world.project.machine().get(),
+            world.project.project().get()
+        ),
+    );
     lands(cx, "prs-row-7");
     cx.simulate_keystrokes("enter");
     tick(cx);
@@ -726,10 +733,10 @@ fn with_no_project_the_view_offers_to_add_one(cx: &mut TestAppContext) {
     tick(cx);
     view.update(cx, |view, cx| {
         let projects: Vec<ProjectId> =
-            view.cockpit.read(cx).registry().projects().iter().map(|project| project.id).collect();
+            view.cockpit.read(cx).registry(view.cockpit.read(cx).first_machine()).projects().iter().map(|project| project.id).collect();
         for project in projects {
             view.cockpit.update(cx, |cockpit, _| {
-                let project = cockpit.registry().project_key(project);
+                let project = cockpit.registry(cockpit.first_machine()).project_key(project);
                 cockpit.remove_project(project).unwrap()
             });
         }

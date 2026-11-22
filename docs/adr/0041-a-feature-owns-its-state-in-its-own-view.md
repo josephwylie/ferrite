@@ -1084,7 +1084,7 @@ hearing, and the pump knows nothing of them.
 
 - **`ToastsView` tends itself.** On the model's `Arrived`, a notify of
   the root or of the window's machines, it tends (`tend`): it hears what
-  the Notices and the machines off screen say (`news`, `NeedsYou::hear`),
+  each held machine's Notices say (`news`, `NeedsYou::hear`; ADR 0045),
   rings what waited out its delay and takes down what went
   (`NeedsYou::ring`), keeps the system notifications posted, and looks.
   A pump run that brought nothing emits no `Arrived` and notifies

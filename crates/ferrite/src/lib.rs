@@ -282,34 +282,30 @@ pub fn launch() {
                 // app's off-screen browser (ADR 0013).
                 let renderer: std::sync::Arc<dyn ferrite_core::visual::Renderer> =
                     std::sync::Arc::new(visual::renderer::start(cx));
-                // This computer's Server, or `--remote`'s machine's (ADR
-                // 0026); the nav lists the others.
-                let machines = cx.new(|_| {
-                    machines::Machines::with_local_environment(
-                        machines::Reach {
-                            settings_dir: settings_dir.clone(),
-                            store: store_dir(),
-                            executable: std::env::current_exe().unwrap_or_default(),
-                            client: ferrite_core::protocol::Peer {
-                                name: "ferrite".into(),
-                                version: env!("CARGO_PKG_VERSION").into(),
-                            },
-                            renderer: Some(renderer),
-                            driven: false,
-                            defaults: defaults.clone(),
-                            bridge: ferrite_core::machine::Bridge::for_machine,
+                // This computer's Server, `--remote`'s machine and every
+                // enabled saved one, held at once (ADR 0026).
+                let mut machines = machines::Machines::new(
+                    machines::Reach {
+                        settings_dir: settings_dir.clone(),
+                        store: store_dir(),
+                        executable: std::env::current_exe().unwrap_or_default(),
+                        client: ferrite_core::protocol::Peer {
+                            name: "ferrite".into(),
+                            version: env!("CARGO_PKG_VERSION").into(),
                         },
-                        &settings.machines,
-                        remote.as_deref(),
-                        settings.local_environment_enabled,
-                    )
+                        renderer: Some(renderer),
+                        driven: false,
+                        defaults: defaults.clone(),
+                        bridge: ferrite_core::machine::Bridge::for_machine,
+                    },
+                    &settings.machines,
+                    remote.as_deref(),
+                    settings.local_environment_enabled,
+                );
+                let core = machines.cockpit().unwrap_or_else(|e| {
+                    ferrite_core::log!("cannot read the Thread store: {e}");
+                    std::process::exit(1);
                 });
-                let core = machines
-                    .update(cx, |machines, _| machines.cockpit())
-                    .unwrap_or_else(|e| {
-                        ferrite_core::log!("cannot read the Thread store: {e}");
-                        std::process::exit(1);
-                    });
                 (core, Some(machines))
             };
             let (adopted, refused) = adopt(&mut core, &imports);
@@ -490,15 +486,23 @@ pub fn launch() {
         });
 }
 
-/// Adopt CLI sessions started outside Ferrite. Each Thread is durable the
-/// moment import returns, so it opens like any parked one. A refusal is the
-/// operator's to read: the file is named and the provider's own words are
-/// shown, and the run carries on without it.
+/// Adopt CLI sessions started outside Ferrite, on this computer, whose
+/// files they are. Each Thread is durable the moment import returns, so it
+/// opens like any parked one. A refusal is the operator's to read: the file
+/// is named and the provider's own words are shown, and the run carries on
+/// without it.
 fn adopt(cockpit: &mut Cockpit, paths: &[String]) -> (Vec<ThreadKey>, Vec<String>) {
     let mut adopted = Vec::new();
     let mut refused = Vec::new();
+    let Some(here) = cockpit.this_computer() else {
+        let refused = paths
+            .iter()
+            .map(|path| format!("cannot import {path}: this computer is turned off"))
+            .collect();
+        return (adopted, refused);
+    };
     for path in paths {
-        match cockpit.import(std::path::Path::new(path)) {
+        match cockpit.import(here, std::path::Path::new(path)) {
             Ok(thread) => adopted.push(thread),
             // Reported, not printed: the caller decides where an operator
             // reads it, and a test can read it too.
@@ -514,14 +518,19 @@ fn adopt(cockpit: &mut Cockpit, paths: &[String]) -> (Vec<ThreadKey>, Vec<String
 /// Thread, the newest registered Project still on disk; with none, home,
 /// where a new terminal opens.
 fn dock_launch_dir(cockpit: &Cockpit) -> std::path::PathBuf {
+    // Only this computer's directories are here to stand in.
+    let Some(here) = cockpit.this_computer() else {
+        return home_dir().unwrap_or_else(|| "/".into());
+    };
     let parked = cockpit.parked().unwrap_or_default();
     let worked = parked
         .iter()
         .rev()
+        .filter(|thread| thread.machine() == here)
         .filter_map(|thread| cockpit.peek(*thread).ok())
         .filter_map(|meta| {
             meta.project_id
-                .and_then(|id| cockpit.registry().reading().project(id))
+                .and_then(|id| cockpit.registry(here).reading().project(id))
                 .map(|project| project.root.clone())
                 .or_else(|| {
                     meta.workspace.map(|binding| match binding {
@@ -533,7 +542,7 @@ fn dock_launch_dir(cockpit: &Cockpit) -> std::path::PathBuf {
         .find(|dir| dir.is_dir());
     let registered = || {
         cockpit
-            .registry()
+            .registry(here)
             .projects()
             .iter()
             .rev()
@@ -587,13 +596,15 @@ mod tests {
 
         let checkout =
             ferrite_core::workspace::follow::canonical(&std::env::current_dir().unwrap());
-        core.register_project(&checkout).unwrap();
+        let here = core.this_computer().unwrap();
+        core.register_project(here, &checkout).unwrap();
         assert_eq!(
             dock_launch_dir(&core),
             checkout,
             "a registered Project, no Thread yet: the Project"
         );
         core.open(
+            here,
             Provider::Claude,
             WorkspaceChoice::Main {
                 checkout: checkout.clone(),
@@ -604,6 +615,7 @@ mod tests {
         let gone = dir.join("gone");
         std::fs::create_dir_all(&gone).unwrap();
         core.open(
+            here,
             Provider::Claude,
             WorkspaceChoice::Main {
                 checkout: gone.clone(),

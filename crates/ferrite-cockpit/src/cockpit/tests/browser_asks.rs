@@ -60,13 +60,13 @@ fn silenceable_browser(name: &str) -> (Cockpit, ThreadKey, Arc<AtomicBool>) {
         store: dir.join("window"), server: Endpoint::Machine(bridge),
         client: ferrite_core::protocol::Peer { name: name.into(), version: "0".into() },
         renderer: None, browser: true, driven: false, discovery: Box::new(Fake::default()),
-        saved_as: Some(ferrite_core::MachineKey(Some("box".into()))),
+        saved_as: ferrite_core::MachineKey(Some("box".into())),
     }).unwrap();
     ferrite_core::doorbell::until("browser window did not attach", || {
-        core.pump(); matches!(core.server(), Some(ServerState::Attached { .. }))
+        core.pump(); matches!(core.server(core.first_machine()), Some(ServerState::Attached { .. }))
     });
-    let thread = core.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() }).unwrap();
-    super::machines::served(&mut core, thread);
+    let thread = core.open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() }).unwrap();
+    super::machines::drawn_and_served(&mut core, thread);
     super::machines::browsed(&mut core, thread, Action::Open { url: "http://localhost:5173/start".into() });
     (core, thread, silent)
 }

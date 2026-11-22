@@ -15,7 +15,7 @@ use super::*;
 use ferrite_core::draft_content::DraftContent;
 use ferrite_core::factory::WorkflowId;
 use ferrite_core::protocol::{Done, TaskAction};
-use ferrite_core::workspace::registry::ProjectId;
+use ferrite_core::ProjectKey;
 use ferrite_pane::composer::{Composer, Role};
 use gpui::{App, WeakEntity};
 
@@ -50,7 +50,7 @@ impl KeptNewTask {
 pub(crate) struct NewTaskView {
     cockpit: WeakEntity<CockpitView>,
     /// The Project whose Factory opened it: the sheet is that Factory's.
-    pub(super) project: ProjectId,
+    pub(super) project: ProjectKey,
     pub(super) instructions: Entity<Composer>,
     /// Its optional pull request, `owner/repository#number` or a URL
     /// (#223).
@@ -86,7 +86,7 @@ impl EventEmitter<NewTaskEvent> for NewTaskView {}
 impl NewTaskView {
     fn new(
         cockpit: WeakEntity<CockpitView>,
-        project: ProjectId,
+        project: ProjectKey,
         kept: KeptNewTask,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -253,12 +253,12 @@ impl CockpitView {
     /// What the sheet of `project`'s Factory draws, none once that Factory
     /// no longer shows. It never reads the sheet: the sheet calls it while
     /// its own update is running.
-    fn new_task_inputs(&self, project: ProjectId, workflow: Option<&str>, cx: &App) -> Option<NewTaskInputs> {
+    fn new_task_inputs(&self, project: ProjectKey, workflow: Option<&str>, cx: &App) -> Option<NewTaskInputs> {
         if self.factory_project()? != project {
             return None;
         }
         let process = match workflow
-            .and_then(|id| self.cockpit.read(cx).factory().reading().workflow(id))
+            .and_then(|id| self.cockpit.read(cx).factory(project.machine()).reading().workflow(id))
             .and_then(|workflow| workflow.latest())
         {
             Some(latest) => format!("{} \u{b7} version {}", latest.definition.name, latest.version),
@@ -346,13 +346,16 @@ impl CockpitView {
             Some(SharedString::from("Say what the task is."))
         } else {
             let action = TaskAction::Start {
-                project,
+                project: project.project(),
                 instructions,
                 request: Some(request),
                 workflow,
                 pr,
             };
-            match self.cockpit.update(cx, |cockpit, _| cockpit.task(action)) {
+            match self
+                .cockpit
+                .update(cx, |cockpit, _| cockpit.task(project.machine(), action))
+            {
                 Ok(Some(Done::Task { task })) => {
                     self.hide_sheet(cx);
                     self.update_factory(cx, |view, _| {

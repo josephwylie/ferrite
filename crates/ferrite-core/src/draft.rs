@@ -10,7 +10,7 @@ use crate::engine::ProviderChoice;
 use crate::providers::models::efforts_for;
 use crate::workspace::registry::{ProjectId, Registry};
 use crate::workspace::WorkspaceChoice;
-use crate::ModelInfo;
+use crate::{MachineKey, ModelInfo, ProjectKey};
 
 /// The workspace choice within the selected Project: the checkout as it
 /// stands, one of the repo's other branches checked out there, a fresh
@@ -28,16 +28,52 @@ pub enum DraftTarget {
 
 /// The pending binding, without a Thread or Session. Callers can read the
 /// choices but change them through the rules that keep them consistent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Its Project names its machine: a first send starts the Thread there.
+#[derive(Debug, Clone, PartialEq)]
 pub struct DraftBinding {
     provider: ProviderChoice,
     effort: Option<String>,
+    project: ProjectKey,
+    target: DraftTarget,
+}
+
+/// A binding as it is saved across runs: its Project by the machine's
+/// saved name and its id there. One saved before Projects were saved
+/// with their machine names none, and is this computer's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedBinding {
+    provider: ProviderChoice,
+    effort: Option<String>,
+    #[serde(default)]
+    machine: MachineKey,
     project: ProjectId,
     target: DraftTarget,
 }
 
+impl SavedBinding {
+    /// The machine its Project is on, as saved files name it.
+    pub fn machine(&self) -> &MachineKey {
+        &self.machine
+    }
+
+    pub fn project(&self) -> ProjectId {
+        self.project
+    }
+
+    /// The binding again, its Project found as `project` (the saved
+    /// machine's, held now).
+    pub fn bind(self, project: ProjectKey) -> DraftBinding {
+        DraftBinding {
+            provider: self.provider,
+            effort: self.effort,
+            project,
+            target: self.target,
+        }
+    }
+}
+
 impl DraftBinding {
-    pub fn new(provider: ProviderChoice, project: ProjectId, target: DraftTarget) -> Self {
+    pub fn new(provider: ProviderChoice, project: ProjectKey, target: DraftTarget) -> Self {
         Self {
             provider,
             effort: None,
@@ -55,8 +91,20 @@ impl DraftBinding {
         self.effort.as_deref()
     }
 
-    pub fn project(&self) -> ProjectId {
+    pub fn project(&self) -> ProjectKey {
         self.project
+    }
+
+    /// This binding as it is saved, its Project's machine saved as
+    /// `machine`.
+    pub fn saved(&self, machine: MachineKey) -> SavedBinding {
+        SavedBinding {
+            provider: self.provider.clone(),
+            effort: self.effort.clone(),
+            machine,
+            project: self.project.project(),
+            target: self.target.clone(),
+        }
     }
 
     pub fn target(&self) -> &DraftTarget {
@@ -83,7 +131,7 @@ impl DraftBinding {
 
     /// A different Project starts on its main checkout; re-picking the
     /// standing Project preserves its workspace choice.
-    pub fn choose_project(&mut self, project: ProjectId) {
+    pub fn choose_project(&mut self, project: ProjectKey) {
         if self.project != project {
             self.choose_checkout(project);
         }
@@ -91,7 +139,7 @@ impl DraftBinding {
 
     /// Choosing a folder or typed path explicitly aims at its checkout,
     /// including when that Project was already selected.
-    pub fn choose_checkout(&mut self, project: ProjectId) {
+    pub fn choose_checkout(&mut self, project: ProjectKey) {
         self.project = project;
         self.target = DraftTarget::Main;
     }
@@ -101,14 +149,15 @@ impl DraftBinding {
     }
 
     /// Interpret the choice once for both first send and file completion.
-    /// This only reads the registry and, when its paths are this
+    /// This only reads the registry of the Project's machine and, when its
+    /// paths are this
     /// computer's (`here`), asks whether a chosen worktree's directory
     /// still stands: bootstrap still owns worktree creation and the git
     /// adoption check, and on a machine (ADR 0026) its Server asks. Stale
     /// choices fail without selecting a different checkout or mutating the
     /// draft.
     pub fn resolve(&self, registry: &Registry, here: bool) -> io::Result<WorkspaceChoice> {
-        let project = registry.project(self.project).ok_or_else(|| {
+        let project = registry.project(self.project.project()).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
                 "the chosen project is no longer registered — re-pick it",
@@ -154,8 +203,8 @@ mod tests {
     struct Fixture {
         dir: PathBuf,
         registry: Registry,
-        one: ProjectId,
-        two: ProjectId,
+        one: ProjectKey,
+        two: ProjectKey,
     }
 
     impl Fixture {
@@ -182,7 +231,7 @@ mod tests {
                         "base",
                     ],
                 );
-                registry.register(&repo).unwrap()
+                ProjectKey::fixture(0, registry.register(&repo).unwrap())
             };
             let one = register("one");
             let two = register("two");
@@ -205,10 +254,10 @@ mod tests {
             )
         }
 
-        fn worktree(&mut self, project: ProjectId) -> crate::workspace::registry::WorktreeEntry {
-            let entry = self.registry.reserve_worktree(project).unwrap();
+        fn worktree(&mut self, project: ProjectKey) -> crate::workspace::registry::WorktreeEntry {
+            let entry = self.registry.reserve_worktree(project.project()).unwrap();
             ensure_worktree(
-                &self.registry.project(project).unwrap().root,
+                &self.registry.project(project.project()).unwrap().root,
                 &entry.path,
                 &entry.branch,
             )
@@ -248,7 +297,7 @@ mod tests {
                     .resolve(&fixture.registry, true)
                     .unwrap()
                     .source_root(),
-                fixture.registry.project(fixture.two).unwrap().root,
+                fixture.registry.project(fixture.two.project()).unwrap().root,
             );
         }
     }
@@ -261,7 +310,7 @@ mod tests {
         // path, so two Projects' same-named worktrees are never confused.
         let other_tree = fixture.worktree(fixture.two);
         assert_eq!(tree.branch, other_tree.branch);
-        let repo = fixture.registry.project(fixture.one).unwrap().root.clone();
+        let repo = fixture.registry.project(fixture.one.project()).unwrap().root.clone();
         fs::write(repo.join("main-only.txt"), "main").unwrap();
         fs::write(tree.path.join("tree-only.txt"), "tree").unwrap();
 
@@ -280,7 +329,7 @@ mod tests {
         assert_eq!(new, WorkspaceChoice::NewWorktree { repo: repo.clone() });
         assert_eq!(new.source_root(), main.source_root());
         assert_eq!(
-            fixture.registry.worktrees(fixture.one).len(),
+            fixture.registry.worktrees(fixture.one.project()).len(),
             1,
             "resolution creates nothing"
         );
@@ -323,7 +372,7 @@ mod tests {
             path: tree.path.clone(),
         };
         let mut draft = fixture.draft(target.clone());
-        let repo = fixture.registry.project(fixture.one).unwrap().root.clone();
+        let repo = fixture.registry.project(fixture.one.project()).unwrap().root.clone();
         // The worktree is gone from disk — git removed it — so the choice
         // names a directory that no longer stands.
         crate::workspace::remove_worktree(&repo, &tree.path).unwrap();
@@ -331,9 +380,9 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
         assert!(error.to_string().contains(&tree.branch));
         assert_eq!(draft.target(), &target);
-        fixture.registry.remove_project(fixture.one).unwrap();
+        fixture.registry.remove_project(fixture.one.project()).unwrap();
         let replacement = fixture.registry.register(&repo).unwrap();
-        assert_ne!(replacement, fixture.one);
+        assert_ne!(replacement, fixture.one.project());
         for target in [DraftTarget::Main, DraftTarget::New, target] {
             draft.choose_target(target.clone());
             let error = draft.resolve(&fixture.registry, true).unwrap_err();

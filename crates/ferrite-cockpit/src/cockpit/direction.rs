@@ -560,9 +560,13 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// A Task command; whether the Server took it. A refusal is said.
+    /// A Task command, on the machine of the Factory shown; whether its
+    /// Server took it. A refusal is said.
     fn direct_command(&mut self, action: TaskAction, cx: &mut Context<Self>) -> bool {
-        let (taken, note) = match self.cockpit.update(cx, |cockpit, _| cockpit.task(action)) {
+        let Some(machine) = self.factory_machine() else {
+            return false;
+        };
+        let (taken, note) = match self.cockpit.update(cx, |cockpit, _| cockpit.task(machine, action)) {
             Ok(_) => (true, None),
             Err(error) => (false, Some(SharedString::from(error.to_string()))),
         };

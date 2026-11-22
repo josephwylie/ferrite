@@ -65,7 +65,7 @@ impl CockpitView {
                 prompt,
                 reply: None,
             },
-            &self.cockpit.read(cx).model_catalog(provider),
+            &self.cockpit.read(cx).model_catalog(thread.machine(), provider),
         );
         let rx = ferrite_core::titler::spawn(form);
         self.titling.0.insert(thread);

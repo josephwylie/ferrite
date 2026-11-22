@@ -1,5 +1,5 @@
 //! The nav's one list, wired (ADR 0040): Pinned and Active cards from the
-//! top, a machine off screen's rows after them, then the Working, Snoozed
+//! top, each other machine's heading and rows after them, then the Working, Snoozed
 //! and Parked shelves anchored over the foot. Each row rides the list's
 //! motion (`nav::flip`), keyed by its Thread and its kind, so a card that
 //! moves from Active to Working slides there while one that parks leaves
@@ -9,8 +9,10 @@ use super::menu_button::{Door, Edge};
 use super::nav_view::{MenuAt, NavEvent, NavInputs, NavView};
 use super::*;
 use crate::machines::{Connection, MachineRow};
+use crate::nav::NavMachine;
 use crate::nav::flip::{self, Update};
 use crate::nav::{list, NavItem, Shelf, SHELVES};
+use ferrite_ui::components::ContextPress;
 use ferrite_ui::motion::{fold_body, Reveal, FOLD};
 use std::time::Instant;
 
@@ -181,29 +183,33 @@ impl NavView {
                 .as_ref()
                 .map(|error| nav::notice(error.clone()).into_any_element()),
         );
-        // With machines (ADR 0026): the one the window is on heads the
-        // list, which folds under it; the others follow its cards.
+        // With machines (ADR 0026): this computer heads the list, which
+        // folds under it; every other machine follows its cards, its
+        // Threads under its heading.
         let machines = inputs.machines.as_ref();
-        let on = machines.and_then(|rows| rows.iter().find(|row| row.selected));
-        if let Some(on) = on {
-            rows.push(self.machine_heading(on, cx));
+        let home = machines.and_then(|rows| rows.iter().find(|machine| machine.home));
+        if let Some(home) = home {
+            rows.push(self.machine_heading(&home.row, cx));
         }
-        let folded = on.is_some_and(|on| on.folded);
+        let folded = home.is_some_and(|home| home.row.folded);
         for row in state.pinned.iter().filter(|_| !folded) {
             rows.push(self.card(inputs, row, None, &mut faces, cx));
         }
         for notice in inputs.inbox.iter().filter(|_| !folded) {
-            let local = notice
-                .away
-                .is_none()
-                .then(|| state.active.iter().find(|row| row.key.thread() == notice.thread))
-                .flatten();
+            let local = state.active.iter().find(|row| row.key == notice.thread);
             rows.push(match local {
                 Some(row) => self.card(inputs, row, Some(notice.open_verb()), &mut faces, cx),
                 None => {
                     let verb = notice.open_verb();
                     let index = rows.len();
+                    // Another machine's Thread: dimmed while that machine is
+                    // lost, as its rows under its heading are.
+                    let lost = machines.into_iter().flatten().any(|machine| {
+                        machine.row.held == Some(notice.thread.machine())
+                            && machine.row.connection != Connection::Online
+                    });
                     nav::notice_row(index, notice, false, &nav::Measure::Text(cx, inputs.width))
+                        .when(lost, |row| row.opacity(ferrite_ui::theme::MACHINE_LOST_OPACITY))
                         .on_click(cx.listener(move |_, _: &ClickEvent, window, cx| {
                             cx.emit(NavEvent::Notice(verb.clone()));
                             window.blur(cx);
@@ -213,7 +219,7 @@ impl NavView {
             });
         }
         if let Some(machines) = machines {
-            rows.extend(self.machines_off_screen(machines, cx));
+            rows.extend(self.other_machines(inputs, machines, cx));
         }
         if !folded && state.pinned.is_empty() && state.active.is_empty() {
             rows.push(self.empty(inputs, cx));
@@ -300,11 +306,6 @@ impl NavView {
             ferrite_ui::motion::request_frame(window);
         }
         let body = list::body().children(rows).children(ghosts);
-        let body = if inputs.machine_lost {
-            machines::held(body, "machine-lost-list").into_any_element()
-        } else {
-            body.into_any_element()
-        };
         self.keys(nav::list_scroll(&self.scroll), cx)
             .child(flip::flip_list(&self.motion, body))
     }
@@ -620,10 +621,11 @@ impl NavView {
         flip::flip_row(&self.motion, NavKey::Slim(thread), slim).into_any_element()
     }
 
-    /// A machine's heading: its press goes to the machine, or folds the
-    /// one the window is on; its triangle folds either.
+    /// A machine's heading: its press, or its triangle's, folds it; a
+    /// held machine's right-click offers what can be made on it.
     fn machine_heading(&self, row: &MachineRow, cx: &mut Context<Self>) -> AnyElement {
-        let (index, selected) = (row.index, row.selected);
+        let index = row.index;
+        let held = row.held;
         let fold = nav::machine_fold(index, row.folded).on_mouse_down(
             MouseButton::Left,
             cx.listener(move |_, _: &MouseDownEvent, _, cx| {
@@ -635,37 +637,57 @@ impl NavView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |_, _: &MouseDownEvent, _, cx| {
-                    cx.emit(if selected {
-                        NavEvent::FoldMachine(index)
-                    } else {
-                        NavEvent::GoToMachine(index)
-                    });
+                    cx.emit(NavEvent::FoldMachine(index));
                 }),
             )
+            .when_some(held, |heading, machine| {
+                let nav = cx.entity().downgrade();
+                heading.context_press(move |at, _, cx| {
+                    let menu = NavEvent::Menu(MenuTarget::Machine(machine), MenuAt::Point(at));
+                    let _ = nav.update(cx, |_, cx| cx.emit(menu));
+                })
+            })
             .into_any_element()
     }
 
-    /// Every machine the window is not on: its heading and, unfolded, the
-    /// Threads it has open. A press on either goes to the machine.
-    fn machines_off_screen(&self, rows: &[MachineRow], cx: &mut Context<Self>) -> Vec<AnyElement> {
+    /// Every machine but this computer: its heading and, unfolded, the
+    /// Threads it has open. A Thread's press opens it in place, beside
+    /// whatever the board shows; its title renames as a card's does; its
+    /// right-click opens the Thread's menu, as a card's does.
+    fn other_machines(&self, inputs: &NavInputs, machines: &[NavMachine], cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut drawn = Vec::new();
-        for row in rows.iter().filter(|row| !row.selected) {
-            drawn.push(self.machine_heading(row, cx));
-            if row.folded {
+        for machine in machines.iter().filter(|machine| !machine.home) {
+            drawn.push(self.machine_heading(&machine.row, cx));
+            if machine.row.folded {
                 continue;
             }
-            let index = row.index;
-            let lost = row.connection != Connection::Online;
-            drawn.extend(row.threads.iter().map(|thread| {
-                nav::machine_thread_row(index, thread, lost)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |_, _: &MouseDownEvent, _, cx| {
-                            cx.emit(NavEvent::GoToMachine(index));
-                        }),
-                    )
-                    .into_any_element()
-            }));
+            let lost = machine.row.connection != Connection::Online;
+            let rows = inputs
+                .state
+                .elsewhere
+                .iter()
+                .filter(|row| Some(row.key.machine()) == machine.row.held);
+            for row in rows {
+                let key = row.key;
+                let nav = cx.entity().downgrade();
+                let title = self.thread_title(inputs, key, row.name.clone(), false, cx);
+                drawn.push(
+                    nav::machine_thread_row(row, lost, title)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                                cx.emit(NavEvent::Open(key));
+                            }),
+                        )
+                        .context_press(move |at, _, cx| {
+                            let _ = nav.update(cx, |nav, cx| {
+                                nav.pick_for_menu(key, cx);
+                                cx.emit(NavEvent::Menu(MenuTarget::Thread(key), MenuAt::Point(at)));
+                            });
+                        })
+                        .into_any_element(),
+                );
+            }
         }
         drawn
     }

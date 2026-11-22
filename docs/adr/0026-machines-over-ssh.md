@@ -1,6 +1,9 @@
 # 0026 — Machines: another computer's Server, over ssh
 
 Status: accepted 2026-10-15 (Herdr benchmark, §6 Remote over SSH).
+"One machine on screen" and "Alerts from machines off screen" are
+superseded by ADR 0045 (2026-11-23): the window holds every enabled
+machine at once, and a Thread of any of them opens in place.
 
 ## Context
 
@@ -185,6 +188,13 @@ to check when it applies the change.
 
 ### One machine on screen
 
+> Superseded by ADR 0045. The window holds every enabled machine at once,
+> each a `HeldMachine` in its one Cockpit, and builds nothing afresh: a
+> press on any machine's Thread opens it in place. `ServerStatus` and
+> `CockpitWindow::go_to` are gone. A machine other than this computer
+> streams a Thread whole only while the window draws it; its status,
+> Decisions and Notices arrive for every Thread.
+
 `cockpit::ServerStatus` is a link that never sends `watch`: it hears the
 snapshot, every Thread's `thread` state, the Roster, the Decisions and
 the Notices — never a history or an input. The app's `Machines` keeps
@@ -207,20 +217,25 @@ glyph, name, and a word when it is not up — and the other machines
 follow the tree, each a heading and, unfolded, its open Threads with
 their marks (working, needs you). The glyphs: `●` green online, `○`
 connecting, `●` yellow needs you (sign in, or no `ferrited`), faint `○`
-off. A press on another machine's heading or row goes there.
+off. A press on another machine's row opens its Thread in place (ADR
+0045).
 
-A machine whose Server is not there stays visible and read-only: its
-board, its tree (smart sections and Projects) and Parked dimmed
-(`MACHINE_LOST_OPACITY`) under covers that take every press; the
-window's root holds the keyboard, so no Composer or control takes a key;
-and the root stops listening for what acts on a Thread (send, the
-answers, close, reopen, paste; escape no longer interrupts). A band says
+A machine whose Server is not there stays visible and read-only, and
+only it: its rows and its Panes are dimmed (`MACHINE_LOST_OPACITY`), each
+Pane under a cover that takes every press, and what acts on a Thread
+from the keyboard does nothing on its Threads (escape no longer
+interrupts); every other machine works on (ADR 0045). A band says
 why — "Sign in to box" (a click signs in), "box has no
 ferrited", or "box is not connected" once it was. A machine still being
-reached for the first time says so only by its glyph. Off-screen
-machines that go keep their last rows, dimmed.
+reached for the first time says so only by its glyph. A machine that
+goes keeps its last rows and Panes, dimmed.
 
 ### Alerts from machines off screen
+
+> Superseded by ADR 0045. The bell hears every machine's Notices and
+> Decisions through the one Cockpit; a toast, a chime and a system
+> notification name the machine, and opening one opens its Thread in
+> place. `GoToMachine`, `CockpitView::land` and `Bell::moved` are gone.
 
 A request on box reaches the operator while the window shows another
 machine: the window's bell hears each machine off screen through its
@@ -238,13 +253,13 @@ sends.
 ### Settings
 
 `settings.machines`: `{name, target, enabled}` in nav order. A machine
-turned off is never connected to: `--remote` naming one starts the
-window on this computer, the machine listed as off, and turning off the
-machine the window is on puts the window on this computer. Settings ›
+turned off is never connected to: `--remote` naming one leaves it
+listed as off, and turning one off lets it go, its Panes with it (ADR
+0045). Settings ›
 About › Machines lists each with sign in (when it needs one), turn
 on/off, remove — or save, for the `--remote` machine of this run — and a
-field to add one by its ssh target. "Start at login" is hidden while the
-window is on a machine: it is this computer's.
+field to add one by its ssh target. Settings › Server and "Start at
+login" are this computer's.
 
 ### Projects and new Threads on a machine
 

@@ -4997,6 +4997,15 @@ impl Engine {
             .collect()
     }
 
+    /// A Thread's state as last published, whole, for a window that has
+    /// just started watching it.
+    pub fn published_thread(&self, id: ThreadId) -> Option<ServerMessage> {
+        Some(ServerMessage::Thread {
+            revision: self.revision,
+            state: self.published.get(&id)?.state.clone()?,
+        })
+    }
+
     fn thread_state(&self, id: ThreadId) -> protocol::ThreadState {
         let mut state = self.threads[&id].wire_state(id);
         state.for_draft = self.starting_for_draft(id);

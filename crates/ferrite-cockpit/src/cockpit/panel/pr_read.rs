@@ -14,14 +14,24 @@ use std::collections::HashMap;
 use gpui::SharedString;
 
 use ferrite_core::protocol::{WirePr, WirePrUnread};
-use ferrite_core::workspace::registry::ProjectId;
+use ferrite_core::ProjectKey;
 use ferrite_core::ThreadKey;
 
 /// Whose repository a PR number is read in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PrSource {
     Thread(ThreadKey),
-    Project(ProjectId),
+    Project(ProjectKey),
+}
+
+impl PrSource {
+    /// The machine the repository is on, whose forge CLI reads it.
+    pub(crate) fn machine(self) -> ferrite_core::MachineId {
+        match self {
+            Self::Thread(thread) => thread.machine(),
+            Self::Project(project) => project.machine(),
+        }
+    }
 }
 
 /// A pull request as a PR tab or the PRs destination names it.
@@ -39,7 +49,7 @@ impl PrTarget {
         }
     }
 
-    pub(crate) fn project(project: ProjectId, number: u64) -> Self {
+    pub(crate) fn project(project: ProjectKey, number: u64) -> Self {
         Self {
             source: PrSource::Project(project),
             number,

@@ -702,7 +702,7 @@ pub fn adoption_check(repo: &Path, path: &Path) -> Result<(), GitError> {
 }
 
 /// A directory the operator named, as the registry keeps it: `~` spelled
-/// out for this computer — a window on a machine sends the path as typed
+/// out for this computer — a window holding a machine sends the path as typed
 /// (ADR 0026) — then canonicalized.
 fn canonical_root(root: &Path) -> io::Result<PathBuf> {
     dunce::canonicalize(super::expand_home(root))

@@ -11,7 +11,7 @@
 use super::nav_chrome::{NavUndo, UndoAct};
 use super::nav_pick::ParkSweep;
 use super::*;
-use crate::machines::MachineRow;
+use crate::nav::NavMachine;
 use crate::nav::{NavCursor, Shelf};
 use ferrite_core::transcript::RateLimits;
 use ferrite_pane::link_target::Open;
@@ -85,7 +85,7 @@ pub(crate) struct NavView {
     /// The Projects the Factory door lists, as `look` last read them: its
     /// menu's rows (`factory_rows`). The door draws only whether one needs
     /// the operator, so a change here alone does not redraw the nav.
-    factories: Vec<ProjectId>,
+    factories: Vec<ProjectKey>,
     /// The Cockpit's notify and the model's `Arrived`, each of which has
     /// the nav look again.
     watching: Vec<gpui::Subscription>,
@@ -95,8 +95,9 @@ pub(crate) struct NavView {
 #[derive(Clone, PartialEq)]
 pub(crate) struct NavInputs {
     pub state: nav::NavState,
-    pub machines: Option<Vec<MachineRow>>,
-    pub machine_lost: bool,
+    /// Every machine's heading and, under each but this computer's, its
+    /// Threads; `None` with this computer alone.
+    pub machines: Option<Vec<NavMachine>>,
     pub inbox: Vec<NoticeRow>,
     pub open_shelves: Vec<Shelf>,
     pub width: f32,
@@ -131,12 +132,12 @@ impl NavInputs {
         self.open_shelves.contains(&shelf)
     }
 
-    /// The window is on a machine whose list folds under its heading.
+    /// This computer's cards fold under its heading.
     pub(crate) fn machine_folded(&self) -> bool {
         self.machines
             .as_ref()
-            .and_then(|rows| rows.iter().find(|row| row.selected))
-            .is_some_and(|on| on.folded)
+            .and_then(|rows| rows.iter().find(|machine| machine.home))
+            .is_some_and(|home| home.row.folded)
     }
 }
 
@@ -170,7 +171,6 @@ pub(crate) enum NavEvent {
     SetShelfOpen(Shelf, bool),
     Undo(UndoAct),
     FoldMachine(usize),
-    GoToMachine(usize),
     /// The Snooze field's ⏎ on a time it read: snooze the Thread until
     /// then, and answer the field (`snooze_answered`).
     Snooze(ThreadKey, std::time::SystemTime),
@@ -293,7 +293,7 @@ impl NavView {
     }
 
     /// The Projects the Factory door lists, as the nav last read them.
-    pub(super) fn factories(&self) -> &[ProjectId] {
+    pub(super) fn factories(&self) -> &[ProjectKey] {
         &self.factories
     }
 
@@ -342,15 +342,15 @@ fn nav_inputs(
     listed: &[(ThreadKey, nav::Section, Option<std::time::SystemTime>)],
     arrivals: &nav::Arrivals,
     cx: &App,
-) -> (NavInputs, Vec<ProjectId>) {
+) -> (NavInputs, Vec<ProjectKey>) {
     use crate::ferrite_update::State;
     let state = nav_state(view, model, listed, arrivals, cx);
-    let inbox = view.inbox_rows(&state, cx);
+    let inbox = view.inbox_rows(&state, listed, cx);
     let projects = factory_projects(view, model, &state);
     let factory = (!projects.is_empty()).then(|| {
-        projects
-            .iter()
-            .any(|project| model.factory().needs_you(*project) > 0)
+        projects.iter().any(|project| {
+            model.factory(project.machine()).needs_you(project.project()) > 0
+        })
     });
     let open = state
         .open_rows()
@@ -371,6 +371,13 @@ fn nav_inputs(
         .and_then(|key| model.thread(key))
         .map(|open| open.provider())
         .unwrap_or(view.launch_provider);
+    // The foot's limits are the shown Thread's machine's, else this
+    // computer's.
+    let limits = shown
+        .map(|key| key.machine())
+        .or(model.this_computer())
+        .map(|machine| model.account_limits(machine, provider))
+        .unwrap_or_default();
     let update = match view.ferrite_update.state() {
         State::Ready { version, .. } => Some(format!("Restart to update to {version}").into()),
         State::HandedOver { version } => Some(format!("Install Ferrite {version}").into()),
@@ -378,7 +385,6 @@ fn nav_inputs(
     };
     let inputs = NavInputs {
         machines: view.machine_rows(cx),
-        machine_lost: view.machine_lost(cx),
         inbox,
         open_shelves: view.prefs.settings.open_shelves.clone(),
         width: view.nav_expanded_width(),
@@ -386,7 +392,7 @@ fn nav_inputs(
         notice: view.nav_notice.text().cloned(),
         filtered: view
             .nav_filter
-            .and_then(|project| model.registry().reading().project(project))
+            .and_then(|project| model.project(project))
             .map(|project| project.title.clone().into()),
         factory,
         menu: view.context_menu().map(|menu| menu.target),
@@ -396,7 +402,7 @@ fn nav_inputs(
             Some((RenameTarget::Thread(thread), editor)) => Some((thread, editor.clone())),
             _ => None,
         },
-        limits: model.account_limits(provider),
+        limits,
         free_disk: view.free_disk,
         update,
         state,
@@ -409,18 +415,23 @@ fn nav_inputs(
 /// the chosen one's alone while the list is filtered to a Project,
 /// which shows it even when empty. Any other Project's Factory is the
 /// palette's (`Factory: <Project>`).
-fn factory_projects(view: &CockpitView, model: &Cockpit, state: &nav::NavState) -> Vec<ProjectId> {
-    let board = model.factory();
-    let automatic = board
-        .workflows
+fn factory_projects(view: &CockpitView, model: &Cockpit, state: &nav::NavState) -> Vec<ProjectKey> {
+    let boards: Vec<_> = model.machines().map(|machine| model.factory(machine)).collect();
+    let tasks = boards
         .iter()
-        .filter(|workflow| workflow.automation.switch == ferrite_core::factory::Switch::On)
-        .map(|workflow| workflow.project);
-    let mut projects: Vec<ProjectId> = state
+        .flat_map(|board| board.tasks.iter().map(|task| board.project_key(task.project)));
+    let automatic = boards.iter().flat_map(|board| {
+        board
+            .workflows
+            .iter()
+            .filter(|workflow| workflow.automation.switch == ferrite_core::factory::Switch::On)
+            .map(|workflow| board.project_key(workflow.project))
+    });
+    let mut projects: Vec<ProjectKey> = state
         .open_rows()
         .chain(&state.parked)
         .filter_map(|row| view.facts.get(row.key).and_then(|facts| facts.project))
-        .chain(board.tasks.iter().map(|task| task.project))
+        .chain(tasks)
         .chain(automatic)
         .chain(view.nav_filter)
         .filter(|project| view.nav_filter.is_none_or(|wanted| wanted == *project))
@@ -469,6 +480,11 @@ fn nav_state(
         if !view.admitted(key, cx) {
             continue;
         }
+        // Another machine's open Thread is a row under its heading.
+        if !view.home_card(key, cx) {
+            state.elsewhere.push(row(key));
+            continue;
+        }
         match section {
             Section::Snoozed => {
                 let until = model.thread(key)
@@ -499,18 +515,14 @@ fn nav_state(
         )
     });
     state.working.sort_by_key(latest);
-    state.parked = view
-        .parked_threads(cx)
-        .into_iter()
-        .map(|thread| row(thread))
-        .collect();
+    state.parked = view.parked_threads(cx).into_iter().map(row).collect();
     state
 }
 
-/// Every open Thread the nav lists, the Project filter's or not, with
-/// the section it is in and its last activity: what `nav::Arrivals`
-/// notes.
-fn listed_threads(
+/// Every open Thread the nav lists, on every machine, the Project
+/// filter's or not, with the section it is in and its last activity: what
+/// `nav::Arrivals` notes.
+pub(super) fn listed_threads(
     view: &CockpitView,
     model: &Cockpit,
     cx: &App,
@@ -591,10 +603,6 @@ impl CockpitView {
             }
             NavEvent::Undo(UndoAct::Snoozed(key)) => self.snooze_thread(key, None, cx),
             NavEvent::FoldMachine(index) => self.fold_machine(index, cx),
-            NavEvent::GoToMachine(index) => cx.emit(GoToMachine {
-                index: Some(index),
-                open: None,
-            }),
             NavEvent::Snooze(key, until) => {
                 let refused = match self.cockpit.update(cx, |cockpit, _| cockpit.snooze_thread(key, Some(until))) {
                     Ok(()) => {

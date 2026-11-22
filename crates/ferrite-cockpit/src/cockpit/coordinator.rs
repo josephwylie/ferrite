@@ -467,8 +467,9 @@ impl CockpitView {
 
     /// What the surface draws.
     fn coordinator_inputs(&self, cx: &gpui::App) -> Option<CoordinatorInputs> {
-        let project = self.factory_project()?;
-        let board = self.cockpit.read(cx).factory();
+        let key = self.factory_project()?;
+        let board = self.cockpit.read(cx).factory(key.machine());
+        let project = key.project();
         let coordinator = board.coordinator(project);
         let agent = self.coordinator_agent(cx);
         let mut proposals: Vec<&Proposal> = board.proposals_of(project).collect();
@@ -476,7 +477,7 @@ impl CockpitView {
         proposals.reverse();
         proposals.sort_by_key(|proposal| proposal.status != ProposalStatus::Pending);
         Some(CoordinatorInputs {
-            models: self.cockpit.read(cx).model_catalog(agent.provider),
+            models: self.cockpit.read(cx).model_catalog(key.machine(), agent.provider),
             agent,
             starting: coordinator.is_some_and(|c| c.starting || c.thread.is_some()),
             error: coordinator.and_then(|c| c.error.clone()),
@@ -533,7 +534,9 @@ impl CockpitView {
             CoordinatorEvent::Dismiss(proposal) => self.dismiss_proposal(proposal, cx),
             CoordinatorEvent::OpenTask(task) => {
                 self.factory_surface(super::workflows::Surface::Board, cx);
-                self.open_task(task, cx);
+                if let Some(machine) = self.factory_machine() {
+                    self.open_task(machine, task, cx);
+                }
             }
         }
     }
@@ -541,8 +544,8 @@ impl CockpitView {
     /// The shown Project's Coordinator's Thread, once started.
     pub(crate) fn coordinator_thread(&self, cx: &gpui::App) -> Option<ThreadKey> {
         let project = self.factory_project()?;
-        let board = self.cockpit.read(cx).factory();
-        Some(board.key(board.coordinator(project)?.thread?))
+        let board = self.cockpit.read(cx).factory(project.machine());
+        Some(board.key(board.coordinator(project.project())?.thread?))
     }
 
     /// Its Pane in this window, once started.
@@ -565,8 +568,8 @@ impl CockpitView {
         let chosen = self.factory_project().and_then(|project| {
             self.cockpit
                 .read(cx)
-                .factory()
-                .coordinator(project)?
+                .factory(project.machine())
+                .coordinator(project.project())?
                 .agent
                 .clone()
         });
@@ -598,13 +601,18 @@ impl CockpitView {
         Some(view.coordinator.read(cx).focus(cx))
     }
 
-    /// A Coordinator command; its refusal in the view's note.
+    /// A Coordinator command, on the machine of the Factory shown; its
+    /// refusal in the view's note.
     fn coordinator_ask(
         &mut self,
         action: CoordinatorAction,
         cx: &mut Context<Self>,
     ) -> Option<Done> {
-        let (done, note) = match self.cockpit.update(cx, |cockpit, _| cockpit.coordinator(action)) {
+        let machine = self.factory_machine()?;
+        let (done, note) = match self
+            .cockpit
+            .update(cx, |cockpit, _| cockpit.coordinator(machine, action))
+        {
             Ok(done) => (done, None),
             Err(error) => (None, Some(SharedString::from(error.to_string()))),
         };
@@ -623,7 +631,10 @@ impl CockpitView {
         if text.is_empty() {
             return;
         }
-        let action = CoordinatorAction::Say { project, text };
+        let action = CoordinatorAction::Say {
+            project: project.project(),
+            text,
+        };
         if self.coordinator_ask(action, cx).is_some() {
             field.update(cx, |field, cx| {
                 field.take(cx);
@@ -667,7 +678,13 @@ impl CockpitView {
                 agent.effort = (!effort.is_empty()).then_some(effort)
             }
         }
-        self.coordinator_ask(CoordinatorAction::Agent { project, agent }, cx);
+        self.coordinator_ask(
+            CoordinatorAction::Agent {
+                project: project.project(),
+                agent,
+            },
+            cx,
+        );
     }
 }
 

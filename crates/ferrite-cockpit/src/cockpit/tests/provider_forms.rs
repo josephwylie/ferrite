@@ -477,7 +477,7 @@ fn contract_the_standing_native_choice_is_option_two(cx: &mut TestAppContext) {
 #[gpui::test]
 fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAppContext) {
     let (core, _) = cockpit("project-fixed-footer", 1);
-    let before = core.registry().projects().len();
+    let before = core.registry(core.first_machine()).projects().len();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(640.), px(420.)));
     let base = scratch("project-fixed-footer-folders");
@@ -570,12 +570,12 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
                 view.project_card(app).is_none(),
                 "the visible footer completes the form"
             );
-            assert_eq!(view.cockpit.read(app).registry().projects().len(), before + 1);
+            assert_eq!(view.cockpit.read(app).registry(view.cockpit.read(app).first_machine()).projects().len(), before + 1);
             let project = view.nav_filter.expect("the completed Project is selected");
             if let Some(created) = created {
                 assert_eq!(project, created, "Done must edit the same Project");
             }
-            let record = view.cockpit.read(app).registry().reading().project(project).unwrap();
+            let record = view.cockpit.read(app).project(project).unwrap();
             assert_eq!(record.title, title);
             assert_eq!(record.root, directories[0]);
             assert_eq!(record.additional_roots, directories[1..]);

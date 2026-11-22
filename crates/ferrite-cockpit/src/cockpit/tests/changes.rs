@@ -33,7 +33,7 @@ fn window_with_agent<'a>(
     let fake = Fake::default();
     let store = Store::open(base.join("store")).unwrap();
     let mut core = Cockpit::new(store, Box::new(fake.clone()));
-    core.open(Provider::Claude, WorkspaceChoice::Main { checkout: repo.clone() }).unwrap();
+    core.open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: repo.clone() }).unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
@@ -351,7 +351,7 @@ fn f6_from_the_filter_steps_to_the_panels_controls(cx: &mut TestAppContext) {
 fn moving_to_another_thread_takes_the_keys_from_the_filter_with_it(cx: &mut TestAppContext) {
     let (view, _fake, repo, thread, cx) = window_with_agent("changes-filter-thread", cx);
     view.update(cx, |view, cx| {
-        view.cockpit.update(cx, |cockpit, _| cockpit.open(Provider::Claude, WorkspaceChoice::Main { checkout: repo }).unwrap());
+        view.cockpit.update(cx, |cockpit, _| cockpit.open(cockpit.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: repo }).unwrap());
         view.sync_panes(cx);
     });
     tick(cx);
@@ -528,7 +528,7 @@ fn window_of_files<'a>(
     }
     let store = Store::open(base.join("store")).unwrap();
     let mut core = Cockpit::new(store, Box::new(Fake::default()));
-    core.open(Provider::Claude, WorkspaceChoice::Main { checkout: repo.clone() }).unwrap();
+    core.open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: repo.clone() }).unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::time::Duration;
 
 use super::*;
@@ -88,19 +87,6 @@ fn a_working_thread_digests_its_turn_and_its_tile() {
     assert_eq!(digest.turns, 1);
     assert!(digest.pending.is_empty());
     assert_eq!(digest.wall.failing_count, Some(2));
-    assert_eq!(
-        digest
-            .wall
-            .lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>(),
-        [
-            "\u{25cf} Bash(cargo test)",
-            "  \u{2514} 357 passed; 2 failed",
-            "\u{25cf} Bash(cargo test -p ferrite)",
-        ]
-    );
 }
 
 /// A Decision reaches every surface that answers or counts it — the bell,
@@ -124,10 +110,7 @@ fn a_pending_decision_is_in_the_digest_with_its_handle() {
     assert_eq!(digest.pending[0].thread, ThreadId::new(1));
     assert_eq!(digest.pending[0].handle, (&pending[0].handle).into());
     assert_eq!(digest.pending[0].decision, (&pending[0].decision).into());
-    assert_eq!(
-        digest.wall.lines.last().map(|line| line.text.as_str()),
-        Some("  $ gh issue close 212")
-    );
+    assert_eq!(digest.wall.context, "Bash \u{b7} gh issue close 212");
 }
 
 /// The bell and a toast word a finished turn from its digest: its one
@@ -188,8 +171,9 @@ fn a_finished_turn_digests_its_answer_or_its_failing_tests() {
     );
 }
 
-/// A tile showing a Subagent prints that Subagent's lines, so the digest
-/// carries the card of the Subject the windows show beside Main's.
+/// A tile showing a Subagent reads that Subagent's card, so the digest
+/// carries the card of the Subject the windows show beside Main's: none
+/// of its words, as Main's has none.
 #[test]
 fn a_shown_subagent_digests_its_own_tile() {
     let boot = crate::clock::instant();
@@ -220,15 +204,8 @@ fn a_shown_subagent_digests_its_own_tile() {
     assert_eq!(digest.subagents, 1);
     let shown = digest.shown.expect("the shown Subagent's card");
     assert_eq!(shown.subject, WireSubject::from(&subject));
-    assert_eq!(
-        shown
-            .wall
-            .lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>(),
-        ["\u{25cf} Reading the spike notes"]
-    );
+    assert_eq!(shown.wall.working, "Working");
+    assert!(!format!("{shown:?}").contains("spike notes"));
     assert_eq!(
         Digest::of(
             ThreadId::new(1),
@@ -267,7 +244,7 @@ fn the_wall_card_folds_progress_result_and_context_lines() {
         }));
     }
     assert_eq!(transcript.todos(), Some(Todos { done: 3, total: 4 }));
-    let card = WallCard::of(&transcript, None, None);
+    let card = WallCard::of(&transcript, None);
     assert_eq!(card.working.as_str(), "Working");
 
     // A red suite flips the folded flag and folds the failing line —
@@ -283,7 +260,7 @@ fn the_wall_card_folds_progress_result_and_context_lines() {
         is_error: true,
         result: ToolResult::Opaque,
     }));
-    let red = WallCard::of(&transcript, None, None);
+    let red = WallCard::of(&transcript, None);
     assert!(red.tests_failing);
     assert_eq!(red.failing_count, Some(2));
 
@@ -301,7 +278,7 @@ fn the_wall_card_folds_progress_result_and_context_lines() {
         suggestions: vec![],
     };
     assert_eq!(
-        WallCard::of(&transcript, Some(&decision), None)
+        WallCard::of(&transcript, Some(&decision))
             .context
             .as_str(),
         "Bash \u{b7} gh issue close 212"
@@ -314,97 +291,8 @@ fn the_wall_card_folds_progress_result_and_context_lines() {
         reason: "claude CLI exited with code 1".into(),
     }));
     assert_eq!(
-        WallCard::of(&closed, None, None).context.as_str(),
+        WallCard::of(&closed, None).context.as_str(),
         "claude CLI exited with code 1"
-    );
-}
-
-/// F-6: a tile's lines are one dim run each, glyph included — a call's
-/// trail inline after one space, a red run's result under it, a passed
-/// run's `ok`, and a pending approval's command in place of the call it
-/// gates.
-#[test]
-fn the_wall_card_prints_calls_trails_results_and_the_decision() {
-    let mut transcript = Transcript::default();
-    transcript.apply(Input::Prompt("fix it".into()));
-    transcript.apply(Input::Event(SessionEvent::ToolStarted {
-        id: "t1".into(),
-        name: "Bash".into(),
-        input: serde_json::json!({ "command": "cargo test --workspace" }),
-    }));
-    transcript.apply(Input::Event(SessionEvent::ToolCompleted {
-        id: "t1".into(),
-        output: "test result: FAILED. 357 passed; 2 failed; 0 ignored".into(),
-        is_error: true,
-        result: ToolResult::Opaque,
-    }));
-    let timings: HashMap<String, ToolTiming> =
-        [("t1".to_string(), ToolTiming::Done(Duration::from_secs(61)))]
-            .into_iter()
-            .collect();
-    let card = WallCard::of(&transcript, None, Some(&timings));
-    let texts: Vec<&str> = card.lines.iter().map(|line| line.text.as_str()).collect();
-    assert_eq!(
-        texts,
-        [
-            "\u{25cf} Bash(cargo test --workspace) 1m 1s",
-            "  \u{2514} 357 passed; 2 failed"
-        ],
-        "the prompt leaves no line"
-    );
-    assert!(card.lines.iter().all(|line| !line.wraps));
-
-    // A passed run says `ok` in its trail and hangs nothing.
-    transcript.apply(Input::Event(SessionEvent::ToolStarted {
-        id: "t2".into(),
-        name: "Bash".into(),
-        input: serde_json::json!({ "command": "cargo test -p ferrite theme::" }),
-    }));
-    transcript.apply(Input::Event(SessionEvent::ToolCompleted {
-        id: "t2".into(),
-        output: "test result: ok. 24 passed; 0 failed".into(),
-        is_error: false,
-        result: ToolResult::Opaque,
-    }));
-    let card = WallCard::of(&transcript, None, None);
-    assert_eq!(
-        card.lines.last().unwrap().text.as_str(),
-        "\u{25cf} Bash(cargo test -p ferrite theme::) ok"
-    );
-
-    // Prose is a line that may wrap; the call a Decision gates gives
-    // way to what the Decision would run.
-    transcript.apply(Input::Event(SessionEvent::TextDelta {
-        text: "Six of seven stale issues closed\n\n".into(),
-    }));
-    let command = "gh issue close 212 --reason \"not planned\"";
-    transcript.apply(Input::Event(SessionEvent::ToolStarted {
-        id: "t3".into(),
-        name: "Bash".into(),
-        input: serde_json::json!({ "command": command }),
-    }));
-    let decision = Decision {
-        delivery: Default::default(),
-        kind: Default::default(),
-        policy: Default::default(),
-        id: "perm".into(),
-        tool_use_id: "t3".into(),
-        tool_name: "Bash".into(),
-        description: String::new(),
-        input: serde_json::json!({ "command": command }),
-        suggestions: vec![],
-    };
-    let card = WallCard::of(&transcript, Some(&decision), None);
-    assert_eq!(
-        card.lines[card.lines.len() - 3..]
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>(),
-        [
-            "\u{25cf} Six of seven stale issues closed",
-            "\u{25c6} Bash wants to run",
-            "  $ gh issue close 212 --reason \"not planned\"",
-        ]
     );
 }
 
@@ -442,19 +330,19 @@ fn every_decision_surface_shares_one_subject_derivation() {
     // The wall's alert context runs through the same derivation.
     let transcript = Transcript::default();
     assert_eq!(
-        WallCard::of(&transcript, Some(&unreadable), None)
+        WallCard::of(&transcript, Some(&unreadable))
             .context
             .as_str(),
         "unreadable permission request"
     );
 }
 
-/// #173: a reply streaming as one long paragraph is in every digest the
-/// Server folds while it streams, so the digest carries only what a tile
-/// or a toast can show of it: the same digest at 8 KB of reply as at 400
-/// KB.
+/// #173, F-A2: a reply streaming as one long paragraph is in every
+/// digest the Server folds while it streams, and every window that does
+/// not draw the Thread is sent it, so the digest carries none of the
+/// reply: the same small digest at 8 KB of reply as at 400 KB.
 #[test]
-fn a_long_streaming_reply_digests_only_what_a_tile_shows() {
+fn a_long_streaming_reply_digests_none_of_itself() {
     let boot = crate::clock::instant();
     let mut activity = asked("write it all down");
     let mut words = 0;
@@ -474,11 +362,8 @@ fn a_long_streaming_reply_digests_only_what_a_tile_shows() {
     let late = Digest::of(ThreadId::new(1), activity.view(), None, boot);
 
     assert_eq!(early, late);
-    let line = &late.wall.lines.last().unwrap().text;
-    // Two rows of the widest tile, cut mid-word: `… word wo`.
-    let rows = &"word ".repeat(1000)[..2 * crate::progress::ROW_CHARS];
-    assert_eq!(*line, format!("\u{25cf} {rows}"));
-    assert!(serde_json::to_vec(&late).unwrap().len() < 2 << 10);
+    assert!(!format!("{late:?}").contains("word"), "{late:?}");
+    assert!(serde_json::to_vec(&late).unwrap().len() < 512);
 
     // Done, it is no answer a toast can word.
     said(
@@ -490,30 +375,7 @@ fn a_long_streaming_reply_digests_only_what_a_tile_shows() {
     );
     let done = Digest::of(ThreadId::new(1), activity.view(), None, boot);
     assert_eq!(done.finish.answer, None);
-    assert!(serde_json::to_vec(&done).unwrap().len() < 2 << 10);
-}
-
-/// A long first line still leaves the tile its continuation: the prose's
-/// own next line.
-#[test]
-fn a_long_first_line_keeps_its_next_line_on_the_tile() {
-    let mut transcript = Transcript::default();
-    transcript.apply(Input::Prompt("explain".into()));
-    let head = "x".repeat(10_000);
-    transcript.apply(Input::Event(SessionEvent::TextDelta {
-        text: format!("{head}\nthe second line"),
-    }));
-
-    let card = WallCard::of(&transcript, None, None);
-
-    let expected = format!(
-        "\u{25cf} {}\nthe second line",
-        "x".repeat(2 * crate::progress::ROW_CHARS)
-    );
-    assert_eq!(
-        card.lines.last().map(|line| line.text.as_str()),
-        Some(expected.as_str())
-    );
+    assert!(serde_json::to_vec(&done).unwrap().len() < 512);
 }
 
 #[test]

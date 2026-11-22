@@ -38,7 +38,7 @@ use super::*;
 use super::destination::{Destination, Shows};
 use crate::cockpit::surfaces::PrTab;
 use ferrite_core::protocol::{ReviewPullRequests, WirePrFilter, WirePrList, WirePrRow, WirePrUnread};
-use ferrite_core::workspace::registry::ProjectId;
+use ferrite_core::ProjectKey;
 use ferrite_ui::icons::{self, icon};
 
 actions!(pull_requests, [Next, Previous, Open, Back]);
@@ -60,9 +60,9 @@ struct ListRead {
 
 pub(crate) struct PrsView {
     cockpit: WeakEntity<CockpitView>,
-    pub(super) project: Option<ProjectId>,
+    pub(super) project: Option<ProjectKey>,
     pub(super) filter: WirePrFilter,
-    lists: HashMap<(ProjectId, WirePrFilter), ListRead>,
+    lists: HashMap<(ProjectKey, WirePrFilter), ListRead>,
     pub(super) selected: Option<u64>,
     detail: bool,
     tab: PrTab,
@@ -74,7 +74,7 @@ pub(crate) struct PrsView {
 /// What the PRs draw from, as the Cockpit has it this frame.
 pub(crate) struct PrsInputs {
     /// The Projects to scope to, in the registry's order, by title.
-    projects: Vec<(ProjectId, SharedString)>,
+    projects: Vec<(ProjectKey, SharedString)>,
     /// The open PR, when its detail shows.
     detail: Option<PrsDetail>,
 }
@@ -93,7 +93,7 @@ pub(crate) struct PrsDetail {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PrsEvent {
     /// Read this Project's list in this state.
-    Read(ProjectId, WirePrFilter),
+    Read(ProjectKey, WirePrFilter),
     /// A PR's detail opened: read it again over what the last read left.
     Opened(PrTarget),
     /// Esc on the list: the board comes back.
@@ -119,18 +119,12 @@ impl CockpitView {
     /// Show the PRs destination in the board's place: on `project` when
     /// told, else where it was left, else the shown Thread's Project, else
     /// the first one.
-    pub(crate) fn open_prs(&mut self, project: Option<ProjectId>, cx: &mut Context<Self>) {
+    pub(crate) fn open_prs(&mut self, project: Option<ProjectKey>, cx: &mut Context<Self>) {
         let focused = self.focused_thread(cx);
         let from_thread =
             focused.and_then(|thread| self.facts.get(thread).and_then(|facts| facts.project));
-        let first = self
-            .cockpit
-            .read(cx)
-            .registry()
-            .projects()
-            .first()
-            .map(|project| project.id);
-        let known = |project: &ProjectId| self.cockpit.read(cx).registry().project(*project).is_some();
+        let first = self.every_project(cx).first().map(|(key, _, _)| *key);
+        let known = |project: &ProjectKey| self.cockpit.read(cx).project(*project).is_some();
         let chosen = project
             .or(self.prs.read(cx).project.filter(known))
             .or(from_thread)
@@ -215,14 +209,13 @@ impl CockpitView {
     /// the answer to the PRs to wait on.
     fn read_prs_list(
         &mut self,
-        project: ProjectId,
+        project: ProjectKey,
         filter: WirePrFilter,
         cx: &mut Context<Self>,
     ) {
         let Some(path) = self
             .cockpit
             .read(cx)
-            .registry()
             .project(project)
             .map(|project| project.root.clone())
         else {
@@ -231,7 +224,9 @@ impl CockpitView {
         if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.read(cx).has_forge_fixture(&path) {
             return;
         }
-        let answer = self.cockpit.update(cx, |cockpit, _| cockpit.list_pull_requests(&path, filter));
+        let answer = self.cockpit.update(cx, |cockpit, _| {
+            cockpit.list_pull_requests(project.machine(), &path, filter)
+        });
         self.prs
             .update(cx, |prs, cx| prs.reading((project, filter), answer, cx));
     }
@@ -240,12 +235,9 @@ impl CockpitView {
     /// and the view of it chosen.
     fn prs_inputs(&self, open: Option<(PrTarget, PrTab)>, cx: &mut Context<Self>) -> PrsInputs {
         let projects = self
-            .cockpit
-            .read(cx)
-            .registry()
-            .projects()
-            .iter()
-            .map(|project| (project.id, SharedString::from(project.title.clone())))
+            .every_project(cx)
+            .into_iter()
+            .map(|(key, _, title)| (key, SharedString::from(title)))
             .collect();
         let detail = open.map(|(target, tab)| {
             let shown = self.pr_shown(target, tab, cx);
@@ -292,7 +284,7 @@ impl PrsView {
     }
 
     /// Shown on `project`, its list read again.
-    fn show(&mut self, project: Option<ProjectId>, cx: &mut Context<Self>) {
+    fn show(&mut self, project: Option<ProjectKey>, cx: &mut Context<Self>) {
         self.project = project;
         if let Some(project) = project {
             self.read_list(project, cx);
@@ -301,14 +293,14 @@ impl PrsView {
 
     /// Ask for `project`'s list as the filter shows it, over the rows the
     /// last read left: they stay until the new ones land.
-    fn read_list(&mut self, project: ProjectId, cx: &mut Context<Self>) {
+    fn read_list(&mut self, project: ProjectKey, cx: &mut Context<Self>) {
         cx.emit(PrsEvent::Read(project, self.filter));
     }
 
     /// The forge's answer to a list read, on its way.
     fn reading(
         &mut self,
-        key: (ProjectId, WirePrFilter),
+        key: (ProjectKey, WirePrFilter),
         answer: std::io::Result<std::sync::mpsc::Receiver<std::io::Result<ReviewPullRequests>>>,
         cx: &mut Context<Self>,
     ) {
@@ -332,7 +324,7 @@ impl PrsView {
 
     fn landed(
         &mut self,
-        key: (ProjectId, WirePrFilter),
+        key: (ProjectKey, WirePrFilter),
         request: u64,
         read: std::io::Result<ReviewPullRequests>,
         cx: &mut Context<Self>,
@@ -364,7 +356,7 @@ impl PrsView {
         cx.notify();
     }
 
-    fn choose_project(&mut self, project: ProjectId, cx: &mut Context<Self>) {
+    fn choose_project(&mut self, project: ProjectKey, cx: &mut Context<Self>) {
         if self.project != Some(project) {
             self.project = Some(project);
             self.selected = None;
@@ -587,8 +579,8 @@ impl PrsView {
     /// The scope and the state filter, over the list.
     fn scope_bar(
         &self,
-        project: ProjectId,
-        projects: &[(ProjectId, SharedString)],
+        project: ProjectKey,
+        projects: &[(ProjectKey, SharedString)],
         cx: &mut Context<Self>,
     ) -> Div {
         use ferrite_ui::theme::*;
@@ -608,7 +600,7 @@ impl PrsView {
             .map(|(id, title)| {
                 let id = *id;
                 self.segment(
-                    format!("prs-project-{}", id.get()).into(),
+                    format!("prs-project-{}-{}", id.machine().get(), id.project().get()).into(),
                     title.clone(),
                     id == project,
                     move |view, cx| view.choose_project(id, cx),
@@ -644,8 +636,8 @@ impl PrsView {
 
     fn list(
         &self,
-        project: ProjectId,
-        projects: &[(ProjectId, SharedString)],
+        project: ProjectKey,
+        projects: &[(ProjectKey, SharedString)],
         cx: &mut Context<Self>,
     ) -> Div {
         use ferrite_ui::theme::*;
@@ -767,7 +759,7 @@ impl PrsView {
             .child(content)
     }
 
-    fn retry(&self, project: ProjectId, cx: &mut Context<Self>) -> AnyElement {
+    fn retry(&self, project: ProjectKey, cx: &mut Context<Self>) -> AnyElement {
         ferrite_ui::components::secondary_button("prs-retry", None, "Retry", cx)
             .debug_selector(|| "prs-retry".into())
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {

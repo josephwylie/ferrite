@@ -21,26 +21,26 @@ impl RemoteFiles {
     pub(in crate::cockpit::tools) fn new(
         root: PathBuf,
         view: WeakEntity<CockpitView>,
-        machine: Arc<ferrite_core::machine::Bridge>,
+        machine: ferrite_core::MachineId,
+        bridge: Arc<ferrite_core::machine::Bridge>,
     ) -> Self {
         Self {
             root,
             submit: Rc::new(move |request, cx| {
                 let (send, answer) = oneshot::channel();
                 let view = view.clone();
-                let machine = machine.clone();
+                let bridge = bridge.clone();
                 cx.defer(move |cx| {
                     let requested = view
                         .update(cx, |view, cx| {
-                            if !view
-                                .bridge_on_screen(cx)
-                                .is_some_and(|current| Arc::ptr_eq(current, &machine))
-                            {
+                            let current = view.cockpit.read(cx).bridge(machine);
+                            if !current.is_some_and(|current| Arc::ptr_eq(current, &bridge)) {
                                 return Err(io::Error::other(
                                     "This connection changed. Reopen the file on its machine.",
                                 ));
                             }
-                            view.cockpit.update(cx, |cockpit, _| cockpit.file_operation(request))
+                            view.cockpit
+                                .update(cx, |cockpit, _| cockpit.file_operation(machine, request))
                         })
                         .map_err(|error| io::Error::other(error.to_string()))
                         .and_then(|result| result);

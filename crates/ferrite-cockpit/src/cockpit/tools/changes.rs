@@ -89,6 +89,14 @@ pub(crate) enum Diff {
 }
 
 impl Diff {
+    /// The machine whose checkout or forge the diff is read from.
+    pub(crate) fn machine(self) -> ferrite_core::MachineId {
+        match self {
+            Diff::Changes(thread) => thread.machine(),
+            Diff::PullRequest(target) => target.source.machine(),
+        }
+    }
+
     pub(crate) fn local_thread(self) -> Option<ThreadKey> {
         match self {
             Diff::Changes(thread) => Some(thread),
@@ -446,7 +454,7 @@ pub(in crate::cockpit) enum ChangesEvent {
 }
 
 impl CockpitView {
-    /// Where `diff` is read: its Thread's checkout on the window's machine,
+    /// Where `diff` is read: its Thread's checkout on its Thread's machine,
     /// or the checkout or Project its pull request is read in.
     pub(in crate::cockpit) fn changes_origin(&self, diff: Diff, cx: &App) -> Option<Origin> {
         match diff {
@@ -496,7 +504,9 @@ impl CockpitView {
         };
         match diff {
             Diff::Changes(_) => {
-                let answer = self.cockpit.update(cx, |cockpit, _| cockpit.changes(&origin.root, scope));
+                let answer = self
+                    .cockpit
+                    .update(cx, |cockpit, _| cockpit.changes(diff.machine(), &origin.root, scope));
                 self.changes.update(cx, |changes, cx| {
                     changes.wait_local(diff, generation, origin, answer, cx)
                 });
@@ -509,7 +519,9 @@ impl CockpitView {
                         "No published diff fixture for this pull request",
                     ))
                 } else {
-                    self.cockpit.update(cx, |cockpit, _| cockpit.review_pull_request_diff(&origin.root, target.number))
+                    self.cockpit.update(cx, |cockpit, _| {
+                        cockpit.review_pull_request_diff(diff.machine(), &origin.root, target.number)
+                    })
                 };
                 self.changes.update(cx, |changes, cx| {
                     changes.wait_published(diff, generation, origin, answer, cx)
@@ -527,7 +539,9 @@ impl CockpitView {
         let Some(generation) = self.changes.update(cx, |changes, _| changes.begin_stage(diff)) else {
             return;
         };
-        let outcome = self.cockpit.update(cx, |cockpit, _| cockpit.set_file_staged(&origin.root, path.clone(), stage));
+        let outcome = self.cockpit.update(cx, |cockpit, _| {
+            cockpit.set_file_staged(diff.machine(), &origin.root, path.clone(), stage)
+        });
         self.changes.update(cx, |changes, cx| {
             changes.wait_stage(diff, generation, origin, path, stage, outcome, cx)
         });

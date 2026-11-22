@@ -89,7 +89,7 @@ fn world<'a>(
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
-    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
+    view.update(cx, |view, cx| view.open_factory(project, cx));
     tick(cx);
     (view, cx, project.project())
 }
@@ -161,7 +161,7 @@ fn the_archive_is_searched_and_opens_a_task_read_only(cx: &mut TestAppContext) {
     // G4: an earlier Worker's transcript opens to be read, with nothing
     // to type into, and goes back to being parked.
     let (parked, row) = view.read_with(cx, |view, cx| {
-        let board = view.cockpit.read(cx).factory();
+        let board = view.cockpit.read(cx).factory(view.cockpit.read(cx).first_machine());
         let task = board.task("t-1").unwrap();
         let parked = task.worker.unwrap();
         let row = task.every_worker().iter().position(|each| *each == parked);
@@ -197,7 +197,7 @@ fn an_unreadable_store_is_said_on_the_board(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
-    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
+    view.update(cx, |view, cx| view.open_factory(project, cx));
     tick(cx);
     assert!(shows(cx, "factory-trouble"));
 }

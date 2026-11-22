@@ -480,7 +480,6 @@ impl CockpitView {
         let project = self
             .cockpit
             .read(cx)
-            .registry()
             .project(draft.binding.project())
             .map(|project| SharedString::from(project.title.clone()))
             .unwrap_or_else(|| "Project".into());

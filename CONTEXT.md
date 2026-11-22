@@ -110,9 +110,10 @@ _Avoid_: folder (the nav has none).
 
 **Roster**
 The Cockpit's state, headless: the open Panes in order, the one holding the
-keyboard (the one on screen), the drafts, and this launch's park order.
-Changed only by the operator's acts on the Cockpit (close, reopen, focus);
-the window mirrors it and paints.
+keyboard (the one on screen, or none: another machine's Thread that merely
+opened is not where the operator is), the drafts, and this launch's park
+order. Changed only by the operator's acts on the Cockpit (close, reopen,
+focus); the window mirrors it and paints.
 _Avoid_: layout (that is the board's split), tab list.
 
 **Layout**
@@ -314,7 +315,7 @@ _Avoid_: active thread, last thread.
 
 **Remote**
 Following and answering Decisions away from the computer the agents run
-on: a window on another Machine's Server.
+on: a window holding another Machine's Server.
 
 **Server**
 The headless Ferrite process (`ferrite server`) that owns every Session,
@@ -327,10 +328,12 @@ _Avoid_: daemon, backend (that is a Provider), host.
 **Machine**
 Another computer whose Server a window reaches over ssh (`ferrite --remote
 <target>`, or saved in Settings) or over a remote link (`ferrited remote
-serve`, `docs/guides/remote-links.md`). The window is on one machine at a
-time — this computer, `local`, or another — and watches only that one's
-Threads; the others stream status to the nav. A machine runs `ferrited`,
-the Server without a window.
+serve`, `docs/guides/remote-links.md`). The window holds every enabled
+machine at once — this computer, `local`, and the others — each a held
+machine in its one Cockpit, and opens any of their Threads in place
+(ADR 0045). Another machine streams a Thread's transcript only while the
+window draws it, and its status, Decisions and Notices for every Thread.
+A machine runs `ferrited`, the Server without a window.
 _Avoid_: host, remote (as a noun), node.
 
 **Peer**

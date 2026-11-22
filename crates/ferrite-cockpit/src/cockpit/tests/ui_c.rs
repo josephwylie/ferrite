@@ -324,7 +324,7 @@ fn a_failed_threads_dot_is_blocked_until_the_failure_is_seen(cx: &mut TestAppCon
     cx.run_until_parked();
     view.read_with(cx, |view, cx| {
         let thread = view.cockpit.read(cx).threads()[0];
-        assert!(!view.cockpit.read(cx).notifications().attention(thread.thread()), "seen");
+        assert!(!view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).attention(thread.thread()), "seen");
         let row = view.thread_row(thread, cx);
         assert_ne!(row.tail, nav::NavTail::Failed, "seen, it says nothing");
         assert_eq!(row.status, nav::RowStatus::Idle, "and wears no dot");

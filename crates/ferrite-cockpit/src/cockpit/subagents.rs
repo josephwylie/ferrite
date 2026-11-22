@@ -824,7 +824,7 @@ impl CockpitView {
 
     pub(super) fn answer_subject(&mut self, answer: Answer, cx: &mut Context<Self>) {
         let index = self.focused(cx);
-        let Some(thread) = self.panes[index].thread() else {
+        let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
             return;
         };
         let Some(request) =

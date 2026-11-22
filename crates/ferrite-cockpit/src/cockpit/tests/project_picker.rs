@@ -8,7 +8,7 @@ use super::*;
 fn the_project_chip_picks_a_project_or_adds_one(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("chip-matches-filter", 1);
     let repo = repo_in(&scratch("chip-matches-filter-repo"));
-    let other = core.register_project(&repo).unwrap();
+    let other = core.register_project(core.first_machine(), &repo).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let added = scratch("chip-matches-filter-added");
     std::fs::create_dir_all(&added).unwrap();
@@ -48,7 +48,7 @@ fn the_project_chip_picks_a_project_or_adds_one(cx: &mut TestAppContext) {
         view.confirm_project_editor(cx);
 
         let created = view.nav_filter.expect("the new Project is the filter");
-        assert_ne!(created, other.project());
+        assert_ne!(created, other);
         assert_eq!(
             view.panes[view.focused(cx)]
                 .draft()
@@ -76,7 +76,7 @@ fn the_project_card_stages_directories_and_registers_on_confirm(cx: &mut TestApp
     std::fs::create_dir_all(&extra).unwrap();
 
     view.update(cx, |view, cx| {
-        let before = view.cockpit.read(cx).registry().projects().len();
+        let before = view.cockpit.read(cx).registry(view.cockpit.read(cx).first_machine()).projects().len();
         view.open_project_creator(cx);
         assert!(
             !view.project_card(cx).unwrap().read(cx).ready(),
@@ -99,20 +99,18 @@ fn the_project_card_stages_directories_and_registers_on_confirm(cx: &mut TestApp
             [main.clone(), extra.clone()]
         );
         assert_eq!(
-            view.cockpit.read(cx).registry().projects().len(),
+            view.cockpit.read(cx).registry(view.cockpit.read(cx).first_machine()).projects().len(),
             before,
             "nothing is registered before Create"
         );
 
         view.confirm_project_editor(cx);
         assert!(view.project_card(cx).is_none());
-        assert_eq!(view.cockpit.read(cx).registry().projects().len(), before + 1);
+        assert_eq!(view.cockpit.read(cx).registry(view.cockpit.read(cx).first_machine()).projects().len(), before + 1);
 
         let project = view
             .cockpit
             .read(cx)
-            .registry()
-            .reading()
             .project(view.nav_filter.expect("the new Project is the filter"))
             .unwrap();
         assert_eq!(project.root, ferrite_core::workspace::follow::canonical(&main));
@@ -127,19 +125,18 @@ fn the_project_card_stages_directories_and_registers_on_confirm(cx: &mut TestApp
 fn the_project_card_edits_an_existing_project(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("project-card-edit", 1);
     let repo = repo_in(&scratch("project-card-edit-repo"));
-    let project = core.register_project(&repo).unwrap();
+    let project = core.register_project(core.first_machine(), &repo).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let extra = scratch("project-card-edit-extra");
     std::fs::create_dir_all(&extra).unwrap();
 
     view.update(cx, |view, cx| {
-        view.open_project_editor(project.project(), cx);
+        view.open_project_editor(project, cx);
         view.adopt_editor_directory(extra.clone(), cx);
         assert_eq!(
             view.cockpit
                 .read(cx)
-                .registry()
-                .project(project.project())
+                .project(project)
                 .unwrap()
                 .additional_roots,
             [ferrite_core::workspace::follow::canonical(&extra)],
@@ -152,7 +149,7 @@ fn the_project_card_edits_an_existing_project(cx: &mut TestAppContext) {
 
         assert!(view.project_card(cx).is_none());
         assert_eq!(
-            view.cockpit.read(cx).registry().project(project.project()).unwrap().title,
+            view.cockpit.read(cx).registry(view.cockpit.read(cx).first_machine()).project(project.project()).unwrap().title,
             "Renamed"
         );
     });
@@ -186,7 +183,7 @@ fn the_project_card_draws_its_body(cx: &mut TestAppContext) {
 fn a_draft_starts_on_the_filtered_project(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("draft-follows-filter", 0);
     let repo = repo_in(&scratch("draft-follows-filter-repo"));
-    let chosen = core.register_project(&repo).unwrap();
+    let chosen = core.register_project(core.first_machine(), &repo).unwrap();
     let extra = scratch("draft-follows-filter-extra");
     std::fs::create_dir_all(&extra).unwrap();
     core.add_project_directories(chosen, &[extra.clone()])
@@ -210,12 +207,12 @@ fn a_draft_starts_on_the_filtered_project(cx: &mut TestAppContext) {
         let standing = view.panes[view.focused(cx)].identity.draft().unwrap();
         view.cockpit.update(cx, |cockpit, _| cockpit.discard_draft(standing).unwrap());
         view.sync_panes(cx);
-        view.nav_filter = Some(chosen.project());
+        view.nav_filter = Some(chosen);
         view.open_draft(DraftTarget::Main, cx);
 
         let draft = view.panes[view.focused(cx)].draft().unwrap();
-        assert_eq!(draft.binding.project(), chosen.project());
-        let project = view.cockpit.read(cx).registry().reading().project(chosen.project()).unwrap();
+        assert_eq!(draft.binding.project(), chosen);
+        let project = view.cockpit.read(cx).registry(view.cockpit.read(cx).first_machine()).reading().project(chosen.project()).unwrap();
         assert_eq!(
             project.directories().collect::<Vec<_>>(),
             [
@@ -234,7 +231,7 @@ fn a_draft_starts_on_the_filtered_project(cx: &mut TestAppContext) {
 fn choosing_a_project_moves_the_standing_draft(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("filter-moves-draft", 1);
     let repo = repo_in(&scratch("filter-moves-draft-repo"));
-    let chosen = core.register_project(&repo).unwrap();
+    let chosen = core.register_project(core.first_machine(), &repo).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
 
     view.update(cx, |view, cx| {
@@ -245,10 +242,10 @@ fn choosing_a_project_moves_the_standing_draft(cx: &mut TestAppContext) {
             view.launch_project.expect("a launch Project")
         );
 
-        view.choose_nav_filter(Some(chosen.project()), cx);
+        view.choose_nav_filter(Some(chosen), cx);
 
         let draft = view.panes[view.focused(cx)].draft().unwrap();
-        assert_eq!(draft.binding.project(), chosen.project());
+        assert_eq!(draft.binding.project(), chosen);
         assert_eq!(
             *draft.binding.target(),
             DraftTarget::Main,
@@ -264,7 +261,7 @@ fn choosing_a_project_moves_the_standing_draft(cx: &mut TestAppContext) {
                 .unwrap()
                 .binding
                 .project(),
-            chosen.project()
+            chosen
         );
     });
 }

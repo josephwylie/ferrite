@@ -58,6 +58,11 @@ impl MachineId {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }
+
+    /// Its number, for an element's id: unique for the run.
+    pub fn get(self) -> u32 {
+        self.0
+    }
 }
 
 /// A Thread and the machine it lives on. Only core makes one, stamping
@@ -93,6 +98,12 @@ impl ThreadKey {
     pub fn sibling(self, thread: ThreadId) -> Self {
         Self::new(self.machine, thread)
     }
+
+    /// This Thread once its machine is held again, as `machine`: its id is
+    /// its machine's Store's, which a new attach does not change.
+    pub fn held_again(self, machine: MachineId) -> Self {
+        Self::new(machine, self.thread)
+    }
 }
 
 /// A Project and the machine it is registered on: a `ProjectId` is per
@@ -108,6 +119,12 @@ impl ProjectKey {
         Self { machine, project }
     }
 
+    /// A key for a test with no Cockpit behind it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fixture(machine: u32, project: ProjectId) -> Self {
+        Self::new(MachineId(machine), project)
+    }
+
     pub fn machine(self) -> MachineId {
         self.machine
     }
@@ -121,7 +138,16 @@ impl ProjectKey {
 /// which an index moving in Settings does not change. `None` is this
 /// computer.
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
 )]
 #[serde(transparent)]
 pub struct MachineKey(pub Option<String>);

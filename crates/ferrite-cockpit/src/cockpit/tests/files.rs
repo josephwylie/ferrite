@@ -1221,7 +1221,7 @@ fn a_deleted_threads_refused_edit_is_still_named_when_leaving(cx: &mut TestAppCo
     editor.update(cx, |editor, cx| editor.type_text("// lost\n", cx));
     press_nav_verb(&view, thread, MenuVerb::Delete, cx);
     pause_and_settle(cx);
-    assert_eq!(view.read_with(cx, |view, cx| view.files.read(cx).unsaved_at_leaving(cx)), Some(1));
+    assert_eq!(view.read_with(cx, |view, cx| view.files.read(cx).unsaved_at_leaving(view.cockpit.read(cx).first_machine(), cx)), Some(1));
 }
 
 /// A Thread with the same id on another machine is another Thread (ADR

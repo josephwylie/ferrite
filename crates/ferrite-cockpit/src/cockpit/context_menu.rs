@@ -24,6 +24,8 @@ pub(super) enum MenuTarget {
     NavFilter,
     /// The search row's Factory button: a Project's board to open.
     NavFactory,
+    /// A machine's heading in the nav: what is made on that machine.
+    Machine(ferrite_core::MachineId),
     /// A diff line in the Review beside the Thread's Pane (ADR 0021).
     Review {
         thread: ThreadKey,
@@ -90,6 +92,8 @@ pub(super) enum MenuVerb {
     Comment,
     OpenAtLine,
     NewThread,
+    /// A new Project on the heading's machine (`MenuTarget::Machine`).
+    NewProject,
     Reveal,
     CopyPath,
     /// The Thread's PR: ask `gh` again now, or open it in the browser.
@@ -129,8 +133,8 @@ pub(super) enum MenuVerb {
     CloseOtherSurfaces,
     CloseSurfacesRight,
     CloseAllSurfaces,
-    FilterProject(Option<ProjectId>),
-    OpenFactory(ProjectId),
+    FilterProject(Option<ProjectKey>),
+    OpenFactory(ProjectKey),
     /// A pull request Surface's row.
     Pr(panel::PrAction),
     /// A PR link's rows (`MenuTarget::PrLink`): open it by a door, copy
@@ -367,6 +371,9 @@ impl CockpitView {
             // exists for — clearing the parked history it holds.
             MenuTarget::NavFilter => rows.extend(self.filter_rows(cx)),
             MenuTarget::NavFactory => rows.extend(self.factory_rows(cx)),
+            MenuTarget::Machine(_) => {
+                rows.push(Some((menu::Item::new("New project\u{2026}"), MenuVerb::NewProject)));
+            }
             MenuTarget::Parked => {
                 rows.push(Some((
                     menu::Item::new(if self.shelf_open(nav::Shelf::Parked) {
@@ -542,7 +549,13 @@ impl CockpitView {
             .read(cx)
             .visible()
             .contains(&PaneIdentity::Thread(thread));
-        if !visible && self.cockpit.read(cx).notifications().can_mark_unread(thread.thread()) {
+        if !visible
+            && self
+                .cockpit
+                .read(cx)
+                .notifications(thread.machine())
+                .can_mark_unread(thread.thread())
+        {
             rows.push(Some((key("Mark as unread", "U"), MenuVerb::MarkUnread)));
         }
         rows.push(Some((key("Rename", "R"), MenuVerb::Rename)));
@@ -984,6 +997,9 @@ impl CockpitView {
             (MenuTarget::NavFactory, MenuVerb::OpenFactory(project)) => {
                 self.open_factory(project, cx)
             }
+            (MenuTarget::Machine(machine), MenuVerb::NewProject) => {
+                self.open_project_creator_on(machine, cx)
+            }
             (MenuTarget::Parked, MenuVerb::DeleteAllParked) => {
                 self.delete_parked_threads(cx);
             }
@@ -992,11 +1008,12 @@ impl CockpitView {
                     MenuTarget::Thread(key)
                     | MenuTarget::Pane(key)
                     | MenuTarget::Snooze(key) => {
-                        self.cockpit.read(cx).project_of(key).map(|project| project.project())
+                        self.cockpit.read(cx).project_of(key)
                     }
                     MenuTarget::Parked
                     | MenuTarget::NavFilter
                     | MenuTarget::NavFactory
+                    | MenuTarget::Machine(_)
                     | MenuTarget::Review { .. }
                     | MenuTarget::Prompt { .. }
                     | MenuTarget::File(_)
@@ -1030,7 +1047,11 @@ impl CockpitView {
                 self.fork_thread(key, None, None, cx)
             }
             (MenuTarget::Thread(key), MenuVerb::CopyLink) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(thread_link(key.thread())));
+                let machine = self.machine_label(key.machine(), cx);
+                cx.write_to_clipboard(ClipboardItem::new_string(thread_link(
+                    machine.as_deref(),
+                    key.thread(),
+                )));
             }
             (_, MenuVerb::OpenTerminal) => {
                 if let Some(path) = self.target_path(target, cx) {
@@ -1273,8 +1294,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_threads_link_is_the_cli_command_that_focuses_it() {
-        assert_eq!(thread_link(ThreadId::new(12)), "ferrite thread focus 12");
+    fn a_threads_link_is_the_cli_command_that_focuses_it_on_its_machine() {
+        assert_eq!(thread_link(None, ThreadId::new(12)), "ferrite thread focus 12");
+        assert_eq!(
+            thread_link(Some("box"), ThreadId::new(12)),
+            "ferrite --machine box thread focus 12"
+        );
+        assert_eq!(
+            thread_link(Some("my box"), ThreadId::new(12)),
+            "ferrite --machine 'my box' thread focus 12"
+        );
     }
 
     #[cfg(target_os = "macos")]

@@ -632,7 +632,6 @@ fn row(relative: &Relative, glyph: &'static str, ink: u32, stop_group: Option<Sh
 mod tests {
     use super::*;
     use ferrite_core::activity::Activity;
-    use ferrite_core::MachineKey;
 
     fn delegated(id: u32, title: Option<&str>, status: Status) -> Delegated {
         Delegated {
@@ -655,7 +654,7 @@ mod tests {
     fn pc() -> Serving {
         Serving {
             name: Some("pc (box)".into()),
-            away: Some(MachineKey(Some("pc".into()))),
+            machine: ferrite_core::ThreadKey::fixture(1, 1).machine(),
         }
     }
 
@@ -798,7 +797,7 @@ mod tests {
         );
         let home = Serving {
             name: None,
-            away: Some(MachineKey(None)),
+            machine: ferrite_core::ThreadKey::fixture(0, 1).machine(),
         };
         assert_eq!(lineage(Delegator::of(&from, Some(home), None)).meta, "on mac");
         let alone = lineage(Delegator::of(&from, None, None));

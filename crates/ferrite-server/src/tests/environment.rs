@@ -86,7 +86,7 @@ fn a_write_to_the_defaults_is_reread_from_the_servers_file() {
     on_disk.save(&harness.dir).unwrap();
     let mut window = cockpit(&harness);
 
-    let read = answered(&mut window, |w| w.server_defaults(None)).unwrap();
+    let read = answered(&mut window, |w| w.server_defaults(w.first_machine(), None)).unwrap();
     assert_eq!(read, on_disk.server_defaults());
 
     let wanted = ServerDefaults {
@@ -94,7 +94,7 @@ fn a_write_to_the_defaults_is_reread_from_the_servers_file() {
         factory_tasks_at_once: 2,
         ..read
     };
-    let written = answered(&mut window, |w| w.server_defaults(Some(wanted.clone()))).unwrap();
+    let written = answered(&mut window, |w| w.server_defaults(w.first_machine(), Some(wanted.clone()))).unwrap();
     assert_eq!(written, wanted);
     let saved = Settings::load(&harness.dir).unwrap();
     assert_eq!(saved.server_defaults(), wanted);
@@ -112,7 +112,7 @@ fn the_cli_commands_name_the_servers_machine_and_binary() {
     let (harness, machine) = machine_world("cli-machine");
     let mut window = cockpit(&harness);
 
-    let Done::Clis { clis } = answered(&mut window, |w| w.cli(CliAction::Versions)).unwrap() else {
+    let Done::Clis { clis } = answered(&mut window, |w| w.cli(w.first_machine(), CliAction::Versions)).unwrap() else {
         panic!("a probe answers with the copies");
     };
     assert_eq!(clis.len(), 2);
@@ -122,13 +122,13 @@ fn the_cli_commands_name_the_servers_machine_and_binary() {
         "a probe does not reach the registry"
     );
 
-    let Done::Clis { clis } = answered(&mut window, |w| w.cli(CliAction::Check)).unwrap() else {
+    let Done::Clis { clis } = answered(&mut window, |w| w.cli(w.first_machine(), CliAction::Check)).unwrap() else {
         panic!("a check answers with the copies");
     };
     assert!(matches!(clis[0].status, Some(CliStatus::UpToDate { .. })));
 
     let updated = answered(&mut window, |w| {
-        w.cli(CliAction::Update {
+        w.cli(w.first_machine(), CliAction::Update {
             provider: Provider::Claude,
         })
     })
@@ -143,7 +143,7 @@ fn the_cli_commands_name_the_servers_machine_and_binary() {
     assert_eq!(*machine.installed.lock().unwrap(), [Provider::Claude]);
 
     let failed = answered(&mut window, |w| {
-        w.cli(CliAction::Update {
+        w.cli(w.first_machine(), CliAction::Update {
             provider: Provider::Codex,
         })
     });

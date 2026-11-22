@@ -27,11 +27,11 @@ fn says(cockpit: &Cockpit, thread: ThreadKey, text: &str) -> bool {
 #[test]
 fn a_removed_machines_id_is_never_reissued() {
     let (gone, _) = cockpit("keys-gone");
-    let removed = gone.on_screen();
+    let removed = gone.first_machine();
     drop(gone);
 
     let (next, _) = cockpit("keys-next");
-    assert_ne!(next.on_screen(), removed);
+    assert_ne!(next.first_machine(), removed);
 }
 
 /// Two machines each hold a Thread under the same id: every read, act
@@ -39,13 +39,13 @@ fn a_removed_machines_id_is_never_reissued() {
 #[test]
 fn two_machines_with_the_same_thread_id_are_kept_apart() {
     let (mut cockpit, here, machine, on_box) = two_machines("keys-apart");
-    let mine = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let mine = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let theirs = cockpit
-        .open_at(machine, Provider::Claude, main_choice())
+        .open(machine, Provider::Claude, main_choice())
         .unwrap();
     assert_eq!(mine.thread(), theirs.thread(), "each machine's first id");
     assert_ne!(mine, theirs);
-    assert_eq!(mine.machine(), cockpit.on_screen());
+    assert_eq!(mine.machine(), cockpit.first_machine());
     assert_eq!(theirs.machine(), machine);
     assert_eq!(cockpit.threads(), vec![mine, theirs]);
     assert_eq!(cockpit.known_threads(), [mine, theirs].into());

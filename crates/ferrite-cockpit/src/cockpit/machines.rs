@@ -1,25 +1,27 @@
-//! The window's machines (ADR 0026): their headings and their Threads in
-//! the nav, the window going to another one, what a machine that went
-//! looks like, what the Inbox says of the machines off screen, and Settings
-//! › Machines. A window with only this computer draws none of it.
+//! The window's machines (ADR 0026, ADR 0045): their headings and their
+//! Threads in the nav, what a machine that went looks like, and Settings
+//! › Machines. The window holds every enabled machine at once; a press on
+//! any machine's Thread opens it in place. A window with only this
+//! computer draws no headings.
 
 use super::*;
-use crate::machines::{MachineRow, Machines, OffScreen};
-use crate::notifications::{Alert, Detail, State};
+use crate::nav::NavMachine;
+use crate::notifications::Alert;
 use ferrite_core::cockpit::ServerState;
-use ferrite_core::notifications::Notifications;
 use gpui::App;
 
 /// What a lost machine still shows (ADR 0026): `element` dimmed under a
 /// cover, `id`, that takes every press until the machine is back.
-pub(super) fn held(element: Div, id: &'static str) -> Div {
+pub(super) fn held(element: Div, id: impl Into<SharedString>) -> Div {
+    let id: SharedString = id.into();
+    let selector = id.clone();
     element
         .relative()
         .opacity(ferrite_ui::theme::MACHINE_LOST_OPACITY)
         .child(
             div()
-                .id(id)
-                .debug_selector(move || id.into())
+                .id(gpui::ElementId::Name(id))
+                .debug_selector(move || selector.to_string())
                 .absolute()
                 .inset_0()
                 .occlude(),
@@ -27,18 +29,66 @@ pub(super) fn held(element: Div, id: &'static str) -> Div {
 }
 
 impl CockpitView {
-    /// Every machine for the nav, when there is more than this computer.
-    pub(super) fn machine_rows(&self, cx: &App) -> Option<Vec<MachineRow>> {
-        let machines = self.machines.as_ref()?.read(cx);
-        machines
-            .listed()
-            .then(|| machines.rows(self.cockpit.read(cx).server()))
+    /// Every machine's heading for the nav, when there is more than this
+    /// computer.
+    pub(super) fn machine_rows(&self, cx: &App) -> Option<Vec<NavMachine>> {
+        let machines = self.machines.as_ref()?;
+        if !machines.listed() {
+            return None;
+        }
+        let model = self.cockpit.read(cx);
+        let home = model.this_computer();
+        Some(
+            machines
+                .rows(model)
+                .into_iter()
+                .map(|row| NavMachine {
+                    home: row.held.is_some() && row.held == home,
+                    row,
+                })
+                .collect(),
+        )
     }
 
-    /// The machine on screen: what a window act that names no Thread or
-    /// Project reaches, until the window holds every machine at once.
-    pub(super) fn on_screen(&self, cx: &App) -> ferrite_core::MachineId {
-        self.cockpit.read(cx).on_screen()
+    /// Where an act with no Thread or Project of its own goes
+    /// (`Cockpit::start_machine`).
+    pub(super) fn start_machine(&self, cx: &App) -> Option<ferrite_core::MachineId> {
+        self.cockpit.read(cx).start_machine()
+    }
+
+    /// Every Project of every machine the window holds, this computer's
+    /// first, each with its title as a row says it: after its machine's
+    /// name when that is not this computer.
+    pub(super) fn every_project<'a>(
+        &self,
+        cx: &'a App,
+    ) -> Vec<(ProjectKey, &'a ferrite_core::workspace::registry::Project, String)> {
+        let cockpit = self.cockpit.read(cx);
+        let mut machines: Vec<ferrite_core::MachineId> = cockpit.machines().collect();
+        machines.sort_by_key(|machine| cockpit.this_computer() != Some(*machine));
+        machines
+            .into_iter()
+            .flat_map(|machine| {
+                let registry = cockpit.registry(machine);
+                let label = self.machine_label(machine, cx);
+                registry.reading().projects().iter().map(move |project| {
+                    let title = match &label {
+                        Some(machine) => format!("{machine} \u{203a} {}", project.title),
+                        None => project.title.clone(),
+                    };
+                    (registry.project_key(project.id), project, title)
+                })
+            })
+            .collect()
+    }
+
+    /// `machine`'s name, when it is not this computer: what a row of it
+    /// says beside its own words.
+    pub(super) fn machine_label(&self, machine: ferrite_core::MachineId, cx: &App) -> Option<String> {
+        if self.cockpit.read(cx).this_computer() == Some(machine) {
+            return None;
+        }
+        self.machines.as_ref()?.name(machine)
     }
 
     /// Whether `machine` is another machine, or none reached: what it
@@ -48,143 +98,35 @@ impl CockpitView {
         !self.cockpit.read(cx).local(machine)
     }
 
-    /// The bridge to the machine on screen; `None` for this computer.
-    pub(super) fn bridge_on_screen<'a>(
-        &self,
-        cx: &'a App,
-    ) -> Option<&'a std::sync::Arc<ferrite_core::machine::Bridge>> {
-        let cockpit = self.cockpit.read(cx);
-        cockpit.bridge(cockpit.on_screen())
+    /// Whether `machine` is another machine whose Server is not there:
+    /// its Panes stay, dimmed, and take no input until it is back.
+    pub(super) fn machine_lost(&self, machine: ferrite_core::MachineId, cx: &App) -> bool {
+        self.elsewhere(machine, cx)
+            && matches!(
+                self.cockpit.read(cx).server(machine),
+                Some(ServerState::Detached { .. })
+            )
     }
 
-    /// The window is on a machine whose Server is not there: what it shows
-    /// stays, dimmed, and takes no input until it is back.
-    pub(super) fn machine_lost(&self, cx: &App) -> bool {
-        self.cockpit.read(cx).environment_available()
-            && self.elsewhere(self.on_screen(cx), cx)
-            && matches!(self.cockpit.read(cx).server(), Some(ServerState::Detached { .. }))
-    }
-
-    /// Take what the machines off screen said.
-    pub(super) fn poll_machines(&mut self, cx: &mut Context<Self>) {
-        if let Some(machines) = &self.machines {
-            machines.update(cx, |machines, cx| {
-                if machines.poll() {
-                    cx.notify();
-                }
-            });
-        }
-    }
-
-    /// Go to the machine an alert is about and open it there (a toast's
-    /// or a row's open, a system notification's click). The window builds
-    /// a Cockpit on it, which opens the alert once attached (`land`).
-    pub(super) fn go_to_alert(&mut self, alert: Alert, cx: &mut Context<Self>) {
-        let index = alert.away.as_ref().and_then(|key| {
-            self.machines
-                .as_ref()
-                .and_then(|machines| machines.read(cx).index(key))
-        });
-        if let Some(index) = index {
-            cx.emit(GoToMachine {
-                index: Some(index),
-                open: Some(Landing::Alert(Alert {
-                    away: None,
-                    ..alert
-                })),
-            });
-        }
-    }
-
-    /// Whether the Cockpit's Server answers (or it runs an Engine of its
-    /// own): what it mirrors is the Server's.
-    pub(super) fn attached(&self, cx: &App) -> bool {
+    /// Whether `machine`'s Server answers (or it runs an Engine of its
+    /// own): what the window mirrors of it is its Server's.
+    pub(super) fn attached(&self, machine: ferrite_core::MachineId, cx: &App) -> bool {
         self.cockpit
             .read(cx)
-            .server()
+            .server(machine)
             .is_none_or(|server| matches!(server, ServerState::Attached { .. }))
     }
 
-    /// Open what the window came to this machine for, once its Server is
-    /// there: an alert while it still stands, else its Thread (revived
-    /// when parked). A machine that does not answer by the landing's
-    /// deadline opens nothing: the operator has moved on.
-    pub(super) fn land(&mut self, cx: &mut Context<Self>) {
-        let now = cx.background_executor().now();
-        let expired = self.landing.as_ref().is_some_and(|(_, until)| now > *until);
-        if !expired && !self.attached(cx) {
-            return;
-        }
-        match self.landing.take().filter(|_| !expired) {
-            Some((Landing::Alert(alert), _))
-                if alert.target.wants(self.cockpit.read(cx).notifications().reading()) =>
-            {
-                self.notice_verb(alert.open_verb(), cx)
-            }
-            Some((Landing::Alert(alert), _)) => {
-                self.notice_verb(Verb::OpenThread(alert.thread), cx);
-            }
-            None => {}
-        }
-    }
-
-    /// The Inbox's rows for the machines off screen: their live requests,
-    /// then their finished turns with when each finished, each named by
-    /// its machine.
-    pub(super) fn away_rows(
-        &self,
-        cx: &App,
-    ) -> (Vec<NoticeRow>, Vec<(std::time::SystemTime, NoticeRow)>) {
-        let now = ferrite_core::clock::system_time();
-        let (mut requests, mut finished) = (Vec::new(), Vec::new());
-        let Some(machines) = &self.machines else {
-            return (requests, finished);
-        };
-        for away in machines.read(cx).off_screen() {
-            let mut statuses = away.status.rows();
-            statuses.sort_by_key(|status| {
-                away.notifications
-                    .first_request(status.thread)
-                    .map(|notice| notice.seq)
-                    .unwrap_or(u64::MAX)
-            });
-            for status in statuses {
-                if away.status.snooze(status.thread).is_some() {
-                    continue;
-                }
-                if status.waiting || away.notifications.first_request(status.thread).is_some() {
-                    if let Some(notice) = away.notifications.first_request(status.thread) {
-                        requests.extend(away_row(
-                            &away,
-                            &RowTarget::Decision(notice.id.clone()),
-                            now,
-                        ));
-                        continue;
-                    }
-                }
-                if !status.working || status.waiting {
-                    if let Some(row) = away_row(&away, &RowTarget::Thread(status.thread), now) {
-                        finished.push((now, row));
-                    }
-                }
-            }
-        }
-        (requests, finished)
-    }
-
     pub(super) fn fold_machine(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(machines) = &self.machines {
-            machines.update(cx, |machines, cx| {
-                machines.toggle_fold(index);
-                cx.notify();
-            });
+        if let Some(machines) = &mut self.machines {
+            machines.toggle_fold(index);
         }
         cx.notify();
     }
 
-    /// Sign in to the machine the window is on, in a terminal.
-    pub(super) fn sign_in(&mut self, cx: &mut Context<Self>) {
-        let Some(bridge) = self.bridge_on_screen(cx) else {
+    /// Sign in to `machine`, in a terminal.
+    pub(super) fn sign_in(&mut self, machine: ferrite_core::MachineId, cx: &mut Context<Self>) {
+        let Some(bridge) = self.cockpit.read(cx).bridge(machine) else {
             return;
         };
         if let Err(error) = bridge.sign_in() {
@@ -193,37 +135,113 @@ impl CockpitView {
         }
     }
 
-    /// Move a disabled selection to the first enabled environment, or none.
+    /// Follow Settings' machines: hold each one turned on, let go of each
+    /// one turned off or removed, and forget what the Inbox heard of it.
     pub(super) fn machines_changed(&mut self, cx: &mut Context<Self>) {
         let saved = self.prefs.settings.machines.clone();
-        let Some(machines) = &self.machines else {
-            return;
-        };
         let local_enabled = self.prefs.settings.local_environment_enabled;
-        let turned_off = machines.update(cx, |machines, cx| {
-            machines.set_local_enabled(local_enabled);
-            cx.notify();
-            machines.settings_changed(&saved)
+        if self.machines.is_none() {
+            return;
+        }
+        // What the Files and the new Panes of a machine about to go hold
+        // is saved first.
+        self.sync_working_sets(cx);
+        self.save_drafts(cx);
+        let before: Vec<ferrite_core::MachineId> = self.cockpit.read(cx).machines().collect();
+        let machines = self.machines.as_mut().expect("checked");
+        self.cockpit.update(cx, |cockpit, _| {
+            machines.set_local_enabled(local_enabled, cockpit);
+            machines.settings_changed(&saved, cockpit);
         });
-        if turned_off {
-            cx.emit(GoToMachine {
-                index: machines.read(cx).fallback(),
-                open: None,
-            });
+        self.machines_let_go(&before, cx);
+    }
+
+    /// The machines held in `before` that the window let go of since, and
+    /// those it took: the Panels of each are put away or held, a shell of
+    /// each one gone ends, what the window keeps by the Threads of each one
+    /// held again follows them to their new keys, the Inbox forgets each
+    /// one gone, and the Panes and the nav redraw.
+    pub(super) fn machines_let_go(
+        &mut self,
+        before: &[ferrite_core::MachineId],
+        cx: &mut Context<Self>,
+    ) {
+        let now: Vec<ferrite_core::MachineId> = self.cockpit.read(cx).machines().collect();
+        let gone: Vec<ferrite_core::MachineId> = before
+            .iter()
+            .copied()
+            .filter(|machine| !now.contains(machine))
+            .collect();
+        if gone.is_empty() && before.len() == now.len() {
+            return;
+        }
+        for machine in &gone {
+            self.terminals.update(cx, |terminals, cx| terminals.let_go(*machine, cx));
+        }
+        self.forget_projects_of(&gone, cx);
+        let reheld = self.panel.hold(self.cockpit.read(cx));
+        for rehold in &reheld {
+            self.terminals.update(cx, |terminals, cx| terminals.held_again(*rehold, cx));
+            self.side_chat.update(cx, |chat, cx| chat.held_again(*rehold, cx));
+        }
+        if !reheld.is_empty() {
+            self.reopen_put_away_drafts(cx);
+        }
+        self.toasts.update(cx, |toasts, cx| {
+            for machine in &gone {
+                toasts.needs_you.forget(*machine);
+            }
+            toasts.look_again(cx);
+        });
+        self.sync_panes(cx);
+        cx.notify();
+    }
+
+    /// The window let go of `gone`: a Project of theirs names nothing it
+    /// holds, so no guess of where a new Thread starts (the nav's filter,
+    /// the last Project worked in) names one any longer, and each new Pane
+    /// aimed at one goes with its machine. A new Thread starts on a machine
+    /// the window holds: before any Project there, the new-Project card on
+    /// this computer (`start_machine`).
+    fn forget_projects_of(&mut self, gone: &[ferrite_core::MachineId], cx: &mut Context<Self>) {
+        let gone_with = |project: Option<ProjectKey>| project.is_some_and(|project| gone.contains(&project.machine()));
+        if gone_with(self.nav_filter) {
+            self.nav_filter = None;
+        }
+        if gone_with(self.launch_project) {
+            self.launch_project = super::startup_project(self.cockpit.read(cx));
+        }
+        self.put_away_drafts(gone, cx);
+    }
+
+    /// Whether `thread` is one of the list's own cards: this computer's,
+    /// or any while the window lists no other machine. Another machine's
+    /// Threads are rows under its heading.
+    pub(super) fn home_card(&self, thread: ThreadKey, cx: &App) -> bool {
+        let listed = self.machines.as_ref().is_some_and(|machines| machines.listed());
+        !listed || self.cockpit.read(cx).this_computer() == Some(thread.machine())
+    }
+
+    /// `thread`'s title as the Inbox and a toast say it: after its
+    /// machine's name when that is not this computer.
+    pub(super) fn row_title(&self, thread: ThreadKey, cx: &App) -> SharedString {
+        let title = self.facts.name(thread);
+        match self.machine_label(thread.machine(), cx) {
+            Some(machine) => crate::notifications::machine_title(&machine, &title),
+            None => title,
         }
     }
 }
 
 impl CockpitView {
-    /// Ask the machine's Server what `project`'s repo holds for the
+    /// Ask `project`'s machine's Server what its repo holds for the
     /// workspace popover (`list_repo`): git there, never here (ADR 0026).
     /// An older Server cannot say, and the popover offers the fresh starts
     /// alone.
-    pub(super) fn ask_machine_repo(&mut self, project: ProjectId, cx: &mut App) {
-        let reply = self.cockpit.update(cx, |cockpit, _| {
-            let project = cockpit.registry().project_key(project);
-            cockpit.list_repo(project).ok()
-        });
+    pub(super) fn ask_machine_repo(&mut self, project: ProjectKey, cx: &mut App) {
+        let reply = self
+            .cockpit
+            .update(cx, |cockpit, _| cockpit.list_repo(project).ok());
         self.checkouts.listen_machine(project, reply);
     }
 
@@ -245,109 +263,32 @@ impl CockpitView {
 
     /// A draft's workspace chip names its checkout's branch, which on a
     /// machine only its Server can read: ask about the first drafted
-    /// Project it has no answer for.
+    /// Project, on a machine there, it has no answer for.
     fn ask_drafted_checkout(&mut self, cx: &mut App) {
-        if !self.elsewhere(self.on_screen(cx), cx) || self.machine_lost(cx) {
-            return;
-        }
         let unknown = self
             .panes
             .iter()
             .filter_map(|pane| pane.draft())
             .map(|draft| draft.binding.project())
-            .find(|project| self.checkouts.branch(*project).is_none());
+            .find(|project| {
+                let machine = project.machine();
+                self.elsewhere(machine, cx)
+                    && !self.machine_lost(machine, cx)
+                    && self.checkouts.branch(*project).is_none()
+            });
         if let Some(project) = unknown {
             self.ask_machine_repo(project, cx);
         }
     }
 }
 
-/// Whether an alert's record still wants the operator, on its machine:
-/// `here` (once attached), or the machine off screen it is on. `None`
-/// while that machine has not been heard from (`NeedsYou::ring`).
-pub(super) fn wanted(
-    alert: &Alert,
-    here: Option<&Notifications>,
-    machines: Option<&Machines>,
-) -> Option<bool> {
-    let notifications = match &alert.away {
-        None => here?,
-        Some(key) => machines?.away(key)?.notifications,
-    };
-    Some(alert.target.wants(notifications))
-}
-
-/// A row about a machine off screen, worded from what its status link
-/// hears and titled with the machine's name. It hears no transcript, so a
-/// finish says only whether it failed.
-pub(super) fn away_row(
-    away: &OffScreen<'_>,
-    target: &RowTarget,
-    now: std::time::SystemTime,
-) -> Option<NoticeRow> {
-    let (thread, state, detail, at, read) = match target {
-        RowTarget::Thread(thread) => {
-            if let Some(notice) = away
-                .notifications
-                .notices()
-                .find(|notice| notice.thread == *thread)
-            {
-                let mut row = away_row(away, &RowTarget::Notice(notice.id), now)?;
-                row.target = target.clone();
-                return Some(row);
-            }
-            (*thread, State::Idle, Detail::None, now, true)
-        }
-        RowTarget::Notice(id) => {
-            let notice = away.notifications.get(*id)?;
-            let (state, detail) = match &notice.outcome {
-                ferrite_core::TurnOutcome::Error(error) => (
-                    State::Failed,
-                    Detail::Words(
-                        ferrite_core::progress::one_line(error, ferrite_core::progress::ROW_CHARS)
-                            .into(),
-                    ),
-                ),
-                _ => (State::Done, Detail::None),
-            };
-            (notice.thread, state, detail, notice.at, notice.read)
-        }
-        RowTarget::Decision(id) => {
-            let notice = away.notifications.decision(id).or_else(|| {
-                away.notifications
-                    .first_request(id.thread)
-                    .filter(|notice| notice.id == *id)
-            })?;
-            let detail = away
-                .status
-                .decision(id.thread, &id.handle)
-                .and_then(|decision| ferrite_core::Decision::try_from(decision).ok())
-                .map(|decision| {
-                    crate::notifications::request_detail(&decision, notice.kind, None, || None)
-                })
-                .unwrap_or(Detail::None);
-            (
-                id.thread,
-                State::NeedsYou(notice.kind),
-                detail,
-                notice.at,
-                notice.read,
-            )
-        }
-    };
-    let title = away
-        .status
-        .title(thread)
-        .filter(|title| !title.is_empty())
-        .unwrap_or(crate::facts::NEW_THREAD);
-    Some(NoticeRow {
-        away: Some(away.key.clone()),
-        target: target.clone(),
-        thread,
-        title: crate::notifications::away_title(&away.name, title),
-        state,
-        detail,
-        when: crate::facts::since_label(at, now),
-        read,
-    })
+/// Whether an alert's record still wants the operator, on its machine.
+/// `None` while that machine has not answered (`NeedsYou::ring`).
+pub(super) fn wanted(alert: &Alert, view: &CockpitView, cx: &App) -> Option<bool> {
+    let machine = alert.thread.machine();
+    if !view.attached(machine, cx) {
+        return None;
+    }
+    let notifications = view.cockpit.read(cx).notifications(machine);
+    Some(alert.target.wants(notifications.reading()))
 }

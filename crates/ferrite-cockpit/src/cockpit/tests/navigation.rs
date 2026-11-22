@@ -275,7 +275,7 @@ fn the_solo_head_is_a_project_then_title_breadcrumb(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         let draft = view.panes[view.focused(cx)].draft().expect("a new Thread");
-        assert_eq!(draft.binding.project(), here.project(), "in the head's project");
+        assert_eq!(draft.binding.project(), here, "in the head's project");
     });
 }
 

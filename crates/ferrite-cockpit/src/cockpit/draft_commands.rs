@@ -1,6 +1,6 @@
 //! What a draft's `/` and `$` menus list before it has a Session: the
-//! commands its Provider finds in its folder, asked once per Provider and
-//! folder.
+//! commands its Provider finds in its folder, asked once per machine,
+//! Provider and folder.
 //!
 //! Only the root asks and only the root takes the answer, in its pump and
 //! as a menu is derived, so it is a plain struct on the root (ADR 0041),
@@ -12,9 +12,11 @@ use ferrite_core::SessionCommand;
 
 use super::*;
 
-/// One Provider's commands in one folder. Its Provider and folder keep a
-/// late answer from listing one draft's commands in another's menu.
+/// One Provider's commands in one folder of one machine. Its machine,
+/// Provider and folder keep a late answer from listing one draft's
+/// commands in another's menu.
 pub(super) struct Listing {
+    machine: ferrite_core::MachineId,
     provider: Provider,
     cwd: std::path::PathBuf,
     pending: Option<Discovery>,
@@ -39,16 +41,24 @@ impl Listing {
 pub(super) struct DraftCommands(Option<Listing>);
 
 impl DraftCommands {
-    /// Whether the listing is `provider`'s in `cwd`.
-    fn is_for(&self, provider: Provider, cwd: &std::path::Path) -> bool {
-        self.0
-            .as_ref()
-            .is_some_and(|listing| listing.provider == provider && listing.cwd == cwd)
+    /// Whether the listing is `provider`'s in `machine`'s `cwd`.
+    fn is_for(&self, machine: ferrite_core::MachineId, provider: Provider, cwd: &std::path::Path) -> bool {
+        self.0.as_ref().is_some_and(|listing| {
+            listing.machine == machine && listing.provider == provider && listing.cwd == cwd
+        })
     }
 
-    /// Wait for `provider`'s commands in `cwd`, in place of any listing.
-    fn listen(&mut self, provider: Provider, cwd: std::path::PathBuf, reply: Option<Discovery>) {
+    /// Wait for `provider`'s commands in `machine`'s `cwd`, in place of any
+    /// listing.
+    fn listen(
+        &mut self,
+        machine: ferrite_core::MachineId,
+        provider: Provider,
+        cwd: std::path::PathBuf,
+        reply: Option<Discovery>,
+    ) {
         self.0 = Some(Listing {
+            machine,
             provider,
             cwd,
             pending: reply,
@@ -88,19 +98,22 @@ impl DraftCommands {
 }
 
 impl CockpitView {
-    /// The draft's commands for `provider` in `cwd`, asked for afresh when
-    /// either changed, with the answer taken if it came. Once they are
-    /// listed, the draft's line `line` knows them.
+    /// The draft's commands for `provider` in `machine`'s `cwd`, asked for
+    /// afresh when any of them changed, with the answer taken if it came.
+    /// Once they are listed, the draft's line `line` knows them.
     pub(super) fn draft_commands(
         &mut self,
+        machine: ferrite_core::MachineId,
         provider: Provider,
         cwd: std::path::PathBuf,
         line: &Entity<Composer>,
         cx: &mut Context<Self>,
     ) -> &Listing {
-        if !self.draft_commands.is_for(provider, &cwd) {
-            let reply = self.cockpit.update(cx, |cockpit, _| cockpit.discover_commands(provider, &cwd));
-            self.draft_commands.listen(provider, cwd, reply);
+        if !self.draft_commands.is_for(machine, provider, &cwd) {
+            let reply = self
+                .cockpit
+                .update(cx, |cockpit, _| cockpit.discover_commands(machine, provider, &cwd));
+            self.draft_commands.listen(machine, provider, cwd, reply);
         }
         self.draft_commands.listed();
         let listing = self.draft_commands.0.as_ref().expect("listened above");

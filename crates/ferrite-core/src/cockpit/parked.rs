@@ -17,6 +17,8 @@ pub(crate) struct Parked {
     rows: BTreeMap<ThreadId, ParkedThread>,
     /// The rows moved since the window last asked.
     changed: bool,
+    /// Its Server has said which Threads it parked.
+    heard: bool,
 }
 
 impl Parked {
@@ -35,6 +37,7 @@ impl Parked {
     fn adopt(&mut self, rows: &[ParkedThread]) {
         self.rows = rows.iter().map(|row| (row.thread, row.clone())).collect();
         self.changed = true;
+        self.heard = true;
     }
 
     /// The window deleted `thread`: its row goes now, not when the Server
@@ -51,6 +54,12 @@ impl Parked {
     /// The parked Threads the Server published, in creation order.
     pub(crate) fn thread_ids(&self) -> impl Iterator<Item = ThreadId> + '_ {
         self.rows.keys().copied()
+    }
+
+    /// Whether `thread` is parked: `None` until its Server has said which
+    /// Threads it parked.
+    pub(crate) fn has(&self, thread: ThreadId) -> Option<bool> {
+        self.heard.then(|| self.rows.contains_key(&thread))
     }
 
     /// A row's meta says no model, effort or summary: the window reads

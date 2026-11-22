@@ -28,7 +28,7 @@ fn workflows_window<'a>(
     Entity<CockpitView>,
     &'a mut gpui::VisualTestContext,
     Fake,
-    ProjectId,
+    ProjectKey,
 ) {
     // Set up before the Cockpit is made: its Engine asks for models then.
     let fake = Fake::default();
@@ -36,7 +36,7 @@ fn workflows_window<'a>(
     let dir = scratch(name);
     let mut core = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
     let thread = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, thread);
     let project = core.project_of(core.threads()[0]).unwrap();
@@ -45,9 +45,9 @@ fn workflows_window<'a>(
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
-    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
+    view.update(cx, |view, cx| view.open_factory(project, cx));
     tick(cx);
-    (view, cx, fake, project.project())
+    (view, cx, fake, project)
 }
 
 fn names(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<String> {
@@ -185,8 +185,8 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
     cx.simulate_input(" for docs");
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let board = view.cockpit.read(cx).factory();
-        assert_eq!(board.workflows_of(project).count(), 2);
+        let board = view.cockpit.read(cx).factory(view.cockpit.read(cx).first_machine());
+        assert_eq!(board.workflows_of(project.project()).count(), 2);
         assert_eq!(
             board.workflow(&blank).unwrap().draft.name,
             "Untitled workflow for docs"

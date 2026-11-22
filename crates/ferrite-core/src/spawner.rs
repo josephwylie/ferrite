@@ -856,6 +856,7 @@ mod tests {
         let mut cockpit = Cockpit::new(Store::open(path.join("store")).unwrap(), spawner);
         let thread = cockpit
             .open(
+                cockpit.first_machine(),
                 provider,
                 WorkspaceChoice::Main {
                     checkout: path.clone(),

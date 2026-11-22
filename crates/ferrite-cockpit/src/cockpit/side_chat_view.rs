@@ -17,7 +17,9 @@
 //! roster, so the nav, the board, focus cycling and the layout do not know
 //! it — and it is retired with its tab (`retire`). The fork carries the
 //! Thread's history, which the tab does not show: only what follows it
-//! (`Fork::inherited` blocks in). The pane draws it with the
+//! (`Fork::inherited` blocks in, counted once the window holds the fork's
+//! history; a fork on another machine streams only while its tab is
+//! drawn). The pane draws it with the
 //! transcript components the Pane's own use, compact, over a Field
 //! Composer of its own: `Ask a quick question` when it is empty, ↵
 //! sending.
@@ -38,7 +40,7 @@ use std::collections::HashMap;
 
 use gpui::WeakEntity;
 
-use crate::cockpit::surfaces::SurfaceId;
+use crate::cockpit::surfaces::{Rehold, SurfaceId};
 
 use super::*;
 
@@ -61,9 +63,11 @@ pub(crate) const KEY_CONTEXT: &str = "SideChat";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Fork {
     thread: ThreadKey,
-    /// How many blocks the fork held when it was made: the Thread's
-    /// history, which the tab leaves unshown.
-    inherited: usize,
+    /// How many blocks the fork held when the window first held its
+    /// history: the Thread's, which the tab leaves unshown. None until
+    /// then, and the tab shows nothing and asks nothing: another machine
+    /// streams the fork only once its tab draws it (F-A2).
+    inherited: Option<usize>,
 }
 
 /// A tab's fork, once the agent has made it.
@@ -276,7 +280,7 @@ impl CockpitView {
     /// way, and then the one Thread waiting on a fork takes it: with two
     /// waiting it could be either's. Delete once no such Server runs.
     pub(super) fn unnamed_fork_owner(&self, thread: ThreadKey, cx: &gpui::App) -> Option<ThreadKey> {
-        if self.cockpit.read(cx).names_fork_owners() {
+        if self.cockpit.read(cx).names_fork_owners(thread.machine()) {
             return None;
         }
         self.side_chat
@@ -295,12 +299,10 @@ impl CockpitView {
         thread: ThreadKey,
         cx: &mut Context<Self>,
     ) -> bool {
-        let inherited = self
-            .cockpit
-            .read(cx)
-            .thread(thread)
-            .map_or(0, |open| open.transcript().blocks().len());
-        let fork = Fork { thread, inherited };
+        let fork = Fork {
+            thread,
+            inherited: self.held_history(thread, cx),
+        };
         let Some(taken) = self.side_chat.update(cx, |chat, cx| chat.bind(owner, fork, cx)) else {
             return false;
         };
@@ -313,6 +315,23 @@ impl CockpitView {
         }
         cx.notify();
         true
+    }
+
+    /// How many blocks `fork` holds, once the window holds its history.
+    fn held_history(&self, fork: ThreadKey, cx: &gpui::App) -> Option<usize> {
+        let open = self.cockpit.read(cx).thread(fork)?;
+        open.history_loaded().then(|| open.transcript().blocks().len())
+    }
+
+    /// Each fork whose history has landed since its tab took it counts
+    /// what it inherited, before its tab shows or asks anything.
+    pub(super) fn settle_side_forks(&mut self, cx: &mut Context<Self>) {
+        let unsettled = self.side_chat.read(cx).unsettled();
+        for fork in unsettled {
+            if let Some(inherited) = self.held_history(fork, cx) {
+                self.side_chat.update(cx, |chat, cx| chat.settle(fork, inherited, cx));
+            }
+        }
     }
 
     /// Put a fork away with its tab. Deleted, so it leaves no Thread
@@ -388,6 +407,16 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// The fork of the side chat the Panel shows, once it has one: a
+    /// Thread whose records the window draws.
+    pub(super) fn side_chat_drawn(&self, cx: &gpui::App) -> Option<ThreadKey> {
+        let owner = self.panes[self.panel_drawn_pane(cx)?].thread()?;
+        let Some(SurfaceId::SideChat(tab)) = self.active_surface(owner) else {
+            return None;
+        };
+        Some(self.side_chat.read(cx).fork(owner, tab)?.thread)
+    }
+
     /// Everything the side chat draws from: the tab the Panel shows, and
     /// what `conversation` (the view's own, by Thread and tab) holds. Its
     /// transcript is told here what its fork holds after its history.
@@ -402,15 +431,17 @@ impl CockpitView {
             return None;
         };
         let conversation = conversation(owner, tab);
-        if let Some((fork, pane)) = conversation {
-            self.sync_compact_transcript(fork.thread, &Subject::Main, pane, fork.inherited, cx);
+        if let Some((Fork { thread, inherited: Some(inherited) }, pane)) = conversation {
+            self.sync_compact_transcript(thread, &Subject::Main, pane, inherited, cx);
         }
         let fork = conversation.map(|(fork, _)| fork);
         let answered = fork.is_some_and(|fork| {
-            self.cockpit
-                .read(cx)
-                .thread(fork.thread)
-                .is_some_and(|open| open.transcript().blocks().len() > fork.inherited)
+            fork.inherited.is_some_and(|inherited| {
+                self.cockpit
+                    .read(cx)
+                    .thread(fork.thread)
+                    .is_some_and(|open| open.transcript().blocks().len() > inherited)
+            })
         });
         Some(SideChatInputs {
             owner,
@@ -451,7 +482,7 @@ impl CockpitView {
         if transcript.status() != Status::Idle {
             return None;
         }
-        let blocks = transcript.blocks().get(fork.inherited..)?;
+        let blocks = transcript.blocks().get(fork.inherited?..)?;
         let asked = blocks.iter().rposition(|block| matches!(block.body, Body::Prompt(_)))?;
         let run = &blocks[asked..];
         if run.len() < 2 {
@@ -624,15 +655,65 @@ impl SideChatView {
         if self.tab_mut(id).is_none() {
             return Some(false);
         }
+        let conversation = Self::conversation(fork, cx);
+        if let Some(tab) = self.tab_mut(id) {
+            tab.conversation = Some(conversation);
+        }
+        cx.notify();
+        Some(true)
+    }
+
+    /// What a tab draws `fork` with, its disclosures pressed in place.
+    fn conversation(fork: Fork, cx: &mut Context<Self>) -> Conversation {
         let pane = PaneView::new(fork.thread, cx);
         if let Some(entity) = pane.transcript() {
             cx.subscribe(&entity, Self::on_transcript_event).detach();
         }
-        if let Some(tab) = self.tab_mut(id) {
-            tab.conversation = Some(Conversation { fork, pane });
+        Conversation { fork, pane }
+    }
+
+    /// A machine let go is held again: its Threads' side chats are theirs,
+    /// each on its fork's key now. A fork is its owner's machine's, and
+    /// the same Thread still, so what it inherited stands.
+    pub(super) fn held_again(&mut self, rehold: Rehold, cx: &mut Context<Self>) {
+        let moved: Vec<_> = self.chats.extract_if(|owner, _| rehold.key(*owner).is_some()).collect();
+        for (owner, mut chat) in moved {
+            for tab in &mut chat.tabs {
+                tab.conversation = tab.conversation.take().map(|was| {
+                    let thread = rehold.key(was.fork.thread).unwrap_or(was.fork.thread);
+                    Self::conversation(Fork { thread, ..was.fork }, cx)
+                });
+            }
+            self.chats.extend(rehold.key(owner).map(|owner| (owner, chat)));
         }
+        let asked: Vec<_> = self.asked.extract_if(|owner, _| rehold.key(*owner).is_some()).collect();
+        self.asked.extend(asked.into_iter().filter_map(|(owner, id)| Some((rehold.key(owner)?, id))));
         cx.notify();
-        Some(true)
+    }
+
+    /// The forks whose history the window has not held yet.
+    fn unsettled(&self) -> Vec<ThreadKey> {
+        self.chats
+            .values()
+            .flat_map(|chat| &chat.tabs)
+            .filter_map(|tab| tab.conversation.as_ref())
+            .filter(|conversation| conversation.fork.inherited.is_none())
+            .map(|conversation| conversation.fork.thread)
+            .collect()
+    }
+
+    /// `fork`'s history has landed, `inherited` blocks of it.
+    fn settle(&mut self, fork: ThreadKey, inherited: usize, cx: &mut Context<Self>) {
+        let conversation = self
+            .chats
+            .values_mut()
+            .flat_map(|chat| &mut chat.tabs)
+            .filter_map(|tab| tab.conversation.as_mut())
+            .find(|conversation| conversation.fork.thread == fork);
+        if let Some(conversation) = conversation {
+            conversation.fork.inherited = Some(inherited);
+            cx.notify();
+        }
     }
 
     /// The Thread whose fork a side chat waits on, when it is the only one.
@@ -667,12 +748,16 @@ impl SideChatView {
     }
 
     /// ⏎ in tab `id`'s field: its question, for the fork. Nothing before
-    /// the fork exists, or for an empty line.
+    /// the window holds the fork's history, or for an empty line.
     fn ask(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(tab) = self.tab_mut(id) else {
             return;
         };
-        let Some(conversation) = &tab.conversation else {
+        let Some(conversation) = tab
+            .conversation
+            .as_ref()
+            .filter(|conversation| conversation.fork.inherited.is_some())
+        else {
             return;
         };
         let fork = conversation.fork.thread;

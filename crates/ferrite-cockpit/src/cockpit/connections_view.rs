@@ -34,7 +34,8 @@ pub(crate) struct ConnectionsView {
 /// What Connections asks of the window.
 #[derive(Clone)]
 pub(crate) enum ConnectionsEvent {
-    /// Go to the environment at this index of the machines list.
+    /// Have Settings edit the defaults and CLIs of the environment at this
+    /// index of the machines list.
     Open(usize),
     /// Turn this app's own environment on or off.
     ToggleLocal,
@@ -82,8 +83,10 @@ pub(crate) struct Listed {
     pub row: MachineRow,
     pub machine: Machine,
     pub state: Option<ServerState>,
-    /// Gone to, but not saved in Settings.
+    /// Named for this run (`--remote`), but not saved in Settings.
     pub unsaved: bool,
+    /// Settings' defaults and CLIs are about it now.
+    pub editing: bool,
 }
 
 pub(super) struct Editor {
@@ -1069,10 +1072,10 @@ impl ConnectionsView {
             machine,
             state,
             unsaved,
+            editing,
         } in listed
         {
             let index = row.index;
-            let selected = row.selected;
             let target = machine.target.clone();
             let changing = self.editor.as_ref().is_some_and(|editor| {
                 matches!(editor.stage, Stage::Adding { .. })
@@ -1084,7 +1087,7 @@ impl ConnectionsView {
             let mut actions = vec![settings::ConnectionAction {
                 id: format!("connection-open-{index}").into(),
                 label: "Open".into(),
-                enabled: machine.enabled && !selected,
+                enabled: machine.enabled && !editing,
                 act: action(cx, move |_, _, cx| cx.emit(ConnectionsEvent::Open(index))),
             }];
             if machine.enabled && row.connection != Connection::Online {
@@ -1198,27 +1201,29 @@ impl ConnectionsView {
     }
 }
 
-const ALREADY_SAVED: &str = "This environment is already saved. Open it or reconnect below.";
+const ALREADY_SAVED: &str = "This environment is already saved. Reconnect it below.";
 
 impl CockpitView {
     /// What Connections draws from. It never reads the view: the view
     /// reads it, from its own listeners and as the sheet draws.
     pub(super) fn connections_inputs(&self, cx: &App) -> ConnectionsInputs {
+        let cockpit = self.cockpit.read(cx);
+        let editing = self.settings_machine(cx);
         let listed = self
             .machines
             .as_ref()
             .map(|machines| {
-                let machines = machines.read(cx);
                 machines
-                    .rows(self.cockpit.read(cx).server())
+                    .rows(cockpit)
                     .into_iter()
                     .filter_map(|row| {
                         let machine = machines.machine(row.index)?.clone();
-                        let state = machines.server_state(row.index, self.cockpit.read(cx).server());
+                        let state = machines.server_state(row.index, cockpit);
                         let unsaved = machines
                             .unsaved()
                             .is_some_and(|unsaved| unsaved.target == machine.target);
                         Some(Listed {
+                            editing: row.held.is_some() && row.held == editing,
                             row,
                             machine,
                             state,
@@ -1249,10 +1254,12 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match event.clone() {
-            ConnectionsEvent::Open(index) => cx.emit(GoToMachine {
-                index: Some(index),
-                open: None,
-            }),
+            ConnectionsEvent::Open(index) => {
+                let held = self.machines.as_ref().and_then(|machines| machines.held(index));
+                if let Some(machine) = held {
+                    self.edit_machine_settings(machine, cx);
+                }
+            }
             ConnectionsEvent::ToggleLocal => {
                 let error = self.toggle_local_environment(cx).err();
                 view.update(cx, |view, cx| view.answered(error, cx));
@@ -1278,14 +1285,17 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The environment the window is on, when it is on a saved one.
-    fn selected_target(&self, cx: &App) -> Option<String> {
-        self.machines.as_ref()?.read(cx).selected_key()?.0
+    /// Why the window cannot let the environment `target` names go now
+    /// (`files_leave_error`); `None` when it is not held.
+    fn leave_error(&self, target: &str, cx: &App) -> Option<&'static str> {
+        let machines = self.machines.as_ref()?;
+        let held = machines.held(machines.named(target)?)?;
+        self.files_leave_error(held, cx)
     }
 
     /// Connections' own save: unlike `change_settings`, it saves nothing
-    /// in memory that it could not write, and refuses to take the window
-    /// off an environment that has files left unsaved.
+    /// in memory that it could not write, and refuses to let go of an
+    /// environment that has files left unsaved.
     fn save_connections(
         &mut self,
         change: impl FnOnce(&mut Vec<Machine>),
@@ -1296,19 +1306,15 @@ impl CockpitView {
         }
         let mut settings = self.prefs.settings.clone();
         change(&mut settings.machines);
-        let leaves = self.selected_target(cx).is_some_and(|target| {
-            self.prefs
-                .settings
-                .machines
-                .iter()
-                .any(|machine| machine.target == target && machine.enabled)
+        let leaving = self.prefs.settings.machines.iter().filter(|machine| {
+            machine.enabled
                 && !settings
                     .machines
                     .iter()
-                    .any(|machine| machine.target == target && machine.enabled)
+                    .any(|kept| kept.target == machine.target && kept.enabled)
         });
-        if leaves {
-            if let Some(error) = self.files_leave_error(cx) {
+        for machine in leaving {
+            if let Some(error) = self.leave_error(&machine.target, cx) {
                 return Err(error.into());
             }
         }
@@ -1351,17 +1357,11 @@ impl CockpitView {
         if !added {
             return;
         }
-        let selected = self.selected_target(cx).as_deref() == Some(&machine.target);
         if let Some(machines) = &self.machines {
-            machines.update(cx, |machines, cx| {
-                if let Some(index) = machines.named(&machine.target) {
-                    machines.retry(index);
-                }
-                cx.notify();
-            });
-        }
-        if selected {
-            self.cockpit.update(cx, |cockpit, _| cockpit.retry_server());
+            if let Some(index) = machines.named(&machine.target) {
+                self.cockpit
+                    .update(cx, |cockpit, _| machines.retry(index, cockpit));
+            }
         }
     }
 
@@ -1373,11 +1373,9 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         let target = machine.target.clone();
-        if self.selected_target(cx).as_deref() == Some(&target) {
-            if let Some(error) = self.files_leave_error(cx) {
-                view.update(cx, |view, cx| view.answered(Some(error.into()), cx));
-                return;
-            }
+        if let Some(error) = self.leave_error(&target, cx) {
+            view.update(cx, |view, cx| view.answered(Some(error.into()), cx));
+            return;
         }
         let saved = self.save_connections(|saved| saved.retain(|saved| saved.target != target), cx);
         let removed = saved.is_ok();
@@ -1403,22 +1401,12 @@ impl CockpitView {
             .detach();
         }
         if unsaved {
-            let leave = self.machines.as_ref().is_some_and(|machines| {
-                machines.update(cx, |machines, cx| {
-                    let leave = machines.forget_unsaved(&target);
-                    cx.notify();
-                    leave
-                })
-            });
-            if leave {
-                cx.emit(GoToMachine {
-                    index: self
-                        .machines
-                        .as_ref()
-                        .and_then(|machines| machines.read(cx).fallback()),
-                    open: None,
-                });
+            let before: Vec<MachineId> = self.cockpit.read(cx).machines().collect();
+            if let Some(machines) = &mut self.machines {
+                self.cockpit
+                    .update(cx, |cockpit, _| machines.forget_unsaved(&target, cockpit));
             }
+            self.machines_let_go(&before, cx);
         }
     }
 
@@ -1428,8 +1416,8 @@ impl CockpitView {
             return Err(format!("Settings cannot be saved: {error}"));
         }
         let enabled = !self.prefs.settings.local_environment_enabled;
-        if !enabled && !self.elsewhere(self.on_screen(cx), cx) {
-            if let Some(error) = self.files_leave_error(cx) {
+        if !enabled {
+            if let Some(error) = self.leave_error("", cx) {
                 return Err(error.into());
             }
         }

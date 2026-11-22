@@ -64,7 +64,7 @@ pub(super) struct Persistence {
     writing: Option<Writing>,
     failures: u32,
     retry_at: Option<Instant>,
-    writer: Option<Writer>,
+    writer: Writer,
 }
 
 impl Default for Persistence {
@@ -74,19 +74,12 @@ impl Default for Persistence {
             writing: None,
             failures: 0,
             retry_at: None,
-            writer: Some(Arc::new(Snapshot::write)),
+            writer: Arc::new(Snapshot::write),
         }
     }
 }
 
 impl Persistence {
-    pub(super) fn retired() -> Self {
-        Self {
-            writer: None,
-            ..Self::default()
-        }
-    }
-
     fn snapshot(&self, surfaces: &Surfaces, working_sets: &WorkingSets) -> Option<Snapshot> {
         let revision = Revision::of(surfaces, working_sets);
         (revision != self.saved).then(|| Snapshot {
@@ -120,9 +113,6 @@ impl Persistence {
         working_sets: &WorkingSets,
         now: Instant,
     ) {
-        if self.writer.is_none() {
-            return;
-        }
         if self
             .writing
             .as_ref()
@@ -138,7 +128,7 @@ impl Persistence {
             return;
         };
         let revision = snapshot.revision;
-        let writer = self.writer.as_ref().unwrap().clone();
+        let writer = self.writer.clone();
         let dir = dir.to_path_buf();
         match std::thread::Builder::new()
             .name("panel-save".into())
@@ -157,9 +147,7 @@ impl Persistence {
         surfaces: &Surfaces,
         working_sets: &WorkingSets,
     ) -> io::Result<()> {
-        let Some(writer) = self.writer.clone() else {
-            return Ok(());
-        };
+        let writer = self.writer.clone();
         if let Some(writing) = self.writing.take() {
             let (revision, result) = writing.join();
             self.completed(revision, result, Instant::now());
@@ -230,12 +218,12 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let attempts = calls.clone();
         let mut persistence = Persistence {
-            writer: Some(Arc::new(move |snapshot, dir| {
+            writer: Arc::new(move |snapshot, dir| {
                 if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
                     return Err(io::Error::other("disk unavailable"));
                 }
                 snapshot.write(dir)
-            })),
+            }),
             ..Default::default()
         };
         let mut surfaces = Surfaces::default();
@@ -261,10 +249,10 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let attempts = calls.clone();
         let mut persistence = Persistence {
-            writer: Some(Arc::new(move |_, _| {
+            writer: Arc::new(move |_, _| {
                 attempts.fetch_add(1, Ordering::SeqCst);
                 Err(io::Error::other("disk unavailable"))
-            })),
+            }),
             ..Default::default()
         };
         let mut surfaces = Surfaces::default();
@@ -292,13 +280,13 @@ mod tests {
         let gate = Mutex::new(gate);
         let count = AtomicUsize::new(0);
         let mut persistence = Persistence {
-            writer: Some(Arc::new(move |snapshot, dir| {
+            writer: Arc::new(move |snapshot, dir| {
                 if count.fetch_add(1, Ordering::SeqCst) == 0 {
                     started.send(()).unwrap();
                     gate.lock().unwrap().recv().unwrap();
                 }
                 snapshot.write(dir)
-            })),
+            }),
             ..Default::default()
         };
         let mut surfaces = Surfaces::default();
@@ -323,62 +311,6 @@ mod tests {
     }
 
     #[test]
-    fn transferring_the_panel_keeps_one_writer_and_the_latest_pending_state() {
-        let dir = scratch("successor");
-        let (started, receiving) = mpsc::channel();
-        let (release, gate) = mpsc::channel();
-        let gate = Mutex::new(gate);
-        let calls = Arc::new(AtomicUsize::new(0));
-        let attempts = calls.clone();
-        let mut panel = super::super::Panel::load(&dir);
-        panel.persistence.writer = Some(Arc::new(move |snapshot, dir| {
-            if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                started.send(()).unwrap();
-                gate.lock().unwrap().recv().unwrap();
-            }
-            snapshot.write(dir)
-        }));
-        open(&mut panel.surfaces, SurfaceId::Files);
-        panel
-            .persistence
-            .pump(&dir, &panel.surfaces, &panel.working_sets, Instant::now());
-        receiving.recv_timeout(Duration::from_secs(2)).unwrap();
-        open(&mut panel.surfaces, SurfaceId::Changes);
-        let mut successor = panel.successor();
-        open(&mut panel.surfaces, SurfaceId::Overview);
-        panel
-            .persistence
-            .pump(&dir, &panel.surfaces, &panel.working_sets, Instant::now());
-        panel
-            .persistence
-            .flush(&dir, &panel.surfaces, &panel.working_sets)
-            .unwrap();
-        successor.persistence.pump(
-            &dir,
-            &successor.surfaces,
-            &successor.working_sets,
-            Instant::now(),
-        );
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            1,
-            "the successor owns the existing writer"
-        );
-        release.send(()).unwrap();
-        successor
-            .persistence
-            .flush(&dir, &successor.surfaces, &successor.working_sets)
-            .unwrap();
-        panel
-            .persistence
-            .flush(&dir, &panel.surfaces, &panel.working_sets)
-            .unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
-        assert_eq!(active(&dir), Some(SurfaceId::Changes));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn shutdown_waits_for_the_previous_snapshot_before_flushing_the_latest() {
         let dir = scratch("quit");
         let (started, receiving) = mpsc::channel();
@@ -386,13 +318,13 @@ mod tests {
         let gate = Mutex::new(gate);
         let count = AtomicUsize::new(0);
         let mut persistence = Persistence {
-            writer: Some(Arc::new(move |snapshot, dir| {
+            writer: Arc::new(move |snapshot, dir| {
                 if count.fetch_add(1, Ordering::SeqCst) == 0 {
                     started.send(()).unwrap();
                     gate.lock().unwrap().recv().unwrap();
                 }
                 snapshot.write(dir)
-            })),
+            }),
             ..Default::default()
         };
         let mut surfaces = Surfaces::default();
