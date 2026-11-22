@@ -869,8 +869,11 @@ fn hear_box(
     message: ferrite_core::protocol::ServerMessage,
     cx: &mut gpui::VisualTestContext,
 ) {
-    machines.update(cx, |machines, _| {
-        machines.status_mut(1).unwrap().fixture_receive(message)
+    // As a status that read a message does (`Machines::poll`), the
+    // machines notify: what hears them reads it then.
+    machines.update(cx, |machines, cx| {
+        machines.status_mut(1).unwrap().fixture_receive(message);
+        cx.notify();
     });
 }
 

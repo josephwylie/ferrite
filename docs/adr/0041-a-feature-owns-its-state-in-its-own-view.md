@@ -224,10 +224,10 @@ that happened to touch it, and nothing in the code said whose a field was.
   float, drawing the newest toast's row as it read it and where the
   window placed it (the amendment below). It emits
   `ToastEvent`: a quick answer, or what a toast opens, each taking the
-  toast down at once. Hearing the machines and ringing stay the root
-  pump's (`ring_alerts`), which updates the view and then plays the chime
-  and posts the system notifications, as does taking a toast down when
-  the list opens what it was about. The window carries the view's alerts
+  toast down at once. It hears the Notices and the machines and rings
+  them itself, and hands the chime and the system notifications to the
+  root (the amendment below, the toasts hear for themselves). Taking a
+  toast down when the list opens what it was about stays the root's. The window carries the view's alerts
   to the next machine's root (`with_needs_you`). The kit's own toasts
   stay the root's (`place_toasts` keeps their margin).
 - **The command palette is the fifteenth.** `Palette` (`palette.rs`) was
@@ -930,11 +930,8 @@ model itself.
   cleared have it look once the root's update ends (`look_again`). The
   root mounts it as a cached part, as it mounts the nav (`toast_float`),
   so a root redraw draws it again only when it notified itself. The
-  hearing and the ring stay on the pump's beat (`ring_alerts`): an alert
-  rings a second after it is heard, and a toast goes 5 or 8 seconds after
-  it rang, with or without an arrival. Taking them off the beat needs the
-  pump to stop calling `ring_alerts` and the view to keep a timer for the
-  next alert due or toast ending. That change belongs to the pump.
+  hearing and the ring were on the pump's beat (`ring_alerts`) until the
+  amendment below took them off it.
 - **The Factory door already read the model.** Its dot (one of the
   door's Projects has a Task that needs the operator) has been part of
   `NavInputs` since the nav moved. The PRs door draws no count. What
@@ -945,16 +942,9 @@ model itself.
   the dot. The menu (`factory_rows`) reads it from the nav. The menu's
   rows and counts are the popup slot's, read once as it opens (ADR 0043),
   as before.
-- **The next three, in order.** The Panes' heads: each reads its Thread's
-  state from the model, and today every root notify rebuilds every shown
-  Pane, the most redraws left in the stream the wakes tests measure. The
-  transcript bodies stay inputs. Then the toasts' hearing, once the pump
-  wakes on arrival: the view hears `Arrived` and the machines, keeps its
-  own timer, and hands the chime and the system notifications back to
-  the root as a `ToastEvent`, so the pump stops reading the Notices on
-  every beat. Then the Facts beside the model (names, Projects, branches,
-  PRs): the nav, the toast's row, the palette and the Panes read them from
-  the root, so each subscriber still observes the root for them.
+- **The next three** were the Panes' heads, the toasts' hearing and the
+  Facts. The amendment below (the toasts hear for themselves) did the
+  second, found the first gone, and names the next three.
 - **A feature does not ask the Server itself yet.** Core's asks block:
   a remote one waits on the Server's socket for its reply, up to
   `REPLY_WAIT`, queueing every other message it reads (`Remote::execute`).
@@ -1035,9 +1025,9 @@ arrives or when a clock it owns is due.
   events, dialogs and controls, and the browser engine's start, come
   from the browser's own callbacks and worker, which do not ring.
   Otherwise the pump is next due at its sweep (every two seconds; free
-  disk and message times ride it), at an alert's delay or a toast's end
-  (`NeedsYou::next_due`), and at the latest after `PUMP_FALLBACK` (250
-  ms).
+  disk and message times ride it), and at the latest after
+  `PUMP_FALLBACK` (250 ms). An alert's delay and a toast's end are the
+  toasts' own clock, not the pump's (the amendment below).
 - **What rides the fallback, and why no one waits on it.** Clock work
   with no due time of its own: a landing's deadline, the Remote's
   reattach backoff and restart timeout (seconds), the Composer's
@@ -1066,6 +1056,72 @@ arrives or when a clock it owns is due.
   four seconds (500 before), an arrival at rest waited 0.4 ms on average
   for its draw (4.5 ms before) and one in a stream 5.1 ms (as before),
   never more than a beat.
+
+## Amendment (2026-11-21): the toasts hear for themselves
+
+The pump read every Notice and every machine's news on each of its runs
+(`ring_alerts`), and woke for the toasts' clock, so an idle window read
+the Notices 18 times in four seconds. Now the toasts do their own
+hearing, and the pump knows nothing of them.
+
+- **`ToastsView` tends itself.** On the model's `Arrived`, a notify of
+  the root or of the window's machines, it tends (`tend`): it hears what
+  the Notices and the machines off screen say (`news`, `NeedsYou::hear`),
+  rings what waited out its delay and takes down what went
+  (`NeedsYou::ring`), keeps the system notifications posted, and looks.
+  A pump run that brought nothing emits no `Arrived` and notifies
+  nothing, so it reads no Notice. The view holds one timer for the next
+  of its own times (`set_clock`, at `NeedsYou::next_due`): an alert's
+  one-second delay, a toast's five- or eight-second end, the wait for a
+  machine not yet heard from. It is set again only when that time moves.
+- **The window plays and posts.** What a tend rang it says as
+  `ToastEvent::Rang`: the tags of system notifications to take back, the
+  chime (needs-you over done) and the postings. The root withdraws,
+  chimes and posts, since the sound file and the notification centre are
+  the window's. What it reads of the window to ring it reads through the
+  root's handle in its own listener: whether the Server answers
+  (`attached`), the Pane on the board (`visible_indices`), the focused
+  Thread, the settings (`sounds_for`, `system_notifications`), and the
+  postings' words and provider (`system_posting`, `alert_provider`,
+  which read the Facts). The window active is the model's.
+- **What the toast float still reads from the root.** The newest toast's
+  row (`alert_row`: the Facts' names, the model's Notices and requests, a
+  machine's status), where it hangs (`place_toasts`: the nav folded, its
+  width, the board's right edge), and for the ring the window state
+  above. It observes the root for the Facts and the Pane on the board.
+- **The Panes' heads are gone.** The Pane head that drew its Thread's
+  state word (`pane::group_head`) went with the Group view when the
+  window came to show one Thread at a time (#318): a Pane has no head,
+  and the state word is the nav row's tail, which the nav already reads
+  from the model. The one head left is the view head over the board
+  (`view_head`), drawn in the root's frame: the shown Thread's Project,
+  a side chat's parent, its title or the rename field, its machine, its
+  branch while the Panel is hidden, and its menu's chevron. No Thread
+  state, and nearly all of it is the Facts and what the window decides
+  (the rename, the popup slot's doors, the Panel, the nav's width), so by
+  the rule above it takes inputs, and it moves with the Facts. Measured
+  on Linux (`tests/wakes.rs`): a bare root notify builds the root, the
+  view head and the shown Pane once each (three notifies: 3, 3, 3; the
+  Pane off the board 0), and the stream test builds the head 71 times,
+  once per root render. The shown Pane's rebuild comes from its cached
+  part reading the root (`PartView`, `render_part`), not from a head, so
+  a head of its own would not lower it.
+- **Measured, before and after, on Linux.** Idle four seconds: 18 pump
+  runs both, Notice readings 18 then 0. A done toast off the board, its
+  second and its five seconds with the window otherwise idle: it comes at
+  1000 ms and goes at 6000 ms both; Notice readings 29 then 3, pump runs
+  29 both. The stream: 34 readings both, one on each run that brought
+  something.
+- **The next three, in order.** The Facts beside the model (names,
+  Projects, branches, PRs): the nav, the toast's row, the palette, the
+  view head and the Panes read them from the root, so each subscriber
+  still observes the root, and a head can follow once they have a home.
+  Then the pump's own root notifies: a run that is not precise (the
+  Server's state, an ask, parked Threads, the models) notifies the whole
+  root, which rebuilds the shown Pane and the head, and naming what each
+  moved would let it notify only that part. Then the toasts' observe of
+  the root: once the Facts and the Pane on the board say when they move,
+  the float tends on those instead of on every root notify.
 
 ## Precedent
 

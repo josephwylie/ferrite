@@ -20,6 +20,7 @@ use gpui::App;
     not(all(target_os = "macos", not(any(test, feature = "visual-reference")))),
     allow(dead_code)
 )]
+#[derive(Clone)]
 pub struct Posting {
     /// Its identity: a newer posting with the tag replaces it, and a click
     /// reports it.
