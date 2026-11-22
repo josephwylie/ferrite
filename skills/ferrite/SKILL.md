@@ -168,6 +168,8 @@ moves their view.
 ```
 
 `agent interrupt` stops the running turn, as the user's Esc does.
+`thread stop 14` stops everything the Thread runs: its turn, its subagents
+and its background commands, its queued prompts going back to its Composer.
 `thread close` parks a Thread: its agent stops, its history stays.
 `"$F" thread revive 14 --resume <provider_session>` starts a parked
 Thread's agent again in place, keeping its id (`--args`, `--env` and

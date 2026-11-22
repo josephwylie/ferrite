@@ -1,6 +1,7 @@
 //! The API's requests (ADR 0027), answered on the pump thread. Each one
 //! that changes a Thread is the window's own command (`Engine::execute`),
-//! so an agent and the operator act through the same door.
+//! so an agent and the operator act through the same door; `thread.stop`,
+//! which no window asks, is the Engine's `stop`.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -155,6 +156,7 @@ impl Server {
                 self.execute(Op::Interrupt { thread })?;
                 thread_result(&self.engine, thread)
             }),
+            Method::ThreadStop(params) => self.stop_thread(params.thread),
             Method::DecisionList(params) => {
                 let decisions: Vec<_> = self
                     .engine
@@ -395,6 +397,24 @@ impl Server {
             .thread(thread)
             .map(|_| thread)
             .ok_or_else(unknown_thread)
+    }
+
+    /// Stop everything `thread` runs (`Engine::stop`). Stopping it again
+    /// changes nothing, and a parked Thread runs nothing: both are already
+    /// stopped. Only a Thread the Store does not hold is unknown.
+    fn stop_thread(&mut self, thread: ThreadId) -> Result<Value, ApiError> {
+        if self.engine.thread(thread).is_some() {
+            self.engine.stop(thread);
+        } else {
+            let parked = self
+                .engine
+                .parked()
+                .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
+            if !parked.contains(&thread) {
+                return Err(ApiError::new(Code::UnknownThread, "no Thread has that id"));
+            }
+        }
+        Ok(json!({ "thread": thread }))
     }
 
     /// Open a Thread as a window's `open` does, its CLI given `args`, then

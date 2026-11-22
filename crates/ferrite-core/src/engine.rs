@@ -45,6 +45,7 @@ mod launch_args;
 mod parked;
 mod queue;
 mod rewind;
+mod stop;
 mod threads;
 mod windows;
 

@@ -32,6 +32,7 @@ mod peers;
 mod progress;
 mod publish;
 mod starts;
+mod stop;
 
 /// How long a test waits for something that must arrive. The wait ends the
 /// moment it arrives, so this costs time only on a slow machine. A wait that
