@@ -1055,8 +1055,10 @@ arrives or when a clock it owns is due.
   reads, and a quarter second on it goes unseen. A test that moves the
   wall clock moves the window's clock by `PUMP_FALLBACK` too, for the
   pump that reads it.
-- **An ask finds the Panes the roster has.** An act's settle can take
-  what the Server said before the pump runs, a Focus with it. The render
+- **An ask finds the Panes the roster has.** An act can receive what
+  the Server said before the pump runs, a Focus with it. What that moved
+  waits for the pump to report, as if the pump had received it: a PR
+  watch's digest is the only word the window's Facts get of it. The render
   that presents the Focus has the Panes follow the roster first
   (`follow_roster`, as the pump does), so a Thread the CLI just opened
   is focused, not reopened. Seen once in a real run on the new pump:

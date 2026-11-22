@@ -81,7 +81,11 @@ from T3 and why.
   carries `Watching`: each PR watched, by URL and number, whether it holds
   the Thread working (T3's `awaited`: `until: merged`, or checks still
   running on the head), and whether a wake waits. The Server sends a new
-  digest when any of it changes, for a held Thread.
+  digest when any of it changes, for a held Thread. The pump copies it
+  into the window's Facts, the one copy the card's eye, the palette, the
+  PR menu and the background line read. A digest received during one of
+  the window's own acts still waits for the pump: a watch that holds
+  nothing has no later message to bring it.
 - **`pr.watch` and `pr.unwatch`** start and stop a watch over the API
   (ADR 0027), for the calling Thread unless one is named. Anyone may call
   them: a watch changes only what news a Thread's agent hears. A new watch is

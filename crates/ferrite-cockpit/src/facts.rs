@@ -43,7 +43,8 @@ pub struct ThreadFacts {
     /// and the checks card both read it, on its own cadence (`pr`).
     pub pr: crate::pr::PrReading,
     /// The PRs the Server watches for the Thread's agent (ADR 0046), from
-    /// its digest: the details card's eye.
+    /// its digest: the one copy the window draws them from (the details
+    /// card's eye, the palette and PR menu entries, the background line).
     pub watching: Watching,
     /// Directory label and branch for every root attached to the Project.
     pub project_branches: Vec<(SharedString, SharedString)>,

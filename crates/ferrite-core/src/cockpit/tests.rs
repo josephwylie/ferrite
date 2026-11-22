@@ -1822,6 +1822,8 @@ fn each_thread_folds_only_its_own_events() {
     let (mut cockpit, fake) = cockpit("own-events");
     let one = cockpit.open(Provider::Claude, main_choice()).unwrap();
     let two = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    // What the opens moved is the pump's to report too: their frame first.
+    cockpit.pump();
 
     fake.streams.borrow()[0].send(text("only for one")).unwrap();
 

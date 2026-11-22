@@ -26,6 +26,7 @@ use super::panel::background::label;
 use super::*;
 
 use ferrite_core::activity::AgentKey;
+use ferrite_core::pr_watch::WatchedPr;
 use ferrite_core::transcript::tools::{policy, ToolKind};
 use ferrite_core::transcript::ToolBlock;
 use ferrite_core::ThreadKey;
@@ -86,9 +87,11 @@ impl Work {
 }
 
 /// Every piece of background work the Thread knows of, whichever view asks:
-/// the provider's tasks, the agents still working and the calls that
-/// launched work into the background that nothing else accounts for.
-fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
+/// the provider's tasks, the agents still working, the calls that launched
+/// work into the background that nothing else accounts for, and the PRs
+/// the Server watches for it as the Facts hold them (`watched`), which the
+/// details card reads too.
+fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>, watched: &[WatchedPr]) -> Vec<Work> {
     use ferrite_core::activity::AgentStatus;
     use ferrite_core::progress::TaskStatus;
     let transcript = open.transcript();
@@ -177,7 +180,7 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
         });
     }
     // T3's PR watch task: one per watched PR, held or not.
-    work.extend(open.activity().watching().prs.iter().map(|pr| Work {
+    work.extend(watched.iter().map(|pr| Work {
         task: BackgroundTask {
             kind: WorkKind::Monitor,
             label: format!("Watching pull request #{}", pr.number),
@@ -577,8 +580,10 @@ impl CockpitView {
     /// open. `outputs`: with the blocks of its calls, for their output.
     pub(super) fn background_inputs(&self, thread: ThreadId, outputs: bool, cx: &App) -> Option<BackgroundInputs> {
         let open = self.cockpit.read(cx).thread(thread)?;
+        let key = self.cockpit.read(cx).thread_key(thread);
         let transcript = open.transcript();
-        let running = running_work(&open);
+        let watched = self.facts.get(key).map_or(&[][..], |facts| &facts.watching.prs);
+        let running = running_work(&open, watched);
         let refusals = running
             .iter()
             .filter_map(|work| match &work.stop {
@@ -614,7 +619,7 @@ impl CockpitView {
             HashMap::new()
         };
         Some(BackgroundInputs {
-            thread: self.cockpit.read(cx).thread_key(thread),
+            thread: key,
             generation: open.generation(),
             busy: open.busy(),
             stops_tasks: open.supports_control(ferrite_core::ControlKind::StopTask),
