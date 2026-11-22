@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use super::Machine;
+use crate::spawn::NoConsoleWindow;
 
 pub fn candidates() -> Vec<String> {
     discover()
@@ -184,6 +185,7 @@ pub fn resolve(target: &str) -> Result<Host, String> {
     Machine::from_ssh_fields(target, "", "")?;
     let mut child = Command::new("ssh")
         .args(["-G", "--", target])
+        .no_console_window()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
