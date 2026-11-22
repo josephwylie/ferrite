@@ -241,9 +241,20 @@ fn an_asks_answer_is_an_arrival() {
 /// the page, in the order typed.
 #[gpui::test]
 fn a_burst_of_keys_all_reach_the_page_in_order(cx: &mut TestAppContext) {
+    typed_keys_reach_the_page("asks-burst", true, cx);
+}
+
+/// A gesture that ends while the Server is asked (here the window lost the
+/// operator, which ends one each frame) still gives the page its input.
+#[gpui::test]
+fn keys_reach_the_page_though_their_gesture_ended_while_the_server_was_asked(cx: &mut TestAppContext) {
+    typed_keys_reach_the_page("asks-ended", false, cx);
+}
+
+fn typed_keys_reach_the_page(name: &str, window_active: bool, cx: &mut TestAppContext) {
     use ferrite_pane::visual::web::fake::Call;
     use ferrite_pane::visual::web::Input;
-    let (core, thread, _) = silenceable_browser("asks-burst");
+    let (core, thread, _) = silenceable_browser(name);
     bind_production_keys(cx);
     let engine = std::rc::Rc::new(FakeEngine::new());
     engine.clean_browser_pages(true);
@@ -256,6 +267,10 @@ fn a_burst_of_keys_all_reach_the_page_in_order(cx: &mut TestAppContext) {
     cx.simulate_click(page, gpui::Modifiers::none());
     step(cx, "the click settles", |cx| !shown(&view, thread, cx).0.tabs.iter().any(|tab| tab.protected));
 
+    if !window_active {
+        cx.deactivate_window();
+        tick(cx);
+    }
     let typed = "packaged annotation feedback";
     cx.update(|window, cx| {
         for character in typed.chars() {

@@ -574,20 +574,32 @@ impl CockpitView {
                         // The page went while the Server answered: its input
                         // is over.
                         None => Some((document, revision)),
-                        Some(page) => {
+                        // The page moved on while it was asked: a new
+                        // document, or an action that retired this one.
+                        Some(page)
+                            if page.document.get() != document
+                                || generation != Some(page.native.state().document_generation)
+                                || page.manual.borrow().retired(sequence) =>
+                        {
                             page.manual
                                 .borrow_mut()
                                 .acknowledge(sequence, document, revision);
-                            // The page may have moved on while it was asked.
-                            if page.document.get() == document
-                                && generation == Some(page.native.state().document_generation)
-                                && page.manual.borrow().valid(sequence)
-                            {
-                                page.native.input(input);
-                                None
-                            } else {
-                                page.manual.borrow_mut().discard(sequence, manual::Finish::Stale)
-                            }
+                            page.manual.borrow_mut().discard(sequence, manual::Finish::Stale)
+                        }
+                        Some(page) if page.manual.borrow().valid(sequence) => {
+                            page.manual
+                                .borrow_mut()
+                                .acknowledge(sequence, document, revision);
+                            page.native.input(input);
+                            None
+                        }
+                        // Its gesture ended while it was asked (the pointer
+                        // left, the window lost the operator): the page still
+                        // has what the operator did, and nothing holds the
+                        // Server's revision for it.
+                        Some(page) => {
+                            page.native.input(input);
+                            Some((document, revision))
                         }
                     },
                     Err(error) => {
