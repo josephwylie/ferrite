@@ -1253,7 +1253,10 @@ fn a_lost_machine_holds_only_its_own_panes(cx: &mut TestAppContext) {
     let card = |thread| crate::nav::testing::drawn_card(thread).expect("its card").opacity;
     assert!(card(theirs) <= ferrite_ui::theme::MACHINE_LOST_OPACITY, "box's card, dimmed");
     assert_eq!(card(mine), 1.0, "this computer's, not");
-    until(cx, |cx| machine_notices(&view, cx) == ["box is reconnecting"]);
+    assert!(machine_notices(&view, cx).is_empty(), "nothing said within T3's grace");
+    cx.executor().advance_clock(crate::cockpit::machines::RECONNECT_GRACE);
+    tick(cx);
+    assert_eq!(machine_notices(&view, cx), ["box is reconnecting"]);
     prompt(&view, mine, "still here", cx);
     assert!(
         fake.sent.borrow().iter().any(|sent| sent.contains("still here")),
