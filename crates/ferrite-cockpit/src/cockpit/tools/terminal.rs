@@ -139,7 +139,7 @@ fn spawn_shell(
 /// per Thread: the menu's choices are the window's.
 pub(crate) struct TerminalsView {
     cockpit: WeakEntity<CockpitView>,
-    threads: HashMap<ThreadId, Shells>,
+    threads: HashMap<ThreadKey, Shells>,
     prefs: Prefs,
     /// The shown shell is to take the keyboard once it is drawn.
     focus_wanted: bool,
@@ -150,7 +150,7 @@ pub(crate) struct TerminalsView {
 /// What the Terminal draws from, as the Cockpit has it this frame.
 pub(crate) struct TerminalInputs {
     /// The Thread whose Panel shows a shell, and the shell it shows.
-    thread: ThreadId,
+    thread: ThreadKey,
     number: u64,
     /// Whether that Thread is the focused one: only then does the shell
     /// take the keyboard it was opened for.
@@ -161,17 +161,17 @@ pub(crate) struct TerminalInputs {
 /// What the Terminal asks of the window.
 pub(crate) enum TerminalsEvent {
     /// `Attach as context`: the text, a Reply in the Thread's Composer.
-    Attach { thread: ThreadId, text: String },
+    Attach { thread: ThreadKey, text: String },
     /// A right-click in a shell: its menu, at the press.
-    Menu { thread: ThreadId, at: gpui::Point<Pixels> },
+    Menu { thread: ThreadKey, at: gpui::Point<Pixels> },
     /// A press on the `⋯` button.
     Door(Door),
     /// A ⌘-press on an address the shell printed.
-    Open { thread: ThreadId, address: String },
+    Open { thread: ThreadKey, address: String },
     /// Try again, on a shell that could not start.
-    Retry { thread: ThreadId, number: u64 },
+    Retry { thread: ThreadKey, number: u64 },
     /// A shell ended on its own: its tab goes.
-    Ended { thread: ThreadId, number: u64 },
+    Ended { thread: ThreadKey, number: u64 },
 }
 
 impl EventEmitter<TerminalsEvent> for TerminalsView {}
@@ -194,10 +194,11 @@ impl CockpitView {
             return;
         };
         let machine = self.cockpit.read(cx).machine().cloned();
+        let key = self.cockpit.read(cx).thread_key(thread);
         let number = self.terminals.update(cx, |terminals, cx| {
-            terminals.open(thread, &directory, machine.as_deref(), cx)
+            terminals.open(key, &directory, machine.as_deref(), cx)
         });
-        self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Terminal(number), cx);
+        self.upsert_surface(key, SurfaceId::Terminal(number), cx);
     }
 
     pub(in crate::cockpit) fn on_terminals_event(
@@ -208,7 +209,7 @@ impl CockpitView {
     ) {
         match event {
             TerminalsEvent::Attach { thread, text } => {
-                if let Some(index) = self.pane_for(*thread) {
+                if let Some(index) = self.pane_for(thread.thread()) {
                     self.focus_pane(index, cx);
                     let reply = Reply::new(text.trim(), "");
                     self.panes[index]
@@ -218,12 +219,12 @@ impl CockpitView {
                 }
             }
             TerminalsEvent::Menu { thread, at } => {
-                self.open_context_menu(MenuTarget::Terminal(*thread), *at, cx)
+                self.open_context_menu(MenuTarget::Terminal(thread.thread()), *at, cx)
             }
             TerminalsEvent::Door(door) => self.toggle_door(*door, cx),
-            TerminalsEvent::Open { thread, address } => self.open_terminal_address(*thread, address, cx),
+            TerminalsEvent::Open { thread, address } => self.open_terminal_address(thread.thread(), address, cx),
             TerminalsEvent::Retry { thread, number } => {
-                let Some(directory) = self.thread_path(*thread, cx) else {
+                let Some(directory) = self.thread_path(thread.thread(), cx) else {
                     return;
                 };
                 let machine = self.cockpit.read(cx).machine().cloned();
@@ -232,7 +233,7 @@ impl CockpitView {
                 });
             }
             TerminalsEvent::Ended { thread, number } => {
-                self.forget_surface(self.cockpit.read(cx).thread_key(*thread), &SurfaceId::Terminal(*number));
+                self.forget_surface(*thread, &SurfaceId::Terminal(*number));
                 cx.notify();
             }
         }
@@ -273,13 +274,17 @@ impl CockpitView {
     pub(in crate::cockpit) fn terminal_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         self.focused_thread(cx).is_some_and(|thread| {
             self.shown_terminal(thread, cx)
-                .is_some_and(|number| self.terminals.read(cx).holds_focus(thread, number, window, cx))
+                .is_some_and(|number| {
+                    let thread = self.cockpit.read(cx).thread_key(thread);
+                    self.terminals.read(cx).holds_focus(thread, number, window, cx)
+                })
         })
     }
 
     /// A Terminal menu row, on the shell `thread`'s Panel shows.
     pub(in crate::cockpit) fn run_terminal_verb(&mut self, thread: ThreadId, verb: Verb, cx: &mut Context<Self>) {
         if let Some(number) = self.shown_terminal(thread, cx) {
+            let thread = self.cockpit.read(cx).thread_key(thread);
             self.terminals
                 .update(cx, |terminals, cx| terminals.run_verb(thread, number, verb, cx));
         }
@@ -289,7 +294,7 @@ impl CockpitView {
     fn terminal_inputs(&self, cx: &gpui::App) -> Option<TerminalInputs> {
         let thread = self.panes[self.panel_drawn_pane(cx)?].thread()?;
         Some(TerminalInputs {
-            thread,
+            thread: self.cockpit.read(cx).thread_key(thread),
             number: self.shown_terminal(thread, cx)?,
             focused: self.focused_thread(cx) == Some(thread),
             doors: self.doors(),
@@ -307,9 +312,10 @@ impl CockpitView {
         command: &'static [u8],
         cx: &mut Context<Self>,
     ) {
+        let key = self.cockpit.read(cx).thread_key(thread);
         if let Some(view) = self
             .shown_terminal(thread, cx)
-            .and_then(|number| self.terminals.read(cx).shell(thread, number))
+            .and_then(|number| self.terminals.read(cx).shell(key, number))
         {
             view.update(cx, |view, _| view.write(command));
             std::thread::sleep(std::time::Duration::from_millis(1500));
@@ -328,26 +334,26 @@ impl TerminalsView {
         }
     }
 
-    fn tab(&self, thread: ThreadId, number: u64) -> Option<&Tab> {
+    fn tab(&self, thread: ThreadKey, number: u64) -> Option<&Tab> {
         self.threads.get(&thread)?.tabs.iter().find(|tab| tab.number == number)
     }
 
-    fn tab_mut(&mut self, thread: ThreadId, number: u64) -> Option<&mut Tab> {
+    fn tab_mut(&mut self, thread: ThreadKey, number: u64) -> Option<&mut Tab> {
         self.threads.get_mut(&thread)?.tabs.iter_mut().find(|tab| tab.number == number)
     }
 
     /// Shell `number` of `thread`, while it runs.
-    pub(in crate::cockpit) fn shell(&self, thread: ThreadId, number: u64) -> Option<Entity<TerminalView>> {
+    pub(in crate::cockpit) fn shell(&self, thread: ThreadKey, number: u64) -> Option<Entity<TerminalView>> {
         self.tab(thread, number)?.view().cloned()
     }
 
-    fn holds_focus(&self, thread: ThreadId, number: u64, window: &Window, cx: &gpui::App) -> bool {
+    fn holds_focus(&self, thread: ThreadKey, number: u64, window: &Window, cx: &gpui::App) -> bool {
         self.shell(thread, number)
             .is_some_and(|view| view.focus_handle(cx).is_focused(window))
     }
 
     /// One more shell for `thread`, in `directory`: its number.
-    fn open(&mut self, thread: ThreadId, directory: &Path, machine: Option<&Bridge>, cx: &mut Context<Self>) -> u64 {
+    pub(in crate::cockpit) fn open(&mut self, thread: ThreadKey, directory: &Path, machine: Option<&Bridge>, cx: &mut Context<Self>) -> u64 {
         let shell = self.start_shell(thread, directory, machine, cx);
         let shells = self.threads.entry(thread).or_default();
         shells.made += 1;
@@ -362,7 +368,7 @@ impl TerminalsView {
     /// says why instead of the door looking dead.
     fn start_shell(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         directory: &Path,
         machine: Option<&Bridge>,
         cx: &mut Context<Self>,
@@ -388,7 +394,7 @@ impl TerminalsView {
     /// Start shell `number` again, where it failed to start.
     fn retry(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         number: u64,
         directory: &Path,
         machine: Option<&Bridge>,
@@ -410,7 +416,7 @@ impl TerminalsView {
 
     fn on_shell_event(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         view: Entity<TerminalView>,
         event: &TerminalEvent,
         cx: &mut Context<Self>,
@@ -446,7 +452,7 @@ impl TerminalsView {
     }
 
     /// Shell `number` of `thread` ends: its tab closed, or it exited.
-    pub(in crate::cockpit) fn end(&mut self, thread: ThreadId, number: u64, cx: &mut Context<Self>) {
+    pub(in crate::cockpit) fn end(&mut self, thread: ThreadKey, number: u64, cx: &mut Context<Self>) {
         let Some(shells) = self.threads.get_mut(&thread) else {
             return;
         };
@@ -482,7 +488,7 @@ impl TerminalsView {
         });
     }
 
-    fn run_verb(&mut self, thread: ThreadId, number: u64, verb: Verb, cx: &mut Context<Self>) {
+    fn run_verb(&mut self, thread: ThreadKey, number: u64, verb: Verb, cx: &mut Context<Self>) {
         let Some(view) = self.shell(thread, number) else {
             return;
         };
@@ -603,7 +609,7 @@ impl TerminalsView {
                 "More",
                 cx,
             ),
-            Door::new(MenuTarget::TerminalMore(thread), Edge::Right),
+            Door::new(MenuTarget::TerminalMore(thread.thread()), Edge::Right),
             "More",
             cx,
         );
@@ -617,7 +623,7 @@ impl TerminalsView {
     }
 
     /// Why the shell never started, and a way to try again.
-    fn failure(why: String, thread: ThreadId, number: u64, cx: &mut Context<Self>) -> AnyElement {
+    fn failure(why: String, thread: ThreadKey, number: u64, cx: &mut Context<Self>) -> AnyElement {
         use theme::*;
         div()
             .debug_selector(|| "terminal-failed".into())
@@ -647,7 +653,7 @@ impl TerminalsView {
 
     /// The numbers of the Thread's shells — what the tests read.
     #[cfg(test)]
-    pub(in crate::cockpit) fn numbers(&self, thread: ThreadId) -> Vec<u64> {
+    pub(in crate::cockpit) fn numbers(&self, thread: ThreadKey) -> Vec<u64> {
         self.threads
             .get(&thread)
             .map(|shells| shells.tabs.iter().map(|tab| tab.number).collect())

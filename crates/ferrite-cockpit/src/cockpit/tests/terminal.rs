@@ -28,7 +28,7 @@ fn opened(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
 }
 
 fn numbers(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> Vec<u64> {
-    view.read_with(cx, |view, cx| view.terminals.read(cx).numbers(thread))
+    view.read_with(cx, |view, cx| view.terminals.read(cx).numbers(view.cockpit.read(cx).thread_key(thread)))
 }
 
 /// The shell the Thread's Panel shows.
@@ -38,7 +38,7 @@ fn shown_shell(
     cx: &mut gpui::VisualTestContext,
 ) -> Option<Entity<ferrite_terminal::TerminalView>> {
     view.read_with(cx, |view, cx| match view.active_surface(view.cockpit.read(cx).thread_key(thread))? {
-        SurfaceId::Terminal(number) => view.terminals.read(cx).shell(thread, number),
+        SurfaceId::Terminal(number) => view.terminals.read(cx).shell(view.cockpit.read(cx).thread_key(thread), number),
         _ => None,
     })
 }
@@ -660,8 +660,29 @@ fn cmd_click_opens_what_the_shell_printed(cx: &mut TestAppContext) {
     back_to_shell(cx);
     cmd_click(cx, 2, 5);
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Files));
-    assert!(view.read_with(cx, |view, cx| view.files.read(cx).tab_names(thread)).contains(&("main.rs".to_string(), true)));
-    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread).expect("the editor"));
+    assert!(view.read_with(cx, |view, cx| view.files.read(cx).tab_names(view.cockpit.read(cx).thread_key(thread))).contains(&("main.rs".to_string(), true)));
+    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(view.cockpit.read(cx).thread_key(thread)).expect("the editor"));
     let (text, caret) = editor.read_with(cx, |editor, _| (editor.text().to_string(), editor.caret_for_test()));
     assert_eq!(text[..caret].matches('\n').count(), 2, "the caret is on line 3");
+}
+
+/// A Thread with the same id on another machine is another Thread (ADR
+/// 0045): each has its own Terminal 1, and ending one leaves the other's.
+#[gpui::test]
+fn a_terminal_keeps_two_machines_threads_apart(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-two-machines", cx);
+    opened(&view, cx);
+    let there = ferrite_core::ThreadKey::fixture(u32::MAX, thread.get());
+    let numbers_there = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| view.terminals.read(cx).numbers(there))
+    };
+    view.update(cx, |view, cx| {
+        let directory = view.thread_path(thread, cx).unwrap();
+        view.terminals.update(cx, |terminals, cx| terminals.open(there, &directory, None, cx));
+    });
+    assert_eq!(numbers(&view, thread, cx), [1]);
+    assert_eq!(numbers_there(&view, cx), [1], "a Terminal 1 of its own");
+    view.update(cx, |view, cx| view.terminals.update(cx, |terminals, cx| terminals.end(there, 1, cx)));
+    assert!(numbers_there(&view, cx).is_empty());
+    assert_eq!(numbers(&view, thread, cx), [1], "this Thread's shell runs on");
 }

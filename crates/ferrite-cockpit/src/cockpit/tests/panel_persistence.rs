@@ -59,10 +59,10 @@ fn idle_pump_saves_panel_and_working_sets_without_a_window(cx: &mut TestAppConte
     );
     let files: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join("files.json")).unwrap()).unwrap();
-    assert_eq!(
-        files["threads"][thread.get().to_string()]["files"][0]["path"],
-        checkout.join("src/lib.rs").to_str().unwrap()
-    );
+    let saved = &files["threads"][0];
+    assert_eq!(saved["machine"], serde_json::Value::Null, "this computer's");
+    assert_eq!(saved["thread"], thread.get());
+    assert_eq!(saved["files"][0]["path"], checkout.join("src/lib.rs").to_str().unwrap());
 }
 
 #[gpui::test]
@@ -75,7 +75,7 @@ fn close_reopen_and_files_preferences_restore_with_the_saved_panel(cx: &mut Test
     let thread = view.update(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         view.open_in_files(thread, file.clone(), None, true, cx);
-        view.files.update(cx, |files, cx| files.run_verb(thread, FilesVerb::TogglePreviewTabs, cx));
+        view.files.update(cx, |files, cx| files.run_verb(view.cockpit.read(cx).thread_key(thread), FilesVerb::TogglePreviewTabs, cx));
         view.close_surfaces(view.cockpit.read(cx).thread_key(thread), CloseSelection::One(SurfaceId::Files), cx);
         view.apply_surface(view.cockpit.read(cx).thread_key(thread), SurfaceAction::Reopen);
         view.apply_surface(view.cockpit.read(cx).thread_key(thread), SurfaceAction::ToggleDetails);
@@ -92,7 +92,7 @@ fn close_reopen_and_files_preferences_restore_with_the_saved_panel(cx: &mut Test
         assert!(!view.panel.surfaces.get(view.cockpit.read(cx).thread_key(thread)).unwrap().details_inline_open);
         view.ensure_files(thread, cx);
         assert_eq!(
-            view.files.read(cx).tab_names(thread),
+            view.files.read(cx).tab_names(view.cockpit.read(cx).thread_key(thread)),
             [("lib.rs".to_string(), false)]
         );
         view.open_context_menu(
@@ -136,7 +136,8 @@ fn a_deleted_threads_working_set_is_saved_away_once(cx: &mut TestAppContext) {
     });
     let files: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join("files.json")).unwrap()).unwrap();
-    assert!(files["threads"].get(thread.get().to_string()).is_none(), "its working set is gone");
+    let saved: Vec<_> = files["threads"].as_array().unwrap().iter().map(|set| set["thread"].as_u64()).collect();
+    assert_eq!(saved, [Some(other.get())], "its working set is gone");
     std::fs::remove_file(dir.join("files.json")).unwrap();
     view.update(cx, |view, cx| {
         for _ in 0..3 {

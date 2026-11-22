@@ -265,7 +265,7 @@ impl CockpitView {
         match &id {
             SurfaceId::Files => {
                 if self.active_surface(thread) != Some(SurfaceId::Files) {
-                    self.files.update(cx, |files, cx| files.refresh(thread.thread(), cx));
+                    self.files.update(cx, |files, cx| files.refresh(thread, cx));
                 }
                 self.ensure_files(thread.thread(), cx);
             }
@@ -295,7 +295,7 @@ impl CockpitView {
     /// A tab pressed: its Surface shows.
     pub(super) fn activate_surface(&mut self, thread: ThreadKey, id: &SurfaceId, cx: &mut Context<Self>) {
         if *id == SurfaceId::Files {
-            self.files.update(cx, |files, cx| files.refresh(thread.thread(), cx));
+            self.files.update(cx, |files, cx| files.refresh(thread, cx));
         }
         self.apply_surface(thread, SurfaceAction::Activate(id.clone()));
         cx.notify();
@@ -333,7 +333,7 @@ impl CockpitView {
     fn release_surface(&mut self, thread: ThreadKey, id: &SurfaceId, cx: &mut Context<Self>) {
         match id {
             SurfaceId::Terminal(number) => {
-                self.terminals.update(cx, |terminals, cx| terminals.end(thread.thread(), *number, cx))
+                self.terminals.update(cx, |terminals, cx| terminals.end(thread, *number, cx))
             }
             SurfaceId::SideChat(tab) => self.close_side_tab(thread.thread(), *tab, cx),
             SurfaceId::File(path) => self.close_preview_of(thread.thread(), path, cx),
@@ -503,7 +503,7 @@ impl CockpitView {
         self.tend_previews(window, cx);
         if let Some(thread) = self.panel_thread(cx) {
             self.files
-                .update(cx, |files, _| files.tend_prose_find(thread.thread(), window));
+                .update(cx, |files, _| files.tend_prose_find(thread, window));
         }
         let shown = self.shown_pr(cx);
         self.pull_request.update(cx, |reader, _| reader.disarm_unless(shown));

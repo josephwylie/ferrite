@@ -2167,7 +2167,7 @@ fn machine_with_edited_remote_file<'a>(
         view.open_in_files(thread, checkout.join("edited.rs"), None, true, cx);
     });
     tick(cx);
-    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread).unwrap());
+    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(view.cockpit.read(cx).thread_key(thread)).unwrap());
     editor.update(cx, |editor, cx| editor.type_text("edited ", cx));
     (root, view, editor, cx)
 }

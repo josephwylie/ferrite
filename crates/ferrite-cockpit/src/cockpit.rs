@@ -1887,9 +1887,9 @@ impl CockpitView {
                 return Some(Reader::Document(scroll));
             }
         }
-        let thread = pane.thread()?;
+        let thread = self.cockpit.read(cx).thread_key(pane.thread()?);
         let on_panel = self.panel_control_focused(window, cx) || self.panel_keys_held(window, cx);
-        if !on_panel || self.active_surface(self.cockpit.read(cx).thread_key(thread)) != Some(crate::cockpit::surfaces::SurfaceId::Files) {
+        if !on_panel || self.active_surface(thread) != Some(crate::cockpit::surfaces::SurfaceId::Files) {
             return None;
         }
         let files = self.files.read(cx);
@@ -2189,7 +2189,7 @@ impl CockpitView {
         }
         let frame = self.cockpit.update(cx, |cockpit, _| cockpit.pump());
         self.fetch_attachment_previews(cx);
-        self.note_work(&frame);
+        self.note_work(&frame, cx);
         self.prune_background_stops(cx);
         self.close_sheet_with_nothing_to_draw(cx);
         self.pump_browsers(cx);
@@ -3007,7 +3007,7 @@ impl CockpitView {
             MenuTarget::Thread(thread)
             | MenuTarget::Pane(thread)
             | MenuTarget::Snooze(thread) => self.thread_path(thread, cx),
-            MenuTarget::File(thread) => self.files.read(cx).pressed(thread),
+            MenuTarget::File(thread) => self.files.read(cx).pressed(self.cockpit.read(cx).thread_key(thread)),
             MenuTarget::FilesMore(_)
             | MenuTarget::ChangesScope(_)
             | MenuTarget::ChangesMore(_)

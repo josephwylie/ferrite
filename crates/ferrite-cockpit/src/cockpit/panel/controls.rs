@@ -303,8 +303,8 @@ impl CockpitView {
         if let Some(handle) = self.panel.focus.handle(control) {
             if let (PanelControl::FileTab(path), Some(thread)) = (control, self.panel_thread(cx)) {
                 self.files.update(cx, |files, _| {
-                    if let Some(at) = files.tab_index(thread.thread(), path) {
-                        files.reveal_tab(thread.thread(), at);
+                    if let Some(at) = files.tab_index(thread, path) {
+                        files.reveal_tab(thread, at);
                     }
                 });
             }
@@ -534,6 +534,7 @@ impl CockpitView {
     /// Close `path`'s file tab: the keyboard goes to the file that takes
     /// its place, else back to the Panel's own tab.
     fn close_file_tab(&mut self, thread: ThreadId, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        let thread = self.cockpit.read(cx).thread_key(thread);
         let Some(at) = self.files.read(cx).tab_index(thread, path) else {
             return;
         };
