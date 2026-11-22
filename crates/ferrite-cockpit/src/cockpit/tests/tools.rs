@@ -561,7 +561,7 @@ fn hold_tools(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::Visua
         view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Changes, cx);
         view.ensure_diff(crate::cockpit::tools::Diff::PullRequest(crate::cockpit::panel::pr_read::PrTarget::thread(thread, 1)), cx);
         view.overview.update(cx, |overview, cx| overview.toggle_file(view.cockpit.read(cx).thread_key(thread), "src/lib.rs".to_string(), cx));
-        view.ensure_browser(thread, cx);
+        view.ensure_browser(view.cockpit.read(cx).thread_key(thread), cx);
         view.fixture_pr_snapshot(thread, super::pr::snapshot(ferrite_core::protocol::WirePrState::Open), cx);
         view.background.update(cx, |background, cx| background.turn(view.cockpit.read(cx).thread_key(thread), "call-1".into(), cx));
     });

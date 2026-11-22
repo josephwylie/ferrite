@@ -18,7 +18,7 @@ pub(in crate::cockpit) enum PageVerb {
 impl CockpitView {
     pub(in crate::cockpit) fn browser_page_rows(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         cx: &gpui::App,
     ) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let Some(browser) = self.browsers.threads.get(&thread) else {
@@ -64,7 +64,7 @@ impl CockpitView {
 
     pub(in crate::cockpit) fn run_browser_page_verb(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         verb: PageVerb,
         cx: &mut Context<Self>,
     ) {

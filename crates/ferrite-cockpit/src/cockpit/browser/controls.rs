@@ -24,7 +24,7 @@ pub(in crate::cockpit) struct Controls {
 
 pub(super) struct ControlRequest {
     pub(super) request: u64,
-    pub(super) thread: ThreadId,
+    pub(super) thread: ThreadKey,
     pub(super) owner: Owner,
     pub(super) document: Document,
     pub(super) revision: u64,
@@ -34,7 +34,7 @@ pub(super) struct ControlRequest {
 
 #[cfg(feature = "cef")]
 struct CaptureRequest {
-    thread: ThreadId,
+    thread: ThreadKey,
     owner: Owner,
     document: Document,
     reply: std::sync::mpsc::SyncSender<
@@ -107,7 +107,7 @@ impl Controls {
     /// Results never borrow the live View or use its last OnPaint frame.
     pub(super) fn capture(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         owner: Owner,
         document: Document,
         point: Option<ferrite_core::browser_annotations::Point>,
@@ -391,7 +391,7 @@ impl Controls {
                                 .dispatch
                                 .clone()
                                 .expect("dispatch capability checked before attachment"),
-                            request.thread,
+                            request.thread.thread(),
                             request.owner,
                             request.document,
                             request.revision,
@@ -536,7 +536,7 @@ fn reply_browser_control(
     cockpit.browser_reply(
         request.request,
         request.dispatch,
-        request.thread,
+        request.thread.thread(),
         request.owner,
         request.document,
         request.revision,

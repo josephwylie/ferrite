@@ -122,7 +122,7 @@ impl CockpitView {
                                 std::fs::write(output.join("lifecycle-before-restoration.json"),serde_json::to_vec_pretty(&state.tabs).unwrap()).map_err(|e|e.to_string())?;
                                 if let Some(tab)=state.tabs.iter().find(|tab|Some(tab.id)!=state.active && !tab.live) {
                                     restoring_page=Some((tab.document(),tab.url.clone()));
-                                    view.update(cx,|view,cx|view.browser_action(thread,ferrite_core::browser::Action::Select{tab:tab.id},cx));
+                                    view.update(cx,|view,cx|view.browser_action(view.cockpit.read(cx).thread_key(thread),ferrite_core::browser::Action::Select{tab:tab.id},cx));
                                     phase(&output,"restored-page");quiet_started=Some(Instant::now());return Ok(false);
                                 }
                             }
@@ -210,7 +210,7 @@ impl CockpitView {
                             { preview_expanded=true; }
                             return Ok(false);
                         }
-                        let viewport=view.read(cx).browser_smoke_viewport(scenario_thread.expect("scenario Thread"));
+                        let viewport=view.read(cx).browser_smoke_viewport(view.read(cx).cockpit.read(cx).thread_key(scenario_thread.expect("scenario Thread")));
                         let Some(viewport)=viewport else{return Ok(false);};
                         if viewport.width==0 || viewport.height==0 { return Ok(false); }
                         std::fs::write(output.join("browser-viewport.json"),serde_json::to_vec_pretty(&serde_json::json!({"width_css":viewport.width,"height_css":viewport.height,"device_scale":viewport.scale})).unwrap()).map_err(|e|e.to_string())?;

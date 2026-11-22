@@ -1551,7 +1551,7 @@ impl CockpitView {
         let url = self.facts.pr(self.cockpit.read(cx).thread_key(thread)).and_then(|pr| pr.url.clone());
         if let Some(url) = url {
             self.show_thread(thread, cx);
-            self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx);
+            self.browser_action(self.cockpit.read(cx).thread_key(thread), ferrite_core::browser::Action::Open { url }, cx);
         }
     }
 
@@ -1726,7 +1726,7 @@ impl CockpitView {
                 skills: open.commands().into(),
                 cited: self
                     .cited_sources
-                    .of(thread)
+                    .of(&self.cited_thread(thread, cx))
                     .map(std::borrow::Cow::Borrowed)
                     .unwrap_or_default(),
                 note: None,
@@ -3964,7 +3964,7 @@ impl CockpitView {
             admitted
         };
         if admitted {
-            self.keep_cited_sources(thread, &cited);
+            self.keep_cited_sources(thread, &cited, cx);
         }
         self.facts.acted(self.cockpit.read(cx), thread);
         // A first prompt names an untitled Thread.
@@ -6846,7 +6846,7 @@ impl CockpitView {
                 if !self.preview_shown(index, cx) { return None; }
                 let pane = self.panes.get(index)?;
                 if !pane.preview.document().is_some_and(|document| matches!(&document.body, ferrite_pane::preview::Body::Browser)) { return None; }
-                self.browser_annotation_focus(pane.thread()?, cx)
+                self.browser_annotation_focus(self.cockpit.read(cx).thread_key(pane.thread()?), cx)
             })
             .or_else(|| {
                 self.panes

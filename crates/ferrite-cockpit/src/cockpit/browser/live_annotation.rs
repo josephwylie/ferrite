@@ -134,7 +134,7 @@ impl LiveAnnotation {
     /// the in-page editor starts, its Send shown as `send_enabled` says,
     /// once the Server has (`tend`).
     pub(super) fn begin(
-        thread: ThreadId,
+        thread: ThreadKey,
         target: Target,
         window: gpui::AnyWindowHandle,
         send_enabled: bool,
@@ -150,7 +150,7 @@ impl LiveAnnotation {
         } = target;
         manual.borrow_mut().protect_local();
         manual.borrow_mut().capture_pause(true);
-        let input = cockpit.browser_input(thread, owner, document);
+        let input = cockpit.browser_input(thread.thread(), owner, document);
         Self {
             guard: None,
             phase: Phase::Beginning(Beginning {
@@ -177,7 +177,7 @@ impl LiveAnnotation {
     /// The Server's word on a beginning annotation, if it came: the next
     /// ask, the page held, or why it could not begin, with the page given
     /// back.
-    fn begun(&mut self, thread: ThreadId, cockpit: &mut Cockpit) -> Option<String> {
+    fn begun(&mut self, thread: ThreadKey, cockpit: &mut Cockpit) -> Option<String> {
         let Phase::Beginning(beginning) = &mut self.phase else {
             return None;
         };
@@ -187,7 +187,7 @@ impl LiveAnnotation {
                     Ok(revision) => {
                         beginning.manual.borrow_mut().revision = revision;
                         let lease = cockpit.browser_protect(
-                            thread,
+                            thread.thread(),
                             beginning.owner,
                             beginning.document,
                             Protection::Annotation,
@@ -201,7 +201,7 @@ impl LiveAnnotation {
             Begin::Protect { revision, lease } => match lease.answer()? {
                 Ok(lease) => Ok((*revision, lease)),
                 Err(error) => {
-                    cockpit.browser_settled(thread, beginning.owner, beginning.document, *revision);
+                    cockpit.browser_settled(thread.thread(), beginning.owner, beginning.document, *revision);
                     Err(error)
                 }
             },
@@ -319,7 +319,7 @@ impl LiveAnnotation {
     /// Thread has one to take the annotation.
     pub(super) fn tend(
         mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         browser: &Browser,
         cockpit: &mut Cockpit,
         controls: &mut Controls,
@@ -528,7 +528,7 @@ impl LiveAnnotation {
                         if let Some((capture, png)) = ready.take() {
                             let guard = self.guard.as_ref().unwrap();
                             self.phase = Phase::Retaining(cockpit.browser_capture(
-                                thread,
+                                thread.thread(),
                                 guard.owner,
                                 guard.lease,
                                 capture,
@@ -602,10 +602,10 @@ impl LiveAnnotation {
 
     /// Give the page back: settle the operator's input, release the
     /// Server's lease and lift the pause.
-    fn release(&mut self, thread: ThreadId, cockpit: &mut Cockpit) {
+    fn release(&mut self, thread: ThreadKey, cockpit: &mut Cockpit) {
         if let Some(guard) = self.guard.take() {
-            cockpit.browser_settled(thread, guard.owner, guard.document, guard.revision);
-            cockpit.browser_release(thread, guard.owner, guard.lease);
+            cockpit.browser_settled(thread.thread(), guard.owner, guard.document, guard.revision);
+            cockpit.browser_release(thread.thread(), guard.owner, guard.lease);
             guard.manual.borrow_mut().capture_pause(false);
             guard.manual.borrow_mut().release_local();
             guard.manual.borrow().restore_pause();

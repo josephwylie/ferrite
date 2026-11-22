@@ -123,10 +123,17 @@ impl CockpitView {
         .detach();
     }
 
+    /// `thread` as `cited-sources.json` names it: a Thread of the machine
+    /// the window is on.
+    pub(super) fn cited_thread(&self, thread: ThreadId, cx: &gpui::App) -> SavedThread {
+        let machine = self.machines.as_ref().and_then(|machines| machines.read(cx).selected_key());
+        SavedThread { machine: machine.unwrap_or(MachineKey(None)), thread }
+    }
+
     /// `replies` went out on `thread`: their quotes keep the Blocks they
     /// were cited from, for the sent rows' Go to source.
-    pub(super) fn keep_cited_sources(&mut self, thread: ThreadId, replies: &[Reply]) {
-        if self.cited_sources.record(thread, replies) {
+    pub(super) fn keep_cited_sources(&mut self, thread: ThreadId, replies: &[Reply], cx: &gpui::App) {
+        if self.cited_sources.record(&self.cited_thread(thread, cx), replies) {
             if let Err(error) = self.cited_sources.save(&self.prefs.dir) {
                 ferrite_core::log!("cited sources were not saved: {error}");
             }
@@ -142,7 +149,7 @@ impl CockpitView {
     ) -> std::io::Result<()> {
         self.cockpit.update(cx, |cockpit, _| cockpit.delete(thread))?;
         self.panel.deleted.push(self.cockpit.read(cx).thread_key(thread));
-        if self.cited_sources.forget(thread) {
+        if self.cited_sources.forget(&self.cited_thread(thread, cx)) {
             if let Err(error) = self.cited_sources.save(&self.prefs.dir) {
                 ferrite_core::log!("cited sources were not saved: {error}");
             }
