@@ -301,19 +301,16 @@ fn core_eviction_releases_a_hidden_retained_transcript_entity(cx: &mut TestAppCo
     });
 
     // Retaining Tail exceeds core's child budget and evicts the hidden Atlas.
-    for _ in 0..8 {
+    // Tail's history is read on the loader's thread, so wait for it to land.
+    ferrite_core::doorbell::until("Tail's history never landed", || {
         tick(cx);
-    }
+        view.read_with(cx, |view, cx| {
+            let thread = view.cockpit.read(cx).thread(thread).unwrap();
+            !thread.activity().subject(&atlas).unwrap().retained()
+        })
+    });
+    tick(cx);
     view.read_with(cx, |view, cx| {
-        let atlas_core = view
-            .cockpit
-            .read(cx)
-            .thread(thread)
-            .unwrap()
-            .activity()
-            .subject(&atlas)
-            .unwrap();
-        assert!(!atlas_core.retained());
         assert!(!view.panes[0].transcripts.contains_key(&atlas));
         assert!(view.panes[0].transcripts.contains_key(&tail));
         assert!(!view.transcript_entities.contains(&atlas_entity));
