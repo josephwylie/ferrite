@@ -77,6 +77,7 @@ impl Parked {
             request: None,
             cap: None,
             pr_watch: Default::default(),
+            delegates: Default::default(),
             summary: None,
         })
     }

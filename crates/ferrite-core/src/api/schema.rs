@@ -37,8 +37,9 @@
 //! - `thread_parked`: that Thread is parked, not gone; the refusal names
 //!   it (`thread.revive` starts it again).
 //! - `linked_machines_off`: a `thread.start` from another machine's
-//!   Thread (`delegated_from`) while this machine's Settings › Labs ›
-//!   Linked machines is off.
+//!   Thread (`delegated_from`), or a `delegate.start`, while this
+//!   machine's Settings › Labs › Linked machines is off.
+//! - `unknown_delegate`: the Thread started no Delegate with that id.
 //! - `failed`: anything else, in its own words.
 //! - `server_unavailable`: the CLI's own, no Server answered.
 //!
@@ -53,6 +54,7 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::delegate::DelegateId;
 use crate::drive;
 use crate::protocol::{WireAnswer, WireSound};
 use crate::runtime_mode::RuntimeMode;
@@ -267,6 +269,14 @@ operations! {
         "Watch an open PR for a Thread: its agent is woken on failed checks, passed required checks, new comments or reviews, conflicts, and once on merge or close.";
     PrUnwatch(PrParams) => "pr.unwatch", ["url"], Anyone,
         "Stop watching a PR for a Thread.";
+    DelegateStart(DelegateStartParams) => "delegate.start", ["machine", "task"], Operator,
+        "Start a Delegate: a Thread on another saved machine does one task for a Thread here, and its ending wakes that Thread's agent with its result.";
+    DelegateGet(DelegateParams) => "delegate.get", ["delegate"], Anyone,
+        "One of a Thread's Delegates: its status and, once it ended, its result.";
+    DelegateList(DelegateListParams) => "delegate.list", [], Anyone,
+        "A Thread's Delegates, or every open Thread's.";
+    DelegateCancel(DelegateCancelParams) => "delegate.cancel", ["delegate"], Operator,
+        "Cancel a Delegate: it ends here at once, and its Thread there is stopped.";
 }
 
 /// Who may call an operation (#224). A call that names no Thread is the
@@ -331,6 +341,60 @@ impl From<PrWatchUntil> for crate::pr_watch::Until {
             PrWatchUntil::Merged => Self::Merged,
         }
     }
+}
+
+/// A Delegate to start (ADR 0047): T3 Code's `delegate_task` with a
+/// target machine.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DelegateStartParams {
+    /// The Thread that delegates; the one the call runs in when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ThreadId>,
+    /// The saved machine to run it on (Settings › Machines), by its name.
+    pub machine: String,
+    /// What it is to do: the prompt its Thread there starts with.
+    pub task: String,
+    /// The directory it works in there.
+    pub checkout: PathBuf,
+    /// Open it in this Project there (that machine's `project.list` id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The provider it runs on there; the delegating Thread's when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Provider>,
+    /// A key a repeated start answers with the Delegate the first one
+    /// started, rather than start another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
+}
+
+/// One of a Thread's Delegates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DelegateParams {
+    /// The Thread that started it; the one the call runs in when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ThreadId>,
+    /// Its id on that Thread, `d1`.
+    pub delegate: DelegateId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DelegateCancelParams {
+    #[serde(flatten)]
+    pub delegate: DelegateParams,
+    /// Why, said in its result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DelegateListParams {
+    /// The Thread whose Delegates to list; the one the call runs in, else
+    /// every open Thread's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ThreadId>,
 }
 
 /// No parameters.

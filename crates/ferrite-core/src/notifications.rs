@@ -109,6 +109,9 @@ pub struct Frame<'a> {
     /// A held prompt went out on that turn end: the operator queued more
     /// work, so this Thread is not one they are waiting on.
     pub resumed: bool,
+    /// A Delegate it started is open, or its ending is still to wake the
+    /// agent (`Delegates::holding`): the work is not finished.
+    pub delegated: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,6 +174,7 @@ impl Notifications {
         // Waiting rather than Working. Retained history is never live work.
         let unfinished = !view.pending_decisions().is_empty()
             || view.background_work()
+            || frame.delegated
             || view.children().iter().any(|child| {
                 child.fresh()
                     && matches!(
@@ -623,6 +627,7 @@ mod tests {
         thread: ThreadId,
         now: Instant,
         held: bool,
+        delegated: bool,
     }
 
     impl Bench {
@@ -635,6 +640,7 @@ mod tests {
                 thread: ThreadId::new(1),
                 now: Instant::now(),
                 held: false,
+                delegated: false,
             }
         }
 
@@ -646,6 +652,7 @@ mod tests {
                     activity: self.activity.view(),
                     settled: applied.main_settled,
                     resumed,
+                    delegated: self.delegated,
                 },
                 self.now,
             )
@@ -912,6 +919,18 @@ mod tests {
             assert_eq!(b.child_done(&key), None);
             assert!(b.wait(Duration::from_secs(4)).is_some());
         }
+    }
+
+    #[test]
+    fn an_open_delegate_holds_the_deferral_until_it_is_told() {
+        let mut b = Bench::new(Duration::from_secs(3));
+        b.prompt();
+        b.delegated = true;
+        assert_eq!(b.turn_ended(done()), None, "a Delegate is open");
+        assert_eq!(b.wait(Duration::from_secs(10)), None);
+        b.delegated = false;
+        assert_eq!(b.wait(Duration::from_secs(1)), None, "the grace runs first");
+        assert!(b.wait(Duration::from_secs(4)).is_some());
     }
 
     #[test]

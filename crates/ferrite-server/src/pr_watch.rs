@@ -211,7 +211,6 @@ impl Server {
                 self.step_pass();
             }
         }
-        self.serve_wakes();
     }
 
     /// `pr.watch`: watch a PR for a Thread, answered at once when it is

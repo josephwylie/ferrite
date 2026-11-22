@@ -39,6 +39,7 @@ mod browser;
 mod calls;
 mod clis;
 mod coordinator;
+mod delegates;
 mod drive;
 mod factory;
 mod github;
@@ -432,6 +433,9 @@ struct Server {
     watcher: pr_watch::Watcher,
     /// Server wakes waiting for their Thread.
     wakes: wake::Wakes,
+    /// The Delegates this Server follows (ADR 0047), through its client
+    /// of the saved machines: the machines' own, or a test's.
+    delegation: delegates::Delegation,
 }
 
 impl Server {
@@ -475,7 +479,6 @@ impl Server {
             next_start: 0,
             swept: Instant::now(),
             defaults,
-            settings_dir,
             stopping: None,
             restarting: None,
             api: Api::default(),
@@ -496,6 +499,8 @@ impl Server {
             clock: Arc::new(|| ferrite_core::clock::now().timestamp_millis()),
             watcher: Default::default(),
             wakes: Default::default(),
+            delegation: delegates::Delegation::new(peers::Peers::new(settings_dir.clone())),
+            settings_dir,
         }
     }
 
@@ -526,6 +531,8 @@ impl Server {
             self.engine.pump();
             self.step_factory();
             self.serve_pr_watches();
+            self.serve_delegates();
+            self.serve_wakes();
             if self.swept.elapsed() >= SWEEP_INTERVAL {
                 self.swept = Instant::now();
                 self.engine.sweep();
