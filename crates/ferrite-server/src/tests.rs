@@ -730,7 +730,7 @@ fn list_repo_answers_a_projects_worktrees_and_branches_read_by_the_server() {
     git(&["worktree", "add", "-q", "-b", "fix", tree.to_str().unwrap()]);
     git(&["branch", "spare"]);
     let mut window = cockpit(&harness);
-    let project = window.register_project(&repo).unwrap();
+    let project = window.register_project(window.first_machine(), &repo).unwrap();
 
     let answer = window.list_repo(project).unwrap();
     let listed = std::cell::RefCell::new(None);
@@ -796,7 +796,7 @@ fn a_review_is_read_by_git_where_the_server_runs() {
     }
 
     use ferrite_reviewr::ferrite::Read;
-    let asked = window.review_diff(&repo, Read::Uncommitted);
+    let asked = window.review_diff(window.first_machine(), &repo, Read::Uncommitted);
     let uncommitted = landed(&mut window, asked).unwrap();
     assert_eq!(uncommitted.len(), 1);
     assert_eq!(uncommitted[0].file.path, "notes.md");
@@ -805,35 +805,35 @@ fn a_review_is_read_by_git_where_the_server_runs() {
         Ok((String::new(), "fresh\n".to_string()))
     );
 
-    let asked = window.review_commits(&repo);
+    let asked = window.review_commits(window.first_machine(), &repo);
     let commits = landed(&mut window, asked).unwrap();
     assert_eq!(commits.len(), 1);
     assert_eq!(commits[0].subject, "reviewed");
     assert_eq!(commits[0].author, "test");
     let pick = ferrite_reviewr::model::CommitPick::single(&commits[0].sha);
-    let asked = window.review_diff(&repo, Read::Commits(pick));
+    let asked = window.review_diff(window.first_machine(), &repo, Read::Commits(pick));
     let files = landed(&mut window, asked).unwrap();
     assert_eq!(files[0].file.path, "README.md");
     let (old, new) = files[0].sides.clone().unwrap();
     assert_eq!(new, "app, reviewed\n");
     assert_ne!(old, new);
 
-    let asked = window.read_review_file(&repo, "notes.md");
+    let asked = window.read_review_file(window.first_machine(), &repo, "notes.md");
     assert_eq!(landed(&mut window, asked).unwrap(), "fresh\n");
-    let asked = window.read_review_file(&repo, "../elsewhere");
+    let asked = window.read_review_file(window.first_machine(), &repo, "../elsewhere");
     assert!(
         landed(&mut window, asked).is_err(),
         "only inside the checkout"
     );
 
-    let asked = window.search_repo(&repo, "reviewed");
+    let asked = window.search_repo(window.first_machine(), &repo, "reviewed");
     let found = landed(&mut window, asked).unwrap();
     assert!(
         found.code.iter().any(|hit| hit.path == "README.md"),
         "{found:?}"
     );
 
-    let asked = window.review_pull_request(&repo, None);
+    let asked = window.review_pull_request(window.first_machine(), &repo, None);
     let pr = landed(&mut window, asked).unwrap();
     assert!(
         pr.pr
@@ -841,7 +841,7 @@ fn a_review_is_read_by_git_where_the_server_runs() {
         "no forge remote, so the note says what the PR tab needs"
     );
 
-    let asked = window.review_diff(&harness.dir, Read::Branch);
+    let asked = window.review_diff(window.first_machine(), &harness.dir, Read::Branch);
     let refused = landed(&mut window, asked).unwrap_err();
     assert!(
         refused.to_string().contains("not a git repository"),
@@ -857,7 +857,7 @@ fn a_pull_request_is_read_by_gh_where_the_server_runs() {
     let harness = start("pull-request");
     let mut window = cockpit(&harness);
     let answer = window
-        .pull_request(&harness.dir.join("no-such-checkout"))
+        .pull_request(window.first_machine(), &harness.dir.join("no-such-checkout"))
         .unwrap();
     let landed = std::cell::RefCell::new(None);
     pump_until(&mut window, |_| {
@@ -1318,7 +1318,7 @@ fn cockpit(harness: &Harness) -> ferrite_core::cockpit::Cockpit {
         server: ferrite_core::cockpit::Endpoint::Local {
             executable: "/bin/false".into(),
         },
-        saved_as: Some(ferrite_core::MachineKey(None)),
+        saved_as: ferrite_core::MachineKey(None),
         client: Peer {
             name: "test".into(),
             version: "0".into(),
@@ -1398,7 +1398,7 @@ fn shows(window: &ferrite_core::cockpit::Cockpit, thread: ThreadKey, said: &str)
 fn a_window_attached_to_a_server_knows_its_id_and_clock() {
     let harness = start("server-id");
     let window = cockpit(&harness);
-    let Some(ferrite_core::cockpit::ServerState::Attached { id, clock, .. }) = window.server()
+    let Some(ferrite_core::cockpit::ServerState::Attached { id, clock, .. }) = window.server(window.first_machine())
     else {
         panic!("attached");
     };
@@ -1415,11 +1415,12 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     let harness = start("cockpit");
     let mut window = cockpit(&harness);
     assert!(matches!(
-        window.server(),
+        window.server(window.first_machine()),
         Some(ferrite_core::cockpit::ServerState::Attached { .. })
     ));
     let thread = window
         .open(
+            window.first_machine(),
             Provider::Claude,
             ferrite_core::workspace::WorkspaceChoice::Main {
                 checkout: harness.dir.clone(),
@@ -1436,8 +1437,8 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     let _ = window.send(thread, "go".into());
     provider.send(text("on it")).unwrap();
     pump_until(&mut window, |window| shows(window, thread, "on it"));
-    let project = window.register_project(&harness.dir).unwrap();
-    assert!(window.registry().project(project.project()).is_some());
+    let project = window.register_project(window.first_machine(), &harness.dir).unwrap();
+    assert!(window.registry(window.first_machine()).project(project.project()).is_some());
 
     // The second window names the same Thread by its own key.
     let mut second = cockpit(&harness);
@@ -1490,6 +1491,7 @@ fn a_reopened_window_can_answer_questions() {
         let mut window = cockpit(&harness);
         let thread = window
             .open(
+                window.first_machine(),
                 Provider::Claude,
                 ferrite_core::workspace::WorkspaceChoice::Main {
                     checkout: harness.dir.clone(),
@@ -2669,6 +2671,7 @@ fn a_window_on_this_computer_lists_its_parked_threads_off_the_published_rows() {
     let mut window = cockpit(&harness);
     let thread = window
         .open(
+            window.first_machine(),
             Provider::Claude,
             ferrite_core::workspace::WorkspaceChoice::Main {
                 checkout: harness.dir.clone(),
@@ -2769,7 +2772,7 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
     let mut window = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
         store: harness.dir.join("box").join("threads"),
         server: ferrite_core::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
-        saved_as: Some(ferrite_core::MachineKey(Some("box".into()))),
+        saved_as: ferrite_core::MachineKey(Some("box".into())),
         client: peer(),
         renderer: None,
         browser: false,
@@ -2779,19 +2782,20 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
     .unwrap();
     assert!(
         matches!(
-            window.server(),
+            window.server(window.first_machine()),
             Some(ferrite_core::cockpit::ServerState::Detached { .. })
         ),
         "a machine is connected to in the background"
     );
     pump_until(&mut window, |window| {
         matches!(
-            window.server(),
+            window.server(window.first_machine()),
             Some(ferrite_core::cockpit::ServerState::Attached { .. })
         )
     });
     let thread = window
         .open(
+            window.first_machine(),
             Provider::Claude,
             ferrite_core::workspace::WorkspaceChoice::Main {
                 checkout: harness.dir.clone(),
@@ -2815,12 +2819,12 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
 fn every_window_learns_its_server_names_fork_owners() {
     let harness = start("fork-of");
     let local = cockpit(&harness);
-    assert!(local.names_fork_owners(), "this computer's Server says it");
+    assert!(local.names_fork_owners(local.first_machine()), "this computer's Server says it");
     let sent = Arc::default();
     let mut machine = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
         store: harness.dir.join("box").join("threads"),
         server: ferrite_core::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
-        saved_as: Some(ferrite_core::MachineKey(Some("box".into()))),
+        saved_as: ferrite_core::MachineKey(Some("box".into())),
         client: peer(),
         renderer: None,
         browser: false,
@@ -2830,62 +2834,89 @@ fn every_window_learns_its_server_names_fork_owners() {
     .unwrap();
     pump_until(&mut machine, |window| {
         matches!(
-            window.server(),
+            window.server(window.first_machine()),
             Some(ferrite_core::cockpit::ServerState::Attached { .. })
         )
     });
-    assert!(machine.names_fork_owners(), "a machine's Server says it");
+    assert!(machine.names_fork_owners(machine.first_machine()), "a machine's Server says it");
 }
 
-/// Only the machine on screen streams transcripts: the others' links say
-/// hello and nothing else, and still hear each open Thread's state and
-/// every Decision.
+/// A machine other than this computer is a link away: the window streams
+/// one of its Threads whole only while it is drawn, and lets it go as it
+/// leaves the screen though it still works (F-A2). Every one of its
+/// Threads' state, Decisions and Notices arrive all the same, drawn or not.
 #[test]
-fn a_machine_off_screen_streams_status_and_never_a_transcript() {
-    let harness = start("machine-status");
+fn a_machine_streams_a_thread_whole_only_while_drawn() {
+    let harness = start("machine-drawn");
     let sent = Arc::default();
-    let mut status = ferrite_core::cockpit::ServerStatus::new(
-        harness.dir.join("box").join("threads"),
-        ferrite_core::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
-        peer(),
-    );
-    let deadline = Instant::now() + PATIENCE;
-    let until = |status: &mut ferrite_core::cockpit::ServerStatus,
-                 done: &dyn Fn(&[ferrite_core::cockpit::StatusRow]) -> bool| {
-        while !done(&status.rows()) {
-            assert!(Instant::now() < deadline, "timed out");
-            status.poll();
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    };
-
-    let mut window = cockpit(&harness);
-    let thread = window
-        .open(
-            Provider::Claude,
-            ferrite_core::workspace::WorkspaceChoice::Main {
-                checkout: harness.dir.clone(),
-            },
+    let mut window = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
+        store: harness.dir.join("box").join("threads"),
+        server: ferrite_core::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
+        saved_as: ferrite_core::MachineKey(Some("box".into())),
+        client: peer(),
+        renderer: None,
+        browser: false,
+        driven: false,
+        discovery: Box::new(NoDiscovery),
+    })
+    .unwrap();
+    let machine = window.first_machine();
+    pump_until(&mut window, |window| {
+        matches!(
+            window.server(machine),
+            Some(ferrite_core::cockpit::ServerState::Attached { .. })
         )
-        .unwrap();
-    let provider = harness
-        .sessions
-        .recv_timeout(PATIENCE)
-        .unwrap();
-    until(&mut status, &|rows| {
-        rows.iter().any(|row| row.thread == thread.thread())
     });
-    let _ = window.send(thread, "go".into());
-    provider.send(text("on it")).unwrap();
-    until(&mut status, &|rows| rows.iter().any(|row| row.working));
-    provider.send(decision()).unwrap();
-    until(&mut status, &|rows| rows.iter().any(|row| row.waiting));
+    let mut other = attach(&harness.address);
+    let (drawn, drawn_provider) = open(&mut other, &harness);
+    let (undrawn, undrawn_provider) = open(&mut other, &harness);
+    let on_box = |thread| ferrite_core::SavedThread {
+        machine: ferrite_core::MachineKey(Some("box".into())),
+        thread,
+    };
+    let drawn = window.resolve(&on_box(drawn)).unwrap();
+    let undrawn = window.resolve(&on_box(undrawn)).unwrap();
+    window.draws_transcripts([drawn]);
 
-    assert!(matches!(
-        status.server(),
-        ferrite_core::cockpit::ServerState::Attached { .. }
-    ));
-    assert_eq!(said(&sent), vec!["hello".to_string()]);
+    let _ = window.send(drawn, "go".into());
+    drawn_provider.send(text("on it\n\n")).unwrap();
+    pump_until(&mut window, |window| shows(window, drawn, "on it"));
+
+    let _ = window.send(undrawn, "go".into());
+    undrawn_provider.send(text("far off\n\n")).unwrap();
+    turn_ends(&undrawn_provider);
+    pump_until(&mut window, |window| {
+        window
+            .notifications(machine)
+            .reading()
+            .notices()
+            .any(|notice| notice.thread == undrawn.thread())
+    });
+    let _ = window.send(undrawn, "again".into());
+    undrawn_provider.send(decision()).unwrap();
+    pump_until(&mut window, |window| {
+        window
+            .notifications(machine)
+            .reading()
+            .decisions()
+            .any(|decision| decision.id.thread == undrawn.thread())
+            && window
+                .thread(undrawn)
+                .is_some_and(|open| !open.digest().pending.is_empty())
+    });
+    assert!(
+        !shows(&window, undrawn, "far off"),
+        "an undrawn Thread on a machine is never streamed whole"
+    );
+
+    window.draws_transcripts([]);
+    pump_until(&mut window, |window| !shows(window, drawn, "on it"));
+    assert!(
+        window
+            .thread(drawn)
+            .is_some_and(|open| open.digest().working),
+        "its state still arrives"
+    );
 }
 
 // ------------------------------------------------------------- the API

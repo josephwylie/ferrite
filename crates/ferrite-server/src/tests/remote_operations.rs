@@ -4,7 +4,7 @@ fn machine(harness: &Harness, sent: &Arc<Mutex<Vec<u8>>>) -> ferrite_core::cockp
     let mut cockpit = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
         store: harness.dir.join("desktop"),
         server: ferrite_core::cockpit::Endpoint::Machine(bridge(harness, sent)),
-        saved_as: Some(ferrite_core::MachineKey(Some("box".into()))),
+        saved_as: ferrite_core::MachineKey(Some("box".into())),
         client: peer(),
         renderer: None,
         browser: false,
@@ -14,7 +14,7 @@ fn machine(harness: &Harness, sent: &Arc<Mutex<Vec<u8>>>) -> ferrite_core::cockp
     .unwrap();
     pump_until(&mut cockpit, |cockpit| {
         matches!(
-            cockpit.server(),
+            cockpit.server(cockpit.first_machine()),
             Some(ferrite_core::cockpit::ServerState::Attached { .. })
         )
     });
@@ -67,14 +67,14 @@ fn remote_changes_reads_and_stages_only_the_servers_index() {
     let sent = Arc::default();
     let mut cockpit = machine(&harness, &sent);
     let read = cockpit
-        .changes(&remote, ferrite_core::changes::Scope::Uncommitted)
+        .changes(cockpit.first_machine(), &remote, ferrite_core::changes::Scope::Uncommitted)
         .unwrap();
     let snapshot = answer(&mut cockpit, read);
     assert_eq!(snapshot.files[0].sides.as_ref().unwrap().1, "server\n");
     assert!(snapshot.branches.contains(&"main".into()));
     assert!(snapshot.staged.is_empty());
     let stage = cockpit
-        .set_file_staged(&remote, "same.txt".into(), true)
+        .set_file_staged(cockpit.first_machine(), &remote, "same.txt".into(), true)
         .unwrap();
     answer(&mut cockpit, stage);
     assert_eq!(
@@ -83,11 +83,11 @@ fn remote_changes_reads_and_stages_only_the_servers_index() {
     );
     assert!(git(&local, &["diff", "--cached", "--name-only"]).is_empty());
     let read = cockpit
-        .changes(&remote, ferrite_core::changes::Scope::Uncommitted)
+        .changes(cockpit.first_machine(), &remote, ferrite_core::changes::Scope::Uncommitted)
         .unwrap();
     assert!(answer(&mut cockpit, read).staged.contains("same.txt"));
     let unstage = cockpit
-        .set_file_staged(&remote, "same.txt".into(), false)
+        .set_file_staged(cockpit.first_machine(), &remote, "same.txt".into(), false)
         .unwrap();
     answer(&mut cockpit, unstage);
     assert!(git(&remote, &["diff", "--cached", "--name-only"]).is_empty());
@@ -103,7 +103,7 @@ fn remote_attachment_bytes_and_previews_cross_the_bridge_without_polling_the_win
     let source = harness.dir.join("desktop-capture.png");
     let bytes = vec![97; ferrite_core::attachment_transfer::CHUNK_SIZE + 7];
     std::fs::write(&source, &bytes).unwrap();
-    let upload = cockpit.upload_attachment(source.clone()).unwrap();
+    let upload = cockpit.upload_attachment(cockpit.first_machine(), source.clone()).unwrap();
     let retained = upload
         .result
         .recv_timeout(PATIENCE)
@@ -115,7 +115,7 @@ fn remote_attachment_bytes_and_previews_cross_the_bridge_without_polling_the_win
         .starts_with(harness.dir.join("threads/attachments")));
     std::fs::remove_file(source).unwrap();
     assert_eq!(std::fs::read(&retained.path).unwrap(), bytes);
-    let preview = cockpit.read_attachment(&retained.path).unwrap();
+    let preview = cockpit.read_attachment(cockpit.first_machine(), &retained.path).unwrap();
     assert_eq!(
         preview
             .recv_timeout(PATIENCE)

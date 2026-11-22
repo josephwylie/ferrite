@@ -221,7 +221,7 @@ fn the_coordinator_starts_on_the_first_word_in_the_main_checkout_on_its_settings
     let mut cockpit_window = cockpit(&harness);
     pump_until(&mut cockpit_window, |window| {
         window
-            .factory()
+            .factory(window.first_machine())
             .coordinator(project_id(&project))
             .is_some_and(|c| c.thread == Some(coordinator))
     });

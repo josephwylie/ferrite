@@ -13,16 +13,16 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::draft::DraftBinding;
+use crate::draft::SavedBinding;
 use crate::draft_content::DraftContent;
 use crate::roster::DraftId;
 use crate::{MachineKey, SavedThread, ThreadId};
 
 /// A new Thread's first prompt, before it has a Thread: the choices it is
-/// aimed at and what is written.
+/// aimed at, its Project by its machine's saved name, and what is written.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FreshDraft {
-    pub binding: DraftBinding,
+    pub binding: SavedBinding,
     pub content: DraftContent,
 }
 
@@ -157,7 +157,7 @@ impl Drafts {
     pub fn keep_fresh(
         &mut self,
         draft: DraftId,
-        binding: &DraftBinding,
+        binding: &SavedBinding,
         content: DraftContent,
     ) -> bool {
         if content.is_empty() {
@@ -203,7 +203,7 @@ fn this_computers(thread: ThreadId) -> SavedThread {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::draft::DraftTarget;
+    use crate::draft::{DraftBinding, DraftTarget};
     use crate::engine::ProviderChoice;
     use crate::replies::Reply;
     use crate::store::Provider;
@@ -283,11 +283,12 @@ mod tests {
                 provider: Provider::Codex,
                 model: Some("gpt".into()),
             },
-            serde_json::from_str::<ProjectId>("7").unwrap(),
+            crate::ProjectKey::fixture(0, serde_json::from_str::<ProjectId>("7").unwrap()),
             DraftTarget::Branch {
                 name: "topic".into(),
             },
-        );
+        )
+        .saved(MachineKey(Some("me@box".into())));
         let mut drafts = Drafts::default();
         assert!(!drafts.keep_fresh(DraftId::new(4), &binding, DraftContent::default()));
         assert!(drafts.keep_fresh(DraftId::new(4), &binding, everything()));

@@ -74,9 +74,8 @@ pub struct Attach {
     /// Either's parked Threads are what its Server publishes (ADR 0026).
     pub store: PathBuf,
     pub server: Endpoint,
-    /// What saved files name the machine (ADR 0045); `None` with no
-    /// environment, whose Threads nothing saves.
-    pub saved_as: Option<crate::MachineKey>,
+    /// What saved files name the machine (ADR 0045).
+    pub saved_as: crate::MachineKey,
     pub client: Peer,
     /// Draws the Visuals the Server's agents ask for; none, and this window
     /// does not offer to.
@@ -94,8 +93,6 @@ pub struct Attach {
 /// Where the Server is.
 #[derive(Clone)]
 pub enum Endpoint {
-    /// No environment is enabled. This client never attempts a connection.
-    Unavailable,
     /// This computer's, started as `<executable> server` when none answers.
     Local { executable: PathBuf },
     /// A machine's, through its bridge (ADR 0026). Never started from here.
@@ -218,7 +215,6 @@ impl Remote {
     /// Detached, attaching from the first `poll`.
     pub(crate) fn new(attach: Attach) -> Self {
         let detached = match &attach.server {
-            Endpoint::Unavailable => "No environment selected".into(),
             Endpoint::Local { .. } => "attaching to the Ferrite server".into(),
             Endpoint::Machine(bridge) => format!("connecting to {}", bridge.name()),
         };
@@ -293,14 +289,10 @@ impl Remote {
         self.attachment.is_some()
     }
 
-    /// The machine this window is on, when it is not this computer.
-    pub(crate) fn available(&self) -> bool {
-        !matches!(self.attach.server, Endpoint::Unavailable)
-    }
-
+    /// The machine's bridge, when it is not this computer.
     pub(crate) fn bridge(&self) -> Option<&Arc<Bridge>> {
         match &self.attach.server {
-            Endpoint::Unavailable | Endpoint::Local { .. } => None,
+            Endpoint::Local { .. } => None,
             Endpoint::Machine(bridge) => Some(bridge),
         }
     }
@@ -337,8 +329,7 @@ impl Remote {
                 Err(TryRecvError::Disconnected) => self.attaching = None,
             }
         }
-        if self.available()
-            && self.attachment.is_none()
+        if self.attachment.is_none()
             && self.attaching.is_none()
             && Instant::now() >= self.retry_at
             && !self.waits_for_operator()
@@ -1084,7 +1075,7 @@ impl Remote {
     fn send_command(&mut self, op: Op) -> Result<u64, WireError> {
         #[cfg(any(test, feature = "test-support"))]
         let _sent = waits::Timing::of(&op, false);
-        if self.available() && self.attachment.is_none() {
+        if self.attachment.is_none() {
             return Err(WireError {
                 code: ErrorCode::Failed,
                 message: self.detached.clone(),
@@ -1118,7 +1109,6 @@ impl Remote {
             Ok(attached) => attached,
             Err(error) => {
                 let most = match &self.attach.server {
-                    Endpoint::Unavailable => return None,
                     Endpoint::Local { .. } => {
                         self.detached = format!("no Ferrite server: {error}");
                         RETRY_MOST
@@ -1409,10 +1399,6 @@ fn attach_to(
     hello: ClientMessage,
 ) -> io::Result<link::Attached> {
     match server {
-        Endpoint::Unavailable => Err(io::Error::new(
-            io::ErrorKind::NotConnected,
-            "No environment selected",
-        )),
         Endpoint::Local { executable } => {
             crate::server::agent::ensure_running(store, executable)?;
             link::Client::attach(&link::address(store), hello)

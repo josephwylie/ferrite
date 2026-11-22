@@ -40,7 +40,6 @@ pub use mirror::ThreadView;
 pub use remote::{Attach, Endpoint, ServerRestart, ServerState};
 #[cfg(any(test, feature = "test-support"))]
 pub use remote::waits;
-pub use status::{ServerStatus, StatusRow};
 
 mod ask;
 mod factory_fixture;
@@ -49,7 +48,6 @@ pub mod mirror;
 mod parked;
 mod remote;
 mod shared;
-mod status;
 
 /// What changed for one of the window's Panes in a frame, its Thread named
 /// by its key.
@@ -66,12 +64,11 @@ pub type Restart = crate::engine::Restart<ThreadKey>;
 /// window — the Roster, focus, the Subjects shown, the Composers holding
 /// text. Every Thread is named by its `ThreadKey`, which says whose it is.
 pub struct Cockpit {
-    /// Every machine the window holds, by the id its keys carry.
+    /// Every machine the window holds, by the id its keys carry: every
+    /// one at once, each reached and kept apart by its own link.
     machines: BTreeMap<MachineId, HeldMachine>,
-    /// The machine on screen: the one this Cockpit opened on. A read or an
-    /// act that names no Thread and no Project is this machine's, until
-    /// the window holds every machine at once.
-    on_screen: MachineId,
+    /// What a reading of a machine the window does not hold reads: nothing.
+    nothing: shared::Shared,
     /// What is on screen (#28): the roster of Panes, focus and park order. Read through `roster()`; changed only by the acts
     /// below, which keep it showing exactly the open Threads plus drafts.
     pub(crate) roster: Roster,
@@ -183,10 +180,11 @@ fn gone() -> WireError {
 }
 
 impl Cockpit {
-    /// A window driving an Engine of its own, in this process.
+    /// A window driving an Engine of its own, in this process: this
+    /// computer.
     pub fn try_new(store: Store, spawner: Box<dyn Spawner>) -> io::Result<Self> {
-        let mut cockpit = Self::with(Self::in_process_machine(store, spawner, MachineKey(None))?);
-        cockpit.receive();
+        let mut cockpit = Self::empty();
+        cockpit.hold_machine(Self::in_process_machine(store, spawner, MachineKey(None))?);
         Ok(cockpit)
     }
 
@@ -205,7 +203,7 @@ impl Cockpit {
             Link::InProcess(Box::new(engine)),
             Some(logs),
             &dir,
-            Some(saved_as),
+            saved_as,
         ))
     }
 
@@ -215,32 +213,12 @@ impl Cockpit {
         Self::try_new(store, spawner).expect("the workspace registry opens")
     }
 
-    /// A window attached to its Server: this computer's, starting one when
-    /// none answers, or a machine's, connected to in the background. Without
-    /// one it starts detached (`server`) and keeps trying; it never runs
-    /// the agents itself. Its parked Threads are what its Server publishes
-    /// (ADR 0026), wherever the logs are.
-    pub fn attach(attach: Attach) -> io::Result<Self> {
-        let local = matches!(attach.server, Endpoint::Local { .. });
-        let logs = local.then(|| Store::reader(&attach.store)).transpose()?;
-        let dir = attach.store.clone();
-        let saved_as = attach.saved_as.clone();
-        let mut remote = remote::Remote::new(attach);
-        let arrived = if local { remote.attach_now() } else { None };
-        let mut machine = HeldMachine::new(Link::Server(Box::new(remote)), logs, &dir, saved_as);
-        // A window streams only what it draws, from its first attach on: it
-        // draws nothing yet (ADR 0032).
-        machine.drawn = Some(Drawn::default());
-        let mut cockpit = Self::with(machine);
-        cockpit.arrive(cockpit.on_screen, arrived.into_iter().collect());
-        Ok(cockpit)
-    }
-
-    fn with(machine: HeldMachine) -> Self {
-        let on_screen = machine.id;
+    /// A window holding no machine: every one in Settings is turned off.
+    /// It lists nothing and starts nothing until one is held.
+    pub fn empty() -> Self {
         Self {
-            machines: BTreeMap::from([(on_screen, machine)]),
-            on_screen,
+            machines: BTreeMap::new(),
+            nothing: shared::Shared::new(Path::new("")),
             roster: Roster::default(),
             said: Said::default(),
             factory_fixture: None,
@@ -259,15 +237,74 @@ impl Cockpit {
         }
     }
 
-    /// The machine on screen: every key of a Thread the window shows
-    /// carries it, until the window holds every machine at once.
-    pub fn on_screen(&self) -> MachineId {
-        self.on_screen
+    /// A window holding one machine's Server (`hold`).
+    pub fn attach(attach: Attach) -> io::Result<Self> {
+        let mut cockpit = Self::empty();
+        cockpit.hold(attach)?;
+        Ok(cockpit)
+    }
+
+    /// Hold another machine beside the rest: this computer's Server,
+    /// starting one when none answers, or a machine's, connected to in the
+    /// background. Without one it stays detached and keeps trying; it
+    /// never runs the agents itself. Its parked Threads are what its Server
+    /// publishes (ADR 0026), wherever the logs are. Its open Threads join
+    /// the Roster as its Server says them, beside every other machine's.
+    pub fn hold(&mut self, attach: Attach) -> io::Result<MachineId> {
+        let local = matches!(attach.server, Endpoint::Local { .. });
+        let logs = local.then(|| Store::reader(&attach.store)).transpose()?;
+        let dir = attach.store.clone();
+        let saved_as = attach.saved_as.clone();
+        let mut remote = remote::Remote::new(attach);
+        let arrived = if local { remote.attach_now() } else { None };
+        let mut machine = HeldMachine::new(Link::Server(Box::new(remote)), logs, &dir, saved_as);
+        // A window streams only what it draws, from its first attach on: it
+        // draws nothing yet (ADR 0032).
+        machine.drawn = Some(Drawn::default());
+        let id = machine.id;
+        self.machines.insert(id, machine);
+        self.arrive(id, arrived.into_iter().collect());
+        Ok(id)
+    }
+
+    fn hold_machine(&mut self, machine: HeldMachine) -> MachineId {
+        let id = machine.id;
+        self.machines.insert(id, machine);
+        self.receive_from(id);
+        id
+    }
+
+    /// Let `machine` go: turned off or removed in Settings. Its Panes leave
+    /// the Roster and every key of it names nothing from now on; its
+    /// Server keeps its Threads.
+    pub fn let_go(&mut self, machine: MachineId) {
+        let Some(held) = self.machines.remove(&machine) else {
+            return;
+        };
+        for thread in &held.shared.open {
+            self.roster.remove_thread(held.key(*thread));
+        }
+        let gone = |key: &ThreadKey| key.machine() == machine;
+        self.visible_subjects.retain(|key, _| !gone(key));
+        self.composing.retain(|key| !gone(key));
+        self.said.browser.retain(|(key, _)| !gone(key));
+        crate::doorbell::ring();
+    }
+
+    /// Every machine the window holds, in the order it took them.
+    pub fn machines(&self) -> impl Iterator<Item = MachineId> + '_ {
+        self.machines.keys().copied()
+    }
+
+    /// This computer, while the window holds it: where a new Thread with
+    /// no Project starts, and whose files the window's own pickers read.
+    /// `None` while it is turned off in Settings.
+    pub fn this_computer(&self) -> Option<MachineId> {
+        self.machine_saved_as(&MachineKey(None))
     }
 
     /// `thread` as saved files name it, by its machine's saved name;
-    /// `None` for a machine the window no longer holds, or one with no
-    /// environment, whose Threads nothing saves.
+    /// `None` for a machine the window no longer holds.
     pub fn saved(&self, thread: ThreadKey) -> Option<SavedThread> {
         Some(SavedThread {
             machine: self.saved_as(thread.machine())?.clone(),
@@ -276,23 +313,35 @@ impl Cockpit {
     }
 
     /// What saved files name `machine`, fixed when the window attached it
-    /// (F-A8); `None` as for `saved`.
+    /// (F-A8); `None` for a machine the window no longer holds.
     pub fn saved_as(&self, machine: MachineId) -> Option<&MachineKey> {
-        self.machines.get(&machine)?.saved_as.as_ref()
+        Some(&self.machines.get(&machine)?.saved_as)
+    }
+
+    /// The machine saved files call `saved`, while the window holds it.
+    pub fn machine_saved_as(&self, saved: &MachineKey) -> Option<MachineId> {
+        self.machines
+            .values()
+            .find(|machine| machine.saved_as == *saved)
+            .map(|machine| machine.id)
     }
 
     /// The Thread a saved file names, if the window holds its machine.
     pub fn resolve(&self, saved: &SavedThread) -> Option<ThreadKey> {
-        self.machines
-            .values()
-            .find(|machine| machine.saved_as.as_ref() == Some(&saved.machine))
-            .map(|machine| machine.key(saved.thread))
+        let machine = self.machine_saved_as(&saved.machine)?;
+        Some(self.machines[&machine].key(saved.thread))
+    }
+
+    /// Project `project` of the machine saved as `machine`, if the window
+    /// holds it.
+    pub fn resolve_project(&self, machine: &MachineKey, project: ProjectId) -> Option<ProjectKey> {
+        let machine = self.machine_saved_as(machine)?;
+        Some(self.machines[&machine].project_key(project))
     }
 
     /// Whether `machine` is this computer, reached: what it names on disk
-    /// is this computer's. A window on another machine, or with no
-    /// environment, must never stand in local files or defaults for its
-    /// own (ADR 0026).
+    /// is this computer's. Another machine's never stands in local files
+    /// or defaults for its own (ADR 0026).
     pub fn local(&self, machine: MachineId) -> bool {
         self.machines.get(&machine).is_some_and(HeldMachine::local)
     }
@@ -305,15 +354,11 @@ impl Cockpit {
             .is_some_and(|machine| machine.known().next().is_some())
     }
 
-    /// The machine on screen.
-    fn here(&self) -> &HeldMachine {
-        &self.machines[&self.on_screen]
-    }
-
-    fn here_mut(&mut self) -> &mut HeldMachine {
+    /// `machine`, held, or why not.
+    fn held_mut(&mut self, machine: MachineId) -> io::Result<&mut HeldMachine> {
         self.machines
-            .get_mut(&self.on_screen)
-            .expect("the machine on screen is held")
+            .get_mut(&machine)
+            .ok_or_else(|| io::Error::from(gone()))
     }
 
     /// The machine `key` is on, and its Thread there: the one place a key
@@ -326,14 +371,23 @@ impl Cockpit {
         Some((self.machines.get_mut(&key.machine())?, key.thread()))
     }
 
-    /// A reading of the shared state of the machine on screen.
-    fn on_screen_reading<'a, T>(
+    /// What `machine`'s Server shares, as its messages left it; nothing for
+    /// a machine the window does not hold.
+    fn shared(&self, machine: MachineId) -> &shared::Shared {
+        self.machines
+            .get(&machine)
+            .map_or(&self.nothing, |held| &held.shared)
+    }
+
+    /// A reading of `machine`'s shared state.
+    fn reading<'a, T>(
         &'a self,
+        machine: MachineId,
         read: impl FnOnce(&'a shared::Shared) -> &'a T,
     ) -> OnMachine<'a, T> {
         OnMachine {
-            machine: self.on_screen,
-            reading: read(&self.here().shared),
+            machine,
+            reading: read(self.shared(machine)),
         }
     }
 
@@ -629,21 +683,19 @@ impl Cockpit {
         answer.expect("answered")
     }
 
-    /// The Server the machine on screen is attached to, or why it is not;
-    /// `None` for an Engine in this process.
-    pub fn server(&self) -> Option<ServerState> {
-        match &self.here().link {
+    /// The Server `machine` is attached to, or why it is not; `None` for
+    /// an Engine in this process, or a machine the window does not hold.
+    pub fn server(&self, machine: MachineId) -> Option<ServerState> {
+        match &self.machines.get(&machine)?.link {
             Link::InProcess(_) => None,
             Link::Server(server) => Some(server.state()),
         }
     }
 
-    /// Whether this client has an enabled environment to connect to.
+    /// Whether the window holds any machine: with every one turned off in
+    /// Settings it has nowhere to start a Thread.
     pub fn environment_available(&self) -> bool {
-        match &self.here().link {
-            Link::InProcess(_) => true,
-            Link::Server(server) => server.available(),
-        }
+        !self.machines.is_empty()
     }
 
     /// The bridge `machine` is reached through; `None` for this computer.
@@ -654,38 +706,39 @@ impl Cockpit {
         }
     }
 
-    /// Attach again now, rather than at the next retry.
-    pub fn retry_server(&mut self) {
-        if let Link::Server(server) = &mut self.here_mut().link {
+    /// Attach `machine` again now, rather than at the next retry.
+    pub fn retry_server(&mut self, machine: MachineId) {
+        if let Some(Link::Server(server)) = self.machines.get_mut(&machine).map(|held| &mut held.link) {
             server.retry();
         }
     }
 
-    /// Stop the Server — at once, or once every agent is idle.
-    pub fn stop_server(&mut self, when: When) -> io::Result<()> {
-        self.server_command(Op::Stop { when })
+    /// Stop `machine`'s Server — at once, or once every agent is idle.
+    pub fn stop_server(&mut self, machine: MachineId, when: When) -> io::Result<()> {
+        self.server_command(machine, Op::Stop { when })
     }
 
-    /// Stop the Server at once and wait, up to `within`, for it to be gone:
-    /// an installer is about to replace the executable it runs.
-    pub fn stop_server_and_wait(&mut self, within: Duration) -> io::Result<()> {
+    /// Stop `machine`'s Server at once and wait, up to `within`, for it to
+    /// be gone: an installer is about to replace the executable it runs.
+    pub fn stop_server_and_wait(&mut self, machine: MachineId, within: Duration) -> io::Result<()> {
         let deadline = Instant::now() + within;
-        let server = self.here_mut().remote()?;
+        let server = self.held_mut(machine)?.remote()?;
         server
             .execute(Op::Stop { when: When::Now })
             .map_err(io::Error::from)?;
         server.wait_gone(deadline)
     }
 
-    /// Restart the Server into its executable as it is on disk now — at
-    /// once, or once every agent is idle — and resume every open Thread.
-    pub fn restart_server(&mut self, when: When) -> io::Result<()> {
+    /// Restart `machine`'s Server into its executable as it is on disk now
+    /// — at once, or once every agent is idle — and resume every open
+    /// Thread.
+    pub fn restart_server(&mut self, machine: MachineId, when: When) -> io::Result<()> {
         // Asked again while one is under way: that one is the restart.
-        if matches!(self.server_restart(), Some(ServerRestart::Restarting)) {
+        if matches!(self.server_restart(machine), Some(ServerRestart::Restarting)) {
             return Ok(());
         }
-        let result = self.server_command(Op::Restart { when });
-        if let Link::Server(server) = &mut self.here_mut().link {
+        let result = self.server_command(machine, Op::Restart { when });
+        if let Ok(server) = self.held_mut(machine).and_then(HeldMachine::remote) {
             match &result {
                 Ok(()) => server.restarting(),
                 Err(error) => server.restart_refused(error.to_string()),
@@ -694,17 +747,18 @@ impl Cockpit {
         result
     }
 
-    /// A restart of the Server, as far as this window has seen it through:
-    /// asked for or heard of, back on a new boot, or failed and why.
-    pub fn server_restart(&self) -> Option<&ServerRestart> {
-        match &self.here().link {
+    /// A restart of `machine`'s Server, as far as this window has seen it
+    /// through: asked for or heard of, back on a new boot, or failed and
+    /// why.
+    pub fn server_restart(&self, machine: MachineId) -> Option<&ServerRestart> {
+        match &self.machines.get(&machine)?.link {
             Link::Server(server) => server.restart(),
             Link::InProcess(_) => None,
         }
     }
 
-    fn server_command(&mut self, op: Op) -> io::Result<()> {
-        self.here_mut()
+    fn server_command(&mut self, machine: MachineId, op: Op) -> io::Result<()> {
+        self.held_mut(machine)?
             .remote()?
             .execute(op)
             .map(drop)
@@ -734,10 +788,6 @@ impl Cockpit {
         executed
     }
 
-    /// An act of the machine on screen.
-    fn act(&mut self, op: Op) -> Executed {
-        self.act_at(self.on_screen, op)
-    }
 
     /// An act on one Thread, where its machine's Engine runs.
     fn act_on(&mut self, key: ThreadKey, op: impl FnOnce(ThreadId) -> Op) -> Executed {
@@ -761,21 +811,25 @@ impl Cockpit {
         }
     }
 
-    /// A tell of the machine on screen.
-    fn tell(&mut self, op: Op) {
-        self.tell_at(self.on_screen, op)
-    }
 
     /// A tell on one Thread, to its machine.
     fn tell_on(&mut self, key: ThreadKey, op: impl FnOnce(ThreadId) -> Op) {
         self.tell_at(key.machine(), op(key.thread()))
     }
 
-    /// The Engine in this process on screen: what only `--demo`, `--load`
-    /// and the tests drive — fixtures, injected inputs, the launch-time
-    /// revival a Server does for itself. It rings the bell, as an act does.
+    /// The first machine the window holds: what a fixture world with one
+    /// machine names when it names none.
+    fn first(&self) -> MachineId {
+        *self.machines.keys().next().expect("the window holds a machine")
+    }
+
+    /// The Engine in this process of the first machine the window holds:
+    /// what only `--demo`, `--load` and the tests drive — fixtures,
+    /// injected inputs, the launch-time revival a Server does for itself.
+    /// It rings the bell, as an act does.
     fn in_process(&mut self) -> &mut Engine {
-        self.here_mut().in_process()
+        let first = self.first();
+        self.machines.get_mut(&first).expect("held").in_process()
     }
 
     /// The Engine in this process that `key`'s Thread runs in.
@@ -811,11 +865,12 @@ impl Cockpit {
         self.machines[&machine].assert_mirrors_match();
     }
 
-    /// A message a fixture world's Server would have sent.
+    /// A message a fixture world's Server (its first machine's) would have
+    /// sent.
     fn receive_fixture(&mut self, message: ServerMessage) {
         // It rings as a Server's message does (ADR 0041).
         crate::doorbell::ring();
-        self.arrive(self.on_screen, vec![remote::Arrival::Message(message)]);
+        self.arrive(self.first(), vec![remote::Arrival::Message(message)]);
     }
 
     fn arrive(&mut self, machine: MachineId, arrived: Vec<remote::Arrival>) {
@@ -968,46 +1023,55 @@ impl Cockpit {
         }))
     }
 
-    /// CLI session files to adopt, found off the UI thread. Discovery reads
-    /// the operator's own files: a window does it, wherever its Engine runs.
+    /// CLI session files to adopt into `machine`, found off the UI thread.
+    /// Discovery reads the operator's own files: a window does it, wherever
+    /// its Engine runs.
     pub fn discover_sessions(
         &mut self,
+        machine: MachineId,
         roots: Vec<(Provider, PathBuf)>,
         cap: usize,
     ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
-        match &mut self.here_mut().link {
+        match &mut self.machines.get_mut(&machine)?.link {
             Link::InProcess(engine) => engine.discover_sessions(roots, cap),
-            Link::Server(server) if server.available() => {
-                server.discovery().discover_sessions(roots, cap)
-            }
-            Link::Server(_) => None,
+            Link::Server(server) => server.discovery().discover_sessions(roots, cap),
         }
     }
 
-    /// The operator opened a Notice of the machine on screen — from a toast
-    /// or the bell: it is read, and they land on its Thread's Pane in the
-    /// view that shows it, reviving a parked one. The Thread landed on, or
-    /// None when it is gone.
-    pub fn open_notice(&mut self, id: NoticeId) -> Option<ThreadKey> {
-        let thread = self.here().shared.notifications.get(id)?.thread;
-        self.tell(Op::Notice {
-            action: NoticeAction::Open { notice: id.get() },
-        });
-        self.land_on(self.here().key(thread))
+    /// The operator opened a Notice of `machine`'s — from a toast or the
+    /// bell: it is read, and they land on its Thread's Pane in the view
+    /// that shows it, reviving a parked one. The Thread landed on, or None
+    /// when it is gone.
+    pub fn open_notice(&mut self, machine: MachineId, id: NoticeId) -> Option<ThreadKey> {
+        let thread = self.shared(machine).notifications.get(id)?.thread;
+        self.tell_at(
+            machine,
+            Op::Notice {
+                action: NoticeAction::Open { notice: id.get() },
+            },
+        );
+        self.land_on(ThreadKey::new(machine, thread))
     }
 
-    /// Open one live Decision attention record of the machine on screen:
-    /// its Subject is shown, and the operator lands on its Thread as
-    /// `open_notice` does.
-    pub fn open_decision_notice(&mut self, id: &DecisionNoticeId) -> Option<ThreadKey> {
-        self.here().shared.notifications.decision(id)?;
-        self.tell(Op::Notice {
-            action: NoticeAction::OpenDecision {
-                thread: id.thread,
-                handle: (&id.handle).into(),
+    /// Open one live Decision attention record of `machine`'s: its Subject
+    /// is shown, and the operator lands on its Thread as `open_notice`
+    /// does.
+    pub fn open_decision_notice(
+        &mut self,
+        machine: MachineId,
+        id: &DecisionNoticeId,
+    ) -> Option<ThreadKey> {
+        self.shared(machine).notifications.decision(id)?;
+        self.tell_at(
+            machine,
+            Op::Notice {
+                action: NoticeAction::OpenDecision {
+                    thread: id.thread,
+                    handle: (&id.handle).into(),
+                },
             },
-        });
-        self.land_on(self.here().key(id.thread))
+        );
+        self.land_on(ThreadKey::new(machine, id.thread))
     }
 
     fn land_on(&mut self, thread: ThreadKey) -> Option<ThreadKey> {
@@ -1206,10 +1270,16 @@ impl Cockpit {
 
 #[cfg(any(test, feature = "test-support"))]
 impl Cockpit {
-    /// Thread `thread` of the machine on screen, for a test that names one
-    /// by its number, or made it in a Store before the Cockpit held it.
+    /// Thread `thread` of the first machine the window holds, for a test
+    /// that names one by its number, or made it in a Store before the
+    /// Cockpit held it.
     pub fn key(&self, thread: ThreadId) -> ThreadKey {
-        self.here().key(thread)
+        ThreadKey::new(self.first(), thread)
+    }
+
+    /// The first machine the window holds: a fixture world's one machine.
+    pub fn first_machine(&self) -> MachineId {
+        self.first()
     }
 
     /// A window driving an Engine of its own that stands in for the
@@ -1217,9 +1287,21 @@ impl Cockpit {
     pub fn new_saved_as(store: Store, spawner: Box<dyn Spawner>, saved_as: MachineKey) -> Self {
         let machine = Self::in_process_machine(store, spawner, saved_as)
             .expect("the workspace registry opens");
-        let mut cockpit = Self::with(machine);
-        cockpit.receive();
+        let mut cockpit = Self::empty();
+        cockpit.hold_machine(machine);
         cockpit
+    }
+
+    /// Another machine beside the rest, with an Engine of its own in this
+    /// process saved as `saved_as`: a test's second machine.
+    pub fn hold_in_process(
+        &mut self,
+        store: Store,
+        spawner: Box<dyn Spawner>,
+        saved_as: MachineKey,
+    ) -> io::Result<MachineId> {
+        let machine = Self::in_process_machine(store, spawner, saved_as)?;
+        Ok(self.hold_machine(machine))
     }
 }
 
@@ -1237,9 +1319,10 @@ impl Cockpit {
         set
     }
 
-    /// The Engine in this process on screen, for a test to reach into.
+    /// The first machine's Engine in this process, for a test to reach
+    /// into.
     pub(crate) fn engine(&self) -> &Engine {
-        self.engine_of(self.on_screen)
+        self.engine_of(self.first())
     }
 
     /// `machine`'s Engine in this process, for a test to reach into.
@@ -1252,21 +1335,6 @@ impl Cockpit {
 
     pub(crate) fn engine_mut(&mut self) -> &mut Engine {
         self.in_process()
-    }
-
-    /// Another machine, with an Engine of its own in this process saved as
-    /// `saved_as`: the window holds it beside the one on screen.
-    pub(crate) fn hold_in_process(
-        &mut self,
-        store: Store,
-        spawner: Box<dyn Spawner>,
-        saved_as: MachineKey,
-    ) -> io::Result<MachineId> {
-        let machine = Self::in_process_machine(store, spawner, saved_as)?;
-        let id = machine.id;
-        self.machines.insert(id, machine);
-        self.receive_from(id);
-        Ok(id)
     }
 }
 
@@ -1363,23 +1431,35 @@ mod parity {
 
 /// What the Engine answers, as this window asks it.
 impl Cockpit {
-    /// The Projects of the machine on screen.
-    pub fn registry(&self) -> OnMachine<'_, Registry> {
-        self.on_screen_reading(|shared| &shared.registry)
+    /// `machine`'s Projects.
+    pub fn registry(&self, machine: MachineId) -> OnMachine<'_, Registry> {
+        self.reading(machine, |shared| &shared.registry)
     }
 
-    /// Register `root` as a Project of the machine on screen.
-    pub fn register_project(&mut self, root: &Path) -> io::Result<ProjectKey> {
-        self.register_project_directories(&[root.to_path_buf()])
+    /// The Project `key` names, while its machine lists it.
+    pub fn project(&self, key: ProjectKey) -> Option<&crate::workspace::registry::Project> {
+        self.shared(key.machine()).registry.project(key.project())
     }
 
-    pub fn register_project_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectKey> {
-        let project = registered(self.act(Op::Project {
-            action: ProjectAction::Register {
-                roots: roots.to_vec(),
+    /// Register `root` as a Project of `machine`.
+    pub fn register_project(&mut self, machine: MachineId, root: &Path) -> io::Result<ProjectKey> {
+        self.register_project_directories(machine, &[root.to_path_buf()])
+    }
+
+    pub fn register_project_directories(
+        &mut self,
+        machine: MachineId,
+        roots: &[PathBuf],
+    ) -> io::Result<ProjectKey> {
+        let project = registered(self.act_at(
+            machine,
+            Op::Project {
+                action: ProjectAction::Register {
+                    roots: roots.to_vec(),
+                },
             },
-        }))?;
-        Ok(self.here().project_key(project))
+        ))?;
+        Ok(ProjectKey::new(machine, project))
     }
 
     /// One act on a Project, where its machine's Engine runs.
@@ -1445,33 +1525,31 @@ impl Cockpit {
     /// Watch Session memory in this process. A Server watches its own.
     pub fn watch_memory(&mut self, sampler: Box<dyn RssSampler>, limit: u64) {
         self.in_process().watch_memory(sampler, limit);
-        self.receive_from(self.on_screen);
+        self.receive();
     }
 
     /// Replace any Session grown past the memory limit. A Server sweeps on
     /// its own, so a window attached to one has nothing to do.
     pub fn sweep(&mut self) -> Vec<Restart> {
-        let here = self.here_mut();
-        let restarts = match &mut here.link {
-            Link::InProcess(engine) => engine.sweep(),
-            Link::Server(_) => Vec::new(),
-        };
-        let restarts = restarts
-            .into_iter()
-            .map(|restart| Restart {
-                thread: here.key(restart.thread),
-                rss: restart.rss,
-            })
-            .collect();
-        self.receive_from(self.on_screen);
+        let mut restarts = Vec::new();
+        for held in self.machines.values_mut() {
+            if let Link::InProcess(engine) = &mut held.link {
+                let id = held.id;
+                restarts.extend(engine.sweep().into_iter().map(|restart| Restart {
+                    thread: ThreadKey::new(id, restart.thread),
+                    rss: restart.rss,
+                }));
+            }
+        }
+        self.receive();
         restarts
     }
 
-    /// The provider's CLI was replaced on disk: its Sessions end as they
-    /// settle, so the next start runs the new release, and its models are
-    /// asked for again.
-    pub fn cli_replaced(&mut self, provider: Provider) {
-        if let Err(error) = self.act(Op::CliReplaced { provider }) {
+    /// The provider's CLI was replaced on `machine`'s disk: its Sessions
+    /// end as they settle, so the next start runs the new release, and its
+    /// models are asked for again.
+    pub fn cli_replaced(&mut self, machine: MachineId, provider: Provider) {
+        if let Err(error) = self.act_at(machine, Op::CliReplaced { provider }) {
             crate::log!(
                 "the server did not hear of the new {provider} CLI: {}",
                 error.message
@@ -1479,17 +1557,8 @@ impl Cockpit {
         }
     }
 
-    /// Open a Thread on the machine on screen.
-    pub fn open(
-        &mut self,
-        provider: Provider,
-        workspace: WorkspaceChoice,
-    ) -> io::Result<ThreadKey> {
-        self.open_at(self.on_screen, provider, workspace)
-    }
-
     /// Open a Thread on `machine`, which the window holds.
-    pub(crate) fn open_at(
+    pub fn open(
         &mut self,
         machine: MachineId,
         provider: Provider,
@@ -1500,11 +1569,12 @@ impl Cockpit {
             workspace: (&workspace).into(),
         };
         let thread = started(self.act_at(machine, op))?;
-        Ok(self.machines[&machine].key(thread))
+        Ok(ThreadKey::new(machine, thread))
     }
 
-    /// A first send that blocks until its Thread opens: the tests' own.
-    /// A window sends a Draft's first message with `bootstrap_draft`.
+    /// A first send on the first machine that blocks until its Thread
+    /// opens: the tests' own. A window sends a Draft's first message with
+    /// `bootstrap_draft`.
     #[cfg(test)]
     pub fn bootstrap(
         &mut self,
@@ -1512,9 +1582,10 @@ impl Cockpit {
         workspace: WorkspaceChoice,
         prompt: &str,
     ) -> io::Result<ThreadKey> {
+        let first = self.first();
         let started = self.in_process().bootstrap(choice, workspace, prompt);
-        self.receive_from(self.on_screen);
-        Ok(self.here().key(started?))
+        self.receive_from(first);
+        Ok(ThreadKey::new(first, started?))
     }
 
     pub fn set_provider(&mut self, thread: ThreadKey, choice: ProviderChoice) -> io::Result<()> {
@@ -1560,12 +1631,16 @@ impl Cockpit {
         done(self.act_on(thread, |thread| Op::Revive { thread }))
     }
 
-    /// Adopt a CLI session file as a Thread of the machine on screen.
-    pub fn import(&mut self, path: &Path) -> io::Result<ThreadKey> {
-        let thread = started(self.act(Op::Import {
-            path: path.to_path_buf(),
-        }))?;
-        Ok(self.here().key(thread))
+    /// Adopt a CLI session file of this computer's as a Thread of
+    /// `machine`, whose Server reads it: this computer's.
+    pub fn import(&mut self, machine: MachineId, path: &Path) -> io::Result<ThreadKey> {
+        let thread = started(self.act_at(
+            machine,
+            Op::Import {
+                path: path.to_path_buf(),
+            },
+        ))?;
+        Ok(ThreadKey::new(machine, thread))
     }
 
     pub fn send(&mut self, thread: ThreadKey, text: String) -> Admission {
@@ -1688,9 +1763,10 @@ impl Cockpit {
 
     pub fn upload_attachment(
         &mut self,
+        machine: MachineId,
         path: PathBuf,
     ) -> io::Result<crate::attachment_transfer::Upload> {
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.upload_attachment(path),
             Link::InProcess(engine) => {
                 let store = engine.browser_store().dir().to_path_buf();
@@ -1702,9 +1778,9 @@ impl Cockpit {
         }
     }
 
-    pub fn read_attachment(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Vec<u8>>>> {
+    pub fn read_attachment(&mut self, machine: MachineId, path: &Path) -> io::Result<Receiver<io::Result<Vec<u8>>>> {
         let path = path.to_path_buf();
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.read_attachment(path),
             Link::InProcess(engine) => {
                 let store = engine.browser_store().dir().to_path_buf();
@@ -1718,6 +1794,7 @@ impl Cockpit {
 
     pub fn changes(
         &mut self,
+        machine: MachineId,
         root: &Path,
         scope: crate::changes::Scope,
     ) -> io::Result<Receiver<io::Result<crate::changes::Snapshot>>> {
@@ -1725,7 +1802,7 @@ impl Cockpit {
             root: root.to_path_buf(),
             scope,
         };
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.changes(request),
             Link::InProcess(_) => Ok(read_here(move || {
                 crate::changes::execute(request)?.snapshot().ok_or_else(|| "Missing Changes snapshot".into())
@@ -1735,6 +1812,7 @@ impl Cockpit {
 
     pub fn set_file_staged(
         &mut self,
+        machine: MachineId,
         root: &Path,
         path: String,
         staged: bool,
@@ -1744,7 +1822,7 @@ impl Cockpit {
             path,
             staged,
         };
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.set_file_staged(request),
             Link::InProcess(_) => Ok(read_here(move || crate::changes::execute(request).map(|_| ()))),
         }
@@ -1753,9 +1831,10 @@ impl Cockpit {
     /// Read or save Files content on the computer that owns the workspace.
     pub fn file_operation(
         &mut self,
+        machine: MachineId,
         request: crate::file_operations::Request,
     ) -> io::Result<Receiver<io::Result<crate::file_operations::Reply>>> {
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.file_operation(request),
             Link::InProcess(_) => Ok(read_here(move || {
                 crate::file_operations::execute(request).map_err(|error| error.to_string())
@@ -1769,9 +1848,10 @@ impl Cockpit {
     /// agents itself has this computer's folders at hand.
     pub fn list_dir(
         &mut self,
+        machine: MachineId,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<crate::workspace::Listing>>> {
-        self.here_mut().remote()?.list_dir(path)
+        self.held_mut(machine)?.remote()?.list_dir(path)
     }
 
     /// What `project`'s repo holds for the workspace chip, read by git
@@ -1794,10 +1874,11 @@ impl Cockpit {
     /// thread, when this window runs its agents itself.
     pub fn review_diff(
         &mut self,
+        machine: MachineId,
         path: &Path,
         read: ferrite_reviewr::ferrite::Read,
     ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::ferrite::FileSides>>>> {
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.review_diff(path, &read),
             Link::InProcess(_) => {
                 let path = path.to_path_buf();
@@ -1812,9 +1893,10 @@ impl Cockpit {
     /// `review_diff` reads.
     pub fn review_commits(
         &mut self,
+        machine: MachineId,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::git::CommitRow>>>> {
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.review_commits(path),
             Link::InProcess(_) => {
                 let path = path.to_path_buf();
@@ -1827,10 +1909,11 @@ impl Cockpit {
     /// the search index where `review_diff` reads.
     pub fn search_repo(
         &mut self,
+        machine: MachineId,
         path: &Path,
         query: &str,
     ) -> io::Result<Receiver<io::Result<ferrite_reviewr::search::SearchResults>>> {
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.search_repo(path, query),
             Link::InProcess(_) => {
                 let (path, query) = (path.to_path_buf(), query.to_string());
@@ -1845,10 +1928,11 @@ impl Cockpit {
     /// file view, read where `review_diff` reads.
     pub fn read_review_file(
         &mut self,
+        machine: MachineId,
         path: &Path,
         file: &str,
     ) -> io::Result<Receiver<io::Result<String>>> {
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.read_review_file(path, file),
             Link::InProcess(_) => {
                 let (path, file) = (path.to_path_buf(), file.to_string());
@@ -1862,6 +1946,7 @@ impl Cockpit {
 
     pub fn review_pull_request_diff(
         &mut self,
+        machine: MachineId,
         path: &Path,
         number: u64,
     ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::ferrite::FileSides>>>> {
@@ -1871,7 +1956,7 @@ impl Cockpit {
         if self.has_forge_fixture(path) {
             return Ok(read_here(|| Err("No published diff fixture for this pull request".to_string())));
         }
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.review_pull_request_diff(path, number),
             Link::InProcess(_) => {
                 let (path, forge) = (path.to_path_buf(), self.forge.clone());
@@ -1890,6 +1975,7 @@ impl Cockpit {
     /// its forge's CLI for a review, where `review_diff` reads.
     pub fn review_pull_request(
         &mut self,
+        machine: MachineId,
         path: &Path,
         number: Option<u64>,
     ) -> io::Result<Receiver<io::Result<crate::protocol::ReviewPullRequest>>> {
@@ -1917,7 +2003,7 @@ impl Cockpit {
                 Ok(crate::protocol::ReviewPullRequest::of(view, "PR"))
             }));
         }
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.review_pull_request(path, number),
             Link::InProcess(_) => {
                 let (path, forge) = (path.to_path_buf(), self.forge.clone());
@@ -1938,13 +2024,14 @@ impl Cockpit {
     /// to, as `filter` admits them, read where `review_pull_request` reads.
     pub fn list_pull_requests(
         &mut self,
+        machine: MachineId,
         path: &Path,
         filter: crate::protocol::WirePrFilter,
     ) -> io::Result<Receiver<io::Result<crate::protocol::ReviewPullRequests>>> {
         if let Some(list) = self.forge_lists.get(&(path.to_path_buf(), filter)).cloned() {
             return Ok(read_here(move || Ok(list)));
         }
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.list_pull_requests(path, filter),
             Link::InProcess(_) => {
                 let (path, forge) = (path.to_path_buf(), self.forge.clone());
@@ -1960,9 +2047,10 @@ impl Cockpit {
     /// list, read where `review_diff` reads.
     pub fn review_files(
         &mut self,
+        machine: MachineId,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::git::WorktreeEntry>>>> {
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.review_files(path),
             Link::InProcess(_) => {
                 let path = path.to_path_buf();
@@ -1977,9 +2065,10 @@ impl Cockpit {
     /// `review_diff` reads.
     pub fn review_bases(
         &mut self,
+        machine: MachineId,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<ferrite_reviewr::ferrite::Bases>>> {
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.review_bases(path),
             Link::InProcess(_) => {
                 let path = path.to_path_buf();
@@ -1992,10 +2081,11 @@ impl Cockpit {
     /// written where `review_diff` reads.
     pub fn pick_review_base(
         &mut self,
+        machine: MachineId,
         path: &Path,
         base: &str,
     ) -> io::Result<Receiver<io::Result<()>>> {
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.pick_review_base(path, base),
             Link::InProcess(_) => {
                 let (path, base) = (path.to_path_buf(), base.to_string());
@@ -2012,13 +2102,14 @@ impl Cockpit {
     /// has nothing to say.
     pub fn pull_request(
         &mut self,
+        machine: MachineId,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<Option<crate::workspace::PullRequest>>>> {
         if let Some(view) = self.forge_fixture.get(path) {
             let reading = crate::workspace::PullRequest::of_view(view);
             return Ok(read_here(move || Ok(reading)));
         }
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.pull_request(path),
             Link::InProcess(_) => {
                 let path = path.to_path_buf();
@@ -2069,6 +2160,7 @@ impl Cockpit {
     /// runs (or here, when this window runs its agents itself).
     pub fn github_names(
         &mut self,
+        machine: MachineId,
         ask: crate::protocol::GitHubAsk,
     ) -> io::Result<Receiver<io::Result<Vec<String>>>> {
         use crate::protocol::GitHubAsk;
@@ -2079,7 +2171,7 @@ impl Cockpit {
         {
             return Ok(read_here(move || Ok(names)));
         }
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.github_names(ask),
             Link::InProcess(_) => Ok(read_here(move || {
                 use crate::server::github::GitHub;
@@ -2431,7 +2523,7 @@ impl Cockpit {
     /// window attached to a Server says `settings_changed`.
     pub fn set_suggestions_enabled(&mut self, enabled: bool) {
         self.in_process().set_suggestions_enabled(enabled);
-        self.receive_from(self.on_screen);
+        self.receive();
     }
 
     pub fn deliver_suggestion(&mut self, thread: ThreadKey, text: String) {
@@ -2454,24 +2546,26 @@ impl Cockpit {
         }
     }
 
-    /// The defaults of the Server this window is on, as its own
-    /// `settings.json` says — written there first when `set`. A window
-    /// that runs its agents itself has no Server to ask.
+    /// The defaults of `machine`'s Server, as its own `settings.json` says
+    /// — written there first when `set`. A window that runs its agents
+    /// itself has no Server to ask.
     pub fn server_defaults(
         &mut self,
+        machine: MachineId,
         set: Option<crate::settings::ServerDefaults>,
     ) -> io::Result<Receiver<io::Result<crate::settings::ServerDefaults>>> {
-        self.here_mut().remote()?.server_defaults(set)
+        self.held_mut(machine)?.remote()?.server_defaults(set)
     }
 
-    /// The provider CLIs of the machine whose Sessions this window shows:
-    /// asked of its Server, or of this computer when the window runs its
-    /// agents itself. The answer is `Done::Clis` or `Done::CliUpdated`.
+    /// `machine`'s provider CLIs: asked of its Server, or of this computer
+    /// when the window runs its agents itself. The answer is `Done::Clis`
+    /// or `Done::CliUpdated`.
     pub fn cli(
         &mut self,
+        machine: MachineId,
         action: crate::protocol::CliAction,
     ) -> io::Result<Receiver<io::Result<Done>>> {
-        match &mut self.here_mut().link {
+        match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.cli(action),
             Link::InProcess(_) => Ok(read_here(move || {
                 crate::server::clis::perform(&crate::server::clis::Host, &action)
@@ -2480,16 +2574,20 @@ impl Cockpit {
         }
     }
 
-    pub fn live_sessions(&self, provider: Provider) -> usize {
-        self.here().shared.live_sessions(provider)
+    pub fn live_sessions(&self, machine: MachineId, provider: Provider) -> usize {
+        self.shared(machine).live_sessions(provider)
     }
 
-    pub fn announced_models(&self, provider: Provider) -> Vec<ModelInfo> {
-        self.here().shared.announced_models(provider)
+    pub fn announced_models(&self, machine: MachineId, provider: Provider) -> Vec<ModelInfo> {
+        self.shared(machine).announced_models(provider)
     }
 
-    pub fn account_limits(&self, provider: Provider) -> crate::transcript::RateLimits {
-        self.here().shared.account_limits(provider)
+    pub fn account_limits(
+        &self,
+        machine: MachineId,
+        provider: Provider,
+    ) -> crate::transcript::RateLimits {
+        self.shared(machine).account_limits(provider)
     }
 
     /// Whether a Server said anything since the last ask: a message, a
@@ -2530,10 +2628,10 @@ impl Cockpit {
         !self.said.asked.is_empty()
     }
 
-    /// Every Factory's Tasks on the machine on screen, as its Server last
-    /// said them (ADR 0037).
-    pub fn factory(&self) -> OnMachine<'_, crate::factory::Board> {
-        self.on_screen_reading(|shared| &shared.factory)
+    /// Every Factory's Tasks on `machine`, as its Server last said them
+    /// (ADR 0037).
+    pub fn factory(&self, machine: MachineId) -> OnMachine<'_, crate::factory::Board> {
+        self.reading(machine, |shared| &shared.factory)
     }
 
     /// Whether the Tasks changed since the last ask.
@@ -2543,31 +2641,38 @@ impl Cockpit {
         })
     }
 
-    /// A Factory command. The Factory runs in the Server: a window that
-    /// runs its agents itself has none.
-    pub fn task(&mut self, action: crate::protocol::TaskAction) -> io::Result<Option<Done>> {
-        self.factory_ask(Op::Task { action })
+    /// A Factory command, of `machine`'s Factory. The Factory runs in the
+    /// Server: a window that runs its agents itself has none.
+    pub fn task(
+        &mut self,
+        machine: MachineId,
+        action: crate::protocol::TaskAction,
+    ) -> io::Result<Option<Done>> {
+        self.factory_ask(machine, Op::Task { action })
     }
 
-    /// A Workflow authoring command (#221), answered by the Server's
+    /// A Workflow authoring command (#221), answered by `machine`'s
     /// Factory.
     pub fn workflow(
         &mut self,
+        machine: MachineId,
         action: crate::protocol::WorkflowAction,
     ) -> io::Result<Option<Done>> {
-        self.factory_ask(Op::Workflow { action })
+        self.factory_ask(machine, Op::Workflow { action })
     }
 
-    /// A Coordinator command (#224), answered by the Server's Factory.
+    /// A Coordinator command (#224), answered by `machine`'s Factory.
     pub fn coordinator(
         &mut self,
+        machine: MachineId,
         action: crate::protocol::CoordinatorAction,
     ) -> io::Result<Option<Done>> {
-        self.factory_ask(Op::Coordinator { action })
+        self.factory_ask(machine, Op::Coordinator { action })
     }
 
-    /// One Factory ask, of the Server (or a fixture world's own Factory).
-    fn factory_ask(&mut self, op: Op) -> io::Result<Option<Done>> {
+    /// One Factory ask, of `machine`'s Server (or a fixture world's own
+    /// Factory).
+    fn factory_ask(&mut self, machine: MachineId, op: Op) -> io::Result<Option<Done>> {
         if let Some((done, board)) = self
             .factory_fixture
             .as_mut()
@@ -2579,22 +2684,36 @@ impl Cockpit {
             return done;
         }
         let done = self
-            .here_mut()
+            .held_mut(machine)?
             .remote()?
             .execute(op)
             .map_err(io::Error::from);
-        self.receive_from(self.on_screen);
+        self.receive_from(machine);
         done
     }
 
-    /// The `window.*` actions handed to this window since the last take,
-    /// each by its request; [`Self::driven`] answers it.
-    pub fn take_drives(&mut self) -> Vec<(u64, crate::drive::Action)> {
-        std::mem::take(&mut self.here_mut().drives)
+    /// The `window.*` actions every machine's Server handed this window
+    /// since the last take, each by its machine and request;
+    /// [`Self::driven`] answers it.
+    pub fn take_drives(&mut self) -> Vec<(MachineId, u64, crate::drive::Action)> {
+        self.machines
+            .values_mut()
+            .flat_map(|held| {
+                let id = held.id;
+                std::mem::take(&mut held.drives)
+                    .into_iter()
+                    .map(move |(request, action)| (id, request, action))
+            })
+            .collect()
     }
 
-    pub fn driven(&mut self, request: u64, answer: Result<crate::drive::Answer, String>) {
-        if let Link::Server(server) = &mut self.here_mut().link {
+    pub fn driven(
+        &mut self,
+        machine: MachineId,
+        request: u64,
+        answer: Result<crate::drive::Answer, String>,
+    ) {
+        if let Some(Link::Server(server)) = self.machines.get_mut(&machine).map(|held| &mut held.link) {
             let (ok, error) = match answer {
                 Ok(answer) => (Some(answer), None),
                 Err(error) => (None, Some(error)),
@@ -2606,21 +2725,20 @@ impl Cockpit {
     /// Request workspace commands without creating a Thread or Session.
     pub fn discover_commands(
         &mut self,
+        machine: MachineId,
         provider: Provider,
         cwd: &std::path::Path,
     ) -> Option<crate::providers::commands::Discovery> {
-        match &mut self.here_mut().link {
+        match &mut self.machines.get_mut(&machine)?.link {
             Link::InProcess(engine) => engine.discover_commands(provider, cwd),
-            Link::Server(server) if server.available() => {
-                server.discovery().discover_commands(provider, cwd)
-            }
-            Link::Server(_) => None,
+            Link::Server(server) => server.discovery().discover_commands(provider, cwd),
         }
     }
 
-    /// The provider's announced model rows, else the fallback catalog.
-    pub fn model_catalog(&self, provider: Provider) -> Vec<ModelInfo> {
-        crate::providers::models::catalog(provider, &self.announced_models(provider))
+    /// `machine`'s provider's announced model rows, else the fallback
+    /// catalog.
+    pub fn model_catalog(&self, machine: MachineId, provider: Provider) -> Vec<ModelInfo> {
+        crate::providers::models::catalog(provider, &self.announced_models(machine, provider))
     }
 
     pub fn set_model(&mut self, thread: ThreadKey, model: Option<String>) -> io::Result<()> {
@@ -2678,45 +2796,76 @@ impl Cockpit {
             .collect()
     }
 
-    /// The Notices of the machine on screen.
-    pub fn notifications(&self) -> OnMachine<'_, Notifications> {
-        self.on_screen_reading(|shared| &shared.notifications)
+    /// `machine`'s Notices.
+    pub fn notifications(&self, machine: MachineId) -> OnMachine<'_, Notifications> {
+        self.reading(machine, |shared| &shared.notifications)
+    }
+
+    /// Every machine's Notices, each read with its machine: what the
+    /// Inbox, the toasts and the bell hear.
+    pub fn every_notifications(&self) -> impl Iterator<Item = OnMachine<'_, Notifications>> {
+        self.machines.values().map(|held| OnMachine {
+            machine: held.id,
+            reading: &held.shared.notifications,
+        })
     }
 
     pub fn set_notification_grace(&mut self, grace: Duration) {
         self.in_process().set_notification_grace(grace);
-        self.receive_from(self.on_screen);
+        self.receive();
     }
 
-    pub fn dismiss_notice(&mut self, id: NoticeId) -> bool {
-        let known = self.here().shared.notifications.get(id).is_some();
-        self.tell(Op::Notice {
-            action: NoticeAction::Dismiss { notice: id.get() },
-        });
+    pub fn dismiss_notice(&mut self, machine: MachineId, id: NoticeId) -> bool {
+        let known = self.shared(machine).notifications.get(id).is_some();
+        self.tell_at(
+            machine,
+            Op::Notice {
+                action: NoticeAction::Dismiss { notice: id.get() },
+            },
+        );
         known
     }
 
-    pub fn dismiss_decision_notice(&mut self, id: &DecisionNoticeId) -> bool {
-        let shown = self.here().shared.notifications.decision(id).is_some();
-        self.tell(Op::Notice {
-            action: NoticeAction::DismissDecision {
-                thread: id.thread,
-                handle: (&id.handle).into(),
+    pub fn dismiss_decision_notice(&mut self, machine: MachineId, id: &DecisionNoticeId) -> bool {
+        let shown = self.shared(machine).notifications.decision(id).is_some();
+        self.tell_at(
+            machine,
+            Op::Notice {
+                action: NoticeAction::DismissDecision {
+                    thread: id.thread,
+                    handle: (&id.handle).into(),
+                },
             },
-        });
+        );
         shown
     }
 
+    /// Every machine's Notices cleared.
     pub fn clear_notices(&mut self) {
-        self.tell(Op::Notice {
-            action: NoticeAction::Clear,
-        });
+        self.tell_every(NoticeAction::Clear);
     }
 
+    /// Every machine's Notices and requests read, as the bell's `mark all
+    /// read` asks. A machine with nothing unread is not asked.
     pub fn mark_notices_read(&mut self) {
-        self.tell(Op::Notice {
-            action: NoticeAction::Read,
-        });
+        self.tell_every(NoticeAction::Read);
+    }
+
+    fn tell_every(&mut self, action: NoticeAction) {
+        let machines: Vec<MachineId> = self
+            .machines
+            .values()
+            .filter(|held| action != NoticeAction::Read || held.shared.notifications.unread() > 0)
+            .map(|held| held.id)
+            .collect();
+        for machine in machines {
+            self.tell_at(
+                machine,
+                Op::Notice {
+                    action: action.clone(),
+                },
+            );
+        }
     }
 
     /// Claude's `Mark as unread` (`Notifications::mark_unread`).
@@ -2811,7 +2960,7 @@ impl Cockpit {
         else {
             panic!("a browser message names its Thread");
         };
-        let key = self.here().key(*thread);
+        let key = ThreadKey::new(self.first(), *thread);
         self.said.browser.push((key, message));
     }
 
@@ -2823,14 +2972,17 @@ impl Cockpit {
     /// A fixture world's Server is one from before `Capability::ForkOf`:
     /// its focus for a fork that opened names no `fork_of`.
     pub fn fixture_server_before_fork_of(&mut self) {
-        self.here_mut().before_fork_of = true;
+        let first = self.first();
+        self.machines.get_mut(&first).expect("held").before_fork_of = true;
     }
 
-    /// Whether the Server on screen names the Thread a fork that opened was
+    /// Whether `machine`'s Server names the Thread a fork that opened was
     /// made from (`Capability::ForkOf`). An Engine in this process is this
     /// build's, so it does.
-    pub fn names_fork_owners(&self) -> bool {
-        let machine = self.here();
+    pub fn names_fork_owners(&self, machine: MachineId) -> bool {
+        let Some(machine) = self.machines.get(&machine) else {
+            return false;
+        };
         match &machine.link {
             Link::InProcess(_) => !machine.before_fork_of,
             Link::Server(server) => server.names_fork_owners(),
@@ -2860,9 +3012,10 @@ impl Cockpit {
             owner: Some(owner),
             ..Default::default()
         };
+        let first = self.first();
         let opened = self.in_process().open_with(provider, workspace, launch);
-        self.receive_from(self.on_screen);
-        Ok(self.here().key(opened?))
+        self.receive_from(first);
+        Ok(ThreadKey::new(first, opened?))
     }
 
     /// A fixture world's Factory board, as a Server would say it.
@@ -2921,11 +3074,13 @@ impl Cockpit {
         self.receive_from(thread.machine());
     }
 
+    /// Whether `draft`'s first send is under way, on whichever machine it
+    /// went to.
     pub fn draft_starting(&self, draft: DraftId) -> bool {
-        match &self.here().link {
+        self.machines.values().any(|held| match &held.link {
             Link::InProcess(engine) => engine.draft_starting(draft),
             Link::Server(server) => server.draft_starting(draft),
-        }
+        })
     }
 }
 
@@ -3102,14 +3257,16 @@ impl Cockpit {
         self.roster.open_draft()
     }
 
-    /// The first send (#29): bootstrap the Thread — create, worktree, spawn
-    /// — and only then let the prompt go; the Thread takes the draft's own
+    /// The first send (#29): bootstrap the Thread on `machine` — its
+    /// Project's, or this computer for none — create, worktree, spawn —
+    /// and only then let the prompt go; the Thread takes the draft's own
     /// slot. On any failure nothing is half-born: no Thread, the Pane stays
     /// draft, and the prompt stays with the caller. `None` means startup is
     /// pending; the draft stays in place until `take_bootstrap_results`
     /// reports it.
     pub fn bootstrap_draft(
         &mut self,
+        machine: MachineId,
         draft: DraftId,
         choice: ProviderChoice,
         workspace: WorkspaceChoice,
@@ -3133,7 +3290,7 @@ impl Cockpit {
         };
         // A Server answers a first send that starts at once in its reply,
         // and one still starting as it settles: both as `Done::Thread`.
-        let started = match &mut self.here_mut().link {
+        let started = match &mut self.held_mut(machine)?.link {
             Link::InProcess(engine) => {
                 let started = engine
                     .bootstrap_command(draft, &commanded(op))
@@ -3142,21 +3299,26 @@ impl Cockpit {
             }
             Link::Server(server) => server.bootstrap(draft, prompt, op).map(|()| None),
         };
-        self.receive_from(self.on_screen);
-        let key = |thread| self.here().key(thread);
-        let started = started?.map(key);
+        self.receive_from(machine);
+        let started = started?.map(|thread| ThreadKey::new(machine, thread));
         Ok(started.map(|thread| complete_draft(&mut self.roster, draft, thread)))
     }
 
-    /// Cancel a submitted startup before changing a draft's choices. The
-    /// draft slot and Composer remain; cancellation emits no completion.
+    /// Cancel a submitted startup before changing a draft's choices,
+    /// wherever it went. The draft slot and Composer remain; cancellation
+    /// emits no completion.
     pub fn cancel_draft_start(&mut self, draft: DraftId) -> io::Result<bool> {
-        let cancelled = match &mut self.here_mut().link {
-            Link::InProcess(engine) => engine.cancel_draft_start(draft),
-            Link::Server(server) => server.cancel_bootstrap(draft),
-        };
-        self.receive_from(self.on_screen);
-        cancelled
+        let mut cancelled = false;
+        let machines: Vec<MachineId> = self.machines.keys().copied().collect();
+        for machine in machines {
+            let held = self.machines.get_mut(&machine).expect("held");
+            cancelled |= match &mut held.link {
+                Link::InProcess(engine) => engine.cancel_draft_start(draft),
+                Link::Server(server) => server.cancel_bootstrap(draft),
+            }?;
+            self.receive_from(machine);
+        }
+        Ok(cancelled)
     }
 
     /// The first sends settled since the last take, each Draft's already
@@ -3191,7 +3353,8 @@ impl Cockpit {
         parked
     }
 
-    /// Adopt a CLI session file (#11), in place of the Pane it was picked
+    /// Adopt a CLI session file (#11) into `machine` (this computer, whose
+    /// files it is), in place of the Pane it was picked
     /// for or, with none, alongside the Panes shown: a draft becomes the
     /// imported Thread; a still-blank Thread yields its slot and is deleted
     /// — clean exactly while it is blank, which the picker's own invariant
@@ -3201,10 +3364,11 @@ impl Cockpit {
     /// Thread was created.
     pub fn adopt_into(
         &mut self,
+        machine: MachineId,
         into: Option<PaneIdentity>,
         path: &Path,
     ) -> io::Result<Adopted> {
-        let thread = self.import(path)?;
+        let thread = self.import(machine, path)?;
         let mut adopted = Adopted {
             thread,
             not_opened: None,

@@ -165,7 +165,7 @@ fn delayed_draft_success_delivers_once_and_preserves_unrelated_roster_actions() 
     let mut cockpit = cockpit("draft-success", vec![plan]);
     let draft = cockpit.open_draft();
     assert!(cockpit
-        .bootstrap_draft(draft, choice(Provider::Claude), workspace(), "first", None)
+        .bootstrap_draft(cockpit.first_machine(), draft, choice(Provider::Claude), workspace(), "first", None)
         .unwrap()
         .is_none());
     let provisional = cockpit.threads()[0];
@@ -183,6 +183,7 @@ fn delayed_draft_success_delivers_once_and_preserves_unrelated_roster_actions() 
     // Duplicate Enter does not allocate a second Thread or Session.
     assert!(cockpit
         .bootstrap_draft(
+            cockpit.first_machine(),
             draft,
             choice(Provider::Claude),
             workspace(),
@@ -223,6 +224,7 @@ fn delayed_draft_startup_and_first_send_failures_restore_the_original_draft() {
         let draft = cockpit.open_draft();
         cockpit
             .bootstrap_draft(
+                cockpit.first_machine(),
                 draft,
                 choice(Provider::Claude),
                 workspace(),
@@ -255,6 +257,7 @@ fn discard_and_park_before_ready_cannot_deliver_even_without_another_pump() {
         let draft = cockpit.open_draft();
         cockpit
             .bootstrap_draft(
+                cockpit.first_machine(),
                 draft,
                 choice(Provider::Claude),
                 workspace(),
@@ -279,7 +282,7 @@ fn delayed_replacement_failure_preserves_header_and_the_original_session() {
     let (old, original) = planned(false);
     let (new, mut replacement) = planned(true);
     let mut cockpit = cockpit("replace-fail", vec![old, new]);
-    let thread = cockpit.open(Provider::Claude, workspace()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, workspace()).unwrap();
     cockpit
         .set_provider(thread, choice(Provider::Codex))
         .unwrap();
@@ -302,7 +305,7 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
     let (old, original) = planned(false);
     let (new, mut replacement) = planned(true);
     let mut cockpit = cockpit("handover", vec![old, new]);
-    let thread = cockpit.open(Provider::Claude, workspace()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, workspace()).unwrap();
     let _ = cockpit.send(thread, "before".into());
     original.ended();
     cockpit.pump();
@@ -364,7 +367,7 @@ fn failed_handover_rewrite_leaves_no_durable_handover_and_keeps_serving() {
     let (old, original) = planned(false);
     let (new, mut replacement) = planned(true);
     let mut cockpit = cockpit("handover-store-fail", vec![old, new]);
-    let thread = cockpit.open(Provider::Claude, workspace()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, workspace()).unwrap();
     let _ = cockpit.send(thread, "before".into());
     original.ended();
     cockpit.pump();
@@ -394,7 +397,7 @@ fn failed_handover_rewrite_leaves_no_durable_handover_and_keeps_serving() {
 fn effort_waits_for_startup_without_losing_the_pending_prompt() {
     let (plan, mut provider) = planned(true);
     let mut cockpit = cockpit("startup-effort", vec![plan]);
-    let thread = cockpit.open(Provider::Claude, workspace()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, workspace()).unwrap();
     let _ = cockpit.send(thread, "waiting".into());
     assert_eq!(
         cockpit.set_effort(thread, Some("high".into()))
@@ -436,7 +439,7 @@ fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
     let (old, original) = planned(false);
     let (new, mut replacement) = planned(true);
     let mut cockpit = cockpit("handover-effort", vec![old, new]);
-    let thread = cockpit.open(Provider::Claude, workspace()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, workspace()).unwrap();
     let _ = cockpit.send(thread, "before".into());
     original.ended();
     cockpit.pump();
@@ -498,11 +501,11 @@ fn halting_sessions_drops_ready_and_starting_sessions_alike() {
     let (starting_plan, starting) = planned(true);
     let mut cockpit = cockpit("halt", vec![ready_plan, starting_plan]);
     let live = cockpit
-        .open(Provider::Codex, workspace())
+        .open(cockpit.first_machine(), Provider::Codex, workspace())
         .expect("a ready Session opens");
     let draft = cockpit.open_draft();
     assert!(cockpit
-        .bootstrap_draft(draft, choice(Provider::Codex), workspace(), "first", None)
+        .bootstrap_draft(cockpit.first_machine(), draft, choice(Provider::Codex), workspace(), "first", None)
         .unwrap()
         .is_none());
     let pending = cockpit

@@ -108,6 +108,12 @@ impl ProjectKey {
         Self { machine, project }
     }
 
+    /// A key for a test with no Cockpit behind it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fixture(machine: u32, project: ProjectId) -> Self {
+        Self::new(MachineId(machine), project)
+    }
+
     pub fn machine(self) -> MachineId {
         self.machine
     }
@@ -121,7 +127,16 @@ impl ProjectKey {
 /// which an index moving in Settings does not change. `None` is this
 /// computer.
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
 )]
 #[serde(transparent)]
 pub struct MachineKey(pub Option<String>);

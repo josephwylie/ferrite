@@ -396,7 +396,7 @@ fn a_window_lists_repositories_and_labels_from_the_login() {
     let world = world("starts-lists");
     let mut window = cockpit(&world.harness);
     let names = |window: &mut ferrite_core::cockpit::Cockpit, ask| {
-        let answer = window.github_names(ask).unwrap();
+        let answer = window.github_names(window.first_machine(), ask).unwrap();
         let landed = std::cell::RefCell::new(None);
         pump_until(window, |_| {
             if let Ok(read) = answer.try_recv() {

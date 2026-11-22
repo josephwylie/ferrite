@@ -421,7 +421,7 @@ fn interrogate_one_unreadable_part_keeps_every_window_from_attaching() {
         server: ferrite_core::cockpit::Endpoint::Local {
             executable: "/bin/false".into(),
         },
-        saved_as: Some(ferrite_core::MachineKey(None)),
+        saved_as: ferrite_core::MachineKey(None),
         client: Peer {
             name: "test".into(),
             version: "0".into(),

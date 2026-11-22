@@ -205,7 +205,7 @@ fn a_worker_that_never_reports_is_prompted_once_then_needs_the_operator() {
     let project_id: ferrite_core::workspace::registry::ProjectId =
         serde_json::from_value(serde_json::json!(project.parse::<u64>().unwrap())).unwrap();
     pump_until(&mut window, |window| {
-        window.factory().needs_you(project_id) == 1
+        window.factory(window.first_machine()).needs_you(project_id) == 1
     });
     pump_until_asked(&mut window, |asked| {
         asked.iter().any(|asked| {

@@ -28,7 +28,7 @@ fn prompts(cockpit: &Cockpit, thread: ThreadKey) -> Vec<(String, Option<String>)
 fn two_turns(name: &str) -> (Cockpit, Fake, ThreadKey) {
     let (mut cockpit, fake) = cockpit(name);
     *fake.rewindable.borrow_mut() = true;
-    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let _ = cockpit.send(thread, "one".into());
     live(&fake)
         .send(SessionEvent::Init {

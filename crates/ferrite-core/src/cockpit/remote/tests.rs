@@ -139,7 +139,7 @@ fn remote(store: &std::path::Path) -> Remote {
         server: Endpoint::Local {
             executable: "/bin/false".into(),
         },
-        saved_as: Some(crate::MachineKey(None)),
+        saved_as: crate::MachineKey(None),
         client: Peer {
             name: "test".into(),
             version: "0".into(),
@@ -347,7 +347,7 @@ fn a_machine_waiting_for_a_sign_in_is_not_asked_again_until_then() {
     let mut remote = Remote::new(Attach {
         store: store.clone(),
         server: Endpoint::Machine(Arc::clone(&bridge)),
-        saved_as: Some(crate::MachineKey(Some("box".into()))),
+        saved_as: crate::MachineKey(Some("box".into())),
         client: Peer {
             name: "test".into(),
             version: "0".into(),
@@ -496,28 +496,4 @@ fn a_command_the_server_does_not_know_reads_as_unsupported() {
     }
     .into();
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
-}
-
-#[test]
-fn unavailable_environment_never_attaches_even_after_retry() {
-    let mut remote = Remote::new(Attach {
-        store: scratch("unavailable-environment"),
-        server: Endpoint::Unavailable,
-        saved_as: None,
-        client: Peer {
-            name: "test".into(),
-            version: "0".into(),
-        },
-        renderer: None,
-        browser: false,
-        driven: false,
-        discovery: Box::new(NoDiscovery),
-    });
-    assert!(!remote.available());
-    assert!(remote.attach_now().is_none());
-    remote.retry();
-    assert!(remote.poll().is_empty());
-    assert!(remote.attaching.is_none());
-    assert!(remote.attachment.is_none());
-    assert!(remote.bridge().is_none());
 }
