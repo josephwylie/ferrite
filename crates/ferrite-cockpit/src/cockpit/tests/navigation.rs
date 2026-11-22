@@ -301,7 +301,7 @@ fn deferred_preview_follows_its_pane_after_reflow(cx: &mut TestAppContext) {
         let thread = source.thread().unwrap();
         assert_eq!(view.files.read(cx).active_path(thread), Some(path));
         assert_eq!(
-            view.active_surface(thread),
+            view.active_surface(view.cockpit.read(cx).thread_key(thread)),
             Some(super::super::surfaces::SurfaceId::Files)
         );
         assert!(view

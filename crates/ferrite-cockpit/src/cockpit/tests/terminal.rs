@@ -37,7 +37,7 @@ fn shown_shell(
     thread: ThreadId,
     cx: &mut gpui::VisualTestContext,
 ) -> Option<Entity<ferrite_terminal::TerminalView>> {
-    view.read_with(cx, |view, cx| match view.active_surface(thread)? {
+    view.read_with(cx, |view, cx| match view.active_surface(view.cockpit.read(cx).thread_key(thread))? {
         SurfaceId::Terminal(number) => view.terminals.read(cx).shell(thread, number),
         _ => None,
     })
@@ -58,7 +58,7 @@ fn the_door_opens_a_shell_in_a_panel_tab_and_closing_it_ends_it(cx: &mut TestApp
     assert!(cx.debug_bounds("panel-tab-Terminal-1").is_some(), "its tab");
     assert_eq!(numbers(&view, thread, cx), [1]);
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)));
-    view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Terminal(1), cx));
+    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Terminal(1), cx));
     leap(cx, std::time::Duration::from_secs(1));
     assert!(cx.debug_bounds("terminal-pane").is_none());
     assert!(numbers(&view, thread, cx).is_empty(), "its shell ended with it");
@@ -180,13 +180,13 @@ fn a_second_terminal_is_a_second_tab_and_cmd_j_shows_the_last(cx: &mut TestAppCo
     opened(&view, cx);
     assert_eq!(numbers(&view, thread, cx), [1, 2]);
     assert!(cx.debug_bounds("panel-tab-Terminal-2").is_some());
-    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.activate_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Overview, cx));
     tick(cx);
     cx.simulate_keystrokes("cmd-j");
     tick(cx);
     assert_eq!(numbers(&view, thread, cx), [1, 2], "no third shell");
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(2)));
-    view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Terminal(2), cx));
+    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Terminal(2), cx));
     tick(cx);
     assert_eq!(numbers(&view, thread, cx), [1]);
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)), "its neighbour");
@@ -268,7 +268,7 @@ fn cmd_j_back_to_an_open_shell_gives_it_the_keyboard(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-cmd-j-focus", cx);
     opened(&view, cx);
     let shell = shown_shell(&view, thread, cx).unwrap();
-    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.activate_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Overview, cx));
     let composer = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).focus_handle(cx));
     cx.update(|window, cx| window.focus(&composer, cx));
     tick(cx);

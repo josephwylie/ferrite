@@ -592,8 +592,8 @@ fn the_footer_keeps_a_threads_own_pr_and_the_palette_opens_the_list(cx: &mut Tes
     tick(cx);
     click(cx, "nav-pull-requests");
     assert!(!shows(cx, "prs-board"), "the Thread's PR, not the list");
-    let tabs = world.view.read_with(cx, |view, _| {
-        view.panel.surfaces.get(thread).unwrap().tabs.clone()
+    let tabs = world.view.read_with(cx, |view, cx| {
+        view.panel.surfaces.get(view.cockpit.read(cx).thread_key(thread)).unwrap().tabs.clone()
     });
     assert!(tabs.contains(&SurfaceId::PullRequest(48)), "{tabs:?}");
 
@@ -622,7 +622,7 @@ fn a_transcript_pr_keeps_the_conversation_and_loads_the_requested_number(cx: &mu
     world.view.read_with(cx, |view, cx| {
         assert!(!view.destination_shown(), "the conversation stays visible");
         assert_eq!(
-            view.active_surface(thread),
+            view.active_surface(view.cockpit.read(cx).thread_key(thread)),
             Some(super::super::surfaces::SurfaceId::PullRequest(7))
         );
         assert_eq!(view.pr_snapshot(thread, cx).map(|pr| pr.number), Some(7));
@@ -673,7 +673,7 @@ fn a_foreign_pr_with_the_same_number_keeps_its_repository(cx: &mut TestAppContex
             cx,
         );
         assert_ne!(
-            view.active_surface(thread),
+            view.active_surface(view.cockpit.read(cx).thread_key(thread)),
             Some(super::super::surfaces::SurfaceId::PullRequest(number))
         );
     });

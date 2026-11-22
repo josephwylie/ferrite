@@ -161,8 +161,8 @@ fn a_panel_sliding_out_takes_no_input(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("column-veil").is_some(), "sliding out");
     drag_edge(1000., cx);
     let thread = thread(&view, cx);
-    let width = view.read_with(cx, |view, _| {
-        view.panel.surfaces.get(thread).map(|s| s.width)
+    let width = view.read_with(cx, |view, cx| {
+        view.panel.surfaces.get(view.cockpit.read(cx).thread_key(thread)).map(|s| s.width)
     });
     assert_eq!(width, Some(0.0), "no width was taken from a deaf panel");
 }
@@ -238,7 +238,7 @@ fn thread(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Threa
 
 fn show(view: &Entity<CockpitView>, id: SurfaceId, cx: &mut gpui::VisualTestContext) {
     let thread = thread(view, cx);
-    view.update(cx, |view, cx| view.upsert_surface(thread, id, cx));
+    view.update(cx, |view, cx| view.upsert_surface(view.cockpit.read(cx).thread_key(thread), id, cx));
     settle(cx);
 }
 
@@ -267,15 +267,15 @@ fn a_tools_floor_is_not_the_operators_width(cx: &mut TestAppContext) {
     assert_eq!(drawn_w(&view, cx), least_w(), "closed and reopened");
 
     view.update(cx, |view, cx| view.flush_panel_persistence(cx));
-    let (saved, dir) = view.read_with(cx, |view, _| {
+    let (saved, dir) = view.read_with(cx, |view, cx| {
         (
-            view.panel.surfaces.get(thread).map(|state| state.width),
+            view.panel.surfaces.get(view.cockpit.read(cx).thread_key(thread)).map(|state| state.width),
             view.prefs.dir.clone(),
         )
     });
     assert_eq!(saved, Some(0.0), "no width was ever chosen");
-    let restarted = Surfaces::load(&dir, |_, _| true).unwrap();
-    assert_eq!(restarted.get(thread).map(|state| state.width), Some(0.0));
+    let restarted = Surfaces::saved_in(&dir, thread);
+    assert_eq!(restarted.map(|state| state.width), Some(0.0));
 }
 
 /// A width the operator dragged is theirs: a tool's floor draws over it
@@ -301,8 +301,8 @@ fn a_dragged_width_survives_a_visit_to_a_wider_tool(cx: &mut TestAppContext) {
     // writer has not yet saved.
     view.update(cx, |view, cx| view.flush_panel_persistence(cx));
     let dir = view.read_with(cx, |view, _| view.prefs.dir.clone());
-    let restarted = Surfaces::load(&dir, |_, _| true).unwrap();
-    assert_eq!(restarted.get(thread).map(|state| state.width), Some(480.0));
+    let restarted = Surfaces::saved_in(&dir, thread);
+    assert_eq!(restarted.map(|state| state.width), Some(480.0));
 }
 
 /// In a narrow window a wide tool leaves the board its least, and Overview
@@ -359,7 +359,7 @@ fn keys_typed_while_the_panel_slides_shut_reach_the_composer(cx: &mut TestAppCon
 
 fn pick(id: SurfaceId, view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     let thread = thread(view, cx);
-    view.update(cx, |view, cx| view.upsert_surface(thread, id, cx));
+    view.update(cx, |view, cx| view.upsert_surface(view.cockpit.read(cx).thread_key(thread), id, cx));
     cx.run_until_parked();
 }
 

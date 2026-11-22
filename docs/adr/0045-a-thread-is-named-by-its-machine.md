@@ -88,8 +88,12 @@ Each lands green and proves something.
    by ThreadKey`, in parallel: (a) the browser; (b) the Files and terminal
    tools; (c) Surfaces, beside, the Panel's controls and overview; (d) side
    chats, sends, titling, the PR watch, background work and the Facts.
-   Each converts through a seam on the root, `CockpitView::key(id)` and
-   `id(key)`, which holds one runtime assert.
+   Where a group meets state still keyed by a bare id, it converts at
+   that call with core's `Cockpit::thread_key(id)` and the key's
+   `thread()`; there is no seam on the root. A file a group saves moves
+   to `SavedThread`s: the Panel's `panel.json` keeps every machine's
+   Panels, the window holds those of the machine it is on, and writes
+   the others back as it read them.
 3. **P3** `refactor(cockpit): the nav, board and menus speak ThreadKey`:
    `NavKey`, `NavEvent`, `MenuTarget`, `ThreadRow`, drag and drop,
    `Arrivals` and `Alert`, whose `away` folds into the key. Saved pins

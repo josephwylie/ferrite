@@ -383,13 +383,13 @@ impl CockpitView {
     /// Surface of `thread`'s Panel. Nothing with no PR on the branch.
     pub(crate) fn open_pr_surface(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         if let Some(number) = self.facts.pr(thread).map(|pr| pr.number) {
-            self.upsert_surface(thread, SurfaceId::PullRequest(number), cx);
+            self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::PullRequest(number), cx);
         }
     }
 
     /// The Thread's PR tab: the PR it shows, else the one its branch has.
-    fn pr_tab_target(&self, thread: ThreadId) -> Option<PrTarget> {
-        let tab = self.panel.surfaces.get(thread).and_then(|state| {
+    fn pr_tab_target(&self, thread: ThreadId, cx: &gpui::App) -> Option<PrTarget> {
+        let tab = self.panel.surfaces.get(self.cockpit.read(cx).thread_key(thread)).and_then(|state| {
             state
                 .active
                 .iter()
@@ -448,12 +448,12 @@ impl CockpitView {
 
     /// Whether an answer for `target` is still wanted: a Thread's tab
     /// closed meanwhile wants none.
-    fn pr_tab_open(&self, target: PrTarget) -> bool {
+    fn pr_tab_open(&self, target: PrTarget, cx: &gpui::App) -> bool {
         match target.source {
             PrSource::Thread(thread) => self
                 .panel
                 .surfaces
-                .get(thread)
+                .get(self.cockpit.read(cx).thread_key(thread))
                 .is_some_and(|state| state.tabs.contains(&SurfaceId::PullRequest(target.number))),
             PrSource::Project(_) => true,
         }
@@ -470,13 +470,13 @@ impl CockpitView {
     /// Ask the forge again for `thread`'s open PR tab: its checks and
     /// conversation move without the PR's number or state moving.
     pub(crate) fn refresh_pr_tab(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let open = self.panel.surfaces.get(thread).is_some_and(|state| {
+        let open = self.panel.surfaces.get(self.cockpit.read(cx).thread_key(thread)).is_some_and(|state| {
             state
                 .tabs
                 .iter()
                 .any(|id| matches!(id, SurfaceId::PullRequest(_)))
         });
-        if let Some(target) = self.pr_tab_target(thread).filter(|_| open) {
+        if let Some(target) = self.pr_tab_target(thread, cx).filter(|_| open) {
             self.read_pr_snapshot(target, true, cx);
         }
     }
@@ -507,7 +507,7 @@ impl CockpitView {
 
     /// The snapshot of `thread`'s PR, once read.
     pub(crate) fn pr_snapshot<'a>(&self, thread: ThreadId, cx: &'a gpui::App) -> Option<&'a WirePr> {
-        self.pull_request.read(cx).reads.snapshot(self.pr_tab_target(thread)?)
+        self.pull_request.read(cx).reads.snapshot(self.pr_tab_target(thread, cx)?)
     }
 
     /// The PR's state: its snapshot's, else the nav's reading's.
@@ -554,13 +554,13 @@ impl CockpitView {
     /// Everything the Panel's PR Surface draws from: the PR the Panel shows.
     fn pr_inputs(&self, cx: &mut Context<Self>) -> Option<PrInputs> {
         let thread = self.panes[self.panel_drawn_pane(cx)?].thread()?;
-        let Some(SurfaceId::PullRequest(number)) = self.active_surface(thread) else {
+        let Some(SurfaceId::PullRequest(number)) = self.active_surface(self.cockpit.read(cx).thread_key(thread)) else {
             return None;
         };
         let tab = self
             .panel
             .surfaces
-            .get(thread)
+            .get(self.cockpit.read(cx).thread_key(thread))
             .map_or(PrTab::Summary, |state| state.pr_tab(number));
         let reading = self
             .facts
@@ -588,7 +588,7 @@ impl CockpitView {
                 match target.source {
                     PrSource::Thread(thread) => {
                         let number = target.number;
-                        self.apply_surface(thread, SurfaceAction::SelectPrTab { number, tab });
+                        self.apply_surface(self.cockpit.read(cx).thread_key(thread), SurfaceAction::SelectPrTab { number, tab });
                     }
                     PrSource::Project(_) => self.prs.update(cx, |prs, cx| prs.set_tab(tab, cx)),
                 }
@@ -656,7 +656,7 @@ impl PullRequestView {
         let shown = self
             .cockpit
             .upgrade()
-            .is_some_and(|cockpit| cockpit.read(cx).pr_tab_open(target));
+            .is_some_and(|cockpit| cockpit.read(cx).pr_tab_open(target, cx));
         if !shown {
             self.reads.forget(target);
             return;

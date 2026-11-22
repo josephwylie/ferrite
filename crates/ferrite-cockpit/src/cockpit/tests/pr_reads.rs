@@ -105,10 +105,10 @@ fn tab_open(
     number: u64,
     cx: &mut gpui::VisualTestContext,
 ) -> bool {
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         view.panel
             .surfaces
-            .get(thread)
+            .get(view.cockpit.read(cx).thread_key(thread))
             .is_some_and(|state| state.tabs.contains(&SurfaceId::PullRequest(number)))
     })
 }
@@ -197,7 +197,7 @@ fn a_pr_that_moved_on_mid_read_does_not_come_back(cx: &mut TestAppContext) {
         "an explicitly opened PR remains available"
     );
     assert!(tab_open(&view, thread, 49, cx));
-    let shown = view.read_with(cx, |view, _| view.active_surface(thread));
+    let shown = view.read_with(cx, |view, cx| view.active_surface(view.cockpit.read(cx).thread_key(thread)));
 
     late.answer(read_of(pr_at(48, "o/r", "The old PR")));
     tick(cx);
@@ -207,7 +207,7 @@ fn a_pr_that_moved_on_mid_read_does_not_come_back(cx: &mut TestAppContext) {
         "the prior PR remains available"
     );
     assert_eq!(
-        view.read_with(cx, |view, _| view.active_surface(thread)),
+        view.read_with(cx, |view, cx| view.active_surface(view.cockpit.read(cx).thread_key(thread))),
         shown
     );
     assert_eq!(title(&view, thread, cx), None, "#49 has not been read");
@@ -222,7 +222,7 @@ fn closing_the_tab_drops_a_late_answer(cx: &mut TestAppContext) {
     open(&view, thread, cx);
     let late = waiting(&view, cx).pop().unwrap();
     view.update(cx, |view, cx| {
-        view.close_surface(thread, &SurfaceId::PullRequest(48), cx)
+        view.close_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::PullRequest(48), cx)
     });
     tick(cx);
 

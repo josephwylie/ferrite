@@ -771,13 +771,13 @@ fn panel_tabs(
     thread: ThreadId,
     cx: &mut gpui::VisualTestContext,
 ) -> (Vec<super::surfaces::SurfaceId>, Option<super::surfaces::SurfaceId>) {
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let tabs = view
             .panel
             .surfaces
-            .get(thread)
+            .get(view.cockpit.read(cx).thread_key(thread))
             .map_or_else(|| vec![super::surfaces::SurfaceId::Overview], |state| state.tabs.clone());
-        (tabs, view.active_surface(thread))
+        (tabs, view.active_surface(view.cockpit.read(cx).thread_key(thread)))
     })
 }
 

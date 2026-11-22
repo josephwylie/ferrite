@@ -187,7 +187,7 @@ fn side_chat_tabs_are_separate_conversations(cx: &mut TestAppContext) {
     // Closing the shown tab leaves the other.
     let forks = view.read_with(cx, |view, cx| forks(view, owner, cx));
     let first = crate::cockpit::surfaces::SurfaceId::SideChat(ids[0]);
-    view.update(cx, |view, cx| view.close_surface(owner, &first, cx));
+    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(owner), &first, cx));
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(titles(view, owner, cx).0, ["Side chat 2"]);
@@ -197,7 +197,7 @@ fn side_chat_tabs_are_separate_conversations(cx: &mut TestAppContext) {
 
     // The last closed, no side chat draws.
     let last = crate::cockpit::surfaces::SurfaceId::SideChat(ids[1]);
-    view.update(cx, |view, cx| view.close_surface(owner, &last, cx));
+    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(owner), &last, cx));
     tick(cx);
     assert!(cx.debug_bounds("side-chat").is_none());
     assert!(view.read_with(cx, |view, cx| titles(view, owner, cx).0.is_empty()));
@@ -378,7 +378,7 @@ fn the_side_chat_tab_shown_takes_the_keys(cx: &mut TestAppContext) {
     assert_eq!(composer_text(&view, cx), "", "nor the Composer");
 
     let shown = crate::cockpit::surfaces::SurfaceId::SideChat(ids[0]);
-    view.update(cx, |view, cx| view.close_surface(owner, &shown, cx));
+    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(owner), &shown, cx));
     tick(cx);
     cx.simulate_input("left");
     view.read_with(cx, |view, cx| {
@@ -527,7 +527,7 @@ fn a_fork_that_lands_after_its_tab_closed_is_retired(cx: &mut TestAppContext) {
     let id = side_tabs(&view, owner, cx)[0];
     assert!(view.read_with(cx, |view, cx| shown_fork(view, owner, cx)).is_none(), "not landed yet");
     let tab = crate::cockpit::surfaces::SurfaceId::SideChat(id);
-    view.update(cx, |view, cx| view.close_surface(owner, &tab, cx));
+    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(owner), &tab, cx));
     tick(cx);
     tick(cx);
     assert_eq!(fake.forks.borrow().len(), 1, "the fork was asked");
@@ -568,7 +568,7 @@ fn each_fork_lands_in_the_tab_of_the_thread_it_forks(cx: &mut TestAppContext) {
         view.open_side_chat(second, cx);
     });
     let tab = crate::cockpit::surfaces::SurfaceId::SideChat(side_tabs(&view, first, cx)[0]);
-    view.update(cx, |view, cx| view.close_surface(first, &tab, cx));
+    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(first), &tab, cx));
     tick(cx);
     tick(cx);
     assert_eq!(fake.forks.borrow().len(), 2, "both forks were asked");

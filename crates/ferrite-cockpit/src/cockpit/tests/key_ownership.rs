@@ -33,7 +33,7 @@ fn the_launcher_opens_its_highlighted_tool_on_enter(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1900.), px(900.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.close_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::Overview, cx));
     tick(cx);
     sentinel_draft(&view, cx);
     let head = cx.debug_bounds("panel-empty-head").expect("the launcher shows");
@@ -356,7 +356,7 @@ fn a_question_mark_typed_on_the_panel_is_text_for_the_composer(cx: &mut TestAppC
     cx.simulate_resize(gpui::size(px(1900.), px(900.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.update(cx, |view, cx| view.upsert_surface(thread, SurfaceId::Files, cx));
+    view.update(cx, |view, cx| view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx));
     tick(cx);
     cx.simulate_keystrokes("f6");
     tick(cx);

@@ -197,7 +197,7 @@ impl CockpitView {
         let number = self.terminals.update(cx, |terminals, cx| {
             terminals.open(thread, &directory, machine.as_deref(), cx)
         });
-        self.upsert_surface(thread, SurfaceId::Terminal(number), cx);
+        self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Terminal(number), cx);
     }
 
     pub(in crate::cockpit) fn on_terminals_event(
@@ -232,7 +232,7 @@ impl CockpitView {
                 });
             }
             TerminalsEvent::Ended { thread, number } => {
-                self.forget_surface(*thread, &SurfaceId::Terminal(*number));
+                self.forget_surface(self.cockpit.read(cx).thread_key(*thread), &SurfaceId::Terminal(*number));
                 cx.notify();
             }
         }
@@ -260,8 +260,8 @@ impl CockpitView {
     }
 
     /// The number of the shell `thread`'s Panel shows, if it shows one.
-    fn shown_terminal(&self, thread: ThreadId) -> Option<u64> {
-        match self.active_surface(thread)? {
+    fn shown_terminal(&self, thread: ThreadId, cx: &gpui::App) -> Option<u64> {
+        match self.active_surface(self.cockpit.read(cx).thread_key(thread))? {
             SurfaceId::Terminal(number) => Some(number),
             _ => None,
         }
@@ -272,14 +272,14 @@ impl CockpitView {
     /// the Composer every frame.
     pub(in crate::cockpit) fn terminal_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         self.focused_thread(cx).is_some_and(|thread| {
-            self.shown_terminal(thread)
+            self.shown_terminal(thread, cx)
                 .is_some_and(|number| self.terminals.read(cx).holds_focus(thread, number, window, cx))
         })
     }
 
     /// A Terminal menu row, on the shell `thread`'s Panel shows.
     pub(in crate::cockpit) fn run_terminal_verb(&mut self, thread: ThreadId, verb: Verb, cx: &mut Context<Self>) {
-        if let Some(number) = self.shown_terminal(thread) {
+        if let Some(number) = self.shown_terminal(thread, cx) {
             self.terminals
                 .update(cx, |terminals, cx| terminals.run_verb(thread, number, verb, cx));
         }
@@ -290,7 +290,7 @@ impl CockpitView {
         let thread = self.panes[self.panel_drawn_pane(cx)?].thread()?;
         Some(TerminalInputs {
             thread,
-            number: self.shown_terminal(thread)?,
+            number: self.shown_terminal(thread, cx)?,
             focused: self.focused_thread(cx) == Some(thread),
             doors: self.doors(),
         })
@@ -308,7 +308,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         if let Some(view) = self
-            .shown_terminal(thread)
+            .shown_terminal(thread, cx)
             .and_then(|number| self.terminals.read(cx).shell(thread, number))
         {
             view.update(cx, |view, _| view.write(command));

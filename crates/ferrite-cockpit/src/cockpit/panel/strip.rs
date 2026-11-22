@@ -164,12 +164,12 @@ impl CockpitView {
         match opener {
             Opener::Browser => self.open_browser(thread, cx),
             Opener::Terminal => self.new_terminal_surface(thread, cx),
-            Opener::Files => self.upsert_surface(thread, SurfaceId::Files, cx),
-            Opener::Changes => self.upsert_surface(thread, SurfaceId::Changes, cx),
+            Opener::Files => self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx),
+            Opener::Changes => self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Changes, cx),
             Opener::PullRequest => self.open_pr_surface(thread, cx),
             Opener::SideChat => self.open_side_chat(thread, cx),
             Opener::Background => self.open_background(thread, cx),
-            Opener::Overview => self.open_panel(thread, cx),
+            Opener::Overview => self.open_panel(self.cockpit.read(cx).thread_key(thread), cx),
         }
     }
 
@@ -200,8 +200,9 @@ impl CockpitView {
         &self,
         thread: ThreadId,
         at: usize,
+        cx: &gpui::App,
     ) -> Vec<Option<(menu::Item, MenuVerb)>> {
-        let Some(state) = self.panel.surfaces.get(thread) else {
+        let Some(state) = self.panel.surfaces.get(self.cockpit.read(cx).thread_key(thread)) else {
             return Vec::new();
         };
         let count = state.tabs.len();
@@ -247,22 +248,22 @@ impl CockpitView {
         let Some(id) = self
             .panel
             .surfaces
-            .get(thread)
+            .get(self.cockpit.read(cx).thread_key(thread))
             .and_then(|state| state.tabs.get(at))
             .cloned()
         else {
             return;
         };
         match verb {
-            MenuVerb::CloseSurface => self.close_surface(thread, &id, cx),
+            MenuVerb::CloseSurface => self.close_surface(self.cockpit.read(cx).thread_key(thread), &id, cx),
             MenuVerb::CloseOtherSurfaces => {
-                self.close_surfaces(thread, CloseSelection::Others(id), cx)
+                self.close_surfaces(self.cockpit.read(cx).thread_key(thread), CloseSelection::Others(id), cx)
             }
             MenuVerb::CloseSurfacesRight => {
-                self.close_surfaces(thread, CloseSelection::Right(id), cx)
+                self.close_surfaces(self.cockpit.read(cx).thread_key(thread), CloseSelection::Right(id), cx)
             }
             MenuVerb::CloseAllSurfaces => {
-                self.close_surfaces(thread, CloseSelection::All, cx)
+                self.close_surfaces(self.cockpit.read(cx).thread_key(thread), CloseSelection::All, cx)
             }
             MenuVerb::CopyPath => {
                 if let SurfaceId::File(path) = &id {
@@ -307,7 +308,7 @@ impl CockpitView {
     /// The head row: the tabs in a strip that scrolls sideways, the `+`
     /// after it, then maximize, short of the title bar's Panel toggle at
     /// the window's edge. The gaps drag the window.
-    pub(super) fn surface_head(&self, thread: ThreadId, cx: &mut Context<Self>) -> Div {
+    pub(super) fn surface_head(&self, thread: ThreadKey, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
         let state = self.panel.surfaces.get(thread);
         let tabs: Vec<SurfaceId> = match state {
@@ -420,7 +421,7 @@ impl CockpitView {
     /// One tab (T3's `group/tab`, see the module doc).
     fn surface_tab(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         at: usize,
         id: &SurfaceId,
         active: bool,
@@ -444,14 +445,14 @@ impl CockpitView {
                 .child(icon(icons::CLOSE, SURFACE_TAB_ICON, INK_STRONG))
         } else {
             // A pull request's icon says its state, in its state's ink.
-            let (glyph, ink) = match (id, self.pr_tone(thread, cx)) {
+            let (glyph, ink) = match (id, self.pr_tone(thread.thread(), cx)) {
                 (SurfaceId::PullRequest(_), Some(tone)) => (tone.glyph(), tone.ink()),
                 _ => (
                     surface_icon(id),
                     if active { INK_STRONG } else { INK_SUBTLE },
                 ),
             };
-            let pending = self.surface_pending(thread, id, cx).then(|| {
+            let pending = self.surface_pending(thread.thread(), id, cx).then(|| {
                 div()
                     .debug_selector({
                         let selector = selector.clone();
@@ -494,7 +495,7 @@ impl CockpitView {
         let middle = id.clone();
         let held = id.clone();
         let control = PanelControl::Tab(id.clone());
-        let semantics = Semantics::tab(self.surface_title(thread, id, cx), active);
+        let semantics = Semantics::tab(self.surface_title(thread.thread(), id, cx), active);
         let handle = self.panel.focus.register(control.clone(), semantics.clone(), cx);
         div()
             .id(element)
@@ -532,7 +533,7 @@ impl CockpitView {
                 div()
                     .min_w_0()
                     .truncate()
-                    .child(self.surface_title(thread, id, cx)),
+                    .child(self.surface_title(thread.thread(), id, cx)),
             )
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 view.activate_surface(thread, &pressed, cx);
@@ -566,7 +567,7 @@ impl CockpitView {
                 cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     view.open_context_menu(
-                        MenuTarget::SurfaceTab { thread, at },
+                        MenuTarget::SurfaceTab { thread: thread.thread(), at },
                         event.position,
                         cx,
                     );
@@ -576,7 +577,7 @@ impl CockpitView {
     }
 
     /// The `+` after the last tab: the opener menu under it.
-    fn surface_plus(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
+    fn surface_plus(&self, thread: ThreadKey, cx: &mut Context<Self>) -> AnyElement {
         let semantics = Semantics::button("Open a surface");
         let handle = self.panel.focus.register(PanelControl::Plus, semantics.clone(), cx);
         let plus =
@@ -584,7 +585,7 @@ impl CockpitView {
                 .occlude()
                 .child(self.panel.focus.measured(PanelControl::Plus));
         self.doors()
-            .button(plus, plus_door(thread), "Open a surface", cx)
+            .button(plus, plus_door(thread.thread()), "Open a surface", cx)
             .into_any_element()
     }
 
@@ -594,8 +595,8 @@ impl CockpitView {
         let Some(thread) = self.focused_thread(cx) else {
             return;
         };
-        if !self.panel_open(thread) {
-            self.apply_surface(thread, SurfaceAction::SetOpen(true));
+        if !self.panel_open(self.cockpit.read(cx).thread_key(thread)) {
+            self.apply_surface(self.cockpit.read(cx).thread_key(thread), SurfaceAction::SetOpen(true));
         }
         let window = self.panel.window_w;
         let left = window - self.panel_target_w(cx) + ferrite_ui::theme::SURFACE_HEAD_PAD_L;
@@ -612,11 +613,11 @@ impl CockpitView {
     /// "Open a surface": the Panel with no tab shown (T3's empty panel).
     /// Its rows are the `+` menu's; a bare letter, the arrows and ⏎ work
     /// while it holds the keyboard.
-    pub(super) fn surface_empty(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn surface_empty(&self, thread: ThreadKey, cx: &mut Context<Self>) -> AnyElement {
         use ferrite_ui::theme::*;
         let highlight = self.panel.empty_highlight;
         let rows = Opener::ALL.into_iter().enumerate().map(|(at, opener)| {
-            let why = self.opener_unavailable(thread, opener, cx);
+            let why = self.opener_unavailable(thread.thread(), opener, cx);
             let id = SharedString::from(format!("panel-open-{}", opener.letter()));
             let selector = id.to_string();
             let key = ferrite_ui::pointer::hover_key(&gpui::ElementId::from(id.clone()));
@@ -639,7 +640,7 @@ impl CockpitView {
                 .child(div().flex_1().min_w_0().truncate().child(opener.label()))
                 .child(soft_key_cap(opener.letter()))
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    view.run_opener(thread, opener, cx);
+                    view.run_opener(thread.thread(), opener, cx);
                 }))
         });
         div()
@@ -661,7 +662,7 @@ impl CockpitView {
             .flex_1()
             .min_h_0()
             .on_key_down(cx.listener(move |view, event: &gpui::KeyDownEvent, _, cx| {
-                if view.surface_empty_key(thread, &event.keystroke, cx) {
+                if view.surface_empty_key(thread.thread(), &event.keystroke, cx) {
                     cx.stop_propagation();
                 }
             }))

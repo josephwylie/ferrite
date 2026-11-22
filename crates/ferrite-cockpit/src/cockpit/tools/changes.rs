@@ -541,7 +541,7 @@ impl CockpitView {
         path: &str,
         cx: &mut Context<Self>,
     ) {
-        self.upsert_surface(thread, SurfaceId::Changes, cx);
+        self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Changes, cx);
         self.changes
             .update(cx, |changes, cx| changes.reveal(Diff::Changes(thread), path, cx));
     }

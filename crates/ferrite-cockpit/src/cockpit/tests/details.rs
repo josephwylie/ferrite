@@ -41,7 +41,7 @@ fn open(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
 fn the_card_opens_beside_the_panels_files(cx: &mut TestAppContext) {
     let (view, thread, cx) = solo("details-beside-files", 1440., cx);
     view.update(cx, |view, cx| {
-        view.upsert_surface(thread, SurfaceId::Files, cx)
+        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx)
     });
     tick(cx);
     assert!(
@@ -95,7 +95,7 @@ fn the_title_bar_toggle_opens_and_shuts_it(cx: &mut TestAppContext) {
 fn escape_shuts_the_card_and_returns_the_keyboard_to_the_composer(cx: &mut TestAppContext) {
     let (view, thread, cx) = solo("details-escape", 1440., cx);
     view.update(cx, |view, cx| {
-        view.upsert_surface(thread, SurfaceId::Files, cx)
+        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx)
     });
     tick(cx);
     cx.simulate_keystrokes("cmd-shift-b");
@@ -115,7 +115,7 @@ fn escape_shuts_the_card_and_returns_the_keyboard_to_the_composer(cx: &mut TestA
 fn a_press_outside_shuts_the_card(cx: &mut TestAppContext) {
     let (view, thread, cx) = solo("details-click-out", 1440., cx);
     view.update(cx, |view, cx| {
-        view.upsert_surface(thread, SurfaceId::Files, cx)
+        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx)
     });
     tick(cx);
     cx.simulate_keystrokes("cmd-shift-b");
@@ -154,7 +154,7 @@ fn a_narrow_pane_opens_details_as_a_popover(cx: &mut TestAppContext) {
 fn a_narrow_pane_keeps_the_panels_files_and_floats_the_card(cx: &mut TestAppContext) {
     let (view, thread, cx) = solo("details-narrow-files", 1440., cx);
     view.update(cx, |view, cx| {
-        view.upsert_surface(thread, SurfaceId::Files, cx)
+        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx)
     });
     tick(cx);
     cx.simulate_keystrokes("cmd-shift-b");
@@ -341,10 +341,9 @@ fn inline_visibility_outlives_pane_recreation(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.flush_panel_persistence(cx);
         view.panes[0].details = ferrite_pane::details::DetailsCard::new(cx);
-        assert!(!view.panel.surfaces.get(thread).unwrap().details_inline_open);
-        let restored =
-            crate::cockpit::surfaces::Surfaces::load(&view.prefs.dir, |_, _| true).unwrap();
-        assert!(!restored.get(thread).unwrap().details_inline_open);
+        assert!(!view.panel.surfaces.get(view.cockpit.read(cx).thread_key(thread)).unwrap().details_inline_open);
+        let restored = crate::cockpit::surfaces::Surfaces::saved_in(&view.prefs.dir, thread).unwrap();
+        assert!(!restored.details_inline_open);
         cx.notify();
     });
     tick(cx);

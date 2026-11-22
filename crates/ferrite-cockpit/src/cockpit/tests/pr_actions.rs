@@ -223,7 +223,7 @@ fn a_queued_action_stays_with_its_pr_through_another_tab(cx: &mut TestAppContext
     );
 
     view.update(cx, |view, cx| {
-        view.upsert_surface(thread, SurfaceId::Overview, cx)
+        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Overview, cx)
     });
     tick(cx);
     assert!(
@@ -231,7 +231,7 @@ fn a_queued_action_stays_with_its_pr_through_another_tab(cx: &mut TestAppContext
         "kept off its tab"
     );
     view.update(cx, |view, cx| {
-        view.activate_surface(thread, &SurfaceId::PullRequest(48), cx)
+        view.activate_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::PullRequest(48), cx)
     });
     tick(cx);
     assert!(

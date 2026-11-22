@@ -29,7 +29,7 @@ impl CockpitView {
         };
         if self.details_inline(pane) {
             self.panes[pane].details.reset_pages();
-            self.apply_surface(thread, surfaces::SurfaceAction::ToggleDetails);
+            self.apply_surface(self.cockpit.read(cx).thread_key(thread), surfaces::SurfaceAction::ToggleDetails);
             cx.notify();
             return;
         }
@@ -86,8 +86,8 @@ impl CockpitView {
         })
     }
 
-    pub(super) fn details_lane_width(&self, index: usize) -> f32 {
-        if self.details_inline(index) && self.details_inline_open(index) {
+    pub(super) fn details_lane_width(&self, index: usize, cx: &gpui::App) -> f32 {
+        if self.details_inline(index) && self.details_inline_open(index, cx) {
             let width = self.panes[index]
                 .details
                 .canvas
@@ -150,17 +150,17 @@ impl CockpitView {
     pub(super) fn details_open(&self, cx: &gpui::App) -> bool {
         self.focused_details(cx).is_some_and(|(_, index)| {
             if self.details_inline(index) {
-                self.details_inline_open(index)
+                self.details_inline_open(index, cx)
             } else {
                 self.panes[index].details.is_open()
             }
         })
     }
 
-    fn details_inline_open(&self, index: usize) -> bool {
+    fn details_inline_open(&self, index: usize, cx: &gpui::App) -> bool {
         self.panes[index]
             .thread()
-            .and_then(|thread| self.panel.surfaces.get(thread))
+            .and_then(|thread| self.panel.surfaces.get(self.cockpit.read(cx).thread_key(thread)))
             .is_none_or(|state| state.details_inline_open)
     }
 
@@ -193,7 +193,7 @@ impl CockpitView {
             pane.details.set_open(false);
         }
         let standing = if inline {
-            if self.details_inline_open(index) {
+            if self.details_inline_open(index, cx) {
                 Standing::Open
             } else {
                 Standing::Hidden

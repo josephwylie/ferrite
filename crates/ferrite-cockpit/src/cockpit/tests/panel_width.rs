@@ -34,7 +34,7 @@ fn drawn(cx: &mut gpui::VisualTestContext) -> f32 {
 }
 
 fn chosen(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> f32 {
-    view.read_with(cx, |view, _| view.panel.surfaces.get(thread).unwrap().width)
+    view.read_with(cx, |view, cx| view.panel.surfaces.get(view.cockpit.read(cx).thread_key(thread)).unwrap().width)
 }
 
 /// Drag the Panel's left edge until the Panel is `width` wide.
@@ -53,7 +53,7 @@ fn show(
     id: SurfaceId,
     cx: &mut gpui::VisualTestContext,
 ) {
-    view.update(cx, |view, cx| view.upsert_surface(thread, id, cx));
+    view.update(cx, |view, cx| view.upsert_surface(view.cockpit.read(cx).thread_key(thread), id, cx));
     leap(cx, Duration::from_secs(1));
 }
 
