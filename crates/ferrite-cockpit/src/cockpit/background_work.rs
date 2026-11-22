@@ -26,6 +26,7 @@ use super::panel::background::label;
 use super::*;
 
 use ferrite_core::activity::AgentKey;
+use ferrite_core::pr_watch::WatchedPr;
 use ferrite_core::transcript::tools::{policy, ToolKind};
 use ferrite_core::transcript::ToolBlock;
 use ferrite_core::ThreadKey;
@@ -63,12 +64,15 @@ pub(super) enum StopState {
 /// One piece of work still running. A command is the provider's task
 /// (`call` is the call that launched it, which holds its output); a
 /// subagent is an agent launched into the background, or any still
-/// working after Main's turn.
+/// working after Main's turn; a monitor is a PR the Server watches.
 #[derive(Clone)]
 pub(super) struct Work {
     pub(super) task: BackgroundTask,
     pub(super) stop: Option<StopTarget>,
     pub(super) call: Option<String>,
+    /// It holds the Thread working, so the line waits on it (T3's
+    /// `awaited`): every command and subagent, and a watch while it holds.
+    pub(super) holds: bool,
 }
 
 impl Work {
@@ -83,9 +87,11 @@ impl Work {
 }
 
 /// Every piece of background work the Thread knows of, whichever view asks:
-/// the provider's tasks, the agents still working and the calls that
-/// launched work into the background that nothing else accounts for.
-fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
+/// the provider's tasks, the agents still working, the calls that launched
+/// work into the background that nothing else accounts for, and the PRs
+/// the Server watches for it as the Facts hold them (`watched`), which the
+/// details card reads too.
+fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>, watched: &[WatchedPr]) -> Vec<Work> {
     use ferrite_core::activity::AgentStatus;
     use ferrite_core::progress::TaskStatus;
     let transcript = open.transcript();
@@ -116,6 +122,7 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
                 },
                 stop: Some(StopTarget::Command(task.id.clone())),
                 call: call.map(|call| call.call.clone()),
+                holds: true,
             }
         })
         .collect();
@@ -148,6 +155,7 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
             },
             stop: stoppable.then(|| StopTarget::Agent(agent.key().clone())),
             call,
+            holds: true,
         });
     }
     let known: Vec<String> = work.iter().filter_map(|work| work.call.clone()).collect();
@@ -168,8 +176,21 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
             },
             stop: (!agent).then(|| StopTarget::Command(background.task.clone())),
             call: Some(call.call.clone()),
+            holds: true,
         });
     }
+    // T3's PR watch task: one per watched PR, held or not.
+    work.extend(watched.iter().map(|pr| Work {
+        task: BackgroundTask {
+            kind: WorkKind::Monitor,
+            label: format!("Watching pull request #{}", pr.number),
+            launched: None,
+            activity: None,
+        },
+        stop: None,
+        call: None,
+        holds: pr.holds,
+    }));
     work
 }
 
@@ -206,14 +227,20 @@ pub(crate) struct BackgroundInputs {
 
 impl BackgroundInputs {
     /// What the line under Main's transcript counts: while Main's turn runs
-    /// its agents are rows of the transcript, so only commands are waited
-    /// on.
+    /// its agents are rows of the transcript, so they are not counted.
     pub(super) fn line_work(&self) -> Vec<Work> {
         let mut work = self.running.clone();
         if self.busy {
-            work.retain(|work| work.task.kind == WorkKind::Command);
+            work.retain(|work| work.task.kind != WorkKind::Subagent);
         }
         work
+    }
+
+    /// Whether the line says `Waiting` on `work`: no turn of Main's runs,
+    /// and some of it holds the Thread. A watch alone that holds nothing
+    /// runs (T3's `backgroundWorkHoldsCompletion`).
+    pub(super) fn waiting(&self, work: &[Work]) -> bool {
+        !self.busy && work.iter().any(|work| work.holds)
     }
 
     /// What `Stop` can end among `work`: a command only where the Session
@@ -360,7 +387,7 @@ impl BackgroundView {
     pub(super) fn line(&self, this: WeakEntity<Self>, inputs: &BackgroundInputs) -> Option<TranscriptTail> {
         let thread = inputs.thread;
         let work = inputs.line_work();
-        let waiting = !inputs.busy;
+        let waiting = inputs.waiting(&work);
         let tasks: Vec<BackgroundTask> = work.iter().map(|work| work.task.clone()).collect();
         let presented = pane::present_background_work(&tasks, waiting)?;
         let stop = self.stop_control(inputs, &work);
@@ -553,8 +580,10 @@ impl CockpitView {
     /// open. `outputs`: with the blocks of its calls, for their output.
     pub(super) fn background_inputs(&self, thread: ThreadId, outputs: bool, cx: &App) -> Option<BackgroundInputs> {
         let open = self.cockpit.read(cx).thread(thread)?;
+        let key = self.cockpit.read(cx).thread_key(thread);
         let transcript = open.transcript();
-        let running = running_work(&open);
+        let watched = self.facts.get(key).map_or(&[][..], |facts| &facts.watching.prs);
+        let running = running_work(&open, watched);
         let refusals = running
             .iter()
             .filter_map(|work| match &work.stop {
@@ -590,7 +619,7 @@ impl CockpitView {
             HashMap::new()
         };
         Some(BackgroundInputs {
-            thread: self.cockpit.read(cx).thread_key(thread),
+            thread: key,
             generation: open.generation(),
             busy: open.busy(),
             stops_tasks: open.supports_control(ferrite_core::ControlKind::StopTask),
@@ -605,9 +634,9 @@ impl CockpitView {
     #[cfg(test)]
     pub(super) fn background_work_title(&self, index: usize, cx: &App) -> Option<String> {
         let inputs = self.background_inputs(self.panes.get(index)?.thread()?, false, cx)?;
-        let tasks: Vec<BackgroundTask> =
-            inputs.line_work().into_iter().map(|work| work.task).collect();
-        pane::present_background_work(&tasks, !inputs.busy).map(|presented| presented.title)
+        let work = inputs.line_work();
+        let tasks: Vec<BackgroundTask> = work.iter().map(|work| work.task.clone()).collect();
+        pane::present_background_work(&tasks, inputs.waiting(&work)).map(|presented| presented.title)
     }
 
     /// Why the line says the stop of task `id` of Pane `index` failed.

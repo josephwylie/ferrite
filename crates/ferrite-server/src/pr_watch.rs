@@ -25,6 +25,8 @@ use ferrite_core::server::github::GitHub;
 use ferrite_core::transcript::{tools, Body, ToolState};
 use ferrite_core::wake::Wake;
 use ferrite_core::workspace::PrState;
+use ferrite_core::link::ClientId;
+use ferrite_core::protocol::{Done, ErrorCode, WireError};
 use ferrite_core::ThreadId;
 
 use super::wake::Section;
@@ -179,14 +181,19 @@ impl Commands {
     }
 }
 
-/// A `pr.watch` call waiting on its fresh read.
+/// A `pr.watch` call or a window's `watch_pr` waiting on its fresh read.
 struct Start {
-    caller: CallerId,
-    id: String,
+    asker: Asker,
     thread: ThreadId,
     target: Target,
     until: Option<Until>,
     answer: mpsc::Receiver<Result<Reading, ReadError>>,
+}
+
+/// Who started a watch, and is answered once its fresh read is in.
+enum Asker {
+    Api { caller: CallerId, id: String },
+    Window { client: ClientId, request: u64 },
 }
 
 impl Server {
@@ -228,6 +235,52 @@ impl Server {
             Err(error) => return Some(Err(error)),
         };
         let until = params.until.map(Until::from);
+        let asker = Asker::Api {
+            caller,
+            id: id.to_string(),
+        };
+        let started = self.start_watch(asker, thread, target, until);
+        if started.is_none() {
+            self.api.owe(caller, id);
+        }
+        started
+    }
+
+    /// A window's `watch_pr` that starts a watch, at its default `until`,
+    /// as T3's PR menu does (`pr.watch`). Stopping one is the Engine's.
+    pub(super) fn window_watch_pr(
+        &mut self,
+        client: ClientId,
+        request: u64,
+        thread: ThreadId,
+        url: &str,
+    ) {
+        let params = PrParams {
+            thread: Some(thread),
+            url: Some(url.to_string()),
+            ..PrParams::default()
+        };
+        let asker = Asker::Window { client, request };
+        let answered = match self.pr_target(None, &params) {
+            Ok((thread, target)) => match self.start_watch(asker, thread, target, None) {
+                Some(answered) => answered,
+                None => return,
+            },
+            Err(error) => Err(error),
+        };
+        self.answer_start(Asker::Window { client, request }, answered);
+    }
+
+    /// Watch `target` for `thread`: at once when it is already watched
+    /// (`Some`, the answer), else after a fresh read says whether it is
+    /// still open (`None`: `asker` is answered then).
+    fn start_watch(
+        &mut self,
+        asker: Asker,
+        thread: ThreadId,
+        target: Target,
+        until: Option<Until>,
+    ) -> Option<Result<Value, ApiError>> {
         let watched = self
             .engine
             .pr_watch(thread)
@@ -243,16 +296,40 @@ impl Server {
             ferrite_core::spawn::serve_the_operator();
             let _ = tell.send(github.pr_reading(&repository, number, false));
         });
-        self.api.owe(caller, id);
         self.watcher.starts.push(Start {
-            caller,
-            id: id.to_string(),
+            asker,
             thread,
             target,
             until,
             answer,
         });
         None
+    }
+
+    /// Answer whoever started a watch. A window reads a PR that already
+    /// ended as a refusal, in the words the agent is told.
+    fn answer_start(&mut self, asker: Asker, answered: Result<Value, ApiError>) {
+        match asker {
+            Asker::Api { caller, id } => self.api.reply(caller, id, answered),
+            Asker::Window { client, request } => {
+                let failed = |message| WireError {
+                    code: ErrorCode::Failed,
+                    message,
+                };
+                let replied = match answered {
+                    Ok(value) => match value.get("state").and_then(Value::as_str) {
+                        Some(state) => Err(failed(format!(
+                            "This PR is already {state}, so there is nothing to watch."
+                        ))),
+                        None => Ok(Some(Done::PrWatch {
+                            watching: value["watching"].as_bool().unwrap_or_default(),
+                        })),
+                    },
+                    Err(error) => Err(failed(error.message)),
+                };
+                self.reply(client, request, replied);
+            }
+        }
     }
 
     /// `pr.unwatch`: stop watching a PR for a Thread.
@@ -262,10 +339,9 @@ impl Server {
         params: &PrParams,
     ) -> Result<Value, ApiError> {
         let (thread, target) = self.pr_target(from, params)?;
-        let mut fact = self.engine.pr_watch(thread).cloned().unwrap_or_default();
-        let was = fact.end(&target.repository, target.number, None, None);
-        self.engine
-            .set_pr_watch(thread, fact)
+        let was = self
+            .engine
+            .unwatch_pr(thread, &target)
             .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
         Ok(answer(&target, false, was))
     }
@@ -324,7 +400,7 @@ impl Server {
                     ended["next"] = json!(format!(
                         "This PR is already {state}, so there is nothing to watch. Report that and end your turn."
                     ));
-                    self.api.reply(start.caller, start.id, Ok(ended));
+                    self.answer_start(start.asker, Ok(ended));
                     continue;
                 }
                 // A pending rollup has no failure yet, so any failure the
@@ -339,7 +415,7 @@ impl Server {
                 ),
                 Err(ReadError::Unusable { setup }) => {
                     let refused = ApiError::new(Code::Failed, setup);
-                    self.api.reply(start.caller, start.id, Err(refused));
+                    self.answer_start(start.asker, Err(refused));
                     continue;
                 }
                 Err(_) => None,
@@ -352,7 +428,7 @@ impl Server {
             let result = self
                 .watch_pr(start.thread, start.target, start.until, checks_pending)
                 .map(|_| answer);
-            self.api.reply(start.caller, start.id, result);
+            self.answer_start(start.asker, result);
         }
     }
 

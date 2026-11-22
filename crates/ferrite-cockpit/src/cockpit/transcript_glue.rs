@@ -229,9 +229,12 @@ impl CockpitView {
                 .iter()
                 .rev()
                 .find_map(|block| match &block.body {
-                    ferrite_core::transcript::Body::Prompt(line) => Some(line.clone()),
+                    ferrite_core::transcript::Body::Prompt(line) => Some((line.clone(), block.wake.is_some())),
                     _ => None,
                 })
+                // A wake's turn is the Server's to send again, not the
+                // operator's.
+                .and_then(|(line, wake)| (!wake).then_some(line))
         });
         match prompt {
             Some(prompt) => self.send_again(index, thread, prompt, cx).is_ok(),

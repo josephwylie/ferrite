@@ -856,6 +856,33 @@ mod tests {
         );
     }
 
+    /// T3 holds a watched thread's completion while its watch is awaited
+    /// (ADR 0046): the Notice waits for the watch to let go, not for the
+    /// Session, which a watch never keeps.
+    #[test]
+    fn a_turn_end_with_a_pr_watch_holding_waits_until_it_lets_go() {
+        use crate::pr_watch::{WatchedPr, Watching};
+        let watching = |holds| Watching {
+            prs: vec![WatchedPr {
+                url: "https://github.com/o/r/pull/48".into(),
+                number: 48,
+                holds,
+            }],
+            wake_waiting: false,
+        };
+        let mut b = Bench::new(Duration::from_secs(3));
+        b.prompt();
+        b.stream();
+        b.activity.set_watching(watching(true));
+        let view = b.activity.view();
+        assert!(view.background_work() && !view.running_behind());
+        assert_eq!(b.turn_ended(done()), None, "the watch holds the Thread");
+        assert_eq!(b.wait(Duration::from_secs(600)), None, "however long checks run");
+        b.activity.set_watching(watching(false));
+        assert_eq!(b.idle(), None, "every check finished: the grace starts now");
+        assert!(b.wait(Duration::from_secs(4)).is_some(), "nobody woke Main");
+    }
+
     #[test]
     fn a_provider_that_never_resumes_main_notifies_after_the_grace() {
         let grace = Duration::from_secs(3);

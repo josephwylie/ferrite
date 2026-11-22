@@ -75,6 +75,7 @@ impl Server {
             };
             let Some(wake) = wake else {
                 self.wakes.0.remove(&thread);
+                self.engine.set_wake_waiting(thread, false);
                 continue;
             };
             match self.engine.send_wake(thread, &wake) {

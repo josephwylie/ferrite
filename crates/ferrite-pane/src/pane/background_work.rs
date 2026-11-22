@@ -16,6 +16,8 @@ use ferrite_ui::{icons, motion};
 pub enum WorkKind {
     Subagent,
     Command,
+    /// A watch that goes on of its own, a PR watch (T3's `monitor`).
+    Monitor,
 }
 
 impl WorkKind {
@@ -25,6 +27,8 @@ impl WorkKind {
             (Self::Subagent, _) => "subagents",
             (Self::Command, 1) => "command",
             (Self::Command, _) => "commands",
+            (Self::Monitor, 1) => "monitor",
+            (Self::Monitor, _) => "monitors",
         }
     }
 }

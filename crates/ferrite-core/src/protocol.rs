@@ -569,6 +569,15 @@ pub enum Op {
     PullRequest {
         path: PathBuf,
     },
+    /// Watch the PR at `url` for `thread`'s agent, or stop watching it,
+    /// as T3 Code's details card and PR menu do (ADR 0046). A new watch
+    /// is read fresh first, so a PR already merged or closed is refused.
+    /// Replied `pr_watch`.
+    WatchPr {
+        thread: ThreadId,
+        url: String,
+        watching: bool,
+    },
     Restart {
         when: When,
     },
@@ -623,6 +632,7 @@ impl Op {
             | Op::ShowSubject { thread, .. }
             | Op::Say { thread, .. }
             | Op::SearchFiles { thread, .. }
+            | Op::WatchPr { thread, .. }
             | Op::Composing { thread, .. } => Some(*thread),
             Op::Open { .. }
             | Op::Bootstrap { .. }
@@ -1727,6 +1737,10 @@ pub enum Done {
     PullRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         json: Option<String>,
+    },
+    /// A `watch_pr`'s outcome: whether the PR is watched now.
+    PrWatch {
+        watching: bool,
     },
     #[serde(other)]
     Unknown,

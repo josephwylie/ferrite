@@ -12,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::docview::FileChange;
+use ferrite_core::pr_watch::{WatchedPr, Watching};
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::{BranchStatus, PullRequest, WorkspaceBinding};
@@ -40,7 +41,11 @@ pub struct ThreadFacts {
     pub status: Option<BranchStatus>,
     /// The branch's PR and its CI, when `gh` can answer: the row's label
     /// and the checks card both read it, on its own cadence (`pr`).
-    pub pr: crate::pr::PrWatch,
+    pub pr: crate::pr::PrReading,
+    /// The PRs the Server watches for the Thread's agent (ADR 0046), from
+    /// its digest: the one copy the window draws them from (the details
+    /// card's eye, the palette and PR menu entries, the background line).
+    pub watching: Watching,
     /// Directory label and branch for every root attached to the Project.
     pub project_branches: Vec<(SharedString, SharedString)>,
     /// The Project the Thread recorded (#29) — what the nav filter matches
@@ -85,6 +90,15 @@ pub struct ThreadFacts {
     /// parked row's checkout costs one `git` call, ever.
     branch_asked: bool,
 }
+/// What a stream moved of a Thread's facts (`Facts::streamed`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Streamed {
+    /// Main's turn just ended.
+    pub settled: bool,
+    /// A PR watch started, ended, or began or stopped holding the Thread.
+    pub watch_moved: bool,
+}
+
 pub struct Facts {
     threads: HashMap<ThreadKey, ThreadFacts>,
     /// Each Project's default branch, read once (a `git` call or two, off
@@ -160,23 +174,33 @@ impl Facts {
         lookups
     }
 
-    /// Something arrived for a Thread: its digest's Wall card and counts
-    /// are copied in (the Server folds them, paced). A turn that just ended
-    /// may have moved the checkout, the other stated refresh moment (#29),
-    /// so the metadata follows it; the checkout itself is a `git` call the
-    /// pump must never wait on, so this answers whether the turn just
-    /// ended, for the caller to re-read it off the UI thread.
-    pub fn streamed(&mut self, cockpit: &Cockpit, thread: ThreadId) -> bool {
+    /// Something arrived for a Thread: its digest's Wall card, counts and
+    /// PR watches are copied in (the Server folds them, paced). A turn that
+    /// just ended may have moved the checkout, the other stated refresh
+    /// moment (#29), so the metadata follows it; the checkout itself is a
+    /// `git` call the pump must never wait on, so this answers whether the
+    /// turn just ended, for the caller to re-read it off the UI thread, and
+    /// whether a watch started, ended or stopped holding, which moves the
+    /// PR the caller reads again.
+    pub fn streamed(&mut self, cockpit: &Cockpit, thread: ThreadId) -> Streamed {
         let busy = cockpit.thread(thread).is_some_and(|open| open.busy());
         let thread = cockpit.thread_key(thread);
         let facts = self.threads.entry(thread).or_default();
         let settled = facts.main_busy && !busy;
         facts.main_busy = busy;
+        let watched = facts.watching.prs.clone();
         self.refresh_wall(cockpit, thread);
         if settled {
             self.refresh_metadata(cockpit, thread);
         }
-        settled
+        let watch_moved = self
+            .threads
+            .get(&thread)
+            .is_some_and(|facts| facts.watching.prs != watched);
+        Streamed {
+            settled,
+            watch_moved,
+        }
     }
 
     /// The operator's own act — a prompt, an interrupt, an answer, a
@@ -223,7 +247,7 @@ impl Facts {
         changed
     }
 
-    /// Whether to ask `gh` for the Thread's PR now (`PrWatch::ask`).
+    /// Whether to ask `gh` for the Thread's PR now (`PrReading::ask`).
     pub fn ask_pr(&mut self, thread: ThreadKey, now: Instant, manual: bool) -> bool {
         self.threads.entry(thread).or_default().pr.ask(now, manual)
     }
@@ -236,6 +260,14 @@ impl Facts {
     /// The Thread's last PR reading.
     pub fn pr(&self, thread: ThreadKey) -> Option<&PullRequest> {
         self.get(thread)?.pr.reading.as_ref()
+    }
+
+    /// The watch on the Thread's PR (`pr`), while the Server watches it.
+    pub fn watched_pr(&self, thread: ThreadKey) -> Option<&WatchedPr> {
+        let pr = self.pr(thread)?;
+        self.get(thread)?
+            .watching
+            .of_pr(pr.number, pr.url.as_deref())
     }
 
     /// Adopt each Project root's branch; answers the Threads whose branches
@@ -432,9 +464,11 @@ impl Facts {
             facts.wall = digest.wall.clone();
             facts.changed_files = digest.changed_files.clone();
             facts.subagents = digest.subagents;
+            facts.watching = digest.watching.clone();
             facts.main_busy = open.busy();
         } else {
             facts.wall = WallCard::default();
+            facts.watching = Watching::default();
             facts.main_busy = false;
         }
         // The wall refolds on exactly the moments that append to the log —

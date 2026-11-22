@@ -1061,6 +1061,14 @@ impl Server {
                 });
                 return;
             }
+            Op::WatchPr {
+                thread,
+                url,
+                watching: true,
+            } => {
+                self.window_watch_pr(id, request, *thread, url);
+                return;
+            }
             Op::Focused { .. } | Op::Composing { .. } => {
                 self.engine.window_says(id, &op);
                 Ok(None)

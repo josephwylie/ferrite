@@ -133,10 +133,11 @@ pub(super) enum MenuVerb {
     OpenFactory(ProjectId),
     /// A pull request Surface's row.
     Pr(panel::PrAction),
-    /// A PR link's rows (`MenuTarget::PrLink`): open it by a door, or copy
-    /// its forge address.
+    /// A PR link's rows (`MenuTarget::PrLink`): open it by a door, copy
+    /// its forge address, or watch it for changes (`true`) or stop.
     PrOpen(Open),
     PrCopy,
+    PrWatch(bool),
     /// The Factory picker's row at this index.
     Factory(usize),
     DetailsItem(ferrite_core::settings::ContextCardItem),
@@ -481,13 +482,22 @@ impl CockpitView {
             };
             Some((item, verb))
         };
-        vec![
+        // T3's row menu: an open PR is watched for changes from here, and
+        // stopped (`ThreadPullRequestsPanel`).
+        let watch = self.pr_watch_target(thread, cx).map(|(_, watched)| {
+            let label = if watched { "Stop watching" } else { "Watch for changes" };
+            Some((menu::Item::new(label), MenuVerb::PrWatch(!watched)))
+        });
+        [
             Some((menu::Item::new("Open pull request"), MenuVerb::PrOpen(Open::Primary))),
             address("Open in integrated browser", MenuVerb::PrOpen(Open::Integrated)),
             address("Open in system browser", MenuVerb::PrOpen(Open::System)),
             None,
             address("Copy link address", MenuVerb::PrCopy),
         ]
+        .into_iter()
+        .chain(watch)
+        .collect()
     }
 
     /// The Thread's own menu, the nav row's and the title's ▾ alike, in
@@ -897,6 +907,12 @@ impl CockpitView {
             (MenuTarget::PrMore(target), MenuVerb::Pr(action)) => self.run_pr_action(target, action, cx),
             (MenuTarget::PrLink(key), MenuVerb::PrOpen(how)) => {
                 self.open_pr_as(key.thread(), how, window, cx)
+            }
+            (MenuTarget::PrLink(key), MenuVerb::PrWatch(watching)) => {
+                let thread = key.thread();
+                if let Some((url, _)) = self.pr_watch_target(thread, cx) {
+                    self.watch_pr(thread, url, watching, cx);
+                }
             }
             (MenuTarget::PrLink(key), MenuVerb::PrCopy) => {
                 if let Some(Ok(address)) = self.pr_target(key.thread(), cx).map(|target| target.address()) {

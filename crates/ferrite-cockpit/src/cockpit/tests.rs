@@ -62,6 +62,7 @@ mod popups;
 mod pr;
 mod pr_actions;
 mod pr_reads;
+mod pr_watching;
 mod project_picker;
 mod provider_controls;
 mod provider_forms;

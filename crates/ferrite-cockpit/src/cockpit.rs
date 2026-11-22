@@ -50,7 +50,8 @@ mod palette;
 pub(crate) mod panel;
 mod parts;
 mod popups;
-mod pr_watch;
+mod pr_reads;
+mod pr_watching;
 mod prs_view;
 mod sends;
 mod server;
@@ -571,8 +572,8 @@ pub struct CockpitView {
     /// The chimes that would have played (`chime`).
     #[cfg(test)]
     pub(crate) chimed: Vec<Sound>,
-    /// When the pump asks for a Thread's PR on its own (`pr_watch`).
-    pr_watch: pr_watch::PrWatch,
+    /// When the pump asks for a Thread's PR on its own (`pr_reads`).
+    pr_reads: pr_reads::PrReads,
     /// The palette, the shortcuts sheet and the notifications list's focus
     /// (`cockpit::palette`).
     floats: palette::Floats,
@@ -1371,7 +1372,7 @@ impl CockpitView {
             landing: None,
             #[cfg(test)]
             chimed: Vec::new(),
-            pr_watch: Default::default(),
+            pr_reads: Default::default(),
             floats: palette::Floats::new(),
             transcript_entities: Default::default(),
             decisions,
@@ -2274,7 +2275,7 @@ impl CockpitView {
         // before using pane indices. Finish bootstraps first so a Draft keeps
         // its existing Composer when it becomes a Thread.
         let panes_changed = self.follow_roster(cx);
-        self.watch_prs(cx);
+        self.pace_pr_reads(cx);
         let mut restarted = Vec::new();
         // What the sweep found moved: a fact or a Thread's age (everything
         // redraws), a working Thread (its Pane and the nav), the frame's
@@ -2413,9 +2414,13 @@ impl CockpitView {
                 }
             }
             // Native progress can change without appending a transcript row.
-            let settled = self.facts.streamed(self.cockpit.read(cx), update.thread);
-            self.advance_pr_actions(update.thread, settled, cx);
-            turn_ended |= settled;
+            let streamed = self.facts.streamed(self.cockpit.read(cx), update.thread);
+            self.advance_pr_actions(update.thread, streamed.settled, cx);
+            turn_ended |= streamed.settled;
+            if streamed.watch_moved {
+                // The watcher saw the PR move: the card follows it.
+                self.check_pr(update.thread, true, cx);
+            }
         }
         let precise = restarted.is_empty()
             && !swept_change
@@ -4051,14 +4056,19 @@ impl CockpitView {
             cx.notify();
             return;
         }
-        // Escape stops what the Pane shows: on Main its turn, never the
-        // Subagents and background work it started; on a Subagent that
-        // Subagent alone — and once it has nothing to stop, it goes back to
-        // its parent.
+        // Escape stops what the Pane shows: on Main its turn while one runs
+        // (T3's Stop, which ends the Thread's PR watches with it), never the
+        // Subagents and background work it started, and nothing at rest;
+        // on a Subagent that Subagent alone — and once it has nothing to
+        // stop, it goes back to its parent.
         if let Some(thread) = self.focused_thread(cx).filter(|_| !self.machine_lost(cx)) {
             let selected = self.panes[self.focused(cx)].selected.clone();
             match &selected {
-                ferrite_core::activity::Subject::Main => self.cockpit.update(cx, |cockpit, _| cockpit.interrupt(thread)),
+                ferrite_core::activity::Subject::Main => {
+                    if self.cockpit.read(cx).thread(thread).is_some_and(|open| turn_running(&open)) {
+                        self.cockpit.update(cx, |cockpit, _| cockpit.interrupt(thread));
+                    }
+                }
                 ferrite_core::activity::Subject::Subagent(key) => {
                     if !self.stop_subagent(thread, key, cx) {
                         let parent = self
