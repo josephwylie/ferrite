@@ -26,14 +26,14 @@ enum Review {
 /// The review editor of every Thread's Browser.
 #[derive(Default)]
 pub(in crate::cockpit) struct BrowserReviewView {
-    threads: BTreeMap<ThreadId, Review>,
+    threads: BTreeMap<ThreadKey, Review>,
 }
 
 /// What the operator asked of a review.
 pub(in crate::cockpit) enum BrowserReviewEvent {
     /// Add: the retained annotation with the operator's notes and drawings,
     /// for the Thread's Composer, or why it could not be made.
-    Add(ThreadId, Result<Annotation, String>),
+    Add(ThreadKey, Result<Annotation, String>),
 }
 
 impl EventEmitter<BrowserReviewEvent> for BrowserReviewView {}
@@ -41,23 +41,23 @@ impl EventEmitter<BrowserReviewEvent> for BrowserReviewView {}
 impl BrowserReviewView {
     /// Every Thread `keep` refuses takes its review with it.
     pub(in crate::cockpit) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
-        self.threads.retain(|thread, _| keep(*thread));
+        self.threads.retain(|key, _| keep(key.thread()));
     }
 
     #[cfg(test)]
     pub(in crate::cockpit) fn held_for_test(&self, thread: ThreadId) -> usize {
-        usize::from(self.threads.contains_key(&thread))
+        self.threads.keys().filter(|key| key.thread() == thread).count()
     }
 
     /// A review is open for `thread`, its capture read or not.
-    pub(super) fn open(&self, thread: ThreadId) -> bool {
+    pub(super) fn open(&self, thread: ThreadKey) -> bool {
         self.threads.contains_key(&thread)
     }
 
     /// `retained`'s capture is being read for `thread` (`image`).
     pub(super) fn load(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         retained: Annotation,
         image: Ask<std::path::PathBuf>,
         cx: &mut Context<Self>,
@@ -76,7 +76,7 @@ impl BrowserReviewView {
     /// The editor of `retained` over its capture's `image`.
     pub(super) fn edit(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         retained: Annotation,
         image: std::path::PathBuf,
         cx: &mut Context<Self>,
@@ -97,7 +97,7 @@ impl BrowserReviewView {
         cx.notify();
     }
 
-    pub(super) fn close(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(super) fn close(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         if self.threads.remove(&thread).is_some() {
             cx.notify();
         }
@@ -105,7 +105,7 @@ impl BrowserReviewView {
 
     /// Each capture read opens its editor. A read that failed, or that ran
     /// past its time, closes its review with why, for its Browser to say.
-    pub(super) fn tend(&mut self, cx: &mut Context<Self>) -> Vec<(ThreadId, String)> {
+    pub(super) fn tend(&mut self, cx: &mut Context<Self>) -> Vec<(ThreadKey, String)> {
         let mut read = Vec::new();
         let mut failed = Vec::new();
         for (thread, review) in &mut self.threads {
@@ -145,7 +145,7 @@ impl BrowserReviewView {
     }
 
     /// The editor in the page's place, once the capture is read.
-    pub(super) fn editor(&self, thread: ThreadId) -> Option<Entity<AnnotationEditor>> {
+    pub(super) fn editor(&self, thread: ThreadKey) -> Option<Entity<AnnotationEditor>> {
         match self.threads.get(&thread)? {
             Review::Editing(editor) => Some(editor.clone()),
             Review::Loading { .. } => None,
@@ -153,7 +153,7 @@ impl BrowserReviewView {
     }
 
     /// What holds the keyboard while `thread`'s review is open.
-    pub(super) fn focus(&self, thread: ThreadId, cx: &gpui::App) -> Option<FocusHandle> {
+    pub(super) fn focus(&self, thread: ThreadKey, cx: &gpui::App) -> Option<FocusHandle> {
         Some(match self.threads.get(&thread)? {
             Review::Editing(editor) => gpui::Focusable::focus_handle(editor.read(cx), cx),
             Review::Loading { focus, .. } => focus.clone(),
@@ -174,7 +174,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         let BrowserReviewEvent::Add(thread, annotation) = event;
-        let Some(index) = self.pane_for(*thread) else {
+        let Some(index) = self.pane_for(thread.thread()) else {
             return;
         };
         match annotation {

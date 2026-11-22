@@ -27,18 +27,18 @@ struct Chrome {
 /// The chrome of every Thread's Browser.
 #[derive(Default)]
 pub(in crate::cockpit) struct BrowserChromeView {
-    threads: BTreeMap<ThreadId, Chrome>,
+    threads: BTreeMap<ThreadKey, Chrome>,
 }
 
 /// What a press in the chrome asks of the window.
 pub(in crate::cockpit) enum BrowserChromeEvent {
     /// A tab, Back, Forward, Reload, Go or a tab's close: an action on the
     /// Thread's pages.
-    Act(ThreadId, Action),
+    Act(ThreadKey, Action),
     /// The annotate button: begin an annotation, or close the one open.
-    Annotate { thread: ThreadId, begin: bool },
+    Annotate { thread: ThreadKey, begin: bool },
     /// New tab: a capture under way stops.
-    NewTab(ThreadId),
+    NewTab(ThreadKey),
 }
 
 impl EventEmitter<BrowserChromeEvent> for BrowserChromeView {}
@@ -61,7 +61,7 @@ pub(in crate::cockpit) struct ChromeParts {
 
 impl BrowserChromeView {
     /// `thread`'s chrome, made the first time its Browser is.
-    pub(super) fn make(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(super) fn make(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         self.threads.entry(thread).or_insert_with(|| Chrome {
             address: cx.new(|cx| {
                 let mut field = Composer::new(cx);
@@ -76,21 +76,21 @@ impl BrowserChromeView {
 
     /// Every Thread `keep` refuses takes its chrome with it.
     pub(in crate::cockpit) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
-        self.threads.retain(|thread, _| keep(*thread));
+        self.threads.retain(|key, _| keep(key.thread()));
     }
 
     #[cfg(test)]
     pub(in crate::cockpit) fn held_for_test(&self, thread: ThreadId) -> usize {
-        usize::from(self.threads.contains_key(&thread))
+        self.threads.keys().filter(|key| key.thread() == thread).count()
     }
 
     #[cfg(test)]
-    pub(in crate::cockpit) fn address_for_test(&self, thread: ThreadId, cx: &gpui::App) -> String {
+    pub(in crate::cockpit) fn address_for_test(&self, thread: ThreadKey, cx: &gpui::App) -> String {
         self.threads[&thread].address.read(cx).text().to_string()
     }
 
     /// A new tab is being entered: no page's controls apply.
-    pub(super) fn new_tab(&self, thread: ThreadId) -> bool {
+    pub(super) fn new_tab(&self, thread: ThreadKey) -> bool {
         self.threads
             .get(&thread)
             .is_some_and(|chrome| chrome.entry == Entry::NewTab)
@@ -98,7 +98,7 @@ impl BrowserChromeView {
 
     /// The Server took an action: the field acts on the page again, and
     /// with no page left it empties.
-    pub(super) fn landed(&mut self, thread: ThreadId, page: bool, cx: &mut Context<Self>) {
+    pub(super) fn landed(&mut self, thread: ThreadKey, page: bool, cx: &mut Context<Self>) {
         let Some(chrome) = self.threads.get_mut(&thread) else {
             return;
         };
@@ -113,7 +113,7 @@ impl BrowserChromeView {
 
     /// The active tab shows `url`: the field takes it, unless it holds an
     /// edit of this tab's address or a new tab is being entered.
-    pub(super) fn follow(&mut self, thread: ThreadId, tab: TabId, url: &str, cx: &mut Context<Self>) {
+    pub(super) fn follow(&mut self, thread: ThreadKey, tab: TabId, url: &str, cx: &mut Context<Self>) {
         let Some(chrome) = self.threads.get_mut(&thread) else {
             return;
         };
@@ -136,7 +136,7 @@ impl BrowserChromeView {
     /// Leave a pending new tab, or put back what an edit replaced of the
     /// active page's address, `active`. False when the address held nothing
     /// to cancel.
-    fn cancel_address(&mut self, thread: ThreadId, active: Option<&str>, cx: &mut Context<Self>) -> bool {
+    fn cancel_address(&mut self, thread: ThreadKey, active: Option<&str>, cx: &mut Context<Self>) -> bool {
         let Some(chrome) = self.threads.get_mut(&thread) else {
             return false;
         };
@@ -153,7 +153,7 @@ impl BrowserChromeView {
     /// `thread`'s tab strip and toolbar.
     pub(super) fn bar(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         inputs: BrowserChromeInputs,
         cx: &mut Context<Self>,
     ) -> ChromeParts {
@@ -473,7 +473,7 @@ impl BrowserChromeView {
 
     /// Go: the active page navigates to the field's address, or while a
     /// new tab is entered, or with no page, a tab opens on it.
-    fn go(&mut self, thread: ThreadId, active: Option<Document>, cx: &mut Context<Self>) {
+    fn go(&mut self, thread: ThreadKey, active: Option<Document>, cx: &mut Context<Self>) {
         let Some(chrome) = self.threads.get(&thread) else {
             return;
         };
@@ -492,7 +492,7 @@ impl CockpitView {
     /// What the chrome draws of `thread`'s Browser: its tabs, the active
     /// one, whether a live page stands for it, and whether an annotation or
     /// its review is open.
-    pub(super) fn browser_chrome_inputs(&self, thread: ThreadId, cx: &gpui::App) -> Option<BrowserChromeInputs> {
+    pub(super) fn browser_chrome_inputs(&self, thread: ThreadKey, cx: &gpui::App) -> Option<BrowserChromeInputs> {
         let browser = self.browsers.threads.get(&thread)?;
         Some(BrowserChromeInputs {
             tabs: browser.state.tabs.clone(),
@@ -526,5 +526,30 @@ impl CockpitView {
             }
             BrowserChromeEvent::NewTab(thread) => self.cancel_browser_capture(*thread, cx),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    fn a_browsers_chrome_keeps_two_machines_threads_apart(cx: &mut gpui::TestAppContext) {
+        let here = ThreadKey::fixture(0, 1);
+        let there = ThreadKey::fixture(1, 1);
+        let chrome = cx.new(|_| BrowserChromeView::default());
+        chrome.update(cx, |chrome, cx| {
+            chrome.make(here, cx);
+            chrome.make(there, cx);
+            chrome.follow(here, TabId(1), "http://here.test/", cx);
+            chrome.follow(there, TabId(1), "http://there.test/", cx);
+            // As its New tab press does.
+            chrome.threads.get_mut(&there).unwrap().entry = Entry::NewTab;
+        });
+        chrome.read_with(cx, |chrome, cx| {
+            assert_eq!(chrome.address_for_test(here, cx), "http://here.test/");
+            assert_eq!(chrome.address_for_test(there, cx), "http://there.test/");
+            assert!(!chrome.new_tab(here) && chrome.new_tab(there));
+        });
     }
 }

@@ -245,7 +245,7 @@ impl CockpitView {
         let folder = self.thread_path(thread, cx);
         match Destination::of(address, folder.as_deref()) {
             Some(Destination::Web(url)) => {
-                self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx)
+                self.browser_action(self.cockpit.read(cx).thread_key(thread), ferrite_core::browser::Action::Open { url }, cx)
             }
             Some(Destination::File(file)) => {
                 if let Some(index) = self.pane_for(thread) {

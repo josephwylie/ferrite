@@ -2083,7 +2083,7 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
     begin(cx);
     assert!(protected(cx), "the live editor protects the exact page");
     assert!(cx.debug_bounds("browser-annotation-overlay").is_none(), "the editor lives in the guest page");
-    assert!(cx.update(|window, cx| view.read(cx).browser_annotation_focus(thread, cx).is_some_and(|focus| focus.is_focused(window))), "starting annotation focuses the rendered WebView");
+    assert!(cx.update(|window, cx| view.read(cx).browser_annotation_focus(view.read(cx).cockpit.read(cx).thread_key(thread), cx).is_some_and(|focus| focus.is_focused(window))), "starting annotation focuses the rendered WebView");
     cx.simulate_keystrokes("escape");
     wait(cx, "Escape reaches the guest", &mut |_| engine.journal().iter().any(|call| matches!(call, Call::Input(Input::Key { key, down: true, .. }) if key == "escape")));
     // simulate_keystrokes sends only key-down; a real release ends the

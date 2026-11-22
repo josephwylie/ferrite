@@ -69,7 +69,7 @@ impl Scenario {
                         return Ok(false);
                     };
                     // The fixture's top-left white margin contains no control.
-                    let Some(viewport) = view.read(cx).browser_smoke_viewport(thread) else {
+                    let Some(viewport) = view.read(cx).browser_smoke_viewport(view.read(cx).cockpit.read(cx).thread_key(thread)) else {
                         trace(view, thread, window, cx, Tick::NotLaidOut, id, &state);
                         return Ok(false);
                     };
@@ -203,7 +203,7 @@ fn trace(
 ) {
     let tab = state.tabs.iter().find(|tab| Some(tab.id) == state.active);
     let view = view.read(cx);
-    let hold = view.browser_smoke_hold(thread, cx);
+    let hold = view.browser_smoke_hold(view.cockpit.read(cx).thread_key(thread), cx);
     hold_trace::record(serde_json::json!({
         "kind": "tick",
         "ui": ui,

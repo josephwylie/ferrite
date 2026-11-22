@@ -1551,7 +1551,7 @@ impl CockpitView {
         let url = self.facts.pr(self.cockpit.read(cx).thread_key(thread)).and_then(|pr| pr.url.clone());
         if let Some(url) = url {
             self.show_thread(thread, cx);
-            self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx);
+            self.browser_action(self.cockpit.read(cx).thread_key(thread), ferrite_core::browser::Action::Open { url }, cx);
         }
     }
 
@@ -6846,7 +6846,7 @@ impl CockpitView {
                 if !self.preview_shown(index, cx) { return None; }
                 let pane = self.panes.get(index)?;
                 if !pane.preview.document().is_some_and(|document| matches!(&document.body, ferrite_pane::preview::Body::Browser)) { return None; }
-                self.browser_annotation_focus(pane.thread()?, cx)
+                self.browser_annotation_focus(self.cockpit.read(cx).thread_key(pane.thread()?), cx)
             })
             .or_else(|| {
                 self.panes

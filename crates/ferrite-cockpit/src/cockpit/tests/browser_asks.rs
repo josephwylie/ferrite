@@ -72,7 +72,7 @@ fn silenceable_browser(name: &str) -> (Cockpit, ThreadId, Arc<AtomicBool>) {
 
 /// The Browser's tabs as the window has them, and its notice.
 fn shown(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> (State, Option<String>) {
-    view.read_with(cx, |view, _| view.browsers.shown_for_test(thread)).unwrap_or_default()
+    view.read_with(cx, |view, cx| view.browsers.shown_for_test(view.cockpit.read(cx).thread_key(thread))).unwrap_or_default()
 }
 
 fn loaded(view: &Entity<CockpitView>, thread: ThreadId, url: &str, cx: &mut gpui::VisualTestContext) -> bool {
@@ -129,7 +129,7 @@ fn a_browsers_asks_never_wait_on_the_windows_thread(cx: &mut TestAppContext) {
     waits::start();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
-    view.update(cx, |view, cx| view.open_browser(thread, cx));
+    view.update(cx, |view, cx| view.open_browser(view.cockpit.read(cx).thread_key(thread), cx));
     step(cx, "the first page loads", |cx| engine.live_views() == 1 && loaded(&view, thread, "http://localhost:5173/start", cx));
 
     let address = cx.debug_bounds("browser-address").unwrap().center();
@@ -261,7 +261,7 @@ fn typed_keys_reach_the_page(name: &str, window_active: bool, cx: &mut TestAppCo
     cx.update(|cx| Visuals::install(engine.clone(), cx));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
-    view.update(cx, |view, cx| view.open_browser(thread, cx));
+    view.update(cx, |view, cx| view.open_browser(view.cockpit.read(cx).thread_key(thread), cx));
     step(cx, "the first page loads", |cx| engine.live_views() == 1 && loaded(&view, thread, "http://localhost:5173/start", cx));
     let page = cx.debug_bounds("browser-preview").unwrap().center();
     cx.simulate_click(page, gpui::Modifiers::none());

@@ -551,7 +551,7 @@ fn an_agents_open_after_a_refused_one_still_shows_the_browser(cx: &mut TestAppCo
     opened(&view, cx);
     view.update(cx, |view, cx| {
         view.browser_action(
-            thread,
+            view.cockpit.read(cx).thread_key(thread),
             ferrite_core::browser::Action::Open { url: "http://user:pw@localhost:5173/".into() },
             cx,
         )

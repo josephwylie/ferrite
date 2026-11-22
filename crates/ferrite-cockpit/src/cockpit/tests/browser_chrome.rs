@@ -360,7 +360,7 @@ fn open_second_page(
             .cockpit
             .update(cx, |cockpit, _| cockpit.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() }))
             .unwrap();
-        view.browser_action(second, ferrite_core::browser::Action::Open { url: url.into() }, cx);
+        view.browser_action(view.cockpit.read(cx).thread_key(second), ferrite_core::browser::Action::Open { url: url.into() }, cx);
         view.focus_thread(first, cx);
         second
     });
@@ -462,7 +462,7 @@ fn a_dialog_is_modal_to_its_page_and_two_dialogs_each_wait_for_their_thread(
 
 fn address_text(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> String {
     view.read_with(cx, |view, cx| {
-        view.browser_chrome.read(cx).address_for_test(thread, cx)
+        view.browser_chrome.read(cx).address_for_test(view.cockpit.read(cx).thread_key(thread), cx)
     })
 }
 
@@ -478,7 +478,7 @@ fn an_address_draft_survives_the_pages_own_navigation(cx: &mut TestAppContext) {
     });
     view.update(cx, |view, cx| {
         view.browser_action(
-            thread,
+            view.cockpit.read(cx).thread_key(thread),
             ferrite_core::browser::Action::Navigate { document, url: "http://localhost:5173/moved".into() },
             cx,
         )

@@ -9,7 +9,7 @@ impl CockpitView {
     #[cfg(feature = "visual-reference")]
     pub(in crate::cockpit) fn fixture_annotation_editor(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         annotation: ferrite_core::browser_annotations::Annotation,
         image: std::path::PathBuf,
         cx: &mut Context<Self>,
@@ -23,7 +23,7 @@ impl CockpitView {
     #[cfg(feature = "browser-smoke")]
     pub(in crate::cockpit) fn browser_smoke_viewport(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
     ) -> Option<BrowserViewport> {
         let browser = self.browsers.threads.get(&thread)?;
         browser
@@ -38,7 +38,7 @@ impl CockpitView {
     #[cfg(feature = "browser-smoke")]
     pub(in crate::cockpit) fn browser_smoke_hold(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         cx: &gpui::App,
     ) -> Option<(bool, bool)> {
         let browser = self.browsers.threads.get(&thread)?;
@@ -50,7 +50,7 @@ impl CockpitView {
     #[cfg(feature = "browser-smoke")]
     pub(in crate::cockpit) fn browser_smoke_annotation_ready(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
     ) -> Option<bool> {
         let annotation = self.browsers.threads.get(&thread)?.annotation.as_ref()?;
         Some(annotation.ready())
@@ -58,7 +58,7 @@ impl CockpitView {
 
     pub(in crate::cockpit) fn browser_annotation_focus(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         cx: &gpui::App,
     ) -> Option<gpui::FocusHandle> {
         self.browser_review.read(cx).focus(thread, cx).or_else(|| {
@@ -69,7 +69,7 @@ impl CockpitView {
 
     pub(super) fn begin_browser_annotation(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -102,10 +102,10 @@ impl CockpitView {
         cx.notify();
     }
 
-    fn annotation_send_enabled(&self, thread: ThreadId, cx: &gpui::App) -> bool {
-        self.focused_thread(cx) == Some(thread)
-            && self.cockpit.read(cx).thread(thread).is_some()
-            && self.pane_for(thread).is_some_and(|index| {
+    fn annotation_send_enabled(&self, thread: ThreadKey, cx: &gpui::App) -> bool {
+        self.focused_thread(cx) == Some(thread.thread())
+            && self.cockpit.read(cx).thread(thread.thread()).is_some()
+            && self.pane_for(thread.thread()).is_some_and(|index| {
                 self.panes[index].is_main() && self.panes[index].composer.read(cx).comment_valid(cx)
             })
             && !self.sheet_up(cx)
@@ -115,7 +115,7 @@ impl CockpitView {
 
     fn send_attached_annotation(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         id: String,
         window: gpui::AnyWindowHandle,
         cx: &mut Context<Self>,
@@ -125,7 +125,7 @@ impl CockpitView {
             let _ = window.update(cx, |_, window, cx| {
                 let _ = view.update(cx, |this, cx| {
                     if this.annotation_send_enabled(thread, cx)
-                        && this.pane_for(thread).is_some_and(|index| {
+                        && this.pane_for(thread.thread()).is_some_and(|index| {
                             this.panes[index]
                                 .composer
                                 .read(cx)
@@ -145,7 +145,7 @@ impl CockpitView {
     /// waits for the annotation to close (`LiveAnnotation::defer`).
     pub(super) fn defer_annotation_action(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         action: Action,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -161,7 +161,7 @@ impl CockpitView {
         deferred
     }
 
-    pub(super) fn cancel_browser_capture(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(super) fn cancel_browser_capture(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         let Some(annotation) = self
             .browsers
             .threads
@@ -174,7 +174,7 @@ impl CockpitView {
         cx.notify();
     }
 
-    pub(super) fn close_browser_annotation(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(super) fn close_browser_annotation(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         self.browser_review
             .update(cx, |review, cx| review.close(thread, cx));
         let Some(browser) = self.browsers.threads.get_mut(&thread) else {
@@ -192,7 +192,7 @@ impl CockpitView {
             .panes
             .iter()
             .flat_map(|pane| {
-                let thread = pane.thread();
+                let thread = pane.thread().map(|thread| self.cockpit.read(cx).thread_key(thread));
                 pane.preview
                     .take_annotation_edits()
                     .into_iter()
@@ -214,7 +214,7 @@ impl CockpitView {
             }
             let image = self
                 .cockpit
-                .update(cx, |cockpit, _| cockpit.browser_annotation_image(thread, retained.clone()));
+                .update(cx, |cockpit, _| cockpit.browser_annotation_image(thread.thread(), retained.clone()));
             self.browser_review
                 .update(cx, |review, cx| review.load(thread, retained, image, cx));
             cx.notify();
@@ -237,7 +237,7 @@ impl CockpitView {
                 continue;
             };
             let send_enabled = self.annotation_send_enabled(thread, cx);
-            let composer = self.pane_for(thread).is_some();
+            let composer = self.pane_for(thread.thread()).is_some();
             let step = self.cockpit.update(cx, |cockpit, _| {
                 annotation.tend(
                     thread,
@@ -255,7 +255,7 @@ impl CockpitView {
             match step.next {
                 Next::Open(annotation) => browser.annotation = Some(annotation),
                 Next::Attach(annotation, send) => {
-                    if let Some(index) = self.pane_for(thread) {
+                    if let Some(index) = self.pane_for(thread.thread()) {
                         let id = annotation.id().to_owned();
                         self.panes[index].composer.update(cx, |composer, cx| {
                             composer.add_browser_annotation(annotation, cx)
@@ -276,7 +276,7 @@ impl CockpitView {
 
     pub(super) fn annotation_browser_body(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         web: Option<Entity<WebView>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
