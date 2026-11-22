@@ -30,8 +30,9 @@
 //!   announced with [`HeightChanged`] so a list can remeasure the row while it
 //!   is still off-screen.
 //! - **Pointer capture.** A press inside the view keeps `Move` and `Up` going
-//!   to the page until the button is released, wherever the pointer goes, so
-//!   a drag never leaves the page thinking a button is still down.
+//!   to the page until the button is released, wherever the pointer or the
+//!   keyboard goes, so a drag never leaves the page thinking a button is
+//!   still down. Only the window losing the operator ends it sooner.
 //!
 //! Ported from `spikes/inline-cef/src/element.rs` (its measurements are in
 //! that spike's NOTES-host.md). [`pump`] drives the engine; start it once.
@@ -263,8 +264,10 @@ impl Render for WebView {
         }
         if self.browser_blur.is_none() {
             self.browser_blur = Some(cx.on_blur(&self.inner.focus, window, |view, window, _| {
-                view.inner.leave(Leaving::Blurred, Some(&*window));
-                view.inner.pressed.set(false);
+                if blur_leaves(view.inner.pressed.get(), window.is_window_active()) {
+                    view.inner.leave(Leaving::Blurred, Some(&*window));
+                    view.inner.pressed.set(false);
+                }
             }));
         }
         let down = self.inner.clone();
@@ -482,6 +485,15 @@ impl Inner {
             .get()
             .map_or(PLACEHOLDER_HEIGHT, |h| h as f32)
     }
+}
+
+/// Whether the view losing the keyboard tells the page the pointer left it.
+/// A button held on the page keeps the pointer there while the window has
+/// the operator: focus moving inside the window is not the pointer moving,
+/// and the release still comes to the page (pointer capture). A window that
+/// lost the operator may never deliver that release, so there it leaves.
+fn blur_leaves(pressed: bool, window_active: bool) -> bool {
+    !pressed || !window_active
 }
 
 /// Why the element tells the page the pointer left it ([`Inner::leave`]).
@@ -802,7 +814,10 @@ pub fn pump(engine: Rc<dyn Engine>, cx: &mut App) {
 mod tests {
     use super::*;
     use crate::visual::web::fake::{Call, FakeEngine, CONTENT_HEIGHT};
-    use gpui::{div, point, Modifiers, ParentElement, Styled, TestAppContext, VisualTestContext};
+    use gpui::{
+        div, point, Modifiers, MouseButton, ParentElement, Styled, TestAppContext,
+        VisualTestContext,
+    };
 
     const LEFT: f32 = 30.;
     const TOP: f32 = 50.;
@@ -1156,6 +1171,80 @@ mod tests {
             &engine.journal()[calls..]
         );
         assert_eq!(web.read_with(cx, |w, _| w.frames()), frames);
+    }
+
+    /// A browser page in the test window, and what it handed its owner as
+    /// operator input (`before_input`), in order.
+    fn browser_page(cx: &mut TestAppContext) -> (Rc<RefCell<Vec<Input>>>, &mut VisualTestContext) {
+        let engine = Rc::new(FakeEngine::new());
+        let handed = Rc::new(RefCell::new(Vec::new()));
+        let queue = handed.clone();
+        let (_host, cx) = cx.add_window_view(|_, cx| Host {
+            web: WebView::browser(
+                engine.clone(),
+                "http://localhost:5173/",
+                BrowserViewport {
+                    width: 1,
+                    height: 1,
+                    scale: 1.,
+                },
+                Rc::new(move |input| queue.borrow_mut().push(input)),
+                Rc::new(|_| {}),
+                cx,
+            )
+            .unwrap(),
+            shown: true,
+        });
+        cx.simulate_resize(size(px(500.), px(700.)));
+        cx.run_until_parked();
+        (handed, cx)
+    }
+
+    fn kinds(inputs: &[Input]) -> Vec<&'static str> {
+        inputs
+            .iter()
+            .map(|input| match input {
+                Input::Move { .. } => "move",
+                Input::Down { .. } => "down",
+                Input::Up { .. } => "up",
+                Input::Leave => "leave",
+                _ => "other",
+            })
+            .collect()
+    }
+
+    #[gpui::test]
+    fn a_press_on_the_page_outlasts_the_keyboard_moving_elsewhere_in_the_window(
+        cx: &mut TestAppContext,
+    ) {
+        let (handed, cx) = browser_page(cx);
+        let on_page = point(px(LEFT + 15.), px(TOP + 20.));
+        cx.simulate_mouse_move(on_page, None, Modifiers::default());
+        cx.simulate_mouse_down(on_page, MouseButton::Left, Modifiers::default());
+        let _elsewhere = cx.update(|window, cx| {
+            assert!(window.is_window_active(), "the window has the operator");
+            let elsewhere = cx.focus_handle();
+            window.focus(&elsewhere, cx);
+            elsewhere
+        });
+        cx.run_until_parked();
+        assert_eq!(kinds(&handed.borrow()), ["move", "down"], "the press holds");
+        cx.simulate_mouse_up(point(px(5.), px(5.)), MouseButton::Left, Modifiers::default());
+        assert_eq!(
+            kinds(&handed.borrow()),
+            ["move", "down", "up"],
+            "the release, off the page, still ends it on the page"
+        );
+    }
+
+    #[gpui::test]
+    fn a_press_on_the_page_ends_when_the_window_loses_the_operator(cx: &mut TestAppContext) {
+        let (handed, cx) = browser_page(cx);
+        let on_page = point(px(LEFT + 15.), px(TOP + 20.));
+        cx.simulate_mouse_move(on_page, None, Modifiers::default());
+        cx.simulate_mouse_down(on_page, MouseButton::Left, Modifiers::default());
+        cx.deactivate_window();
+        assert_eq!(kinds(&handed.borrow()), ["move", "down", "leave"]);
     }
 
     #[gpui::test]
