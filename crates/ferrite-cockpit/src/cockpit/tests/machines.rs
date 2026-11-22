@@ -2052,6 +2052,13 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
     let state = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| served(cockpit, thread)));
     assert_eq!(state.tabs[0].url, "http://localhost:5173/final", "new tab does not navigate the existing page");
     assert_eq!(state.tabs[1].url, "http://localhost:5173/second");
+    // The address acts on the second tab once the window itself has it:
+    // until then Enter would open a third.
+    until(cx, |cx| {
+        view.read_with(cx, |view, cx| view.browsers.shown_for_test(view.cockpit.read(cx).thread_key(thread)))
+            .is_some_and(|(shown, _)| shown.active == Some(state.tabs[1].id))
+    });
+    super::browser_chrome::page_shown(&view, thread, cx);
     engine.defer_browser_navigation(true);
     cx.simulate_keystrokes("cmd-a");
     cx.simulate_input("http://localhost:5173/delayed");
