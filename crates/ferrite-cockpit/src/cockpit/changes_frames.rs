@@ -111,7 +111,8 @@ fn case(name: &str) -> String {
     let open = name != "shut";
     let store = Store::open(base.join("store")).unwrap();
     let mut core = Cockpit::new(store, Box::new(Quiet));
-    core.open(Provider::Claude, WorkspaceChoice::Main { checkout: repo.clone() }).unwrap();
+    let here = core.this_computer().expect("this computer");
+    core.open(here, Provider::Claude, WorkspaceChoice::Main { checkout: repo.clone() }).unwrap();
     let cx = crate::headless::app(ferrite_ui::keymap::bindings(ferrite_ui::keymap::PLATFORM));
     let mut driver = Driver::open(cx, |cx| CockpitView::new_with_provider(core, Provider::Claude, cx));
     driver.tick(16);

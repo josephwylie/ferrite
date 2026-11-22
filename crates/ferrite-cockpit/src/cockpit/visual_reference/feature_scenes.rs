@@ -875,7 +875,8 @@ fn factory() -> (Scene, Setup) {
     let mut scene = Scene::new("factory");
     let ferrite = scene.project("ferrite");
     let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
-    let project = scene.core.project_of(mine).expect("a Project").project();
+    let key = scene.core.project_of(mine).expect("a Project");
+    let project = key.project();
     let worker = scene
         .core
         .fixture_open_owned(
@@ -976,8 +977,8 @@ fn factory() -> (Scene, Setup) {
     };
     scene.core.fixture_factory(board);
     let setup: Setup = Box::new(move |view, _, cx| {
-        view.open_factory(project, cx);
-        view.open_task("t-2", cx);
+        view.open_factory(key, cx);
+        view.open_task(key.machine(), "t-2", cx);
         view.task_tab(crate::cockpit::factory::TaskTab::Activity, cx);
     });
     (scene, setup)
@@ -1268,7 +1269,7 @@ fn factory_workflows() -> (Scene, Setup) {
     let mut scene = Scene::new("factory-workflows");
     let ferrite = scene.project("ferrite");
     let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
-    let project = scene.core.project_of(mine).expect("a Project").project();
+    let project = scene.core.project_of(mine).expect("a Project");
     scene.core.focus_thread(mine);
     scene.core.fixture_live_factory();
     let setup: Setup = Box::new(move |view, _, cx| {
@@ -1294,7 +1295,7 @@ fn factory_start(kind: ferrite_core::factory::StartKind) -> (Scene, Setup) {
     });
     let ferrite = scene.project("ferrite");
     let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
-    let project = scene.core.project_of(mine).expect("a Project").project();
+    let project = scene.core.project_of(mine).expect("a Project");
     scene.core.focus_thread(mine);
     scene.core.fixture_live_factory();
     scene.core.fixture_github(vec![(
@@ -1342,10 +1343,11 @@ fn factory_coordinator() -> (Scene, Setup) {
     let mut scene = Scene::new("factory-coordinator");
     let ferrite = scene.project("ferrite");
     let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
-    let project = scene.core.project_of(mine).expect("a Project").project();
+    let key = scene.core.project_of(mine).expect("a Project");
+    let project = key.project();
     let root = scene
         .core
-        .registry()
+        .registry(key.machine())
         .project(project)
         .expect("its Project")
         .root
@@ -1407,7 +1409,7 @@ fn factory_coordinator() -> (Scene, Setup) {
         core.fixture_factory_command(command);
     }
     let draft = core
-        .factory()
+        .factory(key.machine())
         .workflow("w-1")
         .map(|workflow| workflow.draft.clone())
         .expect("the draft");
@@ -1445,7 +1447,7 @@ fn factory_coordinator() -> (Scene, Setup) {
         });
     }
     let setup: Setup = Box::new(move |view, _, cx| {
-        view.open_factory(project, cx);
+        view.open_factory(key, cx);
         view.factory_surface(crate::cockpit::workflows::Surface::Coordinator, cx);
         view.accept_proposal("p-1", cx);
         view.dismiss_proposal("p-2", cx);
