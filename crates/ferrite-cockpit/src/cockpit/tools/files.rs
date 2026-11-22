@@ -58,7 +58,7 @@ use super::editor::{self, Editor};
 use super::save::SaveState;
 use super::tree::{FileTree, Row, Status};
 use super::working_set::{OpenFile, WorkingSet};
-use ferrite_core::{MachineKey, SavedThread};
+use ferrite_core::SavedThread;
 use super::*;
 use crate::cockpit::context_menu::Submenu;
 use crate::cockpit::panel::controls::focusable;
@@ -328,19 +328,11 @@ impl CockpitView {
         };
         let machine = self.cockpit.read(cx).machine().cloned();
         let stored = self
-            .files_machine(cx)
+            .machine_key
+            .clone()
             .and_then(|machine| self.panel.working_sets.get(&SavedThread { machine, thread }).cloned());
         self.files
             .update(cx, |files, cx| files.make(key, root, machine, stored, cx));
-    }
-
-    /// The machine the window is on, as files.json names it: none with no
-    /// environment to be on.
-    fn files_machine(&self, cx: &gpui::App) -> Option<MachineKey> {
-        match &self.machines {
-            Some(machines) => machines.read(cx).selected_key(),
-            None => Some(MachineKey(None)),
-        }
     }
 
     /// ⌘P: the Files Surface shows, and the tree's filter takes the
@@ -384,9 +376,10 @@ impl CockpitView {
     }
 
     /// The Panel's stored working sets take the live Files' tabs and
-    /// settings, for files.json.
+    /// settings, for files.json, as this view's machine's: its core's
+    /// Thread list prunes only that machine's sets.
     pub(in crate::cockpit) fn sync_working_sets(&mut self, cx: &gpui::App) {
-        let Some(machine) = self.files_machine(cx) else {
+        let Some(machine) = self.machine_key.clone() else {
             return;
         };
         let live = self.files.read(cx).working_sets().map(|(thread, set)| {

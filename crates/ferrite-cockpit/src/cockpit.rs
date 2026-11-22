@@ -603,6 +603,11 @@ pub struct CockpitView {
     /// The machines this window can be on (ADR 0026); `None` in a window
     /// on an Engine of its own.
     machines: Option<Entity<crate::machines::Machines>>,
+    /// The machine this view's core is on, as saved files name it (ADR
+    /// 0045); `None` with no environment. Taken once, when the view gets
+    /// its machines with its core: a swap has moved `Machines` on before
+    /// the view it leaves saves, and that save is still this machine's.
+    machine_key: Option<ferrite_core::MachineKey>,
 }
 
 /// The Cockpit asks its window to put it on machine `index` (ADR 0026),
@@ -1362,6 +1367,7 @@ impl CockpitView {
             columns: columns::Columns::new(),
             launch_provider,
             machines: None,
+            machine_key: Some(ferrite_core::MachineKey(None)),
         };
         // A Cockpit notification is the earliest common point after core
         // state changes and before GPUI draws cached transcript children.
@@ -1398,9 +1404,11 @@ impl CockpitView {
         view
     }
 
-    /// The window's machines (ADR 0026), listed in the nav and Settings.
+    /// The window's machines (ADR 0026), listed in the nav and Settings;
+    /// the one selected now is the one this view's core is on.
     pub fn with_machines(mut self, machines: Entity<crate::machines::Machines>, cx: &gpui::App) -> Self {
-        let here = machines.read(cx).selected_key().unwrap_or(ferrite_core::MachineKey(None));
+        self.machine_key = machines.read(cx).selected_key();
+        let here = self.machine_key.clone().unwrap_or(ferrite_core::MachineKey(None));
         self.panel.hold(here, self.cockpit.read(cx));
         self.machines = Some(machines);
         self

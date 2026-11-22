@@ -126,7 +126,8 @@ impl WorkingSets {
     }
 
     /// `machine`'s sets keep only the Threads it still knows. Another
-    /// machine's sets wait for that machine's own list.
+    /// machine's sets wait for that machine's own list, and an empty list
+    /// is a machine not heard from yet: it prunes nothing.
     pub(super) fn retain(&mut self, machine: &MachineKey, known: &HashSet<ThreadId>) {
         if !known.is_empty() {
             let before = self.sets.len();
@@ -232,5 +233,7 @@ mod tests {
         sets.retain(&MachineKey(None), &HashSet::from([ThreadId::new(4)]));
         assert_eq!(sets.get(&here), None, "this computer no longer has its 3");
         assert_eq!(sets.get(&there), Some(&set("there.rs")), "box's 3 is box's to judge");
+        sets.retain(&MachineKey(Some("me@box".into())), &HashSet::new());
+        assert_eq!(sets.get(&there), Some(&set("there.rs")), "box has not answered yet");
     }
 }
