@@ -231,7 +231,7 @@ fn a_delegates_reply_wakes_its_parent_in_t3_words() {
         .until(|window| !wakes_in(window, thread).is_empty());
     let (note, said) = wakes_in(&world.window, thread).remove(0);
     assert_eq!(said, woken);
-    assert_eq!(note.summary, "Delegated task \"Login test\" completed");
+    assert_eq!(note.summary, "Delegated task \"Login test\" finished");
     assert_eq!(note.outcome, WakeOutcome::Completed);
     let d1 = world.d1();
     assert_eq!((&d1["status"], &d1["result"]), (&"completed".into(), &"All green.".into()));

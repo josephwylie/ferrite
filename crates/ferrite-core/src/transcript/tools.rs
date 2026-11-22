@@ -16,6 +16,9 @@ pub enum ToolKind<'a> {
     WebSearch,
     /// A subagent: it has a transcript of its own.
     Agent,
+    /// A Delegate's start (`delegate_task`, ADR 0047): a Thread on another
+    /// machine, which the call's row opens there.
+    Delegate,
     /// A checklist tool. The plan it acknowledges is `Progress.plan`.
     Todo,
     /// A question or plan approval put to the operator.
@@ -91,6 +94,12 @@ pub struct ToolPolicy<'a> {
 /// (`Agent`, `Task` before it), and what the Codex bridge calls its spawns.
 pub const AGENT: &str = "Agent";
 
+/// Whether a call is Ferrite's `delegate_task` (ADR 0047): Claude's MCP
+/// name for it, or Codex's dynamic tool.
+pub fn starts_delegate(name: &str) -> bool {
+    matches!(name, "delegate_task" | "mcp__ferrite__delegate_task")
+}
+
 /// The tool presentation table. Decided by the name alone, never by a
 /// result still to come; an unknown name is `Other`, rolling up.
 pub fn policy(name: &str) -> ToolPolicy<'_> {
@@ -111,6 +120,7 @@ pub fn policy(name: &str) -> ToolPolicy<'_> {
         "WebFetch" => (Fetch, RollsUp),
         "WebSearch" | "webSearch" => (WebSearch, RollsUp),
         "Task" | AGENT => (Agent, Agents),
+        name if starts_delegate(name) => (Delegate, Agents),
         "ReportFindings" => (Findings, StandsAlone),
         // `TaskStop` and `TaskOutput` are background-task tools, not the
         // checklist's: they stay ordinary rows.
@@ -133,7 +143,7 @@ pub fn policy(name: &str) -> ToolPolicy<'_> {
         (Edit | Write, _) => ToolIcon::SquarePen,
         (Search, _) => ToolIcon::Search,
         (Fetch | WebSearch, _) => ToolIcon::Globe,
-        (Agent, _) => ToolIcon::Bot,
+        (Agent | Delegate, _) => ToolIcon::Bot,
         (Todo, _) => ToolIcon::ListTodo,
         (Question, _) => ToolIcon::MessageCircle,
         (Visual | Mcp("ferrite"), _) => ToolIcon::App,
@@ -273,6 +283,9 @@ pub(super) fn result_summary(
 /// quietly on anything else rather than guessing. A search names what it
 /// looks for, then where: `Grep(status_line, crates/ferrite/src)`.
 pub(super) fn tool_summary(name: &str, input: &serde_json::Value) -> String {
+    if starts_delegate(name) {
+        return delegate_title(input);
+    }
     if matches!(name, "Grep" | "Glob") {
         if let Some(pattern) = input.get("pattern").and_then(|v| v.as_str()) {
             return match input.get("path").and_then(|v| v.as_str()) {
@@ -282,6 +295,31 @@ pub(super) fn tool_summary(name: &str, input: &serde_json::Value) -> String {
         }
     }
     tool_subject(input)
+}
+
+/// A `delegate_task` call's row title, as T3 names the task in its
+/// parent's timeline (`subagentThreadTitle`): its `title`, else its
+/// `task`, past 72 characters cut to 69 and `...`. Codex's call carries
+/// them under `arguments`.
+fn delegate_title(input: &serde_json::Value) -> String {
+    let arguments = input.get("arguments").filter(|value| value.is_object()).unwrap_or(input);
+    let named = |key| {
+        arguments
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    };
+    let Some(detail) = named("title").or_else(|| named("task")) else {
+        return String::new();
+    };
+    match detail.char_indices().nth(72) {
+        None => detail.to_owned(),
+        Some(_) => {
+            let end = detail.char_indices().nth(69).map_or(detail.len(), |(at, _)| at);
+            format!("{}...", &detail[..end])
+        }
+    }
 }
 
 fn tool_subject(input: &serde_json::Value) -> String {
@@ -323,6 +361,22 @@ fn tool_subject(input: &serde_json::Value) -> String {
 mod tests {
     use super::*;
 
+    /// T3's `subagentThreadTitle`: the title, else the task, cut past 72.
+    #[test]
+    fn a_delegate_call_is_titled_as_t3_titles_its_task() {
+        let long = "x".repeat(73);
+        for (input, title) in [
+            (serde_json::json!({"title": " Fix the tests ", "task": "Run them"}), "Fix the tests".to_owned()),
+            (serde_json::json!({"task": "Run the suite"}), "Run the suite".to_owned()),
+            (serde_json::json!({"arguments": {"task": "Codex's"}}), "Codex's".to_owned()),
+            (serde_json::json!({"task": "y".repeat(72)}), "y".repeat(72)),
+            (serde_json::json!({"task": long}), format!("{}...", "x".repeat(69))),
+            (serde_json::json!({}), String::new()),
+        ] {
+            assert_eq!(tool_summary("mcp__ferrite__delegate_task", &input), title, "{input}");
+        }
+    }
+
     #[test]
     fn a_short_subject_keeps_what_a_status_line_needs() {
         use ToolKind::*;
@@ -353,6 +407,7 @@ mod tests {
             ("WebSearch", Globe),
             ("WebFetch", Globe),
             ("Agent", Bot),
+            ("mcp__ferrite__delegate_task", Bot),
             ("TaskStop", Zap),
             ("AskUserQuestion", MessageCircle),
             ("ExitPlanMode", MessageCircle),
@@ -387,6 +442,9 @@ mod tests {
             ("webSearch", WebSearch, RollsUp),
             ("Task", Agent, Agents),
             ("Agent", Agent, Agents),
+            ("mcp__ferrite__delegate_task", Delegate, Agents),
+            ("delegate_task", Delegate, Agents),
+            ("mcp__other__delegate_task", Mcp("other"), RollsUp),
             ("mcp__ferrite__show_visual", Visual, StandsAlone),
             ("ferrite.show_visual", Visual, StandsAlone),
             ("AskUserQuestion", Question, StandsAlone),

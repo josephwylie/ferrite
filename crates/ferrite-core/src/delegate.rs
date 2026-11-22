@@ -26,6 +26,10 @@ use crate::ThreadId;
 /// `task_status` to read.
 pub const RESULT_INLINE_BYTES: usize = 16_000;
 
+/// The longest label a wake's line gives a Delegate (T3's
+/// `LABEL_MAX_LENGTH`).
+const REPORT_LABEL_CHARS: usize = 80;
+
 /// What a start tells the agent to do next (T3's running-task `next`).
 pub const NEXT: &str =
     "Completion wakes this thread. Do not wait on it or poll it. Continue other work, and end your turn when none is left.";
@@ -77,6 +81,13 @@ pub struct Delegate {
     /// not told holds a wake.
     #[serde(default, skip_serializing_if = "is_false")]
     pub told: bool,
+    /// When it was recorded and when it ended here, as stored stamps
+    /// (`clock::now_stamp`): its row's clock (T3's `startedAt` and
+    /// `completedAt`). A record from before them has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
 }
 
 /// T3's delegated task statuses, less `queued`: a Delegate is recorded
@@ -196,7 +207,12 @@ pub struct Delegating {
     pub holds: bool,
 }
 
-/// One Delegate, as a window draws it: no task, no result.
+/// The most of a Delegate's result its digest carries, in characters
+/// (T3's `subagentDetailSummary` cut): its timeline row shows one line.
+pub const RESULT_LINE_CHARS: usize = 280;
+
+/// One Delegate, as a window draws it: no task, and its result only as far
+/// as its row shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delegated {
     pub id: DelegateId,
@@ -215,6 +231,13 @@ pub struct Delegated {
     pub problem: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub stop_owed: bool,
+    /// Its result as a read shows it, cut to [`RESULT_LINE_CHARS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
 }
 
 impl Delegating {
@@ -232,6 +255,9 @@ impl Delegating {
                     status: delegate.status,
                     problem: delegate.problem.clone(),
                     stop_owed: delegate.stop_owed,
+                    result: delegate.result_text().map(|result| cut(&result, RESULT_LINE_CHARS, RESULT_LINE_CHARS)),
+                    started_at: delegate.started_at.clone(),
+                    ended_at: delegate.ended_at.clone(),
                 })
                 .collect(),
             holds: delegates.holding(),
@@ -255,6 +281,25 @@ impl Delegated {
 /// T3's words for a stop that has not reached the Delegate's Thread.
 fn unstopped(machine: &str, problem: &str) -> String {
     format!("It could not be stopped on {machine} and may still run there: {problem}")
+}
+
+/// The Delegate a `delegate_task` call started, by the `taskId` its answer
+/// names (T3 reads its child card's task from the same answer): none for
+/// another call, or one that has not answered or failed.
+pub fn started_by(tool: &crate::transcript::ToolBlock) -> Option<DelegateId> {
+    if !crate::transcript::tools::starts_delegate(&tool.name) || tool.state != crate::transcript::ToolState::Ok {
+        return None;
+    }
+    // The answer is T3's task as JSON, quoted again when a provider hands
+    // it back inside its own (`\"taskId\":\"d1\"`).
+    let answer = &tool.output.as_ref()?.text;
+    let after = &answer[answer.find("taskId")? + "taskId".len()..];
+    let id: String = after
+        .trim_start_matches(['\\', '"', ':', ' '])
+        .chars()
+        .take_while(char::is_ascii_alphanumeric)
+        .collect();
+    id.parse().ok()
 }
 
 /// What a launch there answered, for the record.
@@ -344,6 +389,8 @@ impl Delegates {
             problem: None,
             stop_owed: false,
             told: false,
+            started_at: Some(crate::clock::now_stamp()),
+            ended_at: None,
         });
         self.0.last().expect("pushed")
     }
@@ -372,6 +419,7 @@ impl Delegates {
         delegate.status = status;
         delegate.result = Some(result);
         delegate.problem = None;
+        delegate.ended_at = Some(crate::clock::now_stamp());
         true
     }
 
@@ -389,6 +437,7 @@ impl Delegates {
                     Some(reason) => format!("Cancelled: {reason}"),
                 });
                 delegate.problem = None;
+                delegate.ended_at = Some(crate::clock::now_stamp());
                 Cancel::Requested
             }
         };
@@ -407,6 +456,7 @@ impl Delegates {
                 delegate.status = Status::Interrupted;
                 delegate.result = Some("Stopped with its parent.".into());
                 delegate.problem = None;
+                delegate.ended_at = Some(crate::clock::now_stamp());
             }
             delegate.stop_owed = true;
             delegate.told = true;
@@ -478,10 +528,23 @@ impl Delegates {
             })
             .collect::<Vec<_>>()
             .join("\n\n");
+        // T3's `delegatedCompletionNotification`: one verb for them all,
+        // failed over stopped over finished, and each one's label.
+        let verb = if ended.iter().any(|delegate| delegate.status == Status::Failed) {
+            "failed"
+        } else if ended.iter().any(|delegate| delegate.status != Status::Completed) {
+            "stopped"
+        } else {
+            "finished"
+        };
         let summary = match ended.as_slice() {
             [] => return None,
-            [one] => format!("Delegated task \"{}\" {}", one.name(), one.status),
-            many => format!("{} delegated tasks ended", many.len()),
+            [one] => format!("Delegated task \"{}\" {verb}", one.report_label()),
+            many => format!(
+                "{} delegated tasks {verb}: {}",
+                many.len(),
+                many.iter().map(|delegate| delegate.report_label()).collect::<Vec<_>>().join(", ")
+            ),
         };
         let outcome = if ended.iter().any(|delegate| delegate.status == Status::Failed) {
             Outcome::Failed
@@ -517,9 +580,12 @@ impl Delegate {
         format!("Delegated task {}{title} [{}]", self.id, self.status)
     }
 
-    /// Its title, else its id.
-    fn name(&self) -> String {
-        self.title.clone().unwrap_or_else(|| self.id.to_string())
+    /// What a wake's line names it by (T3's `reportLabel`): the first line
+    /// of its title, else of its task, cut to 80 characters.
+    fn report_label(&self) -> String {
+        let named = self.title.as_deref().map(str::trim).filter(|title| !title.is_empty());
+        let line = named.unwrap_or(&self.task).trim().lines().next().unwrap_or_default().trim();
+        cut(line, REPORT_LABEL_CHARS - 1, REPORT_LABEL_CHARS)
     }
 
     /// Its result as a read shows it: a stop still owed says it may still
@@ -548,6 +614,15 @@ impl Delegate {
             "problem": self.problem,
             "stop_owed": self.stop_owed,
         })
+    }
+}
+
+/// `text` as it is up to `limit` characters, else its first `keep` and
+/// `…` (T3's cut labels).
+fn cut(text: &str, keep: usize, limit: usize) -> String {
+    match (text.char_indices().nth(limit), text.char_indices().nth(keep)) {
+        (Some(_), Some((end, _))) => format!("{}\u{2026}", &text[..end]),
+        _ => text.to_owned(),
     }
 }
 
