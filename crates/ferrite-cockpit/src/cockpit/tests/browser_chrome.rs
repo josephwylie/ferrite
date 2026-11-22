@@ -128,15 +128,7 @@ fn a_pending_new_tab_can_be_left_by_its_page_tab_or_escape(cx: &mut TestAppConte
             !view.cockpit.update(cx, |cockpit, _| served(cockpit, thread).tabs[0].loading)
         })
     });
-    // The window has the Server's word from its message, a beat or more
-    // later.
-    until(cx, |cx| {
-        view.read_with(cx, |view, cx| {
-            view.browsers
-                .shown_for_test(view.cockpit.read(cx).thread_key(thread))
-        })
-        .is_some_and(|(state, _)| state.tabs.iter().any(|tab| tab.live && !tab.loading))
-    });
+    page_shown(&view, thread, cx);
     let page = view.update(cx, |view, cx| {
         view.cockpit.update(cx, |cockpit, _| served(cockpit, thread).tabs[0].id)
     });
@@ -195,9 +187,25 @@ pub(super) fn browser_window<'a>(cx: &'a mut TestAppContext, name: &str) -> Wind
             !view.cockpit.update(cx, |cockpit, _| served(cockpit, thread).tabs[0].loading)
         })
     });
-    // The window has the Server's word from its message, on its next beat.
-    tick(cx);
+    page_shown(&view, thread, cx);
     (engine, view, thread, cx)
+}
+
+/// Wait until the window itself has the Server's word that `thread`'s
+/// active tab is live and loaded, and has drawn it: its controls act on
+/// the page only from then. The word comes as a message, a beat or more
+/// after the Server has it.
+pub(super) fn page_shown(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
+    until(cx, |cx| {
+        view.read_with(cx, |view, cx| {
+            view.browsers
+                .shown_for_test(view.cockpit.read(cx).thread_key(thread))
+        })
+        .is_some_and(|(state, _)| {
+            state.tabs.iter().any(|tab| Some(tab.id) == state.active && tab.live && !tab.loading)
+        })
+    });
+    tick(cx);
 }
 
 fn tab_count(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> usize {

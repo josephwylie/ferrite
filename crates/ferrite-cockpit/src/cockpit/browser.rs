@@ -891,7 +891,9 @@ impl CockpitView {
                             .iter()
                             .any(|page| page.id == tab && !page.live)
                     }) {
-                        self.browser_action(thread, Action::Select { tab }, cx);
+                        // Not the operator's press: its answer leaves the
+                        // address entry, a pending new tab too, as it is.
+                        self.act_in_browser(thread, Action::Select { tab }, false, cx);
                     }
                 }
                 Event::SettledInput(thread, owner, document, revision) => {
