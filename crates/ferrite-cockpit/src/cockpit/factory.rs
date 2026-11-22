@@ -1020,9 +1020,25 @@ fn task_toast(machine: ferrite_core::MachineId, task: &str) -> SharedString {
     format!("{}:{task}", machine.get()).into()
 }
 
-/// A system notification's tag for a Task.
-pub(crate) fn task_tag(task: &str) -> String {
-    format!("ferrite-task-{task}")
+const TASK_TAG: &str = "ferrite-task-";
+
+/// A system notification's tag for a Task. Task ids are a machine's own,
+/// so it names the machine as a Thread's tag does (`system_tag`).
+pub(crate) fn task_tag(machine: &ferrite_core::MachineKey, task: &str) -> String {
+    match &machine.0 {
+        None => format!("{TASK_TAG}{task}"),
+        Some(target) => format!("{TASK_TAG}{task}@{target}"),
+    }
+}
+
+/// The Task a tag names, and its machine: `task_tag` read back. A Task id
+/// holds no `@` (`t-N`), so the first one starts the machine's name.
+pub(crate) fn tagged_task(tag: &str) -> Option<(ferrite_core::MachineKey, &str)> {
+    let named = tag.strip_prefix(TASK_TAG)?;
+    Some(match named.split_once('@') {
+        Some((task, target)) => (ferrite_core::MachineKey(Some(target.to_string())), task),
+        None => (ferrite_core::MachineKey(None), named),
+    })
 }
 
 /// The ink a status is said in.
@@ -1379,9 +1395,10 @@ impl CockpitView {
         if self.prefs.settings.system_notifications
             && crate::system_notifications::wanted(false, self.cockpit.read(cx).window_active())
         {
+            let saved_as = self.cockpit.read(cx).saved_as(machine).cloned().unwrap_or_default();
             crate::system_notifications::post(
                 crate::system_notifications::Posting {
-                    tag: task_tag(&task),
+                    tag: task_tag(&saved_as, &task),
                     needs_you: status.needs_you(),
                     word: status.word(),
                     title,
@@ -1414,7 +1431,8 @@ impl CockpitView {
         for (machine, task) in gone {
             self.task_toasts.remove(&(machine, task.clone()));
             window.remove_notification1::<TaskToast>(task_toast(machine, &task), cx);
-            crate::system_notifications::withdraw(&task_tag(&task), cx);
+            let saved_as = self.cockpit.read(cx).saved_as(machine).cloned().unwrap_or_default();
+            crate::system_notifications::withdraw(&task_tag(&saved_as, &task), cx);
         }
     }
 
@@ -1449,20 +1467,18 @@ impl CockpitView {
     }
 
     /// A Task's system notification, clicked: its panel opens, on the
-    /// Factory shown's machine when its board has it, else the first
-    /// machine whose board does.
+    /// machine its tag names, while the window holds it and its board has
+    /// the Task.
     pub(super) fn open_task_notification(&mut self, tag: &str, cx: &mut Context<Self>) -> bool {
-        let Some(task) = tag.strip_prefix("ferrite-task-") else {
+        let Some((machine, task)) = tagged_task(tag) else {
             return false;
         };
-        let task = task.to_string();
         let cockpit = self.cockpit.read(cx);
-        let machine = self
-            .factory_machine()
-            .into_iter()
-            .chain(cockpit.machines())
-            .find(|machine| cockpit.factory(*machine).task(&task).is_some());
+        let machine = cockpit
+            .machine_saved_as(&machine)
+            .filter(|machine| cockpit.factory(*machine).task(task).is_some());
         if let Some(machine) = machine {
+            let task = task.to_string();
             self.open_task(machine, &task, cx);
         }
         true

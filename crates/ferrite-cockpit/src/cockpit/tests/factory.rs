@@ -301,8 +301,32 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
             .iter()
             .map(|notification| notification.tag.to_string())
             .collect::<Vec<_>>(),
-        [crate::cockpit::factory::task_tag("t-1")]
+        [crate::cockpit::factory::task_tag(&ferrite_core::MachineKey(None), "t-1")]
     );
+    // Its click lands on the Task, on its machine.
+    let tag = cx.delivered_system_notifications()[0].tag.to_string();
+    view.update(cx, |view, cx| view.open_system_notification(&tag, cx));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.open_task_now(cx).map(|task| task.id.as_str()), Some("t-1"));
+    });
+}
+
+/// A Task's notification tag names its machine, as a Thread's does: Task
+/// ids count from 1 on each machine, so `t-1` here and `t-1` on box are
+/// two Tasks, and a click reads back which.
+#[test]
+fn a_tasks_tag_names_its_machine() {
+    use crate::cockpit::factory::{task_tag, tagged_task};
+    use ferrite_core::MachineKey;
+    let here = MachineKey(None);
+    let on_box = MachineKey(Some("me@box".into()));
+    assert_eq!(task_tag(&here, "t-1"), "ferrite-task-t-1");
+    assert_eq!(task_tag(&on_box, "t-1"), "ferrite-task-t-1@me@box");
+    assert_ne!(task_tag(&here, "t-1"), task_tag(&on_box, "t-1"));
+    for machine in [here, on_box] {
+        assert_eq!(tagged_task(&task_tag(&machine, "t-1")), Some((machine, "t-1")));
+    }
+    assert_eq!(tagged_task("ferrite-thread-1@me@box"), None, "a Thread's is not a Task's");
 }
 
 /// A Task's toast says the event it announced, from the alert itself,
