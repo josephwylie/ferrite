@@ -686,7 +686,7 @@ fn a_workers_report_is_its_own_tool_needing_no_permission() {
     let (program, env) = stub("claude", output, &host, Some(&argv));
     let (heard, hear) = std::sync::mpsc::channel();
     let tools =
-        Tools::new(heard).for_thread(ThreadId::new(7), Some(&ThreadOwner::Task("t-1".into())));
+        Tools::new(heard).for_thread(ThreadId::new(7), Some(&ThreadOwner::Task("t-1".into())), false);
     let session = ClaudeSession::spawn(ClaudeConfig {
         program,
         env,
@@ -789,7 +789,7 @@ fn every_thread_watches_prs_and_a_subagents_watch_is_refused() {
     .join("\n");
     let (program, env) = stub("claude", output, &host, Some(&argv));
     let (heard, hear) = std::sync::mpsc::channel();
-    let tools = Tools::new(heard).for_thread(ThreadId::new(7), None);
+    let tools = Tools::new(heard).for_thread(ThreadId::new(7), None, false);
     let session = ClaudeSession::spawn(ClaudeConfig {
         program,
         env,

@@ -182,16 +182,24 @@ Stopping the agent or parking its Thread ends its watches.
 "$F" delegate get d1
 "$F" delegate list
 "$F" delegate cancel d1 --reason "not needed"
+"$F" delegate defaults 14
 ```
 
 `delegate start` starts a Thread on the saved machine `pc` to do the task,
 in `--checkout` there, for the Thread you run in (`--thread` for another),
-capped at your mode. Settings › Labs › Linked machines must be on on both
-machines. Its result wakes you when it ends: do not wait on it or poll it,
-and end your turn once no other work is left. `delegate get` reads one (its
-result once ended), `delegate list` all of yours, and `delegate cancel`
-stops it there. Stopping or parking your Thread stops them too; an
-interrupt does not.
+capped at your mode. Without `--checkout` it works in `--project` there,
+else in the Project there with your repository. `--model`, `--effort` and
+`--mode` (no broader than yours) set what it runs; on your provider it
+runs the model your agent runs, and on that model its effort. `delegate
+defaults` names what a Delegate of that Thread runs when its start names
+none. Settings › Labs › Linked machines must be on on both machines; while
+it is, your own `delegate_task`, `task_status`, `task_cancel`,
+`orchestrator_capabilities`, `machine_list` and `project_list` tools do
+the same, in T3 Code's words. Its result wakes you when it ends: do not
+wait on it or poll it, and end your turn once no other work is left.
+`delegate get` reads one (its result once ended), `delegate list` all of
+yours, and `delegate cancel` stops it there. Stopping or parking your
+Thread stops them too; an interrupt does not.
 
 ## Stop, close and clean up
 
@@ -257,7 +265,8 @@ prompt was taken, rather than when the turn ends:
 "$F" agent prompt 14 "Go on." --until working --until blocked --timeout-ms 8000
 ```
 
-`"$F" machine list` names the saved machines `--machine` can ask,
+`"$F" machine list` names the saved machines `--machine` can ask
+(`--reach`: whether each answers now),
 `"$F" provider list` the providers, models and efforts a Thread here can
 start on, `"$F" agent result 14` how its latest turn ended and its last
 reply in full, and

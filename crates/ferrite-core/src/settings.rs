@@ -177,6 +177,10 @@ pub struct ServerDefaults {
     pub codex_sandbox: Option<String>,
     pub placeholder_suggestions: bool,
     pub factory_tasks_at_once: usize,
+    /// Settings › Labs › Linked machines (`Labs::linked_machines`): the
+    /// machine's own, as T3 Code scopes Linked environments to its server.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub linked_machines: bool,
 }
 
 impl Default for ServerDefaults {
@@ -460,6 +464,7 @@ impl Settings {
             codex_sandbox: self.codex_sandbox.clone(),
             placeholder_suggestions: self.placeholder_suggestions,
             factory_tasks_at_once: self.factory_tasks_at_once,
+            linked_machines: self.labs.linked_machines,
         }
     }
 
@@ -469,6 +474,7 @@ impl Settings {
         self.codex_sandbox = defaults.codex_sandbox;
         self.placeholder_suggestions = defaults.placeholder_suggestions;
         self.factory_tasks_at_once = defaults.factory_tasks_at_once;
+        self.labs.linked_machines = defaults.linked_machines;
     }
 
     /// The model choice for `provider`; `None` is that provider's own

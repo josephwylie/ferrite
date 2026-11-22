@@ -103,6 +103,13 @@ pub fn now_stamp() -> String {
     now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
 }
 
+/// A Unix time, in seconds, as an RFC 3339 stamp in UTC
+/// (`2027-02-20T10:00:00Z`), as T3 Code says a link's `expiresAt`.
+pub fn utc_stamp(secs: u64) -> Option<String> {
+    let at = DateTime::from_timestamp(i64::try_from(secs).ok()?, 0)?;
+    Some(at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+}
+
 /// A stored stamp ([`now_stamp`]) as a local wall time; `None` for one
 /// written before stamps were kept (`7:18 pm`), which reads as it was.
 pub fn parse_local(stamp: &str) -> Option<DateTime<Local>> {

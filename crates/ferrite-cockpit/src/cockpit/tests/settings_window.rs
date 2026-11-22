@@ -181,6 +181,38 @@ fn leaving_the_connections_page_drops_the_connection_editor(cx: &mut TestAppCont
     assert!(cx.debug_bounds("connection-add").is_some());
 }
 
+/// Settings › Labs turns Linked machines on and off, and its file says so
+/// for the next start (the Delegate tools are offered by it).
+#[gpui::test]
+fn labs_turns_linked_machines_on_and_it_stays_on(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("settings-labs", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    let click = |selector: &'static str, cx: &mut gpui::VisualTestContext| {
+        let hit = cx.debug_bounds(selector).expect(selector).center();
+        cx.simulate_click(hit, gpui::Modifiers::none());
+        cx.run_until_parked();
+    };
+    click("settings-page-labs", cx);
+    let saved = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            let shown = view.shown_defaults(cx).unwrap().linked_machines;
+            let file = ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap();
+            assert_eq!(shown, file.labs.linked_machines, "shown as saved");
+            shown
+        })
+    };
+    assert!(!saved(cx), "off until turned on");
+    click("settings-linked-machines", cx);
+    assert!(saved(cx));
+    click("settings-linked-machines", cx);
+    assert!(!saved(cx));
+}
+
 #[gpui::test]
 fn a_ready_setup_replaces_the_environment_it_edits_and_keeps_its_warning(
     cx: &mut TestAppContext,
@@ -464,16 +496,17 @@ fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
     assert_eq!(page(cx), settings::PageKey::Permissions);
     assert!(cx.debug_bounds("settings-codex-sandbox").is_some());
     assert!(cx.debug_bounds("settings-provider-0").is_none());
-    cx.simulate_keystrokes("down down down down down");
+    cx.simulate_keystrokes("down down down down down down");
     tick(cx);
     assert_eq!(page(cx), settings::PageKey::About, "held at the foot");
     cx.simulate_keystrokes("up");
     tick(cx);
-    assert_eq!(page(cx), settings::PageKey::Connections);
-    cx.simulate_keystrokes("up up up");
+    assert_eq!(page(cx), settings::PageKey::Labs);
+    assert!(cx.debug_bounds("settings-linked-machines").is_some());
+    cx.simulate_keystrokes("up up up up");
     tick(cx);
     assert_eq!(page(cx), settings::PageKey::Behaviour);
-    cx.simulate_keystrokes("down down down down");
+    cx.simulate_keystrokes("down down down down down");
     tick(cx);
 
     let threads = cx

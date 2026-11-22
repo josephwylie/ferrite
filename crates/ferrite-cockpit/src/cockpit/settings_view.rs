@@ -47,6 +47,7 @@ pub(crate) struct SettingsInputs {
     // Cockpit with its own listeners.
     pub permissions: Vec<settings::Group>,
     pub machine: settings::Group,
+    pub labs: Vec<settings::Group>,
     pub server: Vec<settings::Row>,
     pub ferrite_update: Vec<settings::Row>,
 }
@@ -219,6 +220,7 @@ impl SettingsView {
             dir,
             permissions,
             machine,
+            labs,
             server,
             ferrite_update,
         } = inputs;
@@ -490,6 +492,7 @@ impl SettingsView {
                 vec![settings::Group::new(None).rows(server)],
             ),
             settings::page(settings::PageKey::Connections, connections),
+            settings::page(settings::PageKey::Labs, labs),
             settings::page(settings::PageKey::About, about),
         ]
     }
@@ -555,6 +558,7 @@ impl CockpitView {
             dir: self.prefs.dir.clone(),
             permissions: self.permission_groups(cx),
             machine: self.machine_group(cx),
+            labs: self.labs_groups(cx),
             server: self.server_rows(cx),
             ferrite_update: self.ferrite_update_rows(cx),
         }

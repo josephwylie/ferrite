@@ -281,7 +281,7 @@ fn a_cancel_stops_it_there_and_an_unreachable_stop_is_owed_until_it_gets_there()
     assert_eq!(d1["status"], "cancelled");
     world.d1_until(
         "result",
-        "Cancelled: not needed It could not be stopped on pc and may still run there: pc could not be reached: no route to host"
+        "Cancelled: not needed It could not be stopped on pc and may still run there: pc did not answer: no route to host"
             .into(),
     );
     world.link.up.store(true, Ordering::SeqCst);
@@ -358,7 +358,7 @@ fn a_child_parked_there_is_read_not_failed() {
     world.d1_until("status", "running".into());
     world.link.up.store(false, Ordering::SeqCst);
     ends(&provider, "Done there.", ferrite_core::TurnOutcome::Completed);
-    world.d1_until("problem", "pc could not be reached: no route to host".into());
+    world.d1_until("problem", "pc did not answer: no route to host".into());
     call(&world.peer).answer("c", "thread.close", serde_json::json!({ "thread": child }));
     world.link.up.store(true, Ordering::SeqCst);
     assert_eq!(
@@ -403,4 +403,331 @@ fn no_delegate_starts_while_linked_machines_is_off() {
     );
     assert_eq!(refused["error"]["code"], "linked_machines_off", "{refused}");
     assert!(world.link.methods().is_empty(), "nothing was sent there");
+}
+
+/// A Thread may act on another machine only while this machine's Labs
+/// gate is on: nor ask the machines, nor what one runs.
+#[test]
+fn nothing_asks_the_machines_while_linked_machines_is_off() {
+    let world = world("delegates-gate-asks");
+    std::fs::write(
+        world.parent.dir.join("settings.json"),
+        r#"{"machines":[{"name":"pc","target":"me@pc"}]}"#,
+    )
+    .unwrap();
+    for (method, params) in [
+        ("machine.list", serde_json::json!({ "reach": true })),
+        ("provider.list", serde_json::json!({ "machine": "pc" })),
+    ] {
+        let refused = world.as_agent(method, params);
+        assert_eq!(
+            (&refused["error"]["code"], &refused["error"]["message"]),
+            (
+                &"linked_machines_off".into(),
+                &"Linked machines is off on this machine, so no tool can act on another machine. \
+                  The user can turn it on in Settings → Labs."
+                    .into()
+            )
+        );
+    }
+    assert!(world.link.methods().is_empty(), "nothing was sent there");
+}
+
+/// AC: a machine with Linked machines off refuses the Delegate's Thread,
+/// and the start says so in T3's words.
+#[test]
+fn a_machine_with_linked_machines_off_takes_no_delegate() {
+    let world = world("delegates-gate-there");
+    std::fs::write(world.peer.dir.join("settings.json"), "{}").unwrap();
+    let refused = world.as_agent(
+        "delegate.start",
+        serde_json::json!({ "machine": "pc", "task": "x", "checkout": world.peer.dir }),
+    );
+    assert_eq!(
+        (&refused["error"]["code"], &refused["error"]["message"]),
+        (
+            &"linked_machines_off".into(),
+            &"pc has Linked machines turned off. Turn it on in its Settings → Labs.".into()
+        )
+    );
+}
+
+/// `root` is a checkout whose primary remote is `url`.
+fn remote(root: &Path, url: &str) {
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(
+        root.join(".git/config"),
+        format!("[remote \"origin\"]\n\turl = {url}\n"),
+    )
+    .unwrap();
+}
+
+/// A Project on `harness`'s Server whose repository is `url`, in `dir`:
+/// its id and directory.
+fn project_of(harness: &Harness, dir: &Path, url: &str) -> (String, PathBuf) {
+    use ferrite_core::workspace::git_for_tests as git;
+    let repo = repo_in(dir);
+    git(&repo, &["remote", "add", "origin", url]);
+    let opened = call(harness).answer("p", "project.open", serde_json::json!({ "cwd": repo }));
+    let id = opened["result"]["project"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{opened}"));
+    (id.to_string(), dunce::canonicalize(&repo).unwrap())
+}
+
+impl World {
+    /// The Thread there of a start answered `started`: its `thread.get`.
+    fn child(&self, started: &serde_json::Value) -> serde_json::Value {
+        let child = &started["result"]["delegate"]["thread"];
+        assert!(child.is_u64(), "{started}");
+        let got = call(&self.peer).answer("1", "thread.get", serde_json::json!({ "thread": child }));
+        got["result"]["thread"].clone()
+    }
+}
+
+/// AC: a start that names no checkout works in the Project there whose
+/// repository is its parent's, however each machine spells the remote;
+/// one that names a Project works in its directory.
+#[test]
+fn a_delegate_works_in_the_project_there_with_its_parents_repository() {
+    let world = world("delegates-repository");
+    remote(&world.parent.dir, "git@github.com:Acme/App.git");
+    let (project, directory) =
+        project_of(&world.peer, &world.peer.dir, "https://github.com/acme/app");
+    let started = world.as_agent(
+        "delegate.start",
+        serde_json::json!({ "machine": "pc", "task": "Fix it.", "request": "k-1" }),
+    );
+    let child = world.child(&started);
+    assert_eq!(
+        (child["cwd"].as_str().map(PathBuf::from), &child["project"]),
+        (Some(directory.clone()), &serde_json::json!(project))
+    );
+    let _first = world.peer.sessions.recv_timeout(PATIENCE).unwrap();
+    let named = world.as_agent(
+        "delegate.start",
+        serde_json::json!({ "machine": "pc", "task": "And this.", "project": project, "request": "k-2" }),
+    );
+    let child = world.child(&named);
+    assert_eq!(child["cwd"].as_str().map(PathBuf::from), Some(directory));
+}
+
+/// AC: with no one Project there to work in, a start is refused in T3's
+/// words before any Thread starts there.
+#[test]
+fn a_delegate_with_no_one_project_there_is_refused() {
+    let world = world("delegates-no-project");
+    let start = || {
+        world.as_agent(
+            "delegate.start",
+            serde_json::json!({ "machine": "pc", "task": "x" }),
+        )["error"]
+            .clone()
+    };
+    let refused = start();
+    assert_eq!(
+        (&refused["code"], &refused["message"]),
+        (
+            &"target_required".into(),
+            &"Pass `project`: this Thread's project has no repository to match there.".into()
+        )
+    );
+    remote(&world.parent.dir, "https://github.com/acme/app.git");
+    let refused = start();
+    assert_eq!(refused["code"], "project_not_found", "{refused}");
+    let message = refused["message"].as_str().unwrap();
+    assert!(
+        message.starts_with(
+            "No project there has this repository (github.com/acme/app). Pass `project`; \
+             `project.list` with this `machine` lists them."
+        ),
+        "{refused}"
+    );
+    let (one, _) = project_of(&world.peer, &world.peer.dir.join("one"), "git@github.com:acme/app");
+    let (two, _) = project_of(&world.peer, &world.peer.dir.join("two"), "git@github.com:acme/app");
+    let refused = start();
+    let message = refused["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("Several projects there have this repository: ")
+            && message.contains(&format!("({one})"))
+            && message.contains(&format!("({two})")),
+        "{refused}"
+    );
+    assert!(!world.link.methods().contains(&"thread.start".to_string()));
+}
+
+/// AC: the model, effort and mode asked are what its Thread there runs,
+/// and the record says so; a mode broader than the parent's, or another
+/// provider with no model, is refused before anything starts there.
+#[test]
+fn a_delegate_runs_the_model_effort_and_mode_asked() {
+    let world = world("delegates-model");
+    let started = world.as_agent(
+        "delegate.start",
+        serde_json::json!({
+            "machine": "pc", "task": "x", "checkout": world.peer.dir,
+            "model": "opus", "effort": "high", "mode": "approval_required",
+        }),
+    );
+    let delegate = &started["result"]["delegate"];
+    assert_eq!(
+        (&delegate["provider"], &delegate["model"]),
+        (&"claude".into(), &"opus".into()),
+        "{started}"
+    );
+    let _provider = world.peer.sessions.recv_timeout(PATIENCE).unwrap();
+    {
+        let told = world.peer.told.lock().unwrap();
+        let asked = ["--model", "opus", "--effort", "high"].map(String::from);
+        assert!(told.args[0].ends_with(&asked), "{:?}", told.args);
+        assert_eq!(
+            told.caps,
+            vec![Some(ferrite_core::runtime_mode::RuntimeMode::ApprovalRequired)]
+        );
+    }
+    let broader = world.as_agent(
+        "delegate.start",
+        serde_json::json!({ "machine": "pc", "task": "x", "checkout": world.peer.dir, "mode": "full_access" }),
+    );
+    assert_eq!(broader["error"]["code"], "widens_cap", "{broader}");
+    let codex = world.as_agent(
+        "delegate.start",
+        serde_json::json!({ "machine": "pc", "task": "x", "checkout": world.peer.dir, "provider": "codex" }),
+    );
+    assert_eq!(
+        (&codex["error"]["code"], &codex["error"]["message"]),
+        (
+            &"target_required".into(),
+            &"Pass `model` from `provider.list` with this `machine`.".into()
+        ),
+        "{codex}"
+    );
+    let methods = world.link.methods();
+    let starts = methods.iter().filter(|method| *method == "thread.start").count();
+    assert_eq!(starts, 1);
+}
+
+/// AC: `machine.list` with `reach` says whether each machine answers now,
+/// and `provider.list` of a machine is that machine's own; each in T3's
+/// words when it cannot be.
+#[test]
+fn the_linked_machines_are_asked_whether_they_answer_and_what_they_run() {
+    let world = world("delegates-reach");
+    let listed = world.as_agent("machine.list", serde_json::json!({ "reach": true }));
+    assert_eq!(listed["result"]["machines"][0]["status"], "reachable", "{listed}");
+    let providers = world.as_agent("provider.list", serde_json::json!({ "machine": "pc" }));
+    assert_eq!(providers["result"]["providers"][1]["provider"], "codex", "{providers}");
+    let unasked = world.as_agent("machine.list", serde_json::json!({}));
+    assert_eq!(
+        unasked["result"]["machines"][0].get("status"),
+        None,
+        "without reach, nothing is asked"
+    );
+    world.link.up.store(false, Ordering::SeqCst);
+    let listed = world.as_agent("machine.list", serde_json::json!({ "reach": true }));
+    let pc = &listed["result"]["machines"][0];
+    assert_eq!(
+        (&pc["status"], &pc["problem"]),
+        (&"unreachable".into(), &"pc did not answer: no route to host".into())
+    );
+    let unreached = world.as_agent("provider.list", serde_json::json!({ "machine": "pc" }));
+    assert_eq!(unreached["error"]["message"], "pc did not answer: no route to host");
+    let unknown = world.as_agent("provider.list", serde_json::json!({ "machine": "vps" }));
+    assert_eq!(
+        unknown["error"]["message"],
+        "This machine is not linked to vps. `machine.list` lists the linked ones."
+    );
+}
+
+/// AC: a Delegate that names no model runs the one its parent's Session
+/// runs, as its provider announced it, though the parent was started with
+/// none named; `delegate.defaults` says so.
+#[test]
+fn a_delegate_runs_the_model_its_parent_runs() {
+    let world = world("delegates-running-model");
+    let model = "claude-haiku-4-5";
+    world
+        .agent
+        .send(SessionEvent::ModelChanged {
+            model: model.into(),
+        })
+        .unwrap();
+    let defaults = || {
+        world.as_agent("delegate.defaults", serde_json::json!({ "thread": world.thread }))
+            ["result"]
+            .clone()
+    };
+    until("the parent's model", || defaults()["model"] == model);
+    assert_eq!(defaults()["provider"], "claude");
+    world.as_agent(
+        "delegate.start",
+        serde_json::json!({ "machine": "pc", "task": "x", "checkout": world.peer.dir }),
+    );
+    let _provider = world.peer.sessions.recv_timeout(PATIENCE).unwrap();
+    let told = world.peer.told.lock().unwrap();
+    let asked = ["--model", model].map(String::from);
+    assert!(told.args[0].ends_with(&asked), "{:?}", told.args);
+}
+
+/// AC: the agent's own Delegate tools start one on `pc` in the Project
+/// with its repository, answer T3's `next`, and read its result once it
+/// has woken the agent.
+#[test]
+fn the_agents_own_tools_delegate_to_a_linked_machine() {
+    let world = world("delegates-tools");
+    remote(&world.parent.dir, "git@github.com:acme/app.git");
+    project_of(&world.peer, &world.peer.dir, "https://github.com/acme/app");
+    let tools = world.parent.tools.for_thread(world.thread, None, true);
+    let use_tool = |tool: &str, arguments: serde_json::Value| {
+        let (told, said) = mpsc::channel();
+        tools.call(tool, &arguments, true, move |answer| {
+            told.send((answer.text, answer.is_error)).unwrap()
+        });
+        let (text, error) = said.recv_timeout(PATIENCE).unwrap();
+        assert!(!error, "{tool}: {text}");
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()
+    };
+    let machines = use_tool("machine_list", serde_json::json!({}));
+    assert_eq!(machines["links"][0]["status"], "reachable", "{machines}");
+    let capabilities = use_tool("orchestrator_capabilities", serde_json::json!({}));
+    assert_eq!(
+        capabilities["inheritedProviderInstanceId"], "claude",
+        "{capabilities}"
+    );
+    let there = use_tool(
+        "orchestrator_capabilities",
+        serde_json::json!({ "machineId": "pc" }),
+    );
+    assert_eq!(there["providers"][1]["driverKind"], "codex", "{there}");
+    let projects = use_tool("project_list", serde_json::json!({ "machineId": "pc" }));
+    assert_eq!(
+        projects["projects"][0]["repositoryIdentity"]["canonicalKey"],
+        "github.com/acme/app",
+        "{projects}"
+    );
+    let task = use_tool(
+        "delegate_task",
+        serde_json::json!({
+            "task": "Fix the flaky login test.",
+            "title": "Login test",
+            "target": { "machineId": "pc" },
+        }),
+    );
+    assert_eq!(
+        (&task["taskId"], &task["next"]),
+        (&"d1".into(), &ferrite_core::delegate::NEXT.into()),
+        "{task}"
+    );
+    let provider = world.peer.sessions.recv_timeout(PATIENCE).unwrap();
+    world.d1_until("status", "running".into());
+    ends(&provider, "All green.", ferrite_core::TurnOutcome::Completed);
+    assert_eq!(
+        world.prompts(1),
+        vec!["Delegated task d1 (Login test) [completed]:\nAll green."]
+    );
+    let status = use_tool("task_status", serde_json::json!({ "taskId": "d1" }));
+    assert_eq!(
+        (&status["workState"], &status["summary"]),
+        (&"result_available".into(), &"All green.".into())
+    );
 }

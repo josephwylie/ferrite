@@ -20,17 +20,20 @@ pub enum PageKey {
     Notifications,
     Server,
     Connections,
+    /// What is still being tried, off until turned on (T3 Code's Labs).
+    Labs,
     About,
 }
 
 impl PageKey {
-    pub const ALL: [PageKey; 7] = [
+    pub const ALL: [PageKey; 8] = [
         PageKey::NewThreads,
         PageKey::Permissions,
         PageKey::Behaviour,
         PageKey::Notifications,
         PageKey::Server,
         PageKey::Connections,
+        PageKey::Labs,
         PageKey::About,
     ];
 
@@ -42,6 +45,7 @@ impl PageKey {
             PageKey::Notifications => "Notifications",
             PageKey::Server => "Server",
             PageKey::Connections => "Connections",
+            PageKey::Labs => "Labs",
             PageKey::About => "About",
         }
     }
@@ -55,6 +59,7 @@ impl PageKey {
             PageKey::Notifications => "settings-page-notifications",
             PageKey::Server => "settings-page-server",
             PageKey::Connections => "settings-page-connections",
+            PageKey::Labs => "settings-page-labs",
             PageKey::About => "settings-page-about",
         }
     }
@@ -639,8 +644,9 @@ mod tests {
         assert_eq!(PageKey::About.step(1), PageKey::About);
         assert_eq!(PageKey::NewThreads.step(-1), PageKey::NewThreads);
         assert_eq!(PageKey::Server.step(1), PageKey::Connections);
-        assert_eq!(PageKey::Connections.step(1), PageKey::About);
-        assert_eq!(PageKey::About.step(-6), PageKey::NewThreads);
+        assert_eq!(PageKey::Connections.step(1), PageKey::Labs);
+        assert_eq!(PageKey::Labs.step(1), PageKey::About);
+        assert_eq!(PageKey::About.step(-7), PageKey::NewThreads);
         assert_eq!(PageKey::default(), PageKey::NewThreads);
     }
 
