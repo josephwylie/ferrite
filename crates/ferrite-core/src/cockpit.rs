@@ -1720,15 +1720,15 @@ impl Cockpit {
     }
 
     pub fn interrupt(&mut self, thread: ThreadId) {
-        said(self.act(Op::Interrupt { thread }));
+        self.tell(Op::Interrupt { thread });
     }
 
     /// Stop one Subagent of `thread`; Main's turn and the others run on.
     pub fn stop_subagent(&mut self, thread: ThreadId, key: &AgentKey) {
-        said(self.act(Op::StopSubagent {
+        self.tell(Op::StopSubagent {
             thread,
             key: key.as_str().into(),
-        }));
+        });
     }
 
     /// Answer the pending Decision `decision` names, if it still waits.
@@ -1772,7 +1772,7 @@ impl Cockpit {
 
     /// Ferrite's own words in a Thread's Pane.
     pub fn say(&mut self, thread: ThreadId, text: String) {
-        said(self.act(Op::Say { thread, text }));
+        self.tell(Op::Say { thread, text });
     }
 
     pub fn search_files(
@@ -2361,10 +2361,10 @@ impl Cockpit {
 
     /// Send the queued prompt `id` names next (`Engine::send_queued_now`).
     pub fn send_queued_now(&mut self, thread: ThreadId, id: &str) {
-        said(self.act(Op::SendQueuedNow {
+        self.tell(Op::SendQueuedNow {
             thread,
             item: id.to_string(),
-        }));
+        });
     }
 
     /// Edit the queued prompt `id` names, ahead of the current draft.
@@ -2376,12 +2376,12 @@ impl Cockpit {
         // A Server too old to send ids listed its queue by text alone
         // (`mirror::queue_of`): its items take back the latest.
         let id = (!id.is_empty()).then_some(id);
-        said(self.act(Op::CancelQueued {
+        self.tell(Op::CancelQueued {
             thread,
             restore,
             edit,
             item: id.map(str::to_string),
-        }));
+        });
     }
 
     /// A prompt the provider handed back, for the Composer, and whether it
@@ -2439,7 +2439,7 @@ impl Cockpit {
         self.forge = settings.forge_hosts.review_config();
         match &mut self.link {
             Link::InProcess(engine) => engine.apply_settings(settings),
-            Link::Server(server) => said(server.execute(Op::SettingsChanged)),
+            Link::Server(server) => server.tell(Op::SettingsChanged),
         }
         self.settle();
     }
