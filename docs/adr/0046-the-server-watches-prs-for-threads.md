@@ -62,7 +62,9 @@ from T3 and why.
   named the PR (T3's `agentEnds`). That command counts while it runs. If it
   succeeds, it counts until the read made at its end is done, so a later
   `--auto` merge is still news. Interrupting the agent or parking its
-  Thread ends every watch with no wake. Ten comment-only wakes in a row
+  Thread ends every watch with no wake. Escape interrupts only while a
+  turn runs, as T3's Stop does (`canInterruptRunningThread`), so at rest
+  it leaves the watch on. Ten comment-only wakes in a row
   end it, as in T3. A rate limit pauses the watch. A lost connection is
   tried again without counting. Any other failed read counts, and eight
   in a row give up with T3's give-up wake.

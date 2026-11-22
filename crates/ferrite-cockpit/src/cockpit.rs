@@ -4056,14 +4056,19 @@ impl CockpitView {
             cx.notify();
             return;
         }
-        // Escape stops what the Pane shows: on Main its turn, never the
-        // Subagents and background work it started; on a Subagent that
-        // Subagent alone — and once it has nothing to stop, it goes back to
-        // its parent.
+        // Escape stops what the Pane shows: on Main its turn while one runs
+        // (T3's Stop, which ends the Thread's PR watches with it), never the
+        // Subagents and background work it started, and nothing at rest;
+        // on a Subagent that Subagent alone — and once it has nothing to
+        // stop, it goes back to its parent.
         if let Some(thread) = self.focused_thread(cx).filter(|_| !self.machine_lost(cx)) {
             let selected = self.panes[self.focused(cx)].selected.clone();
             match &selected {
-                ferrite_core::activity::Subject::Main => self.cockpit.update(cx, |cockpit, _| cockpit.interrupt(thread)),
+                ferrite_core::activity::Subject::Main => {
+                    if self.cockpit.read(cx).thread(thread).is_some_and(|open| turn_running(&open)) {
+                        self.cockpit.update(cx, |cockpit, _| cockpit.interrupt(thread));
+                    }
+                }
                 ferrite_core::activity::Subject::Subagent(key) => {
                     if !self.stop_subagent(thread, key, cx) {
                         let parent = self
