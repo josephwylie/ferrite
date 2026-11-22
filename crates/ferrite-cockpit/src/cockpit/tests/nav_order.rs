@@ -69,7 +69,7 @@ fn a_thread_whose_shell_outlives_its_turn_works_until_the_shell_ends(cx: &mut Te
             !view
                 .cockpit
                 .read(cx)
-                .notifications()
+                .notifications(last.machine())
                 .notices()
                 .any(|notice| notice.thread == last.thread()),
             "a running shell is no finish"
@@ -95,7 +95,7 @@ fn a_thread_whose_shell_outlives_its_turn_works_until_the_shell_ends(cx: &mut Te
         assert!(view
             .cockpit
             .read(cx)
-            .notifications()
+            .notifications(last.machine())
             .notices()
             .any(|notice| notice.thread == last.thread()));
     });

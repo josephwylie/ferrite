@@ -132,7 +132,7 @@ fn a_finished_thread_needs_you_until_it_is_seen(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let notifications = view.cockpit.read(cx).notifications();
+        let notifications = view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine());
         assert_eq!(notifications.unread(), 1);
         assert!(notifications.attention(threads[1].thread()), "off the screen");
         assert!(!notifications.attention(threads[0].thread()));
@@ -145,7 +145,7 @@ fn a_finished_thread_needs_you_until_it_is_seen(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.focus_thread(threads[1], cx));
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let notifications = view.cockpit.read(cx).notifications();
+        let notifications = view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine());
         assert_eq!(notifications.unread(), 0, "landing on the Pane reads it");
         assert!(!notifications.attention(threads[1].thread()));
         assert_eq!(
@@ -254,7 +254,7 @@ fn a_finish_on_the_focused_pane_is_read_at_once_and_never_toasts(cx: &mut TestAp
         .unwrap();
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let notifications = view.cockpit.read(cx).notifications();
+        let notifications = view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine());
         assert_eq!(notifications.notices().count(), 1);
         assert_eq!(notifications.unread(), 0);
     });
@@ -281,16 +281,16 @@ fn opening_a_notice_lands_on_its_pane_and_reads_it(cx: &mut TestAppContext) {
     tick(cx);
     let id = view.read_with(cx, |view, cx| {
         assert_eq!(view.focused(cx), 0);
-        view.cockpit.read(cx).notifications().newest().unwrap()
+        view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).newest().unwrap()
     });
-    view.update(cx, |view, cx| view.notice_verb(Verb::Open(id), cx));
+    view.update(cx, |view, cx| view.notice_verb(Verb::Open(view.cockpit.read(cx).first_machine(), id), cx));
     view.read_with(cx, |view, cx| {
         assert_eq!(view.focused(cx), 2, "focus landed on the finished Pane");
-        assert!(view.cockpit.read(cx).notifications().get(id).unwrap().read);
+        assert!(view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).get(id).unwrap().read);
     });
-    view.update(cx, |view, cx| view.notice_verb(Verb::Dismiss(id), cx));
+    view.update(cx, |view, cx| view.notice_verb(Verb::Dismiss(view.cockpit.read(cx).first_machine(), id), cx));
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.cockpit.read(cx).notifications().notices().count(), 0);
+        assert_eq!(view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).notices().count(), 0);
     });
 }
 
@@ -354,7 +354,7 @@ fn contract_request_attention_toasts_once_and_cancellation_removes_it(cx: &mut T
     tick(cx);
     ring(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.cockpit.read(cx).notifications().unread(), 2);
+        assert_eq!(view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).unread(), 2);
         assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1, "one toast per Thread");
     });
     for name in ["AskUserQuestion", "Bash"] {
@@ -362,7 +362,7 @@ fn contract_request_attention_toasts_once_and_cancellation_removes_it(cx: &mut T
     }
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.cockpit.read(cx).notifications().unread(), 0)
+        assert_eq!(view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).unread(), 0)
     });
     assert_eq!(toasts(cx), 0, "cancelled requests leave no stale toast");
     view.read_with(cx, |view, _| {
@@ -400,7 +400,7 @@ fn a_request_toast_expires(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         assert!(view.toasts.read(cx).needs_you.toasts().is_empty(), "it went on its own");
         assert_eq!(
-            view.cockpit.read(cx).notifications().unread(),
+            view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).unread(),
             1,
             "the request still waits in the Inbox"
         );
@@ -478,7 +478,7 @@ fn away_from_the_window_the_shown_thread_s_finish_posts_a_notification(
     });
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(!view.cockpit.read(cx).notifications().attention(thread.thread()));
+        assert!(!view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).attention(thread.thread()));
     });
     assert!(
         tags(cx).is_empty(),
@@ -516,7 +516,7 @@ fn clicking_a_request_s_system_notification_opens_it(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.focused(cx), 1, "the click landed on its Thread");
-        let request = view.cockpit.read(cx).notifications().reading().decisions().next().unwrap();
+        let request = view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).reading().decisions().next().unwrap();
         assert!(request.read);
         assert!(view.toasts.read(cx).needs_you.toasts().is_empty());
     });
@@ -649,7 +649,7 @@ fn contract_request_notice_opens_its_owning_child(cx: &mut TestAppContext) {
     let id = view.read_with(cx, |view, cx| {
         view.cockpit
             .read(cx)
-            .notifications()
+            .notifications(view.cockpit.read(cx).first_machine())
             .decisions()
             .next()
             .unwrap()
@@ -657,7 +657,7 @@ fn contract_request_notice_opens_its_owning_child(cx: &mut TestAppContext) {
             .clone()
     });
     view.update(cx, |view, cx| {
-        view.notice_verb(Verb::OpenDecision(id.clone()), cx)
+        view.notice_verb(Verb::OpenDecision(view.cockpit.read(cx).first_machine(), id.clone()), cx)
     });
     tick(cx);
     view.read_with(cx, |view, cx| {
@@ -666,7 +666,7 @@ fn contract_request_notice_opens_its_owning_child(cx: &mut TestAppContext) {
             view.panes[view.focused(cx)].selected,
             Subject::Subagent(key.clone())
         );
-        assert!(view.cockpit.read(cx).notifications().decision(&id).unwrap().read);
+        assert!(view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).decision(&id).unwrap().read);
         assert!(!view.nav_view.read(cx).keys_held);
     });
 }
@@ -698,7 +698,7 @@ fn inbox_tracks_open_threads_independently_of_notices(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    assert_eq!(inbox(cx), vec![threads[1].thread()]);
+    assert_eq!(inbox(cx), vec![threads[1]]);
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
             outcome: ferrite_core::TurnOutcome::Completed,
@@ -746,9 +746,9 @@ fn the_list_empty_over_working_then_a_decision_parks_from_the_keyboard(cx: &mut 
     view.update(cx, |view, cx| {
         let rows = view.needs_you_rows(cx);
         assert_eq!(rows.len(), 1, "Decision takes precedence over work");
-        assert_eq!(rows[0].thread, threads[1].thread());
+        assert_eq!(rows[0].thread, threads[1]);
         if let RowTarget::Decision(id) = &rows[0].target {
-            view.notice_verb(Verb::DismissDecision(id.clone()), cx);
+            view.notice_verb(Verb::DismissDecision(view.cockpit.read(cx).first_machine(), id.clone()), cx);
         }
     });
     tick(cx);
@@ -830,8 +830,8 @@ fn inbox_followup_returns_to_work_and_repeated_finishes_stay_one_row(cx: &mut Te
         );
     }
     view.update(cx, |view, cx| {
-        let id = view.cockpit.read(cx).notifications().notices().next().unwrap().id;
-        view.notice_verb(Verb::Dismiss(id), cx);
+        let id = view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).notices().next().unwrap().id;
+        view.notice_verb(Verb::Dismiss(view.cockpit.read(cx).first_machine(), id), cx);
         assert_eq!(
             view.needs_you_rows(cx).len(),
             1,
@@ -996,7 +996,7 @@ fn snooze_hides_a_thread_until_woken_and_new_decisions_wake_it(cx: &mut TestAppC
         assert!(!view
             .needs_you_rows(cx)
             .iter()
-            .any(|row| row.thread == threads[0].thread()));
+            .any(|row| row.thread == threads[0]));
         assert_eq!(view.nav_state(cx).snoozed.len(), 1);
     });
     fake.streams.borrow()[0]
@@ -1007,7 +1007,7 @@ fn snooze_hides_a_thread_until_woken_and_new_decisions_wake_it(cx: &mut TestAppC
         assert!(view
             .needs_you_rows(cx)
             .iter()
-            .any(|row| row.thread == threads[0].thread()));
+            .any(|row| row.thread == threads[0]));
         assert!(view.nav_state(cx).snoozed.is_empty());
     });
 }

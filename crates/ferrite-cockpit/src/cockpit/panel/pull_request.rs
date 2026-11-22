@@ -414,7 +414,6 @@ impl CockpitView {
             PrSource::Project(project) => self
                 .cockpit
                 .read(cx)
-                .registry()
                 .project(project)
                 .map(|project| project.root.clone()),
         }
@@ -441,7 +440,9 @@ impl CockpitView {
         else {
             return;
         };
-        let answer = self.cockpit.update(cx, |cockpit, _| cockpit.review_pull_request(&path, Some(target.number)));
+        let answer = self.cockpit.update(cx, |cockpit, _| {
+            cockpit.review_pull_request(target.source.machine(), &path, Some(target.number))
+        });
         self.pull_request
             .update(cx, |reader, cx| reader.wait(target, request, answer, cx));
     }

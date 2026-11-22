@@ -79,7 +79,7 @@ impl CockpitView {
         if !self.ferrite_update.restart_offered() {
             return;
         }
-        if self.in_flight(cx).is_none() {
+        if self.in_flight_here(cx).is_none() {
             self.release_executable(cx);
             restart(cx);
             return;
@@ -91,7 +91,7 @@ impl CockpitView {
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(IDLE_POLL).await;
             let idle = this.update(cx, |view, cx| {
-                let idle = view.in_flight(cx).is_none();
+                let idle = view.in_flight_here(cx).is_none();
                 if idle {
                     view.release_executable(cx);
                     restart(cx);
@@ -128,7 +128,7 @@ impl CockpitView {
                 // On Windows the update stops the Server too, so it asks
                 // even when the window's going alone would end nothing.
                 let warning = if cfg!(windows) {
-                    self.in_flight(cx)
+                    self.in_flight_here(cx)
                         .map(|what| format!("{what}. The update stops them."))
                 } else {
                     self.leaving_warning(cx)
@@ -154,7 +154,7 @@ impl CockpitView {
         if !self.prefs.ferrite_updates {
             return Vec::new();
         }
-        let busy = self.in_flight(cx);
+        let busy = self.in_flight_here(cx);
         let (detail, button) = self.ferrite_update.describe(busy.as_deref());
         let view = cx.entity().downgrade();
         vec![

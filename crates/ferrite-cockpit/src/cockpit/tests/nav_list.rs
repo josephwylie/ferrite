@@ -428,7 +428,7 @@ fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
 fn a_new_thread_in_a_project_opens_a_draft_there(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("project-heading-plus", 1);
     let elsewhere = core
-        .register_project(&std::env::temp_dir().canonicalize().unwrap())
+        .register_project(core.first_machine(), &std::env::temp_dir().canonicalize().unwrap())
         .unwrap();
     let heading = core.project_of(core.threads()[0]).expect("a bound Thread");
     assert_ne!(heading, elsewhere);
@@ -436,8 +436,8 @@ fn a_new_thread_in_a_project_opens_a_draft_there(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         // The fallback names the *other* Project, so a draft that
         // ignored the request would be caught.
-        view.launch_project = Some(elsewhere.project());
-        view.open_draft_in_project(heading.project(), cx);
+        view.launch_project = Some(elsewhere);
+        view.open_draft_in_project(heading, cx);
     });
     tick(cx);
 
@@ -447,10 +447,10 @@ fn a_new_thread_in_a_project_opens_a_draft_there(cx: &mut TestAppContext) {
             .iter()
             .find_map(|pane| pane.draft())
             .expect("the command opened a draft");
-        assert_eq!(draft.binding.project(), heading.project());
+        assert_eq!(draft.binding.project(), heading);
         assert_eq!(
             view.launch_project,
-            Some(heading).map(|key| key.project()),
+            Some(heading),
             "the next draft starts where this one was asked for"
         );
     });

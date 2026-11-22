@@ -8,10 +8,26 @@ use ferrite_pane::composer::Composer;
 use std::path::PathBuf;
 
 impl CockpitView {
-    /// `composer`'s files are going to this window's agents: on this
-    /// computer or on its machine, and kept in the app's own store.
-    pub(super) fn aim_attachments(&self, composer: &Entity<Composer>, cx: &mut Context<Self>) {
-        let destination = if self.elsewhere(self.on_screen(cx), cx) {
+    /// The machine pane `index`'s agent works on: its Thread's, or its
+    /// draft's Project's.
+    pub(super) fn pane_machine(&self, index: usize) -> Option<MachineId> {
+        let pane = self.panes.get(index)?;
+        match (pane.thread(), pane.draft()) {
+            (Some(thread), _) => Some(thread.machine()),
+            (None, Some(draft)) => Some(draft.binding.project().machine()),
+            _ => None,
+        }
+    }
+
+    /// `composer`'s files are going to an agent on `machine`: this
+    /// computer or another, and kept in the app's own store.
+    pub(super) fn aim_attachments(
+        &self,
+        composer: &Entity<Composer>,
+        machine: MachineId,
+        cx: &mut Context<Self>,
+    ) {
+        let destination = if self.elsewhere(machine, cx) {
             Destination::Remote
         } else {
             Destination::Local
@@ -33,7 +49,9 @@ impl CockpitView {
             return false;
         };
         let composer = pane.composer.clone();
-        self.upload_attachments(&composer, cx);
+        if let Some(machine) = self.pane_machine(index) {
+            self.upload_attachments(&composer, machine, cx);
+        }
         if composer.update(cx, |composer, cx| composer.has_blocked_file(cx)) {
             return false;
         }
@@ -58,16 +76,22 @@ impl CockpitView {
         Ok(())
     }
 
+    /// Send `composer`'s files still on this computer to `machine`, when
+    /// that is another machine.
     pub(super) fn upload_attachments(
         &mut self,
         composer: &Entity<Composer>,
+        machine: MachineId,
         cx: &mut Context<Self>,
     ) {
-        let Some(machine) = self.bridge_on_screen(cx).cloned() else {
+        let Some(bridge) = self.cockpit.read(cx).bridge(machine).cloned() else {
             return;
         };
         for (path, attempt) in composer.update(cx, |composer, cx| composer.pending_uploads(cx)) {
-            let upload = match self.cockpit.update(cx, |cockpit, _| cockpit.upload_attachment(path.clone())) {
+            let upload = match self
+                .cockpit
+                .update(cx, |cockpit, _| cockpit.upload_attachment(machine, path.clone()))
+            {
                 Ok(upload) => upload,
                 Err(error) => {
                     composer.update(cx, |composer, cx| {
@@ -77,15 +101,14 @@ impl CockpitView {
                 }
             };
             let composer = composer.downgrade();
-            let machine = machine.clone();
+            let bridge = bridge.clone();
             cx.spawn(async move |this, cx| {
                 let _cancel = CancelUpload(upload.cancel);
                 let started = cx.background_executor().now();
                 loop {
                     let active = this
                         .update(cx, |view, cx| {
-                            view.bridge_on_screen(cx)
-                                .is_some_and(|current| std::sync::Arc::ptr_eq(current, &machine))
+                            view.same_bridge(machine, &bridge, cx)
                                 && composer
                                     .update(cx, |composer, _| {
                                         composer.uploading_file(&path, attempt)
@@ -127,9 +150,7 @@ impl CockpitView {
                     if let Some(result) = result {
                         let _ =
                             this.update(cx, |view, cx| {
-                                if !view.bridge_on_screen(cx).is_some_and(|current| {
-                                    std::sync::Arc::ptr_eq(current, &machine)
-                                }) {
+                                if !view.same_bridge(machine, &bridge, cx) {
                                     return;
                                 }
                                 let remote = result.as_ref().ok().cloned();
@@ -162,29 +183,55 @@ impl CockpitView {
         }
     }
 
-    pub(super) fn fetch_attachment_previews(&mut self, cx: &mut Context<Self>) {
-        let Some(machine) = self.bridge_on_screen(cx).cloned() else {
-            return;
-        };
-        let key = self
-            .cockpit
+    /// Whether `machine` is still reached through `bridge`: an answer that
+    /// came over a link since let go is no longer the window's.
+    fn same_bridge(
+        &self,
+        machine: MachineId,
+        bridge: &std::sync::Arc<ferrite_core::machine::Bridge>,
+        cx: &gpui::App,
+    ) -> bool {
+        self.cockpit
             .read(cx)
-            .saved_as(self.on_screen(cx))
-            .and_then(|key| key.0.clone())
-            .unwrap_or_else(|| format!("session-{:p}", std::sync::Arc::as_ptr(&machine)));
-        let store = ferrite_core::machine::dir(&self.prefs.dir, &key).join("attachment-previews");
-        let requests: Vec<_> = self
-            .panes
-            .iter()
-            .flat_map(|pane| {
-                pane.preview
-                    .take_attachment_requests()
-                    .into_iter()
-                    .map(|path| (pane.preview.clone(), pane.composer.entity_id(), path))
-            })
-            .collect();
-        for (preview, owner, (path, request)) in requests {
-            let receiver = match self.cockpit.update(cx, |cockpit, _| cockpit.read_attachment(&path)) {
+            .bridge(machine)
+            .is_some_and(|current| std::sync::Arc::ptr_eq(current, bridge))
+    }
+
+    /// Read the attachments each Pane's preview asks for from its
+    /// machine, when that is another machine.
+    pub(super) fn fetch_attachment_previews(&mut self, cx: &mut Context<Self>) {
+        let mut requests = Vec::new();
+        for index in 0..self.panes.len() {
+            let Some(machine) = self.pane_machine(index) else {
+                continue;
+            };
+            let Some(bridge) = self.cockpit.read(cx).bridge(machine).cloned() else {
+                continue;
+            };
+            let pane = &self.panes[index];
+            for path in pane.preview.take_attachment_requests() {
+                requests.push((
+                    machine,
+                    bridge.clone(),
+                    pane.preview.clone(),
+                    pane.composer.entity_id(),
+                    path,
+                ));
+            }
+        }
+        for (machine, bridge, preview, owner, (path, request)) in requests {
+            let key = self
+                .cockpit
+                .read(cx)
+                .saved_as(machine)
+                .and_then(|key| key.0.clone())
+                .unwrap_or_else(|| format!("session-{:p}", std::sync::Arc::as_ptr(&bridge)));
+            let store =
+                ferrite_core::machine::dir(&self.prefs.dir, &key).join("attachment-previews");
+            let receiver = match self
+                .cockpit
+                .update(cx, |cockpit, _| cockpit.read_attachment(machine, &path))
+            {
                 Ok(receiver) => receiver,
                 Err(error) => {
                     preview.finish_attachment(&path, request, Err(error.to_string()));
@@ -192,7 +239,6 @@ impl CockpitView {
                     continue;
                 }
             };
-            let machine = machine.clone();
             let store = ferrite_core::machine::dir(
                 &store.join(format!("{owner:?}")),
                 &path.to_string_lossy(),
@@ -225,10 +271,7 @@ impl CockpitView {
             cx.spawn(async move |this, cx| {
                 let result = read.await.map_err(|error| error.to_string());
                 let _ = this.update(cx, |view, cx| {
-                    if view
-                        .bridge_on_screen(cx)
-                        .is_some_and(|current| std::sync::Arc::ptr_eq(current, &machine))
-                    {
+                    if view.same_bridge(machine, &bridge, cx) {
                         preview.finish_attachment(&path, request, result);
                         cx.notify();
                     }
@@ -251,14 +294,20 @@ impl CockpitView {
                     .cwd()
                     .to_path_buf(),
             ),
-            (None, Some(draft)) => Some(
-                draft
-                    .binding
-                    .resolve(self.cockpit.read(cx).registry().reading(), !self.elsewhere(self.on_screen(cx), cx))
-                    .ok()?
-                    .source_root()
-                    .to_path_buf(),
-            ),
+            (None, Some(draft)) => {
+                let machine = draft.binding.project().machine();
+                Some(
+                    draft
+                        .binding
+                        .resolve(
+                            self.cockpit.read(cx).registry(machine).reading(),
+                            !self.elsewhere(machine, cx),
+                        )
+                        .ok()?
+                        .source_root()
+                        .to_path_buf(),
+                )
+            }
             _ => None,
         }
     }

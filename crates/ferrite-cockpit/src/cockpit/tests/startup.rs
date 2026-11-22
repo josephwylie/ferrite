@@ -7,7 +7,7 @@ fn startup_does_not_make_the_app_directory_a_project() {
     let (core, _fake) = cockpit("startup-project", 0);
 
     assert_eq!(startup_project(&core), None);
-    assert!(core.registry().projects().is_empty());
+    assert!(core.registry(core.first_machine()).projects().is_empty());
 }
 
 /// The draft opens where the operator left off: the Project of the
@@ -15,19 +15,19 @@ fn startup_does_not_make_the_app_directory_a_project() {
 #[test]
 fn startup_starts_on_the_last_project_worked_in() {
     let (mut core, _fake) = cockpit("startup-last-project", 0);
-    let first = core.register_project(&here()).unwrap();
+    let first = core.register_project(core.first_machine(), &here()).unwrap();
     let older = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     // A second registered Project, newer than the Thread's — the old
     // "newest registered" answer would name this one.
     let second = core
-        .register_project(&std::env::temp_dir().canonicalize().unwrap())
+        .register_project(core.first_machine(), &std::env::temp_dir().canonicalize().unwrap())
         .unwrap();
     assert_ne!(first, second);
 
     assert_eq!(core.project_of(older), Some(first));
-    assert_eq!(startup_project(&core), Some(first).map(|key| key.project()));
+    assert_eq!(startup_project(&core), Some(first));
 }
 
 #[gpui::test]
@@ -61,7 +61,7 @@ fn a_launch_that_opens_nothing_still_lists_the_parked_threads(cx: &mut TestAppCo
         let store = Store::open(dir.clone()).unwrap();
         let mut earlier = Cockpit::new(store, Box::new(Fake::default()));
         earlier
-            .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+            .open(earlier.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
             .unwrap();
         earlier.threads()[0].thread()
     };

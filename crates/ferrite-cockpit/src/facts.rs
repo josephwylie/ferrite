@@ -14,7 +14,7 @@ use ferrite_core::cockpit::Cockpit;
 use ferrite_core::docview::FileChange;
 use ferrite_core::pr_watch::{WatchedPr, Watching};
 use ferrite_core::store::Provider;
-use ferrite_core::workspace::registry::ProjectId;
+use ferrite_core::ProjectKey;
 use ferrite_core::workspace::{BranchStatus, PullRequest, WorkspaceBinding};
 use ferrite_core::ThreadKey;
 use ferrite_pane::pane::WallCard;
@@ -52,7 +52,7 @@ pub struct ThreadFacts {
     /// on, so a Thread whose Project is unknown appears under `All
     /// Projects` alone rather than being quietly filed under someone
     /// else's.
-    pub project: Option<ProjectId>,
+    pub project: Option<ProjectKey>,
     /// The Project a row names, down the honest ladder (§3.5c): the
     /// registry's title for the recorded Project; else the binding's own
     /// repo leaf — `repo`, never the worktree path, whose leaf is a branch
@@ -104,7 +104,7 @@ pub struct Facts {
     /// Each Project's default branch, read once (a `git` call or two, off
     /// the UI thread) the first time a Thread of it is refreshed: `None`
     /// while that read is out.
-    default_branches: HashMap<ProjectId, Option<SharedString>>,
+    default_branches: HashMap<ProjectKey, Option<SharedString>>,
     /// The nav's parked Threads, in the Cockpit's stable park order (#21).
     parked: Vec<ThreadKey>,
     /// Whether an untitled Thread is named from its first prompt (a
@@ -316,21 +316,20 @@ impl Facts {
                 facts.worktree = None;
                 continue;
             };
+            let project = meta
+                .project_id
+                .map(|id| cockpit.registry(key.machine()).project_key(id));
             facts.provider = Some(meta.provider);
             facts.worktree = worktree_label(meta.workspace.as_ref());
-            facts.project = meta.project_id;
+            facts.project = project;
             let checkout = match meta.workspace.as_ref() {
                 Some(WorkspaceBinding::Worktree { repo, .. }) => Some(repo.as_path()),
                 Some(WorkspaceBinding::Main { checkout }) => Some(checkout.as_path()),
                 None => None,
             };
-            facts.default_branch = default_branch_of(
-                &mut self.default_branches,
-                meta.project_id,
-                checkout,
-                &mut lookups,
-            );
-            facts.project_label = project_label(cockpit, meta.project_id, meta.workspace.as_ref());
+            facts.default_branch =
+                default_branch_of(&mut self.default_branches, project, checkout, &mut lookups);
+            facts.project_label = project_label(cockpit, project, meta.workspace.as_ref());
             // The checkout, for a parked Thread, in the order that costs
             // least: the registry already knows a worktree's branch, and a
             // main checkout is asked `git` exactly once, ever.
@@ -340,7 +339,7 @@ impl Facts {
                     // A worktree the agent made (followed into, never
                     // registered) is asked git, once, like a main checkout.
                     Some(WorkspaceBinding::Worktree { path, .. }) => {
-                        match cockpit.registry().branch_for(&path) {
+                        match cockpit.registry(key.machine()).branch_for(&path) {
                             Some(branch) => {
                                 facts.branch = Some(SharedString::from(branch.to_string()));
                                 None
@@ -386,11 +385,16 @@ impl Facts {
     /// never launch Git. Answers whether any of these facts moved.
     fn refresh_metadata(&mut self, cockpit: &Cockpit, key: ThreadKey) -> bool {
         let (project, project_label, worktree) = match cockpit.peek(key) {
-            Ok(meta) => (
-                meta.project_id,
-                project_label(cockpit, meta.project_id, meta.workspace.as_ref()),
-                worktree_label(meta.workspace.as_ref()),
-            ),
+            Ok(meta) => {
+                let project = meta
+                    .project_id
+                    .map(|id| cockpit.registry(key.machine()).project_key(id));
+                (
+                    project,
+                    project_label(cockpit, project, meta.workspace.as_ref()),
+                    worktree_label(meta.workspace.as_ref()),
+                )
+            }
             Err(_) => (None, None, None),
         };
         let name = display_name(cockpit, key, self.auto_title);
@@ -478,8 +482,8 @@ impl Facts {
 /// is seen, its read from `checkout` joins `lookups`, and the branch is
 /// unknown until it comes back. A Thread no Project claims has none.
 fn default_branch_of(
-    cache: &mut HashMap<ProjectId, Option<SharedString>>,
-    project: Option<ProjectId>,
+    cache: &mut HashMap<ProjectKey, Option<SharedString>>,
+    project: Option<ProjectKey>,
     checkout: Option<&std::path::Path>,
     lookups: &mut Lookups,
 ) -> Option<SharedString> {
@@ -496,11 +500,11 @@ fn default_branch_of(
 
 fn project_label(
     cockpit: &Cockpit,
-    project: Option<ProjectId>,
+    project: Option<ProjectKey>,
     workspace: Option<&WorkspaceBinding>,
 ) -> Option<SharedString> {
     if let Some(title) = project
-        .and_then(|id| cockpit.registry().reading().project(id))
+        .and_then(|key| cockpit.project(key))
         .map(|project| SharedString::from(project.title.clone()))
     {
         return Some(title);
@@ -624,7 +628,7 @@ pub struct Lookups {
     pub branches: Vec<(ThreadKey, std::path::PathBuf)>,
     /// Projects whose default branch only `git` can say, each with a
     /// checkout of it.
-    pub default_branches: Vec<(ProjectId, std::path::PathBuf)>,
+    pub default_branches: Vec<(ProjectKey, std::path::PathBuf)>,
 }
 
 impl Lookups {
@@ -656,7 +660,7 @@ impl Lookups {
 
 /// What `Lookups::run` found, for `Facts::looked_up`.
 pub struct Answers {
-    default_branches: Vec<(ProjectId, String)>,
+    default_branches: Vec<(ProjectKey, String)>,
     branches: Vec<(ThreadKey, Option<String>)>,
 }
 
@@ -814,7 +818,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let store = ferrite_core::store::Store::open(&dir).unwrap();
-        let project: ProjectId = serde_json::from_str("7").unwrap();
+        let project: ferrite_core::workspace::registry::ProjectId = serde_json::from_str("7").unwrap();
         let binding = WorkspaceBinding::Main {
             checkout: dir.clone(),
         };
@@ -845,7 +849,7 @@ mod tests {
         let row = facts.get(titled).unwrap();
         assert_eq!(row.name.as_ref(), "Release notes");
         assert_eq!(row.provider, Some(Provider::Codex));
-        assert_eq!(row.project, Some(project));
+        assert_eq!(row.project.map(|key| key.project()), Some(project));
         assert!(row.last_used.is_some());
         let row = facts.get(untitled).unwrap();
         assert_eq!(row.name.as_ref(), "Fix the flaky");
@@ -867,7 +871,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let store = ferrite_core::store::Store::open(&dir).unwrap();
         let checkout = std::env::current_dir().unwrap();
-        let project: ProjectId = serde_json::from_str("7").unwrap();
+        let project: ferrite_core::workspace::registry::ProjectId = serde_json::from_str("7").unwrap();
         let (thread, writer) = store
             .create(
                 Provider::Claude,
@@ -885,6 +889,7 @@ mod tests {
 
         let lookups = facts.opened(&cockpit, thread);
         assert_eq!(lookups.branches, vec![(thread, checkout.clone())]);
+        let project = cockpit.registry(thread.machine()).project_key(project);
         assert_eq!(lookups.default_branches, vec![(project, checkout.clone())]);
         let opened = facts.get(thread).unwrap();
         assert_eq!(opened.branch, None, "no git ran here");

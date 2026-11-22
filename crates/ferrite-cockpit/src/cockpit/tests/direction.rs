@@ -92,7 +92,7 @@ fn window<'a>(
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
-    view.update(cx, |view, cx| view.open_task("t-1", cx));
+    view.update(cx, |view, cx| view.open_task(view.cockpit.read(cx).first_machine(), "t-1", cx));
     tick(cx);
     (view, cx)
 }
@@ -152,7 +152,7 @@ fn the_answer_box_answers_the_question_and_keeps_what_was_typed(cx: &mut TestApp
         cx.notify();
     });
     tick(cx);
-    view.update(cx, |view, cx| view.open_task("t-1", cx));
+    view.update(cx, |view, cx| view.open_task(view.cockpit.read(cx).first_machine(), "t-1", cx));
     tick(cx);
     assert_eq!(
         answer(&view, cx),
@@ -485,7 +485,7 @@ fn a_sheet_follows_its_task_and_goes_with_it(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.cockpit.update(cx, |cockpit, _| cockpit.fixture_factory(Board {
             workflows: Vec::new(),
-            tasks: vec![task(project, Status::Working, serde_json::json!({}))],
+            tasks: vec![task(project.project(), Status::Working, serde_json::json!({}))],
             ..Default::default()
         }))
     });
@@ -523,7 +523,7 @@ fn leaving_the_factory_takes_the_sheet_and_its_words(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |view, _| view.factory().is_none()));
     assert!(!shows(cx, "rework-sheet"));
     assert!(!up(&view, cx), "closed, not only undrawn");
-    view.update(cx, |view, cx| view.open_task("t-1", cx));
+    view.update(cx, |view, cx| view.open_task(view.cockpit.read(cx).first_machine(), "t-1", cx));
     tick(cx);
     click(cx, "task-rework-open");
     assert_eq!(typed(&view, cx), "");
@@ -640,7 +640,7 @@ fn approval_settings_choose_who_approves_and_list_what_completes(cx: &mut TestAp
     let (core_fake, dir) = (Fake::default(), scratch("direct-settings"));
     let mut core = Cockpit::new(Store::open(&dir).unwrap(), Box::new(core_fake.clone()));
     let thread = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, thread);
     let project = core.project_of(core.threads()[0]).unwrap();
@@ -649,7 +649,7 @@ fn approval_settings_choose_who_approves_and_list_what_completes(cx: &mut TestAp
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
-    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
+    view.update(cx, |view, cx| view.open_factory(project, cx));
     tick(cx);
     click(cx, "factory-tab-workflows");
     click(cx, "workflow-new");

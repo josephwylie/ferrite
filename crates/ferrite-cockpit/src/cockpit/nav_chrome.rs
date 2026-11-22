@@ -74,10 +74,10 @@ impl CockpitView {
             menu::Item::new("All projects").checked(self.nav_filter.is_none()),
             MenuVerb::FilterProject(None),
         ))];
-        rows.extend(self.cockpit.read(cx).registry().projects().iter().map(|project| {
+        rows.extend(self.every_project(cx).into_iter().map(|(key, _, title)| {
             Some((
-                menu::Item::new(project.title.clone()).checked(self.nav_filter == Some(project.id)),
-                MenuVerb::FilterProject(Some(project.id)),
+                menu::Item::new(title).checked(self.nav_filter == Some(key)),
+                MenuVerb::FilterProject(Some(key)),
             ))
         }));
         rows

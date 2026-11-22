@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use ferrite_core::notifications::{DecisionNoticeId, NoticeId, Notifications, RequestKind};
-use ferrite_core::{MachineKey, ThreadId};
+use ferrite_core::{MachineId, ThreadId, ThreadKey};
 use gpui::prelude::*;
 use gpui::{div, px, rgb, AnyElement, App, Div, SharedString, Stateful, Window};
 
@@ -31,30 +31,30 @@ pub enum QuickAnswer {
 }
 
 /// What a click or a key on the Inbox's surfaces means. The cockpit answers
-/// each against the core and repaints.
+/// each against the core and repaints. A Notice's and a request's ids are
+/// their machine's, so each verb names the machine it is about.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Verb {
     /// Land on the Notice's Thread (a toast, a row, ⏎).
-    Open(NoticeId),
-    OpenThread(ThreadId),
+    Open(MachineId, NoticeId),
+    OpenThread(ThreadKey),
     /// Forget one Notice (⌫ on its row).
-    Dismiss(NoticeId),
+    Dismiss(MachineId, NoticeId),
     /// Land on the exact live request the row represented.
-    OpenDecision(DecisionNoticeId),
+    OpenDecision(MachineId, DecisionNoticeId),
     /// Hide one live request until its handle changes or ends.
-    DismissDecision(DecisionNoticeId),
-    /// The head's `mark all read`: every row read, none removed.
+    DismissDecision(MachineId, DecisionNoticeId),
+    /// The head's `mark all read`: every row read on every machine, none
+    /// removed.
     MarkAllRead,
     /// A toast's `1 allow` / `3 deny`.
-    Answer(DecisionNoticeId, QuickAnswer),
-    /// Land on an alert's Thread on a machine off screen: the window goes
-    /// there first (ADR 0026).
-    GoTo(Alert),
+    Answer(MachineId, DecisionNoticeId, QuickAnswer),
 }
 
 pub type Handle = Rc<dyn Fn(Verb, &mut Window, &mut App)>;
 
-/// A NeedsYou row has one actionable target, independent of provider wire data.
+/// A NeedsYou row has one actionable target, independent of provider wire
+/// data: an id on the row's machine.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RowTarget {
     Notice(NoticeId),
@@ -125,13 +125,13 @@ impl Detail {
 }
 
 /// One row of the list (and the face of a toast), worded by the cockpit.
+/// One about a machine other than this computer is titled with the
+/// machine's name first.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
-    /// The machine off screen it is on; `None` for the one on screen. Its
-    /// title then begins with the machine's name.
-    pub away: Option<MachineKey>,
     pub target: RowTarget,
-    pub thread: ThreadId,
+    /// Its Thread, on the machine `target`'s id is of.
+    pub thread: ThreadKey,
     pub title: SharedString,
     pub state: State,
     pub detail: Detail,
@@ -159,18 +159,14 @@ impl Row {
 
     /// What opening the row does.
     pub fn open_verb(&self) -> Verb {
-        Alert {
-            away: self.away.clone(),
-            target: self.target.clone(),
-            thread: self.thread,
-        }
-        .open_verb()
+        target_verb(self.thread, &self.target)
     }
 }
 
 /// A machine's name before a Thread's title: what a row, a toast or a
-/// system notification about a machine off screen is called.
-pub fn away_title(machine: &str, title: &str) -> SharedString {
+/// system notification about a machine other than this computer is
+/// called.
+pub fn machine_title(machine: &str, title: &str) -> SharedString {
     format!("{machine} \u{203a} {title}").into()
 }
 
@@ -299,28 +295,23 @@ pub const NEEDS_YOU_TOAST: Duration = Duration::from_secs(8);
 pub const DONE_TOAST: Duration = Duration::from_secs(5);
 
 /// One event that may want the operator: a Notice or a live request, and
-/// its Thread. Ids are per Store, so a machine off screen keys its own.
+/// its Thread. Ids are per Store: its Thread's machine is the one they are
+/// of.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Alert {
-    /// The machine off screen it is on; `None` for the one on screen.
-    pub away: Option<MachineKey>,
     pub target: RowTarget,
-    pub thread: ThreadId,
+    pub thread: ThreadKey,
 }
 
 impl Alert {
-    /// What opening it does: land on it, or on a machine off screen go
-    /// there first.
+    /// What opening it does: land on it, in place, on whichever machine.
     pub fn open_verb(&self) -> Verb {
-        match &self.away {
-            None => target_verb(&self.target),
-            Some(_) => Verb::GoTo(self.clone()),
-        }
+        target_verb(self.thread, &self.target)
     }
 
-    /// Whether `other` is about the same Thread on the same machine.
-    fn same_thread(&self, other: &Alert) -> bool {
-        self.away == other.away && self.thread == other.thread
+    /// Whether `other` is about the same record on the same machine.
+    fn same(&self, machine: MachineId, target: &RowTarget) -> bool {
+        self.thread.machine() == machine && self.target == *target
     }
 
     /// A live request (needs you), not a finished turn.
@@ -372,23 +363,19 @@ struct Heard {
 /// request, 5s for a finish), or sooner once it is read, resolved, or in
 /// view.
 ///
-/// **Machines off screen** (ADR 0026) are heard too, each keyed by its
-/// `MachineKey`. What one held when the window first heard it is not news
-/// (the window just left it, or met it already waiting); what it says
-/// after rings like the rest. Nobody looks at a machine off screen, so its
-/// alerts are never in view. When the window goes to another machine, the
-/// Inbox moves with it (`moved`): an alert rings once, off screen or on, and
-/// what waits or stands goes on doing so. A machine not heard from yet (the
-/// one just left, or the one arrived at before it answers) cannot say
+/// **Every machine** the window holds is heard (ADR 0045), each apart:
+/// Thread 3 here and Thread 3 on box are two Threads. What a machine other
+/// than this computer held when the window first heard it is not news (the
+/// window met it already waiting); what it says after rings like the rest,
+/// once, and opens in place. A machine not heard from yet cannot say
 /// whether its alerts still stand: they wait for it, no longer than a
 /// toast would stand.
 pub struct NeedsYou {
     /// The list's cursor row in the Inbox (`nav::NavView`),
     /// first on open.
     pub cursor: usize,
-    cursor_thread: RefCell<Option<(Option<MachineKey>, ThreadId)>>,
-    /// Per machine; `None` is the one on screen.
-    heard: HashMap<Option<MachineKey>, Heard>,
+    cursor_thread: RefCell<Option<ThreadKey>>,
+    heard: HashMap<MachineId, Heard>,
     /// Heard and waiting out `ALERT_DELAY`, one per Thread: the newest.
     pending: Vec<(Alert, Instant)>,
     toasts: Vec<Toast>,
@@ -418,67 +405,20 @@ impl NeedsYou {
     pub fn cursor_at(&self, rows: &[Row]) -> usize {
         let mut selected = self.cursor_thread.borrow_mut();
         let at = selected
-            .as_ref()
-            .and_then(|(away, thread)| {
-                rows.iter()
-                    .position(|row| row.away == *away && row.thread == *thread)
-            })
+            .and_then(|thread| rows.iter().position(|row| row.thread == thread))
             .unwrap_or(self.cursor.min(rows.len().saturating_sub(1)));
-        *selected = rows.get(at).map(|row| (row.away.clone(), row.thread));
+        *selected = rows.get(at).map(|row| row.thread);
         at
     }
 
     pub fn select_cursor(&mut self, at: usize, rows: &[Row]) {
         self.cursor = at;
-        *self.cursor_thread.get_mut() = rows.get(at).map(|row| (row.away.clone(), row.thread));
-    }
-
-    /// The Inbox of a window that went from machine `left` to `arrived`:
-    /// all it holds of each re-keyed (the one left is off screen now, the
-    /// one arrived at on screen), so neither rings again for what it rang
-    /// already, and what waits, stands or is posted goes on. A system
-    /// notification keeps its tag: the notification centre holds it so.
-    pub fn moved(self, left: Option<&MachineKey>, arrived: Option<&MachineKey>) -> Self {
-        let rekey = |away: Option<MachineKey>| match away {
-            None => left.cloned(),
-            Some(key) if Some(&key) == arrived => None,
-            other => other,
-        };
-        let realert = |alert: Alert| Alert {
-            away: rekey(alert.away.clone()),
-            ..alert
-        };
-        Self {
-            heard: self
-                .heard
-                .into_iter()
-                .map(|(away, heard)| (rekey(away), heard))
-                .collect(),
-            pending: self
-                .pending
-                .into_iter()
-                .map(|(alert, due)| (realert(alert), due))
-                .collect(),
-            toasts: self
-                .toasts
-                .into_iter()
-                .map(|toast| Toast {
-                    alert: realert(toast.alert),
-                    ..toast
-                })
-                .collect(),
-            posted: self
-                .posted
-                .into_iter()
-                .map(|(tag, alert)| (tag, realert(alert)))
-                .collect(),
-            ..Self::new()
-        }
+        *self.cursor_thread.get_mut() = rows.get(at).map(|row| row.thread);
     }
 
     /// A machine's watermark: its Notices at or below it have been heard.
-    pub fn presented(&self, away: Option<&MachineKey>) -> Option<NoticeId> {
-        self.heard.get(&away.cloned())?.presented
+    pub fn presented(&self, machine: MachineId) -> Option<NoticeId> {
+        self.heard.get(&machine)?.presented
     }
 
     /// The toasts standing now, oldest first.
@@ -513,50 +453,48 @@ impl NeedsYou {
         self.toasts.clear();
     }
 
-    /// Take one toast down (its button acted on it): one about the
-    /// machine on screen.
-    pub fn drop_toast(&mut self, target: &RowTarget) {
+    /// Take one toast down (its button acted on it): `target`, on
+    /// `machine`.
+    pub fn drop_toast(&mut self, machine: MachineId, target: &RowTarget) {
         self.toasts
-            .retain(|toast| toast.alert.away.is_some() || &toast.alert.target != target);
+            .retain(|toast| !toast.alert.same(machine, target));
     }
 
-    /// Hear what a machine (`away`; `None` for the one on screen) said
-    /// since the last call: every Notice born since its watermark
-    /// (`notices`: id, Thread, read) moves it, and its live requests
-    /// (`requests`: id, read) replace the set heard. Each unread newcomer
-    /// waits out `ALERT_DELAY`, displacing whatever its Thread had
-    /// waiting. A machine off screen heard for the first time only sets
-    /// what was heard.
+    /// Hear what `machine` said since the last call: every Notice born
+    /// since its watermark (`notices`: id, Thread, read) moves it, and its
+    /// live requests (`requests`: id, Thread, read) replace the set heard.
+    /// Each unread newcomer waits out `ALERT_DELAY`, displacing whatever
+    /// its Thread had waiting. A machine heard for the first time with
+    /// `quiet_first` only sets what was heard.
     pub fn hear(
         &mut self,
-        away: Option<MachineKey>,
-        notices: impl IntoIterator<Item = (NoticeId, ThreadId, bool)>,
-        requests: impl IntoIterator<Item = (DecisionNoticeId, bool)>,
+        machine: MachineId,
+        quiet_first: bool,
+        notices: impl IntoIterator<Item = (NoticeId, ThreadKey, bool)>,
+        requests: impl IntoIterator<Item = (DecisionNoticeId, ThreadKey, bool)>,
         now: Instant,
     ) {
-        let quiet = away.is_some() && !self.heard.contains_key(&away);
-        let state = self.heard.entry(away.clone()).or_default();
+        let quiet = quiet_first && !self.heard.contains_key(&machine);
+        let state = self.heard.entry(machine).or_default();
         let mut heard = Vec::new();
         for (id, thread, read) in notices {
             state.presented = Some(state.presented.map_or(id, |seen| seen.max(id)));
             if !read {
                 heard.push(Alert {
-                    away: away.clone(),
                     target: RowTarget::Notice(id),
                     thread,
                 });
             }
         }
-        let requests: Vec<(DecisionNoticeId, bool)> = requests.into_iter().collect();
+        let requests: Vec<(DecisionNoticeId, ThreadKey, bool)> = requests.into_iter().collect();
         let seen = std::mem::replace(
             &mut state.requests,
-            requests.iter().map(|(id, _)| id.clone()).collect(),
+            requests.iter().map(|(id, _, _)| id.clone()).collect(),
         );
-        for (id, read) in requests {
+        for (id, thread, read) in requests {
             if !seen.contains(&id) && !read {
                 heard.push(Alert {
-                    away: away.clone(),
-                    thread: id.thread,
+                    thread,
                     target: RowTarget::Decision(id),
                 });
             }
@@ -566,9 +504,18 @@ impl NeedsYou {
         }
         for alert in heard {
             self.pending
-                .retain(|(waiting, _)| !waiting.same_thread(&alert));
+                .retain(|(waiting, _)| waiting.thread != alert.thread);
             self.pending.push((alert, now + ALERT_DELAY));
         }
+    }
+
+    /// Forget what was heard of `machine`: the window let it go.
+    pub fn forget(&mut self, machine: MachineId) {
+        self.heard.remove(&machine);
+        self.pending
+            .retain(|(alert, _)| alert.thread.machine() != machine);
+        self.toasts
+            .retain(|toast| toast.alert.thread.machine() != machine);
     }
 
     /// Bring the Inbox up to `now`. A standing toast goes once it expired,
@@ -603,7 +550,7 @@ impl NeedsYou {
                 }
                 _ => continue,
             }
-            self.toasts.retain(|toast| !toast.alert.same_thread(&alert));
+            self.toasts.retain(|toast| toast.alert.thread != alert.thread);
             self.toasts.push(Toast {
                 until: now + alert.stands(),
                 alert: alert.clone(),
@@ -680,8 +627,8 @@ fn quick_button(
 /// close: the head (`◆ needs you · <title>`; `✓ done · <title>` for a
 /// finished turn), one body line,
 /// and the quick answers — `Allow 1` `Deny 3` `Open ⏎` for an approval,
-/// `Open ⏎` alone for a question, a finished turn, or anything on a
-/// machine off screen (its status link answers nothing).
+/// `Open ⏎` alone for a question or a finished turn — on whichever
+/// machine.
 pub fn toast(row: &Row, handle: Handle, width: f32) -> Div {
     toast_card(row, Some(handle), width)
 }
@@ -694,7 +641,8 @@ pub fn toast_face(row: &Row, width: f32) -> Div {
 }
 
 fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
-    let thread = row.thread.get() as usize;
+    let thread = row.thread.thread().get() as usize;
+    let machine = row.thread.machine();
     let word = row.word();
     let body: AnyElement = match &row.detail {
         Detail::Run { tool, command } => div()
@@ -724,20 +672,20 @@ fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
             .into_any_element(),
     };
     let mut answers: Vec<(&'static str, &'static str, &'static str, Verb)> = Vec::new();
-    if let (None, RowTarget::Decision(id), State::NeedsYou(RequestKind::Permission)) =
-        (&row.away, &row.target, row.state)
+    if let (RowTarget::Decision(id), State::NeedsYou(RequestKind::Permission)) =
+        (&row.target, row.state)
     {
         answers.push((
             "toast-allow",
             "1",
             "Allow",
-            Verb::Answer(id.clone(), QuickAnswer::Allow),
+            Verb::Answer(machine, id.clone(), QuickAnswer::Allow),
         ));
         answers.push((
             "toast-deny",
             "3",
             "Deny",
-            Verb::Answer(id.clone(), QuickAnswer::Deny),
+            Verb::Answer(machine, id.clone(), QuickAnswer::Deny),
         ));
     }
     answers.push(("toast-open", "\u{23ce}", "Open", row.open_verb()));
@@ -848,14 +796,16 @@ impl ToastStage {
 
 /// A toast's identity on screen: its record, on its machine.
 pub fn toast_key(row: &Row) -> SharedString {
-    format!("toast-in-{:?}-{:?}", row.away, row.target).into()
+    format!("toast-in-{}-{:?}", row.thread.machine().get(), row.target).into()
 }
 
-pub fn target_verb(target: &RowTarget) -> Verb {
+/// What opening `target` does: land on it, on `thread`'s machine.
+pub fn target_verb(thread: ThreadKey, target: &RowTarget) -> Verb {
+    let machine = thread.machine();
     match target {
-        RowTarget::Thread(thread) => Verb::OpenThread(*thread),
-        RowTarget::Notice(id) => Verb::Open(*id),
-        RowTarget::Decision(id) => Verb::OpenDecision(id.clone()),
+        RowTarget::Thread(_) => Verb::OpenThread(thread),
+        RowTarget::Notice(id) => Verb::Open(machine, *id),
+        RowTarget::Decision(id) => Verb::OpenDecision(machine, id.clone()),
     }
 }
 
@@ -865,11 +815,23 @@ mod tests {
     use ferrite_core::activity::DecisionHandle;
     use std::time::Duration;
 
+    /// Thread `thread` on this computer (machine 0) or another.
+    fn on(machine: u32, thread: u64) -> ThreadKey {
+        ThreadKey::fixture(machine, thread)
+    }
+
+    fn here(thread: u64) -> ThreadKey {
+        on(0, thread)
+    }
+
+    fn machine(machine: u32) -> MachineId {
+        on(machine, 1).machine()
+    }
+
     fn row(state: State, detail: Detail) -> Row {
         Row {
-            away: None,
             target: RowTarget::Notice(NoticeId::from_u64(1)),
-            thread: ThreadId::new(3),
+            thread: here(3),
             title: "Fold regression".into(),
             state,
             detail,
@@ -1019,12 +981,13 @@ mod tests {
         let mut needs_you = NeedsYou::new();
         let start = Instant::now();
         let waiting = request(2, 1);
-        let here = request(1, 2);
-        let in_view = |alert: &Alert| alert.thread == ThreadId::new(1);
+        let shown = request(1, 2);
+        let in_view = |alert: &Alert| alert.thread == here(1);
         needs_you.hear(
-            None,
+            machine(0),
+            false,
             [],
-            [(waiting.clone(), false), (here.clone(), false)],
+            [(waiting.clone(), here(2), false), (shown.clone(), here(1), false)],
             start,
         );
         let ring = needs_you.ring(start, &|_| Some(true), &in_view);
@@ -1036,18 +999,18 @@ mod tests {
         let due = start + ALERT_DELAY;
         let ring = needs_you.ring(due, &|_| Some(true), &in_view);
         let toast = Alert {
-            away: None,
             target: RowTarget::Decision(waiting.clone()),
-            thread: ThreadId::new(2),
+            thread: here(2),
         };
         assert_eq!(ring.rang, [toast], "the one in view stays quiet");
         assert!(ring.redraw);
         assert_eq!(needs_you.toasts().len(), 1);
         // Heard once: hearing the same requests again adds nothing.
         needs_you.hear(
-            None,
+            machine(0),
+            false,
             [],
-            [(waiting.clone(), false), (here.clone(), false)],
+            [(waiting.clone(), here(2), false), (shown.clone(), here(1), false)],
             due,
         );
         let later = due + ALERT_DELAY;
@@ -1065,15 +1028,13 @@ mod tests {
         let read = NoticeId::from_u64(4);
         let unread = NoticeId::from_u64(5);
         needs_you.hear(
-            None,
-            [
-                (read, ThreadId::new(5), true),
-                (unread, ThreadId::new(6), false),
-            ],
+            machine(0),
+            false,
+            [(read, here(5), true), (unread, here(6), false)],
             [],
             later,
         );
-        assert_eq!(needs_you.presented(None), Some(unread));
+        assert_eq!(needs_you.presented(machine(0)), Some(unread));
         let ring = needs_you.ring(later + ALERT_DELAY, &|_| Some(false), &|_| false);
         assert!(ring.rang.is_empty() && needs_you.toasts().is_empty());
     }
@@ -1085,9 +1046,10 @@ mod tests {
         let start = Instant::now();
         let asking = request(2, 1);
         needs_you.hear(
-            None,
-            [(NoticeId::from_u64(1), ThreadId::new(1), false)],
-            [(asking, false)],
+            machine(0),
+            false,
+            [(NoticeId::from_u64(1), here(1), false)],
+            [(asking, here(2), false)],
             start,
         );
         let shown = start + ALERT_DELAY;
@@ -1114,15 +1076,26 @@ mod tests {
     #[test]
     fn a_new_event_for_a_thread_replaces_its_toast() {
         let mut needs_you = NeedsYou::new();
-        let thread = ThreadId::new(3);
         let start = Instant::now();
-        needs_you.hear(None, [(NoticeId::from_u64(1), thread, false)], [], start);
+        needs_you.hear(
+            machine(0),
+            false,
+            [(NoticeId::from_u64(1), here(3), false)],
+            [],
+            start,
+        );
         needs_you.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
         // Two requests in the same second: only the newer rings.
         let at = start + DONE_TOAST / 2;
         let (first, second) = (request(3, 1), request(3, 2));
-        needs_you.hear(None, [], [(first.clone(), false)], at);
-        needs_you.hear(None, [], [(first, false), (second.clone(), false)], at);
+        needs_you.hear(machine(0), false, [], [(first.clone(), here(3), false)], at);
+        needs_you.hear(
+            machine(0),
+            false,
+            [],
+            [(first, here(3), false), (second.clone(), here(3), false)],
+            at,
+        );
         let ring = needs_you.ring(at + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert_eq!(ring.rang.len(), 1);
         assert_eq!(
@@ -1135,20 +1108,20 @@ mod tests {
         );
         // A button that acted takes its toast down.
         let target = needs_you.toasts()[0].alert.target.clone();
-        needs_you.drop_toast(&target);
+        needs_you.drop_toast(machine(0), &target);
         assert!(needs_you.toasts().is_empty());
     }
 
-    /// ADR 0026: a machine off screen is heard quietly the first time —
-    /// what it held then is not news — and rings for what it says after,
-    /// its Threads apart from the same ids on screen.
+    /// ADR 0045: a machine other than this computer is heard quietly the
+    /// first time — what it held then is not news — and rings for what it
+    /// says after, its Threads apart from the same ids on this computer.
     #[test]
-    fn a_machine_off_screen_rings_only_for_what_is_new() {
+    fn another_machine_rings_only_for_what_is_new() {
         let mut needs_you = NeedsYou::new();
         let start = Instant::now();
-        let away = Some(MachineKey(Some("me@box".into())));
+        let on_box = machine(1);
         let held = request(3, 1);
-        needs_you.hear(away.clone(), [], [(held.clone(), false)], start);
+        needs_you.hear(on_box, true, [], [(held.clone(), on(1, 3), false)], start);
         assert!(
             !needs_you.busy(),
             "what it held when first heard is not news"
@@ -1156,149 +1129,53 @@ mod tests {
 
         let asked = request(3, 2);
         needs_you.hear(
-            away.clone(),
+            on_box,
+            true,
             [],
-            [(held, false), (asked.clone(), false)],
+            [(held, on(1, 3), false), (asked.clone(), on(1, 3), false)],
             start,
         );
-        needs_you.hear(None, [], [(request(3, 1), false)], start);
+        needs_you.hear(machine(0), false, [], [(request(3, 1), here(3), false)], start);
         let ring = needs_you.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert_eq!(
             ring.rang,
             [
                 Alert {
-                    away: away.clone(),
                     target: RowTarget::Decision(asked),
-                    thread: ThreadId::new(3),
+                    thread: on(1, 3),
                 },
                 Alert {
-                    away: None,
                     target: RowTarget::Decision(request(3, 1)),
-                    thread: ThreadId::new(3),
+                    thread: here(3),
                 },
             ],
             "Thread 3 here and Thread 3 on box are two Threads"
         );
         assert_eq!(needs_you.toasts().len(), 2);
-        needs_you.drop_toast(&RowTarget::Decision(request(3, 1)));
-        assert_eq!(needs_you.toasts().len(), 1, "only the one on screen went");
-        assert_eq!(needs_you.toasts()[0].alert.away, away);
+        needs_you.drop_toast(machine(0), &RowTarget::Decision(request(3, 1)));
+        assert_eq!(needs_you.toasts().len(), 1, "only this computer's went");
+        assert_eq!(needs_you.toasts()[0].alert.thread, on(1, 3));
     }
 
-    /// What was heard moves with the window: arriving at box, what rang
-    /// off screen does not ring again; leaving this computer, what it held
-    /// is heard already. What either says after still rings.
+    /// A machine not heard from yet is waited for no longer than the
+    /// toast would have stood; one the window lets go is forgotten.
     #[test]
-    fn what_rang_off_screen_does_not_ring_again_on_arrival() {
+    fn a_machine_that_never_answers_is_given_up_on() {
         let mut needs_you = NeedsYou::new();
         let start = Instant::now();
-        let home = MachineKey(None);
-        let on_box = MachineKey(Some("me@box".into()));
-        let finished = NoticeId::from_u64(7);
-        needs_you.hear(None, [(finished, ThreadId::new(1), false)], [], start);
-        needs_you.hear(Some(on_box.clone()), [], [], start);
-        let (one, two) = (request(1, 1), request(2, 1));
-        needs_you.hear(
-            Some(on_box.clone()),
-            [],
-            [(one, false), (two.clone(), false)],
-            start,
-        );
-        let ring = needs_you.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
-        assert_eq!(ring.rang.len(), 3, "box's two and the finish here");
-
-        let mut needs_you = needs_you.moved(Some(&home), Some(&on_box));
-        let later = start + 2 * ALERT_DELAY;
-        assert_eq!(needs_you.presented(Some(&home)), Some(finished));
-        assert_eq!(needs_you.presented(None), None, "box had no Notice");
-        needs_you.hear(None, [], [(two, false)], later);
-        needs_you.hear(Some(home.clone()), [], [], later);
-        let ring = needs_you.ring(later + ALERT_DELAY, &|_| Some(true), &|_| false);
-        assert!(ring.rang.is_empty(), "nothing heard rings twice");
-
-        let (later, newer) = (later + ALERT_DELAY, NoticeId::from_u64(8));
-        needs_you.hear(
-            Some(home.clone()),
-            [(newer, ThreadId::new(1), false)],
-            [],
-            later,
-        );
-        let ring = needs_you.ring(later + ALERT_DELAY, &|_| Some(true), &|_| false);
-        assert_eq!(
-            ring.rang,
-            [Alert {
-                away: Some(home),
-                target: RowTarget::Notice(newer),
-                thread: ThreadId::new(1),
-            }]
-        );
-    }
-
-    /// The window goes from this computer to box within a second of box
-    /// asking: what waits goes on waiting, now on screen, and rings once
-    /// box answers; the toast standing for box3 stands on, and what was
-    /// posted opens on the machine it was about, under the same tag. Each
-    /// is about the same Thread, re-keyed.
-    #[test]
-    fn what_waits_or_stands_moves_with_the_window() {
-        let mut needs_you = NeedsYou::new();
-        let start = Instant::now();
-        let home = MachineKey(None);
-        let (on_box, box3) = (
-            MachineKey(Some("me@box".into())),
-            MachineKey(Some("me@box3".into())),
-        );
-        needs_you.hear(Some(box3.clone()), [], [], start);
-        needs_you.hear(Some(box3.clone()), [], [(request(4, 1), false)], start);
-        needs_you.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
-        let finished = NoticeId::from_u64(2);
-        needs_you.posted.insert(
-            "here".into(),
-            Alert {
-                away: None,
-                target: RowTarget::Notice(finished),
-                thread: ThreadId::new(1),
-            },
-        );
-        let asking = request(3, 1);
-        let at = start + ALERT_DELAY;
-        needs_you.hear(Some(on_box.clone()), [], [], at);
-        needs_you.hear(Some(on_box.clone()), [], [(asking.clone(), false)], at);
-
-        let mut needs_you = needs_you.moved(Some(&home), Some(&on_box));
-        assert_eq!(needs_you.toasts().len(), 1, "box3's toast stands on");
-        assert_eq!(needs_you.toasts()[0].alert.away, Some(box3));
-        assert_eq!(
-            needs_you.posted["here"].away,
-            Some(home),
-            "same tag, re-keyed"
-        );
-        let due = at + ALERT_DELAY;
-        let ring = needs_you.ring(due, &|alert| alert.away.is_some().then_some(true), &|_| {
-            false
-        });
-        assert!(ring.rang.is_empty(), "box has not answered yet");
-        let ring = needs_you.ring(due + ALERT_DELAY, &|_| Some(true), &|_| false);
-        assert_eq!(
-            ring.rang,
-            [Alert {
-                away: None,
-                target: RowTarget::Decision(asking),
-                thread: ThreadId::new(3),
-            }]
-        );
-
-        // A machine that never answers is waited for no longer than the
-        // toast would have stood.
-        let late = request(3, 2);
-        needs_you.hear(None, [], [(late, false)], due);
-        needs_you.ring(due + ALERT_DELAY, &|_| None, &|_| false);
-        needs_you.ring(due + ALERT_DELAY + NEEDS_YOU_TOAST, &|_| None, &|_| false);
-        let ring = needs_you.ring(
-            due + ALERT_DELAY + NEEDS_YOU_TOAST,
-            &|_| Some(true),
-            &|_| false,
-        );
+        let on_box = machine(1);
+        needs_you.hear(on_box, true, [], [], start);
+        needs_you.hear(on_box, true, [], [(request(3, 2), on(1, 3), false)], start);
+        let due = start + ALERT_DELAY;
+        needs_you.ring(due, &|_| None, &|_| false);
+        assert!(needs_you.busy(), "waiting for box");
+        needs_you.ring(due + NEEDS_YOU_TOAST, &|_| None, &|_| false);
+        let ring = needs_you.ring(due + NEEDS_YOU_TOAST, &|_| Some(true), &|_| false);
         assert!(ring.rang.is_empty(), "given up on");
+
+        needs_you.hear(on_box, true, [], [(request(3, 3), on(1, 3), false)], due);
+        needs_you.forget(on_box);
+        assert!(!needs_you.busy(), "let go");
+        assert_eq!(needs_you.presented(on_box), None);
     }
 }

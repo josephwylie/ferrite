@@ -19,23 +19,23 @@ fn click(cx: &mut gpui::VisualTestContext, selector: &str) {
 
 /// A fixture world with a live Factory: the core, the Project, and the
 /// operator's own Thread.
-fn world(name: &str) -> (Cockpit, ProjectId, ThreadKey) {
+fn world(name: &str) -> (Cockpit, ProjectKey, ThreadKey) {
     let fake = Fake::default();
     let dir = scratch(name);
     let mut core = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
     let mine = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, mine);
     let project = core.project_of(mine).unwrap();
     core.fixture_live_factory();
-    (core, project.project(), mine)
+    (core, project, mine)
 }
 
 fn window<'a>(
     cx: &'a mut TestAppContext,
     core: Cockpit,
-    project: ProjectId,
+    project: ProjectKey,
 ) -> (Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -90,8 +90,8 @@ fn the_coordinator_is_empty_until_the_operator_speaks(cx: &mut TestAppContext) {
         let agent = view
             .cockpit
             .read(cx)
-            .factory()
-            .coordinator(project)
+            .factory(project.machine())
+            .coordinator(project.project())
             .unwrap()
             .agent
             .clone();
@@ -105,8 +105,8 @@ fn the_coordinator_is_empty_until_the_operator_speaks(cx: &mut TestAppContext) {
     tick(cx);
     click(cx, "coordinator-send");
     view.read_with(cx, |view, cx| {
-        let board = view.cockpit.read(cx).factory();
-        let coordinator = board.coordinator(project).unwrap();
+        let board = view.cockpit.read(cx).factory(project.machine());
+        let coordinator = board.coordinator(project.project()).unwrap();
         assert!(coordinator.starting, "the Factory starts it");
         assert!(board.tasks.is_empty(), "talking starts nothing");
         let field = view.factory().unwrap().read(cx).coordinator.read(cx).field.clone();
@@ -125,11 +125,11 @@ fn proposals_are_cards_accepted_or_dismissed_beside_the_conversation(cx: &mut Te
         .fixture_open_owned(
             Provider::Claude,
             WorkspaceChoice::Main { checkout: here() },
-            ferrite_core::ThreadOwner::Factory(project),
+            ferrite_core::ThreadOwner::Factory(project.project()),
         )
         .unwrap();
     core.fixture_factory_command(Command::CoordinatorStarted {
-        project,
+        project: project.project(),
         thread: coordinator.thread(),
     });
     for act in [
@@ -169,14 +169,14 @@ fn proposals_are_cards_accepted_or_dismissed_beside_the_conversation(cx: &mut Te
     assert!(!shows(cx, "proposal-p-2-accept"));
     view.read_with(cx, |view, cx| {
         assert!(
-            view.cockpit.read(cx).factory().tasks.is_empty(),
+            view.cockpit.read(cx).factory(view.cockpit.read(cx).first_machine()).tasks.is_empty(),
             "dismissed: nothing"
         );
     });
 
     click(cx, "proposal-p-1-accept");
     let task = view.read_with(cx, |view, cx| {
-        let board = view.cockpit.read(cx).factory();
+        let board = view.cockpit.read(cx).factory(project.machine());
         let card = board.proposal("p-1").unwrap();
         assert_eq!(card.status, ProposalStatus::Accepted);
         assert_eq!(board.tasks.len(), 1, "accepted: the Task");
@@ -203,11 +203,11 @@ fn focusing_a_coordinator_by_id_opens_its_projects_coordinator_tab(cx: &mut Test
         .fixture_open_owned(
             Provider::Claude,
             WorkspaceChoice::Main { checkout: here() },
-            ferrite_core::ThreadOwner::Factory(project),
+            ferrite_core::ThreadOwner::Factory(project.project()),
         )
         .unwrap();
     core.fixture_factory_command(Command::CoordinatorStarted {
-        project,
+        project: project.project(),
         thread: coordinator.thread(),
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));

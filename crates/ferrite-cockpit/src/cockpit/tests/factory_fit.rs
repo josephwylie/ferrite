@@ -101,7 +101,7 @@ fn the_board_fits_and_brings_an_open_tasks_column_into_view(cx: &mut TestAppCont
     core.fixture_factory(every_column(project.project()));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
-    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
+    view.update(cx, |view, cx| view.open_factory(project, cx));
     tick(cx);
     let board = bounds(cx, "factory-board".into());
     assert!(board.left() > px(150.), "the sidebar is open: {board:?}");
@@ -127,7 +127,7 @@ fn the_board_fits_and_brings_an_open_tasks_column_into_view(cx: &mut TestAppCont
     );
 
     for open in ["t-4", "t-6", "t-1"] {
-        view.update(cx, |view, cx| view.open_task(open, cx));
+        view.update(cx, |view, cx| view.open_task(view.cockpit.read(cx).first_machine(), open, cx));
         tick(cx);
         tick(cx);
         let panel = bounds(cx, "task-panel".into());
@@ -185,8 +185,8 @@ fn an_open_task_that_moves_column_stays_in_view(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     view.update(cx, |view, cx| {
-        view.open_factory(project.project(), cx);
-        view.open_task("t-3", cx);
+        view.open_factory(project, cx);
+        view.open_task(view.cockpit.read(cx).first_machine(), "t-3", cx);
     });
     tick(cx);
     tick(cx);
@@ -218,7 +218,7 @@ fn an_open_task_that_moves_column_stays_in_view(cx: &mut TestAppContext) {
 fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("fit-palette", 1);
     let repo = repo_in(&scratch("fit-palette-repo"));
-    let empty = core.register_project(&repo).unwrap();
+    let empty = core.register_project(core.first_machine(), &repo).unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
@@ -228,8 +228,7 @@ fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext)
     let title = view.read_with(cx, |view, cx| {
         view.cockpit
             .read(cx)
-            .registry()
-            .project(empty.project())
+            .project(empty)
             .unwrap()
             .title
             .clone()
@@ -261,7 +260,7 @@ fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext)
     view.read_with(cx, |view, _| {
         assert_eq!(
             view.factory_project(),
-            Some(empty).map(|key| key.project())
+            Some(empty)
         );
     });
     assert!(shows(cx, "factory-board"));
@@ -292,7 +291,7 @@ fn an_answer_sent_lets_the_keyboard_go(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     view.update(cx, |view, cx| {
-        view.open_task("t-1", cx);
+        view.open_task(view.cockpit.read(cx).first_machine(), "t-1", cx);
         view.focus_answer(cx);
     });
     tick(cx);
@@ -357,7 +356,7 @@ fn the_worker_tab_takes_the_keyboard_from_the_overviews_field(cx: &mut TestAppCo
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     view.update(cx, |view, cx| {
-        view.open_task("t-1", cx);
+        view.open_task(view.cockpit.read(cx).first_machine(), "t-1", cx);
         view.focus_answer(cx);
     });
     tick(cx);
@@ -382,7 +381,7 @@ fn the_coordinators_pane_draws_without_a_click(cx: &mut TestAppContext) {
     let dir = scratch("fit-coordinator-draws");
     let mut core = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
     let first = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     let project = core.project_of(first).unwrap();
     core.fixture_live_factory();
@@ -399,14 +398,14 @@ fn the_coordinators_pane_draws_without_a_click(cx: &mut TestAppContext) {
     });
     // The operator's own Thread is the one on screen from the first frame.
     let mine = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, mine);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     view.update(cx, |view, cx| {
         view.focus_thread(mine, cx);
-        view.open_factory(project.project(), cx);
+        view.open_factory(project, cx);
         // The surface already shows when the Coordinator's Pane arrives:
         // nothing moved the roster to it.
         view.update_factory(cx, |factory, _| factory.surface = Surface::Coordinator);
@@ -448,7 +447,7 @@ fn a_tasks_toast_is_not_raised_over_its_own_panel(cx: &mut TestAppContext) {
             window.notifications(cx).len()
         })
     };
-    view.update(cx, |view, cx| view.open_task("t-4", cx));
+    view.update(cx, |view, cx| view.open_task(view.cockpit.read(cx).first_machine(), "t-4", cx));
     tick(cx);
     let before = toasts(cx);
     let alert = |task: &str, status: Status| ferrite_core::protocol::ServerMessage::TaskAlert {
@@ -515,13 +514,13 @@ fn the_title_bar_names_the_factory_and_its_open_task(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     assert!(shows(cx, "view-title"), "a Thread's title before");
-    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
+    view.update(cx, |view, cx| view.open_factory(project, cx));
     tick(cx);
     assert!(!shows(cx, "view-title"), "not the Thread behind the board");
     assert!(!shows(cx, "title-tools"), "nor its Panel's toggle");
     assert!(shows(cx, "view-head-factory"));
     assert!(!shows(cx, "view-head-task"));
-    view.update(cx, |view, cx| view.open_task("t-2", cx));
+    view.update(cx, |view, cx| view.open_task(view.cockpit.read(cx).first_machine(), "t-2", cx));
     tick(cx);
     assert!(shows(cx, "view-head-task"), "the open Task");
     view.update(cx, |view, cx| view.factory_surface(Surface::Workflows, cx));
@@ -529,7 +528,7 @@ fn the_title_bar_names_the_factory_and_its_open_task(cx: &mut TestAppContext) {
     assert!(!shows(cx, "view-head-task"), "the panel is not on screen");
     assert!(shows(cx, "view-head-factory"));
 
-    view.update(cx, |view, cx| view.open_task("t-6", cx));
+    view.update(cx, |view, cx| view.open_task(view.cockpit.read(cx).first_machine(), "t-6", cx));
     tick(cx);
     assert!(shows(cx, "view-head-task"), "the Completed Task");
     let mut cleared = every_column(project.project());
@@ -563,7 +562,7 @@ fn the_new_task_sheet_closes_with_its_menu_and_keeps_its_words(cx: &mut TestAppC
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     view.update(cx, |view, cx| {
-        view.open_factory(project.project(), cx);
+        view.open_factory(project, cx);
         view.open_new_task(cx);
     });
     tick(cx);
@@ -619,7 +618,7 @@ fn focusing_a_worker_by_id_brings_its_panel_forward_from_workflows(cx: &mut Test
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     view.update(cx, |view, cx| {
-        view.open_factory(project.project(), cx);
+        view.open_factory(project, cx);
         view.factory_surface(Surface::Workflows, cx);
     });
     tick(cx);
@@ -655,7 +654,7 @@ fn template_window<'a>(
     let dir = scratch(name);
     let mut core = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
     let thread = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, thread);
     let project = core.project_of(thread).unwrap();
@@ -664,7 +663,7 @@ fn template_window<'a>(
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     view.update(cx, |view, cx| {
-        view.open_factory(project.project(), cx);
+        view.open_factory(project, cx);
         view.factory_surface(Surface::Workflows, cx);
         view.create_workflow(Template::IssueToReviewedPr, cx);
     });
@@ -835,7 +834,7 @@ fn the_coordinators_settings_fit_the_window(cx: &mut TestAppContext) {
     let dir = scratch("fit-coordinator-settings");
     let mut core = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
     let mine = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, mine);
     let project = core.project_of(mine).unwrap();
@@ -843,7 +842,7 @@ fn the_coordinators_settings_fit_the_window(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
     view.update(cx, |view, cx| {
-        view.open_factory(project.project(), cx);
+        view.open_factory(project, cx);
         view.factory_surface(Surface::Coordinator, cx);
     });
     tick(cx);
@@ -947,7 +946,7 @@ fn the_board_tab_leaves_the_archive(cx: &mut TestAppContext) {
     core.fixture_factory(every_column(project.project()));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
-    view.update(cx, |view, cx| view.open_factory(project.project(), cx));
+    view.update(cx, |view, cx| view.open_factory(project, cx));
     tick(cx);
     click(cx, "factory-archive");
     assert!(shows(cx, "factory-archive-list"));

@@ -77,7 +77,7 @@ fn a_ready_release_waits_for_working_agents(cx: &mut TestAppContext) {
                 when_idle: true,
             }
         );
-        let busy = view.in_flight(cx);
+        let busy = view.in_flight_here(cx);
         assert_eq!(
             view.ferrite_update.describe(busy.as_deref()).0.as_ref(),
             "0.5.0 installs once no agent is working or waiting (1 agent is working now)"
@@ -118,7 +118,7 @@ fn background_work_keeps_a_restart_waiting(cx: &mut TestAppContext) {
         view.restart_to_update(cx);
     });
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.in_flight(cx).as_deref(), Some("1 agent is working"));
+        assert_eq!(view.in_flight_here(cx).as_deref(), Some("1 agent is working"));
         assert!(!view.ferrite_update.restart_offered());
         assert_eq!(
             view.cockpit.read(cx).threads(),

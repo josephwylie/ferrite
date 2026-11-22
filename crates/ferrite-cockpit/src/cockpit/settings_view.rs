@@ -39,7 +39,7 @@ pub(crate) struct SettingsInputs {
     pub providers: Vec<ProviderInputs>,
     /// The CLIs' versions, once probed: (claude, codex).
     pub cli_versions: Option<(SharedString, SharedString)>,
-    /// The machine the window is on, as Settings names it.
+    /// The machine Settings' defaults and CLIs are about, as it names it.
     pub place: SharedString,
     /// Where the settings, the Threads and the logs live.
     pub dir: PathBuf,
@@ -535,17 +535,23 @@ impl CockpitView {
     /// sheet calls it while its own update is running.
     pub(super) fn settings_inputs(&mut self, cx: &mut Context<Self>) -> SettingsInputs {
         let place = self.machine_place(cx);
+        let machine = self.settings_machine(cx);
+        let cockpit = self.cockpit.read(cx);
         let providers = Provider::ALL
             .into_iter()
             .map(|provider| ProviderInputs {
                 provider,
-                catalog: self.cockpit.read(cx).model_catalog(provider),
-                announced: self.cockpit.read(cx).announced_models(provider),
+                catalog: machine
+                    .map(|machine| cockpit.model_catalog(machine, provider))
+                    .unwrap_or_default(),
+                announced: machine
+                    .map(|machine| cockpit.announced_models(machine, provider))
+                    .unwrap_or_default(),
                 update: crate::cli_updates::describe(
                     provider,
                     self.cli_updates.state(provider),
                     self.prefs.settings.auto_update_clis,
-                    self.cockpit.read(cx).live_sessions(provider),
+                    machine.map_or(0, |machine| cockpit.live_sessions(machine, provider)),
                     &place,
                 ),
             })

@@ -1189,7 +1189,7 @@ fn the_thread_card_opens_main_not_the_pending_child(cx: &mut TestAppContext) {
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
-        view.notice_verb(crate::notifications::Verb::OpenThread(thread.thread()), cx)
+        view.notice_verb(crate::notifications::Verb::OpenThread(thread), cx)
     });
     tick(cx);
     assert!(selected(&view, cx) == Subject::Main);

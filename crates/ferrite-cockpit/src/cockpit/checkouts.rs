@@ -17,27 +17,27 @@ type Reply = std::sync::mpsc::Receiver<std::io::Result<RepoListing>>;
 #[derive(Default)]
 pub(super) struct Checkouts {
     /// The branch each Project's checkout is on, as last answered.
-    branches: std::cell::RefCell<std::collections::HashMap<ProjectId, SharedString>>,
+    branches: std::cell::RefCell<std::collections::HashMap<ProjectKey, SharedString>>,
     /// Projects whose checkout is being asked about: one lookup each at a
     /// time, however many frames name it meanwhile.
-    asking: std::cell::RefCell<std::collections::HashSet<ProjectId>>,
+    asking: std::cell::RefCell<std::collections::HashSet<ProjectKey>>,
     /// What git lists for a draft's chosen repo, kept by Project: the
     /// rows show the last answer at once and take the fresh one when it
     /// lands.
-    listing: Option<(ProjectId, RepoListing)>,
+    listing: Option<(ProjectKey, RepoListing)>,
     /// On a machine, the listing its Server is reading for the menu or a
     /// draft's chip.
-    asking_machine: Option<(ProjectId, Reply)>,
+    asking_machine: Option<(ProjectKey, Reply)>,
 }
 
 impl Checkouts {
     /// The branch `project`'s checkout is on, as last answered.
-    pub(super) fn branch(&self, project: ProjectId) -> Option<SharedString> {
+    pub(super) fn branch(&self, project: ProjectKey) -> Option<SharedString> {
         self.branches.borrow().get(&project).cloned()
     }
 
     /// Whether `project`'s checkout is being asked about.
-    pub(super) fn asking(&self, project: ProjectId) -> bool {
+    pub(super) fn asking(&self, project: ProjectKey) -> bool {
         self.asking.borrow().contains(&project)
     }
 
@@ -48,14 +48,14 @@ impl Checkouts {
     }
 
     /// `projects`' checkouts are being asked about.
-    pub(super) fn listen(&self, projects: impl IntoIterator<Item = ProjectId>) {
+    pub(super) fn listen(&self, projects: impl IntoIterator<Item = ProjectKey>) {
         self.asking.borrow_mut().extend(projects);
     }
 
     /// Take git's answers, a branch or none for each Project asked about
     /// (`main`, the branch a fresh clone would be sitting on); whether
     /// any changed.
-    pub(super) fn listed(&mut self, answers: Vec<(ProjectId, Option<String>)>) -> bool {
+    pub(super) fn listed(&mut self, answers: Vec<(ProjectKey, Option<String>)>) -> bool {
         let mut changed = false;
         let asking = self.asking.get_mut();
         let known = self.branches.get_mut();
@@ -71,7 +71,7 @@ impl Checkouts {
     }
 
     /// What `project`'s repo lists, as last answered.
-    pub(super) fn listing(&self, project: ProjectId) -> Option<&RepoListing> {
+    pub(super) fn listing(&self, project: ProjectKey) -> Option<&RepoListing> {
         self.listing
             .as_ref()
             .filter(|(listed, _)| *listed == project)
@@ -79,13 +79,13 @@ impl Checkouts {
     }
 
     /// Git here listed `project`'s repo.
-    pub(super) fn set_listing(&mut self, project: ProjectId, listing: RepoListing) {
+    pub(super) fn set_listing(&mut self, project: ProjectKey, listing: RepoListing) {
         self.listing = Some((project, listing));
     }
 
     /// Wait for the machine's Server to list `project`'s repo; none, it
     /// cannot say.
-    pub(super) fn listen_machine(&mut self, project: ProjectId, reply: Option<Reply>) {
+    pub(super) fn listen_machine(&mut self, project: ProjectKey, reply: Option<Reply>) {
         self.asking_machine = reply.map(|reply| (project, reply));
     }
 

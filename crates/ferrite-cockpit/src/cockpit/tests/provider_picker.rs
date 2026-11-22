@@ -207,7 +207,7 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
     tx.send((Provider::Codex, models.clone())).unwrap();
     tick(cx);
     let index = view.read_with(cx, |view, cx| {
-        assert_eq!(view.cockpit.read(cx).model_catalog(Provider::Codex), models);
+        assert_eq!(view.cockpit.read(cx).model_catalog(view.cockpit.read(cx).first_machine(), Provider::Codex), models);
         picker(view, cx)
             .rows
             .iter()
@@ -241,7 +241,7 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
     tick(cx);
     view.update(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.read(cx).model_catalog(Provider::Codex),
+            view.cockpit.read(cx).model_catalog(view.cockpit.read(cx).first_machine(), Provider::Codex),
             models,
             "an empty discovery keeps the last usable menu"
         );

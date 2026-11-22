@@ -686,24 +686,27 @@ impl CockpitView {
 
     pub(super) fn pump_browsers(&mut self, cx: &mut Context<Self>) {
         self.pump_browser_annotations(cx);
-        if matches!(
-            self.cockpit.read(cx).server(),
-            Some(ferrite_core::cockpit::ServerState::Detached { .. })
-        ) {
-            for browser in self.browsers.threads.values_mut() {
-                // Their answers went with the link.
-                browser.attaching = None;
-                browser.waiting.clear();
-                browser.pages.clear();
-                browser.owner = None;
-                browser.state.owner = None;
-                for tab in &mut browser.state.tabs {
-                    tab.live = false;
-                    tab.loading = false;
-                }
-                browser.error =
-                    Some("Browser disconnected. Reconnect Ferrite to resume this page.".into());
+        // A Browser of a machine whose Server went: its answers went with
+        // the link.
+        let cockpit = self.cockpit.read(cx);
+        let lost = self.browsers.threads.iter_mut().filter(|(thread, _)| {
+            matches!(
+                cockpit.server(thread.machine()),
+                Some(ferrite_core::cockpit::ServerState::Detached { .. })
+            )
+        });
+        for (_, browser) in lost {
+            browser.attaching = None;
+            browser.waiting.clear();
+            browser.pages.clear();
+            browser.owner = None;
+            browser.state.owner = None;
+            for tab in &mut browser.state.tabs {
+                tab.live = false;
+                tab.loading = false;
             }
+            browser.error =
+                Some("Browser disconnected. Reconnect Ferrite to resume this page.".into());
         }
         let requests: Vec<_> = self
             .panes
@@ -877,7 +880,7 @@ impl CockpitView {
             match event {
                 Event::Restore(thread, tab) => {
                     if !matches!(
-                        self.cockpit.read(cx).server(),
+                        self.cockpit.read(cx).server(thread.machine()),
                         Some(ferrite_core::cockpit::ServerState::Attached { .. })
                     ) {
                         continue;

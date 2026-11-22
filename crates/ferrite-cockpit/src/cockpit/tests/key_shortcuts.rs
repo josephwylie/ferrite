@@ -64,13 +64,13 @@ fn cmd_t_opens_a_new_thread_and_cmd_n_still_does(cx: &mut TestAppContext) {
 fn cmd_t_from_a_thread_starts_in_its_project(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("cmd-t-project", 1);
     let elsewhere = core
-        .register_project(&std::env::temp_dir().canonicalize().unwrap())
+        .register_project(core.first_machine(), &std::env::temp_dir().canonicalize().unwrap())
         .unwrap();
     let here = core.project_of(core.threads()[0]).expect("a bound Thread");
     assert_ne!(here, elsewhere);
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.launch_project = Some(elsewhere.project()));
+    view.update(cx, |view, _| view.launch_project = Some(elsewhere));
     tick(cx);
 
     cx.simulate_keystrokes("cmd-t");
@@ -78,7 +78,7 @@ fn cmd_t_from_a_thread_starts_in_its_project(cx: &mut TestAppContext) {
         let draft = view.panes[view.focused(cx)]
             .draft()
             .expect("cmd-t opened a draft");
-        assert_eq!(draft.binding.project(), here.project());
+        assert_eq!(draft.binding.project(), here);
     });
 }
 
@@ -89,11 +89,11 @@ fn cmd_t_from_a_thread_outranks_the_nav_filter(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("cmd-t-over-filter", 1);
     let here = core.project_of(core.threads()[0]).expect("a bound Thread");
     let filtered = core
-        .register_project(&std::env::temp_dir().canonicalize().unwrap())
+        .register_project(core.first_machine(), &std::env::temp_dir().canonicalize().unwrap())
         .unwrap();
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.nav_filter = Some(filtered.project()));
+    view.update(cx, |view, _| view.nav_filter = Some(filtered));
     tick(cx);
 
     cx.simulate_keystrokes("cmd-t");
@@ -101,7 +101,7 @@ fn cmd_t_from_a_thread_outranks_the_nav_filter(cx: &mut TestAppContext) {
         let draft = view.panes[view.focused(cx)]
             .draft()
             .expect("cmd-t opened a draft");
-        assert_eq!(draft.binding.project(), here.project());
+        assert_eq!(draft.binding.project(), here);
     });
 }
 
@@ -114,11 +114,11 @@ fn cmd_t_from_a_thread_brings_the_standing_draft_to_its_project(cx: &mut TestApp
     let thread = core.threads()[0];
     let here = core.project_of(thread).expect("a bound Thread");
     let elsewhere = core
-        .register_project(&std::env::temp_dir().canonicalize().unwrap())
+        .register_project(core.first_machine(), &std::env::temp_dir().canonicalize().unwrap())
         .unwrap();
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.open_draft_in_project(elsewhere.project(), cx));
+    view.update(cx, |view, cx| view.open_draft_in_project(elsewhere, cx));
     tick(cx);
     let project = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
@@ -133,19 +133,19 @@ fn cmd_t_from_a_thread_brings_the_standing_draft_to_its_project(cx: &mut TestApp
     cx.simulate_keystrokes("cmd-t");
     assert_eq!(
         project(&view, cx),
-        here.project(),
+        here,
         "pressed on the draft, it follows the Thread focus last left"
     );
 
     view.update(cx, |view, cx| {
-        view.open_draft_in_project(elsewhere.project(), cx);
+        view.open_draft_in_project(elsewhere, cx);
         view.cockpit.update(cx, |cockpit, _| cockpit.focus(PaneIdentity::Thread(thread)));
     });
     tick(cx);
     cx.simulate_keystrokes("cmd-t");
     assert_eq!(
         project(&view, cx),
-        here.project(),
+        here,
         "pressed on the Thread, it follows"
     );
 }

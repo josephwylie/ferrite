@@ -55,9 +55,9 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
             .chain(&state.parked)
             .any(|row| row.key.thread() == thread.thread())
             || view
-                .inbox_rows(&state, cx)
+                .needs_you_rows(cx)
                 .iter()
-                .any(|row| row.thread == thread.thread())
+                .any(|row| row.thread == thread)
     };
     view.read_with(cx, |view, cx| {
         assert!(listed(view, mine, cx), "the operator's own is listed");

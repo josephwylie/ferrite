@@ -760,7 +760,10 @@ impl CockpitView {
             self.open_in_files(thread, path, line, true, cx);
             return;
         }
-        if self.elsewhere(self.on_screen(cx), cx) {
+        if self
+            .pane_machine(self.focused(cx))
+            .is_some_and(|machine| self.elsewhere(machine, cx))
+        {
             self.nav_notice.hint("Start a Thread in this remote workspace before opening its files.");
             cx.notify();
             return;

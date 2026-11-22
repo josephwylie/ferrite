@@ -30,7 +30,7 @@
 use std::ops::Range;
 
 use ferrite_core::roster::PaneIdentity;
-use ferrite_core::workspace::registry::ProjectId;
+use ferrite_core::ProjectKey;
 use ferrite_core::ThreadKey;
 use gpui::prelude::*;
 use gpui::{
@@ -142,11 +142,11 @@ pub(crate) enum Command {
     NewThread,
     NewWorktreeThread,
     ReopenLast,
-    NewThreadIn(ProjectId),
+    NewThreadIn(ProjectKey),
     FilterAll,
-    FilterProject(ProjectId),
+    FilterProject(ProjectKey),
     NewProject,
-    EditProject(ProjectId),
+    EditProject(ProjectKey),
     Settings,
     PullRequests,
     ToggleSidebar,
@@ -243,9 +243,9 @@ pub(crate) enum Act {
     /// Focus the Thread, or revive it.
     Thread(ThreadKey),
     /// Land on the Project's Thread that most needs the operator.
-    Project(ProjectId),
+    Project(ProjectKey),
     /// Open the Project's Factory.
-    Factory(ProjectId),
+    Factory(ProjectKey),
     Command(Command),
     /// Import the session file and resume it: in place of `into` (a blank
     /// Pane the picker was opened for), else alongside.

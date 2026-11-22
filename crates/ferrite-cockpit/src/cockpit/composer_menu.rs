@@ -760,13 +760,17 @@ impl CockpitView {
                     None => {
                         let draft = pane.draft()?;
                         let provider = draft.binding.provider().provider;
+                        let machine = draft.binding.project().machine();
                         let cwd = draft
                             .binding
-                            .resolve(self.cockpit.read(cx).registry().reading(), !self.elsewhere(self.on_screen(cx), cx))
+                            .resolve(
+                                self.cockpit.read(cx).registry(machine).reading(),
+                                !self.elsewhere(machine, cx),
+                            )
                             .ok()?
                             .source_root()
                             .to_path_buf();
-                        self.draft_listed(provider, cwd, &line, cx)
+                        self.draft_listed(machine, provider, cwd, &line, cx)
                     }
                 };
                 Ask::Skills { filter, listed }
@@ -777,13 +781,17 @@ impl CockpitView {
                     None => {
                         let draft = pane.draft()?;
                         let provider = draft.binding.provider().provider;
+                        let machine = draft.binding.project().machine();
                         let cwd = draft
                             .binding
-                            .resolve(self.cockpit.read(cx).registry().reading(), !self.elsewhere(self.on_screen(cx), cx))
+                            .resolve(
+                                self.cockpit.read(cx).registry(machine).reading(),
+                                !self.elsewhere(machine, cx),
+                            )
                             .ok()
                             .map(|workspace| workspace.source_root().to_path_buf());
                         match cwd {
-                            Some(cwd) => self.draft_listed(provider, cwd, &line, cx),
+                            Some(cwd) => self.draft_listed(machine, provider, cwd, &line, cx),
                             None => {
                                 // Never reuse commands from the previous
                                 // valid binding.
@@ -818,7 +826,9 @@ impl CockpitView {
                     filter,
                     root,
                     search,
-                    on_machine: self.elsewhere(self.on_screen(cx), cx),
+                    on_machine: self
+                        .pane_machine(index)
+                        .is_some_and(|machine| self.elsewhere(machine, cx)),
                 }
             }
         };
@@ -832,12 +842,13 @@ impl CockpitView {
     /// The draft's listing for `provider` in `cwd`, as the menu lists it.
     fn draft_listed(
         &mut self,
+        machine: ferrite_core::MachineId,
         provider: Provider,
         cwd: std::path::PathBuf,
         line: &Entity<Composer>,
         cx: &mut Context<Self>,
     ) -> Listed {
-        let listing = self.draft_commands(provider, cwd, line, cx);
+        let listing = self.draft_commands(machine, provider, cwd, line, cx);
         Listed::Draft {
             commands: listing.commands.clone(),
             loading: listing.loading(),

@@ -42,7 +42,6 @@ use gpui::{
 
 use crate::machines::{Connection, MachineRow};
 use crate::notifications::{Row as NoticeRow, State as NoticeState};
-use ferrite_core::cockpit::StatusRow;
 pub use ferrite_pane::mark::{mark, NavTail, RowStatus};
 use ferrite_ui::components;
 use ferrite_ui::icons::{self, icon};
@@ -753,8 +752,8 @@ pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
     )
 }
 
-/// A request from a machine off screen, among the Active cards, two
-/// lines: its mark, its title
+/// A Notice or request among the Active cards that has no card of its
+/// own (another machine's Thread), two lines: its mark, its title
 /// (`INK_STRONG` while unread) and its age, then its state's word and
 /// detail in the word's ink. The cursor's row is selected.
 pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure) -> Stateful<Div> {
@@ -869,10 +868,33 @@ pub fn notice(text: SharedString) -> Div {
 
 // ------------------------------------------------------------- machines
 
+/// A machine as the nav draws it (ADR 0026): its heading and, for a
+/// machine other than this computer — whose Threads are the list's own
+/// cards — the Threads it has open.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NavMachine {
+    pub row: MachineRow,
+    /// This computer, held: the list's cards are its Threads.
+    pub home: bool,
+    pub threads: Vec<MachineThread>,
+}
+
+/// One open Thread under its machine's heading, as its row draws it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MachineThread {
+    pub key: ThreadKey,
+    pub title: SharedString,
+    pub working: bool,
+    /// A Decision waits.
+    pub waiting: bool,
+    /// The board shows it.
+    pub selected: bool,
+}
+
 /// A machine's heading (ADR 0026), in the heading style: its chevron
 /// (`fold`, from `machine_fold`, with its own press), its connection mark,
-/// its name — the strong ink on the machine the window is on — and a word
-/// for a connection that is not up. The cockpit wires the press: onto the
+/// its name — the strong ink while the window holds it — and a word for a
+/// connection that is not up. The cockpit wires the press: it folds the
 /// machine.
 pub fn machine_heading(row: &MachineRow, fold: impl IntoElement) -> Stateful<Div> {
     let index = row.index;
@@ -909,7 +931,7 @@ pub fn machine_heading(row: &MachineRow, fold: impl IntoElement) -> Stateful<Div
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_color(rgb(if row.selected { INK_STRONG } else { INK_SUBTLE }))
+                .text_color(rgb(if row.held.is_some() { INK_STRONG } else { INK_SUBTLE }))
                 .child(SharedString::from(row.name.clone())),
         )
         .children(word.map(|word| trailing(word, FS_META, INK_SUBTLE)))
@@ -930,10 +952,11 @@ pub fn machine_fold(index: usize, folded: bool) -> Stateful<Div> {
         ))
 }
 
-/// One open Thread on a machine the window is not on: its mark, its title
-/// and its word, from the status the machine streams. A press goes to the
-/// machine. A machine that went keeps its rows, dimmed.
-pub fn machine_thread_row(machine: usize, row: &StatusRow, lost: bool) -> Stateful<Div> {
+/// One open Thread under its machine's heading: its mark, its title and
+/// its word, from what the machine streams of it. The cockpit wires the
+/// press: it opens the Thread in place. A machine that went keeps its
+/// rows, dimmed.
+pub fn machine_thread_row(row: &MachineThread, lost: bool) -> Stateful<Div> {
     let (status, word) = if row.waiting {
         (RowStatus::NeedsYou, Some((words::NEEDS_YOU, ATTENTION)))
     } else if row.working {
@@ -941,11 +964,11 @@ pub fn machine_thread_row(machine: usize, row: &StatusRow, lost: bool) -> Statef
     } else {
         (RowStatus::Idle, None)
     };
-    let thread = row.thread.get();
+    let (machine, thread) = (row.key.machine().get(), row.key.thread().get());
     let key = SharedString::from(format!("nav-machine-{machine}-{thread}"));
-    let title: SharedString = row.title.clone().unwrap_or_default().into();
+    let title = row.title.clone();
     // Thread ids are per Server: the machine is part of the id.
-    row_frame(key.clone(), key.clone(), false)
+    row_frame(key.clone(), key.clone(), row.selected)
         .debug_selector(move || key.to_string())
         .when(lost, |row| row.opacity(MACHINE_LOST_OPACITY))
         .flex_row()

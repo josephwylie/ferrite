@@ -1,21 +1,20 @@
-//! The machines a window can be on (ADR 0026): this computer, each machine
-//! saved in Settings, and the one `--remote` named for this run. The window
-//! is on one at a time — its Cockpit watches that machine's Threads — and
-//! every other enabled machine streams only status (`ServerStatus`) for the
-//! nav. A machine's bridge lives for the run, so going back to it finds its
-//! ssh master still up.
+//! The machines a window holds (ADR 0026, ADR 0045): this computer, each
+//! machine saved in Settings, and the one `--remote` named for this run.
+//! The window holds every enabled one at once, each its own machine in
+//! the one Cockpit: it attaches to each as it starts or is turned on, and
+//! lets each go as it is turned off or removed. A machine's bridge lives
+//! for the run, so turning it back on finds its ssh master still up.
 
 use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ferrite_core::cockpit::{Attach, Cockpit, Endpoint, ServerState, ServerStatus, StatusRow};
+use ferrite_core::cockpit::{Attach, Cockpit, Endpoint, ServerState};
 use ferrite_core::machine::{self, Bridge, Machine};
-use ferrite_core::notifications::Notifications;
 use ferrite_core::protocol::Peer;
 use ferrite_core::spawner::{self, SessionDefaults};
 use ferrite_core::visual::Renderer;
-use ferrite_core::MachineKey;
+use ferrite_core::{MachineId, MachineKey};
 
 /// What the nav calls this computer.
 pub const LOCAL: &str = "local";
@@ -42,8 +41,6 @@ pub struct Machines {
     /// This computer first, then the machines in Settings' order, then an
     /// unsaved `--remote` one.
     entries: Vec<Entry>,
-    /// The one the window is on.
-    selected: Option<usize>,
     local_enabled: bool,
 }
 
@@ -52,22 +49,12 @@ struct Entry {
     machine: Option<Machine>,
     /// Made the first time the machine is reached.
     bridge: Option<Arc<Bridge>>,
-    /// Off screen and enabled: what the nav lists.
-    status: Option<ServerStatus>,
+    /// The machine as the Cockpit holds it, while it is enabled.
+    held: Option<MachineId>,
     /// The `--remote` machine, not in Settings.
     unsaved: bool,
     /// The nav shows its heading alone.
     folded: bool,
-    removed: bool,
-}
-
-/// A machine off screen whose Server has been heard from: what the Inbox
-/// hears of it.
-pub struct OffScreen<'a> {
-    pub key: MachineKey,
-    pub name: String,
-    pub notifications: &'a Notifications,
-    pub status: &'a ServerStatus,
 }
 
 /// A machine's connection, as its glyph in the nav says it.
@@ -81,66 +68,73 @@ pub enum Connection {
 }
 
 impl Connection {
-    fn of(state: &ServerState) -> Self {
+    fn of(state: Option<&ServerState>) -> Self {
         match state {
-            ServerState::Attached { .. } => Self::Online,
-            ServerState::Detached {
+            // An Engine in this process is always there.
+            None | Some(ServerState::Attached { .. }) => Self::Online,
+            Some(ServerState::Detached {
                 attention: Some(_), ..
-            } => Self::Attention,
-            ServerState::Detached { .. } => Self::Connecting,
+            }) => Self::Attention,
+            Some(ServerState::Detached { .. }) => Self::Connecting,
         }
     }
 }
 
-/// One machine, as the nav draws it.
+/// One machine, as the nav draws its heading.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MachineRow {
     pub index: usize,
+    /// The machine as the Cockpit holds it; `None` while it is off.
+    pub held: Option<MachineId>,
     pub name: String,
     pub connection: Connection,
-    pub selected: bool,
     pub folded: bool,
-    /// What it last said it was doing: only for a machine off screen (the
-    /// one on screen is the tree below its heading). A machine that went
-    /// keeps its rows, drawn dimmed.
-    pub threads: Vec<StatusRow>,
 }
 
 impl Machines {
-    /// This computer, `saved`, and `remote` (a target, or a saved machine's
-    /// name or target), which the window starts on — unless it is turned
-    /// off in Settings: then on this computer, the machine listed as off.
-    pub fn new(reach: Reach, saved: &[Machine], remote: Option<&str>) -> Self {
-        Self::with_local_environment(reach, saved, remote, true)
-    }
-
-    pub fn with_local_environment(
-        reach: Reach,
-        saved: &[Machine],
-        remote: Option<&str>,
-        local_enabled: bool,
-    ) -> Self {
+    /// This computer — unless it is turned off in Settings — `saved`, and
+    /// `remote` (a target, or a saved machine's name or target), which
+    /// the window holds for this run though it is not saved. Nothing is
+    /// attached until `cockpit`.
+    pub fn new(reach: Reach, saved: &[Machine], remote: Option<&str>, local_enabled: bool) -> Self {
         let mut machines = Self {
             reach,
             entries: vec![Entry::new(None, false)],
-            selected: local_enabled.then_some(0),
             local_enabled,
         };
-        machines.settings_changed(saved);
-        if machines.selected.is_none() {
-            machines.selected = machines.fallback();
-            machines.sync_status();
-        }
+        machines.follow(saved);
         if let Some(remote) = remote {
-            let index = machines.named(remote).unwrap_or_else(|| {
+            if machines.named(remote).is_none() {
                 machines
                     .entries
                     .push(Entry::new(Some(Machine::new(remote)), true));
-                machines.entries.len() - 1
-            });
-            machines.select(index);
+            }
         }
         machines
+    }
+
+    /// The window's Cockpit, holding every enabled machine. This
+    /// computer's Store that cannot be read is an error; a machine is
+    /// attached to in the background, so one that is not there holds only
+    /// its own rows.
+    pub fn cockpit(&mut self) -> io::Result<Cockpit> {
+        let mut cockpit = Cockpit::empty();
+        if !self.entries[0].disabled(self.local_enabled) {
+            self.entries[0].held = Some(cockpit.hold(self.attach(0))?);
+        }
+        self.sync(&mut cockpit);
+        Ok(cockpit)
+    }
+
+    /// Take as its own each machine `cockpit` already holds, by the name
+    /// it is saved as, and attach every other enabled one beside them: a
+    /// view test's window around an Engine of its own.
+    #[cfg(test)]
+    pub fn beside(&mut self, cockpit: &mut Cockpit) {
+        for entry in &mut self.entries {
+            entry.held = cockpit.machine_saved_as(&entry.key());
+        }
+        self.sync(cockpit);
     }
 
     /// Whether there is more than this computer to list.
@@ -148,53 +142,43 @@ impl Machines {
         self.entries.len() > 1
     }
 
-    /// The machine the window is on; `None` for this computer.
-    #[cfg(test)]
-    pub fn selected(&self) -> Option<&Machine> {
-        self.entries.get(self.selected?)?.machine.as_ref()
-    }
-
     /// Machine `index`; `None` for this computer.
     pub fn machine(&self, index: usize) -> Option<&Machine> {
         self.entries.get(index)?.machine.as_ref()
     }
 
-    pub fn server_state(&self, index: usize, shown: Option<ServerState>) -> Option<ServerState> {
-        if Some(index) == self.selected {
-            shown
-        } else {
-            self.entries
-                .get(index)?
-                .status
-                .as_ref()
-                .map(ServerStatus::server)
-        }
+    /// Machine `index` as the Cockpit holds it, while it is enabled.
+    pub fn held(&self, index: usize) -> Option<MachineId> {
+        self.entries.get(index)?.held
     }
 
-    pub fn retry(&mut self, index: usize) {
-        if let Some(status) = self
-            .entries
-            .get_mut(index)
-            .and_then(|entry| entry.status.as_mut())
-        {
-            status.retry();
-        }
-    }
-
-    /// The machine the window is on, as alerts name it.
-    pub fn selected_key(&self) -> Option<MachineKey> {
-        self.entries.get(self.selected?).map(Entry::key)
-    }
-
-    pub fn fallback(&self) -> Option<usize> {
+    /// Where the machine the Cockpit holds as `machine` is listed.
+    pub fn listed_as(&self, machine: MachineId) -> Option<usize> {
         self.entries
             .iter()
-            .position(|entry| !entry.disabled(self.local_enabled))
+            .position(|entry| entry.held == Some(machine))
     }
 
-    pub fn set_local_enabled(&mut self, enabled: bool) {
+    /// What the nav and the Inbox call the machine the Cockpit holds as
+    /// `machine`.
+    pub fn name(&self, machine: MachineId) -> Option<String> {
+        Some(self.entries[self.listed_as(machine)?].name())
+    }
+
+    pub fn server_state(&self, index: usize, cockpit: &Cockpit) -> Option<ServerState> {
+        cockpit.server(self.held(index)?)
+    }
+
+    pub fn retry(&self, index: usize, cockpit: &mut Cockpit) {
+        if let Some(machine) = self.held(index) {
+            cockpit.retry_server(machine);
+        }
+    }
+
+    /// Turn this computer on or off, attaching to it or letting it go.
+    pub fn set_local_enabled(&mut self, enabled: bool, cockpit: &mut Cockpit) {
         self.local_enabled = enabled;
-        self.sync_status();
+        self.sync(cockpit);
     }
 
     /// Where the machine `name` (its name or its target) is listed now;
@@ -216,42 +200,6 @@ impl Machines {
         self.entries.iter().position(|entry| entry.key() == *key)
     }
 
-    /// The machine `key` names, while it is off screen and has been heard
-    /// from.
-    pub fn away(&self, key: &MachineKey) -> Option<OffScreen<'_>> {
-        self.off_screen().find(|away| away.key == *key)
-    }
-
-    /// Every machine off screen that has been heard from.
-    pub fn off_screen(&self) -> impl Iterator<Item = OffScreen<'_>> {
-        self.entries.iter().filter_map(|entry| {
-            let status = entry.status.as_ref()?;
-            Some(OffScreen {
-                key: entry.key(),
-                name: entry.name(),
-                notifications: status.notifications()?,
-                status,
-            })
-        })
-    }
-
-    /// The Inbox's `mark all read` on every machine off screen.
-    pub fn mark_notices_read(&mut self) {
-        for status in self
-            .entries
-            .iter_mut()
-            .filter_map(|entry| entry.status.as_mut())
-        {
-            status.mark_notices_read();
-        }
-    }
-
-    /// Machine `index`'s status link, while it is off screen.
-    #[cfg(test)]
-    pub fn status_mut(&mut self, index: usize) -> Option<&mut ServerStatus> {
-        self.entries.get_mut(index)?.status.as_mut()
-    }
-
     /// The `--remote` machine, while it is not saved.
     pub fn unsaved(&self) -> Option<&Machine> {
         self.entries
@@ -260,7 +208,9 @@ impl Machines {
             .and_then(|entry| entry.machine.as_ref())
     }
 
-    pub fn forget_unsaved(&mut self, target: &str) -> bool {
+    /// Forget the unsaved `--remote` machine `target`: the window lets it
+    /// go. False when there is none.
+    pub fn forget_unsaved(&mut self, target: &str, cockpit: &mut Cockpit) -> bool {
         let Some(index) = self
             .entries
             .iter()
@@ -268,100 +218,30 @@ impl Machines {
         else {
             return false;
         };
-        if Some(index) == self.selected {
-            let entry = &mut self.entries[index];
-            entry.removed = true;
-            entry.machine.as_mut().expect("remote entry").enabled = false;
-            true
-        } else {
-            self.entries.remove(index);
-            self.selected = self
-                .selected
-                .map(|selected| selected - usize::from(index < selected));
-            false
+        if let Some(machine) = self.entries.remove(index).held {
+            cockpit.let_go(machine);
         }
-    }
-
-    /// A window's Cockpit on the selected machine.
-    pub fn cockpit(&mut self) -> io::Result<Cockpit> {
-        self.attach(self.selected)
-    }
-
-    /// Put the window on another machine: a Cockpit attached there. `None`
-    /// when it already is, or the machine is disabled; the window stays
-    /// where it is when the Cockpit cannot be built.
-    pub fn go_to(&mut self, index: Option<usize>) -> Option<io::Result<Cockpit>> {
-        if index == self.selected || index.is_some_and(|index| !self.selectable(index)) {
-            return None;
-        }
-        let cockpit = self.attach(index);
-        if cockpit.is_ok() {
-            self.finish_selection(index);
-        }
-        Some(cockpit)
-    }
-
-    /// Put the window on another machine. False when it already is, or
-    /// the machine is disabled.
-    pub fn select(&mut self, index: usize) -> bool {
-        if !self.selectable(index) {
-            return false;
-        }
-        self.finish_selection(Some(index));
         true
     }
 
-    fn finish_selection(&mut self, index: Option<usize>) {
-        let key = index.map(|index| self.entries[index].key());
-        self.entries.retain(|entry| !entry.removed);
-        self.selected = key.and_then(|key| self.index(&key));
-        self.sync_status();
-    }
-
-    /// Take what the machines off screen said. True when a row changed.
-    pub fn poll(&mut self) -> bool {
-        let mut changed = false;
-        for status in self
-            .entries
-            .iter_mut()
-            .filter_map(|entry| entry.status.as_mut())
-        {
-            changed |= status.poll();
-        }
-        changed
-    }
-
-    /// Every machine for the nav; `shown` is the window's own Server.
-    pub fn rows(&self, shown: Option<ServerState>) -> Vec<MachineRow> {
+    /// Every machine for the nav and Settings: this computer only while
+    /// it is on.
+    pub fn rows(&self, cockpit: &Cockpit) -> Vec<MachineRow> {
         self.entries
             .iter()
             .enumerate()
             .filter(|(index, _)| *index != 0 || self.local_enabled)
             .map(|(index, entry)| {
-                let selected = Some(index) == self.selected;
-                let connection = if entry.disabled(self.local_enabled) {
-                    Connection::Disabled
-                } else if selected {
-                    shown.as_ref().map_or(Connection::Online, Connection::of)
-                } else {
-                    entry
-                        .status
-                        .as_ref()
-                        .map_or(Connection::Connecting, |status| {
-                            Connection::of(&status.server())
-                        })
+                let connection = match entry.held {
+                    None => Connection::Disabled,
+                    Some(machine) => Connection::of(cockpit.server(machine).as_ref()),
                 };
                 MachineRow {
                     index,
+                    held: entry.held,
                     name: entry.name(),
                     connection,
-                    selected,
                     folded: entry.folded,
-                    threads: entry
-                        .status
-                        .as_ref()
-                        .map(ServerStatus::rows)
-                        .unwrap_or_default(),
                 }
             })
             .collect()
@@ -373,8 +253,8 @@ impl Machines {
         }
     }
 
-    /// Sign in to a machine in a terminal; its links attach once the
-    /// master is up.
+    /// Sign in to machine `index` in a terminal; its link attaches once
+    /// the master is up.
     pub fn sign_in(&mut self, index: usize) -> io::Result<()> {
         match self.bridge(index) {
             Some(bridge) => bridge.sign_in(),
@@ -385,17 +265,22 @@ impl Machines {
         }
     }
 
-    /// Follow Settings' machines: added, removed, renamed, enabled or not.
-    /// A removed selection remains disabled until the window moves.
-    /// An unsaved command-line selection stays unsaved.
-    pub fn settings_changed(&mut self, saved: &[Machine]) -> bool {
-        let selected = self
-            .selected
-            .and_then(|index| self.entries[index].machine.clone());
-        let was_unsaved = self
-            .selected
-            .is_some_and(|index| self.entries[index].unsaved);
-        let was_local = self.selected == Some(0);
+    /// Follow Settings' machines — added, removed, renamed, enabled or
+    /// not — attaching to each one turned on and letting go of each one
+    /// turned off or removed. An unsaved command-line machine stays
+    /// unsaved.
+    pub fn settings_changed(&mut self, saved: &[Machine], cockpit: &mut Cockpit) {
+        let gone = self.follow(saved);
+        for machine in gone {
+            cockpit.let_go(machine);
+        }
+        self.sync(cockpit);
+    }
+
+    /// Settings' machines in their order, keeping what each entry already
+    /// had (its bridge, its hold, its fold): what the entries removed
+    /// held, for the Cockpit to let go of.
+    fn follow(&mut self, saved: &[Machine]) -> Vec<MachineId> {
         let mut old: Vec<Entry> = self.entries.drain(1..).collect();
         let mut take = |target: &str| {
             old.iter()
@@ -409,71 +294,55 @@ impl Machines {
                 let mut entry = take(&machine.target).unwrap_or_else(|| Entry::new(None, false));
                 entry.machine = Some(machine.clone());
                 entry.unsaved = false;
-                entry.removed = false;
                 entry
             })
             .collect();
-        if let Some(machine) = &selected {
-            if !entries
-                .iter()
-                .any(|entry| entry.target() == Some(&machine.target))
-            {
-                let mut entry = take(&machine.target).unwrap_or_else(|| Entry::new(None, true));
-                entry.machine = Some(machine.clone());
-                entry.unsaved = was_unsaved;
-                entry.removed = !was_unsaved;
-                if entry.removed {
-                    entry.machine.as_mut().expect("selected remote").enabled = false;
+        let (unsaved, removed): (Vec<Entry>, Vec<Entry>) =
+            old.into_iter().partition(|entry| entry.unsaved);
+        entries.extend(unsaved);
+        self.entries.extend(entries);
+        removed.into_iter().filter_map(|entry| entry.held).collect()
+    }
+
+    /// Hold every enabled machine and none other.
+    fn sync(&mut self, cockpit: &mut Cockpit) {
+        for index in 0..self.entries.len() {
+            let wanted = !self.entries[index].disabled(self.local_enabled);
+            match (wanted, self.entries[index].held) {
+                (true, None) => {
+                    let attach = self.attach(index);
+                    match cockpit.hold(attach) {
+                        Ok(machine) => self.entries[index].held = Some(machine),
+                        Err(error) => ferrite_core::log!(
+                            "the window cannot hold {}: {error}",
+                            self.entries[index].name()
+                        ),
+                    }
                 }
-                entries.push(entry);
+                (false, Some(machine)) => {
+                    cockpit.let_go(machine);
+                    self.entries[index].held = None;
+                }
+                _ => {}
             }
         }
-        self.entries.extend(entries);
-        self.selected = selected
-            .and_then(|machine| {
-                self.entries
-                    .iter()
-                    .position(|entry| entry.target() == Some(&machine.target))
-            })
-            .or_else(|| was_local.then_some(0));
-        self.sync_status();
-        self.selected
-            .is_none_or(|index| self.entries[index].disabled(self.local_enabled))
     }
 
-    fn selectable(&self, index: usize) -> bool {
-        Some(index) != self.selected
-            && !self
-                .entries
-                .get(index)
-                .is_none_or(|entry| entry.disabled(self.local_enabled))
-    }
-
-    fn attach(&mut self, index: Option<usize>) -> io::Result<Cockpit> {
-        let (store, server, saved_as) = match index {
-            Some(index) if !self.entries[index].disabled(self.local_enabled) => {
-                let (store, server) = self.endpoint(index);
-                (store, server, Some(self.entries[index].key()))
-            }
-            _ => (
-                self.reach.settings_dir.join("no-environment"),
-                Endpoint::Unavailable,
-                None,
-            ),
-        };
-        Cockpit::attach(Attach {
+    fn attach(&mut self, index: usize) -> Attach {
+        let (store, server) = self.endpoint(index);
+        Attach {
             browser: cfg!(feature = "cef"),
             store,
             server,
-            saved_as,
+            saved_as: self.entries[index].key(),
             client: self.reach.client.clone(),
             renderer: self.reach.renderer.clone(),
             driven: self.reach.driven,
             discovery: Box::new(spawner::Spawn::new(self.reach.defaults.clone(), None)),
-        })
+        }
     }
 
-    /// Where machine `index`'s Server is, and the Store path its window is
+    /// Where machine `index`'s Server is, and the Store path its holder is
     /// given (`Attach::store`).
     fn endpoint(&mut self, index: usize) -> (PathBuf, Endpoint) {
         match self.bridge(index) {
@@ -503,24 +372,6 @@ impl Machines {
             Arc::new(reach(machine, settings_dir))
         })))
     }
-
-    /// A status link for each enabled machine off screen, and none for the
-    /// one on screen, which its Cockpit watches.
-    fn sync_status(&mut self) {
-        for index in 0..self.entries.len() {
-            let wanted =
-                Some(index) != self.selected && !self.entries[index].disabled(self.local_enabled);
-            match (wanted, self.entries[index].status.is_some()) {
-                (true, false) => {
-                    let (store, server) = self.endpoint(index);
-                    self.entries[index].status =
-                        Some(ServerStatus::new(store, server, self.reach.client.clone()));
-                }
-                (false, true) => self.entries[index].status = None,
-                _ => {}
-            }
-        }
-    }
 }
 
 impl Entry {
@@ -528,10 +379,9 @@ impl Entry {
         Self {
             machine,
             bridge: None,
-            status: None,
+            held: None,
             unsaved,
             folded: false,
-            removed: false,
         }
     }
 

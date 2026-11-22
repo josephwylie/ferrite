@@ -124,11 +124,10 @@ pub(crate) use ferrite_core::Attention;
 
 use ferrite_core::store::Provider;
 use ferrite_core::transcript::plain_text;
-use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::RepoListing;
 #[cfg(test)]
 use ferrite_core::workspace::WorkspaceChoice;
-use ferrite_core::{DecisionAnswer, ThreadId, ThreadKey};
+use ferrite_core::{DecisionAnswer, MachineId, ProjectKey, ThreadId, ThreadKey};
 use gpui::prelude::*;
 use gpui::{
     actions, anchored, deferred, div, px, rgb, rgba, AnyElement, ClickEvent, ClipboardItem,
@@ -441,7 +440,7 @@ pub struct CockpitView {
     /// palette. `None` is every Project. It narrows the **navigation only**
     /// to that Project's section — which Panes the Cockpit flies is never
     /// touched by it.
-    nav_filter: Option<ProjectId>,
+    nav_filter: Option<ProjectKey>,
     /// The nav, a view of its own (ADR 0041): it owns its list's motion,
     /// scroll, keyboard, search, picks and undo notice, and asks the
     /// Cockpit for the rest through `NavEvent`.
@@ -468,7 +467,7 @@ pub struct CockpitView {
     /// it, so the next draft opens where the last one ran. Startup only
     /// selects an already registered Project; it must never turn the app's
     /// process directory into user workspace state.
-    launch_project: Option<ProjectId>,
+    launch_project: Option<ProjectKey>,
     /// The inline title rename, in a nav row or the view head.
     rename: rename::Rename,
     /// The one popup that is up: the context menu, the mode menu, or the
@@ -566,9 +565,6 @@ pub struct CockpitView {
     /// What the last nav act has to say (a failed Park, a refused
     /// rename).
     nav_notice: nav_list::Notice,
-    /// What to open once the Cockpit is attached: what the window came
-    /// to this machine for (ADR 0026), and until when it waits.
-    landing: Option<(Landing, std::time::Instant)>,
     /// The chimes that would have played (`chime`).
     #[cfg(test)]
     pub(crate) chimed: Vec<Sound>,
@@ -592,7 +588,7 @@ pub struct CockpitView {
     /// The PRs destination, kept as it was left while another view shows.
     prs: Entity<prs_view::PrsView>,
     /// The Tasks whose needs-you toast stands, and the state it announced.
-    task_toasts: std::collections::HashMap<String, ferrite_core::factory::Status>,
+    task_toasts: std::collections::HashMap<(MachineId, String), ferrite_core::factory::Status>,
     /// The empty board: its selected row and the list's own focus.
     empty_board: Entity<empty_board::EmptyBoardView>,
     /// Each Thread's reader slot (its Review) sliding open or shut
@@ -601,26 +597,10 @@ pub struct CockpitView {
     columns: columns::Columns,
     /// The Provider an empty board's first draft starts on.
     launch_provider: Provider,
-    /// The machines this window can be on (ADR 0026); `None` in a window
-    /// on an Engine of its own.
-    machines: Option<Entity<crate::machines::Machines>>,
+    /// The machines this window holds (ADR 0026, ADR 0045); `None` in a
+    /// window on an Engine of its own.
+    machines: Option<crate::machines::Machines>,
 }
-
-/// The Cockpit asks its window to put it on machine `index` (ADR 0026),
-/// and there to open `open`. `None` leaves the client without an environment.
-pub struct GoToMachine {
-    pub index: Option<usize>,
-    pub open: Option<Landing>,
-}
-
-/// What a window goes to a machine for: an alert about one of its
-/// Threads.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Landing {
-    Alert(crate::notifications::Alert),
-}
-
-impl EventEmitter<GoToMachine> for CockpitView {}
 
 /// What the model says on a pump beat that brought something: a Session's
 /// events, a restart, a sweep that moved a fact or a clock, the Server's
@@ -1082,27 +1062,27 @@ impl CockpitView {
         Self::new_with_machines(cockpit, launch_provider, prefs, None, cx)
     }
 
-    /// A view on the machine `machines` has selected, which `cockpit` is
-    /// attached to; `None` is a window on an Engine of its own.
+    /// A view on every machine `machines` holds, which `cockpit` holds;
+    /// `None` is a window on an Engine of its own.
     pub fn new_with_machines(
         cockpit: Cockpit,
         launch_provider: Provider,
         prefs: Preferences,
-        machines: Option<Entity<crate::machines::Machines>>,
+        machines: Option<crate::machines::Machines>,
         cx: &mut Context<Self>,
     ) -> Self {
         let panel = panel::Panel::load(&prefs.dir);
         Self::new_with_panel(cockpit, launch_provider, prefs, panel, machines, cx)
     }
 
-    /// The view knows its machine before its first Panes open: each opens
-    /// with its draft as that machine's (ADR 0045).
+    /// The view knows its machines before its first Panes open: each
+    /// opens with its draft as its machine's (ADR 0045).
     pub(crate) fn new_with_panel(
         mut cockpit: Cockpit,
         launch_provider: Provider,
         prefs: Preferences,
         mut panel: panel::Panel,
-        machines: Option<Entity<crate::machines::Machines>>,
+        machines: Option<crate::machines::Machines>,
         cx: &mut Context<Self>,
     ) -> Self {
         panel.hold(&cockpit);
@@ -1208,8 +1188,10 @@ impl CockpitView {
         // Keep their synthetic seed out of production; `startup_project` is
         // tested directly against an empty registry below.
         #[cfg(test)]
-        let launch_project = launch_project
-            .or_else(|| cockpit.register_project(&here()).ok().map(|project| project.project()));
+        let launch_project = launch_project.or_else(|| {
+            let machine = cockpit.this_computer()?;
+            cockpit.register_project(machine, &here()).ok()
+        });
         cx.bind_keys([
             gpui::KeyBinding::new("enter", browser::Go, Some("BrowserAddress")),
             gpui::KeyBinding::new("escape", browser::CancelAddress, Some("BrowserAddress")),
@@ -1361,7 +1343,6 @@ impl CockpitView {
             user_commands: Default::default(),
             leave_asked: false,
             nav_notice: Default::default(),
-            landing: None,
             #[cfg(test)]
             chimed: Vec::new(),
             pr_reads: Default::default(),
@@ -1401,9 +1382,9 @@ impl CockpitView {
         view.free_disk_asked = Some(cx.background_executor().now());
         view.read_free_disk(cx);
         // Nothing revived: the cockpit starts as one draft Pane (#29) —
-        // nothing spawns before the operator's choice. A machine's Threads
-        // arrive once it is connected, and its Projects are its own.
-        if view.panes.is_empty() && view.bridge_on_screen(cx).is_none() {
+        // nothing spawns before the operator's choice. Only this
+        // computer's Projects are there before any Server answers.
+        if view.panes.is_empty() && view.cockpit.read(cx).this_computer().is_some() {
             if view.launch_project.is_some() {
                 view.open_draft_with_provider(DraftTarget::Main, launch_provider, cx);
             } else {
@@ -1411,42 +1392,6 @@ impl CockpitView {
             }
         }
         view
-    }
-
-    /// Open `open` once the Cockpit is attached, if it is by `until`.
-    pub fn with_landing(mut self, open: Option<Landing>, until: std::time::Instant) -> Self {
-        self.landing = open.map(|open| (open, until));
-        self
-    }
-
-    /// The Needs-you state of the Cockpit the window left (`NeedsYou::moved`).
-    pub fn with_needs_you(self, needs_you: NeedsYou, cx: &mut Context<Self>) -> Self {
-        self.toasts.update(cx, |toasts, _| toasts.needs_you = needs_you);
-        self
-    }
-
-    pub(crate) fn machines(&self) -> Option<Entity<crate::machines::Machines>> {
-        self.machines.clone()
-    }
-
-    pub(crate) fn launch_provider(&self) -> Provider {
-        self.launch_provider
-    }
-
-    /// The Preferences a Cockpit built in this one's place starts with:
-    /// the settings as they are now; what a launch says once is said.
-    pub(crate) fn successor_preferences(&self) -> Preferences {
-        Preferences {
-            settings: self.prefs.settings.clone(),
-            dir: self.prefs.dir.clone(),
-            defaults: self.prefs.defaults.clone(),
-            titler: self.prefs.titler,
-            cli_updates: self.prefs.cli_updates,
-            ferrite_updates: self.prefs.ferrite_updates,
-            whats_new: None,
-            unreadable: self.prefs.unreadable.clone(),
-            keys_refused: Vec::new(),
-        }
     }
 
     /// `sync_panes` when the Panes are not the roster's, in its order:
@@ -1494,7 +1439,7 @@ impl CockpitView {
             self.decisions
                 .update(cx, |decisions, _| decisions.open_pane(*identity));
             pane.preview.set_remote_files(self.elsewhere(thread.machine(), cx));
-            self.aim_attachments(&pane.composer, cx);
+            self.aim_attachments(&pane.composer, thread.machine(), cx);
             cx.subscribe(&pane.composer, Self::composer_edited).detach();
             cx.subscribe(&pane.composer, Self::composer_opens_source).detach();
             cx.subscribe(&pane.composer, Self::composer_comment_opened).detach();
@@ -1591,15 +1536,14 @@ impl CockpitView {
     }
 
     /// Run the facts' slow reads in the background and adopt what they
-    /// find. On a machine the git half is left out: its checkouts are the
-    /// machine's (ADR 0026).
+    /// find. Another machine's git half is left out: its checkouts are its
+    /// own (ADR 0026).
     fn look_up(&mut self, mut lookups: crate::facts::Lookups, cx: &mut Context<Self>) {
         let cockpit = self.cockpit.read(cx);
         lookups.branches.retain(|(thread, _)| cockpit.local(thread.machine()));
-        // A Project names no machine yet: the one on screen's.
-        if self.elsewhere(self.on_screen(cx), cx) {
-            lookups.default_branches.clear();
-        }
+        lookups
+            .default_branches
+            .retain(|(project, _)| cockpit.local(project.machine()));
         if lookups.is_empty() {
             return;
         }
@@ -2092,7 +2036,14 @@ impl CockpitView {
     /// Menus follow the text — typing `/` or `@` opens, backspacing past
     /// the trigger closes, and a pick's own splice closes through here too.
     fn composer_edited(&mut self, composer: Entity<Composer>, _: &Edited, cx: &mut Context<Self>) {
-        self.upload_attachments(&composer, cx);
+        let machine = self
+            .panes
+            .iter()
+            .position(|pane| pane.composer == composer)
+            .and_then(|index| self.pane_machine(index));
+        if let Some(machine) = machine {
+            self.upload_attachments(&composer, machine, cx);
+        }
         if let Some(draft) = self
             .panes
             .iter_mut()
@@ -2190,7 +2141,6 @@ impl CockpitView {
         // moves: a frame that changes none of it redraws only those.
         let shared = self.parts.borrow().on.then(|| self.shared_chrome(cx));
         self.poll_navigation(cx);
-        self.poll_machines(cx);
         if let Some(connections) = self.connections(cx) {
             connections.update(cx, |connections, cx| connections.poll(cx));
         }
@@ -2209,6 +2159,11 @@ impl CockpitView {
         }
         self.poll_machine_repo(cx);
         let server_moved = self.server_moved(cx);
+        if server_moved {
+            for pane in &self.panes {
+                self.notify_part(parts::Part::Pane(pane.identity), cx);
+            }
+        }
         // A Focus or a toast an API caller asked for is presented by the
         // render, so it needs one even when nothing else moved.
         let asked = self.cockpit.read(cx).has_asked();
@@ -2223,7 +2178,6 @@ impl CockpitView {
         self.poll_factory_skills(cx);
         self.poll_environment(cx);
         self.apply_thread_rules(&frame, cx);
-        self.land(cx);
         self.settle_held_sends(cx);
         for index in 0..self.panes.len() {
             if let Some(thread) = self.panes[index].thread() {
@@ -2477,20 +2431,25 @@ impl CockpitView {
     /// notices and attention (the Inbox, each
     /// Pane's head).
     fn shared_chrome(&self, cx: &gpui::App) -> String {
-        let notifications = self.cockpit.read(cx).notifications();
-        let attention: Vec<ThreadKey> = self
-            .cockpit
-            .read(cx)
+        let cockpit = self.cockpit.read(cx);
+        let attention: Vec<ThreadKey> = cockpit
             .threads()
             .into_iter()
-            .filter(|thread| notifications.attention(thread.thread()))
+            .filter(|thread| cockpit.notifications(thread.machine()).attention(thread.thread()))
+            .collect();
+        let limits: Vec<_> = cockpit
+            .machines()
+            .flat_map(|machine| Provider::ALL.map(|provider| cockpit.account_limits(machine, provider)))
+            .collect();
+        let unread: Vec<_> = cockpit
+            .every_notifications()
+            .map(|notifications| notifications.unread())
             .collect();
         format!(
-            "{:?} {:?} {:?} {} {:?}",
-            self.cockpit.read(cx).account_limits(Provider::Claude),
-            self.cockpit.read(cx).account_limits(Provider::Codex),
-            self.cockpit.read(cx).needs_you(),
-            notifications.unread(),
+            "{:?} {:?} {:?} {:?}",
+            limits,
+            cockpit.needs_you(),
+            unread,
             attention,
         )
     }
@@ -2511,14 +2470,11 @@ impl CockpitView {
     /// worktrees each Thread's repo has, and hands the answer to the core:
     /// that is how a binding follows the agent into a worktree it made
     /// (`workspace::follow`), and the labels re-read on the very next pass.
-    /// None of it on a machine: no git here can read its checkouts.
+    /// None of it for another machine: no git here can read its checkouts.
     fn refresh_branches(&mut self, cx: &mut Context<Self>) {
-        if self.elsewhere(self.on_screen(cx), cx) {
-            return;
-        }
         // A draft has no Thread yet, but its workspace chip names its
         // Project's checkout, which the operator may switch under it.
-        let drafted: Vec<ProjectId> = self
+        let drafted: Vec<ProjectKey> = self
             .panes
             .iter()
             .filter_map(|pane| pane.draft())
@@ -2536,6 +2492,7 @@ impl CockpitView {
             .read(cx)
             .threads()
             .into_iter()
+            .filter(|thread| !self.elsewhere(thread.machine(), cx))
             .filter_map(|thread| {
                 let open = self.cockpit.read(cx).thread(thread)?;
                 let repo = open.workspace().map(|binding| binding.repo().to_path_buf());
@@ -2549,7 +2506,13 @@ impl CockpitView {
                     .peek(thread)
                     .ok()
                     .and_then(|meta| meta.project_id)
-                    .and_then(|project| self.cockpit.read(cx).registry().reading().project(project));
+                    .and_then(|project| {
+                        self.cockpit
+                            .read(cx)
+                            .registry(thread.machine())
+                            .reading()
+                            .project(project)
+                    });
                 let directories = project
                     .map(|project| {
                         project
@@ -2786,16 +2749,17 @@ impl CockpitView {
     /// its reader slot while a document is open or sliding shut. A reader
     /// the tree has not placed yet opens beside its Pane, on the right.
     /// Every slot is at rest here: `slid_tree` draws a slide.
-    /// The slot `leaf` stands for on this view's boards: one of its Panes,
-    /// or the reader slot one has open. None for a leaf of no Pane here.
-    fn leaf_slot(&self, leaf: Leaf) -> Option<Slot> {
-        self.panes.iter().find_map(|pane| {
-            if pane_leaf(pane.identity) == leaf {
-                return Some(Slot::Pane(pane.identity));
-            }
-            let owner = pane.thread()?;
-            (reader_leaf(owner) == leaf).then_some(Slot::Reader(owner))
-        })
+    /// The slot `leaf` stands for on `board`: its Pane, or the reader slot
+    /// its Thread has open. None for a leaf of neither. Only the board can
+    /// say: a leaf is a bare id, and two machines' Threads share them.
+    fn leaf_slot(board: Board, leaf: Leaf) -> Option<Slot> {
+        if pane_leaf(board.0) == leaf {
+            return Some(Slot::Pane(board.0));
+        }
+        let PaneIdentity::Thread(owner) = board.0 else {
+            return None;
+        };
+        (reader_leaf(owner) == leaf).then_some(Slot::Reader(owner))
     }
 
     fn board_tree(&self, board: Board, cx: &gpui::App) -> Option<Tree> {
@@ -2863,7 +2827,7 @@ impl CockpitView {
             return tree
                 .rects(bounds, ferrite_ui::theme::BOARD_SEAM)
                 .into_iter()
-                .filter_map(|(leaf, rect)| match self.leaf_slot(leaf)? {
+                .filter_map(|(leaf, rect)| match Self::leaf_slot(board, leaf)? {
                     Slot::Pane(identity) => self.index_of(identity).map(|index| (index, rect)),
                     Slot::Reader(_) => None,
                 })
@@ -3019,15 +2983,14 @@ impl CockpitView {
     }
 
     /// Whether any Thread, open or parked, records this Project.
-    fn project_in_use(&self, project: ProjectId, cx: &gpui::App) -> bool {
+    fn project_in_use(&self, project: ProjectKey, cx: &gpui::App) -> bool {
         self.cockpit
             .read(cx)
             .threads()
             .into_iter()
             .chain(self.facts.parked().iter().copied())
             .any(|thread| {
-                let cockpit = self.cockpit.read(cx);
-                cockpit.project_of(thread) == Some(cockpit.registry().project_key(project))
+                self.cockpit.read(cx).project_of(thread) == Some(project)
             })
     }
 
@@ -3053,6 +3016,7 @@ impl CockpitView {
             MenuTarget::Parked
             | MenuTarget::NavFilter
             | MenuTarget::NavFactory
+            | MenuTarget::Machine(_)
             | MenuTarget::Review { .. }
             | MenuTarget::Prompt { .. }
             | MenuTarget::Factory
@@ -3140,7 +3104,7 @@ impl CockpitView {
             .map(|(leaf, rect)| (*leaf, (rect.w, rect.h)))
             .collect();
         for (leaf, rect) in rects {
-            let Some(slot) = self.leaf_slot(leaf) else {
+            let Some(slot) = Self::leaf_slot(on, leaf) else {
                 continue;
             };
             let cell = match slot {
@@ -3500,14 +3464,17 @@ impl CockpitView {
         if !self.prefs.settings.auto_update_clis {
             return;
         }
+        let Some(machine) = self.settings_machine(cx) else {
+            return;
+        };
         for provider in self.cli_updates.ready() {
-            if self.cockpit.read(cx).live_sessions(provider) == 0 {
+            if self.cockpit.read(cx).live_sessions(machine, provider) == 0 {
                 self.update_cli(provider, cx);
             }
         }
     }
 
-    /// Install `provider`'s newest CLI on the machine the window is on, now.
+    /// Install `provider`'s newest CLI on the machine Settings is about, now.
     /// Once it lands, the model menus are asked again and every open Thread
     /// of that provider restarts on its own conversation — at once when
     /// idle, otherwise when its turn ends — so nothing keeps running the old
@@ -3694,7 +3661,7 @@ impl CockpitView {
                 status,
                 title,
                 detail,
-            } => self.present_task_alert(project.project(), task, status, title, detail, window, cx),
+            } => self.present_task_alert(project, task, status, title, detail, window, cx),
         }
     }
 
@@ -4071,7 +4038,10 @@ impl CockpitView {
         // Subagents and background work it started, and nothing at rest;
         // on a Subagent that Subagent alone — and once it has nothing to
         // stop, it goes back to its parent.
-        if let Some(thread) = self.focused_thread(cx).filter(|_| !self.machine_lost(cx)) {
+        if let Some(thread) = self
+            .focused_thread(cx)
+            .filter(|thread| !self.machine_lost(thread.machine(), cx))
+        {
             let selected = self.panes[self.focused(cx)].selected.clone();
             match &selected {
                 ferrite_core::activity::Subject::Main => {
@@ -4750,6 +4720,7 @@ impl CockpitView {
     /// start there, so a bare ↵ keeps everything as it is.
     fn provider_rows(
         &self,
+        machine: ferrite_core::MachineId,
         current: Provider,
         chosen: Option<&str>,
         serving: Option<&str>,
@@ -4780,7 +4751,7 @@ impl CockpitView {
                 consequence: Consequence::Inert,
             });
             let mut catalog = ferrite_core::providers::models::menu(
-                self.cockpit.read(cx).model_catalog(provider),
+                self.cockpit.read(cx).model_catalog(machine, provider),
                 chosen.filter(|_| provider == current),
             );
             if provider == current {
@@ -4800,7 +4771,7 @@ impl CockpitView {
                                     && !self
                                         .cockpit
                                         .read(cx)
-                                        .model_catalog(provider)
+                                        .model_catalog(machine, provider)
                                         .iter()
                                         .any(|row| row.value == "default"))
                         }
@@ -4875,6 +4846,18 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// The machine an import for `into` lists and adopts on: the blank
+    /// Pane's, else where a new Thread starts (`start_machine`).
+    pub(super) fn import_machine(
+        &self,
+        into: Option<PaneIdentity>,
+        cx: &gpui::App,
+    ) -> Option<ferrite_core::MachineId> {
+        into.and_then(|pane| self.index_of(pane))
+            .and_then(|index| self.pane_machine(index))
+            .or_else(|| self.start_machine(cx))
+    }
+
     /// An import pick (#11): adopt the picked file through the core door —
     /// in place of `into`, the blank Pane the picker was opened for (a
     /// draft becomes the imported Thread and its line clears; a blank
@@ -4890,7 +4873,13 @@ impl CockpitView {
     ) {
         // The Pane may have gone while the picker was up.
         let into = into.filter(|pane| self.index_of(*pane).is_some());
-        match self.cockpit.update(cx, |cockpit, _| cockpit.adopt_into(into, path)) {
+        let Some(machine) = self.import_machine(into, cx) else {
+            return;
+        };
+        match self
+            .cockpit
+            .update(cx, |cockpit, _| cockpit.adopt_into(machine, into, path))
+        {
             Ok(adopted) => {
                 let draft = into.filter(|pane| pane.draft().is_some());
                 if let Some(error) = &adopted.not_opened {
@@ -5002,7 +4991,7 @@ impl CockpitView {
     /// or a Project just created). Filtered, the tree is that Project's
     /// section. A draft already bootstrapping is on its way out and is left
     /// alone.
-    pub(crate) fn choose_nav_filter(&mut self, project: Option<ProjectId>, cx: &mut Context<Self>) {
+    pub(crate) fn choose_nav_filter(&mut self, project: Option<ProjectKey>, cx: &mut Context<Self>) {
         self.nav_filter = project;
         if let Some(project) = project {
             let standing = self.panes.iter().position(|pane| {
@@ -5022,7 +5011,7 @@ impl CockpitView {
 
     /// Pin or unpin a Thread (the row menu's `Pin` / `Unpin`): a pinned
     /// Thread is listed under `Pinned`, newest pin last. Saved with the
-    /// settings as the window's machine's Thread.
+    /// settings as its machine's Thread (`SavedThread`).
     pub(crate) fn set_pinned(&mut self, key: ThreadKey, pinned: bool, cx: &mut Context<Self>) {
         let Some(pin) = self.cockpit.read(cx).saved(key) else {
             return;
@@ -5061,7 +5050,7 @@ impl CockpitView {
     /// A new Thread in a named Project — the ⌘K palette's "new thread in
     /// <project>". It is a loose draft like every pointer-made one, and it
     /// moves the fallback Project, so the draft after it starts here too.
-    pub(crate) fn open_draft_in_project(&mut self, project: ProjectId, cx: &mut Context<Self>) {
+    pub(crate) fn open_draft_in_project(&mut self, project: ProjectKey, cx: &mut Context<Self>) {
         self.launch_project = Some(project);
         let provider = self.default_choice();
         self.open_draft_with_choice(
@@ -5078,7 +5067,7 @@ impl CockpitView {
         &mut self,
         target: DraftTarget,
         provider: ProviderChoice,
-        chosen: Option<ProjectId>,
+        chosen: Option<ProjectKey>,
         cx: &mut Context<Self>,
     ) {
         if !self.cockpit.read(cx).environment_available() {
@@ -5091,8 +5080,7 @@ impl CockpitView {
             .read(cx)
             .roster()
             .current_thread()
-            .and_then(|thread| self.cockpit.read(cx).project_of(thread))
-            .map(|project| project.project());
+            .and_then(|thread| self.cockpit.read(cx).project_of(thread));
         // A second press with a draft already up must not stack another:
         // focus the standing draft and re-aim it at the caller's target.
         // A draft mid-bootstrap is on its way out and does not count.
@@ -5151,12 +5139,13 @@ impl CockpitView {
             band_focus: None,
             error: None,
         };
+        let machine = binding.binding.project().machine();
         let draft = self.cockpit.update(cx, |cockpit, _| cockpit.open_draft());
         let pane = CockpitPane::new(PaneView::new_draft(draft, binding, cx), cx);
         self.decisions
             .update(cx, |decisions, _| decisions.open_pane(pane.identity));
-        pane.preview.set_remote_files(self.elsewhere(self.on_screen(cx), cx));
-        self.aim_attachments(&pane.composer, cx);
+        pane.preview.set_remote_files(self.elsewhere(machine, cx));
+        self.aim_attachments(&pane.composer, machine, cx);
         cx.subscribe(&pane.composer, Self::composer_edited).detach();
         cx.subscribe(&pane.composer, Self::composer_opens_source).detach();
             cx.subscribe(&pane.composer, Self::composer_comment_opened).detach();
@@ -5227,16 +5216,15 @@ impl CockpitView {
     /// Ask git, off the UI thread, what `project`'s repo holds for the
     /// workspace popover — its worktrees and its local branches — and fill
     /// the open popover's rows in when the answer lands. One listing per
-    /// open, never per frame. On a machine, its Server asks git there.
-    fn refresh_repo_listing(&mut self, project: ProjectId, cx: &mut Context<Self>) {
-        if self.elsewhere(self.on_screen(cx), cx) {
+    /// open, never per frame. On another machine, its Server asks git there.
+    fn refresh_repo_listing(&mut self, project: ProjectKey, cx: &mut Context<Self>) {
+        if self.elsewhere(project.machine(), cx) {
             self.ask_machine_repo(project, cx);
             return;
         }
         let Some(root) = self
             .cockpit
             .read(cx)
-            .registry()
             .project(project)
             .map(|project| project.root.clone())
         else {
@@ -5294,7 +5282,7 @@ impl CockpitView {
     /// asked about off the UI thread and reads `main` until the answer
     /// lands — the name a Project git cannot answer for keeps, the branch
     /// a fresh clone would be sitting on.
-    fn checked_out_branch(&self, project: ProjectId, cx: &Context<Self>) -> SharedString {
+    fn checked_out_branch(&self, project: ProjectKey, cx: &Context<Self>) -> SharedString {
         if let Some(branch) = self.checkouts.branch(project) {
             return branch;
         }
@@ -5304,18 +5292,18 @@ impl CockpitView {
 
     /// Ask git, off the UI thread, what each of `projects`' checkouts is
     /// on. Callable from a frame: it only starts the lookup, once per
-    /// Project at a time, and `checkouts_read` takes the answers. Never on
-    /// a machine, whose checkouts no git here can read.
-    fn look_up_checkouts(&self, projects: impl IntoIterator<Item = ProjectId>, cx: &Context<Self>) {
-        if self.elsewhere(self.on_screen(cx), cx) {
-            return;
-        }
-        let mut roots: Vec<(ProjectId, std::path::PathBuf)> = Vec::new();
+    /// Project at a time, and `checkouts_read` takes the answers. Never of
+    /// another machine, whose checkouts no git here can read.
+    fn look_up_checkouts(&self, projects: impl IntoIterator<Item = ProjectKey>, cx: &Context<Self>) {
+        let mut roots: Vec<(ProjectKey, std::path::PathBuf)> = Vec::new();
         for project in projects {
-            if self.checkouts.asking(project) || roots.iter().any(|(asked, _)| *asked == project) {
+            if self.elsewhere(project.machine(), cx)
+                || self.checkouts.asking(project)
+                || roots.iter().any(|(asked, _)| *asked == project)
+            {
                 continue;
             }
-            if let Some(found) = self.cockpit.read(cx).registry().project(project) {
+            if let Some(found) = self.cockpit.read(cx).project(project) {
                 roots.push((project, found.root.clone()));
             }
         }
@@ -5345,7 +5333,7 @@ impl CockpitView {
     /// answer repaints — the chip, and an open workspace menu's rows.
     fn checkouts_read(
         &mut self,
-        answers: Vec<(ProjectId, Option<String>)>,
+        answers: Vec<(ProjectKey, Option<String>)>,
         cx: &mut Context<Self>,
     ) {
         if self.checkouts.listed(answers) {
@@ -5354,15 +5342,27 @@ impl CockpitView {
         }
     }
 
-    /// The project chip's rows for `draft` (`menu_rows::project_rows`),
-    /// with the focused Composer's line for the type-a-path row.
+    /// The project chip's rows for `draft` (`menu_rows::project_rows`):
+    /// every machine's Projects, with the focused Composer's line for the
+    /// type-a-path row.
     fn project_menu_rows(&self, draft: &pane::DraftBinding, cx: &Context<Self>) -> Vec<Row> {
         let typed = self
             .panes
             .get(self.focused(cx))
             .map(|pane| pane.composer.read(cx).text().trim().to_string())
             .unwrap_or_default();
-        menu_rows::project_rows(self.cockpit.read(cx).registry().projects(), draft, &typed)
+        let cockpit = self.cockpit.read(cx);
+        let projects: Vec<_> = cockpit
+            .machines()
+            .flat_map(|machine| {
+                let registry = cockpit.registry(machine);
+                let label = self.machine_label(machine, cx);
+                registry.reading().projects().iter().map(move |project| {
+                    (registry.project_key(project.id), project, label.clone())
+                })
+            })
+            .collect();
+        menu_rows::project_rows(&projects, draft, &typed)
     }
 
     /// The workspace chip's rows for `draft` (`menu_rows::workspace_rows`),
@@ -5436,7 +5436,10 @@ impl CockpitView {
         }
         match choice {
             BandChoice::Provider(provider) => {
-                let announced = self.cockpit.read(cx).announced_models(provider.provider);
+                let announced = self
+                    .pane_machine(self.focused(cx))
+                    .map(|machine| self.cockpit.read(cx).announced_models(machine, provider.provider))
+                    .unwrap_or_default();
                 if let Some(draft) = self.focused_draft_mut(cx) {
                     draft.binding.choose_provider(provider.clone(), &announced);
                     draft.error = None;
@@ -5459,10 +5462,14 @@ impl CockpitView {
                 // waiting for the relaunch.
                 self.launch_project = Some(*project);
             }
-            BandChoice::RegisterPath(path) => match self.cockpit.update(cx, |cockpit, _| cockpit.register_project(path)) {
-                Ok(project) => {
+            BandChoice::RegisterPath(path) => match self.pane_machine(self.focused(cx)).map(|machine| {
+                self.cockpit
+                    .update(cx, |cockpit, _| cockpit.register_project(machine, path))
+            }) {
+                None => {}
+                Some(Ok(project)) => {
                     if let Some(draft) = self.focused_draft_mut(cx) {
-                        draft.binding.choose_checkout(project.project());
+                        draft.binding.choose_checkout(project);
                         draft.error = None;
                     }
                     // The typed path was the pick's input, not a prompt:
@@ -5472,7 +5479,7 @@ impl CockpitView {
                         composer.splice(whole, "", cx);
                     });
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     if let Some(draft) = self.focused_draft_mut(cx) {
                         draft.error = Some(SharedString::from(format!(
                             "cannot register {}: {e}",
@@ -5516,12 +5523,18 @@ impl CockpitView {
         }
         let provider = binding.provider().clone();
         let effort = binding.effort().map(str::to_owned);
+        let machine = binding.project().machine();
         let resolved = binding
-            .resolve(self.cockpit.read(cx).registry().reading(), !self.elsewhere(self.on_screen(cx), cx))
+            .resolve(
+                self.cockpit.read(cx).registry(machine).reading(),
+                !self.elsewhere(machine, cx),
+            )
             .map_err(|e| e.to_string());
         let opened = resolved.and_then(|choice| {
             self.cockpit
-                .update(cx, |cockpit, _| cockpit.bootstrap_draft(id, provider, choice, &text, effort.clone()))
+                .update(cx, |cockpit, _| {
+                    cockpit.bootstrap_draft(machine, id, provider, choice, &text, effort.clone())
+                })
                 .map_err(|e| e.to_string())
         });
         self.finish_draft_start(id, &text, opened, cx);
@@ -5585,7 +5598,6 @@ impl CockpitView {
         let project_title = self
             .cockpit
             .read(cx)
-            .registry()
             .project(draft.binding.project())
             .map(|project| project.title.clone())
             .unwrap_or_else(|| "Project".into());
@@ -5658,7 +5670,10 @@ impl CockpitView {
         let draft = self.panes[index].draft()?;
         let provider = draft.binding.provider().provider;
         let model = draft.binding.provider().model.as_deref();
-        let announced = self.cockpit.read(cx).announced_models(provider);
+        let announced = self
+            .cockpit
+            .read(cx)
+            .announced_models(draft.binding.project().machine(), provider);
         // The model's name, the provider's default until one is chosen.
         let model_label = SharedString::from(ferrite_core::providers::models::footer_name(
             provider, model, &announced,
@@ -5743,9 +5758,10 @@ impl CockpitView {
                 let ring = self.panes[index].draft().and_then(|draft| {
                     pane::plan_usage_ring(
                         ("draft-usage-ring", index),
-                        self.cockpit
-                            .read(cx)
-                            .account_limits(draft.binding.provider().provider),
+                        self.cockpit.read(cx).account_limits(
+                            draft.binding.project().machine(),
+                            draft.binding.provider().provider,
+                        ),
                         None,
                         self.usage_popover_held,
                         cx,
@@ -5787,7 +5803,7 @@ impl CockpitView {
                 let ring = open.and_then(|open| {
                     pane::plan_usage_ring(
                         ("plan-usage-ring", thread.thread().get() as usize),
-                        self.cockpit.read(cx).account_limits(open.provider()),
+                        self.cockpit.read(cx).account_limits(thread.machine(), open.provider()),
                         open.transcript().plan().map(SharedString::from),
                         self.usage_popover_held,
                         cx,
@@ -5858,9 +5874,11 @@ impl CockpitView {
     fn aim_launch(&mut self, root: &std::path::Path, cx: &mut gpui::App) {
         self.launch_project = Some(
             self.cockpit
-                .update(cx, |cockpit, _| cockpit.register_project(root))
-                .expect("the scratch repo registers")
-                .project(),
+                .update(cx, |cockpit, _| {
+                    let machine = cockpit.this_computer().expect("this computer is held");
+                    cockpit.register_project(machine, root)
+                })
+                .expect("the scratch repo registers"),
         );
         for pane in &mut self.panes {
             if let Some(draft) = pane.draft_mut() {
@@ -5947,7 +5965,7 @@ impl CockpitView {
 
     /// Does the Project filter admit this Thread? `All projects` admits
     /// everything; a chosen Project admits only Threads whose cached
-    /// ProjectId is it — so a Thread whose Project is unknown appears under
+    /// Project is it — so a Thread whose Project is unknown appears under
     /// `All projects` alone, rather than being quietly filed under someone
     /// else's Project.
     fn admitted(&self, thread: ThreadKey, cx: &gpui::App) -> bool {
@@ -5970,7 +5988,11 @@ impl CockpitView {
         let open = self.cockpit.read(cx).thread(key);
         let now = ferrite_core::clock::system_time();
         // A Notice not yet seen makes a quiet Thread done.
-        let unread = self.cockpit.read(cx).notifications().attention(key.thread());
+        let unread = self
+            .cockpit
+            .read(cx)
+            .notifications(key.machine())
+            .attention(key.thread());
         // The tail reads the Pane's own head slot, so the nav and the Pane
         // never disagree about a Thread (C10).
         let slot =
@@ -6624,11 +6646,17 @@ impl CockpitView {
         // Every age the Cockpit can show: a Thread's (the nav, a parked
         // Pane, the palette), a notice's and a waiting request's (the
         // Inbox, its toasts).
-        let notifications = self.cockpit.read(cx).notifications();
-        let notices = notifications
-            .notices()
-            .map(|notice| notice.at)
-            .chain(notifications.decisions().map(|request| request.at))
+        let notices = self
+            .cockpit
+            .read(cx)
+            .every_notifications()
+            .flat_map(|notifications| {
+                notifications
+                    .reading()
+                    .notices()
+                    .map(|notice| notice.at)
+                    .chain(notifications.reading().decisions().map(|request| request.at))
+            })
             .filter_map(|at| crate::facts::since_label_changes_in(at, wall))
             .min();
         let thread_ages = self.facts.next_age_change(wall);
@@ -6830,10 +6858,13 @@ impl CockpitView {
         // keyboard pointing at nothing, and every global key stops working.
         // An empty cockpit still needs the keyboard: with nothing focused,
         // dispatch starts above these handlers and cmd-n could never make the
-        // first Thread. A machine whose Server
-        // went is read-only (ADR 0026): the root holds the keyboard, so no
-        // Composer or control on its board takes a key until it is back.
-        let lost = self.machine_lost(cx);
+        // first Thread. A machine whose Server went is read-only (ADR
+        // 0026): while the focused Pane is one of its, the root holds the
+        // keyboard, so no Composer or control there takes a key until it
+        // is back.
+        let lost = self
+            .pane_machine(self.focused(cx))
+            .is_some_and(|machine| self.machine_lost(machine, cx));
         let wanted = self
             .rename
             .shown()
@@ -7042,11 +7073,6 @@ impl CockpitView {
                 .flex()
                 .flex_col()
                 .child(self.pane_slot(visible[0], window, cx))
-        };
-        let grid = if lost {
-            machines::held(grid, "machine-lost")
-        } else {
-            grid
         };
 
         // A terminal multiplexer's window (theme WP-C): the sidebar and the
@@ -7347,10 +7373,21 @@ impl CockpitView {
 }
 
 impl CockpitView {
-    /// One Pane's cell — the click-to-focus and drag plumbing around
-    /// `render_pane`. The same cell serves the whole board and a slot of
-    /// its tree; only who lays it out differs.
+    /// Pane `index`'s cell — the click-to-focus and drag plumbing around
+    /// `render_pane`, for the whole board or a slot of its tree. While its
+    /// machine is lost it is dimmed under a cover that takes every press
+    /// until the machine is back (ADR 0026).
     fn pane_cell(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let cell = self.live_pane_cell(index, window, cx);
+        match self.pane_machine(index) {
+            Some(machine) if self.machine_lost(machine, cx) => {
+                machines::held(cell, format!("machine-lost-{}", machine.get()))
+            }
+            _ => cell,
+        }
+    }
+
+    fn live_pane_cell(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> Div {
         #[cfg(test)]
         drawn::built_pane(self.panes[index].identity);
         let content = self.pane_content(index, window, cx);
@@ -7493,7 +7530,11 @@ impl CockpitView {
         let facts = pane::PaneFacts {
             composer_empty: pane.composer.read(cx).is_empty(),
             focused,
-            unread: self.cockpit.read(cx).notifications().attention(thread.thread()),
+            unread: self
+                .cockpit
+                .read(cx)
+                .notifications(thread.machine())
+                .attention(thread.thread()),
             reduce_motion: cx.reduce_motion(),
             editing: focused
                 && window.is_window_active()
@@ -7551,14 +7592,14 @@ impl CockpitView {
 
     /// Read free disk for the nav's foot off the UI thread: the least free of the
     /// volumes holding the Threads' checkouts (SPEC §8), or a fixture
-    /// world's figure. Nothing on a machine, whose checkouts are its own;
-    /// tests and captures never read the real disk.
+    /// world's figure. Never another machine's, whose checkouts are its
+    /// own; tests and captures never read the real disk.
     fn read_free_disk(&mut self, cx: &mut Context<Self>) {
         if let Some(bytes) = self.cockpit.read(cx).free_disk_fixture() {
             self.free_disk_landed(Some(bytes), cx);
             return;
         }
-        if self.elsewhere(self.on_screen(cx), cx) || cfg!(any(test, feature = "visual-reference")) {
+        if cfg!(any(test, feature = "visual-reference")) {
             return;
         }
         let mut paths: Vec<std::path::PathBuf> = self
@@ -7566,6 +7607,7 @@ impl CockpitView {
             .read(cx)
             .threads()
             .into_iter()
+            .filter(|thread| !self.elsewhere(thread.machine(), cx))
             .filter_map(|thread| self.thread_path(thread, cx))
             .collect();
         paths.sort();
@@ -7750,7 +7792,7 @@ impl CockpitView {
                 }
                 self.cockpit
                     .read(cx)
-                    .model_catalog(open.provider())
+                    .model_catalog(thread.machine(), open.provider())
                     .into_iter()
                     .find(|row| {
                         row.value.eq_ignore_ascii_case(&argument)
@@ -8118,7 +8160,10 @@ impl CockpitView {
             self.prefs.settings.effort_for(provider),
             provider,
             draft.binding.provider().model.as_deref(),
-            &self.cockpit.read(cx).announced_models(provider),
+            &self
+                .cockpit
+                .read(cx)
+                .announced_models(draft.binding.project().machine(), provider),
         )
     }
 
@@ -8153,12 +8198,6 @@ impl CockpitView {
         self.focus_nav_on(first, window, cx);
     }
 
-    /// The Thread `thread` names in the Notices of the machine on screen,
-    /// which the Inbox reads: an id read there is that machine's (ADR 0045).
-    fn noticed(&self, thread: ThreadId, cx: &gpui::App) -> ThreadKey {
-        self.cockpit.read(cx).notifications().key(thread)
-    }
-
     /// Every click or key on the Inbox's surfaces — a toast's `⏎ open`, a
     /// row, ⏎ and ⌫ on the list, `mark all read` — lands here and is
     /// answered against core. Opening lands the operator on the Notice's
@@ -8166,27 +8205,33 @@ impl CockpitView {
     /// answer needs the window: `answer_from_toast`.)
     pub(crate) fn notice_verb(&mut self, verb: Verb, cx: &mut Context<Self>) {
         match verb {
-            Verb::OpenThread(thread) => self.land_on_thread(self.noticed(thread, cx), cx),
-            Verb::Open(id) => {
-                self.drop_toast(&crate::notifications::RowTarget::Notice(id), cx);
-                if self.cockpit.update(cx, |cockpit, _| cockpit.open_notice(id).is_some()) {
+            Verb::OpenThread(thread) => self.land_on_thread(thread, cx),
+            Verb::Open(machine, id) => {
+                self.drop_toast(machine, &crate::notifications::RowTarget::Notice(id), cx);
+                if self
+                    .cockpit
+                    .update(cx, |cockpit, _| cockpit.open_notice(machine, id).is_some())
+                {
                     self.sync_panes(cx);
                 }
                 self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
             }
-            Verb::Dismiss(id) => {
-                self.cockpit.update(cx, |cockpit, _| cockpit.dismiss_notice(id));
+            Verb::Dismiss(machine, id) => {
+                self.cockpit
+                    .update(cx, |cockpit, _| cockpit.dismiss_notice(machine, id));
             }
-            Verb::OpenDecision(id) => {
-                self.drop_toast(&crate::notifications::RowTarget::Decision(id.clone()), cx);
-                let subject = self
-                    .cockpit
-                    .read(cx)
-                    .notifications()
+            Verb::OpenDecision(machine, id) => {
+                self.drop_toast(
+                    machine,
+                    &crate::notifications::RowTarget::Decision(id.clone()),
+                    cx,
+                );
+                let notifications = self.cockpit.read(cx).notifications(machine);
+                let subject = notifications
                     .decision(&id)
                     .and_then(|notice| notice.subject.clone())
                     .unwrap_or(ferrite_core::activity::Subject::Main);
-                let thread = self.noticed(id.thread, cx);
+                let thread = notifications.key(id.thread);
                 let pending_subject = self
                     .cockpit
                     .read(cx)
@@ -8202,7 +8247,10 @@ impl CockpitView {
                             .clone()
                             .unwrap_or(ferrite_core::activity::Subject::Main)
                     });
-                if let Some(thread) = self.cockpit.update(cx, |cockpit, _| cockpit.open_decision_notice(&id)) {
+                if let Some(thread) = self
+                    .cockpit
+                    .update(cx, |cockpit, _| cockpit.open_decision_notice(machine, &id))
+                {
                     self.sync_panes(cx);
                     self.select_subject_from_notice(thread, subject, cx);
                 } else if let Some(subject) = pending_subject {
@@ -8211,22 +8259,16 @@ impl CockpitView {
                 }
                 self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
             }
-            Verb::DismissDecision(id) => {
-                self.cockpit.update(cx, |cockpit, _| cockpit.dismiss_decision_notice(&id));
+            Verb::DismissDecision(machine, id) => {
+                self.cockpit
+                    .update(cx, |cockpit, _| cockpit.dismiss_decision_notice(machine, &id));
             }
-            // Every row read, none removed: titles drop to plain, the badge
-            // clears.
+            // Every row read on every machine, none removed: titles drop
+            // to plain, the badge clears.
             Verb::MarkAllRead => {
                 self.cockpit.update(cx, |cockpit, _| cockpit.mark_notices_read());
-                if let Some(machines) = &self.machines {
-                    machines.update(cx, |machines, _| machines.mark_notices_read());
-                }
             }
             Verb::Answer(..) => {}
-            Verb::GoTo(alert) => {
-                self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
-                self.go_to_alert(alert, cx);
-            }
         }
         cx.notify();
     }
@@ -8235,6 +8277,7 @@ impl CockpitView {
     /// answer to that Thread's waiting approval, and the toast goes.
     fn answer_from_toast(
         &mut self,
+        machine: ferrite_core::MachineId,
         id: ferrite_core::notifications::DecisionNoticeId,
         answer: crate::notifications::QuickAnswer,
         window: &mut Window,
@@ -8248,8 +8291,13 @@ impl CockpitView {
                 ferrite_pane::decision::ApprovalChoice::DenyAndSteer
             }
         };
-        self.drop_toast(&crate::notifications::RowTarget::Decision(id.clone()), cx);
-        self.answer_approval(self.noticed(id.thread, cx), choice, None, window, cx);
+        self.drop_toast(
+            machine,
+            &crate::notifications::RowTarget::Decision(id.clone()),
+            cx,
+        );
+        let thread = self.cockpit.read(cx).notifications(machine).key(id.thread);
+        self.answer_approval(thread, choice, None, window, cx);
         cx.notify();
     }
 
@@ -8259,13 +8307,13 @@ impl CockpitView {
     /// one line that fits the row, else `worked for <settled duration>`.
     fn notice_row(
         &self,
+        key: ThreadKey,
         notice: &ferrite_core::notifications::Notice,
         now: std::time::SystemTime,
         cx: &gpui::App,
     ) -> NoticeRow {
         use crate::notifications::{Detail, State};
-        let key = self.noticed(notice.thread, cx);
-        let title = self.facts.name(key);
+        let title = self.row_title(key, cx);
         let finish = self
             .cockpit
             .read(cx)
@@ -8295,9 +8343,8 @@ impl CockpitView {
             }
         };
         NoticeRow {
-            away: None,
             target: crate::notifications::RowTarget::Notice(notice.id),
-            thread: notice.thread,
+            thread: key,
             title,
             state,
             detail,
@@ -8307,55 +8354,41 @@ impl CockpitView {
     }
 
     /// The provider an alert's Thread runs on, as far as its machine says.
-    fn alert_provider(
-        &self,
-        alert: &crate::notifications::Alert,
-        machines: Option<&crate::machines::Machines>,
-        cx: &gpui::App,
-    ) -> Option<Provider> {
-        match &alert.away {
-            None => self
-                .cockpit
-                .read(cx)
-                .thread(self.noticed(alert.thread, cx))
-                .map(|open| open.provider()),
-            Some(key) => machines?.away(key)?.status.provider(alert.thread),
-        }
+    fn alert_provider(&self, alert: &crate::notifications::Alert, cx: &gpui::App) -> Option<Provider> {
+        self.cockpit
+            .read(cx)
+            .thread(alert.thread)
+            .map(|open| open.provider())
     }
 
     /// One alert's system notification, worded as its row and tagged with
-    /// its Thread so a newer one replaces it, while its record is there to
-    /// word it.
+    /// its Thread on its machine, so a newer one replaces it, while its
+    /// record is there to word it.
     fn system_posting(
         &self,
         alert: &crate::notifications::Alert,
-        machines: Option<&crate::machines::Machines>,
         now: std::time::SystemTime,
         cx: &gpui::App,
     ) -> Option<crate::system_notifications::Posting> {
-        let row = self.alert_row(alert, machines, now, cx)?;
-        let machine = match alert.away.clone() {
-            Some(machine) => machine,
-            None => self.cockpit.read(cx).saved_as(self.on_screen(cx))?.clone(),
-        };
-        // The directory is this computer's only for a Thread on screen.
-        let cwd = match alert.away {
-            None => self
-                .cockpit
-                .read(cx)
-                .thread(self.noticed(alert.thread, cx))
-                .and_then(|open| open.workspace())
-                .map(|binding| binding.cwd().to_path_buf()),
-            Some(_) => None,
-        };
+        let row = self.alert_row(alert, now, cx)?;
+        let cockpit = self.cockpit.read(cx);
+        let machine = alert.thread.machine();
+        let saved_as = cockpit.saved_as(machine)?.clone();
+        // The directory is this computer's only for a Thread on it.
+        let cwd = cockpit
+            .local(machine)
+            .then(|| cockpit.thread(alert.thread))
+            .flatten()
+            .and_then(|open| open.workspace())
+            .map(|binding| binding.cwd().to_path_buf());
         Some(crate::system_notifications::Posting {
-            tag: system_tag(&machine, alert.thread),
+            tag: system_tag(&saved_as, alert.thread.thread()),
             needs_you: alert.needs_you(),
             word: row.word(),
             title: row.title.to_string(),
             detail: row.detail.text(),
             agent: self
-                .alert_provider(alert, machines, cx)
+                .alert_provider(alert, cx)
                 .map(|provider| provider.to_string()),
             cwd,
         })
@@ -8373,8 +8406,8 @@ impl CockpitView {
     }
 
     /// The operator clicked a system notification: the app comes forward
-    /// (the click handler's doing) and lands on what it was about — on its
-    /// machine, when that is off screen.
+    /// (the click handler's doing) and lands on what it was about, in
+    /// place, on whichever machine.
     pub(crate) fn open_system_notification(&mut self, tag: &str, cx: &mut Context<Self>) {
         if self.open_task_notification(tag, cx) {
             return;
@@ -8392,18 +8425,18 @@ impl CockpitView {
     fn alert_row(
         &self,
         alert: &crate::notifications::Alert,
-        machines: Option<&crate::machines::Machines>,
         now: std::time::SystemTime,
         cx: &gpui::App,
     ) -> Option<NoticeRow> {
-        if let Some(key) = &alert.away {
-            return machines::away_row(&machines?.away(key)?, &alert.target, now);
-        }
-        let notifications = self.cockpit.read(cx).notifications();
+        let notifications = self.cockpit.read(cx).notifications(alert.thread.machine());
         Some(match &alert.target {
             RowTarget::Thread(_) => return None,
-            RowTarget::Notice(id) => self.notice_row(notifications.get(*id)?, now, cx),
-            RowTarget::Decision(id) => self.decision_row(notifications.decision(id)?, now, cx),
+            RowTarget::Notice(id) => {
+                self.notice_row(alert.thread, notifications.get(*id)?, now, cx)
+            }
+            RowTarget::Decision(id) => {
+                self.decision_row(alert.thread, notifications.decision(id)?, now, cx)
+            }
         })
     }
 
@@ -8411,13 +8444,12 @@ impl CockpitView {
     /// from when it was raised.
     fn decision_row(
         &self,
+        key: ThreadKey,
         notice: &ferrite_core::notifications::DecisionNotice,
         now: std::time::SystemTime,
         cx: &gpui::App,
     ) -> NoticeRow {
         use crate::notifications::{Detail, State};
-        let thread = notice.id.thread;
-        let key = self.noticed(thread, cx);
         let open = self.cockpit.read(cx).thread(key);
         let detail = open
             .and_then(|open| {
@@ -8457,10 +8489,9 @@ impl CockpitView {
             })
             .unwrap_or(Detail::None);
         NoticeRow {
-            away: None,
             target: crate::notifications::RowTarget::Decision(notice.id.clone()),
-            thread,
-            title: self.facts.name(key),
+            thread: key,
+            title: self.row_title(key, cx),
             state: State::NeedsYou(notice.kind),
             detail,
             when: crate::facts::since_label(notice.at, now),
@@ -8472,32 +8503,48 @@ impl CockpitView {
     /// Requests precede other rows, retaining each machine's attention order.
     #[cfg(test)]
     pub(super) fn needs_you_rows(&self, cx: &gpui::App) -> Vec<NoticeRow> {
-        self.inbox_rows(&self.nav_state(cx), cx)
+        let model = self.cockpit.read(cx);
+        let listed = nav_view::listed_threads(self, model, cx);
+        self.inbox_rows(&self.nav_state(cx), &listed, cx)
     }
 
-    /// The Active section as the Inbox's rows: each local Thread's, then a
-    /// connected machine's requests and finishes, requests first.
-    pub(super) fn inbox_rows(&self, state: &nav::NavState, cx: &gpui::App) -> Vec<NoticeRow> {
+    /// The Active section as the Inbox's rows: this computer's cards',
+    /// then every other machine's Threads awaiting handling, requests
+    /// first.
+    pub(super) fn inbox_rows(
+        &self,
+        state: &nav::NavState,
+        listed: &[(ThreadKey, nav::Section, Option<std::time::SystemTime>)],
+        cx: &gpui::App,
+    ) -> Vec<NoticeRow> {
         let now = ferrite_core::clock::system_time();
-        let notifications = self.cockpit.read(cx).notifications();
+        let others = listed
+            .iter()
+            .filter(|(key, section, _)| {
+                *section == nav::Section::Active
+                    && !self.home_card(*key, cx)
+                    && self.admitted(*key, cx)
+            })
+            .map(|(key, _, _)| *key);
         let mut rows: Vec<_> = state
             .active
             .iter()
-            .map(|entry| {
-                let thread = entry.key;
+            .map(|entry| entry.key)
+            .chain(others)
+            .map(|thread| {
+                let notifications = self.cockpit.read(cx).notifications(thread.machine());
                 if let Some(decision) = notifications.first_request(thread.thread()) {
-                    self.decision_row(decision, now, cx)
+                    self.decision_row(thread, decision, now, cx)
                 } else if let Some(notice) = notifications
                     .notices()
                     .find(|notice| notice.thread == thread.thread())
                 {
-                    self.notice_row(notice, now, cx)
+                    self.notice_row(thread, notice, now, cx)
                 } else {
                     NoticeRow {
-                        away: None,
                         target: RowTarget::Thread(thread.thread()),
-                        thread: thread.thread(),
-                        title: self.facts.name(thread),
+                        thread,
+                        title: self.row_title(thread, cx),
                         state: crate::notifications::State::Idle,
                         detail: crate::notifications::Detail::None,
                         when: "".into(),
@@ -8506,12 +8553,9 @@ impl CockpitView {
                 }
             })
             .collect();
-        let (requests, finished) = self.away_rows(cx);
-        rows.extend(requests);
-        rows.extend(finished.into_iter().map(|(_, row)| row));
         rows.sort_by_key(|row| !row.request());
         let mut seen = std::collections::BTreeSet::new();
-        rows.retain(|row| seen.insert((row.away.clone(), row.thread)));
+        rows.retain(|row| seen.insert(row.thread));
         rows
     }
 
@@ -8575,8 +8619,8 @@ impl CockpitView {
 /// and reader slots are no Threads and never persist, so stand-in ids
 /// nothing real reaches name them: a draft counts down from the top, and a
 /// reader slot is its Thread's number under the `READER_LEAF` bit. A board
-/// shows one machine's Panes, so a leaf maps back to its slot through them
-/// (`leaf_slot`).
+/// holds one Pane and its reader, so a leaf maps back to its slot through
+/// the board (`leaf_slot`).
 type Leaf = ThreadId;
 
 const READER_LEAF: u64 = 1 << 62;
@@ -8643,13 +8687,13 @@ pub(crate) fn here() -> std::path::PathBuf {
 /// the work they were actually doing — and the newest registered Project
 /// is the fallback for a store whose Threads name nothing the registry
 /// still knows.
-fn startup_project(cockpit: &ferrite_core::cockpit::Cockpit) -> Option<ProjectId> {
-    cockpit.last_worked_project().map(|project| project.project()).or_else(|| {
-        cockpit
-            .registry()
+fn startup_project(cockpit: &ferrite_core::cockpit::Cockpit) -> Option<ProjectKey> {
+    cockpit.last_worked_project().or_else(|| {
+        let registry = cockpit.registry(cockpit.this_computer()?);
+        registry
             .projects()
             .last()
-            .map(|project| project.id)
+            .map(|project| registry.project_key(project.id))
     })
 }
 

@@ -114,7 +114,7 @@ pub(super) enum BandChoice {
     Provider(ProviderChoice),
     /// The effort chip: a rung, or None for the operator's default.
     Effort(Option<String>),
-    Project(ProjectId),
+    Project(ProjectKey),
     /// The type-a-path row: register the typed path as a project, then
     /// choose it.
     RegisterPath(std::path::PathBuf),
@@ -386,14 +386,14 @@ pub(super) fn band_row(label: SharedString, detail: SharedString, active: bool, 
 /// ticked, then, when the line `typed` reads `path <dir>`, a row that
 /// registers it, and last `Add project…`.
 pub(super) fn project_rows(
-    projects: &[ferrite_core::workspace::registry::Project],
+    projects: &[(ProjectKey, &ferrite_core::workspace::registry::Project, Option<String>)],
     draft: &pane::DraftBinding,
     typed: &str,
 ) -> Vec<Row> {
     let mut rows: Vec<Row> = projects
         .iter()
-        .map(|project| {
-            let detail = if project.additional_roots.is_empty() {
+        .map(|(key, project, machine)| {
+            let mut detail = if project.additional_roots.is_empty() {
                 project.root.display().to_string()
             } else {
                 let count = project.additional_roots.len();
@@ -403,11 +403,15 @@ pub(super) fn project_rows(
                     if count == 1 { "y" } else { "ies" }
                 )
             };
+            // Another machine's Project says whose it is.
+            if let Some(machine) = machine {
+                detail = format!("{machine} · {detail}");
+            }
             band_row(
                 SharedString::from(project.title.clone()),
                 SharedString::from(detail),
-                draft.binding.project() == project.id,
-                BandChoice::Project(project.id),
+                draft.binding.project() == *key,
+                BandChoice::Project(*key),
             )
         })
         .collect();

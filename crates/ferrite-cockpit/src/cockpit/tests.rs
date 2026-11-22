@@ -129,6 +129,9 @@ use ferrite_core::store::Store;
 
 use ferrite_core::transcript::Body;
 
+#[allow(unused_imports)]
+use ferrite_core::workspace::registry::ProjectId;
+
 use ferrite_core::workspace::WorkspaceBinding;
 
 use ferrite_core::{Decision, SessionEvent};
@@ -472,7 +475,7 @@ fn cockpit(name: &str, panes: usize) -> (Cockpit, Fake) {
     let now = ferrite_core::clock::now_stamp();
     for _ in 0..panes {
         let thread = cockpit
-            .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+            .open(cockpit.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
             .unwrap();
         did_something_at(&dir, thread, &now);
     }
@@ -1170,6 +1173,7 @@ fn bound_cockpit_as(
     let mut cockpit = Cockpit::new_saved_as(store, Box::new(fake.clone()), saved_as);
     cockpit
         .open(
+            cockpit.first_machine(),
             provider,
             WorkspaceChoice::Main {
                 checkout: checkout.clone(),

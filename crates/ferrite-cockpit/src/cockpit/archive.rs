@@ -268,9 +268,10 @@ impl CockpitView {
     /// What the Archive's list draws: the shown Project's archived Tasks
     /// that match `query`, and the open one.
     fn archive_inputs(&self, query: &str, cx: &gpui::App) -> Option<ArchiveInputs> {
-        let project = self.factory_project()?;
+        let key = self.factory_project()?;
+        let project = key.project();
         let view = self.factory()?.read(cx);
-        let board = self.cockpit.read(cx).factory().reading();
+        let board = self.cockpit.read(cx).factory(key.machine()).reading();
         let found = board
             .archive(project, query)
             .map(|task| ArchivedRow {
@@ -296,7 +297,11 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match event {
-            ArchiveEvent::Open(task) => self.open_task(task, cx),
+            ArchiveEvent::Open(task) => {
+                if let Some(machine) = self.factory_machine() {
+                    self.open_task(machine, task, cx);
+                }
+            }
             ArchiveEvent::Close => self.close_archive(cx),
         }
     }
@@ -370,7 +375,7 @@ impl CockpitView {
     /// The earlier Worker being read, if it is one of `task`'s.
     pub(super) fn worker_reading(&self, task: &Task, cx: &gpui::App) -> Option<ThreadKey> {
         let (thread, _) = self.factory()?.read(cx).archive.read(cx).reading?;
-        let board = self.cockpit.read(cx).factory();
+        let board = self.cockpit.read(cx).factory(self.factory_machine()?);
         task.every_worker()
             .into_iter()
             .any(|worker| board.key(worker) == thread)
@@ -452,14 +457,19 @@ impl CockpitView {
         let Some(project) = self.factory_project() else {
             return;
         };
-        self.task_command(TaskAction::Clear { project }, cx);
+        self.task_command(
+            TaskAction::Clear {
+                project: project.project(),
+            },
+            cx,
+        );
     }
 
     /// The Workers a Task had, each Step's and the last, for a Task with
     /// no Worker Pane in this window (a completed one, its Workers parked).
     pub(super) fn worker_history(&self, task: &Task, cx: &mut Context<Self>) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
-        let board = self.cockpit.read(cx).factory();
+        let board = self.cockpit.read(cx).factory(self.factory_machine()?);
         let threads: Vec<ThreadKey> = task
             .every_worker()
             .into_iter()

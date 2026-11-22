@@ -16,7 +16,7 @@ use super::*;
 use super::destination::{Destination, Shows};
 use ferrite_core::factory::{self as core_factory, Status, Task, TaskId};
 use ferrite_core::protocol::{Done, TaskAction};
-use ferrite_core::workspace::registry::ProjectId;
+use ferrite_core::ProjectKey;
 
 /// The Task panel's width beside the columns.
 const TASK_PANEL_W: f32 = 480.;
@@ -1014,6 +1014,12 @@ fn trouble(trouble: String) -> AnyElement {
 /// What identifies a Task's toast among the window's notifications.
 struct TaskToast;
 
+/// A Task's toast among the window's notifications: Task ids are a
+/// machine's own.
+fn task_toast(machine: ferrite_core::MachineId, task: &str) -> SharedString {
+    format!("{}:{task}", machine.get()).into()
+}
+
 /// A system notification's tag for a Task.
 pub(crate) fn task_tag(task: &str) -> String {
     format!("ferrite-task-{task}")
@@ -1078,14 +1084,18 @@ impl CockpitView {
             }
             FactoryEvent::Clear => self.clear_completed(cx),
             FactoryEvent::NewTask => self.open_new_task(cx),
-            FactoryEvent::OpenTask(task) => self.open_task(task, cx),
+            FactoryEvent::OpenTask(task) => {
+                if let Some(machine) = self.factory_machine() {
+                    self.open_task(machine, task, cx);
+                }
+            }
             FactoryEvent::Tab(tab) => self.task_tab(*tab, cx),
             FactoryEvent::Command(action) => self.task_command(action.clone(), cx),
         }
     }
 
     /// Show `project`'s Factory board in the board's place.
-    pub(crate) fn open_factory(&mut self, project: ProjectId, cx: &mut Context<Self>) {
+    pub(crate) fn open_factory(&mut self, project: ProjectKey, cx: &mut Context<Self>) {
         let focus_at_open = self.cockpit.read(cx).roster().focused();
         match self.destination.as_mut() {
             Some(Destination {
@@ -1103,16 +1113,24 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Open a Task's panel, brought forward from whichever surface shows:
-    /// on the Board, or the Archive for an archived Task. What it shows is
-    /// the board's; nothing starts.
-    pub(crate) fn open_task(&mut self, task: &str, cx: &mut Context<Self>) {
-        let Some((project, archived)) = self
-            .cockpit
-            .read(cx)
-            .factory()
+    /// The machine of the Factory shown, whose board its Tasks are on.
+    pub(super) fn factory_machine(&self) -> Option<ferrite_core::MachineId> {
+        self.factory_project().map(|project| project.machine())
+    }
+
+    /// Open `machine`'s Task `task`'s panel, brought forward from whichever
+    /// surface shows: on the Board, or the Archive for an archived Task.
+    /// What it shows is the board's; nothing starts.
+    pub(crate) fn open_task(
+        &mut self,
+        machine: ferrite_core::MachineId,
+        task: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let board = self.cockpit.read(cx).factory(machine);
+        let Some((project, archived)) = board
             .task(task)
-            .map(|task| (task.project, task.archived()))
+            .map(|task| (board.project_key(task.project), task.archived()))
         else {
             return;
         };
@@ -1169,9 +1187,11 @@ impl CockpitView {
     }
 
     /// Whether `task`'s panel is on screen.
-    fn task_panel_shown(&self, task: &str, cx: &gpui::App) -> bool {
-        self.factory()
-            .is_some_and(|view| view.read(cx).surface == super::workflows::Surface::Board)
+    fn task_panel_shown(&self, machine: ferrite_core::MachineId, task: &str, cx: &gpui::App) -> bool {
+        self.factory_machine() == Some(machine)
+            && self
+                .factory()
+                .is_some_and(|view| view.read(cx).surface == super::workflows::Surface::Board)
             && self.open_task_now(cx).is_some_and(|open| open.id == task)
     }
 
@@ -1181,7 +1201,7 @@ impl CockpitView {
         let view = self.factory()?.read(cx);
         self.cockpit
             .read(cx)
-            .factory()
+            .factory(self.factory_machine()?)
             .reading()
             .task(view.open.as_deref()?)
             .filter(|task| task.archived() == view.archive_shown)
@@ -1205,7 +1225,11 @@ impl CockpitView {
         if let Some(reading) = self.worker_reading(task, cx) {
             return Some(reading);
         }
-        let worker = self.cockpit.read(cx).factory().key(task.worker?);
+        let worker = self
+            .cockpit
+            .read(cx)
+            .factory(self.factory_machine()?)
+            .key(task.worker?);
         self.pane_for_worker(task, cx).is_some().then_some(worker)
     }
 
@@ -1214,7 +1238,10 @@ impl CockpitView {
         let gone = self
             .factory()
             .and_then(|view| view.read(cx).open.as_deref())
-            .is_some_and(|id| self.cockpit.read(cx).factory().task(id).is_none());
+            .is_some_and(|id| {
+                self.factory_machine()
+                    .is_none_or(|machine| self.cockpit.read(cx).factory(machine).task(id).is_none())
+            });
         if gone {
             self.update_factory(cx, |view, _| view.open = None);
         }
@@ -1250,9 +1277,13 @@ impl CockpitView {
         Some(self.focus.clone())
     }
 
-    /// The Factory command a press makes, its answer in the view's note.
+    /// The Factory command a press makes, on the machine of the Factory
+    /// shown, its answer in the view's note.
     pub(crate) fn task_command(&mut self, action: TaskAction, cx: &mut Context<Self>) {
-        let note = match self.cockpit.update(cx, |cockpit, _| cockpit.task(action)) {
+        let Some(machine) = self.factory_machine() else {
+            return;
+        };
+        let note = match self.cockpit.update(cx, |cockpit, _| cockpit.task(machine, action)) {
             Ok(Some(Done::Deleted { kept })) => {
                 self.update_factory(cx, |view, _| view.open = None);
                 kept.map(SharedString::from)
@@ -1268,7 +1299,7 @@ impl CockpitView {
     /// and a system notification, and nothing in the Inbox.
     pub(super) fn present_task_alert(
         &mut self,
-        project: ProjectId,
+        project: ProjectKey,
         task: String,
         status: Status,
         title: String,
@@ -1278,14 +1309,14 @@ impl CockpitView {
     ) {
         use gpui::component::WindowExt as _;
         use gpui::component::notification::{Notification, NotificationType};
-        let found = self.cockpit.read(cx).factory().reading().task(&task);
+        let machine = project.machine();
+        let found = self.cockpit.read(cx).factory(machine).reading().task(&task);
         let provider = found.map(|found| found.agent.provider);
         let cwd = found.and_then(|found| found.worktree.clone());
         let detail = detail.unwrap_or_else(|| title.clone());
         let project_title = self
             .cockpit
             .read(cx)
-            .registry()
             .project(project)
             .map(|project| project.title.clone());
         let heading = SharedString::from(format!(
@@ -1305,7 +1336,7 @@ impl CockpitView {
                 view.surface == super::workflows::Surface::Board && !view.archive_shown
             });
         let toast = Notification::new()
-            .id1::<TaskToast>(SharedString::from(task.clone()))
+            .id1::<TaskToast>(task_toast(machine, &task))
             .content(move |_, _, _| {
                 div()
                     .flex()
@@ -1328,10 +1359,10 @@ impl CockpitView {
             })
             .autohide(board_shown || !status.needs_you());
         // As a Thread's toast is not raised over the Thread on screen.
-        if !self.task_panel_shown(&task, cx) {
+        if !self.task_panel_shown(machine, &task, cx) {
             window.push_notification(toast, cx);
             if status.needs_you() {
-                self.task_toasts.insert(task.clone(), status);
+                self.task_toasts.insert((machine, task.clone()), status);
             }
         }
         let sounds = match provider {
@@ -1368,20 +1399,21 @@ impl CockpitView {
     /// its request is answered.
     pub(super) fn retire_task_toasts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use gpui::component::WindowExt as _;
-        let board = self.cockpit.read(cx).factory();
-        let gone: Vec<String> = self
+        let cockpit = self.cockpit.read(cx);
+        let gone: Vec<(ferrite_core::MachineId, String)> = self
             .task_toasts
             .iter()
-            .filter(|(task, status)| {
-                board
+            .filter(|((machine, task), status)| {
+                cockpit
+                    .factory(*machine)
                     .task(task)
                     .is_none_or(|found| found.status != **status)
             })
-            .map(|(task, _)| task.clone())
+            .map(|(key, _)| key.clone())
             .collect();
-        for task in gone {
-            self.task_toasts.remove(&task);
-            window.remove_notification1::<TaskToast>(SharedString::from(task.clone()), cx);
+        for (machine, task) in gone {
+            self.task_toasts.remove(&(machine, task.clone()));
+            window.remove_notification1::<TaskToast>(task_toast(machine, &task), cx);
             crate::system_notifications::withdraw(&task_tag(&task), cx);
         }
     }
@@ -1397,7 +1429,7 @@ impl CockpitView {
     ) {
         match owner {
             ferrite_core::ThreadOwner::Task(task) => {
-                self.open_task(&task, cx);
+                self.open_task(thread.machine(), &task, cx);
                 if self
                     .open_task_now(cx)
                     .is_some_and(|task| task.worker == Some(thread.thread()))
@@ -1409,41 +1441,53 @@ impl CockpitView {
                 }
             }
             ferrite_core::ThreadOwner::Factory(project) => {
+                let project = self.cockpit.read(cx).registry(thread.machine()).project_key(project);
                 self.open_factory(project, cx);
                 self.factory_surface(super::workflows::Surface::Coordinator, cx);
             }
         }
     }
 
-    /// A Task's system notification, clicked: its panel opens.
+    /// A Task's system notification, clicked: its panel opens, on the
+    /// Factory shown's machine when its board has it, else the first
+    /// machine whose board does.
     pub(super) fn open_task_notification(&mut self, tag: &str, cx: &mut Context<Self>) -> bool {
         let Some(task) = tag.strip_prefix("ferrite-task-") else {
             return false;
         };
         let task = task.to_string();
-        self.open_task(&task, cx);
+        let cockpit = self.cockpit.read(cx);
+        let machine = self
+            .factory_machine()
+            .into_iter()
+            .chain(cockpit.machines())
+            .find(|machine| cockpit.factory(*machine).task(&task).is_some());
+        if let Some(machine) = machine {
+            self.open_task(machine, &task, cx);
+        }
         true
     }
 
     /// The Factory menu's rows: a Project's board each, checked while it
     /// shows, with how many of its Tasks need the operator.
     pub(super) fn factory_rows(&self, cx: &gpui::App) -> Vec<Option<(menu::Item, MenuVerb)>> {
-        let board = self.cockpit.read(cx).factory();
+        let cockpit = self.cockpit.read(cx);
         self.nav_view
             .read(cx)
             .factories()
             .iter()
             .map(|&project| {
-                let title = self
-                    .cockpit
-                    .read(cx)
-                    .registry()
+                let title = cockpit
                     .project(project)
                     .map(|project| project.title.clone())
                     .unwrap_or_default();
+                let title = match self.machine_label(project.machine(), cx) {
+                    Some(machine) => format!("{machine} \u{203a} {title}"),
+                    None => title,
+                };
                 let shown = self.factory_project() == Some(project);
                 let item = menu::Item::new(title).checked(shown);
-                let item = match board.needs_you(project) {
+                let item = match cockpit.factory(project.machine()).needs_you(project.project()) {
                     0 => item,
                     count => item.detail(count.to_string()),
                 };
@@ -1455,14 +1499,14 @@ impl CockpitView {
     /// What the Factory's head and the Board draw: the Project and its
     /// Factory as the board says them now.
     fn factory_inputs(&self, window: &Window, cx: &gpui::App) -> Option<FactoryInputs> {
-        let project = self.factory_project()?;
-        let board = self.cockpit.read(cx).factory();
+        let key = self.factory_project()?;
+        let board = self.cockpit.read(cx).factory(key.machine());
+        let project = key.project();
         Some(FactoryInputs {
             title: self
                 .cockpit
                 .read(cx)
-                .registry()
-                .project(project)
+                .project(key)
                 .map(|project| project.title.clone())
                 .unwrap_or_else(|| "Project".into()),
             cards: board.on_board(project).map(TaskCard::of).collect(),
@@ -1537,7 +1581,12 @@ impl CockpitView {
         if task.archived() || task.keeping.parked {
             return None;
         }
-        self.pane_for(self.cockpit.read(cx).factory().key(task.worker?))
+        self.pane_for(
+            self.cockpit
+                .read(cx)
+                .factory(self.factory_machine()?)
+                .key(task.worker?),
+        )
     }
 }
 

@@ -64,7 +64,7 @@ const SCROLLBACKS: [usize; 3] = [1_000, theme::TERMINAL_SCROLLBACK, 100_000];
 
 /// A shell's standing: running, or the reason it never started.
 enum Shell {
-    /// `remote`: it runs on the window's machine, so a failed end is the
+    /// `remote`: it runs on another machine, so a failed end is the
     /// connection's and leaves its tab to say so.
     Running { view: Entity<TerminalView>, remote: bool },
     Failed(String),

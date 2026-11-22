@@ -385,7 +385,7 @@ fn open_second_page(
     let second = view.update(cx, |view, cx| {
         let second = view
             .cockpit
-            .update(cx, |cockpit, _| cockpit.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() }))
+            .update(cx, |cockpit, _| cockpit.open(cockpit.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() }))
             .unwrap();
         view.browser_action(second, ferrite_core::browser::Action::Open { url: url.into() }, cx);
         view.focus_thread(first, cx);

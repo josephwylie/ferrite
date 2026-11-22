@@ -454,7 +454,10 @@ impl CockpitView {
                     }
                 }
             }
-            let limits = self.cockpit.read(cx).account_limits(open.provider());
+            let limits = self
+                .cockpit
+                .read(cx)
+                .account_limits(thread.machine(), open.provider());
             for (name, limit) in [("5 hours", limits.five_hour), ("Weekly", limits.weekly)] {
                 if let Some(limit) = limit {
                     let mut row = Row::new(Item::Usage, name, icons::CLOCK);

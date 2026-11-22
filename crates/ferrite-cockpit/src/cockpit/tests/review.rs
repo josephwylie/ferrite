@@ -31,6 +31,7 @@ fn edited(name: &str) -> (Cockpit, Fake, std::path::PathBuf) {
     let store = Store::open(base.join("store")).unwrap();
     let mut core = Cockpit::new(store, Box::new(fake.clone()));
     core.open(
+        core.first_machine(),
         Provider::Claude,
         WorkspaceChoice::Main {
             checkout: repo.clone(),

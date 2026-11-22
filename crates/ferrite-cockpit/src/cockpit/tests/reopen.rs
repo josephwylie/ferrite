@@ -113,6 +113,7 @@ fn restart_view<'a>(
     let store = Store::open(scratch(name).join("threads")).unwrap();
     let mut core = Cockpit::new(store, Box::new(fake));
     core.open(
+        core.first_machine(),
         Provider::Claude,
         WorkspaceChoice::Main {
             checkout: checkout.to_path_buf(),

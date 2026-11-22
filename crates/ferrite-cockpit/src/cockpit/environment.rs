@@ -2,9 +2,11 @@
 //! preferences (text size, sounds, the sidebar) live in this computer's
 //! `settings.json`. A Server's defaults — how its Sessions ask for
 //! permission, its Factory's limit, its follow-up suggestions — and its
-//! provider CLIs belong to the machine the Server runs on, so a window on a
-//! machine reads and writes those through the Server (`Op::ServerDefaults`,
-//! `Op::Cli`) and shows the file's own answer, never this computer's.
+//! provider CLIs belong to the machine the Server runs on. Settings edits
+//! one machine's at a time, its page's own state (`Environment::machine`):
+//! this computer's from its file, another machine's through its Server
+//! (`Op::ServerDefaults`, `Op::Cli`), showing the file's own answer, never
+//! this computer's.
 
 use super::*;
 use ferrite_core::protocol::{CliAction, CliBinary, Done};
@@ -13,12 +15,16 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 
 type Answer<T> = Receiver<std::io::Result<T>>;
 
-/// What the window has asked of its machine and not yet heard, and the
-/// defaults it last heard.
+/// The machine Settings edits, what the window has asked of it and not yet
+/// heard, and the defaults it last heard.
 #[derive(Default)]
 pub(crate) struct Environment {
+    /// The machine Settings' defaults and CLIs are about, as Connections
+    /// opened it; `None` is this computer (`CockpitView::settings_machine`).
+    machine: Option<MachineId>,
     /// The machine's defaults as its own `settings.json` last said, kept
-    /// only for a window on a machine: this computer's are the window's.
+    /// only for a machine other than this computer: this computer's are the
+    /// window's.
     /// Edits show at once; the Server's reread replaces them when the last
     /// write lands.
     pub(super) defaults: Option<ServerDefaults>,
@@ -53,15 +59,51 @@ fn cli_line(binary: Option<&CliBinary>) -> SharedString {
 }
 
 impl CockpitView {
-    /// Where the window's Sessions run, as Settings says it.
-    pub(super) fn machine_place(&self, cx: &gpui::App) -> SharedString {
-        if !self.cockpit.read(cx).environment_available() {
-            return "No environment selected".into();
+    /// The machine Settings' defaults and CLIs are about: the one
+    /// Connections opened, while the window holds it; else this computer;
+    /// else the first machine the window holds.
+    pub(super) fn settings_machine(&self, cx: &gpui::App) -> Option<MachineId> {
+        let cockpit = self.cockpit.read(cx);
+        self.environment
+            .machine
+            .filter(|machine| cockpit.machines().any(|held| held == *machine))
+            .or(cockpit.this_computer())
+            .or_else(|| cockpit.machines().next())
+    }
+
+    /// Have Settings edit `machine`'s defaults and CLIs: what it heard of
+    /// the one before is forgotten, and `machine` asked anew.
+    pub(super) fn edit_machine_settings(&mut self, machine: MachineId, cx: &mut Context<Self>) {
+        if self.settings_machine(cx) == Some(machine) {
+            return;
         }
-        match self.bridge_on_screen(cx) {
-            Some(machine) => machine.name().to_string().into(),
+        self.environment = Environment {
+            machine: Some(machine),
+            ..Environment::default()
+        };
+        self.cli_versions = None;
+        self.ask_server_defaults(cx);
+        self.probe_cli_versions(cx);
+        cx.notify();
+    }
+
+    /// Where the Sessions Settings is about run, as Settings says it.
+    pub(super) fn machine_place(&self, cx: &gpui::App) -> SharedString {
+        let Some(machine) = self.settings_machine(cx) else {
+            return "No environment selected".into();
+        };
+        match self.cockpit.read(cx).bridge(machine) {
+            Some(bridge) => bridge.name().to_string().into(),
             None => "this computer".into(),
         }
+    }
+
+    /// Whether Settings is about a machine other than this computer, or
+    /// none: with no machine held, this computer's files stand in for
+    /// nothing.
+    fn settings_elsewhere(&self, cx: &gpui::App) -> bool {
+        self.settings_machine(cx)
+            .is_none_or(|machine| self.elsewhere(machine, cx))
     }
 
     /// What a machine's failure reads as: a Server from before the command
@@ -77,7 +119,7 @@ impl CockpitView {
 
     /// Read the machine's defaults, unless a read is out.
     pub(super) fn ask_server_defaults(&mut self, cx: &mut gpui::App) {
-        if self.elsewhere(self.on_screen(cx), cx) && self.environment.defaults_asked.is_empty() {
+        if self.settings_elsewhere(cx) && self.environment.defaults_asked.is_empty() {
             self.send_defaults(None, cx);
         }
     }
@@ -86,7 +128,13 @@ impl CockpitView {
     /// Whether it went out.
     fn send_defaults(&mut self, set: Option<ServerDefaults>, cx: &mut gpui::App) -> bool {
         let write = set.is_some();
-        match self.cockpit.update(cx, |cockpit, _| cockpit.server_defaults(set)) {
+        let Some(machine) = self.settings_machine(cx) else {
+            return false;
+        };
+        match self
+            .cockpit
+            .update(cx, |cockpit, _| cockpit.server_defaults(machine, set))
+        {
             Ok(answer) => {
                 self.environment
                     .defaults_asked
@@ -103,7 +151,7 @@ impl CockpitView {
     /// The defaults Settings shows: this computer's from its own file, or
     /// the machine's once it has said them.
     pub(super) fn shown_defaults(&self, cx: &gpui::App) -> Option<ServerDefaults> {
-        if self.elsewhere(self.on_screen(cx), cx) {
+        if self.settings_elsewhere(cx) {
             self.environment.defaults.clone()
         } else {
             Some(self.prefs.settings.server_defaults())
@@ -124,7 +172,7 @@ impl CockpitView {
         change: impl FnOnce(&mut ServerDefaults),
         cx: &mut Context<Self>,
     ) {
-        if !self.elsewhere(self.on_screen(cx), cx) {
+        if !self.settings_elsewhere(cx) {
             self.change_settings(
                 |settings| {
                     let mut defaults = settings.server_defaults();
@@ -160,7 +208,7 @@ impl CockpitView {
 
     /// What stands in for the machine's rows until it has said them.
     fn defaults_unread(&self, cx: &gpui::App) -> settings::Row {
-        if !self.cockpit.read(cx).environment_available() {
+        if self.settings_machine(cx).is_none() {
             return settings::fact(
                 "Defaults",
                 "Enable or add an environment in Connections".into(),
@@ -322,9 +370,17 @@ impl CockpitView {
         )]
     }
 
+    /// The CLIs of the machine Settings is about, asked `action`.
+    fn ask_clis(&mut self, action: CliAction, cx: &mut Context<Self>) -> std::io::Result<Answer<Done>> {
+        let machine = self
+            .settings_machine(cx)
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, "No environment selected"))?;
+        self.cockpit.update(cx, |cockpit, _| cockpit.cli(machine, action))
+    }
+
     /// Ask the machine's CLIs their versions.
     pub(super) fn probe_cli_versions(&mut self, cx: &mut Context<Self>) {
-        match self.cockpit.update(cx, |cockpit, _| cockpit.cli(CliAction::Versions)) {
+        match self.ask_clis(CliAction::Versions, cx) {
             Ok(answer) => self.environment.versions = Some(answer),
             Err(error) => {
                 ferrite_core::log!("could not ask the CLIs' versions: {error}");
@@ -336,7 +392,7 @@ impl CockpitView {
 
     /// Ask the machine to check its CLIs against the registry.
     pub(super) fn check_clis(&mut self, cx: &mut Context<Self>) {
-        match self.cockpit.update(cx, |cockpit, _| cockpit.cli(CliAction::Check)) {
+        match self.ask_clis(CliAction::Check, cx) {
             Ok(answer) => self.environment.check = Some(answer),
             Err(error) => {
                 let auto = self.prefs.settings.auto_update_clis;
@@ -351,7 +407,7 @@ impl CockpitView {
 
     /// Have the machine install `provider`'s newest CLI.
     pub(super) fn install_cli(&mut self, provider: Provider, cx: &mut Context<Self>) {
-        match self.cockpit.update(cx, |cockpit, _| cockpit.cli(CliAction::Update { provider })) {
+        match self.ask_clis(CliAction::Update { provider }, cx) {
             Ok(answer) => self.environment.updates.push((provider, answer)),
             Err(error) => self.cli_updates.updated(provider, Err(error.to_string())),
         }
@@ -485,7 +541,10 @@ impl CockpitView {
                 Ok(Done::CliUpdated { binary, .. }) => {
                     // Open Threads restart on the new CLI as each goes idle,
                     // and the pickers ask for its menu now.
-                    self.cockpit.update(cx, |cockpit, _| cockpit.cli_replaced(provider));
+                    if let Some(machine) = self.settings_machine(cx) {
+                        self.cockpit
+                            .update(cx, |cockpit, _| cockpit.cli_replaced(machine, provider));
+                    }
                     self.cli_updates.updated(provider, Ok(binary.version));
                     self.probe_cli_versions(cx);
                 }

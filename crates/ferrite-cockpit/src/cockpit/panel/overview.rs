@@ -187,7 +187,13 @@ impl CockpitView {
         };
         let answer = self
             .cockpit
-            .update(cx, |cockpit, _| cockpit.review_diff(&workspace, ferrite_reviewr::ferrite::Read::Uncommitted));
+            .update(cx, |cockpit, _| {
+                cockpit.review_diff(
+                    thread.machine(),
+                    &workspace,
+                    ferrite_reviewr::ferrite::Read::Uncommitted,
+                )
+            });
         self.overview.update(cx, |overview, cx| {
             overview.wait_hunks(thread, path, stat, &workspace, answer, cx)
         });

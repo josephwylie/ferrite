@@ -1182,9 +1182,14 @@ impl CockpitView {
             .github
             .repository
             .map(|repository| GitHubAsk::Labels { repository });
+        let Some(machine) = self.factory_machine() else {
+            return;
+        };
         for ask in std::iter::once(GitHubAsk::Repositories).chain(labels) {
             if starts.read(cx).unasked(&ask) {
-                let asked = self.cockpit.update(cx, |cockpit, _| cockpit.github_names(ask.clone()));
+                let asked = self
+                    .cockpit
+                    .update(cx, |cockpit, _| cockpit.github_names(machine, ask.clone()));
                 starts.update(cx, |starts, cx| starts.listen(ask, asked, cx));
             }
         }

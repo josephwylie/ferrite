@@ -95,7 +95,12 @@ impl CockpitView {
                 self.unsent.drafts.keep_thread(thread, content)
             }
             (PaneIdentity::Draft(id), Some(draft)) => {
-                self.unsent.drafts.keep_fresh(id, &draft.binding, content)
+                let cockpit = self.cockpit.read(cx);
+                let Some(machine) = cockpit.saved_as(draft.binding.project().machine()) else {
+                    return false;
+                };
+                let binding = draft.binding.saved(machine.clone());
+                self.unsent.drafts.keep_fresh(id, &binding, content)
             }
             (PaneIdentity::Draft(_), None) => false,
         }
@@ -160,7 +165,8 @@ impl CockpitView {
 
     /// The launch's own Panes are up: reopen the new Panes the last launch
     /// left unsent, each aimed where it was, and leave the focus where the
-    /// launch put it.
+    /// launch put it. One whose machine the window does not hold has
+    /// nowhere to open.
     pub(super) fn reopen_unsent_drafts(&mut self, cx: &mut Context<Self>) {
         let kept = self.unsent.drafts.take_fresh();
         if kept.is_empty() {
@@ -168,7 +174,14 @@ impl CockpitView {
         }
         let focused = self.cockpit.read(cx).roster().focused();
         for fresh in kept {
-            let id = self.spawn_draft_pane(fresh.binding, cx);
+            let Some(project) = self
+                .cockpit
+                .read(cx)
+                .resolve_project(fresh.binding.machine(), fresh.binding.project())
+            else {
+                continue;
+            };
+            let id = self.spawn_draft_pane(fresh.binding.bind(project), cx);
             if let Some(pane) = self
                 .panes
                 .iter()

@@ -120,7 +120,7 @@ fn close_reopen_and_files_preferences_restore_with_the_saved_panel(cx: &mut Test
 fn a_deleted_threads_working_set_is_saved_away_once(cx: &mut TestAppContext) {
     let (mut core, _fake, checkout) = bound_cockpit("panel-deleted-save", Provider::Claude);
     let other = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: checkout.clone() })
+        .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: checkout.clone() })
         .unwrap();
     let prefs = preferences("panel-deleted-save-settings");
     let dir = prefs.dir.clone();

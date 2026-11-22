@@ -93,7 +93,7 @@ fn a_starting_session_is_not_working(cx: &mut TestAppContext) {
         Box::new(Starting(Vec::new())),
     );
     let thread = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     assert!(core.thread(thread).unwrap().starting());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));

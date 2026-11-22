@@ -616,12 +616,12 @@ fn a_focus_asked_while_a_fork_is_on_its_way_lands_the_window(cx: &mut TestAppCon
     let (view, fake, cx) = answered("side-chat-focus-meanwhile", cx);
     let owner = owner(&view, cx);
     assert!(
-        view.read_with(cx, |view, cx| view.cockpit.read(cx).names_fork_owners()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).names_fork_owners(view.cockpit.read(cx).first_machine())),
         "a Server that names a fork's owner"
     );
     let other = view.update(cx, |view, cx| {
         view.cockpit
-            .update(cx, |cockpit, _| cockpit.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() }))
+            .update(cx, |cockpit, _| cockpit.open(cockpit.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() }))
             .unwrap()
     });
     tick(cx);

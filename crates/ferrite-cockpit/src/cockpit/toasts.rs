@@ -5,10 +5,10 @@
 //! Its state lives in a view of its own (ADR 0041), `ToastsView`: what the
 //! Inbox has heard of each machine, what waits out its delay, the toasts
 //! standing and the system notifications posted (`NeedsYou`), and the
-//! toast on its way out (`ToastStage`). It hears the Notices and the
-//! machines itself (`tend`), as the client's model says something
-//! `Arrived`, the window or its machines notify, and on a clock of its own
-//! for the next alert's delay or toast's end. What it rings it hands the
+//! toast on its way out (`ToastStage`). It hears every machine's Notices
+//! itself (`tend`), as the client's model says something `Arrived`, the
+//! window notifies, and on a clock of its own for the next alert's delay
+//! or toast's end. What it rings it hands the
 //! window as a `ToastEvent` (the chime, the system notifications posted and
 //! taken back). The float reads its toast's row as it tends, and the
 //! window hands it where it hangs as it lays out its columns
@@ -23,12 +23,14 @@ use crate::float::{self, FloatPlace};
 use crate::notifications::{Alert, QuickAnswer, ToastStage};
 use crate::system_notifications::Posting;
 use ferrite_core::notifications::{DecisionNoticeId, NoticeId, Notifications};
+use ferrite_core::cockpit::OnMachine;
+use ferrite_core::MachineId;
 use std::time::Instant;
 
 /// What the toasts ask of the window.
 pub(crate) enum ToastEvent {
-    /// `Allow 1` / `Deny 3` on an approval's toast.
-    Answer(DecisionNoticeId, QuickAnswer),
+    /// `Allow 1` / `Deny 3` on an approval's toast, on its machine.
+    Answer(MachineId, DecisionNoticeId, QuickAnswer),
     /// `Open ⏎`: what the toast is about.
     Open(Verb),
     /// What a `tend` rang and what went, for the window to play and post.
@@ -80,8 +82,8 @@ pub(crate) struct ToastsView {
     /// When the alerts next have work of the clock's own, and the timer
     /// that tends them then (`set_clock`).
     clock: Option<(Instant, gpui::Task<()>)>,
-    /// The Cockpit's notify, its machines' and the model's `Arrived`, each
-    /// of which has the toasts tend.
+    /// The Cockpit's notify and the model's `Arrived`, each of which has
+    /// the toasts tend.
     watching: Vec<gpui::Subscription>,
 }
 
@@ -93,8 +95,8 @@ impl ToastsView {
         model: Entity<Cockpit>,
         cx: &mut Context<Self>,
     ) -> Self {
-        // The Cockpit is still being made, and its machines are handed to
-        // it after: the float first looks once it is.
+        // The Cockpit is still being made: the float first looks once it
+        // is.
         let toasts = cx.weak_entity();
         cx.defer(move |cx| {
             toasts.update(cx, |toasts, cx| toasts.watch(cx)).ok();
@@ -114,27 +116,21 @@ impl ToastsView {
         let Some(cockpit) = self.cockpit.upgrade() else {
             return;
         };
-        let machines = cockpit.read(cx).machines();
         self.watching = vec![
             cx.observe(&cockpit, |toasts, _, cx| toasts.tend(cx)),
             cx.subscribe(&self.model, |toasts, _, _: &Arrived, cx| toasts.tend(cx)),
         ];
-        self.watching.extend(
-            machines.map(|machines| cx.observe(&machines, |toasts, _, cx| toasts.tend(cx))),
-        );
         self.tend(cx);
     }
 
-    /// Hear what the Notices and the machines say, ring what waited out
-    /// its delay, take down what went, and set the clock for the next of
-    /// them; then look. It runs as the model says something `Arrived`,
-    /// the window or its machines notify, and on that clock, never on a
-    /// pump that brought nothing.
+    /// Hear what every machine's Notices say, ring what waited out its
+    /// delay, take down what went, and set the clock for the next of them;
+    /// then look. It runs as the model says something `Arrived`, the window
+    /// notifies, and on that clock, never on a pump that brought nothing.
     ///
     /// The operator is looking at an event, and nothing rings for it, no
     /// system notification either, while the window has focus and its
     /// Thread is on the board (focus-notify's rule, ADR 0005's update).
-    /// Nobody looks at a machine off screen.
     fn tend(&mut self, cx: &mut Context<Self>) {
         let Some(cockpit) = self.cockpit.upgrade() else {
             return;
@@ -144,33 +140,20 @@ impl ToastsView {
         let now = cx.background_executor().now();
         let view = cockpit.read(cx);
         let needs_you = &mut self.needs_you;
-        let machines = view.machines.as_ref().map(|machines| machines.read(cx));
         let model = self.model.read(cx);
-        // Until its Server answers, a Cockpit's Notices are none, not news:
-        // hearing them would forget the requests heard of it, and judging
-        // its alerts by them would drop the ones the window brought along.
-        let here = view.attached(cx).then(|| model.notifications());
-        if let Some(here) = here {
-            let operators = |thread: ThreadId| model.operators(here.key(thread));
-            let (fresh, requests) = news(here.reading(), needs_you.presented(None), &operators);
-            needs_you.hear(None, fresh, requests, now);
+        // Until its Server answers, a machine's Notices are none, not news:
+        // hearing them would forget the requests heard of it. A machine
+        // other than this computer is first heard quietly: what stood
+        // before the window held it is not news either.
+        for notifications in model.every_notifications() {
+            let machine = notifications.machine();
+            if !view.attached(machine, cx) {
+                continue;
+            }
+            let (fresh, requests) = news(notifications, needs_you.presented(machine), model);
+            needs_you.hear(machine, !model.local(machine), fresh, requests, now);
         }
-        for away in machines.iter().flat_map(|machines| machines.off_screen()) {
-            let operators = |thread: ThreadId| away.status.operators(thread);
-            let (fresh, requests) = news(
-                away.notifications,
-                needs_you.presented(Some(&away.key)),
-                &operators,
-            );
-            needs_you.hear(Some(away.key), fresh, requests, now);
-        }
-        let live = |alert: &Alert| {
-            super::machines::wanted(alert, here.map(|here| here.reading()), machines)
-        };
-        // An alert of the machine on screen names a Thread of its Notices.
-        let on_screen = |alert: &Alert| {
-            (alert.away.is_none()).then(|| model.notifications().key(alert.thread))
-        };
+        let live = |alert: &Alert| super::machines::wanted(alert, view, cx);
         // A system notification the operator has since read, or whose
         // request resolved, is taken back out of the notification centre.
         let withdraw: Vec<String> = needs_you
@@ -187,9 +170,7 @@ impl ToastsView {
                 .into_iter()
                 .filter_map(|index| view.panes[index].thread())
                 .collect();
-            let in_view = |alert: &Alert| {
-                present && on_screen(alert).is_some_and(|thread| on_board.contains(&thread))
-            };
+            let in_view = |alert: &Alert| present && on_board.contains(&alert.thread);
             let ring = needs_you.ring(now, &live, &in_view);
             // Alerts that ring together chime once, needs-you over done.
             let settings = &view.prefs.settings;
@@ -197,7 +178,7 @@ impl ToastsView {
                 .rang
                 .iter()
                 .filter(|alert| {
-                    view.alert_provider(alert, machines, cx)
+                    view.alert_provider(alert, cx)
                         .is_some_and(|provider| settings.sounds_for(provider))
                 })
                 .map(|alert| {
@@ -215,10 +196,10 @@ impl ToastsView {
                     .rang
                     .into_iter()
                     .filter(|alert| {
-                        let focused = focused.is_some() && on_screen(alert) == focused;
+                        let focused = focused == Some(alert.thread);
                         crate::system_notifications::wanted(focused, present)
                     })
-                    .filter_map(|alert| Some((view.system_posting(&alert, machines, wall, cx)?, alert)))
+                    .filter_map(|alert| Some((view.system_posting(&alert, wall, cx)?, alert)))
                     .collect();
             }
         }
@@ -270,9 +251,8 @@ impl ToastsView {
             return;
         };
         let view = cockpit.read(cx);
-        let machines = view.machines.as_ref().map(|machines| machines.read(cx));
         let row = self.needs_you.toasts().last().and_then(|toast| {
-            view.alert_row(&toast.alert, machines, ferrite_core::clock::system_time(), cx)
+            view.alert_row(&toast.alert, ferrite_core::clock::system_time(), cx)
         });
         if self.inputs.row != row {
             self.inputs.row = row;
@@ -324,7 +304,7 @@ impl ToastsView {
             let _ = this.update(cx, |toasts, cx| {
                 toasts.stage.dismiss();
                 cx.emit(match verb {
-                    Verb::Answer(id, answer) => ToastEvent::Answer(id, answer),
+                    Verb::Answer(machine, id, answer) => ToastEvent::Answer(machine, id, answer),
                     verb => ToastEvent::Open(verb),
                 });
             });
@@ -401,7 +381,9 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match event {
-            ToastEvent::Answer(id, answer) => self.answer_from_toast(id.clone(), *answer, window, cx),
+            ToastEvent::Answer(machine, id, answer) => {
+                self.answer_from_toast(*machine, id.clone(), *answer, window, cx)
+            }
             ToastEvent::Open(verb) => self.notice_verb(verb.clone(), cx),
             ToastEvent::Rang(Rang {
                 withdraw,
@@ -421,10 +403,11 @@ impl CockpitView {
         }
     }
 
-    /// Take one toast down (its button, or the list, acted on it).
-    pub(super) fn drop_toast(&mut self, target: &RowTarget, cx: &mut Context<Self>) {
+    /// Take one toast of `machine` down (its button, or the list, acted on
+    /// it).
+    pub(super) fn drop_toast(&mut self, machine: MachineId, target: &RowTarget, cx: &mut Context<Self>) {
         self.toasts.update(cx, |toasts, cx| {
-            toasts.needs_you.drop_toast(target);
+            toasts.needs_you.drop_toast(machine, target);
             toasts.look_again(cx);
         });
     }
@@ -457,15 +440,16 @@ impl CockpitView {
     }
 }
 
-type FreshNotice = (NoticeId, ThreadId, bool);
-type LiveRequest = (DecisionNoticeId, bool);
+type FreshNotice = (NoticeId, ThreadKey, bool);
+type LiveRequest = (DecisionNoticeId, ThreadKey, bool);
 
-/// What a machine's Needs-you state may not have heard yet: its Notices born after
-/// `after` (id, Thread, read) and its live requests (id, read).
+/// What a machine's Needs-you state may not have heard yet: its Notices
+/// born after `after` (id, Thread, read) and its live requests (id,
+/// Thread, read).
 fn news(
-    notifications: &Notifications,
+    notifications: OnMachine<'_, Notifications>,
     after: Option<NoticeId>,
-    operators: &dyn Fn(ThreadId) -> bool,
+    model: &Cockpit,
 ) -> (Vec<FreshNotice>, Vec<LiveRequest>) {
     // An owned Thread's Notices and requests ring nothing: its owner
     // (a Task, a Factory) tells the operator in its own way (ADR 0037).
@@ -473,17 +457,18 @@ fn news(
     let fresh = notifications
         .since(after)
         .map(|notice| {
-            (
-                notice.id,
-                notice.thread,
-                notice.read || !operators(notice.thread),
-            )
+            let thread = notifications.key(notice.thread);
+            (notice.id, thread, notice.read || !model.operators(thread))
         })
         .collect();
     let requests = notifications
         .decisions()
-        .filter(|notice| operators(notice.id.thread))
-        .map(|notice| (notice.id.clone(), notice.read))
+        .filter_map(|notice| {
+            let thread = notifications.key(notice.id.thread);
+            model
+                .operators(thread)
+                .then(|| (notice.id.clone(), thread, notice.read))
+        })
         .collect();
     (fresh, requests)
 }

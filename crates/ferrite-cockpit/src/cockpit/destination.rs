@@ -12,7 +12,7 @@ pub(crate) struct Destination {
 pub(crate) enum Shows {
     /// A Project's Factory board (ADR 0037): which Project's, and its view,
     /// which keeps what the Factory keeps while it shows.
-    Factory(ProjectId, Entity<factory::FactoryView>),
+    Factory(ProjectKey, Entity<factory::FactoryView>),
     /// The PRs list. What it holds lives on `PrsView`, kept for the next
     /// visit.
     Prs,
@@ -28,7 +28,7 @@ impl CockpitView {
     }
 
     /// The Project whose Factory stands in the board's place.
-    pub(super) fn factory_project(&self) -> Option<ProjectId> {
+    pub(super) fn factory_project(&self) -> Option<ProjectKey> {
         match &self.destination.as_ref()?.shows {
             Shows::Factory(project, _) => Some(*project),
             Shows::Prs => None,

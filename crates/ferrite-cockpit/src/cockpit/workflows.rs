@@ -215,8 +215,9 @@ impl CockpitView {
     /// The Workflow shown with `chosen` chosen: it, else the Project's
     /// first.
     fn chosen_workflow<'a>(&self, chosen: Option<&str>, cx: &'a gpui::App) -> Option<&'a Workflow> {
-        let project = self.factory_project()?;
-        let board = self.cockpit.read(cx).factory().reading();
+        let key = self.factory_project()?;
+        let project = key.project();
+        let board = self.cockpit.read(cx).factory(key.machine()).reading();
         chosen
             .and_then(|id| board.workflow(id))
             .filter(|workflow| workflow.project == project)
@@ -234,13 +235,15 @@ impl CockpitView {
         self.shown_workflow(cx)?.draft.step(step).cloned()
     }
 
-    /// One Workflow ask; a refusal is said in the view's note.
+    /// One Workflow ask, on the machine of the Factory shown; a refusal is
+    /// said in the view's note.
     pub(crate) fn workflow_ask(
         &mut self,
         action: WorkflowAction,
         cx: &mut Context<Self>,
     ) -> Option<Done> {
-        let done = match self.cockpit.update(cx, |cockpit, _| cockpit.workflow(action)) {
+        let machine = self.factory_machine()?;
+        let done = match self.cockpit.update(cx, |cockpit, _| cockpit.workflow(machine, action)) {
             Ok(done) => {
                 self.update_factory(cx, |view, _| view.note = None);
                 done
@@ -262,7 +265,13 @@ impl CockpitView {
             return;
         };
         if let Some(Done::Workflow { workflow }) =
-            self.workflow_ask(WorkflowAction::Create { project, template }, cx)
+            self.workflow_ask(
+                WorkflowAction::Create {
+                    project: project.project(),
+                    template,
+                },
+                cx,
+            )
         {
             self.select_workflow(workflow, cx);
         }

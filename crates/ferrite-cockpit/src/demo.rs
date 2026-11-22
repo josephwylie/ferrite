@@ -1118,6 +1118,10 @@ pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider) {
     let parked = core.parked().map(|threads| threads.len()).unwrap_or(0);
     let mut open = threads_for(core, revivable.min(parked), first).len();
     let checkout = std::env::current_dir().unwrap_or_else(|_| ".".into());
+    // The demo seeds this computer's own Threads.
+    let Some(machine) = core.this_computer() else {
+        return;
+    };
     while open < panes {
         let provider = match (open % 2 == 0, first) {
             (true, first) => first,
@@ -1127,7 +1131,7 @@ pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider) {
         let choice = WorkspaceChoice::Main {
             checkout: checkout.clone(),
         };
-        match core.open(provider, choice) {
+        match core.open(machine, provider, choice) {
             Ok(_) => open += 1,
             Err(e) => {
                 ferrite_core::log!("could not open a thread: {e}");
@@ -1145,8 +1149,11 @@ pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider) {
 /// it is owed — newest, because that is what the operator was last looking
 /// at — and opens a new one only when the store has none.
 pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> Vec<ThreadKey> {
-    // Keep a fixture run scoped to its launch directory.
-    let project = cockpit.register_project(&here()).ok();
+    // A fixture run is this computer's, scoped to its launch directory.
+    let Some(machine) = cockpit.this_computer() else {
+        return Vec::new();
+    };
+    let project = cockpit.register_project(machine, &here()).ok();
     let mut parked = cockpit.parked().unwrap_or_default();
     parked.reverse();
     // Only this Project's parked Threads come back into the fixture.
@@ -1173,7 +1180,7 @@ pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> 
                     }
                 }
             }
-            None => match cockpit.open(want, WorkspaceChoice::Main { checkout: here() }) {
+            None => match cockpit.open(machine, want, WorkspaceChoice::Main { checkout: here() }) {
                 Ok(id) => shown.push(id),
                 Err(e) => {
                     ferrite_core::log!("could not open a thread: {e}");

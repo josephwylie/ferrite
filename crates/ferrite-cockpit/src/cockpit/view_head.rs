@@ -37,7 +37,7 @@ impl CockpitView {
             let prs = self.prs.read(cx);
             let project = prs
                 .project
-                .and_then(|project| self.cockpit.read(cx).registry().reading().project(project))
+                .and_then(|project| self.cockpit.read(cx).project(project))
                 .map(|project| SharedString::from(project.title.clone()));
             parts.extend(prs.head(project));
         } else if !self.empty_board_shown(cx) {
@@ -198,7 +198,6 @@ impl CockpitView {
         let project = self
             .cockpit
             .read(cx)
-            .registry()
             .project(project)
             .map(|project| SharedString::from(project.title.clone()))
             .unwrap_or_else(|| "Project".into());

@@ -1084,6 +1084,7 @@ impl CockpitView {
                 let serving = open.transcript().model().map(str::to_string);
                 let locked = open.first_prompt_sent();
                 let (rows, _) = self.provider_rows(
+                    thread.machine(),
                     current,
                     chosen.as_deref(),
                     serving.as_deref(),
@@ -1112,7 +1113,7 @@ impl CockpitView {
                     })
                     .unwrap_or_default();
                 (
-                    self.listable(rows, current, serving.as_deref(), cx),
+                    self.listable(thread.machine(), rows, current, serving.as_deref(), cx),
                     efforts,
                     label,
                     current,
@@ -1128,10 +1129,11 @@ impl CockpitView {
                 let choice = draft.binding.provider();
                 let current = choice.provider;
                 let model = choice.model.clone();
-                let (rows, _) = self.provider_rows(current, model.as_deref(), None, false, |choice| {
+                let machine = draft.binding.project().machine();
+                let (rows, _) = self.provider_rows(machine, current, model.as_deref(), None, false, |choice| {
                     Consequence::Band(BandChoice::Provider(choice))
                 }, cx);
-                let announced = self.cockpit.read(cx).announced_models(current);
+                let announced = self.cockpit.read(cx).announced_models(machine, current);
                 let label =
                     ferrite_core::providers::models::footer_name(current, model.as_deref(), &announced);
                 let efforts = self
@@ -1149,7 +1151,7 @@ impl CockpitView {
                         })
                     })
                     .unwrap_or_default();
-                (self.listable(rows, current, None, cx), efforts, label, current, None, None)
+                (self.listable(machine, rows, current, None, cx), efforts, label, current, None, None)
             }
         };
         Self::hold_tuning_rows(&mut rows, hold);
@@ -1185,7 +1187,14 @@ impl CockpitView {
     /// and each row's mark name the Provider), and the CLI's own `Default`
     /// only while nothing else can carry the ✓ — a known serving model
     /// takes it instead (Claude's model menu).
-    fn listable(&self, rows: Vec<Row>, current: Provider, serving: Option<&str>, cx: &gpui::App) -> Vec<Row> {
+    fn listable(
+        &self,
+        machine: ferrite_core::MachineId,
+        rows: Vec<Row>,
+        current: Provider,
+        serving: Option<&str>,
+        cx: &gpui::App,
+    ) -> Vec<Row> {
         let mut rows: Vec<Row> = rows
             .into_iter()
             .filter(|row| row_choice(row).is_some())
@@ -1201,7 +1210,7 @@ impl CockpitView {
             .and_then(|serving| {
                 self.cockpit
                     .read(cx)
-                    .model_catalog(current)
+                    .model_catalog(machine, current)
                     .into_iter()
                     .find(|model| model.value != "default" && model.is(serving))
             })

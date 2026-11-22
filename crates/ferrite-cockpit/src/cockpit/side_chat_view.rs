@@ -275,7 +275,7 @@ impl CockpitView {
     /// way, and then the one Thread waiting on a fork takes it: with two
     /// waiting it could be either's. Delete once no such Server runs.
     pub(super) fn unnamed_fork_owner(&self, thread: ThreadKey, cx: &gpui::App) -> Option<ThreadKey> {
-        if self.cockpit.read(cx).names_fork_owners() {
+        if self.cockpit.read(cx).names_fork_owners(thread.machine()) {
             return None;
         }
         self.side_chat
