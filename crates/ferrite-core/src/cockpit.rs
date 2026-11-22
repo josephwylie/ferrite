@@ -2105,6 +2105,41 @@ impl Cockpit {
         }
     }
 
+    /// Whether a PR watch can start here: only a Server runs the watcher
+    /// (T3's `canStartWatch`). Any window can stop one.
+    pub fn starts_pr_watches(&self) -> bool {
+        matches!(self.link, Link::Server(_))
+    }
+
+    /// Watch the PR at `url` for `thread`'s agent, or stop watching it
+    /// (ADR 0046), as T3's details card and PR menu do: whether it is
+    /// watched once the Server has it. A new watch is the Server's
+    /// watcher's, which reads the PR first; an Engine in this process only
+    /// stops one.
+    pub fn watch_pr(
+        &mut self,
+        thread: ThreadId,
+        url: &str,
+        watching: bool,
+    ) -> io::Result<Receiver<io::Result<bool>>> {
+        let op = Op::WatchPr {
+            thread,
+            url: url.to_string(),
+            watching,
+        };
+        match &mut self.link {
+            Link::Server(server) => server.watch_pr(op),
+            Link::InProcess(_) => {
+                let done = self.act(op);
+                Ok(read_here(move || match done {
+                    Ok(Some(Done::PrWatch { watching })) => Ok(watching),
+                    Ok(_) => Err("the server answered something else".to_string()),
+                    Err(error) => Err(error.message),
+                }))
+            }
+        }
+    }
+
     /// What a GitHub start's picker lists, read by `gh` where the Server
     /// runs (or here, when this window runs its agents itself).
     pub fn github_names(
@@ -2707,6 +2742,15 @@ impl Cockpit {
         self.tell(Op::Notice {
             action: NoticeAction::Unseen { thread },
         });
+    }
+
+    /// A fixture world's PR watches for `thread` (ADR 0046), as the
+    /// Server's watcher would have saved them.
+    pub fn fixture_pr_watch(&mut self, thread: ThreadId, fact: crate::pr_watch::WatchFact) {
+        if let Err(error) = self.in_process().set_pr_watch(thread, fact) {
+            crate::log!("thread {thread}: a fixture watch was not saved: {error}");
+        }
+        self.settle();
     }
 
     pub fn fixture_backdate_notices(&mut self, thread: ThreadId, at: std::time::SystemTime) {

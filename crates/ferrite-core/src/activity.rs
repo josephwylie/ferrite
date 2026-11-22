@@ -1062,6 +1062,11 @@ pub struct Activity {
     connected: bool,
     limited: bool,
     main_operator_turn: bool,
+    /// What the Server's PR watching holds of the Thread (ADR 0046): not
+    /// the provider's word, so no input carries it. Its owner sets it
+    /// (`set_watching`): the Engine from the Thread's watches, a window
+    /// from the digest.
+    watching: crate::pr_watch::Watching,
 }
 
 impl Default for Activity {
@@ -1087,7 +1092,16 @@ impl Activity {
             connected: false,
             limited: false,
             main_operator_turn: false,
+            watching: Default::default(),
         }
+    }
+
+    /// Say what the Server's watching holds of the Thread. Answers whether
+    /// it moved.
+    pub fn set_watching(&mut self, watching: crate::pr_watch::Watching) -> bool {
+        let moved = self.watching != watching;
+        self.watching = watching;
+        moved
     }
 
     pub fn view(&self) -> ActivityView<'_> {
@@ -2280,6 +2294,10 @@ impl<'a> ActivityView<'a> {
     }
     pub fn limited(self) -> bool {
         self.activity.limited
+    }
+    /// What the Server's PR watching holds of the Thread (ADR 0046).
+    pub fn watching(self) -> &'a crate::pr_watch::Watching {
+        &self.activity.watching
     }
     pub fn working_descendants(self) -> usize {
         self.activity

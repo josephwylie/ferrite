@@ -168,6 +168,8 @@ icons![
     // A transcript work row's gutter (T3 Code's `TimelineToolActivityIcon`).
     "square-pen",
     "eye",
+    // A watched PR's eye in the details card, slashed on hover (T3's).
+    "eye-off",
     "brain",
     "hammer",
     "wrench",
@@ -388,6 +390,8 @@ pub const CHART_NO_AXES_COLUMN: &str = "icons/chart-no-axes-column.svg";
 /// A transcript work row's glyphs (`tools::ToolIcon`), Lucide's.
 pub const SQUARE_PEN: &str = "icons/square-pen.svg";
 pub const EYE: &str = "icons/eye.svg";
+/// A watched PR's eye as a press stops it (T3's `EyeOffIcon`).
+pub const EYE_OFF: &str = "icons/eye-off.svg";
 pub const BRAIN: &str = "icons/brain.svg";
 pub const HAMMER: &str = "icons/hammer.svg";
 pub const WRENCH: &str = "icons/wrench.svg";
@@ -743,6 +747,7 @@ mod tests {
         UNDO_2,
         ALARM_CLOCK,
         ALARM_CLOCK_OFF,
+        EYE_OFF,
         FOLDER_PLUS,
         SQUARE_PEN,
         LIST_FILTER,

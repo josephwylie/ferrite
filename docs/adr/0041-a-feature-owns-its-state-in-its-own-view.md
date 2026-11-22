@@ -627,7 +627,11 @@ write, its focus and scroll, its density measurements, and where its
 canvas, card and opener were laid out. Whether it stands beside the
 transcript, and whether its `Previous agents` is unfolded, are the
 Thread's saved Surfaces (`details_inline_open`, `previous_agents_open`). Its rows the root builds in `details_content`
-into plain values that draw themselves (`cockpit/details/content.rs`).
+into plain values that draw themselves (`cockpit/details/content.rs`); a
+watched PR's eye is one more value on its `PrBlock`, the watch's URL from
+the Thread's digest (`Facts::watched_pr`), and its press calls the root's
+`watch_pr` (`cockpit/pr_watching.rs`), as the palette and the PR's context
+menu do.
 What stays on the root is the root's: moving the keyboard between the card
 and the Composer, fitting the card to the Pane's width as the columns
 move, and closing a card whose Pane lost the focus. A view would move
@@ -776,7 +780,14 @@ Thread's count goes in `forget_gone_threads`. The ask (`check_pr`), which
 the palette, the context menu and opening a Thread make too, and its
 answer (`pr_landed`) stay the root's, and the reading is the Facts'
 (`ask_pr`, `pr_answered`). A view would add events for asks the root makes
-anyway.
+anyway. It stays beside the Server's watch (ADR 0046) because the two read
+different PRs: the card and the nav show a Thread's branch PR whether or
+not its agent watches it, and the Server reads only watched PRs, on its
+own two-minute clock. Serving every Thread's PR from the Server would be a
+`gh` read per open Thread on a clock, where `PrReads` reads on focus and
+on a push. A watched Thread's card follows the watcher without a second
+clock: when the Thread's digest says its watch started, ended or stopped
+holding (`Facts::streamed`), the pump reads the PR again (`check_pr`).
 
 The titler's names on their way are the twelfth. `Titling`
 (`cockpit/titling.rs`) keeps the Threads the titler is naming from their

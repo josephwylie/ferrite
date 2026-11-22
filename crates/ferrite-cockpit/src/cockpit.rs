@@ -51,6 +51,7 @@ pub(crate) mod panel;
 mod parts;
 mod popups;
 mod pr_reads;
+mod pr_watching;
 mod prs_view;
 mod sends;
 mod server;
@@ -2413,9 +2414,13 @@ impl CockpitView {
                 }
             }
             // Native progress can change without appending a transcript row.
-            let settled = self.facts.streamed(self.cockpit.read(cx), update.thread);
-            self.advance_pr_actions(update.thread, settled, cx);
-            turn_ended |= settled;
+            let streamed = self.facts.streamed(self.cockpit.read(cx), update.thread);
+            self.advance_pr_actions(update.thread, streamed.settled, cx);
+            turn_ended |= streamed.settled;
+            if streamed.watch_moved {
+                // The watcher saw the PR move: the card follows it.
+                self.check_pr(update.thread, true, cx);
+            }
         }
         let precise = restarted.is_empty()
             && !swept_change

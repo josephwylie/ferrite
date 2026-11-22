@@ -66,6 +66,11 @@ from T3 and why.
   end it, as in T3. A rate limit pauses the watch. A lost connection is
   tried again without counting. Any other failed read counts, and eight
   in a row give up with T3's give-up wake.
+- **The window hears a watch through the Thread's digest.** `Digest`
+  carries `Watching`: each PR watched, by URL and number, whether it holds
+  the Thread working (T3's `awaited`: `until: merged`, or checks still
+  running on the head), and whether a wake waits. The Server sends a new
+  digest when any of it changes, for a held Thread.
 - **`pr.watch` and `pr.unwatch`** start and stop a watch over the API
   (ADR 0027), for the calling Thread unless one is named. Anyone may call
   them: a watch changes only what news a Thread's agent hears. A new watch is
@@ -109,6 +114,9 @@ from T3 and why.
   watches through `ferrite pr watch`.
 - **The API answers in snake_case** (`was_watching`), as every operation
   of ADR 0027 does.
-- **What the window draws is not here.** The notice row, the Working
-  shelf hold for `until`, and deferring a Notice belong to the window,
-  and come with it.
+- **The operator stops a watch, and starts one where a Server runs.**
+  T3's details card stops a watch from its eye, and its PR menu starts and
+  stops one (`Watch for changes`, `Stop watching`). Ferrite's do the same,
+  and the palette has `Watch PR for changes` and `Stop watching PR`. They
+  ask through `Op::WatchPr` for the window's Thread. A start needs the
+  Server's watcher, so a window with no Server shows only the stop.

@@ -630,6 +630,8 @@ struct Thread {
     /// The Threads it started on other machines (ADR 0047), as its log
     /// holds them.
     delegates: crate::delegate::Delegates,
+    /// A server wake waits to be sent to it (`Engine::send_wake`).
+    wake_waiting: bool,
     /// What waits for the Session to take it.
     awaiting: Awaiting,
     /// The Session was started for use (ADR 0032) rather than asked for:
@@ -769,6 +771,7 @@ impl Thread {
             cap: None,
             pr_watch: Default::default(),
             delegates: Default::default(),
+            wake_waiting: false,
             awaiting: Awaiting::default(),
             woken: false,
             settled_at: None,
@@ -1062,6 +1065,13 @@ impl Thread {
     /// the provider still holds or takes queued prompts.
     fn turn_ahead(&self) -> bool {
         self.busy() || self.activity.view().main_operator_turn() || self.native_queue.pending()
+    }
+
+    /// Tell its Activity what the Server's watching holds of it (ADR 0046):
+    /// a new Activity knows nothing of it. Answers whether that moved.
+    fn sync_watching(&mut self) -> bool {
+        let watching = crate::pr_watch::Watching::of(&self.pr_watch, self.wake_waiting);
+        self.activity.activity.set_watching(watching)
     }
 
     /// Whether work runs behind Main: its Subagents, or its transcript's
@@ -3156,7 +3166,47 @@ impl Engine {
             .set_pr_watch(thread, pr_watch.clone(), Some(&mut state.writer))
             .map_err(io::Error::other)?;
         state.pr_watch = pr_watch;
+        self.watching_moved(thread);
         Ok(())
+    }
+
+    /// A Thread's watches or its waiting wake moved: its digest is refolded
+    /// at once when what it says of them moved, a let-go Thread's held
+    /// again for it.
+    fn watching_moved(&mut self, thread: ThreadId) {
+        let Some(state) = self.threads.get(&thread) else {
+            return;
+        };
+        let told = self
+            .published
+            .get(&thread)
+            .and_then(|published| published.digest.as_ref())
+            .map(|digest| &digest.watching);
+        if !state.held
+            && told == Some(&crate::pr_watch::Watching::of(&state.pr_watch, state.wake_waiting))
+        {
+            return;
+        }
+        self.hold(thread);
+        if self
+            .threads
+            .get_mut(&thread)
+            .is_some_and(Thread::sync_watching)
+        {
+            self.published.entry(thread).or_default().digest_owed = true;
+        }
+    }
+
+    /// Stop watching `target` for `thread`, keeping what its watch told as
+    /// the PR's ended watch (T3's unwatch). Answers whether it was watched.
+    pub fn unwatch_pr(&mut self, thread: ThreadId, target: &crate::pr_watch::Target) -> io::Result<bool> {
+        let mut fact = self
+            .pr_watch(thread)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Thread is not open"))?
+            .clone();
+        let was = fact.end(&target.repository, target.number, None, None);
+        self.set_pr_watch(thread, fact)?;
+        Ok(was)
     }
 
     /// End every PR watch on `thread` with no wake, as stopping or parking
@@ -3245,6 +3295,24 @@ impl Engine {
     /// and its Session is up. One with no Session starts it, and the wake
     /// waits with its sender for the next try.
     pub fn send_wake(&mut self, thread: ThreadId, wake: &crate::wake::Wake) -> WakeTaken {
+        let taken = self.try_wake(thread, wake);
+        self.set_wake_waiting(thread, taken == WakeTaken::NotYet);
+        taken
+    }
+
+    /// Whether a server wake still waits for `thread`: its sender says
+    /// when it dropped one that went stale.
+    pub fn set_wake_waiting(&mut self, thread: ThreadId, waiting: bool) {
+        let Some(state) = self.threads.get_mut(&thread) else {
+            return;
+        };
+        if state.wake_waiting != waiting {
+            state.wake_waiting = waiting;
+            self.watching_moved(thread);
+        }
+    }
+
+    fn try_wake(&mut self, thread: ThreadId, wake: &crate::wake::Wake) -> WakeTaken {
         let Some(state) = self.threads.get(&thread) else {
             return WakeTaken::Gone;
         };
@@ -3531,6 +3599,9 @@ impl Engine {
         // says its Pane changed (below, after the walk).
         for (id, thread) in self.threads.walk_mut() {
             let mut update = PaneUpdate::new(*id);
+            if thread.held && thread.sync_watching() {
+                self.published.entry(*id).or_default().digest_owed = true;
+            }
             if let Some(session) = thread.session.as_ref().and_then(SessionLifecycle::session) {
                 thread.state_changed |= thread.announced.ask(session);
             }

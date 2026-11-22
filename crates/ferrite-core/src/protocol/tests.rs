@@ -238,6 +238,7 @@ fn digest() -> crate::digest::Digest {
             answer: Some("Renamed it everywhere.".into()),
             worked_ms: Some(192_000),
         },
+        watching: Default::default(),
     }
 }
 
@@ -2079,6 +2080,42 @@ fn samples() -> Vec<(&'static str, Sample)> {
             Sample::Server(ServerMessage::Digest {
                 thread,
                 digest: digest(),
+            }),
+        ),
+        (
+            "digest_watching",
+            Sample::Server(ServerMessage::Digest {
+                thread,
+                digest: crate::digest::Digest {
+                    watching: crate::pr_watch::Watching {
+                        prs: vec![crate::pr_watch::WatchedPr {
+                            url: "https://github.com/o/r/pull/48".into(),
+                            number: 48,
+                            holds: true,
+                        }],
+                        wake_waiting: true,
+                    },
+                    ..digest()
+                },
+            }),
+        ),
+        (
+            "command_watch_pr",
+            command(
+                44,
+                Op::WatchPr {
+                    thread,
+                    url: "https://github.com/o/r/pull/48".into(),
+                    watching: false,
+                },
+            ),
+        ),
+        (
+            "reply_pr_watch",
+            Sample::Server(ServerMessage::Reply {
+                id: 44,
+                ok: Some(Done::PrWatch { watching: false }),
+                error: None,
             }),
         ),
         (
