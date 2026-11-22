@@ -171,6 +171,18 @@ Each lands green and proves something.
    an import not opened for a Pane; the Factory is about its Project's
    machine; Settings names the machine whose defaults it edits; and
    Connections and the Server page name theirs.
+
+   A machine turned off and on is the same machine to the window. Its
+   Panels' tabs wait under its saved name and come back keyed by its new
+   `MachineId` (`Surfaces::hold` says each re-hold). A terminal tab reads
+   that its shell ended, and a side chat resumes on its fork, which the
+   roster takes back but no Pane shows. Only a restart drops a tab that
+   ends (`Restart::Ends`). Its drafts are put away and reopen with it,
+   and while it is off nothing the window holds (the nav filter, the
+   standing draft, the launch Project) names its Projects, so a new
+   Thread starts on this computer. Settings names the machine it edits
+   atop its pages about it, as T3's scope sentence does (`Applying
+   settings on box`).
 7. **P7** `feat(nav): one list across machines, a small icon marks a
    Thread on another machine`. The machine headings go, rows merge into
    the sections, and a 14px server glyph sits at the meta line's right
@@ -191,7 +203,8 @@ Each lands green and proves something.
 - Ages and "newest send first" mix machines' clocks once the list merges.
   T3 corrects each environment's clock. That needs an offset per machine,
   taken when its Server says hello.
-- System notification tags already name the machine (ADR 0017). Anything
+- System notification tags already name the machine (ADR 0017), a Factory
+  task's too (`ferrite-task-{task}@{target}`, this computer's bare). Anything
   else that saves a `ThreadId` across runs must save a `SavedThread`.
 
 ## Precedent
