@@ -330,16 +330,18 @@ Nothing here fences the link itself, and T3 does not either.
     pointer: the follower's problem, or a stop owed.
   - T3's background line lists only the provider's tasks. A Delegate
     holds Ferrite's parent on the Working shelf, so the line names what
-    it waits on.
+    it waits on, counted as T3 counts kinds under Ferrite's noun, after
+    subagents (`Waiting on 1 subagent and 2 delegates`).
 - **No `N of M` in a wake's words.** T3 counts the tasks of the parent's
   run (`2 of 3 delegated tasks finished`). Ferrite has no runs: the count
   is of the Delegates the wake covers.
 - **The timeline row is the call's.** T3 draws the task's row from its
   subagent turn item and hides the `delegate_task` call. Ferrite's
-  parent has no such item, so the call itself is drawn as T3's row. A
-  call that started nothing is drawn as a failed one, where T3 keeps its
-  plain tool row; a Delegate started by `ferrite delegate start` has no
-  call, so no row in the transcript (its Lineage row still shows it).
+  parent has no such item, so the call that started a Delegate is drawn
+  as T3's row. A call still out or refused keeps its ordinary tool row
+  with its error, as T3's does. A Delegate started by `ferrite delegate
+  start` has no call, so no row in the transcript (its Lineage row still
+  shows it).
 - **A Done dot is not green.** T3 inks a completed relative's dot as
   success. Ferrite's state inks have no done hue (Done is a shape, not a
   hue), so it is the idle dot.

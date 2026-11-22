@@ -5028,10 +5028,10 @@ mod tests {
         );
         let blocks = transcript.blocks();
         assert_eq!(
-            text::group_live(blocks).first().map(|block| block.id),
+            text::group_live(blocks, &AgentFaces::default()).first().map(|block| block.id),
             Some(blocks[5].id)
         );
-        assert!(text::group_live(&blocks[..5]).is_empty());
+        assert!(text::group_live(&blocks[..5], &AgentFaces::default()).is_empty());
     }
 
     #[gpui::test]

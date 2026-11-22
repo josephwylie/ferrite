@@ -103,6 +103,20 @@ impl AgentFaces {
         self.0.get(call)
     }
 
+    /// Whether `tool` draws as an agent's row ([`is_agent`]).
+    pub(crate) fn draws(&self, tool: &ToolBlock) -> bool {
+        is_agent(tool, |call| self.0.contains_key(call))
+    }
+
+    /// The `delegate_task` calls a Delegate answers for.
+    pub(crate) fn delegate_calls(&self) -> std::collections::BTreeSet<String> {
+        self.0
+            .iter()
+            .filter(|(_, face)| face.on.is_some())
+            .map(|(call, _)| call.clone())
+            .collect()
+    }
+
     /// The agent calls in `blocks` take on their agents' standing, so a
     /// group's tense and counts read them: running while the agent runs or
     /// waits; failed or stopped as it ended; settled once it is done.
@@ -137,11 +151,17 @@ impl AgentFaces {
     }
 }
 
-/// Whether a call starts a subagent or a Delegate, and so draws as
-/// [`render_agent`].
-pub(crate) fn is_agent(tool: &ToolBlock) -> bool {
+/// Whether a call draws as [`render_agent`]: a subagent's, or a
+/// `delegate_task` call that `started` a Delegate. One still out or refused
+/// keeps its ordinary tool row with its error (T3's
+/// `withoutSubagentDelegationRows`).
+pub(crate) fn is_agent(tool: &ToolBlock, started: impl Fn(&str) -> bool) -> bool {
     use ferrite_core::transcript::tools::{policy, ToolKind};
-    matches!(policy(&tool.name).kind, ToolKind::Agent | ToolKind::Delegate)
+    match policy(&tool.name).kind {
+        ToolKind::Agent => true,
+        ToolKind::Delegate => started(&tool.call),
+        _ => false,
+    }
 }
 
 /// What an agent's row says (T3's `SubagentTimelineLink`), before it is
@@ -822,8 +842,8 @@ mod tests {
             input: serde_json::json!({ "task": "Run the login test", "target": { "machineId": "s-pc" } }),
         }));
         let call = tool(&transcript.blocks()[0]).clone();
-        assert!(is_agent(&call), "it draws as an agent row");
-        assert_eq!(agent_row(&call, None).on, None, "not before the Delegate answers");
+        let mut faces = AgentFaces::default();
+        assert!(!faces.draws(&call), "an ordinary call until its Delegate answers");
         let face = AgentFace {
             on: Some(Elsewhere {
                 machine: "pc".into(),
@@ -831,12 +851,51 @@ mod tests {
             }),
             ..face(AgentRun::Done, None, Some("All green."))
         };
+        faces.insert("d".into(), face.clone());
+        assert!(faces.draws(&call), "its Delegate's row");
         assert!(!face.opens(), "a machine this window does not reach opens nothing");
         let row = agent_row(&call, Some(&face));
         assert_eq!(
             (row.title.as_str(), row.on.as_deref(), row.detail.as_str(), row.label),
             ("Run the login test", Some("on pc"), "All green.", None)
         );
+    }
+
+    /// A card counts its agents by kind, a Delegate under Ferrite's noun.
+    #[test]
+    fn a_card_of_delegates_says_delegates() {
+        let mut transcript = Transcript::default();
+        for (id, name) in [("a", "mcp__ferrite__delegate_task"), ("b", "delegate_task"), ("c", "Agent")] {
+            transcript.apply(Input::Event(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: name.into(),
+                input: serde_json::json!({ "task": "x" }),
+            }));
+        }
+        let calls: Vec<&ToolBlock> = transcript.blocks().iter().map(tool).collect();
+        assert_eq!(text::agent_card_title(&calls[..2]), "2 delegates");
+        assert_eq!(text::agent_card_title(&calls[1..]), "1 subagent and 1 delegate");
+    }
+
+    /// A refused call has no Delegate: it stays a tool row, its error kept.
+    #[test]
+    fn a_refused_delegate_call_is_no_agent_row() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "d".into(),
+            name: "mcp__ferrite__delegate_task".into(),
+            input: serde_json::json!({ "task": "Run the login test" }),
+        }));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "d".into(),
+            output: "target_required: Pass target.projectId".into(),
+            is_error: true,
+            result: ferrite_core::ToolResult::Opaque,
+        }));
+        let refused = tool(&transcript.blocks()[0]).clone();
+        assert!(!AgentFaces::default().draws(&refused));
+        assert!(matches!(&refused.state, ToolState::Failed(why) if why.contains("target_required")));
+        assert_eq!(text::call_line(&refused).verb, "Failed to delegate ", "T3's sentence");
     }
 
     /// A call no agent answers for (a foreground call the activity has not

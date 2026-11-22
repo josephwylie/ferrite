@@ -216,6 +216,9 @@ pub(crate) struct RowShape {
     /// A Thread on another machine delegated this one: its divider heads
     /// the rows (`TranscriptPresentation::parent`).
     pub parent: bool,
+    /// The `delegate_task` calls a Delegate answers for: they fold as
+    /// agents do, where any other is an ordinary call.
+    pub delegates: std::collections::BTreeSet<String>,
 }
 
 /// One renderable transcript unit. Its blocks are owned so a list callback
@@ -434,9 +437,14 @@ pub fn gated(call: &str, pending: &str) -> bool {
 /// card). Calls of different runs never share a group. A question, a visual
 /// or a checklist call that failed has none: it keeps a row of its own and
 /// ends the group before it. Decided by the tool's policy, never by a result
-/// still to come.
-pub(crate) fn run_of(tool: &ToolBlock) -> Option<tools::Grouping> {
-    let grouping = tools::policy(&tool.name).grouping;
+/// still to come; a `delegate_task` call joins the agents' once its Delegate
+/// answers for it (`RowShape::delegates`).
+fn run_of(tool: &ToolBlock, shape: &RowShape) -> Option<tools::Grouping> {
+    let grouping = if crate::pane::is_agent(tool, |call| shape.delegates.contains(call)) {
+        tools::Grouping::Agents
+    } else {
+        tools::policy(&tool.name).grouping
+    };
     matches!(grouping, tools::Grouping::RollsUp | tools::Grouping::Agents).then_some(grouping)
 }
 
@@ -581,12 +589,12 @@ fn sent_day(block: &Block) -> Option<impl PartialEq + Copy> {
 /// reading across blocks that draw nothing. Returns the members' indices
 /// and the index after the run.
 fn group_at(blocks: &[Block], start: usize, projection: &Projection) -> (Vec<usize>, usize) {
-    let run = run_at(&blocks[start]);
+    let run = run_at(&blocks[start], projection.shape);
     let mut members = vec![start];
     let mut end = start + 1;
     let mut index = end;
     while let Some(block) = blocks.get(index) {
-        match run_at(block) {
+        match run_at(block, projection.shape) {
             _ if projection.skips(block) => index += 1,
             joins if run.is_some() && joins == run => {
                 members.push(index);
@@ -602,12 +610,12 @@ fn group_at(blocks: &[Block], start: usize, projection: &Projection) -> (Vec<usi
 /// The run a block folds into with its neighbours (T3's work groups): a
 /// call's (`run_of`) unless it failed, since a failure stands on a row of
 /// its own; a shown thought, the routine calls'.
-fn run_at(block: &Block) -> Option<tools::Grouping> {
+fn run_at(block: &Block, shape: &RowShape) -> Option<tools::Grouping> {
     if block.markdown.is_some() {
         return None;
     }
     match &block.body {
-        Body::Tool(tool) if !matches!(tool.state, ToolState::Failed(_)) => run_of(tool),
+        Body::Tool(tool) if !matches!(tool.state, ToolState::Failed(_)) => run_of(tool, shape),
         Body::Thinking(_) => Some(tools::Grouping::RollsUp),
         _ => None,
     }
@@ -760,7 +768,7 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 }
             }
             Body::Tool(_) | Body::Thinking(_) if !projection.skips(block) => {
-                if run_at(block).is_some() {
+                if run_at(block, shape).is_some() {
                     let (members, end) = group_at(blocks, index - 1, projection);
                     if members.len() > 1 {
                         let run: Vec<Block> =
@@ -1006,6 +1014,24 @@ mod tests {
             ..delegated
         };
         assert_eq!(kinds(&transcript, &both)[..3], [Boundary, Parent, Prompt]);
+    }
+
+    /// A `delegate_task` call folds with the routine calls until its
+    /// Delegate answers for it, then with the agents.
+    #[test]
+    fn a_delegate_call_joins_the_agents_once_it_started_one() {
+        use RowKind::*;
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        call(&mut transcript, "a", "mcp__ferrite__delegate_task");
+        call(&mut transcript, "b", "mcp__ferrite__delegate_task");
+        call(&mut transcript, "c", "Read");
+        assert_eq!(kinds(&transcript, &shape()), [Prompt, Group]);
+        let started = RowShape {
+            delegates: ["a".to_owned(), "b".to_owned()].into(),
+            ..shape()
+        };
+        assert_eq!(kinds(&transcript, &started), [Prompt, Group, Activity]);
     }
 
     /// The running turn's shape: its header under its prompt, its live row

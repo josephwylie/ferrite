@@ -17,6 +17,8 @@ use ferrite_ui::{icons, motion};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WorkKind {
     Subagent,
+    /// A Thread this one started on another machine (ADR 0047).
+    Delegate,
     Command,
     /// A watch that goes on of its own, a PR watch (T3's `monitor`).
     Monitor,
@@ -27,6 +29,8 @@ impl WorkKind {
         match (self, count) {
             (Self::Subagent, 1) => "subagent",
             (Self::Subagent, _) => "subagents",
+            (Self::Delegate, 1) => "delegate",
+            (Self::Delegate, _) => "delegates",
             (Self::Command, 1) => "command",
             (Self::Command, _) => "commands",
             (Self::Monitor, 1) => "monitor",
@@ -295,6 +299,23 @@ mod tests {
             task(WorkKind::Command, "b"),
         ];
         assert_eq!(present(&commands, false).unwrap().title, "Running 2 commands");
+    }
+
+    /// T3's count by kind, a Delegate under Ferrite's noun, after subagents.
+    #[test]
+    fn delegates_are_counted_as_delegates_beside_subagents() {
+        let mixed = [
+            task(WorkKind::Delegate, "Ping on pc"),
+            task(WorkKind::Subagent, "Review"),
+            task(WorkKind::Delegate, "Long ping on pc"),
+        ];
+        let line = present(&mixed, true).unwrap();
+        assert_eq!(line.title, "Waiting on 1 subagent and 2 delegates");
+        assert_eq!(line.description.as_deref(), Some("Review, Ping on pc, Long ping on pc"));
+        assert_eq!(
+            present(&[task(WorkKind::Delegate, " ")], true).unwrap().title,
+            "Waiting on a delegate"
+        );
     }
 
     #[test]

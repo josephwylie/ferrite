@@ -315,6 +315,7 @@ impl TranscriptInput {
             note: self.presentation.note.clone(),
             earlier: self.presentation.earlier,
             parent: self.presentation.parent.is_some(),
+            delegates: self.presentation.agents.delegate_calls(),
         };
         shape.live_open = live_anchor(&self.body.blocks, &shape)
             .is_some_and(|anchor| self.body.expanded.contains(&anchor));
@@ -1958,7 +1959,7 @@ impl TranscriptView {
         grouped: bool,
     ) -> AnyElement {
         let block = stamped.id;
-        if pane::is_agent(tool) {
+        if self.input.presentation.agents.draws(tool) {
             let face = self.input.presentation.agents.get(&tool.call);
             let open = view
                 .filter(|_| face.is_some_and(pane::AgentFace::opens))
@@ -2036,7 +2037,7 @@ impl TranscriptView {
         let disclosure = view
             .clone()
             .map(|view| self.disclosure_control(&id, true, view));
-        if pane::is_agent_card(row.blocks()) {
+        if pane::is_agent_card(row.blocks(), &self.input.presentation.agents) {
             let clock = pane::AgentClock::longest(
                 pane::group_tools(row.blocks())
                     .filter_map(|tool| self.input.presentation.agents.get(&tool.call)?.clock),
@@ -2074,7 +2075,7 @@ impl TranscriptView {
             let drawn: Vec<&ferrite_core::transcript::Block> = if expanded {
                 row.blocks().iter().collect()
             } else {
-                pane::group_live(row.blocks())
+                pane::group_live(row.blocks(), &self.input.presentation.agents)
             };
             drawn
                 .into_iter()
@@ -2128,7 +2129,7 @@ impl TranscriptView {
                 Body::Tool(tool) => {
                     // An agent's row has no details: it is a stop while it
                     // opens its agent (↵), which the keyboard can stop too.
-                    let stop = if pane::is_agent(tool) {
+                    let stop = if self.input.presentation.agents.draws(tool) {
                         self.input
                             .presentation
                             .agents
@@ -2165,7 +2166,7 @@ impl TranscriptView {
                             call(&mut stops, block);
                         }
                     } else {
-                        for block in pane::group_live(row.blocks()) {
+                        for block in pane::group_live(row.blocks(), &self.input.presentation.agents) {
                             call(&mut stops, block);
                         }
                     }
@@ -2818,7 +2819,7 @@ fn parent_divider(parent: &ParentLink, view: Option<Entity<TranscriptView>>) -> 
         Some(view) => components::button("parent-divider-open")
             .debug_selector(|| "parent-divider-open".into())
             .accessibility_label("Open parent thread")
-            .tooltip("Open parent thread")
+            .tooltip_builder(ferrite_ui::menu::tooltip("Open parent thread"))
             .min_w_0()
             .h(px(theme::PARENT_PILL_H))
             .px(px(theme::PARENT_PILL_PAD_X))
@@ -3809,6 +3810,58 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The pointer resting on a Delegate's divider raises Ferrite's tooltip
+    /// for what a press does.
+    #[gpui::test]
+    fn the_parent_divider_shows_its_tooltip_at_rest(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+        let mut mounted = None;
+        // The kit's Root holds the tooltip layer.
+        let (_root, cx) = cx.add_window_view(|window, cx: &mut gpui::Context<gpui::component::Root>| {
+            gpui::component::init(cx);
+            let view = cx.new(|cx| {
+                super::TranscriptView::empty(
+                    ferrite_core::ThreadId::new(1),
+                    "parent-divider-transcript".into(),
+                    crate::preview::Preview::new(cx),
+                    crate::rich::TextCache::default(),
+                    cx,
+                )
+            });
+            mounted = Some(view.clone());
+            gpui::component::Root::new(view, window, cx)
+        });
+        let view = mounted.expect("the transcript");
+        cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("Fix the tests".into()));
+        view.update(cx, |view, cx| {
+            let presentation = super::TranscriptPresentation {
+                content_revision: (1, 0),
+                parent: Some(super::ParentLink {
+                    title: "Ship it".into(),
+                    machine: "mac".into(),
+                    opens: true,
+                }),
+                ..view.input.presentation.clone()
+            };
+            let body = super::TranscriptBody {
+                blocks: transcript.blocks().to_vec(),
+                preview: view.input.body.preview.clone(),
+                expanded: Default::default(),
+                target: None,
+            };
+            view.reconcile(presentation, || body, crate::select::TranscriptText::default(), cx);
+        });
+        cx.run_until_parked();
+        let at = cx.debug_bounds("parent-divider-open").expect("the pill").center();
+        cx.simulate_mouse_move(at, None, gpui::Modifiers::none());
+        cx.simulate_mouse_move(at + gpui::point(gpui::px(1.), gpui::px(0.)), None, gpui::Modifiers::none());
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("tooltip").is_some(), "its tooltip, at rest");
     }
 
     /// A row's entrance starts on the frame that first draws it, however

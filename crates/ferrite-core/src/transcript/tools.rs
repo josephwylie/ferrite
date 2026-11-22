@@ -16,8 +16,8 @@ pub enum ToolKind<'a> {
     WebSearch,
     /// A subagent: it has a transcript of its own.
     Agent,
-    /// A Delegate's start (`delegate_task`, ADR 0047): a Thread on another
-    /// machine, which the call's row opens there.
+    /// A Delegate's start (`delegate_task`, ADR 0047): an ordinary call
+    /// until the window holds the Delegate it started.
     Delegate,
     /// A checklist tool. The plan it acknowledges is `Progress.plan`.
     Todo,
@@ -120,7 +120,7 @@ pub fn policy(name: &str) -> ToolPolicy<'_> {
         "WebFetch" => (Fetch, RollsUp),
         "WebSearch" | "webSearch" => (WebSearch, RollsUp),
         "Task" | AGENT => (Agent, Agents),
-        name if starts_delegate(name) => (Delegate, Agents),
+        name if starts_delegate(name) => (Delegate, RollsUp),
         "ReportFindings" => (Findings, StandsAlone),
         // `TaskStop` and `TaskOutput` are background-task tools, not the
         // checklist's: they stay ordinary rows.
@@ -442,8 +442,8 @@ mod tests {
             ("webSearch", WebSearch, RollsUp),
             ("Task", Agent, Agents),
             ("Agent", Agent, Agents),
-            ("mcp__ferrite__delegate_task", Delegate, Agents),
-            ("delegate_task", Delegate, Agents),
+            ("mcp__ferrite__delegate_task", Delegate, RollsUp),
+            ("delegate_task", Delegate, RollsUp),
             ("mcp__other__delegate_task", Mcp("other"), RollsUp),
             ("mcp__ferrite__show_visual", Visual, StandsAlone),
             ("ferrite.show_visual", Visual, StandsAlone),

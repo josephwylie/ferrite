@@ -621,6 +621,7 @@ impl RenderOnce for LiveClock {
         let selector = self.selector;
         div()
             .debug_selector(move || selector.into())
+            .whitespace_nowrap()
             .child(SharedString::from((self.format)(elapsed)))
     }
 }

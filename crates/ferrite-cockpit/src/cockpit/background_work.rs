@@ -63,9 +63,9 @@ pub(super) enum StopState {
 
 /// One piece of work still running. A command is the provider's task
 /// (`call` is the call that launched it, which holds its output); a
-/// subagent is an agent launched into the background, any still working
-/// after Main's turn, or a Delegate open on another machine (T3's
-/// delegated task is a subagent); a monitor is a PR the Server watches.
+/// subagent is an agent launched into the background, or any still working
+/// after Main's turn; a Delegate is one open on another machine; a monitor
+/// is a PR the Server watches.
 #[derive(Clone)]
 pub(super) struct Work {
     pub(super) task: BackgroundTask,
@@ -200,7 +200,7 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>, facts: Option<&Thr
     // its Lineage row's: the line's stops what runs here.
     work.extend(delegates.iter().filter(|delegate| !delegate.status.ended()).map(|delegate| Work {
         task: BackgroundTask {
-            kind: WorkKind::Subagent,
+            kind: WorkKind::Delegate,
             label: format!(
                 "{} on {}",
                 delegate.title.as_deref().unwrap_or("Delegate"),
@@ -253,7 +253,7 @@ impl BackgroundInputs {
     pub(super) fn line_work(&self) -> Vec<Work> {
         let mut work = self.running.clone();
         if self.busy {
-            work.retain(|work| work.task.kind != WorkKind::Subagent);
+            work.retain(|work| !matches!(work.task.kind, WorkKind::Subagent | WorkKind::Delegate));
         }
         work
     }
@@ -291,11 +291,12 @@ fn stop_leaves(work: &[Work], targets: &[StopTarget]) -> Option<String> {
             .filter(|work| work.task.kind == kind && !work.stop.as_ref().is_some_and(|stop| targets.contains(stop)))
             .count()
     };
-    let (commands, agents) = (left(WorkKind::Command), left(WorkKind::Subagent));
+    let (commands, agents, delegates) =
+        (left(WorkKind::Command), left(WorkKind::Subagent), left(WorkKind::Delegate));
     let counted = |count: usize, noun: &str| {
         (count > 0).then(|| format!("{count} {noun}{}", if count == 1 { "" } else { "s" }))
     };
-    let parts: Vec<String> = [counted(commands, "command"), counted(agents, "agent")]
+    let parts: Vec<String> = [counted(commands, "command"), counted(agents, "agent"), counted(delegates, "delegate")]
         .into_iter()
         .flatten()
         .collect();
