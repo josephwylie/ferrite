@@ -146,10 +146,9 @@ impl ServerStatus {
         {
             return;
         }
-        let action = NoticeAction::Read;
-        if let Err(error) = self.remote.execute(Op::Notice { action }) {
-            crate::log!("a notice act did not reach the server: {}", error.message);
-        }
+        self.remote.tell(Op::Notice {
+            action: NoticeAction::Read,
+        });
     }
 
     /// Whether an open Thread is the operator's own, not a Worker's or a

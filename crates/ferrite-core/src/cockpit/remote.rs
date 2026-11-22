@@ -285,6 +285,11 @@ impl Remote {
         self.attention = None;
     }
 
+    /// Whether a command sent now reaches a Server.
+    pub(crate) fn reaches_server(&self) -> bool {
+        self.attachment.is_some()
+    }
+
     /// The machine this window is on, when it is not this computer.
     pub(crate) fn available(&self) -> bool {
         !matches!(self.attach.server, Endpoint::Unavailable)

@@ -1080,7 +1080,7 @@ fn box_handle(serial: u64) -> ferrite_core::protocol::WireHandle {
 }
 
 /// box's request Notice for Decision `serial` on `thread`, unread.
-fn box_request(thread: ThreadId, serial: u64) -> ferrite_core::protocol::WireNotice {
+pub(super) fn box_request(thread: ThreadId, serial: u64) -> ferrite_core::protocol::WireNotice {
     ferrite_core::protocol::WireNotice::Request {
         thread,
         handle: box_handle(serial),
