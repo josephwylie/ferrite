@@ -407,7 +407,7 @@ impl CockpitView {
         if let Some(archive) = self.factory().map(|view| view.read(cx).archive.clone()) {
             archive.update(cx, |archive, _| archive.retain_threads(keep_key));
         }
-        self.pr_watch.retain_threads(keep);
+        self.pr_reads.retain_threads(keep);
     }
 
     /// How much of `thread`'s state the window holds.
@@ -428,7 +428,7 @@ impl CockpitView {
             + self
                 .factory()
                 .map_or(0, |view| view.read(cx).archive.read(cx).held_for_test(key))
-            + usize::from(self.pr_watch.holds(thread))
+            + usize::from(self.pr_reads.holds(thread))
     }
 
     pub(crate) fn successor_panel(&mut self, cx: &gpui::App) -> Panel {

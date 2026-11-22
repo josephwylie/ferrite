@@ -18,7 +18,7 @@ from T3 and why.
 - **The Server watches, not a window.** A watch is the agent's, and the
   agent runs on the Server (ADR 0025). So the Server reads the PR with its
   own `gh` account, and a watch goes on while no window is attached. The
-  window's own PR reading for the nav (`PrWatch`, ADR 0041) is a different
+  window's own PR reading for the nav (`PrReads`, ADR 0041) is a different
   thing and stays.
 - **A watch is a header fact on its Thread.** `WatchFact` (`pr_watch`)
   keeps each watch that is on and the last ended one per PR. It is amended

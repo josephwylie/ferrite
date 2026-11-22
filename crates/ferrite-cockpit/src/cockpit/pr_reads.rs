@@ -9,7 +9,7 @@
 use super::*;
 
 #[derive(Default)]
-pub(super) struct PrWatch {
+pub(super) struct PrReads {
     /// The Thread the pump last saw focused: focusing another asks for its
     /// PR.
     focus: Option<ThreadId>,
@@ -21,7 +21,7 @@ pub(super) struct PrWatch {
     pub(crate) asked: Vec<(ThreadId, bool)>,
 }
 
-impl PrWatch {
+impl PrReads {
     /// `focused` is the Thread focused now: it, when it is not the one last
     /// seen.
     fn focus_moved(&mut self, focused: Option<ThreadId>) -> Option<ThreadId> {
@@ -53,11 +53,11 @@ impl PrWatch {
 }
 
 impl CockpitView {
-    /// The pump's watch: the Thread focused since the last frame, and each
+    /// The pump's pacing: the Thread focused since the last frame, and each
     /// whose work published since, have their PR read.
-    pub(super) fn watch_prs(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn pace_pr_reads(&mut self, cx: &mut Context<Self>) {
         self.refresh_published(cx);
-        if let Some(thread) = self.pr_watch.focus_moved(self.focused_thread(cx)) {
+        if let Some(thread) = self.pr_reads.focus_moved(self.focused_thread(cx)) {
             self.check_pr(thread, false, cx);
         }
     }
@@ -82,7 +82,7 @@ impl CockpitView {
         }
         self.notify_part(parts::Part::Nav, cx);
         #[cfg(test)]
-        self.pr_watch.asked.push((thread, manual));
+        self.pr_reads.asked.push((thread, manual));
         // Tests and captures never run `gh`: only a fixture world's forge
         // answers them (`Cockpit::fixture_forge`); a test reads what was
         // asked.
@@ -119,7 +119,7 @@ impl CockpitView {
                 else {
                     return false;
                 };
-                self.pr_watch.published_moved(*thread, count)
+                self.pr_reads.published_moved(*thread, count)
             })
             .collect();
         for thread in moved {

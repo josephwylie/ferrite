@@ -40,7 +40,7 @@ pub struct ThreadFacts {
     pub status: Option<BranchStatus>,
     /// The branch's PR and its CI, when `gh` can answer: the row's label
     /// and the checks card both read it, on its own cadence (`pr`).
-    pub pr: crate::pr::PrWatch,
+    pub pr: crate::pr::PrReading,
     /// Directory label and branch for every root attached to the Project.
     pub project_branches: Vec<(SharedString, SharedString)>,
     /// The Project the Thread recorded (#29) — what the nav filter matches
@@ -223,7 +223,7 @@ impl Facts {
         changed
     }
 
-    /// Whether to ask `gh` for the Thread's PR now (`PrWatch::ask`).
+    /// Whether to ask `gh` for the Thread's PR now (`PrReading::ask`).
     pub fn ask_pr(&mut self, thread: ThreadKey, now: Instant, manual: bool) -> bool {
         self.threads.entry(thread).or_default().pr.ask(now, manual)
     }

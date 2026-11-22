@@ -41,14 +41,14 @@ pub(crate) fn state_word(pr: &PullRequest) -> &'static str {
 
 /// One Thread's PR: the last reading, and whether another is on its way.
 #[derive(Debug, Default)]
-pub struct PrWatch {
+pub struct PrReading {
     /// What `gh` last said; `None` when it said nothing (or was never asked).
     pub reading: Option<PullRequest>,
     checking: bool,
     asked: Option<Instant>,
 }
 
-impl PrWatch {
+impl PrReading {
     /// Whether to ask `gh` now, marking the ask when so. A manual refresh
     /// always asks; an automatic one waits out `AUTO_EVERY` since the last
     /// ask. Never while an answer is still on its way.
@@ -103,18 +103,18 @@ mod tests {
         }
     }
 
-    /// A reading lands and moves the watch; one on its way still counts
+    /// A reading lands and moves it; one on its way still counts
     /// as moved when `gh` then says nothing.
     #[test]
-    fn an_answer_moves_the_watch() {
+    fn an_answer_moves_the_reading() {
         let now = Instant::now();
-        let mut watch = PrWatch::default();
-        assert!(watch.ask(now, false));
-        assert!(watch.answered(Some(pr(PrState::Open, Some(CheckState::Passing)))));
-        assert_eq!(watch.reading.as_ref().map(|pr| pr.number), Some(123));
-        assert!(watch.ask(now + AUTO_EVERY, false));
-        assert!(watch.answered(None), "gh had nothing to say");
-        assert!(watch.reading.is_none());
+        let mut paced = PrReading::default();
+        assert!(paced.ask(now, false));
+        assert!(paced.answered(Some(pr(PrState::Open, Some(CheckState::Passing)))));
+        assert_eq!(paced.reading.as_ref().map(|pr| pr.number), Some(123));
+        assert!(paced.ask(now + AUTO_EVERY, false));
+        assert!(paced.answered(None), "gh had nothing to say");
+        assert!(paced.reading.is_none());
     }
 
     /// Automatic readings wait out thirty seconds per Thread; a manual one
@@ -122,14 +122,14 @@ mod tests {
     #[test]
     fn automatic_readings_are_paced_and_manual_ones_are_not() {
         let now = Instant::now();
-        let mut watch = PrWatch::default();
-        assert!(watch.ask(now, false));
-        assert!(!watch.ask(now, true), "one answer out at a time");
-        watch.answered(None);
-        assert!(!watch.ask(now + AUTO_EVERY / 2, false));
-        assert!(watch.ask(now + AUTO_EVERY / 2, true));
-        watch.answered(None);
-        assert!(!watch.ask(now + AUTO_EVERY, false), "the manual ask counts");
-        assert!(watch.ask(now + AUTO_EVERY / 2 + AUTO_EVERY, false));
+        let mut paced = PrReading::default();
+        assert!(paced.ask(now, false));
+        assert!(!paced.ask(now, true), "one answer out at a time");
+        paced.answered(None);
+        assert!(!paced.ask(now + AUTO_EVERY / 2, false));
+        assert!(paced.ask(now + AUTO_EVERY / 2, true));
+        paced.answered(None);
+        assert!(!paced.ask(now + AUTO_EVERY, false), "the manual ask counts");
+        assert!(paced.ask(now + AUTO_EVERY / 2 + AUTO_EVERY, false));
     }
 }

@@ -50,7 +50,7 @@ mod palette;
 pub(crate) mod panel;
 mod parts;
 mod popups;
-mod pr_watch;
+mod pr_reads;
 mod prs_view;
 mod sends;
 mod server;
@@ -571,8 +571,8 @@ pub struct CockpitView {
     /// The chimes that would have played (`chime`).
     #[cfg(test)]
     pub(crate) chimed: Vec<Sound>,
-    /// When the pump asks for a Thread's PR on its own (`pr_watch`).
-    pr_watch: pr_watch::PrWatch,
+    /// When the pump asks for a Thread's PR on its own (`pr_reads`).
+    pr_reads: pr_reads::PrReads,
     /// The palette, the shortcuts sheet and the notifications list's focus
     /// (`cockpit::palette`).
     floats: palette::Floats,
@@ -1371,7 +1371,7 @@ impl CockpitView {
             landing: None,
             #[cfg(test)]
             chimed: Vec::new(),
-            pr_watch: Default::default(),
+            pr_reads: Default::default(),
             floats: palette::Floats::new(),
             transcript_entities: Default::default(),
             decisions,
@@ -2274,7 +2274,7 @@ impl CockpitView {
         // before using pane indices. Finish bootstraps first so a Draft keeps
         // its existing Composer when it becomes a Thread.
         let panes_changed = self.follow_roster(cx);
-        self.watch_prs(cx);
+        self.pace_pr_reads(cx);
         let mut restarted = Vec::new();
         // What the sweep found moved: a fact or a Thread's age (everything
         // redraws), a working Thread (its Pane and the nav), the frame's
