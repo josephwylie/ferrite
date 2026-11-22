@@ -131,8 +131,11 @@ fn a_pending_new_tab_can_be_left_by_its_page_tab_or_escape(cx: &mut TestAppConte
     // The window has the Server's word from its message, a beat or more
     // later.
     until(cx, |cx| {
-        view.read_with(cx, |view, _| view.browsers.shown_for_test(thread))
-            .is_some_and(|(state, _)| state.tabs.iter().any(|tab| tab.live && !tab.loading))
+        view.read_with(cx, |view, cx| {
+            view.browsers
+                .shown_for_test(view.cockpit.read(cx).thread_key(thread))
+        })
+        .is_some_and(|(state, _)| state.tabs.iter().any(|tab| tab.live && !tab.loading))
     });
     let page = view.update(cx, |view, cx| {
         view.cockpit.update(cx, |cockpit, _| served(cockpit, thread).tabs[0].id)
