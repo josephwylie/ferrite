@@ -167,6 +167,38 @@ and `agent.result`. Peers is the Server's client of a saved machine.
     every Session, and T3's orchestration block, cut to delegating and
     linked machines, while the tools are offered.
 
+- **The window draws what the parent's digest says** (T3's parts, cited
+  in `docs/design/t3-reference/delegates.md`). `Digest` carries
+  `Delegating`: each Delegate as a window draws it (`Delegated`: no task,
+  no result) and whether they hold the Thread; a child's digest carries
+  its `delegated_from`. The Server sends a new digest when either moves,
+  and the pump copies both into the window's Facts, the one copy every
+  reader reads.
+  - Main's Lineage draws each as T3's remote row: its title, else
+    `Subagent`, and `on pc · Running` in T3's status words (`Starting`,
+    `Running`, `Waiting`, `Done`, `Failed`, `Stopped`). Open ones follow
+    Main's agents and ended ones go under `Previous agents`, newest first.
+    The heading counts those Running. Under the pointer it says `Open on
+    pc`, then what holds it up: the follower's `problem`, or an owed stop
+    in its result's words.
+  - Its press opens the Thread there by its Server and id, on the machine
+    of this window that answers as that Server: on screen, or by going to
+    it as an alert does (`CockpitView::open_elsewhere`). A row no machine
+    of this window answers for is drawn but cannot be pressed, as T3
+    disables it.
+  - An open one has a stop: `Op::CancelDelegate`, the agent's
+    `delegate.cancel`.
+  - While they hold, `ActivityView::background_work` is true: the Thread
+    is on the Working shelf, its Notice waits, and the background line
+    lists each open one as `Fix the tests on pc`.
+  - A Delegates' wake is T3's notification row with T3's bot
+    (`wake::Source::Delegates`), where a watch's has an eye.
+  - A child heads its Lineage with T3's delegated-from row: the parent's
+    title as it was then, `on` the name this window gives that machine,
+    else the one the parent's Server sent (`DelegatedFrom::label`). Its
+    press opens the parent the same way.
+  - The child is an ordinary row in its machine's nav, not nested.
+
 ## Operator decisions
 
 - **Interrupting the parent's Main does not cancel its Delegates.** This
@@ -239,3 +271,22 @@ Nothing here fences the link itself, and T3 does not either.
   without running git, so a remote spelled through one keys as written.
 - **No re-stop for a stop already under way.** A stop owed again while
   one is out is covered by that one (T3 looks once more).
+- **The window says more, by operator decision.** T3's remote row has no
+  stop (its local agents' rows have `Stop subagent`), its window shows no
+  follow problem, and its background line lists only the provider's
+  tasks. Ferrite's row has a stop under the pointer, as T3's local rows
+  do, says what holds the Delegate up, and the background line lists the
+  open ones.
+- **A Done dot is not green.** T3 inks a completed relative's dot as
+  success. Ferrite's state inks have no done hue (Done is a shape, not a
+  hue), so it is the idle dot.
+- **Not nested in the nav** (operator decision). T3's sidebar nests a
+  delegated thread under its parent; Ferrite's nav lists each machine's
+  own Threads.
+- **No read through another machine.** T3 reads a thread in a linked
+  environment it is not connected to through the linking one (`Read the
+  thread on pc`). Ferrite's window opens only a machine it reaches.
+- **Not yet in the transcript.** T3 also draws a delegated task in its
+  parent's timeline (`SubagentTimelineLink`, `on pc`) and heads the
+  child's with `Subagent of … on mac`. Ferrite's parent shows the
+  `delegate_task` call as a tool row, and its child has no divider.

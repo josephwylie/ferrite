@@ -76,7 +76,8 @@ from T3 and why.
   keeps no Session and holds back no restart.
 - **A wake draws as T3's notification row.** Its Block's `WakeNote` makes
   the transcript draw a work row (its summary, an eye, or the alert for a
-  failure) that opens to the whole text, where a prompt draws a bubble. It
+  failure; a Delegates' wake has T3's bot, by its `wake::Source`) that
+  opens to the whole text, where a prompt draws a bubble. It
   opens a turn as a prompt does, and is never the Thread's title, the
   prompt `Copy prompt` reads, or one `Retry` sends again.
 - **The window hears a watch through the Thread's digest.** `Digest`

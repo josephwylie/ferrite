@@ -348,7 +348,9 @@ its Thread counts as working. A cancel, or stopping or parking its Thread,
 ends it here at once and stops it there, retrying a stop that cannot get
 there yet; interrupting Main does not. It may start Delegates of its own.
 An agent starts one with T3 Code's tools (`delegate_task`) while both
-Machines have Settings › Labs › Linked machines on.
+Machines have Settings › Labs › Linked machines on. The operator sees it in
+its Thread's Lineage, where they open or stop it; its own Thread there names
+the Thread that delegated it.
 _Avoid_: child, subagent (a Provider's), task (the Factory's), remote
 thread.
 
