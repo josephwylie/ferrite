@@ -244,6 +244,7 @@ impl Server {
             ferrite_core::spawn::serve_the_operator();
             let _ = tell.send(github.pr_reading(&repository, number, false));
         });
+        self.api.owe(caller, id);
         self.watcher.starts.push(Start {
             caller,
             id: id.to_string(),

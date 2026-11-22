@@ -1996,6 +1996,26 @@ fn pull_requests_and_merging_parse_from_the_cli() {
     );
 }
 
+/// An answer the Server gives later (`pr.watch` after its fresh read)
+/// reaches a caller that hung up first, as an agent's tool call does at
+/// once, and then lets it go.
+#[test]
+fn an_owed_answer_reaches_a_caller_that_hung_up() {
+    let mut api = Api::default();
+    let (answers, answer) = std::sync::mpsc::channel();
+    api.join(1, answers);
+    api.owe(1, "7");
+    api.hang_up(1);
+    api.reply(1, "7".into(), Ok(json!({ "watching": true })));
+    let line = String::from_utf8(answer.try_recv().unwrap()).unwrap();
+    assert!(line.contains(r#""watching":true"#), "{line}");
+    assert_eq!(
+        answer.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Disconnected),
+        "let go once answered"
+    );
+}
+
 /// `ferrite pr watch <url> --until merged`: the PR by its url, for the
 /// Thread the call runs in unless `--thread` names one.
 #[test]
