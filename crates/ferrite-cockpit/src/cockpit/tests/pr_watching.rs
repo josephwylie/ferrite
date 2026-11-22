@@ -161,3 +161,47 @@ fn a_watch_holds_the_thread_working_while_checks_run_or_until_merged(cx: &mut Te
     watch(&fact, cx);
     assert_eq!(seen(cx), (false, None), "an ended watch is no work");
 }
+
+/// Escape is T3's Stop, which a thread takes only while a turn runs
+/// (`canInterruptRunningThread`): mid-turn it stops the turn and, with it,
+/// every watch, waking nothing; with no turn running it sends nothing, and
+/// a watch goes on.
+#[gpui::test]
+fn escape_ends_a_watch_only_with_the_turn_it_stops(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("pr-watch-escape", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let watched = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            !view.cockpit.read(cx).thread(thread).unwrap().activity().watching().is_empty()
+        })
+    };
+    let mut fact = WatchFact::default();
+    fact.watch(Target::of_url("https://github.com/o/r/pull/48").unwrap(), None, Some(false), 0);
+    view.update(cx, |view, cx| {
+        view.cockpit
+            .update(cx, |cockpit, _| cockpit.fixture_pr_watch(thread, fact))
+    });
+    tick(cx);
+    assert!(watched(cx), "the premise: watched, at rest");
+
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert_eq!(*fake.interrupts.borrow(), 0, "nothing runs: nothing to stop");
+    assert!(watched(cx), "the watch goes on");
+
+    view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "go".into()))
+    });
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta { text: "working".into() })
+        .unwrap();
+    tick(cx);
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert_eq!(*fake.interrupts.borrow(), 1, "the turn is stopped");
+    assert!(!watched(cx), "and its watches with it");
+}
