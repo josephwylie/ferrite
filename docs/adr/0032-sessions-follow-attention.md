@@ -49,8 +49,9 @@ decided independently:
   the digest carries none of the transcript's words, as no surface that
   reads it drew them; a running turn's answer waits for its end. A Thread
   at work that a window does not draw costs it a few hundred bytes a
-  refold, not its stream. A side chat's fork counts as drawn while its
-  Panel tab is.)
+  refold, not its stream. Its `thread` state comes without the Session's
+  `/` commands and models, which a watch brings. A side chat's fork counts
+  as drawn while its Panel tab is.)
 
 Ending and restarting a Session is invisible. Waking adds no transcript row
 and changes no status, unlike a revive or a Session that closed. A prompt sent

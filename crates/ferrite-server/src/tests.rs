@@ -4416,6 +4416,42 @@ fn an_unwatched_thread_at_work_sends_none_of_its_transcript() {
     assert!(window.said(thread).is_empty(), "no input crossed");
 }
 
+/// A window that does not watch a Thread is not sent what its Session
+/// offers a Composer (F-A2): its `/` commands and models are tens of KB,
+/// and the state that holds them moves with every turn. Watching brings
+/// them, and a window attaching later is sent none until it watches.
+#[test]
+fn a_sessions_catalog_goes_only_to_the_windows_watching() {
+    let harness = start("catalog-cost");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    for event in announcements() {
+        provider.send(event).unwrap();
+    }
+    window.until(|window| {
+        window
+            .mirrors
+            .view(thread)
+            .is_some_and(|view| view.permission_mode() == Some("plan"))
+    });
+    let view = window.mirrors.view(thread).unwrap();
+    assert!(view.commands().is_empty(), "{:?}", view.commands());
+    assert!(view.models().is_empty(), "{:?}", view.models());
+
+    let later = attach(&harness.address);
+    let view = later.mirrors.view(thread).unwrap();
+    assert!(view.commands().is_empty(), "nor in a snapshot");
+    assert!(view.models().is_empty(), "nor in a snapshot");
+
+    window.watch(thread, None);
+    window.until(|window| {
+        window.mirrors.view(thread).is_some_and(|view| {
+            view.commands().first().is_some_and(|command| command.name == "review")
+                && view.models().first().is_some_and(|model| model.value == "opus")
+        })
+    });
+}
+
 /// A Thread's digest goes out as it changes, and the words a turn streams
 /// do not change it (F-A2): what does change mid-turn, a test run's
 /// count, goes at most four times a second, and a Decision at once.

@@ -645,6 +645,12 @@ impl Server {
                     client.browser_dispatch = capabilities.contains(&Capability::BrowserDispatch);
                     client.driven = capabilities.contains(&Capability::Driven);
                     let mut snapshot = self.engine.snapshot();
+                    // It watches nothing yet.
+                    snapshot.threads = snapshot
+                        .threads
+                        .into_iter()
+                        .map(protocol::ThreadState::unwatched)
+                        .collect();
                     snapshot.factory = Some(self.factory.board());
                     self.send(id, ServerMessage::Snapshot(snapshot));
                 }
@@ -735,6 +741,9 @@ impl Server {
         }
         if let Some(client) = self.clients.get_mut(&id) {
             client.watching.insert(thread);
+        }
+        if let Some(whole) = self.engine.published_thread(thread) {
+            self.send(id, whole);
         }
         self.publish_browser(thread, None);
     }
@@ -1391,7 +1400,21 @@ impl Server {
                 .map(|(id, _)| *id)
                 .collect();
             for id in receivers {
-                self.send(id, message.clone());
+                let watched = |thread| {
+                    self.clients
+                        .get(&id)
+                        .is_some_and(|client| client.watching.contains(&thread))
+                };
+                let sent = match &message {
+                    ServerMessage::Thread { revision, state } if !watched(state.thread) => {
+                        ServerMessage::Thread {
+                            revision: *revision,
+                            state: state.clone().unwatched(),
+                        }
+                    }
+                    message => message.clone(),
+                };
+                self.send(id, sent);
             }
         }
     }

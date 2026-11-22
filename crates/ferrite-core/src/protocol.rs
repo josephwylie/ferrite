@@ -1917,6 +1917,18 @@ pub struct ThreadState {
     pub history_errors: Vec<WireHistoryError>,
 }
 
+impl ThreadState {
+    /// The state as a window that does not watch the Thread is sent it:
+    /// without what its Session offers a Composer. Those lists are nearly
+    /// all of its bytes and only a drawn Thread reads them, so they come
+    /// with the watch (ADR 0032).
+    pub fn unwatched(mut self) -> Self {
+        self.commands = Vec::new();
+        self.models = Vec::new();
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireRecovered {
     pub text: String,
