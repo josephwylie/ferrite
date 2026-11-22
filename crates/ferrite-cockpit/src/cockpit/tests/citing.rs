@@ -244,6 +244,8 @@ fn a_citation_keeps_its_comment_and_source_across_a_restart(cx: &mut TestAppCont
         Some(before.clone())
     );
     let (core, _fake) = cockpit("cite-restart-again", 1);
+    // The relaunch holds its machine under a new id.
+    let thread = core.key(thread.thread());
     assert_eq!(core.threads()[0], thread);
     let prefs = Preferences {
         dir,

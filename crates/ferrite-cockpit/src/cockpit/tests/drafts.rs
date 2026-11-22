@@ -108,6 +108,8 @@ fn a_whole_draft_comes_back_after_a_restart(cx: &mut TestAppContext) {
     drop(view);
 
     let (core, _fake) = cockpit("drafts-restart-again", 1);
+    // The relaunch holds its machine under a new id.
+    let thread = core.key(thread.thread());
     assert_eq!(core.threads()[0], thread);
     let (view, cx) = window_with(core, prefs_at(&dir), cx);
     assert_eq!(held(&view, cx), before, "the same words and attachments");
@@ -191,6 +193,8 @@ fn a_closed_new_pane_is_not_reopened(
         "the file forgot the discarded pane"
     );
     let (core, _fake) = cockpit(&format!("{name}-again"), 1);
+    // The relaunch holds its machine under a new id.
+    let thread = core.key(thread.thread());
     assert_eq!(core.threads()[0], thread);
     let (view, _cx) = window_with(core, prefs_at(&dir), cx);
     view.read_with(_cx, |view, _| {

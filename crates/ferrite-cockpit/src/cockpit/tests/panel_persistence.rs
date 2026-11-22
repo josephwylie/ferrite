@@ -83,6 +83,8 @@ fn close_reopen_and_files_preferences_restore_with_the_saved_panel(cx: &mut Test
         thread
     });
     let (core, _fake, _checkout) = bound_cockpit("panel-restore-second", Provider::Claude);
+    // The relaunch holds its machine under a new id.
+    let thread = core.key(thread.thread());
     let mut prefs = Preferences::ephemeral();
     prefs.dir = dir;
     let restored = cx.new(|cx| CockpitView::new_with_settings(core, Provider::Claude, prefs, cx));

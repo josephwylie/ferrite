@@ -63,20 +63,20 @@ fn a_launch_that_opens_nothing_still_lists_the_parked_threads(cx: &mut TestAppCo
         earlier
             .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
             .unwrap();
-        earlier.threads()[0]
+        earlier.threads()[0].thread()
     };
     let store = Store::open(dir).unwrap();
     let core = Cockpit::new(store, Box::new(Fake::default()));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
 
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
             view.panes[0].draft().is_some(),
             "nothing revived: the launch is a draft"
         );
         assert_eq!(
             view.facts.parked().to_vec(),
-            vec![parked],
+            vec![view.cockpit.read(cx).key(parked)],
             "and the parked Thread has its row"
         );
     });

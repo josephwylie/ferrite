@@ -1147,6 +1147,8 @@ fn a_relaunch_restores_the_binding_and_spawns_where_it_points() {
         Store::open(&dir).unwrap(),
         Box::new(relaunched_fake.clone()),
     );
+    // The relaunch holds its machine under a new id.
+    let thread = relaunched.key(thread.thread());
     revive_awake(&mut relaunched, thread);
 
     assert_eq!(
@@ -1215,6 +1217,8 @@ fn waking_leaves_the_worktree_to_the_spawners_preparation() {
             held: held.clone(),
         }),
     );
+    // The relaunch holds its machine under a new id.
+    let thread = relaunched.key(thread.thread());
     revive_awake(&mut relaunched, thread);
 
     assert!(!worktree.exists(), "no git on the caller's thread");
@@ -1385,6 +1389,8 @@ fn thread_title_is_durable_and_blank_rename_is_refused() {
     drop(cockpit);
 
     let mut relaunched = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
+    // The relaunch holds its machine under a new id.
+    let thread = relaunched.key(thread.thread());
     relaunched.revive(thread).unwrap();
     assert_eq!(
         relaunched.thread_title(thread).unwrap().as_deref(),
@@ -1877,7 +1883,7 @@ fn completion_observation_is_quiet_factual_and_unchanged_after_reopen() {
     cockpit.pump();
     let completion = |cockpit: &Cockpit| {
         let rows: Vec<_> = cockpit
-            .thread(thread)
+            .thread(cockpit.key(thread.thread()))
             .unwrap()
             .transcript()
             .blocks()
@@ -1920,6 +1926,8 @@ fn completion_observation_is_quiet_factual_and_unchanged_after_reopen() {
     cockpit.park(thread).unwrap();
     drop(cockpit);
     let mut reopened = Cockpit::new(Store::open(&dir).unwrap(), Box::new(Fake::default()));
+    // The relaunch holds its machine under a new id.
+    let thread = reopened.key(thread.thread());
     reopened.revive(thread).unwrap();
     assert_eq!(
         completion(&reopened),
@@ -2521,6 +2529,8 @@ fn a_new_cockpit_recovers_prompt_history_from_the_store() {
     drop(cockpit);
 
     let mut relaunched = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
+    // The relaunch holds its machine under a new id.
+    let thread = relaunched.key(thread.thread());
     relaunched.revive(thread).unwrap();
     assert_eq!(
         relaunched.recall_prompt(thread, HistoryDirection::Older, "draft"),
@@ -3089,6 +3099,8 @@ fn a_restart_finds_the_threads_it_left_behind() {
 
     // A new run of Ferrite over the same store.
     let mut restarted = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
+    // The relaunch holds its machine under a new id.
+    let (first, second) = (restarted.key(first.thread()), restarted.key(second.thread()));
 
     assert_eq!(restarted.parked().unwrap(), vec![first, second]);
     restarted.revive(second).unwrap();
@@ -5224,6 +5236,11 @@ fn a_store_with_groups_lists_every_thread_and_opens_each_alone() {
     std::fs::write(dir.join("groups.json"), LEGACY).unwrap();
 
     let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(Fake::default()));
+    // The relaunch holds its machine under a new id.
+    let threads: Vec<ThreadKey> = threads
+        .iter()
+        .map(|thread| cockpit.key(thread.thread()))
+        .collect();
     let mut listed = cockpit.threads();
     listed.extend(cockpit.parked().unwrap());
     listed.sort();

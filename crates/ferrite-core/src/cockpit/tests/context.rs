@@ -410,6 +410,8 @@ fn what_quitting_cannot_write_is_kept_and_reported() {
     let dir = cockpit.engine().store.dir().to_path_buf();
     drop(cockpit);
     let mut relaunched = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
+    // The relaunch holds its machine under a new id.
+    let thread = relaunched.key(thread.thread());
     relaunched.revive(thread).unwrap();
     let notices: Vec<String> = relaunched
         .thread(thread)

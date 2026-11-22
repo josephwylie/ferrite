@@ -161,8 +161,18 @@ fn machine_window(
     core: Cockpit,
     machines: Entity<Machines>,
 ) -> (Entity<gpui::component::Root>, &mut gpui::VisualTestContext) {
+    machine_window_with(cx, core, machines, Preferences::ephemeral())
+}
+
+/// `machine_window`, with these preferences.
+fn machine_window_with(
+    cx: &mut TestAppContext,
+    core: Cockpit,
+    machines: Entity<Machines>,
+    prefs: Preferences,
+) -> (Entity<gpui::component::Root>, &mut gpui::VisualTestContext) {
     cx.add_window_view(|window, cx| {
-        let view = cx.new(|cx| CockpitView::new_with_machines(core, Provider::Claude, Preferences::ephemeral(), Some(machines), cx));
+        let view = cx.new(|cx| CockpitView::new_with_machines(core, Provider::Claude, prefs, Some(machines), cx));
         gpui::component::Root::new(
             cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
             window,
@@ -226,7 +236,13 @@ fn a_trip_to_a_machine_and_back_keeps_each_machines_pins(cx: &mut TestAppContext
     let mine = core.known_threads().into_iter().next().unwrap();
     let number = mine.thread().get();
     let machines = cx.new(|_| machines("pins", None));
-    let (root, cx) = machine_window(cx, core, machines);
+    let mut prefs = Preferences::ephemeral();
+    prefs.settings.machines = vec![Machine {
+        name: "box".into(),
+        target: "me@box".into(),
+        enabled: true,
+    }];
+    let (root, cx) = machine_window_with(cx, core, machines, prefs);
     let pins = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             let saved = serde_json::to_value(&view.prefs.settings).unwrap()["pinned_threads"].clone();
@@ -376,6 +392,8 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
         .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     let mut core = attach("window");
+    // This window holds box under an id of its own.
+    let editing = core.key(editing.thread());
     core.focus_thread(editing);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -389,7 +407,10 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
 
     background.park_thread(earlier).unwrap();
     until(cx, |cx| {
-        view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(earlier).is_none())
+        view.read_with(cx, |view, cx| {
+            let cockpit = view.cockpit.read(cx);
+            cockpit.thread(cockpit.key(earlier.thread())).is_none()
+        })
     });
     let editor = cx
         .debug_bounds("focused-prompt-editor")
@@ -409,6 +430,7 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
     let opened = background
         .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
+    let opened = view.read_with(cx, |view, cx| view.cockpit.read(cx).key(opened.thread()));
     until(cx, |cx| {
         view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(opened).is_some())
     });
@@ -712,16 +734,7 @@ fn machine_window_saving_to<'a>(
 ) -> (Entity<gpui::component::Root>, &'a mut gpui::VisualTestContext) {
     let mut prefs = Preferences::ephemeral();
     prefs.dir = dir.to_path_buf();
-    cx.add_window_view(|window, cx| {
-        let view = cx.new(|cx| {
-            CockpitView::new_with_machines(core, Provider::Claude, prefs, Some(machines), cx)
-        });
-        gpui::component::Root::new(
-            cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
-            window,
-            cx,
-        )
-    })
+    machine_window_with(cx, core, machines, prefs)
 }
 
 /// The verifier's run: this computer's Thread has Files open, and files.json
@@ -767,7 +780,7 @@ fn going_to_a_machine_and_back_keeps_each_machines_files_tabs(cx: &mut TestAppCo
 /// of the same Thread id, and box's list prunes only box's sets.
 #[gpui::test]
 fn coming_home_from_a_machine_saves_its_files_tabs_as_its_own(cx: &mut TestAppContext) {
-    let (core, _fake, checkout) = bound_cockpit("machines-files-back", Provider::Claude);
+    let (core, _fake, checkout) = bound_cockpit_as("machines-files-back", Provider::Claude, ferrite_core::MachineKey(Some("me@box".into())));
     let thread = core.known_threads().into_iter().next().unwrap();
     let dir = scratch("machines-files-back-prefs");
     seed_saved_files(&dir, &[(None, thread.thread().get(), "here-1.rs")]);
@@ -836,16 +849,7 @@ fn machine_window_drafting_in<'a>(
 ) -> (Entity<gpui::component::Root>, &'a mut gpui::VisualTestContext) {
     let mut prefs = Preferences::ephemeral();
     prefs.dir = dir.to_path_buf();
-    cx.add_window_view(|window, cx| {
-        let view = cx.new(|cx| {
-            CockpitView::new_with_machines(core, Provider::Claude, prefs, Some(machines), cx)
-        });
-        gpui::component::Root::new(
-            cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
-            window,
-            cx,
-        )
-    })
+    machine_window_with(cx, core, machines, prefs)
 }
 
 /// `view`'s first Pane's Composer takes `text`, as typing would leave it.
@@ -905,7 +909,7 @@ fn going_to_a_machine_and_back_keeps_each_machines_drafts(cx: &mut TestAppContex
 /// as box's, not over this computer's draft of the same Thread number.
 #[gpui::test]
 fn coming_home_from_a_machine_saves_its_drafts_as_its_own(cx: &mut TestAppContext) {
-    let (core, _fake, _checkout) = bound_cockpit("machines-drafts-back", Provider::Claude);
+    let (core, _fake, _checkout) = bound_cockpit_as("machines-drafts-back", Provider::Claude, ferrite_core::MachineKey(Some("me@box".into())));
     let thread = core.known_threads().into_iter().next().unwrap();
     let dir = scratch("machines-drafts-back-prefs");
     seed_saved_drafts(&dir, &[(None, thread.thread().get(), "here"), (Some("me@box"), thread.thread().get(), "there")]);

@@ -1154,11 +1154,20 @@ fn checkout_with_files(base: &std::path::Path) -> std::path::PathBuf {
 
 /// One Thread of `provider` bound to a checkout with files to mention.
 fn bound_cockpit(name: &str, provider: Provider) -> (Cockpit, Fake, std::path::PathBuf) {
+    bound_cockpit_as(name, provider, ferrite_core::MachineKey(None))
+}
+
+/// `bound_cockpit`, standing in for the machine saved as `saved_as`.
+fn bound_cockpit_as(
+    name: &str,
+    provider: Provider,
+    saved_as: ferrite_core::MachineKey,
+) -> (Cockpit, Fake, std::path::PathBuf) {
     let base = scratch(name);
     let checkout = checkout_with_files(&base);
     let fake = Fake::default();
     let store = Store::open(base.join("threads")).unwrap();
-    let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
+    let mut cockpit = Cockpit::new_saved_as(store, Box::new(fake.clone()), saved_as);
     cockpit
         .open(
             provider,

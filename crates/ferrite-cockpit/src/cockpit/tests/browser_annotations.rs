@@ -154,6 +154,8 @@ fn restarted<'a>(
     drop(view);
 
     let mut core = Cockpit::new(Store::open(&store).unwrap(), Box::new(fake));
+    // The relaunch holds its machine under a new id.
+    let thread = core.key(thread.thread());
     core.reopen(thread).unwrap();
     launch(&mut core);
     let mut prefs = Preferences::ephemeral();

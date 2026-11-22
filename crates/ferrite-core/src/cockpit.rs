@@ -1211,6 +1211,16 @@ impl Cockpit {
     pub fn key(&self, thread: ThreadId) -> ThreadKey {
         self.here().key(thread)
     }
+
+    /// A window driving an Engine of its own that stands in for the
+    /// machine saved as `saved_as`: a view test's window on that machine.
+    pub fn new_saved_as(store: Store, spawner: Box<dyn Spawner>, saved_as: MachineKey) -> Self {
+        let machine = Self::in_process_machine(store, spawner, saved_as)
+            .expect("the workspace registry opens");
+        let mut cockpit = Self::with(machine);
+        cockpit.receive();
+        cockpit
+    }
 }
 
 #[cfg(test)]
