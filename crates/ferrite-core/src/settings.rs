@@ -148,6 +148,17 @@ pub struct Settings {
     /// starred: its Favourites tab, and the first rows of their provider's
     /// own tab. Default: none.
     pub favourite_models: Vec<FavouriteModel>,
+    /// What is still being tried out (Settings › Labs). Default: all off.
+    pub labs: Labs,
+}
+
+/// What is still being tried out, each off until the operator turns it on.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Labs {
+    /// Whether a Thread may start a Delegate on another machine, and this
+    /// machine's Server takes one. Default: off.
+    pub linked_machines: bool,
 }
 
 /// The defaults a Server owns: what the machine whose Server runs the
@@ -388,6 +399,7 @@ impl Default for Settings {
             forge_hosts: ForgeHosts::default(),
             factory_tasks_at_once: crate::factory::DEFAULT_LIMIT,
             favourite_models: Vec::new(),
+            labs: Labs::default(),
         }
     }
 }
@@ -651,6 +663,9 @@ mod tests {
                 provider: Provider::Codex,
                 model: "gpt-5.6".into(),
             }],
+            labs: Labs {
+                linked_machines: true,
+            },
         }
     }
 

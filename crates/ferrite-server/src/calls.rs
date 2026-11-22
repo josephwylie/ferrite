@@ -15,13 +15,15 @@ use ferrite_core::api::schema::{
     ThreadStartParams,
 };
 use ferrite_core::api::{
-    self, thread_info, thread_result, unknown_thread, ApiError, CallerId, Code, Method, Request,
-    ThreadInfo, Until, Wait,
+    self, thread_info, thread_parked, thread_result, unknown_thread, ApiError, CallerId, Code,
+    Method, Request, ThreadInfo, Until, Wait,
 };
 use ferrite_core::drive::Action;
 use ferrite_core::engine::{Launch, ReadBack};
 use ferrite_core::protocol::{Done, Op, ProjectAction, ServerMessage};
-use ferrite_core::store::LoadError;
+use ferrite_core::runtime_mode::RuntimeMode;
+use ferrite_core::settings::Settings;
+use ferrite_core::store::{LoadError, Provider};
 use ferrite_core::workspace::{self, WorkspaceChoice};
 use ferrite_core::ThreadId;
 
@@ -196,6 +198,7 @@ impl Server {
             Method::WorktreeRemove(params) => self.remove_worktree(&params.path),
             Method::MachineList(_) => self.machines(),
             Method::IdentityGet(_) => Ok(json!({ "server_id": self.id })),
+            Method::ProviderList(_) => Ok(self.providers()),
             Method::EventsSubscribe(params) => {
                 self.api
                     .subscribe(&self.engine, caller_id, id, params.threads);
@@ -417,9 +420,35 @@ impl Server {
         Ok(json!({ "thread": thread }))
     }
 
-    /// Open a Thread as a window's `open` does, its CLI given `args`, then
-    /// title it and land the windows on it as asked.
+    /// Open a Thread as a window's `open` does, its CLI given `args` and
+    /// capped at `mode`, then title it, prompt it and land the windows on
+    /// it as asked; or answer with the Thread an earlier start with the
+    /// same `request` key opened, starting and sending nothing.
     fn start_thread(&mut self, params: ThreadStartParams) -> Result<ThreadId, ApiError> {
+        if params.delegated_from.is_some() && !self.takes_delegates()? {
+            return Err(ApiError::new(
+                Code::LinkedMachinesOff,
+                "this machine takes no Thread from another machine's: turn on Settings › \
+                 Labs › Linked machines here",
+            ));
+        }
+        if let Some(request) = &params.request {
+            let started = self
+                .engine
+                .started_by(request)
+                .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
+            if let Some(thread) = started {
+                return self.open_thread(thread).map_err(|_| thread_parked(thread));
+            }
+        }
+        let provider = params.provider.unwrap_or(self.default_provider);
+        let mut args = params.args;
+        if let Some(cap) = params.mode {
+            let defaults = self.defaults.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            if cap < RuntimeMode::of_launch(provider, &defaults, &args) {
+                args.extend(cap.args(provider));
+            }
+        }
         let (checkout, project) = match &params.project {
             Some(project) => {
                 let project = self.project(project)?;
@@ -443,23 +472,31 @@ impl Server {
         let workspace = workspace_choice(checkout, params.worktree, params.branch, params.base)?;
         let launch = Launch {
             launch_provider: params.provider,
-            args: params.args,
+            args,
             env: params.env.into_iter().collect(),
             launcher: params.launcher,
             resume: params.resume,
             project,
             owner,
+            delegated_from: params.delegated_from,
+            request: params.request,
         };
         let thread = self
             .engine
-            .open_with(
-                params.provider.unwrap_or(self.default_provider),
-                workspace,
-                launch,
-            )
+            .open_with(provider, workspace, launch)
             .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
         if let Some(title) = params.title {
             self.execute(Op::Rename { thread, title })?;
+        }
+        if let Some(text) = params.prompt {
+            let prompt = AgentPromptParams {
+                thread,
+                text,
+                wait: false,
+                timeout_ms: None,
+                until: Vec::new(),
+            };
+            self.prompt(&prompt).map_err(|error| error.on(thread))?;
         }
         if params.focus {
             self.say(ServerMessage::Focus {
@@ -497,12 +534,52 @@ impl Server {
             env: params.env.into_iter().collect(),
             launcher: params.launcher,
             resume: params.resume,
-            project: None,
-            owner: None,
+            ..Launch::default()
         };
         self.engine
             .revive_with(thread, launch)
             .map_err(|error| ApiError::new(Code::Failed, error.to_string()))
+    }
+
+    /// Whether this machine takes a Thread from another machine's: its
+    /// Settings › Labs › Linked machines, as its `settings.json` says now.
+    fn takes_delegates(&self) -> Result<bool, ApiError> {
+        Settings::load(&self.settings_dir)
+            .map(|settings| settings.labs.linked_machines)
+            .map_err(|error| ApiError::new(Code::Failed, error.to_string()))
+    }
+
+    /// What this machine runs Threads on, as `provider.list` answers
+    /// (T3 Code's `orchestrator_capabilities`): each provider's models and
+    /// their efforts, the modes a Thread may be capped at, and the mode
+    /// its settings start one at, which no cap broadens.
+    fn providers(&self) -> Value {
+        let defaults = self.defaults.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let providers: Vec<Value> = Provider::ALL
+            .into_iter()
+            .map(|provider| {
+                let models: Vec<Value> = self
+                    .engine
+                    .model_catalog(provider)
+                    .into_iter()
+                    .map(|model| {
+                        json!({
+                            "model": model.value,
+                            "label": model.display,
+                            "efforts": model.efforts,
+                            "default_effort": model.default_effort,
+                        })
+                    })
+                    .collect();
+                json!({
+                    "provider": provider,
+                    "models": models,
+                    "modes": RuntimeMode::ALL,
+                    "mode": RuntimeMode::of_launch(provider, &defaults, &[]),
+                })
+            })
+            .collect();
+        json!({ "providers": providers, "default_provider": self.default_provider })
     }
 
     /// Herdr's rule: nothing is sent to an agent a Decision blocks, since

@@ -199,3 +199,42 @@ fn a_rewind_takes_the_prompt_its_old_echo_shares_an_id_with() {
     drop(writer);
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A fork is the operator's own and started here: it keeps neither its
+/// source's owner nor the Thread on another machine that delegated it, nor
+/// the start key that finds the source again.
+#[test]
+fn a_fork_drops_who_delegated_its_source_and_its_start_key() {
+    let dir = scratch("fork-delegated");
+    let store = Store::open(&dir).unwrap();
+    let delegated_from = crate::DelegatedFrom {
+        server: crate::server::ServerId::new("s-mac"),
+        label: "mac".into(),
+        thread: ThreadId::new(12),
+        title: "Release checklist".into(),
+    };
+    let origin = Origin {
+        owner: Some(crate::ThreadOwner::Task("t-1".into())),
+        delegated_from: Some(delegated_from.clone()),
+        request: Some("delegate:s-mac:12:k-1".into()),
+    };
+    let (id, mut writer) = store
+        .create_owned(Provider::Claude, None, None, main(), origin)
+        .unwrap();
+    writer.record_prompt("one").unwrap();
+    writer.flush().unwrap();
+
+    let fork = store.fork(id, None, None).unwrap();
+    let forked = store.peek(fork).unwrap();
+    assert_eq!(
+        (forked.owner, forked.delegated_from, forked.request),
+        (None, None, None)
+    );
+    assert_eq!(store.load(fork).unwrap().delegated_from(), None);
+    let source = store.peek(id).unwrap();
+    assert_eq!(source.delegated_from, Some(delegated_from));
+    assert_eq!(store.started_by("delegate:s-mac:12:k-1").unwrap(), Some(id));
+    assert_eq!(store.started_by("delegate:s-mac:12:k-2").unwrap(), None);
+    drop(writer);
+    let _ = fs::remove_dir_all(&dir);
+}

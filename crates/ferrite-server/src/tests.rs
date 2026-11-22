@@ -22,6 +22,7 @@ mod browser_annotations;
 mod browser_lifetime;
 #[cfg(unix)]
 mod browser_providers;
+mod delegated;
 mod drive;
 mod environment;
 mod factory;
@@ -53,8 +54,19 @@ type Queued = Arc<Mutex<Vec<String>>>;
 /// `None`, the Server cannot list them.
 type Installed = Arc<Mutex<Option<Vec<String>>>>;
 
+/// What every Session was started with beyond Ferrite's own (its launch
+/// arguments) and the prompts it was sent, in order.
+#[derive(Default)]
+pub(super) struct Told {
+    pub(super) args: Vec<Vec<String>>,
+    pub(super) prompts: Vec<String>,
+}
+
+type Telling = Arc<Mutex<Told>>;
+
 struct Scripted {
     events: Receiver<SessionEvent>,
+    told: Telling,
     answers: Answers,
     queued: Queued,
     can_queue: CanQueue,
@@ -72,7 +84,8 @@ impl Session for Scripted {
     fn events(&self) -> &Receiver<SessionEvent> {
         &self.events
     }
-    fn send(&mut self, _: &str) -> io::Result<()> {
+    fn send(&mut self, text: &str) -> io::Result<()> {
+        self.told.lock().unwrap().prompts.push(text.into());
         Ok(())
     }
     fn interrupt(&mut self) -> io::Result<()> {
@@ -137,6 +150,7 @@ type Launches = Arc<Mutex<Vec<(Provider, Option<String>, Option<String>)>>>;
 struct Spawn {
     sessions: Sender<Sender<SessionEvent>>,
     launches: Launches,
+    told: Telling,
     answers: Answers,
     queued: Queued,
     /// Sessions start only as the test lets each through; at once without.
@@ -153,6 +167,7 @@ impl Spawn {
             request.model.map(str::to_string),
             request.effort.map(str::to_string),
         ));
+        self.told.lock().unwrap().args.push(request.launch.args.to_vec());
     }
 
     fn scripted(&self) -> Scripted {
@@ -160,6 +175,7 @@ impl Spawn {
         self.sessions.send(provider).unwrap();
         Scripted {
             events,
+            told: self.told.clone(),
             answers: self.answers.clone(),
             queued: self.queued.clone(),
             can_queue: self.can_queue.clone(),
@@ -215,6 +231,7 @@ struct Harness {
     api: PathBuf,
     sessions: Receiver<Sender<SessionEvent>>,
     launches: Launches,
+    told: Telling,
     answers: Answers,
     queued: Queued,
     browser: ferrite_core::browser::Client,
@@ -282,11 +299,13 @@ fn serve_configured(
     let answers = Answers::default();
     let queued = Queued::default();
     let launches = Launches::default();
+    let told = Telling::default();
     let installed = Installed::default();
     let spawn = Spawn {
         installed: installed.clone(),
         sessions,
         launches: launches.clone(),
+        told: told.clone(),
         answers: answers.clone(),
         queued: queued.clone(),
         gate,
@@ -331,6 +350,7 @@ fn serve_configured(
         api,
         sessions: started,
         launches,
+        told,
         answers,
         queued,
         browser,
@@ -1587,6 +1607,7 @@ pub(super) fn spawn() -> (Box<dyn Spawner>, Receiver<Sender<SessionEvent>>) {
     let (sessions, providers) = mpsc::channel();
     let spawner = Spawn {
         launches: Default::default(),
+        told: Default::default(),
         sessions,
         answers: Answers::default(),
         queued: Queued::default(),
@@ -2170,6 +2191,7 @@ fn spawn_gated() -> (Box<dyn Spawner>, Receiver<Sender<SessionEvent>>, Sender<()
     let (gate, opens) = mpsc::channel();
     let spawner = Spawn {
         launches: Default::default(),
+        told: Default::default(),
         sessions,
         answers: Answers::default(),
         queued: Queued::default(),
@@ -2326,6 +2348,7 @@ fn asking_a_thread_without_its_agent_starts_it_and_asks_it() {
     let controls = Controls::default();
     let spawner = Spawn {
         launches: Default::default(),
+        told: Default::default(),
         sessions,
         answers: Answers::default(),
         queued: Queued::default(),
@@ -2383,6 +2406,7 @@ fn prompts_queued_while_the_agent_starts_wait_for_it() {
         "restored-queue",
         Box::new(Spawn {
             launches: Default::default(),
+            told: Default::default(),
             sessions,
             answers: Answers::default(),
             queued: queued.clone(),
@@ -2422,6 +2446,7 @@ fn prompts_wait_for_a_provider_that_cannot_queue_yet() {
         "restored-cannot-queue",
         Box::new(Spawn {
             launches: Default::default(),
+            told: Default::default(),
             sessions,
             answers: Answers::default(),
             queued: queued.clone(),

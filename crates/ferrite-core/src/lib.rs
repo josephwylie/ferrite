@@ -45,6 +45,7 @@ pub mod providers;
 pub mod questions;
 pub mod replies;
 pub mod roster;
+pub mod runtime_mode;
 pub mod self_update;
 pub mod server;
 pub mod session;
@@ -75,7 +76,8 @@ pub use session_event::{
     SessionControl, SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
 };
 pub use thread::{
-    MachineId, MachineKey, ProjectKey, SavedThread, ThreadId, ThreadKey, ThreadOwner,
+    DelegatedFrom, MachineId, MachineKey, ProjectKey, SavedThread, ThreadId, ThreadKey,
+    ThreadOwner,
 };
 
 /// Conversation-owned website tabs and lifecycle.

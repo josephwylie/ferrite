@@ -110,7 +110,7 @@ impl ApiError {
         }
     }
 
-    fn on(self, thread: ThreadId) -> Self {
+    pub fn on(self, thread: ThreadId) -> Self {
         Self {
             thread: Some(thread),
             ..self
@@ -171,6 +171,11 @@ pub enum Code {
     /// A Coordinator's Thread asked for what only the operator does: it
     /// raises a proposal instead (#224).
     ProposeInstead,
+    /// The Thread is parked, not gone: the refusal names it.
+    ThreadParked,
+    /// A Thread from another machine (`delegated_from`) while this
+    /// machine's Settings › Labs › Linked machines is off.
+    LinkedMachinesOff,
 }
 
 impl From<crate::factory::Refusal> for ApiError {
@@ -252,6 +257,9 @@ pub struct ThreadInfo {
     /// The branch of that worktree, when Ferrite made it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// The Thread on another machine that delegated it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegated_from: Option<crate::DelegatedFrom>,
 }
 
 pub fn thread_info(engine: &Engine, thread: ThreadId) -> Option<ThreadInfo> {
@@ -282,6 +290,7 @@ pub fn thread_info(engine: &Engine, thread: ThreadId) -> Option<ThreadInfo> {
             .and_then(|path| engine.registry().branch_for(path))
             .map(Into::into),
         owner: view.owner().map(owner),
+        delegated_from: view.delegated_from().cloned(),
     })
 }
 
@@ -363,6 +372,16 @@ pub fn thread_result(engine: &Engine, thread: ThreadId) -> Result<Value, ApiErro
 
 pub fn unknown_thread() -> ApiError {
     ApiError::new(Code::UnknownThread, "no open Thread has that id")
+}
+
+/// `thread` is parked, not gone: its history stays, and `thread.revive`
+/// starts it again.
+pub fn thread_parked(thread: ThreadId) -> ApiError {
+    ApiError::new(
+        Code::ThreadParked,
+        format!("Thread {thread} is parked: its history stays (thread.revive starts it again)"),
+    )
+    .on(thread)
 }
 
 /// What a subscription hears.

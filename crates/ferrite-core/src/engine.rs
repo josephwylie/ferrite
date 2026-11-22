@@ -80,6 +80,11 @@ pub struct Launch {
     /// Whose the Thread is when not the operator's (ADR 0037): written
     /// with it at its start. A revive keeps the one it has.
     pub owner: Option<crate::ThreadOwner>,
+    /// The Thread on another machine that delegated it, kept like the
+    /// owner.
+    pub delegated_from: Option<crate::DelegatedFrom>,
+    /// The key of the `thread.start` that opens it (`Engine::started_by`).
+    pub request: Option<String>,
 }
 
 /// Everything one spawn needs, in one struct: every path that starts a
@@ -596,6 +601,8 @@ struct Thread {
     snooze: Option<crate::snooze::Snooze>,
     /// Whose the Thread is when not the operator's (ADR 0037).
     owner: Option<crate::ThreadOwner>,
+    /// The Thread on another machine that delegated it.
+    delegated_from: Option<crate::DelegatedFrom>,
     /// What waits for the Session to take it.
     awaiting: Awaiting,
     /// The Session was started for use (ADR 0032) rather than asked for:
@@ -731,6 +738,7 @@ impl Thread {
             title: None,
             snooze: None,
             owner: None,
+            delegated_from: None,
             awaiting: Awaiting::default(),
             woken: false,
             settled_at: None,
@@ -1551,6 +1559,8 @@ impl Engine {
             resume,
             project,
             owner,
+            delegated_from,
+            request,
             ..
         } = launch;
         let root =
@@ -1633,7 +1643,11 @@ impl Engine {
             model.clone(),
             Some(project),
             binding.clone(),
-            owner.clone(),
+            crate::store::Origin {
+                owner: owner.clone(),
+                delegated_from: delegated_from.clone(),
+                request,
+            },
         );
         let (id, mut writer) = match created {
             Ok(created) => created,
@@ -1727,6 +1741,7 @@ impl Engine {
             state.agent_args = agent_args;
             state.project = Some(project);
             state.owner = owner;
+            state.delegated_from = delegated_from;
             state.reserved_worktree = reserved;
         }
         self.note_open(id);
@@ -2362,6 +2377,7 @@ impl Engine {
         let title = snapshot.title().map(str::to_string);
         let snooze = snapshot.snooze();
         let owner = snapshot.owner().cloned();
+        let delegated_from = snapshot.delegated_from().cloned();
         let resume = match &launch {
             Some(launch) => launch.resume.clone(),
             None => snapshot.resume_target().map(str::to_string),
@@ -2417,6 +2433,7 @@ impl Engine {
         state.title = title;
         state.snooze = snooze;
         state.owner = owner;
+        state.delegated_from = delegated_from;
         state.project = project;
         state.agent_args = agent_args;
         if let Some(error) = unreadable_args {
@@ -2843,6 +2860,12 @@ impl Engine {
         if let Err(e) = session.stop_subagent(key) {
             state.apply(Input::Notice(format!("stop failed: {e}")));
         }
+    }
+
+    /// The Thread a `thread.start` carrying `request` opened, open or
+    /// parked, while the Store holds it (`Store::started_by`).
+    pub fn started_by(&self, request: &str) -> io::Result<Option<ThreadId>> {
+        self.store.started_by(request)
     }
 
     /// Threads the store holds that no Pane is showing — what a restart finds,
@@ -5362,6 +5385,11 @@ impl<'a> ThreadView<'a> {
     /// Whose the Thread is when not the operator's (ADR 0037).
     pub fn owner(&self) -> Option<&'a crate::ThreadOwner> {
         self.state.owner.as_ref()
+    }
+
+    /// The Thread on another machine that delegated it.
+    pub fn delegated_from(&self) -> Option<&'a crate::DelegatedFrom> {
+        self.state.delegated_from.as_ref()
     }
 
     /// The follow-up predicted for this Thread's last response, if one has

@@ -107,6 +107,16 @@ stay, as any agent driving others uses them:
 | `machine.list` | the enabled saved machines, `{id, label, target}` by name |
 | `identity.get` | `{server_id}`: the Server's `ServerId` (ADR 0025), the same over every route to it, for a Peer to check (below) |
 
+Added for Delegates, copied from T3 Code's linked environments: a
+Thread's agent starts a Thread on another machine to do one piece of
+work, and that machine's Server follows it. These are what the starting
+Server asks of the other machine's:
+
+| Operation | Does |
+|---|---|
+| `thread.start` | gains `request` (the caller's key, kept in the Thread's header: a start with the same key answers with the Thread the first opened and starts and sends nothing, across a restart too; `thread_parked`, naming it, once it is parked), `prompt` (its first prompt, sent once inside the start, as T3's launch carries `message`), `mode` (T3's runtime modes, `approval_required` < `auto_accept_edits` < `auto` < `full_access`: the Thread runs at the narrower of `mode` and what this machine's settings and `args` start it at, pinned by the provider's own flags after `args`, so a revive keeps it; a narrower start is never broadened) and `delegated_from` (`{server, label, thread, title}`: the starting Thread, kept in the header for life and in every answer about the Thread; a fork drops it, as it drops `owner`; refused `linked_machines_off` while this machine's Settings › Labs › Linked machines is off) |
+| `provider.list` | T3's `orchestrator_capabilities`: each provider with its models (`model`, `label`, `efforts`, `default_effort`), the `modes` a start may cap at, and the `mode` this machine's settings start a Thread at |
+
 `notification.show` gains `sound` (`request`, `done`, `none`) and
 `important`. A Thread's answer gains `focused` and `draft`, which the
 windows tell the Server (`focused`, `composing`, gen-1 commands only a

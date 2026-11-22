@@ -1,0 +1,1 @@
+{"id":"1","method":"thread.start","params":{"cwd":"/work/app","provider":"codex","title":"Fix the flaky login test","request":"delegate:5f3a9c:12:k-1","prompt":"Fix the flaky login test, then say what changed.","mode":"auto_accept_edits","delegated_from":{"server":"5f3a9c","label":"mac","thread":12,"title":"Release checklist"}}}
