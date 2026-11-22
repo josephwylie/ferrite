@@ -6094,10 +6094,12 @@ fn snooze_is_shared_and_survives_server_restart_without_a_session() {
             .and_then(|open| open.snooze())
             .is_some()
     });
+    // Each window names the Thread by a key of its own.
     let mut second = cockpit(&harness);
+    let theirs = here(&second, thread.thread());
     pump_until(&mut second, |window| {
         window
-            .thread(thread)
+            .thread(theirs)
             .and_then(|open| open.snooze())
             .is_some_and(|snooze| snooze.until == until)
     });
@@ -6110,6 +6112,7 @@ fn snooze_is_shared_and_survives_server_restart_without_a_session() {
     gone(&harness.api);
     let successor = serve_in(harness.dir.clone(), None);
     let mut reopened = cockpit(&successor);
+    let thread = here(&reopened, thread.thread());
     pump_until(&mut reopened, |window| {
         window
             .thread(thread)

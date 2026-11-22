@@ -661,8 +661,8 @@ fn switching_machines_transfers_unsaved_panel_state_and_retires_the_previous_wri
     cx.run_until_parked();
     let successor = shown(&root, cx);
     assert_ne!(successor.entity_id(), first.entity_id());
-    successor.read_with(cx, |view, _| {
-        let on_box = thread;
+    successor.read_with(cx, |view, cx| {
+        let on_box = view.cockpit.read(cx).key(thread.thread());
         assert!(
             view.panel.surfaces.get(on_box).is_none(),
             "box's Thread of the same number is another Thread, with no Panel yet"
