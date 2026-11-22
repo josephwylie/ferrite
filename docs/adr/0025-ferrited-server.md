@@ -225,7 +225,7 @@ Server → Client:
 
 | Message | Lane | Meaning |
 |---|---|---|
-| `welcome {generation, server:{version, executable}, boot_id, capabilities[], error?, uptime_ms?}` | — | `error.code = unsupported_generation` when the generations do not meet; the Server then closes. `uptime_ms` is the `at_ms` clock now. |
+| `welcome {generation, server:{version, executable}, boot_id, capabilities[], error?, uptime_ms?, server_id?, now_ms?}` | — | `error.code = unsupported_generation` when the generations do not meet; the Server then closes. `uptime_ms` is the `at_ms` clock now. `server_id` and `now_ms` are gen-1 additions (2026-11-22): the Server's own id and its wall clock now (below). |
 | `snapshot {boot_id, revision, threads[], roster, decisions[], groups?, registry?, notices?, providers?, parked?, digests?}` | — | Everything a window draws before any transcript. `roster` is the shared half: open Threads in order and the park order. A Server without `digests` predates ADR 0032: its windows watch every open Thread. |
 | `history {thread, after, inputs[]}` … `history_end {thread, seq, live[]}` | reliable | A watched Thread's log from its bounded base, as a revive reads it (ADR 0009, 0032), read off the pump thread up to a writer `checkpoint` taken on the pump thread at `seq`, in pieces of about 1 MiB (`after` counts the inputs before each; `0` starts the Thread over, and a window drops a piece that does not follow the ones it holds); a window draws the history whole once `history_end` arrives, never its oldest pieces first; then `live`, the live-only inputs that rebuild what the log never holds and is still in effect (the Session's `Connect`, pending Decisions, MCP state, rate limits). Live inputs continue after `seq`. |
 | `input {thread, seq, at_ms, input}` | reliable | One `ActivityInput` the Engine applied, in order. |
@@ -274,6 +274,21 @@ messages carry it so a client drops one older than its snapshot.
 `at_ms` is the Server's monotonic clock since boot; the client offsets it
 by the difference measured at `welcome`, so working timers agree across
 clients.
+
+Every Server has an id (`server::ServerId`), made the first time a Server
+starts on its Store and kept in its `server-id` file, so every boot and
+every route to it names one Server; remote access (`remote-access.json`)
+reads the same one, and a Store paired before ids keeps the identity it
+was paired with. `welcome` says it, with `now_ms`, the Server's wall clock
+in milliseconds since the epoch. A window keeps both for its link
+(`ServerState::Attached {id, clock}`): `clock::ServerClock` is how far the
+Server's wall clock runs ahead of the window's, sampled across the
+hello's round trip as T3 Code's `recordServerClock` does (the offset
+nearest 0 the round trip allows, so clocks that agree read as 0), and
+`local_ms` reads a Server's wall time on the window's clock. A Server from
+before sends neither: no id, and its clock reads as agreeing. Added
+2026-11-22, for the merged sidebar and Delegates on other machines, which
+hold more than one Server at once; nothing reads them yet.
 
 **Lanes.** One connection, one outbox. Streaming text is never dropped,
 not sent latest-wins as the plan sketched: Herdr's latest-wins lane
