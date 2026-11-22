@@ -3,7 +3,8 @@ use std::cell::RefCell;
 use super::*;
 
 /// What a call asked, and the answers it got, in order; the last answer
-/// is given again to any later ask.
+/// is given again to any later ask. Who this machine is (`machine.list`
+/// without `reach`) is answered `srv-here` and not kept.
 struct Server {
     asked: RefCell<Vec<Method>>,
     answers: RefCell<Vec<Result<Value, Refusal>>>,
@@ -19,6 +20,9 @@ impl Server {
 
     fn call(&self, tool: &str, arguments: Value) -> (Value, bool) {
         let ask = |method| {
+            if method == Method::MachineList(MachineListParams::default()) {
+                return Ok(json!({ "server_id": "srv-here", "machines": [] }));
+            }
             self.asked.borrow_mut().push(method);
             let mut answers = self.answers.borrow_mut();
             match answers.len() {
@@ -264,6 +268,11 @@ fn what_a_delegate_cannot_be_is_refused_without_asking() {
     for (arguments, said) in [
         (json!({ "task": "x", "target": {} }), failure("target_required", NO_MACHINE)),
         (json!({ "task": "x" }), failure("target_required", NO_MACHINE)),
+        // `machine_list`'s own `machineId` names this machine, as T3's does.
+        (
+            json!({ "task": "x", "target": { "machineId": "srv-here" } }),
+            failure("target_required", NO_MACHINE),
+        ),
         (
             json!({ "task": "x", "target": there, "isolation": "worktree" }),
             failure("invalid_request", NO_WORKTREE),
@@ -437,12 +446,14 @@ fn project_list_pages_the_projects_there() {
     );
     let (last, _) = server.call("project_list", json!({ "cursor": 2, "limit": 500 }));
     assert_eq!(last["nextCursor"], Value::Null);
+    server.call("project_list", json!({ "machineId": "srv-here" }));
     assert_eq!(
         *server.asked.borrow(),
         vec![
             Method::ProjectList(MachineParams {
                 machine: Some("pc".into())
             }),
+            Method::ProjectList(MachineParams::default()),
             Method::ProjectList(MachineParams::default()),
         ]
     );

@@ -208,8 +208,10 @@ Nothing here fences the link itself, and T3 does not either.
   - `interactionMode: "plan"`: a start there carries a runtime mode only.
     The parent's `interactionMode` reads `default`, since Ferrite counts
     Claude's plan mode as `approval-required`;
-  - a task with no `target.machineId`: a child on this machine is a
-    native subagent or a Thread of its own, not a Delegate.
+  - a task with no `target.machineId`, or this machine's: a child on this
+    machine is a native subagent or a Thread of its own, not a Delegate.
+    A `machineId` naming this machine (`machine_list`'s own) means here
+    for every tool, as T3's `remoteTarget` has it.
 
   `driverKind` names the provider there whose id it is, a Ferrite
   provider being its own one instance. `search` matches models as T3's

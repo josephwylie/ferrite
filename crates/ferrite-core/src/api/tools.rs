@@ -815,14 +815,24 @@ mod tests {
         let tools = Tools::new(heard).for_thread(ThreadId::new(7), None, true);
         let target = r#"{"machineId":"pc","model":"opus"}"#;
         tools.call("delegate_task", &json!({ "task": "x", "target": target }), true, |_| {});
-        let Ok(link::Heard::Api(Heard::Joined(..))) = hear.recv_timeout(Duration::from_secs(5)) else {
-            panic!("joined first");
+        let asked = || loop {
+            match hear.recv_timeout(Duration::from_secs(5)) {
+                Ok(link::Heard::Api(Heard::Joined(_, answers))) => {
+                    let Ok(link::Heard::Api(Heard::Request(_, request))) = hear.recv() else {
+                        panic!("joined, then asked");
+                    };
+                    return (request.method, answers);
+                }
+                Ok(_) => continue,
+                Err(error) => panic!("nothing asked: {error}"),
+            }
         };
-        let Ok(link::Heard::Api(Heard::Request(_, request))) = hear.recv() else {
-            panic!("then asked");
-        };
-        let Method::DelegateStart(start) = request.method else {
-            panic!("a delegate.start: {:?}", request.method);
+        let (here, answers) = asked();
+        assert_eq!(here, Method::MachineList(Default::default()));
+        let this = br#"{"id":"1","result":{"server_id":"srv-here","machines":[]}}"#;
+        answers.send(this.to_vec()).unwrap();
+        let Method::DelegateStart(start) = asked().0 else {
+            panic!("then a delegate.start");
         };
         assert_eq!((start.machine.as_str(), start.model.as_deref()), ("pc", Some("opus")));
     }

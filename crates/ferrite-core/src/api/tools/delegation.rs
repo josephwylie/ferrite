@@ -61,9 +61,9 @@ Ordinary coding tasks need no Ferrite tools.
 /// `NOT_LISTED`, which names its `t3_environment_link`).
 const NOT_LISTED: &str = "Not listed: not linked yet. The user links it in Settings → Connections.";
 
-/// A start that names no machine: Ferrite delegates only to another one.
-const NO_MACHINE: &str =
-    "Pass target.machineId: a delegated task runs on a linked machine. machine_list lists them.";
+/// A start that names no machine, or this one: Ferrite delegates only to
+/// another.
+const NO_MACHINE: &str = "Pass target.machineId: a delegated task runs on a linked machine, not this one. machine_list lists them under links.";
 
 /// T3's refusal of a worktree there, without its `t3_thread_launch`.
 const NO_WORKTREE: &str = "A task in a linked machine runs in that project's checkout; isolation \"worktree\" is not supported there. Omit isolation.";
@@ -336,7 +336,7 @@ pub(super) fn call(
 /// hands on. Asked of another machine, T3's answer is that machine's,
 /// which knows no parent: nothing is inherited there.
 fn capabilities(arguments: &Value, thread: ThreadId, ask: &Ask<'_>) -> Result<Value, Failure> {
-    let machine = arguments["machineId"].as_str().map(str::to_string);
+    let machine = remote_target(&arguments["machineId"], ask)?;
     let search = match arguments["search"].as_str().map(str::trim) {
         None => None,
         Some(search) if !search.is_empty() && search.chars().count() <= 200 => {
@@ -472,10 +472,8 @@ fn delegate(arguments: &Value, ask: &Ask<'_>) -> Result<Value, Failure> {
         .filter(|task| !task.is_empty())
         .ok_or_else(|| invalid("Pass task: what the child agent is to do."))?;
     let target = &arguments["target"];
-    let machine = target["machineId"]
-        .as_str()
-        .ok_or_else(|| Failure::new("target_required", NO_MACHINE))?
-        .to_string();
+    let machine = remote_target(&target["machineId"], ask)?
+        .ok_or_else(|| Failure::new("target_required", NO_MACHINE))?;
     if arguments["isolation"] == "worktree" {
         return Err(invalid(NO_WORKTREE));
     }
@@ -533,6 +531,14 @@ fn delegate(arguments: &Value, ask: &Ask<'_>) -> Result<Value, Failure> {
             waited(delegate, wait, ask)
         }
     }
+}
+
+/// The linked machine a call names, or none when it names this one, whose
+/// id `machine_list` answers first (T3's `remoteTarget`).
+fn remote_target(named: &Value, ask: &Ask<'_>) -> Result<Option<String>, Failure> {
+    let Some(named) = named.as_str() else { return Ok(None) };
+    let here = ask(Method::MachineList(MachineListParams::default()))?;
+    Ok((here["server_id"] != named).then(|| named.to_string()))
 }
 
 /// The provider there of driver `kind` (T3's `resolveRemoteInstance`): a
@@ -734,7 +740,7 @@ fn projects(arguments: &Value, ask: &Ask<'_>) -> Result<Value, Failure> {
             _ => return Err(invalid("Pass limit: a whole number from 1.")),
         },
     };
-    let machine = arguments["machineId"].as_str().map(str::to_string);
+    let machine = remote_target(&arguments["machineId"], ask)?;
     let listed = ask(Method::ProjectList(MachineParams { machine }))?;
     let all = listed["projects"].as_array().cloned().unwrap_or_default();
     let page: Vec<Value> = all.iter().skip(cursor).take(limit).map(project).collect();
