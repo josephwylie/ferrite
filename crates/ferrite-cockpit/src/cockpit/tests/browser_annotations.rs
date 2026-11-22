@@ -213,13 +213,13 @@ fn a_restored_image_tab_nothing_claims_goes_without_the_lightbox(cx: &mut TestAp
     assert_eq!(composer_text(&view, window), "still mine", "the keyboard is the Pane's");
     let tab = crate::cockpit::surfaces::SurfaceId::File(capture);
     view.update(window, |view, cx| {
-        assert!(!view.panel.surfaces.get(thread).unwrap().tabs.contains(&tab));
-        view.apply_surface(thread, crate::cockpit::surfaces::SurfaceAction::Reopen);
-        assert!(!view.panel.surfaces.get(thread).unwrap().tabs.contains(&tab), "nor on Reopen");
+        assert!(!view.panel.surfaces.get(view.cockpit.read(cx).thread_key(thread)).unwrap().tabs.contains(&tab));
+        view.apply_surface(view.cockpit.read(cx).thread_key(thread), crate::cockpit::surfaces::SurfaceAction::Reopen);
+        assert!(!view.panel.surfaces.get(view.cockpit.read(cx).thread_key(thread)).unwrap().tabs.contains(&tab), "nor on Reopen");
         view.flush_panel_persistence(cx);
     });
-    let saved = crate::cockpit::surfaces::Surfaces::load(&settings, |_, _| true).unwrap();
-    assert!(!saved.get(thread).unwrap().tabs.contains(&tab), "nor at the next launch");
+    let saved = crate::cockpit::surfaces::Surfaces::saved_in(&settings, thread).unwrap();
+    assert!(!saved.tabs.contains(&tab), "nor at the next launch");
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -249,7 +249,7 @@ fn a_restored_review_waits_for_history_that_lands_after_the_first_frame(cx: &mut
         cx.debug_bounds("annotation-stage").is_some()
     });
     assert!(window.debug_bounds("lightbox").is_none());
-    assert!(view.read_with(window, |view, _| view.active_surface(thread) == Some(tab)));
+    assert!(view.read_with(window, |view, cx| view.active_surface(view.cockpit.read(cx).thread_key(thread)) == Some(tab)));
     std::fs::remove_dir_all(root).unwrap();
 }
 

@@ -323,7 +323,7 @@ impl CockpitView {
             return self.panel_target_w(cx);
         }
         self.panel_drawn_pane(cx).map_or(0.0, |index| {
-            self.panel_rest_w(index) * self.columns.panel.drawn
+            self.panel_rest_w(index, cx) * self.columns.panel.drawn
         })
     }
 }

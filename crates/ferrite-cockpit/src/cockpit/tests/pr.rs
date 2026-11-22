@@ -295,7 +295,7 @@ fn the_pr_surface_keeps_its_view(cx: &mut TestAppContext) {
     click("pr-tab-Timeline", cx);
     assert!(cx.debug_bounds("pr-timeline").is_some(), "the conversation");
     view.update(cx, |view, cx| {
-        view.upsert_surface(thread, SurfaceId::Overview, cx)
+        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Overview, cx)
     });
     tick(cx);
     view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
@@ -304,8 +304,8 @@ fn the_pr_surface_keeps_its_view(cx: &mut TestAppContext) {
         cx.debug_bounds("pr-timeline").is_some(),
         "kept on the Surface"
     );
-    let kept = view.read_with(cx, |view, _| {
-        view.panel.surfaces.get(thread).unwrap().pr_tab(48)
+    let kept = view.read_with(cx, |view, cx| {
+        view.panel.surfaces.get(view.cockpit.read(cx).thread_key(thread)).unwrap().pr_tab(48)
     });
     assert_eq!(kept, PrTab::Timeline);
     click("pr-tab-Guide", cx);
@@ -438,7 +438,7 @@ fn an_armed_merge_does_not_outlive_its_surface(cx: &mut TestAppContext) {
     let (view, thread, fake, cx) = with_pr("pr-armed", WirePrState::Open, cx);
     let back = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.update(cx, |view, cx| {
-            view.activate_surface(thread, &SurfaceId::PullRequest(48), cx)
+            view.activate_surface(view.cockpit.read(cx).thread_key(thread), &SurfaceId::PullRequest(48), cx)
         });
         tick(cx);
     };
@@ -448,7 +448,7 @@ fn an_armed_merge_does_not_outlive_its_surface(cx: &mut TestAppContext) {
 
     click("pr-primary", cx);
     view.update(cx, |view, cx| {
-        view.upsert_surface(thread, SurfaceId::Overview, cx)
+        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Overview, cx)
     });
     tick(cx);
     back(&view, cx);
@@ -480,7 +480,7 @@ fn a_restored_tab_for_another_pr_keeps_its_identity(cx: &mut TestAppContext) {
     std::fs::create_dir_all(&dir).unwrap();
     let mut surfaces = crate::cockpit::surfaces::Surfaces::default();
     surfaces.apply(
-        thread,
+        ferrite_core::ThreadKey::fixture(0, thread.get()),
         true,
         crate::cockpit::surfaces::SurfaceAction::Open(SurfaceId::PullRequest(47)),
     );
@@ -499,8 +499,8 @@ fn a_restored_tab_for_another_pr_keeps_its_identity(cx: &mut TestAppContext) {
         view.fixture_pr_snapshot(thread, snapshot(WirePrState::Open), cx)
     });
     tick(cx);
-    let tabs = view.read_with(cx, |view, _| {
-        view.panel.surfaces.get(thread).unwrap().tabs.clone()
+    let tabs = view.read_with(cx, |view, cx| {
+        view.panel.surfaces.get(view.cockpit.read(cx).thread_key(thread)).unwrap().tabs.clone()
     });
     assert!(tabs.contains(&SurfaceId::PullRequest(47)), "{tabs:?}");
     assert!(cx.debug_bounds("panel-tab-PullRequest-47").is_some());
@@ -533,8 +533,9 @@ fn a_thread_pr_restored_on_code_reads_its_diff(cx: &mut TestAppContext) {
     let dir = scratch("pr-restored-code-prefs");
     std::fs::create_dir_all(&dir).unwrap();
     let mut surfaces = Surfaces::default();
-    surfaces.apply(thread, true, SurfaceAction::Open(SurfaceId::PullRequest(48)));
-    surfaces.apply(thread, true, SurfaceAction::SelectPrTab { number: 48, tab: PrTab::Code });
+    let key = ferrite_core::ThreadKey::fixture(0, thread.get());
+    surfaces.apply(key, true, SurfaceAction::Open(SurfaceId::PullRequest(48)));
+    surfaces.apply(key, true, SurfaceAction::SelectPrTab { number: 48, tab: PrTab::Code });
     surfaces.save(&dir).unwrap();
     let prefs = Preferences {
         dir,
@@ -607,7 +608,7 @@ fn a_prs_code_view_reads_the_published_diff(cx: &mut TestAppContext) {
         let path = view.thread_path(thread, cx).unwrap();
         let files = ferrite_core::protocol::sides_of_unified("diff --git a/published.rs b/published.rs\n--- a/published.rs\n+++ b/published.rs\n@@ -1 +1 @@\n-old\n+published\n");
         view.cockpit.update(cx, |cockpit, _| cockpit.fixture_forge_diff(path, 48, files));
-        view.upsert_surface(thread, SurfaceId::Changes, cx);
+        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Changes, cx);
     });
     tick(cx);
     view.update(cx, |view, cx| view.open_pr_surface(thread, cx));

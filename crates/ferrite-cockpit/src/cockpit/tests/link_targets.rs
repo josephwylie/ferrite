@@ -40,7 +40,7 @@ fn two_prs<'a>(
     });
     tick(cx);
     view.update(cx, |view, cx| {
-        if view.panel_open(a) {
+        if view.panel_open(view.cockpit.read(cx).thread_key(a)) {
             view.toggle_panel_now(cx);
         }
     });
@@ -74,7 +74,7 @@ fn another_threads_pr_badge_shows_that_threads_pr(cx: &mut TestAppContext) {
     press(badge(b), MouseButton::Left, gpui::Modifiers::none(), cx);
 
     assert_eq!(view.read_with(cx, |view, cx| view.focused_thread(cx)), Some(b));
-    let shown = view.read_with(cx, |view, _| view.panel.surfaces.get(b).map(|s| (s.open, s.active.clone())));
+    let shown = view.read_with(cx, |view, cx| view.panel.surfaces.get(view.cockpit.read(cx).thread_key(b)).map(|s| (s.open, s.active.clone())));
     assert_eq!(shown, Some((true, Some(SurfaceId::PullRequest(202)))));
     assert!(cx.debug_bounds("pr-header").is_some(), "its native detail is drawn");
     assert_eq!(cx.opened_url(), None, "nothing left Ferrite");

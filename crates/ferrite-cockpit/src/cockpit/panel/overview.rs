@@ -20,7 +20,7 @@ pub(crate) struct OverviewView {
     pub(super) hunks: Hunks,
     /// Each Thread's sections' scroll, so a Thread's Overview comes back
     /// where it was left. The Background Surface scrolls with it.
-    scrolls: HashMap<ThreadId, ScrollHandle>,
+    scrolls: HashMap<ThreadKey, ScrollHandle>,
 }
 
 /// What the Overview asks of the window.
@@ -28,25 +28,25 @@ pub(in crate::cockpit) enum OverviewEvent {
     /// An unfolded file's hunks are unread, or were read at another
     /// diffstat: read the checkout's uncommitted diff for it.
     ReadHunks {
-        thread: ThreadId,
+        thread: ThreadKey,
         path: String,
         stat: (usize, usize),
     },
     /// `Create PR`.
-    CreatePr(ThreadId),
+    CreatePr(ThreadKey),
     /// A changed file's name: it opens in the preview.
     Preview(std::path::PathBuf),
     /// `Review changes`.
     Review,
     /// The pull request's row.
-    OpenPr(ThreadId),
+    OpenPr(ThreadKey),
 }
 
 impl EventEmitter<OverviewEvent> for OverviewView {}
 
 /// What the Overview draws of the window for one Thread.
 pub(in crate::cockpit) struct OverviewInputs<'a> {
-    pub(super) thread: ThreadId,
+    pub(super) thread: ThreadKey,
     /// The machine the Thread runs on, as the Environment names it.
     pub(super) machine: String,
     /// The Thread's checkout.
@@ -69,18 +69,18 @@ pub(in crate::cockpit) struct OverviewInputs<'a> {
 
 impl OverviewView {
     /// `thread`'s sections' scroll, made the first time it is asked for.
-    pub(in crate::cockpit) fn scroll(&mut self, thread: ThreadId) -> ScrollHandle {
+    pub(in crate::cockpit) fn scroll(&mut self, thread: ThreadKey) -> ScrollHandle {
         self.scrolls.entry(thread).or_default().clone()
     }
 
     /// Every Thread `keep` refuses takes its folds, reads and scroll with it.
-    pub(in crate::cockpit) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
+    pub(in crate::cockpit) fn retain_threads(&mut self, keep: impl Fn(ThreadKey) -> bool) {
         self.hunks.retain_threads(&keep);
         self.scrolls.retain(|thread, _| keep(*thread));
     }
 
     #[cfg(test)]
-    pub(in crate::cockpit) fn held_for_test(&self, thread: ThreadId) -> usize {
+    pub(in crate::cockpit) fn held_for_test(&self, thread: ThreadKey) -> usize {
         self.hunks.held_for_test(thread)
     }
 }
@@ -90,16 +90,16 @@ impl CockpitView {
     /// open.
     pub(in crate::cockpit) fn overview_sections(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if self.cockpit.read(cx).thread(thread).is_none() {
+        if self.cockpit.read(cx).thread(thread.thread()).is_none() {
             return div().into_any_element();
         }
-        let folder = self.thread_path(thread, cx);
+        let folder = self.thread_path(thread.thread(), cx);
         let background = self
-            .background_inputs(thread, false, cx)
+            .background_inputs(thread.thread(), false, cx)
             .and_then(|inputs| self.background.update(cx, |background, cx| background.section(&inputs, cx)));
         // The model is lent, not written: the Overview draws what it
         // borrows of it under its own update.
@@ -117,15 +117,16 @@ impl CockpitView {
     fn overview_inputs<'a>(
         &'a self,
         model: &'a Cockpit,
-        thread: ThreadId,
+        key: ThreadKey,
         folder: Option<std::path::PathBuf>,
         background: Option<Div>,
     ) -> Option<OverviewInputs<'a>> {
+        let thread = key.thread();
         let open = model.thread(thread)?;
         let transcript = open.transcript();
         let facts = self.facts.get(thread);
         Some(OverviewInputs {
-            thread,
+            thread: key,
             machine: model.machine().map_or_else(
                 || "This computer".to_string(),
                 |bridge| bridge.name().to_string(),
@@ -158,14 +159,14 @@ impl CockpitView {
             OverviewEvent::ReadHunks { thread, path, stat } => {
                 self.read_overview_hunks(*thread, path.clone(), *stat, cx)
             }
-            OverviewEvent::CreatePr(thread) => self.create_pr(*thread, cx),
+            OverviewEvent::CreatePr(thread) => self.create_pr(thread.thread(), cx),
             OverviewEvent::Preview(path) => self.open_preview(path.clone(), None, window, cx),
             OverviewEvent::Review => self.open_beside(
                 beside::Beside::Review(ferrite_reviewr::model::Scope::Uncommitted),
                 window,
                 cx,
             ),
-            OverviewEvent::OpenPr(thread) => self.open_pr_surface(*thread, cx),
+            OverviewEvent::OpenPr(thread) => self.open_pr_surface(thread.thread(), cx),
         }
     }
 
@@ -174,7 +175,7 @@ impl CockpitView {
     /// Overview.
     fn read_overview_hunks(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         path: String,
         stat: (usize, usize),
         cx: &mut Context<Self>,
@@ -182,7 +183,7 @@ impl CockpitView {
         if !self.overview.read(cx).wants_read(thread, &path, stat) {
             return;
         }
-        let Some(workspace) = self.thread_path(thread, cx) else {
+        let Some(workspace) = self.thread_path(thread.thread(), cx) else {
             return;
         };
         let answer = self
@@ -230,6 +231,25 @@ impl CockpitView {
         path: &str,
         cx: &gpui::App,
     ) -> Option<super::hunks::Shown> {
-        self.overview.read(cx).hunks_for_test(thread, path).cloned()
+        self.overview.read(cx).hunks_for_test(self.cockpit.read(cx).thread_key(thread), path).cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Thread 3 here and Thread 3 on box keep a scroll each, and one
+    /// going takes only its own.
+    #[test]
+    fn an_overview_keeps_two_machines_threads_apart() {
+        let mut overview = OverviewView::default();
+        let (mine, boxes) = (ThreadKey::fixture(0, 3), ThreadKey::fixture(1, 3));
+        overview.scroll(mine);
+        overview.scroll(boxes);
+        assert_eq!(overview.scrolls.len(), 2);
+        overview.retain_threads(|key| key != boxes);
+        assert!(overview.scrolls.contains_key(&mine));
+        assert!(!overview.scrolls.contains_key(&boxes));
     }
 }

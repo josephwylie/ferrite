@@ -73,7 +73,7 @@ fn a_closed_side_chat_is_ended_not_reopened_and_no_fork_is_substituted(cx: &mut 
         .iter()
         .position(|id| matches!(id, SurfaceId::SideChat(_)))
         .unwrap();
-    let rows = view.read_with(cx, |view, _| view.surface_tab_rows(thread, at));
+    let rows = view.read_with(cx, |view, cx| view.surface_tab_rows(thread, at, cx));
     assert!(
         rows.iter()
             .flatten()
@@ -192,7 +192,7 @@ fn a_file_missing_after_restart_says_so_and_can_be_tried_again(cx: &mut TestAppC
         let (view, thread, cx) = restart_view("reopen-missing-a", &dir, &checkout, cx);
         view.update(cx, |view, cx| {
             view.open_in_files(thread, note.clone(), None, true, cx);
-            view.upsert_surface(thread, SurfaceId::File(note.clone()), cx);
+            view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::File(note.clone()), cx);
         });
         tick(cx);
     }
@@ -211,7 +211,7 @@ fn a_file_missing_after_restart_says_so_and_can_be_tried_again(cx: &mut TestAppC
     until(cx, |cx| cx.debug_bounds("files-unshown").is_none());
 
     view.update(cx, |view, cx| {
-        view.upsert_surface(thread, SurfaceId::Files, cx)
+        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx)
     });
     tick(cx);
     std::fs::remove_file(&note).unwrap();

@@ -1282,7 +1282,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             }
             let setup: Setup = Box::new(|view, _, cx| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
-                view.open_panel(thread, cx);
+                view.open_panel(view.cockpit.read(cx).thread_key(thread), cx);
             });
             (scene, setup)
         }

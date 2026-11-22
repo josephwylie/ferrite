@@ -73,7 +73,7 @@ impl CockpitView {
         let open = self
             .panel
             .surfaces
-            .get(thread)
+            .get(self.cockpit.read(cx).thread_key(thread))
             .and_then(|state| {
                 state
                     .tabs
@@ -84,7 +84,7 @@ impl CockpitView {
             });
         match open {
             Some(id) => {
-                self.upsert_surface(thread, id, cx);
+                self.upsert_surface(self.cockpit.read(cx).thread_key(thread), id, cx);
                 self.terminals.update(cx, |terminals, _| terminals.want_focus());
             }
             None => self.new_terminal_surface(thread, cx),

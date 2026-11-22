@@ -755,7 +755,9 @@ impl CockpitView {
             Command::SurfaceMenu,
         );
         add(
-            focused.is_some_and(|thread| self.active_surface(thread).is_some() && self.panel_open(thread)),
+            focused
+                .map(|thread| self.cockpit.read(cx).thread_key(thread))
+                .is_some_and(|thread| self.active_surface(thread).is_some() && self.panel_open(thread)),
             "Close surface".into(),
             "the Panel's shown tab",
             None,
@@ -765,7 +767,7 @@ impl CockpitView {
             focused.is_some_and(|thread| {
                 self.panel
                     .surfaces
-                    .get(thread)
+                    .get(self.cockpit.read(cx).thread_key(thread))
                     .is_some_and(|state| state.can_reopen())
             }),
             "Reopen closed surface".into(),
@@ -1110,21 +1112,21 @@ impl CockpitView {
                 if let Some(thread) = thread {
                     match self.opener_unavailable(thread, panel::Opener::Changes, cx) {
                         None => self.run_opener(thread, panel::Opener::Changes, cx),
-                        Some(_) => self.open_panel(thread, cx),
+                        Some(_) => self.open_panel(self.cockpit.read(cx).thread_key(thread), cx),
                     }
                 }
             }
             Command::SurfaceMenu => self.open_surface_menu(cx),
             Command::CloseSurface => {
                 if let Some((thread, id)) =
-                    thread.and_then(|thread| Some((thread, self.active_surface(thread)?)))
+                    thread.and_then(|thread| Some((thread, self.active_surface(self.cockpit.read(cx).thread_key(thread))?)))
                 {
-                    self.close_surface(thread, &id, cx);
+                    self.close_surface(self.cockpit.read(cx).thread_key(thread), &id, cx);
                 }
             }
             Command::ReopenSurface => {
                 if let Some(thread) = thread {
-                    self.apply_surface(thread, surfaces::SurfaceAction::Reopen);
+                    self.apply_surface(self.cockpit.read(cx).thread_key(thread), surfaces::SurfaceAction::Reopen);
                     cx.notify();
                 }
             }

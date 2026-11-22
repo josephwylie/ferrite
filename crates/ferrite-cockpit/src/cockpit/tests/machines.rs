@@ -162,7 +162,7 @@ fn machine_window(
     machines: Entity<Machines>,
 ) -> (Entity<gpui::component::Root>, &mut gpui::VisualTestContext) {
     cx.add_window_view(|window, cx| {
-        let view = cx.new(|cx| CockpitView::new(core, cx).with_machines(machines));
+        let view = cx.new(|cx| CockpitView::new(core, cx).with_machines(machines, cx));
         gpui::component::Root::new(
             cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
             window,
@@ -231,10 +231,10 @@ fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut Test
     });
     cx.simulate_keystrokes("cmd-shift-f");
     tick(cx);
-    view.read_with(cx, |view, _| assert_eq!(view.active_surface(thread), Some(SurfaceId::Files)));
+    view.read_with(cx, |view, cx| assert_eq!(view.active_surface(view.cockpit.read(cx).thread_key(thread)), Some(SurfaceId::Files)));
     cx.simulate_keystrokes("cmd-j");
     tick(cx);
-    view.read_with(cx, |view, _| assert!(matches!(view.active_surface(thread), Some(SurfaceId::Terminal(_)))));
+    view.read_with(cx, |view, cx| assert!(matches!(view.active_surface(view.cockpit.read(cx).thread_key(thread)), Some(SurfaceId::Terminal(_)))));
     assert!(cx.debug_bounds("terminal-failed").is_some(), "a fake SSH bridge cannot start a local shell");
 }
 
@@ -360,7 +360,7 @@ fn a_machine_off_screen_heads_its_rows_with_its_connection(cx: &mut TestAppConte
     let (core, _fake) = cockpit("machines-listed", 1);
     let machines = cx.new(|_| machines("listed", None));
     let (view, cx) = add_cockpit_window(cx, |_, cx| {
-        CockpitView::new(core, cx).with_machines(machines)
+        CockpitView::new(core, cx).with_machines(machines, cx)
     });
     tick(cx);
     assert!(
@@ -450,7 +450,7 @@ fn a_window_with_only_this_computer_lists_no_machines(cx: &mut TestAppContext) {
         )
     });
     let (_view, cx) =
-        add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx).with_machines(alone));
+        add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx).with_machines(alone, cx));
     tick(cx);
     assert!(debug_bounds(cx, "nav-machine-0".into()).is_none());
 }
@@ -559,27 +559,31 @@ fn switching_machines_transfers_unsaved_panel_state_and_retires_the_previous_wri
         view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
         view.pump(cx);
         view.flush_panel_persistence(cx);
-        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Browser));
-        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Changes));
+        view.apply_surface(view.cockpit.read(cx).thread_key(thread), SurfaceAction::Open(SurfaceId::Browser));
+        view.apply_surface(view.cockpit.read(cx).thread_key(thread), SurfaceAction::Open(SurfaceId::Changes));
         cx.emit(GoToMachine { index: Some(1), open: None });
         thread
     });
     cx.run_until_parked();
     let successor = shown(&root, cx);
     assert_ne!(successor.entity_id(), first.entity_id());
-    successor.read_with(cx, |view, _| {
-        let state = view.panel.surfaces.get(thread).unwrap();
-        assert_eq!(state.active, Some(SurfaceId::Changes));
-        assert!(!state.tabs.contains(&SurfaceId::Browser), "live resources end with their owner");
+    successor.read_with(cx, |view, cx| {
+        let on_box = view.cockpit.read(cx).thread_key(thread);
+        assert!(
+            view.panel.surfaces.get(on_box).is_none(),
+            "box's Thread of the same number is another Thread, with no Panel yet"
+        );
     });
     std::fs::remove_file(&dir).unwrap();
     successor.update(cx, |view, cx| view.flush_panel_persistence(cx));
     first.update(cx, |view, cx| {
-        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Overview));
+        view.apply_surface(view.cockpit.read(cx).thread_key(thread), SurfaceAction::Open(SurfaceId::Overview));
         view.pump(cx);
         view.flush_panel_persistence(cx);
     });
-    assert_eq!(Surfaces::load(&dir, |_, _| true).unwrap().get(thread).unwrap().active, Some(SurfaceId::Changes));
+    let state = Surfaces::saved_in(&dir, thread).expect("this computer's Panel, saved by the successor");
+    assert_eq!(state.active, Some(SurfaceId::Changes));
+    assert!(!state.tabs.contains(&SurfaceId::Browser), "live resources end with their owner");
     let files: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("files.json")).unwrap()).unwrap();
     assert_eq!(files["threads"][thread.get().to_string()]["files"][0]["path"], checkout.join("src/lib.rs").to_str().unwrap());
 }
@@ -594,7 +598,7 @@ fn a_machine_without_ferrited_says_so_and_takes_no_input(cx: &mut TestAppContext
         .update(cx, |machines, _| machines.cockpit())
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| {
-        CockpitView::new(core, cx).with_machines(machines)
+        CockpitView::new(core, cx).with_machines(machines, cx)
     });
     until(cx, |cx| {
         view.read_with(cx, |view, cx| {
@@ -1291,7 +1295,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         .update(cx, |machines, _| machines.cockpit())
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| {
-        CockpitView::new(core, cx).with_machines(machines)
+        CockpitView::new(core, cx).with_machines(machines, cx)
     });
     until(cx, |cx| {
         view.read_with(cx, |view, cx| {
@@ -1465,7 +1469,7 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
         .update(cx, |machines, _| machines.cockpit())
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| {
-        CockpitView::new(core, cx).with_machines(machines)
+        CockpitView::new(core, cx).with_machines(machines, cx)
     });
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     until(cx, |cx| {

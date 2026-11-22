@@ -127,7 +127,7 @@ use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::RepoListing;
 #[cfg(test)]
 use ferrite_core::workspace::WorkspaceChoice;
-use ferrite_core::{DecisionAnswer, ThreadId};
+use ferrite_core::{DecisionAnswer, ThreadId, ThreadKey};
 use gpui::prelude::*;
 use gpui::{
     actions, anchored, deferred, div, px, rgb, rgba, AnyElement, ClickEvent, ClipboardItem,
@@ -1086,9 +1086,12 @@ impl CockpitView {
         mut cockpit: Cockpit,
         launch_provider: Provider,
         prefs: Preferences,
-        panel: panel::Panel,
+        mut panel: panel::Panel,
         cx: &mut Context<Self>,
     ) -> Self {
+        // A window is on this computer until it is given its machines
+        // (`with_machines`).
+        panel.hold(ferrite_core::MachineKey(None), &cockpit);
         ferrite_pane::pane::init_components(cx);
         subagents::init(cx);
         cockpit.settings_changed(&prefs.settings);
@@ -1396,7 +1399,9 @@ impl CockpitView {
     }
 
     /// The window's machines (ADR 0026), listed in the nav and Settings.
-    pub fn with_machines(mut self, machines: Entity<crate::machines::Machines>) -> Self {
+    pub fn with_machines(mut self, machines: Entity<crate::machines::Machines>, cx: &gpui::App) -> Self {
+        let here = machines.read(cx).selected_key().unwrap_or(ferrite_core::MachineKey(None));
+        self.panel.hold(here, self.cockpit.read(cx));
         self.machines = Some(machines);
         self
     }
@@ -1884,7 +1889,7 @@ impl CockpitView {
         }
         let thread = pane.thread()?;
         let on_panel = self.panel_control_focused(window, cx) || self.panel_keys_held(window, cx);
-        if !on_panel || self.active_surface(thread) != Some(crate::cockpit::surfaces::SurfaceId::Files) {
+        if !on_panel || self.active_surface(self.cockpit.read(cx).thread_key(thread)) != Some(crate::cockpit::surfaces::SurfaceId::Files) {
             return None;
         }
         let files = self.files.read(cx);
@@ -2002,7 +2007,7 @@ impl CockpitView {
                         self.show_changes_of(thread, &relative, cx);
                     }
                     None => {
-                        self.upsert_surface(thread, surfaces::SurfaceId::Changes, cx);
+                        self.upsert_surface(self.cockpit.read(cx).thread_key(thread), surfaces::SurfaceId::Changes, cx);
                         cx.notify();
                     }
                 }
@@ -2756,7 +2761,7 @@ impl CockpitView {
     /// while it has a reader slot. A plain Pane has none.
     fn board(&self, cx: &gpui::App) -> Option<Board> {
         match self.visible_indices(cx).as_slice() {
-            [index] if self.has_reader(*index) => Some(Board(self.panes[*index].identity)),
+            [index] if self.has_reader(*index, cx) => Some(Board(self.panes[*index].identity)),
             _ => None,
         }
     }
@@ -2773,7 +2778,7 @@ impl CockpitView {
         let readers: Vec<ThreadId> = self
             .visible_indices(cx)
             .into_iter()
-            .filter(|index| self.has_reader(*index))
+            .filter(|index| self.has_reader(*index, cx))
             .filter_map(|index| self.panes[index].thread())
             .collect();
         let base = self.board_layouts.get(&board).cloned().unwrap_or_default();
@@ -4419,7 +4424,7 @@ impl CockpitView {
     ) {
         if let Some(thread) = self.panel_thread(cx) {
             let on_controls = self.panel_control_focused(window, cx);
-            if self.open_files_find(thread, on_controls, window, cx) {
+            if self.open_files_find(thread.thread(), on_controls, window, cx) {
                 return;
             }
         }
@@ -7475,7 +7480,7 @@ impl CockpitView {
             menu,
             activity_decisions,
             details,
-            details_lane_width: self.details_lane_width(index),
+            details_lane_width: self.details_lane_width(index, cx),
             toolbar,
             resume_offer,
             // An empty Thread wears the draft's start card until its first

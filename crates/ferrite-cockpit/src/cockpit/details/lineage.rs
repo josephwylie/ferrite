@@ -259,7 +259,7 @@ impl Lineage {
             press("details-lineage-previous".into(), previous, cx).on_click(cx.listener(
                 move |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
-                    view.apply_surface(thread, SurfaceAction::TogglePreviousAgents);
+                    view.apply_surface(view.cockpit.read(cx).thread_key(thread), SurfaceAction::TogglePreviousAgents);
                     cx.notify();
                 },
             )),

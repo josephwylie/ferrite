@@ -38,7 +38,7 @@ pub(crate) enum Layout {
 }
 
 /// A file in the panel: its Thread and the path its facts carry.
-type FileKey = (ThreadId, String);
+type FileKey = (ThreadKey, String);
 
 /// A file's `+N −N`, as the facts count it.
 type Stat = (usize, usize);
@@ -134,13 +134,13 @@ impl Hunks {
     }
 
     /// Every Thread `keep` refuses takes its folds and reads with it.
-    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
+    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadKey) -> bool) {
         self.unfolded.retain(|(thread, _)| keep(*thread));
         self.reads.retain(|(thread, _), _| keep(*thread));
     }
 
     #[cfg(test)]
-    pub(super) fn held_for_test(&self, thread: ThreadId) -> usize {
+    pub(super) fn held_for_test(&self, thread: ThreadKey) -> usize {
         self.unfolded.iter().chain(self.reads.keys()).filter(|(of, _)| *of == thread).count()
     }
 }
@@ -148,19 +148,19 @@ impl Hunks {
 impl OverviewView {
     /// Fold or unfold `path`'s hunks under its block. The read, if one is
     /// due, is asked by the next frame that draws the block.
-    pub(in crate::cockpit) fn toggle_file(&mut self, thread: ThreadId, path: String, cx: &mut Context<Self>) {
+    pub(in crate::cockpit) fn toggle_file(&mut self, thread: ThreadKey, path: String, cx: &mut Context<Self>) {
         self.hunks.toggle((thread, path));
         cx.notify();
     }
 
     /// Whether every one of `paths` is unfolded (the section line's fold).
-    pub(super) fn files_unfolded<'a>(&self, thread: ThreadId, mut paths: impl Iterator<Item = &'a str>) -> bool {
+    pub(super) fn files_unfolded<'a>(&self, thread: ThreadKey, mut paths: impl Iterator<Item = &'a str>) -> bool {
         paths.all(|path| self.hunks.unfolded(&(thread, path.to_string())))
     }
 
     /// The section line's fold: unfold every one of `paths` unless all
     /// are, then fold them all.
-    pub(super) fn toggle_files(&mut self, thread: ThreadId, paths: Vec<String>, cx: &mut Context<Self>) {
+    pub(super) fn toggle_files(&mut self, thread: ThreadKey, paths: Vec<String>, cx: &mut Context<Self>) {
         let unfold = !self.files_unfolded(thread, paths.iter().map(String::as_str));
         self.hunks
             .set_all(paths.into_iter().map(|path| (thread, path)), unfold);
@@ -169,7 +169,7 @@ impl OverviewView {
 
     /// Whether `path`'s block is unfolded; when it is and its hunks are
     /// stale (or unread), ask the window for them.
-    pub(super) fn file_unfolded(&self, thread: ThreadId, file: &FileChange, cx: &mut Context<Self>) -> bool {
+    pub(super) fn file_unfolded(&self, thread: ThreadKey, file: &FileChange, cx: &mut Context<Self>) -> bool {
         let key = (thread, file.path.clone());
         let stat = (file.added, file.removed);
         if self.hunks.wants_read(&key, stat) {
@@ -183,7 +183,7 @@ impl OverviewView {
     }
 
     /// Whether `path`'s block wants its hunks read at `stat`.
-    pub(in crate::cockpit) fn wants_read(&self, thread: ThreadId, path: &str, stat: Stat) -> bool {
+    pub(in crate::cockpit) fn wants_read(&self, thread: ThreadKey, path: &str, stat: Stat) -> bool {
         self.hunks.wants_read(&(thread, path.to_string()), stat)
     }
 
@@ -191,7 +191,7 @@ impl OverviewView {
     /// build `path`'s hunks off the UI thread.
     pub(in crate::cockpit) fn wait_hunks(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         path: String,
         stat: Stat,
         workspace: &std::path::Path,
@@ -226,7 +226,7 @@ impl OverviewView {
     }
 
     #[cfg(test)]
-    pub(in crate::cockpit) fn hunks_for_test(&self, thread: ThreadId, path: &str) -> Option<&Shown> {
+    pub(in crate::cockpit) fn hunks_for_test(&self, thread: ThreadKey, path: &str) -> Option<&Shown> {
         self.hunks.shown(&(thread, path.to_string()))
     }
 
@@ -235,7 +235,7 @@ impl OverviewView {
     /// the frame it arrives and goes in the frame the block folds, as every
     /// fold does (motion-measured.md, "Tool group expand / collapse":
     /// snap everything).
-    pub(super) fn hunks_element(&self, thread: ThreadId, index: usize, path: &str, unfolded: bool) -> Option<Div> {
+    pub(super) fn hunks_element(&self, thread: ThreadKey, index: usize, path: &str, unfolded: bool) -> Option<Div> {
         unfolded
             .then(|| self.hunks.shown(&(thread, path.to_string())))
             .flatten()
@@ -526,7 +526,7 @@ mod tests {
     #[test]
     fn a_file_reads_again_when_its_diffstat_moves() {
         let mut hunks = Hunks::default();
-        let key = (ThreadId::new(1), "src/nav.rs".to_string());
+        let key = (ThreadKey::fixture(0, 1), "src/nav.rs".to_string());
         assert!(!hunks.wants_read(&key, (1, 1)), "folded: nothing");
         assert!(hunks.toggle(key.clone()));
         assert!(hunks.wants_read(&key, (1, 1)));

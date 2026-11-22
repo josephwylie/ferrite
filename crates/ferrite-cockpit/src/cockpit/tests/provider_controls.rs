@@ -41,7 +41,7 @@ fn contract_context_card_refreshes_and_shows_native_details(cx: &mut TestAppCont
     tick(cx);
     // Opening the panel asks the Session for a fresh reading.
     let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
-    view.update(cx, |view, cx| view.open_panel(thread, cx));
+    view.update(cx, |view, cx| view.open_panel(view.cockpit.read(cx).thread_key(thread), cx));
     cx.run_until_parked();
     assert_eq!(
         fake.controls.borrow().as_slice(),
@@ -385,7 +385,7 @@ fn background_work_lives_in_its_row_the_rail_and_the_pane(cx: &mut TestAppContex
     tick(cx);
     view.update(cx, |view, cx| {
         let thread = view.focused_thread(cx).unwrap();
-        view.open_panel(thread, cx);
+        view.open_panel(view.cockpit.read(cx).thread_key(thread), cx);
     });
     tick(cx);
     assert!(

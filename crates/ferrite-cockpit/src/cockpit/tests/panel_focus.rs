@@ -65,8 +65,8 @@ fn with_tabs<'a>(
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
-        view.upsert_surface(thread, SurfaceId::Files, cx);
-        view.upsert_surface(thread, SurfaceId::Changes, cx);
+        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx);
+        view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::Changes, cx);
         view.panes[0]
             .composer
             .update(cx, |composer, cx| composer.set(SENTINEL.into(), cx));
@@ -157,10 +157,10 @@ fn enter_presses_a_control_and_escape_gives_the_keyboard_back(cx: &mut TestAppCo
     press("end", cx);
     activate("enter", cx);
     assert!(
-        view.read_with(cx, |view, _| view
+        view.read_with(cx, |view, cx| view
             .panel
             .surfaces
-            .get(thread)
+            .get(view.cockpit.read(cx).thread_key(thread))
             .unwrap()
             .maximized),
         "⏎ maximizes"
@@ -196,7 +196,7 @@ fn arrowing_along_overflowing_tabs_scrolls_each_stop_into_view(cx: &mut TestAppC
     view.update(cx, |view, cx| {
         for n in 0..14 {
             let path = std::path::PathBuf::from(format!("/work/a-long-file-name-{n}.rs"));
-            view.upsert_surface(thread, SurfaceId::File(path), cx);
+            view.upsert_surface(view.cockpit.read(cx).thread_key(thread), SurfaceId::File(path), cx);
         }
     });
     tick(cx);

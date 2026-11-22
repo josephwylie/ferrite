@@ -171,7 +171,7 @@ impl CockpitView {
                 ["pull", "issues"].iter().any(|kind| url.starts_with(&format!("{repository}/{kind}/")))
             });
         if same_repository {
-            self.upsert_surface(thread, surfaces::SurfaceId::PullRequest(number), cx);
+            self.upsert_surface(self.cockpit.read(cx).thread_key(thread), surfaces::SurfaceId::PullRequest(number), cx);
         } else {
             self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx);
         }

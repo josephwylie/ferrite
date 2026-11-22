@@ -289,7 +289,7 @@ fn a_sheet_closing_after_the_filter_went_gives_the_composer_the_keys(cx: &mut Te
     typed_into_the_filter("b", cx);
     cx.simulate_keystrokes("cmd-,");
     tick(cx);
-    view.update(cx, |view, cx| view.upsert_surface(thread, crate::cockpit::surfaces::SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| view.upsert_surface(view.cockpit.read(cx).thread_key(thread), crate::cockpit::surfaces::SurfaceId::Overview, cx));
     tick(cx);
     assert!(cx.debug_bounds("changes-filter").is_none(), "the filter is not drawn");
     cx.simulate_keystrokes("escape");

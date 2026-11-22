@@ -798,7 +798,7 @@ impl CockpitView {
         match (pane.thread(), pane.preview.document()) {
             (Some(thread), Some(document)) => {
                 let id = document_surface(&document);
-                self.close_surface(thread, &id, cx);
+                self.close_surface(self.cockpit.read(cx).thread_key(thread), &id, cx);
             }
             _ => pane.preview.close(),
         }
@@ -906,6 +906,7 @@ impl CockpitView {
             .detach();
         }
         for (thread, id) in tended.opened {
+            let thread = self.cockpit.read(cx).thread_key(thread);
             if self.active_surface(thread).as_ref() != Some(&id) || !self.panel_open(thread) {
                 self.apply_surface(thread, SurfaceAction::Open(id));
             }
@@ -924,7 +925,7 @@ impl CockpitView {
             let Some(thread) = self.panes[index].thread() else {
                 continue;
             };
-            let wanted = match self.active_surface(thread) {
+            let wanted = match self.active_surface(self.cockpit.read(cx).thread_key(thread)) {
                 Some(SurfaceId::File(path)) => path,
                 Some(SurfaceId::Browser) => PathBuf::from(BROWSER_PATH),
                 _ => continue,
@@ -953,7 +954,7 @@ impl CockpitView {
             }
         }
         for (thread, id) in unfillable {
-            self.forget_surface(thread, &id);
+            self.forget_surface(self.cockpit.read(cx).thread_key(thread), &id);
         }
     }
 

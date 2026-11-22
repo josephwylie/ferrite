@@ -307,7 +307,7 @@ impl CockpitView {
         keep: bool,
         cx: &mut Context<Self>,
     ) {
-        self.upsert_surface(thread, SurfaceId::Files, cx);
+        self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx);
         let beside = self.files_tree_beside(cx);
         self.files
             .update(cx, |files, cx| files.open(thread, path, line, keep, beside, cx));
@@ -332,7 +332,7 @@ impl CockpitView {
     /// ⌘P: the Files Surface shows, and the tree's filter takes the
     /// keyboard.
     pub(in crate::cockpit) fn go_to_file(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) {
-        self.upsert_surface(thread, SurfaceId::Files, cx);
+        self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx);
         self.files.update(cx, |files, cx| files.go_to_file(thread, window, cx));
         cx.notify();
     }
@@ -348,7 +348,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.active_surface(thread) != Some(SurfaceId::Files) {
+        if self.active_surface(self.cockpit.read(cx).thread_key(thread)) != Some(SurfaceId::Files) {
             return false;
         }
         let held = on_controls || self.panel_keys_held(window, cx);
@@ -456,13 +456,13 @@ impl CockpitView {
     /// picked from it shows the editor again.
     fn files_tree_beside(&self, cx: &gpui::App) -> bool {
         self.panel_pane(cx)
-            .is_some_and(|index| self.panel_rest_w(index) >= theme::FILES_TREE_W + theme::FILES_EDITOR_MIN_W)
+            .is_some_and(|index| self.panel_rest_w(index, cx) >= theme::FILES_TREE_W + theme::FILES_EDITOR_MIN_W)
     }
 
     /// Everything Files draws from: the Thread whose Panel shows it.
     fn files_inputs(&self, cx: &gpui::App) -> Option<FilesInputs> {
         let thread = self.panes[self.panel_drawn_pane(cx)?].thread()?;
-        (self.active_surface(thread) == Some(SurfaceId::Files)).then(|| FilesInputs {
+        (self.active_surface(self.cockpit.read(cx).thread_key(thread)) == Some(SurfaceId::Files)).then(|| FilesInputs {
             thread,
             beside: self.files_tree_beside(cx),
             doors: self.doors(),

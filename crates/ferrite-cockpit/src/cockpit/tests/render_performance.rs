@@ -305,8 +305,8 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     // is put away: the measure below is of the Pane with the window to itself.
     view.update(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
-        view.close_surface(thread, &crate::cockpit::surfaces::SurfaceId::Files, cx);
-        if view.panel_open(thread) {
+        view.close_surface(view.cockpit.read(cx).thread_key(thread), &crate::cockpit::surfaces::SurfaceId::Files, cx);
+        if view.panel_open(view.cockpit.read(cx).thread_key(thread)) {
             view.toggle_panel_now(cx);
         }
     });

@@ -127,7 +127,7 @@ pub(crate) struct PanelFocus {
     drawn: RefCell<Vec<(PanelControl, Semantics)>>,
     /// The frame drawing the Panel now, until it is finished.
     drawing: RefCell<Option<Drawing>>,
-    remembered: RefCell<HashMap<ThreadId, PanelControl>>,
+    remembered: RefCell<HashMap<ThreadKey, PanelControl>>,
     /// Where the stops that open a menu were last drawn, for it to hang
     /// from.
     bounds: RefCell<HashMap<PanelControl, gpui::Bounds<gpui::Pixels>>>,
@@ -136,7 +136,7 @@ pub(crate) struct PanelFocus {
 /// A frame's stops as its views draw them, and the Thread whose Panel it
 /// draws: none for a draft's preview or no Panel.
 struct Drawing {
-    thread: Option<ThreadId>,
+    thread: Option<ThreadKey>,
     stops: Vec<(PanelControl, Semantics)>,
 }
 
@@ -150,7 +150,7 @@ impl PanelFocus {
 
     /// The root starts drawing the Panel of `thread`, or none. The row is
     /// finished once the frame is, after every child view has rendered.
-    pub(super) fn begin(self: &Rc<Self>, thread: Option<ThreadId>, window: &Window, cx: &mut App) {
+    pub(super) fn begin(self: &Rc<Self>, thread: Option<ThreadKey>, window: &Window, cx: &mut App) {
         let drawing = Drawing {
             thread,
             stops: Vec::new(),
@@ -238,12 +238,12 @@ impl PanelFocus {
     }
 
     /// A deleted Thread's stop is no longer remembered.
-    pub(crate) fn retain_threads(&self, keep: impl Fn(ThreadId) -> bool) {
+    pub(crate) fn retain_threads(&self, keep: impl Fn(ThreadKey) -> bool) {
         self.remembered.borrow_mut().retain(|thread, _| keep(*thread));
     }
 
     #[cfg(test)]
-    pub(crate) fn held_for_test(&self, thread: ThreadId) -> usize {
+    pub(crate) fn held_for_test(&self, thread: ThreadKey) -> usize {
         usize::from(self.remembered.borrow().contains_key(&thread))
     }
 
@@ -282,7 +282,7 @@ impl CockpitView {
 
     /// The stop F6 arrives at: the one last in focus while it is drawn,
     /// else the shown tab, else the first stop.
-    fn panel_entry(&self, thread: ThreadId) -> Option<PanelControl> {
+    fn panel_entry(&self, thread: ThreadKey) -> Option<PanelControl> {
         let focus = &self.panel.focus;
         let remembered = focus.remembered.borrow().get(&thread).cloned();
         remembered
@@ -303,8 +303,8 @@ impl CockpitView {
         if let Some(handle) = self.panel.focus.handle(control) {
             if let (PanelControl::FileTab(path), Some(thread)) = (control, self.panel_thread(cx)) {
                 self.files.update(cx, |files, _| {
-                    if let Some(at) = files.tab_index(thread, path) {
-                        files.reveal_tab(thread, at);
+                    if let Some(at) = files.tab_index(thread.thread(), path) {
+                        files.reveal_tab(thread.thread(), at);
                     }
                 });
             }
@@ -502,7 +502,7 @@ impl CockpitView {
         let on_control = self.panel_control_focused(window, cx);
         let focused = self.panel.focus.focused(window);
         if let Some(PanelControl::FileTab(path)) = focused {
-            self.close_file_tab(thread, &path, window, cx);
+            self.close_file_tab(thread.thread(), &path, window, cx);
             return true;
         }
         let closing = match focused {
@@ -522,7 +522,7 @@ impl CockpitView {
     }
 
     /// A tab has closed: the keyboard goes to the tab that takes its place.
-    fn focus_after_close(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) {
+    fn focus_after_close(&mut self, thread: ThreadKey, window: &mut Window, cx: &mut Context<Self>) {
         let next = self
             .active_surface(thread)
             .map(PanelControl::Tab)
@@ -563,7 +563,7 @@ impl CockpitView {
                 self.close_surface(thread, &id, cx);
                 self.focus_after_close(thread, window, cx);
             }
-            Some(PanelControl::FileTab(path)) => self.close_file_tab(thread, &path, window, cx),
+            Some(PanelControl::FileTab(path)) => self.close_file_tab(thread.thread(), &path, window, cx),
             _ => {}
         }
     }
@@ -591,15 +591,15 @@ impl CockpitView {
                 else {
                     return;
                 };
-                MenuTarget::SurfaceTab { thread, at }
+                MenuTarget::SurfaceTab { thread: thread.thread(), at }
             }
-            PanelControl::Plus => return self.toggle_door(super::strip::plus_door(thread), cx),
-            PanelControl::PrNumber => MenuTarget::PrLink(thread),
+            PanelControl::Plus => return self.toggle_door(super::strip::plus_door(thread.thread()), cx),
+            PanelControl::PrNumber => MenuTarget::PrLink(thread.thread()),
             PanelControl::PrMore => {
-                let Some(number) = self.pr_snapshot(thread, cx).map(|pr| pr.number) else {
+                let Some(number) = self.pr_snapshot(thread.thread(), cx).map(|pr| pr.number) else {
                     return;
                 };
-                let target = super::pr_read::PrTarget::thread(thread, number);
+                let target = super::pr_read::PrTarget::thread(thread.thread(), number);
                 return self.toggle_door(super::pull_request::pr_more_door(target), cx);
             }
             _ => return,
@@ -625,4 +625,23 @@ impl CockpitView {
         self.open_context_menu_at(target, at, gpui::Anchor::TopLeft, None, cx);
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The stop remembered for Thread 3 here is not box's Thread 3's.
+    #[test]
+    fn panel_focus_keeps_two_machines_threads_apart() {
+        let focus = PanelFocus::default();
+        let (mine, boxes) = (ThreadKey::fixture(0, 3), ThreadKey::fixture(1, 3));
+        focus.remembered.borrow_mut().insert(mine, PanelControl::Plus);
+        assert_eq!(focus.held_for_test(mine), 1);
+        assert_eq!(focus.held_for_test(boxes), 0);
+        focus.remembered.borrow_mut().insert(boxes, PanelControl::Maximize);
+        focus.retain_threads(|key| key != boxes);
+        assert_eq!(focus.remembered.borrow().get(&mine), Some(&PanelControl::Plus));
+        assert_eq!(focus.held_for_test(boxes), 0);
+    }
 }

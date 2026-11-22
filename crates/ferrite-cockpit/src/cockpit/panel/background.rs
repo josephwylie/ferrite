@@ -30,7 +30,7 @@ const TAIL_LINES: usize = 12;
 impl CockpitView {
     /// Open `thread`'s Background Surface.
     pub(crate) fn open_background(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        self.upsert_surface(thread, SurfaceId::Background, cx);
+        self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Background, cx);
     }
 }
 

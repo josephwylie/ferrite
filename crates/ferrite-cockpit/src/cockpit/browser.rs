@@ -221,7 +221,7 @@ impl CockpitView {
         if let Some(index) = self.pane_for(thread) {
             self.panes[index].preview.show_browser();
         }
-        self.upsert_surface(thread, super::surfaces::SurfaceId::Browser, cx);
+        self.upsert_surface(self.cockpit.read(cx).thread_key(thread), super::surfaces::SurfaceId::Browser, cx);
     }
 
     pub(super) fn browser_action(
@@ -233,7 +233,7 @@ impl CockpitView {
         if self.defer_annotation_action(thread, action.clone(), cx) { return; }
         self.cancel_browser_capture(thread, cx);
         self.ensure_browser(thread, cx);
-        let seen = self.surface_revision(thread);
+        let seen = self.surface_revision(self.cockpit.read(cx).thread_key(thread));
         // Only an action the Server accepts is echoed back to claim this revision.
         let echoed = matches!(action, Action::Open { .. } | Action::Select { .. });
         if matches!(action, Action::Open { .. }) {
@@ -338,7 +338,7 @@ impl CockpitView {
         for (thread, seen) in std::mem::take(&mut self.browsers.reveal) {
             match self.pane_for(thread) {
                 Some(index) => {
-                    if self.reveal_surface(thread, super::surfaces::SurfaceId::Browser, seen) {
+                    if self.reveal_surface(self.cockpit.read(cx).thread_key(thread), super::surfaces::SurfaceId::Browser, seen) {
                         self.panes[index].preview.show_browser();
                     }
                 }
@@ -400,7 +400,7 @@ impl CockpitView {
                     .sent
                     .get_mut(&thread)
                     .and_then(std::collections::VecDeque::pop_front)
-                    .unwrap_or_else(|| self.surface_revision(thread));
+                    .unwrap_or_else(|| self.surface_revision(self.cockpit.read(cx).thread_key(thread)));
                 self.browsers.reveal.entry(thread).or_insert(seen);
             }
             let browser = self.browsers.threads.get_mut(&thread).unwrap();

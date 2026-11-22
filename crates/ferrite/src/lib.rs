@@ -414,7 +414,7 @@ pub fn launch() {
                                 cx,
                             );
                             match machines {
-                                Some(machines) => view.with_machines(machines),
+                                Some(machines) => view.with_machines(machines, cx),
                                 None => view,
                             }
                         });
