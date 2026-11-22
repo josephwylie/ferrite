@@ -603,20 +603,22 @@ mod tests {
         }
     }
 
-    /// A call is an API request from the bound Thread: the caller is the
-    /// Session's own, never one the agent names.
+    /// A call is an API request from the bound Thread: whatever the agent
+    /// writes, the caller is the Session's own.
     #[test]
     fn a_call_is_a_request_from_the_sessions_own_thread() {
         let (worker, hear) = tools(ThreadOwner::Task("t-1".into()));
         let (told, said) = mpsc::channel();
         worker.call(
             "report_outcome",
-            &json!({ "outcome": "finished", "summary": "Done" }),
+            &json!({ "outcome": "finished", "summary": "Done", "worker": 8 }),
             true,
             move |answer| told.send((answer.text, answer.is_error)).unwrap(),
         );
-        let Ok(link::Heard::Api(Heard::Joined(caller, answers))) = hear.recv() else {
-            panic!("joined first");
+        let Ok(link::Heard::Api(Heard::Joined(caller, answers))) =
+            hear.recv_timeout(Duration::from_secs(5))
+        else {
+            panic!("joined first, not answered {:?}", said.try_recv());
         };
         let Ok(link::Heard::Api(Heard::Request(asked, request))) = hear.recv() else {
             panic!("then asked");
