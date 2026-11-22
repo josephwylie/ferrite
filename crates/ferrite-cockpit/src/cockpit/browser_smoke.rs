@@ -12,12 +12,12 @@ use std::time::{Duration, Instant};
 /// the reply (ADR 0041): `None` until the ask is answered, then asked again.
 fn served(
     view: &Entity<CockpitView>,
-    thread: ferrite_core::ThreadId,
+    thread: ferrite_core::ThreadKey,
     cx: &mut App,
 ) -> Result<Option<ferrite_core::browser::State>, String> {
     thread_local! {
         static ASKED: std::cell::RefCell<std::collections::BTreeMap<
-            ferrite_core::ThreadId,
+            ferrite_core::ThreadKey,
             ferrite_core::cockpit::Ask<ferrite_core::browser::State>,
         >> = Default::default();
     }
@@ -122,7 +122,7 @@ impl CockpitView {
                                 std::fs::write(output.join("lifecycle-before-restoration.json"),serde_json::to_vec_pretty(&state.tabs).unwrap()).map_err(|e|e.to_string())?;
                                 if let Some(tab)=state.tabs.iter().find(|tab|Some(tab.id)!=state.active && !tab.live) {
                                     restoring_page=Some((tab.document(),tab.url.clone()));
-                                    view.update(cx,|view,cx|view.browser_action(view.cockpit.read(cx).thread_key(thread),ferrite_core::browser::Action::Select{tab:tab.id},cx));
+                                    view.update(cx,|view,cx|view.browser_action(thread,ferrite_core::browser::Action::Select{tab:tab.id},cx));
                                     phase(&output,"restored-page");quiet_started=Some(Instant::now());return Ok(false);
                                 }
                             }
