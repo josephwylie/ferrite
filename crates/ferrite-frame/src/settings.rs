@@ -97,6 +97,8 @@ pub fn draw(sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> Drawn {
 /// `Page · Group`.
 struct Shown {
     title: SharedString,
+    /// What the page's settings apply to; a search's results say none.
+    scope: Option<SharedString>,
     groups: Vec<(Option<SharedString>, Group)>,
     /// The pages with a match (all of them without a query).
     hit: Vec<PageKey>,
@@ -107,6 +109,7 @@ fn shown(pages: &[Page], selected: PageKey, query: &str) -> Shown {
         let page = pages.iter().find(|page| page.key == selected);
         return Shown {
             title: selected.title().into(),
+            scope: page.and_then(|page| page.scope.clone()),
             groups: page
                 .map(|page| {
                     page.groups
@@ -149,6 +152,7 @@ fn shown(pages: &[Page], selected: PageKey, query: &str) -> Shown {
     }
     Shown {
         title: "Search results".into(),
+        scope: None,
         groups,
         hit,
     }
@@ -266,6 +270,15 @@ fn body(
                     32.
                 } else {
                     SETTINGS_GROUP_GAP
+                }))
+                // Atop the page, as T3 Code's settings say the environment
+                // they apply to.
+                .children(shown.scope.clone().map(|scope| {
+                    components::text_ui()
+                        .debug_selector(|| "settings-scope".into())
+                        .px(px(SETTINGS_ROW_PAD_X))
+                        .text_color(rgb(INK_SUBTLE))
+                        .child(scope)
                 }))
                 .when(searching && shown.groups.is_empty(), |list| {
                     list.child(

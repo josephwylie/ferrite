@@ -98,6 +98,14 @@ impl CockpitView {
         }
     }
 
+    /// What Settings' pages about a machine say atop them, as T3 Code's
+    /// say the environment they apply to: `Applying settings on box`.
+    /// With no machine held there is none to name.
+    pub(super) fn settings_scope(&self, cx: &gpui::App) -> Option<SharedString> {
+        self.settings_machine(cx)?;
+        Some(format!("Applying settings on {}", self.machine_place(cx)).into())
+    }
+
     /// Whether Settings is about a machine other than this computer, or
     /// none: with no machine held, this computer's files stand in for
     /// nothing.
@@ -233,11 +241,11 @@ impl CockpitView {
     }
 
     /// Settings › Permissions: how each provider's Sessions ask before
-    /// acting, as the machine they run on says.
+    /// acting, as the machine they run on says. The page says which
+    /// machine atop it (`settings_scope`).
     pub(super) fn permission_groups(&self, cx: &Context<Self>) -> Vec<settings::Group> {
-        let applies = settings::fact("Applies to", self.machine_place(cx));
         let Some(defaults) = self.shown_defaults(cx) else {
-            return vec![settings::Group::new(None).rows([applies, self.defaults_unread(cx)])];
+            return vec![settings::Group::new(None).rows([self.defaults_unread(cx)])];
         };
         let modes = |options: &[(&str, Option<&str>)], selected: Option<&str>| {
             options
@@ -300,12 +308,14 @@ impl CockpitView {
                 self.default_change(cx, |d, v| d.codex_sandbox = v),
             ),
         ];
-        vec![
-            settings::Group::new(None)
-                .rows(std::iter::once(applies).chain(self.defaults_unsaved(cx))),
-            provider_group(Provider::Claude).rows(claude),
-            provider_group(Provider::Codex).rows(codex),
-        ]
+        self.defaults_unsaved(cx)
+            .map(|unsaved| settings::Group::new(None).rows([unsaved]))
+            .into_iter()
+            .chain([
+                provider_group(Provider::Claude).rows(claude),
+                provider_group(Provider::Codex).rows(codex),
+            ])
+            .collect()
     }
 
     /// Settings › Behaviour's group of what the machine does on its own
@@ -349,15 +359,15 @@ impl CockpitView {
 
     /// Settings › Labs: what is still being tried on the machine, each off
     /// until turned on there (T3 Code's Labs › Beta, scoped to its server).
+    /// The page says which machine atop it (`settings_scope`).
     pub(super) fn labs_groups(&self, cx: &Context<Self>) -> Vec<settings::Group> {
-        let applies = settings::fact("Applies to", self.machine_place(cx));
         let group = settings::Group::new(Some("Beta"));
         let Some(defaults) = self.shown_defaults(cx) else {
-            return vec![group.rows([applies, self.defaults_unread(cx)])];
+            return vec![group.rows([self.defaults_unread(cx)])];
         };
         vec![group.rows(
-            std::iter::once(applies)
-                .chain(self.defaults_unsaved(cx))
+            self.defaults_unsaved(cx)
+                .into_iter()
                 .chain([settings::toggle(
                     "settings-linked-machines",
                     "Linked machines",

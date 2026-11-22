@@ -484,3 +484,31 @@ fn with_a_machine_off_a_new_thread_starts_on_this_computer(cx: &mut TestAppConte
         })
     });
 }
+
+/// Open on box's Connections row has Settings edit box, and the page says
+/// so atop it, as T3 Code's settings say the environment they apply to.
+#[gpui::test]
+fn open_in_connections_names_the_machine_settings_edit(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _fake, machines, _agents) = two_machines("settings-scope", 1);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.hide_sheet(cx));
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    let sheet = view.read_with(cx, |view, cx| view.settings_sheet(cx).expect("Settings"));
+    sheet.update(cx, |sheet, cx| {
+        sheet.page = settings::PageKey::Connections;
+        cx.notify();
+    });
+    tick(cx);
+    let scope = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, _| window.debug_text("settings-scope"))
+            .map(|lines| lines.join(" "))
+    };
+    assert_eq!(scope(cx).as_deref(), Some("Applying settings on this computer"));
+    let open = connection_act(&view, "connection-open-1", cx);
+    cx.update(|window, cx| open(window, cx));
+    tick(cx);
+    assert_eq!(scope(cx).as_deref(), Some("Applying settings on box"));
+}
