@@ -425,7 +425,7 @@ impl CockpitView {
                         .is_some_and(|open| open.transcript().todos().is_some())
             }
             Some(Popup::Checks(thread)) => {
-                on(*thread, None) && self.facts.pr(*thread).is_some_and(|pr| pr.checks.is_some())
+                on(*thread, None) && self.facts.pr(self.cockpit.read(cx).thread_key(*thread)).is_some_and(|pr| pr.checks.is_some())
             }
             Some(Popup::Session { thread, generation }) => on(*thread, Some(*generation)),
             Some(Popup::Band(menu)) => {

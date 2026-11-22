@@ -124,7 +124,7 @@ impl CockpitView {
         let thread = key.thread();
         let open = model.thread(thread)?;
         let transcript = open.transcript();
-        let facts = self.facts.get(thread);
+        let facts = self.facts.get(model.thread_key(thread));
         Some(OverviewInputs {
             thread: key,
             machine: model.machine().map_or_else(
@@ -132,10 +132,10 @@ impl CockpitView {
                 |bridge| bridge.name().to_string(),
             ),
             folder,
-            branch: self.thread_branch(thread),
+            branch: self.thread_branch(model.thread_key(thread)),
             facts,
             files: facts.map(|facts| facts.changed_files.as_slice()).unwrap_or_default(),
-            pr: self.facts.pr(thread),
+            pr: self.facts.pr(model.thread_key(thread)),
             usage: transcript.usage(),
             context_details: transcript.context_details(),
             usage_details: transcript.usage_details(),
@@ -202,10 +202,10 @@ impl CockpitView {
         let Some(index) = self.pane_for(thread) else {
             return;
         };
-        let branch = self.thread_branch(thread);
+        let branch = self.thread_branch(self.cockpit.read(cx).thread_key(thread));
         let base = self
             .facts
-            .get(thread)
+            .get(self.cockpit.read(cx).thread_key(thread))
             .and_then(|facts| facts.default_branch.clone());
         let prompt = super::changes::create_pr_prompt(branch.as_deref(), base.as_deref());
         self.send_again(index, thread, prompt, cx).ok();
@@ -213,7 +213,7 @@ impl CockpitView {
 
     /// The branch `thread`'s checkout is on: as git last said, else as the
     /// Thread was bound.
-    pub(in crate::cockpit) fn thread_branch(&self, thread: ThreadId) -> Option<SharedString> {
+    pub(in crate::cockpit) fn thread_branch(&self, thread: ferrite_core::ThreadKey) -> Option<SharedString> {
         let facts = self.facts.get(thread)?;
         facts
             .status

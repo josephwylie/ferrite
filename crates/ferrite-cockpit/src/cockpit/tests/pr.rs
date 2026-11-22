@@ -13,7 +13,7 @@ fn reading(
     thread: ThreadId,
     cx: &mut gpui::VisualTestContext,
 ) -> Option<u64> {
-    view.read_with(cx, |view, _| view.facts.pr(thread).map(|pr| pr.number))
+    view.read_with(cx, |view, cx| view.facts.pr(view.cockpit.read(cx).thread_key(thread)).map(|pr| pr.number))
 }
 
 fn land(

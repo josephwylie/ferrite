@@ -80,9 +80,9 @@ fn child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder(cx: &mu
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     assert_eq!(
-        view.read_with(cx, |view, _| view
+        view.read_with(cx, |view, cx| view
             .facts
-            .get(thread)
+            .get(view.cockpit.read(cx).thread_key(thread))
             .map_or(0, |facts| facts.subagents)),
         2,
         "the Thread card counts the discovered children"
@@ -566,9 +566,9 @@ fn native_child_progress_uses_the_shared_pinned_row(
     assert!(cx
         .debug_bounds("live-phase")
         .is_some());
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let pane = &view.panes[0];
-        let facts = view.facts.get(pane.thread().unwrap()).unwrap();
+        let facts = view.facts.get(view.cockpit.read(cx).thread_key(pane.thread().unwrap())).unwrap();
         assert!(!facts.wall.working.contains("Server busy"));
     });
     emit(

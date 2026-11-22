@@ -534,7 +534,7 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
     .collect::<Vec<_>>()
     .join(" · ");
     view.update(cx, |view, cx| {
-        view.facts.pr_answered(thread, Some(pr));
+        view.facts.pr_answered(view.cockpit.read(cx).thread_key(thread), Some(pr));
         cx.notify();
     });
     tick(cx);

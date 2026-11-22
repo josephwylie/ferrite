@@ -76,7 +76,7 @@ impl CockpitView {
         };
         if !self
             .facts
-            .ask_pr(thread, cx.background_executor().now(), manual)
+            .ask_pr(self.cockpit.read(cx).thread_key(thread), cx.background_executor().now(), manual)
         {
             return;
         }
@@ -134,7 +134,7 @@ impl CockpitView {
         reading: Option<ferrite_core::workspace::PullRequest>,
         cx: &mut Context<Self>,
     ) {
-        if self.facts.pr_answered(thread, reading) {
+        if self.facts.pr_answered(self.cockpit.read(cx).thread_key(thread), reading) {
             self.notify_part(parts::Part::Nav, cx);
             self.pr_reading_changed(thread, cx);
         }

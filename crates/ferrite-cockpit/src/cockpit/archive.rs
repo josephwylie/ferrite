@@ -20,6 +20,7 @@ use super::*;
 use super::destination::{Destination, Shows};
 use ferrite_core::factory::{self as core_factory, Task, TaskId};
 use ferrite_core::protocol::TaskAction;
+use ferrite_core::ThreadKey;
 use ferrite_pane::composer::{Composer, Role};
 
 /// One archived Task as its row says it.
@@ -56,7 +57,7 @@ pub(crate) struct ArchiveView {
     search: Entity<Composer>,
     /// An earlier Worker of the open Task, opened to be read (G4), and
     /// whether this window reopened it, to park it again.
-    pub(super) reading: Option<(ThreadId, bool)>,
+    pub(super) reading: Option<(ThreadKey, bool)>,
 }
 
 impl EventEmitter<ArchiveEvent> for ArchiveView {}
@@ -87,14 +88,14 @@ impl ArchiveView {
     }
 
     /// Forget an earlier Worker whose Thread is gone.
-    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
+    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadKey) -> bool) {
         if self.reading.is_some_and(|(thread, _)| !keep(thread)) {
             self.reading = None;
         }
     }
 
     #[cfg(test)]
-    pub(super) fn held_for_test(&self, thread: ThreadId) -> usize {
+    pub(super) fn held_for_test(&self, thread: ThreadKey) -> usize {
         usize::from(self.reading.is_some_and(|(held, _)| held == thread))
     }
 
@@ -320,11 +321,12 @@ impl CockpitView {
     /// Composer (G4). `None` goes back to the list; a Thread this window
     /// reopened is parked again.
     pub(crate) fn read_worker(&mut self, thread: Option<ThreadId>, cx: &mut Context<Self>) {
+        let thread = thread.map(|thread| self.cockpit.read(cx).thread_key(thread));
         let was = self.factory().map(|view| view.read(cx).archive.clone()).and_then(|archive| {
             archive.update(cx, |archive, _| archive.reading.take())
         });
         if let Some((was, true)) = was.filter(|(was, _)| Some(*was) != thread) {
-            if let Err(error) = self.cockpit.update(cx, |cockpit, _| cockpit.park(was)) {
+            if let Err(error) = self.cockpit.update(cx, |cockpit, _| cockpit.park(was.thread())) {
                 ferrite_core::log!("factory: an earlier Worker could not be parked again: {error}");
             }
             let focused = self.cockpit.read(cx).roster().focused();
@@ -339,8 +341,8 @@ impl CockpitView {
         if let Some(thread) = thread {
             let reopened = match was {
                 Some((same, reopened)) if same == thread => Ok(reopened),
-                _ if self.cockpit.read(cx).thread(thread).is_some() => Ok(false),
-                _ => self.cockpit.update(cx, |cockpit, _| cockpit.revive(thread).map(|()| true)),
+                _ if self.cockpit.read(cx).thread(thread.thread()).is_some() => Ok(false),
+                _ => self.cockpit.update(cx, |cockpit, _| cockpit.revive(thread.thread()).map(|()| true)),
             };
             // Reopening it moves the roster's focus before this window has
             // its Pane: that is not the operator leaving the board.
@@ -369,7 +371,9 @@ impl CockpitView {
     /// The earlier Worker being read, if it is one of `task`'s.
     pub(super) fn worker_reading(&self, task: &Task, cx: &gpui::App) -> Option<ThreadId> {
         let (thread, _) = self.factory()?.read(cx).archive.read(cx).reading?;
-        task.every_worker().contains(&thread).then_some(thread)
+        let cockpit = self.cockpit.read(cx);
+        let worker = |worker: &ThreadId| cockpit.thread_key(*worker) == thread;
+        task.every_worker().iter().any(worker).then_some(thread.thread())
     }
 
     /// The earlier Worker's transcript, to read: no Composer, nothing to

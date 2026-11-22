@@ -380,7 +380,7 @@ impl CockpitView {
     /// in creation order, then its parked Threads. Each Thread once.
     pub(super) fn palette_thread_rows(&self, cx: &gpui::App) -> Vec<PaletteRow> {
         let order = self.thread_order(cx);
-        let project_of = |thread: ThreadId| self.facts.get(thread).and_then(|facts| facts.project);
+        let project_of = |thread: ThreadId| self.facts.get(self.cockpit.read(cx).thread_key(thread)).and_then(|facts| facts.project);
         let open_threads: Vec<ThreadId> = {
             let mut open = self.cockpit.read(cx).threads();
             let side_chat = self.side_chat.read(cx);
@@ -396,10 +396,10 @@ impl CockpitView {
             .facts
             .parked()
             .iter()
-            .copied()
+            .map(|thread| thread.thread())
             .filter(|thread| !open_threads.contains(thread))
             .filter(|thread| {
-                self.facts.last_used(*thread).is_some_and(|at| {
+                self.facts.last_used(self.cockpit.read(cx).thread_key(*thread)).is_some_and(|at| {
                     recent
                         .duration_since(at)
                         .is_ok_and(|ago| ago < std::time::Duration::from_secs(24 * 60 * 60))
@@ -437,14 +437,14 @@ impl CockpitView {
                 let row = self.thread_row(self.cockpit.read(cx).thread_key(thread), cx);
                 let age = self
                     .facts
-                    .last_used(thread)
+                    .last_used(self.cockpit.read(cx).thread_key(thread))
                     .map(|at| crate::facts::since_label(at, now))
                     .unwrap_or_default();
                 let word = state_word(&row, age);
                 let ordinal = order.iter().position(|listed| *listed == thread);
                 let scope = self
                     .facts
-                    .get(thread)
+                    .get(self.cockpit.read(cx).thread_key(thread))
                     .and_then(|facts| facts.project_label.clone());
                 let name = if row.status == nav::RowStatus::Parked {
                     SharedString::from(format!("Parked \u{b7} {}", row.name))
@@ -464,7 +464,7 @@ impl CockpitView {
                         .thread_path(thread, cx)
                         .map(|path| SharedString::from(home_relative(&path))),
                     keys,
-                    used: self.facts.last_used(thread),
+                    used: self.facts.last_used(self.cockpit.read(cx).thread_key(thread)),
                     act: Act::Thread(thread),
                 });
             }
@@ -538,7 +538,7 @@ impl CockpitView {
             .into_iter()
             .filter(|thread| !self.side_chat.read(cx).owns(self.cockpit.read(cx).thread_key(*thread)))
             .filter(|thread| {
-                self.facts.get(*thread).and_then(|facts| facts.project) == Some(project)
+                self.facts.get(self.cockpit.read(cx).thread_key(*thread)).and_then(|facts| facts.project) == Some(project)
             })
             .map(|thread| self.thread_row(self.cockpit.read(cx).thread_key(thread), cx))
             .collect()
@@ -593,7 +593,7 @@ impl CockpitView {
             )
             .is_empty()
         });
-        let facts = focused.and_then(|thread| self.facts.get(thread));
+        let facts = focused.and_then(|thread| self.facts.get(self.cockpit.read(cx).thread_key(thread)));
         // The changes show in the panel, so only where it has a Thread.
         let changed = facts.is_some_and(|facts| !facts.changed_files.is_empty())
             && self.panel_candidate(cx).is_some();
@@ -961,7 +961,7 @@ impl CockpitView {
         self.facts
             .parked()
             .iter()
-            .copied()
+            .map(|thread| thread.thread())
             .filter(|thread| self.pane_for(*thread).is_none())
             .collect()
     }

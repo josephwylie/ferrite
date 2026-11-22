@@ -511,8 +511,8 @@ fn unfolding_a_panel_file_reads_its_hunks_off_the_ui_thread(cx: &mut TestAppCont
     cx.simulate_click(fold.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let path = view.read_with(cx, |view, _| {
-        view.facts.get(thread).unwrap().changed_files[0]
+    let path = view.read_with(cx, |view, cx| {
+        view.facts.get(view.cockpit.read(cx).thread_key(thread)).unwrap().changed_files[0]
             .path
             .clone()
     });

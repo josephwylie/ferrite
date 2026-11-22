@@ -1526,7 +1526,7 @@ impl CockpitView {
         if opened || self.panes.len() != before {
             self.parked_changed(cx);
         }
-        self.refresh_names();
+        self.refresh_names(cx);
     }
 
     /// The parked set changed: rebuild the nav's parked rows now, from the
@@ -1548,7 +1548,7 @@ impl CockpitView {
     /// Open the Thread's PR in its browser preview. An explicit open: the
     /// Thread comes forward first, so the page is the one shown.
     pub(crate) fn open_pr(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let url = self.facts.pr(thread).and_then(|pr| pr.url.clone());
+        let url = self.facts.pr(self.cockpit.read(cx).thread_key(thread)).and_then(|pr| pr.url.clone());
         if let Some(url) = url {
             self.show_thread(thread, cx);
             self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx);
@@ -1556,8 +1556,8 @@ impl CockpitView {
     }
 
     /// The Thread's PR as a link target: the one every door to it opens.
-    pub(crate) fn pr_target(&self, thread: ThreadId) -> Option<LinkTarget> {
-        self.facts.pr(thread).map(|pr| LinkTarget::PullRequest {
+    pub(crate) fn pr_target(&self, thread: ThreadId, cx: &gpui::App) -> Option<LinkTarget> {
+        self.facts.pr(self.cockpit.read(cx).thread_key(thread)).map(|pr| LinkTarget::PullRequest {
             thread,
             number: pr.number,
             url: pr.url.clone(),
@@ -1574,7 +1574,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(target) = self.pr_target(thread) else {
+        let Some(target) = self.pr_target(thread, cx) else {
             return;
         };
         let address = target.address();
@@ -2032,10 +2032,10 @@ impl CockpitView {
 
     /// Every open Pane's name, from the cache — the head reads
     /// `PaneView::name`, and it moves only at a naming moment.
-    fn refresh_names(&mut self) {
+    fn refresh_names(&mut self, cx: &gpui::App) {
         for pane in &mut self.panes {
             if let Some(thread) = pane.thread() {
-                pane.name = self.facts.name(thread);
+                pane.name = self.facts.name(self.cockpit.read(cx).thread_key(thread));
             }
         }
     }
@@ -2306,7 +2306,7 @@ impl CockpitView {
                         .thread(*thread)
                         .is_some_and(|open| open.busy() || open.working_descendants() > 0)
                 })
-                .chain(moved)
+                .chain(moved.into_iter().map(|thread| thread.thread()))
                 .collect();
             let wall = ferrite_core::clock::system_time();
             let aged = self.ages_turn_at.is_some_and(|at| wall >= at);
@@ -2618,13 +2618,13 @@ impl CockpitView {
                 let labels = view.facts.set_branches(
                     branches
                         .iter()
-                        .map(|(thread, status, _)| (*thread, status.clone()))
+                        .map(|(thread, status, _)| (view.cockpit.read(cx).thread_key(*thread), status.clone()))
                         .collect(),
                 );
                 let roots = view.facts.set_project_branches(
                     branches
                         .into_iter()
-                        .map(|(thread, _, project_branches)| (thread, project_branches))
+                        .map(|(thread, _, project_branches)| (view.cockpit.read(cx).thread_key(thread), project_branches))
                         .collect(),
                 );
                 let mut moved = false;
@@ -2642,7 +2642,7 @@ impl CockpitView {
                     cx.notify();
                 } else if !labels.is_empty() || !roots.is_empty() {
                     for thread in labels.iter().chain(&roots) {
-                        view.notify_thread_pane(*thread, cx);
+                        view.notify_thread_pane(thread.thread(), cx);
                     }
                     view.notify_part(parts::Part::Nav, cx);
                     view.notify_frame(cx);
@@ -2871,7 +2871,7 @@ impl CockpitView {
         let Some(thread) = self.focused_thread(cx) else {
             return;
         };
-        let has_checks = self.facts.pr(thread).is_some_and(|pr| pr.checks.is_some());
+        let has_checks = self.facts.pr(self.cockpit.read(cx).thread_key(thread)).is_some_and(|pr| pr.checks.is_some());
         if !has_checks {
             return;
         }
@@ -2964,7 +2964,7 @@ impl CockpitView {
     /// the operator edits the name they can see.
     fn start_rename(&mut self, target: RenameTarget, cx: &mut Context<Self>) {
         let (RenameTarget::Thread(thread) | RenameTarget::ViewTitle(thread)) = target;
-        let title = self.facts.name(thread).to_string();
+        let title = self.facts.name(self.cockpit.read(cx).thread_key(thread)).to_string();
         self.rename.open(target, title, cx);
         cx.notify();
     }
@@ -2987,7 +2987,7 @@ impl CockpitView {
                 Err(error) => self.nav_notice.problem(error.to_string()),
                 Ok(_) => {
                     self.facts.renamed(self.cockpit.read(cx), thread);
-                    self.refresh_names();
+                    self.refresh_names(cx);
                     self.nav_notice.clear();
                 }
             }
@@ -3002,7 +3002,7 @@ impl CockpitView {
         self.facts
             .parked()
             .iter()
-            .copied()
+            .map(|thread| thread.thread())
             .filter(|thread| self.admitted(*thread, cx))
             .collect()
     }
@@ -3013,7 +3013,7 @@ impl CockpitView {
             .read(cx)
             .threads()
             .into_iter()
-            .chain(self.facts.parked().iter().copied())
+            .chain(self.facts.parked().iter().map(|thread| thread.thread()))
             .any(|thread| self.cockpit.read(cx).project_id(thread) == Some(project))
     }
 
@@ -3743,7 +3743,7 @@ impl CockpitView {
             for thread in self.cockpit.read(cx).threads() {
                 self.facts.renamed(self.cockpit.read(cx), thread);
             }
-            self.refresh_names();
+            self.refresh_names(cx);
         }
         let reading = self.prefs.settings.reading_size;
         for review in self.panes.iter().filter_map(|pane| pane.review.review()) {
@@ -3969,7 +3969,7 @@ impl CockpitView {
         self.facts.acted(self.cockpit.read(cx), thread);
         // A first prompt names an untitled Thread.
         self.facts.renamed(self.cockpit.read(cx), thread);
-        self.refresh_names();
+        self.refresh_names(cx);
         if admitted && self.is_first_prompt(thread, cx) {
             self.start_titling(self.cockpit.read(cx).thread_key(thread), text, cx);
         }
@@ -5537,7 +5537,7 @@ impl CockpitView {
                 self.promote_draft(id, self.cockpit.read(cx).thread_key(done.thread), cx);
                 self.sync_panes(cx);
                 self.thread_opened(done.thread, cx);
-                self.refresh_names();
+                self.refresh_names(cx);
                 self.start_titling(self.cockpit.read(cx).thread_key(done.thread), text.to_string(), cx);
                 self.scroll_transcript_to_bottom(index, cx);
             }
@@ -5755,7 +5755,7 @@ impl CockpitView {
                 // An empty Thread says where its work runs, as a draft
                 // does; its Project and checkout are settled, so as words.
                 let empty = open.is_some_and(|open| pane::offers_import(Some(open.transcript())));
-                let env = self.facts.get(thread).filter(|_| empty).map(|facts| {
+                let env = self.facts.get(self.cockpit.read(cx).thread_key(thread)).filter(|_| empty).map(|facts| {
                     [
                         (ferrite_ui::icons::FOLDER, facts.project_label.clone()),
                         (ferrite_ui::icons::BRANCH, facts.branch.clone()),
@@ -5939,7 +5939,7 @@ impl CockpitView {
         let Some(wanted) = self.nav_filter else {
             return true;
         };
-        self.facts.get(thread).and_then(|facts| facts.project) == Some(wanted)
+        self.facts.get(self.cockpit.read(cx).thread_key(thread)).and_then(|facts| facts.project) == Some(wanted)
     }
 
     /// One Thread's nav row, entirely from caches: the name core has (there
@@ -5948,7 +5948,7 @@ impl CockpitView {
     /// the selection.
     fn thread_row(&self, key: ThreadKey, cx: &gpui::App) -> nav::ThreadRow {
         let thread = key.thread();
-        let facts = self.facts.get(thread);
+        let facts = self.facts.get(key);
         let open = self.cockpit.read(cx).thread(thread);
         let now = ferrite_core::clock::system_time();
         // A Notice not yet seen makes a quiet Thread done.
@@ -5989,14 +5989,14 @@ impl CockpitView {
         );
         let row = nav::ThreadRow {
             key,
-            name: self.facts.name(thread),
+            name: self.facts.name(key),
             status,
             project: facts.and_then(|facts| facts.project_label.clone()),
             selected: false,
             tail: nav::NavTail::of(status, slot.as_ref(), age),
             branch: facts.and_then(Self::checkout_branch),
             worktree: facts.and_then(|facts| facts.worktree.clone()),
-            pr: self.facts.pr(thread).map(nav::NavPr::of),
+            pr: self.facts.pr(self.cockpit.read(cx).thread_key(thread)).map(nav::NavPr::of),
             provider: open
                 .map(|open| open.provider())
                 .or_else(|| facts.and_then(|facts| facts.provider)),
@@ -6051,9 +6051,9 @@ impl CockpitView {
     /// When a Thread was last used, for `sort: recent`. A Thread whose log
     /// cannot be stat'd sorts to the bottom rather than to the top: an
     /// unknown time is not a recent one.
-    fn last_used(&self, thread: ThreadId) -> std::time::SystemTime {
+    fn last_used(&self, thread: ThreadId, cx: &gpui::App) -> std::time::SystemTime {
         self.facts
-            .last_used(thread)
+            .last_used(self.cockpit.read(cx).thread_key(thread))
             .unwrap_or(std::time::UNIX_EPOCH)
     }
 
@@ -6090,7 +6090,7 @@ impl CockpitView {
             thread,
             result: revived.as_ref().map(drop).map_err(|e| e.to_string()),
         };
-        self.report_failures("reopen", &[outcome]);
+        self.report_failures("reopen", &[outcome], cx);
         cx.notify();
         revived.is_ok()
     }
@@ -6167,7 +6167,7 @@ impl CockpitView {
                     view.widen_scope_to(thread, cx);
                     view.sync_panes(cx);
                 }
-                view.report_failures("reopen", &[outcome]);
+                view.report_failures("reopen", &[outcome], cx);
                 cx.notify();
             }
         });
@@ -7524,7 +7524,7 @@ impl CockpitView {
             // An empty Thread wears the draft's start card until its first
             // prompt.
             start: if pane.is_main() && open.transcript().blocks().is_empty() {
-                self.thread_hero(thread)
+                self.thread_hero(thread, cx)
             } else {
                 None
             },
@@ -7992,7 +7992,7 @@ impl CockpitView {
             window,
             cx,
         )?;
-        let card = head_cards::checks_card(thread, self.facts.pr(thread)?, cx);
+        let card = head_cards::checks_card(thread, self.facts.pr(self.cockpit.read(cx).thread_key(thread))?, cx);
         // The mark rides the Pane head's checkout line: the card drops
         // below it, from its left edge.
         Some(
@@ -8240,7 +8240,7 @@ impl CockpitView {
         cx: &gpui::App,
     ) -> NoticeRow {
         use crate::notifications::{Detail, State};
-        let title = self.facts.name(notice.thread);
+        let title = self.facts.name(self.cockpit.read(cx).thread_key(notice.thread));
         let finish = self
             .cockpit
             .read(cx)
@@ -8437,7 +8437,7 @@ impl CockpitView {
             away: None,
             target: crate::notifications::RowTarget::Decision(notice.id.clone()),
             thread,
-            title: self.facts.name(thread),
+            title: self.facts.name(self.cockpit.read(cx).thread_key(thread)),
             state: State::NeedsYou(notice.kind),
             detail,
             when: crate::facts::since_label(notice.at, now),
@@ -8474,7 +8474,7 @@ impl CockpitView {
                         away: None,
                         target: RowTarget::Thread(thread),
                         thread,
-                        title: self.facts.name(thread),
+                        title: self.facts.name(self.cockpit.read(cx).thread_key(thread)),
                         state: crate::notifications::State::Idle,
                         detail: crate::notifications::Detail::None,
                         when: "".into(),

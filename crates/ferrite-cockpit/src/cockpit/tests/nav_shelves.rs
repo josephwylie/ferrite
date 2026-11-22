@@ -192,7 +192,7 @@ fn the_search_row_replaces_the_list_with_its_results(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(threads[1], name).unwrap());
         view.facts.renamed(view.cockpit.read(cx), threads[1]);
-        view.refresh_names();
+        view.refresh_names(cx);
         cx.notify();
     });
     tick(cx);
@@ -241,7 +241,7 @@ fn the_search_highlight_follows_its_thread_through_live_updates(cx: &mut TestApp
             view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(*thread, &format!("Needle {n}")).unwrap());
             view.facts.renamed(view.cockpit.read(cx), *thread);
         }
-        view.refresh_names();
+        view.refresh_names(cx);
         cx.notify();
     });
     tick(cx);
@@ -295,8 +295,8 @@ fn the_foot_offers_undo_for_a_park(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.park_listed(&[keyed(view, threads[1], cx)], cx));
     tick(cx);
     assert!(cx.debug_bounds("nav-undo-notice").is_some(), "Parked, Undo ⌘Z");
-    view.read_with(cx, |view, _| {
-        assert!(view.facts.parked().contains(&threads[1]))
+    view.read_with(cx, |view, cx| {
+        assert!(view.facts.parked().contains(&view.cockpit.read(cx).thread_key(threads[1])))
     });
 
     cx.simulate_keystrokes("cmd-shift-e cmd-z");
@@ -350,7 +350,7 @@ fn the_keyboard_walks_the_list_and_follows_a_parked_thread(cx: &mut TestAppConte
     cx.simulate_keystrokes("cmd-w");
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.facts.parked().contains(&thread.thread()), "⌘W parked it");
+        assert!(view.facts.parked().contains(&thread), "⌘W parked it");
         assert_eq!(
             view.nav_view.read(cx).cursor.clone().map(|cursor| cursor.item),
             Some(nav::NavItem::Thread(thread)),
@@ -449,7 +449,7 @@ fn a_hovered_card_shows_its_detail_card(cx: &mut TestAppContext) {
             runs: Vec::new(),
             conflicting: false,
         };
-        view.facts.pr_answered(threads[0], Some(pr));
+        view.facts.pr_answered(view.cockpit.read(cx).thread_key(threads[0]), Some(pr));
         cx.notify();
     });
     tick(cx);
@@ -604,8 +604,8 @@ fn rename_on_a_slim_row_draws_the_editor(cx: &mut TestAppContext) {
         cx.simulate_keystrokes("enter");
         tick(cx);
         assert!(cx.debug_bounds("rename-field").is_none(), "{at}: it closed");
-        view.read_with(cx, |view, _| {
-            assert_eq!(view.facts.name(thread).as_ref(), format!("{at} renamed"));
+        view.read_with(cx, |view, cx| {
+            assert_eq!(view.facts.name(view.cockpit.read(cx).thread_key(thread)).as_ref(), format!("{at} renamed"));
         });
     }
 }

@@ -998,9 +998,9 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
     until(cx, |cx| {
         view.read_with(cx, |view, _| view.facts.parked().len() == 2)
     });
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.facts.parked(), &[named, other], "in creation order");
-        assert_eq!(view.facts.name(named).as_ref(), "Release notes");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.facts.parked().iter().map(|key| key.thread()).collect::<Vec<_>>(), [named, other], "in creation order");
+        assert_eq!(view.facts.name(view.cockpit.read(cx).thread_key(named)).as_ref(), "Release notes");
         assert!(view.panes.is_empty(), "nothing open on the machine");
     });
     assert!(
@@ -1020,7 +1020,7 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     until(cx, |cx| {
         view.read_with(cx, |view, _| {
-            view.panes.len() == 1 && view.facts.parked() == [other]
+            view.panes.len() == 1 && view.facts.parked().iter().map(|key| key.thread()).collect::<Vec<_>>() == [other]
         })
     });
     view.read_with(cx, |view, _| {

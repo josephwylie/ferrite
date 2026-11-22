@@ -20,6 +20,7 @@
 use super::*;
 use crate::cockpit::background_work::{BackgroundEvent, BackgroundInputs, BackgroundView, StopTarget, Work};
 use crate::cockpit::surfaces::SurfaceId;
+use ferrite_core::ThreadKey;
 use ferrite_pane::pane::WorkKind;
 use ferrite_core::transcript::{ToolBlock, ToolState};
 use ferrite_core::transcript::tools::{policy, ToolKind};
@@ -154,7 +155,7 @@ impl BackgroundView {
     #[allow(clippy::too_many_arguments)]
     fn card(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         id: SharedString,
         key: String,
         title: SharedString,
@@ -208,7 +209,7 @@ impl BackgroundView {
 
 /// `Open` on an agent's card: the agent in the Panel.
 fn open_agent_button(
-    thread: ThreadId,
+    thread: ThreadKey,
     work: &Work,
     cx: &mut Context<BackgroundView>,
 ) -> Option<AnyElement> {

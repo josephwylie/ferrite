@@ -314,7 +314,7 @@ impl CockpitView {
         let branch = self
             .panel_pane(cx)
             .is_none()
-            .then(|| self.head_branch(thread))
+            .then(|| self.head_branch(thread, cx))
             .flatten();
         parts.extend(branch);
         let spare = div().flex_1().h_full();
@@ -329,7 +329,7 @@ impl CockpitView {
     /// at most `HEAD_PROJECT_MAX_W`, in `INK_SUBTLE` lifting to
     /// `INK_STRONG` under the pointer. A click starts a new Thread there.
     fn head_project(&self, thread: ThreadId, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let facts = self.facts.get(thread)?;
+        let facts = self.facts.get(self.cockpit.read(cx).thread_key(thread))?;
         let (project, name) = (facts.project?, facts.project_label.clone()?);
         let badge = ferrite_ui::project_badge::project_badge(&name)
             .size(px(theme::HEAD_BADGE))
@@ -365,7 +365,7 @@ impl CockpitView {
     /// as the row's width changes (`ParentRoom`); its tooltip keeps the
     /// whole title.
     fn head_parent(&self, parent: ThreadId, cx: &mut Context<Self>) -> AnyElement {
-        let title = self.facts.name(parent).clone();
+        let title = self.facts.name(self.cockpit.read(cx).thread_key(parent)).clone();
         let mut room = self.head_parent_room.get();
         room.collapsed = room.collapses(self.parent_title_w(parent, cx));
         self.head_parent_room.set(room);
@@ -414,7 +414,7 @@ impl CockpitView {
 
     /// The parent's title drawn whole, as wide as the head would draw it.
     fn parent_title_w(&self, parent: ThreadId, cx: &gpui::App) -> f32 {
-        crate::nav::Measure::Text(cx, self.nav_expanded_width()).ui(self.facts.name(parent).as_ref(), theme::FS_TITLE, theme::W_LABEL)
+        crate::nav::Measure::Text(cx, self.nav_expanded_width()).ui(self.facts.name(self.cockpit.read(cx).thread_key(parent)).as_ref(), theme::FS_TITLE, theme::W_LABEL)
     }
 
     /// The head's spare width after the breadcrumb, laid out: once it says
@@ -439,8 +439,8 @@ impl CockpitView {
 
     /// The Thread's branch in the quiet ink, for a head whose panel is
     /// hidden. None while its checkout says no branch.
-    fn head_branch(&self, thread: ThreadId) -> Option<AnyElement> {
-        let branch = Self::checkout_branch(self.facts.get(thread)?)?;
+    fn head_branch(&self, thread: ThreadId, cx: &gpui::App) -> Option<AnyElement> {
+        let branch = Self::checkout_branch(self.facts.get(self.cockpit.read(cx).thread_key(thread))?)?;
         Some(
             div()
                 .debug_selector(|| "view-branch".into())
@@ -470,8 +470,8 @@ impl CockpitView {
                     .into_any_element();
             }
         }
-        let name = self.facts.name(thread).clone();
         let key = self.cockpit.read(cx).thread_key(thread);
+        let name = self.facts.name(key).clone();
         let hover = SharedString::from(format!("view-title-hover-{}", thread.get()));
         let shown = ferrite_ui::motion::hover_t(&hover) > 0.0;
         let title = div()

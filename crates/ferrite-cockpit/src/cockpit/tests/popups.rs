@@ -154,7 +154,7 @@ fn window<'a>(
     }
     view.update(cx, |view, cx| {
         for thread in view.cockpit.read(cx).threads().to_vec() {
-            view.facts.pr_answered(thread, Some(pr_with_checks()));
+            view.facts.pr_answered(view.cockpit.read(cx).thread_key(thread), Some(pr_with_checks()));
         }
         cx.notify();
     });

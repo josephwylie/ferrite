@@ -235,7 +235,7 @@ fn the_pull_request_is_a_row_in_changes(cx: &mut TestAppContext) {
     let (view, cx) = solo("panel-pr-row", 1, 1600., cx);
     let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     view.update(cx, |view, cx| {
-        view.facts.pr_answered(thread, Some(pr_with_checks()));
+        view.facts.pr_answered(view.cockpit.read(cx).thread_key(thread), Some(pr_with_checks()));
         cx.notify();
     });
     tick(cx);
@@ -396,7 +396,7 @@ fn the_head_says_the_branch_while_the_panel_is_hidden(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         view.facts.set_branches(vec![(
-            thread,
+            view.cockpit.read(cx).thread_key(thread),
             Some(ferrite_core::workspace::BranchStatus {
                 branch: Some("lane-p".into()),
                 ..Default::default()

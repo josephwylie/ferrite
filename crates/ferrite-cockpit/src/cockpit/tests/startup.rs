@@ -75,7 +75,7 @@ fn a_launch_that_opens_nothing_still_lists_the_parked_threads(cx: &mut TestAppCo
             "nothing revived: the launch is a draft"
         );
         assert_eq!(
-            view.facts.parked().to_vec(),
+            view.facts.parked().iter().map(|key| key.thread()).collect::<Vec<_>>(),
             vec![parked],
             "and the parked Thread has its row"
         );

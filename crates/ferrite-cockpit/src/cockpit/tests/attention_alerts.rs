@@ -690,7 +690,7 @@ fn inbox_tracks_open_threads_independently_of_notices(cx: &mut TestAppContext) {
         2,
         "idle open Threads need handling without Notices"
     );
-    view.update(cx, |view, _| view.facts.fixture_forget_last_used(threads[0]));
+    view.update(cx, |view, cx| view.facts.fixture_forget_last_used(view.cockpit.read(cx).thread_key(threads[0])));
     assert_eq!(inbox(cx).len(), 2, "an unknown age cannot hide Inbox work");
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {

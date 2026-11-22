@@ -947,10 +947,10 @@ fn native_progress_follows_the_tail_and_metadata_refreshes_the_wall(cx: &mut Tes
         })
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view
             .facts
-            .get(thread)
+            .get(view.cockpit.read(cx).thread_key(thread))
             .unwrap()
             .wall
             .working

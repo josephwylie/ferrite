@@ -269,7 +269,7 @@ impl CockpitView {
         });
         let title = self
             .facts
-            .get(thread)
+            .get(self.cockpit.read(cx).thread_key(thread))
             .and_then(|facts| facts.branch.clone())
             .map_or_else(|| home_relative(&workspace), |branch| branch.to_string());
         let index = self.focused(cx);

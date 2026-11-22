@@ -122,7 +122,7 @@ impl CockpitView {
     pub(crate) fn open_prs(&mut self, project: Option<ProjectId>, cx: &mut Context<Self>) {
         let focused = self.focused_thread(cx);
         let from_thread =
-            focused.and_then(|thread| self.facts.get(thread).and_then(|facts| facts.project));
+            focused.and_then(|thread| self.facts.get(self.cockpit.read(cx).thread_key(thread)).and_then(|facts| facts.project));
         let first = self
             .cockpit
             .read(cx)
@@ -158,7 +158,7 @@ impl CockpitView {
             .and_then(|path| origin(&path))
             .or_else(|| {
                 self.facts
-                    .pr(thread)
+                    .pr(self.cockpit.read(cx).thread_key(thread))
                     .and_then(|pr| pr.url.as_ref())
                     .and_then(|url| {
                         url.rsplit_once("/pull/")
@@ -182,7 +182,7 @@ impl CockpitView {
     pub(crate) fn open_prs_from_foot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self
             .focused_thread(cx)
-            .filter(|thread| self.facts.pr(*thread).is_some())
+            .filter(|thread| self.facts.pr(self.cockpit.read(cx).thread_key(*thread)).is_some())
         {
             Some(thread) => {
                 self.open_pr_as(thread, ferrite_pane::link_target::Open::Primary, window, cx)

@@ -25,7 +25,7 @@ impl CockpitView {
             }
             outcomes.push(Outcome { thread, result });
         }
-        self.report_failures("park", &outcomes);
+        self.report_failures("park", &outcomes, cx);
         self.sync_panes(cx);
         self.nav_view.update(cx, |nav, cx| {
             nav.picked.retain(|picked| !parked.contains(picked));
@@ -38,12 +38,12 @@ impl CockpitView {
 
     /// The notice for every failed outcome, each by its Thread's name; none
     /// when all went through.
-    pub(super) fn report_failures(&mut self, verb: &str, outcomes: &[Outcome]) {
+    pub(super) fn report_failures(&mut self, verb: &str, outcomes: &[Outcome], cx: &gpui::App) {
         let failed: Vec<String> = outcomes
             .iter()
             .filter_map(|outcome| {
                 let why = outcome.result.as_ref().err()?;
-                Some(format!("{}: {why}", self.facts.name(outcome.thread)))
+                Some(format!("{}: {why}", self.facts.name(self.cockpit.read(cx).thread_key(outcome.thread))))
             })
             .collect();
         if failed.is_empty() {
@@ -64,7 +64,7 @@ impl CockpitView {
                 result: self.try_revive(key.thread(), cx).map_err(|e| e.to_string()),
             })
             .collect();
-        self.report_failures("undo", &outcomes);
+        self.report_failures("undo", &outcomes, cx);
         self.sync_panes(cx);
     }
 }
