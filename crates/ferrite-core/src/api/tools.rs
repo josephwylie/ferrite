@@ -1,5 +1,7 @@
-//! The API as an owned Thread's own tools: a Worker's `report_*` and a
-//! Coordinator's `proposal_raise`, one per operation whose callers are
+//! The API as a Thread's own tools: every Thread's PR watch
+//! ([`PR_TOOLS`], T3 Code's `watch_pull_request` and
+//! `unwatch_pull_request`), an owned Thread's `report_*` (a Worker's) and
+//! `proposal_raise` (a Coordinator's), one per operation whose callers are
 //! that Thread's kind (`schema::Callers`), and a Coordinator's Factory
 //! reads ([`COORDINATOR_READS`]). As Ferrite's own tools they are
 //! pre-allowed beside `update_plan`, never a permission Decision, and a
@@ -37,7 +39,31 @@ const COORDINATOR_READS: [&str; 5] = [
     "proposal.list",
 ];
 
-/// The Server's end, where every owned Session's tools are bound.
+/// Every Thread's PR watch tools, by T3 Code's names and words, and the
+/// operation each is.
+const PR_TOOLS: [PrTool; 2] = [
+    PrTool {
+        name: "watch_pull_request",
+        operation: "pr.watch",
+        description: "Watch an open PR for this thread, linking it if needed. Ferrite wakes you on failed checks, passed required checks, new comments or reviews, conflicts, and once on merge or close unless you did it via CLI. Handle old comments first; only new ones wake you. After this call, end your turn. The watch stays on: do not call this again on a wake. A wake is not a merge decision. Check readiness yourself.",
+    },
+    PrTool {
+        name: "unwatch_pull_request",
+        operation: "pr.unwatch",
+        description: "Stop watching a PR for this thread. It stays linked.",
+    },
+];
+
+/// What T3 Code refuses a subagent's watch with.
+pub const SUBAGENT_WATCH: &str = "This thread is a subagent, so it cannot watch pull requests. Its parent thread owns the pull request: finish your task and report back instead.";
+
+struct PrTool {
+    name: &'static str,
+    operation: &'static str,
+    description: &'static str,
+}
+
+/// The Server's end, where every Session's tools are bound.
 #[derive(Debug, Clone)]
 pub struct Tools(Sender<link::Heard>);
 
@@ -47,15 +73,15 @@ impl Tools {
         Self(heard)
     }
 
-    /// The tools of a Thread `owner` owns, bound to `thread`.
-    pub fn for_thread(&self, thread: ThreadId, owner: &ThreadOwner) -> ThreadTools {
+    /// The tools of `thread`, which `owner` owns, if anyone does.
+    pub fn for_thread(&self, thread: ThreadId, owner: Option<&ThreadOwner>) -> ThreadTools {
         ThreadTools {
             heard: self.0.clone(),
             thread,
-            callers: match owner {
+            callers: owner.map(|owner| match owner {
                 ThreadOwner::Task(_) => Callers::Worker,
                 ThreadOwner::Factory(_) => Callers::Coordinator,
-            },
+            }),
         }
     }
 }
@@ -65,7 +91,8 @@ impl Tools {
 pub struct ThreadTools {
     heard: Sender<link::Heard>,
     thread: ThreadId,
-    callers: Callers,
+    /// An owned Thread's kind; `None` for the operator's own.
+    callers: Option<Callers>,
 }
 
 /// One tool, as a provider is told of it.
@@ -82,15 +109,23 @@ pub struct Answer {
 }
 
 impl ThreadTools {
+    /// An owned Thread's operations, by their own names.
     fn operations(&self) -> impl Iterator<Item = &'static Operation> + '_ {
         Method::OPERATIONS.iter().filter(move |operation| {
-            operation.callers == self.callers
-                || (self.callers == Callers::Coordinator
-                    && COORDINATOR_READS.contains(&operation.name))
+            self.callers.is_some_and(|callers| {
+                operation.callers == callers
+                    || (callers == Callers::Coordinator
+                        && COORDINATOR_READS.contains(&operation.name))
+            })
         })
     }
 
     pub fn definitions(&self) -> Vec<Definition> {
+        let pr = PR_TOOLS.iter().map(|tool| Definition {
+            name: tool.name.to_string(),
+            description: tool.description.to_string(),
+            input_schema: pr_schema(tool.operation == "pr.watch"),
+        });
         self.operations()
             .map(|operation| Definition {
                 name: tool_name(operation),
@@ -100,13 +135,14 @@ impl ThreadTools {
                     operation.summary,
                     operation.words().0,
                     operation.words().1,
-                    match operation.callers == self.callers {
+                    match Some(operation.callers) == self.callers {
                         true => ", about your own Thread",
                         false => "",
                     },
                 ),
                 input_schema: input_schema(operation),
             })
+            .chain(pr)
             .collect()
     }
 
@@ -116,20 +152,32 @@ impl ThreadTools {
     }
 
     fn operation(&self, tool: &str) -> Option<&'static Operation> {
-        self.operations()
-            .find(|operation| tool_name(operation) == tool)
+        let pr = PR_TOOLS
+            .iter()
+            .find(|pr| pr.name == tool)
+            .and_then(|pr| Method::OPERATIONS.iter().find(|op| op.name == pr.operation));
+        pr.or_else(|| {
+            self.operations()
+                .find(|operation| tool_name(operation) == tool)
+        })
     }
 
     /// Ask the Server, off this thread, and `respond` with its answer.
+    /// `main`: Main made the call, not a subagent, whose PR its parent
+    /// owns (T3 Code refuses a subagent's watch).
     pub fn call(
         &self,
         tool: &str,
         arguments: &Value,
+        main: bool,
         respond: impl FnOnce(Answer) + Send + 'static,
     ) {
         let Some(operation) = self.operation(tool) else {
             return respond(refused(format!("Ferrite offers no tool {tool}")));
         };
+        if operation.name == "pr.watch" && !main {
+            return respond(refused(SUBAGENT_WATCH.into()));
+        }
         let request: Request = match serde_json::from_value(json!({
             "id": "1",
             "method": operation.name,
@@ -158,6 +206,31 @@ impl ThreadTools {
             })
         });
     }
+}
+
+/// A PR tool's parameters, in T3 Code's words: the PR, and for a watch
+/// how long it keeps the Thread working.
+fn pr_schema(watch: bool) -> Value {
+    let mut properties = json!({
+        "url": { "type": "string" },
+        "repository": {
+            "type": "string",
+            "description": "With `number`, when no `url`.",
+        },
+        "number": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "With `repository`, when no `url`.",
+        },
+    });
+    if watch {
+        properties["until"] = json!({
+            "type": "string",
+            "enum": ["checks", "merged"],
+            "description": "How long this thread stays working. Omit to keep the current value; a new watch starts at \"checks\". \"checks\": until checks finish, for a PR you hand to the user. \"merged\": until it merges, closes or is unwatched, when you act on it yourself, such as merging after approval.",
+        });
+    }
+    json!({ "type": "object", "properties": properties })
 }
 
 /// `report.outcome` → `report_outcome`.
@@ -241,7 +314,7 @@ mod tests {
 
     fn tools(owner: ThreadOwner) -> (ThreadTools, mpsc::Receiver<link::Heard>) {
         let (heard, hear) = mpsc::channel();
-        (Tools::new(heard).for_thread(ThreadId::new(7), &owner), hear)
+        (Tools::new(heard).for_thread(ThreadId::new(7), Some(&owner)), hear)
     }
 
     #[test]
@@ -260,7 +333,9 @@ mod tests {
                 "report_outcome",
                 "report_question",
                 "report_revision",
-                "report_evidence"
+                "report_evidence",
+                "watch_pull_request",
+                "unwatch_pull_request"
             ]
         );
         let schema = &worker.definitions()[0].input_schema;
@@ -283,13 +358,18 @@ mod tests {
                 "workflow_list",
                 "workflow_get",
                 "proposal_raise",
-                "proposal_list"
+                "proposal_list",
+                "watch_pull_request",
+                "unwatch_pull_request"
             ]
         );
         assert!(!coordinator.offers("report_outcome"));
         assert!(!coordinator.offers("workflow_save"), "reads, not acts");
         let briefing = crate::factory::briefing(serde_json::from_value(json!(3)).unwrap());
-        for tool in names(&coordinator) {
+        let factory_tools = names(&coordinator)
+            .into_iter()
+            .filter(|tool| !tool.ends_with("_pull_request"));
+        for tool in factory_tools {
             assert!(
                 briefing.contains(&format!("`{tool}`")),
                 "{tool}: {briefing}"
@@ -306,6 +386,7 @@ mod tests {
         worker.call(
             "report_outcome",
             &json!({ "outcome": "finished", "summary": "Done", "worker": 8 }),
+            true,
             move |answer| told.send((answer.text, answer.is_error)).unwrap(),
         );
         let Ok(link::Heard::Api(Heard::Joined(caller, answers))) = hear.recv() else {
@@ -338,6 +419,44 @@ mod tests {
         assert!(read.text.contains("\"reason\""), "{}", read.text);
     }
 
+    /// Every Thread watches PRs with T3 Code's tools and words; a
+    /// subagent's watch is refused before the Server hears it, as T3
+    /// refuses one, while its unwatch goes.
+    #[test]
+    fn a_subagents_watch_is_refused_without_asking() {
+        let (heard, hear) = mpsc::channel();
+        let tools = Tools::new(heard).for_thread(ThreadId::new(7), None);
+        let definitions = tools.definitions();
+        let names: Vec<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["watch_pull_request", "unwatch_pull_request"]);
+        assert!(definitions[0].description.starts_with(
+            "Watch an open PR for this thread, linking it if needed. Ferrite wakes you"
+        ));
+        assert_eq!(
+            definitions[0].input_schema["properties"]["until"]["enum"],
+            json!(["checks", "merged"])
+        );
+        let (told, said) = mpsc::channel();
+        let pr = json!({ "url": "https://github.com/acme/app/pull/7" });
+        tools.call("watch_pull_request", &pr, false, move |answer| {
+            told.send((answer.text, answer.is_error)).unwrap()
+        });
+        assert_eq!(said.recv().unwrap(), (SUBAGENT_WATCH.to_string(), true));
+        assert!(hear.try_recv().is_err(), "nothing reached the Server");
+
+        tools.call("unwatch_pull_request", &pr, false, |_| {});
+        let Ok(link::Heard::Api(Heard::Joined(..))) = hear.recv() else {
+            panic!("joined first");
+        };
+        let Ok(link::Heard::Api(Heard::Request(_, request))) = hear.recv() else {
+            panic!("then asked");
+        };
+        assert_eq!(
+            (request.method.name(), request.caller),
+            ("pr.unwatch", Some(ThreadId::new(7)))
+        );
+    }
+
     #[test]
     fn a_malformed_call_is_refused_without_asking() {
         let (worker, hear) = tools(ThreadOwner::Task("t-1".into()));
@@ -345,6 +464,7 @@ mod tests {
         worker.call(
             "report_outcome",
             &json!({ "outcome": "maybe" }),
+            true,
             move |answer| told.send(answer.is_error).unwrap(),
         );
         assert!(said.recv().unwrap());

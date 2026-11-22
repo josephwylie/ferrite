@@ -997,7 +997,7 @@ impl CockpitView {
             .preview
             .document()
             .is_some_and(|document| matches!(document.body, Body::Browser))
-            .then(|| self.browser_body(pane.thread(), cx));
+            .then(|| self.browser_body(pane.thread().map(|thread| self.cockpit.read(cx).thread_key(thread)), cx));
         Some(FileSurfaceInputs {
             owner,
             preview: pane.preview.clone(),

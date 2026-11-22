@@ -139,7 +139,7 @@ pub(super) fn checks_card(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.browser_action(thread, ferrite_core::browser::Action::Open { url: url.clone() }, cx);
+                    view.browser_action(view.cockpit.read(cx).thread_key(thread), ferrite_core::browser::Action::Open { url: url.clone() }, cx);
                     view.close_popup(cx);
                 }),
             ),

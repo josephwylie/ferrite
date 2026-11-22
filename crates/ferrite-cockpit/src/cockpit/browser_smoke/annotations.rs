@@ -22,13 +22,13 @@ impl Scenario {
             0 => {
                 let Some(ready)=super::served(view,thread,cx)? else { return Ok(false); };
                 if !ready.tabs.iter().any(|tab|Some(tab.id)==ready.active && tab.live && tab.visible && !tab.loading && tab.error.is_none()) { return Ok(false); }
-                if view.read(cx).browser_smoke_annotation_ready(thread).is_some() { return Ok(false); }
+                if view.read(cx).browser_smoke_annotation_ready(view.read(cx).cockpit.read(cx).thread_key(thread)).is_some() { return Ok(false); }
                 // Composer thumbnails repeat the button's colour after the first round.
                 if self.button.is_none() { self.button=fixture_button(window)?; }
                 if self.button.is_some() && click(window,cx,"browser-annotate") { self.stage = 1; }
             }
             1 => {
-                if view.read(cx).browser_smoke_annotation_ready(thread)!=Some(true) { return Ok(false); }
+                if view.read(cx).browser_smoke_annotation_ready(view.read(cx).cockpit.read(cx).thread_key(thread))!=Some(true) { return Ok(false); }
                 match self.round { 0=>type_text(window,cx,"d"), 2=>type_text(window,cx,"r"), _=>{} }
                 self.stage = 2;
             }

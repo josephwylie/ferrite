@@ -128,12 +128,7 @@ fn a_pending_new_tab_can_be_left_by_its_page_tab_or_escape(cx: &mut TestAppConte
             !view.cockpit.update(cx, |cockpit, _| served(cockpit, thread).tabs[0].loading)
         })
     });
-    // The window has the Server's word from its message, a beat or more
-    // later.
-    until(cx, |cx| {
-        view.read_with(cx, |view, _| view.browsers.shown_for_test(thread))
-            .is_some_and(|(state, _)| state.tabs.iter().any(|tab| tab.live && !tab.loading))
-    });
+    page_shown(&view, thread, cx);
     let page = view.update(cx, |view, cx| {
         view.cockpit.update(cx, |cockpit, _| served(cockpit, thread).tabs[0].id)
     });
@@ -192,9 +187,25 @@ pub(super) fn browser_window<'a>(cx: &'a mut TestAppContext, name: &str) -> Wind
             !view.cockpit.update(cx, |cockpit, _| served(cockpit, thread).tabs[0].loading)
         })
     });
-    // The window has the Server's word from its message, on its next beat.
-    tick(cx);
+    page_shown(&view, thread, cx);
     (engine, view, thread, cx)
+}
+
+/// Wait until the window itself has the Server's word that `thread`'s
+/// active tab is live and loaded, and has drawn it: its controls act on
+/// the page only from then. The word comes as a message, a beat or more
+/// after the Server has it.
+pub(super) fn page_shown(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
+    until(cx, |cx| {
+        view.read_with(cx, |view, cx| {
+            view.browsers
+                .shown_for_test(view.cockpit.read(cx).thread_key(thread))
+        })
+        .is_some_and(|(state, _)| {
+            state.tabs.iter().any(|tab| Some(tab.id) == state.active && tab.live && !tab.loading)
+        })
+    });
+    tick(cx);
 }
 
 fn tab_count(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> usize {
@@ -364,7 +375,7 @@ fn open_second_page(
             .cockpit
             .update(cx, |cockpit, _| cockpit.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() }))
             .unwrap();
-        view.browser_action(second, ferrite_core::browser::Action::Open { url: url.into() }, cx);
+        view.browser_action(view.cockpit.read(cx).thread_key(second), ferrite_core::browser::Action::Open { url: url.into() }, cx);
         view.focus_thread(first, cx);
         second
     });
@@ -466,7 +477,7 @@ fn a_dialog_is_modal_to_its_page_and_two_dialogs_each_wait_for_their_thread(
 
 fn address_text(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> String {
     view.read_with(cx, |view, cx| {
-        view.browser_chrome.read(cx).address_for_test(thread, cx)
+        view.browser_chrome.read(cx).address_for_test(view.cockpit.read(cx).thread_key(thread), cx)
     })
 }
 
@@ -482,7 +493,7 @@ fn an_address_draft_survives_the_pages_own_navigation(cx: &mut TestAppContext) {
     });
     view.update(cx, |view, cx| {
         view.browser_action(
-            thread,
+            view.cockpit.read(cx).thread_key(thread),
             ferrite_core::browser::Action::Navigate { document, url: "http://localhost:5173/moved".into() },
             cx,
         )

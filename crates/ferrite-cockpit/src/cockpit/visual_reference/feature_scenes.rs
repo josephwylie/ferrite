@@ -1487,7 +1487,7 @@ fn annotation_editor() -> (Scene, Setup) {
     )
     .unwrap();
     let setup: Setup = Box::new(move |view, _, cx| {
-        let thread = view.panes[view.focused(cx)].thread().unwrap();
+        let thread = view.cockpit.read(cx).thread_key(view.panes[view.focused(cx)].thread().unwrap());
         view.fixture_annotation_editor(thread, annotation, image, cx);
     });
     (scene, setup)

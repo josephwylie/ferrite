@@ -66,10 +66,22 @@ from T3 and why.
   tried again without counting. Any other failed read counts, and eight
   in a row give up with T3's give-up wake.
 - **`pr.watch` and `pr.unwatch`** start and stop a watch over the API
-  (ADR 0027), for the calling Thread unless one is named. A new watch is
+  (ADR 0027), for the calling Thread unless one is named. Anyone may call
+  them: a watch changes only what news a Thread's agent hears. A new watch is
   read fresh first: a PR already merged or closed starts no watch and
   says so in T3's words, and whether checks were still running seeds the
   watch, so a failure CI makes right after the call is news.
+
+- **The agent's tools are T3's.** Every Thread's Main Session, on Claude
+  and Codex, is offered `watch_pull_request` (with `until`) and
+  `unwatch_pull_request` in T3's words, with Ferrite in place of T3 Code.
+  They are Ferrite's own tools (`api::tools`), pre-allowed, and a call
+  reaches the Server as `pr.watch` or `pr.unwatch` from the Session's own
+  Thread. A subagent's watch is refused in T3's words before the Server
+  hears it. Claude's call counts as Main's unless the stream named its
+  `tool_use` a subagent's (`parent_tool_use_id`, the check the receipt
+  for `update_plan` makes); Codex's counts as Main's when it comes on
+  Main's own thread.
 
 ## Where Ferrite differs from T3, and why
 
@@ -87,6 +99,13 @@ from T3 and why.
 - **A waiting wake is not durable.** T3 queues the wake as a message in its
   store. Ferrite saves the news and holds the wake in memory. A restart
   between the two loses that one wake, but never repeats it.
+- **A subagent sees the tools and is refused.** T3 hides them from a
+  subagent. One Claude or Codex process serves Main and its subagents
+  with one tool list, so Ferrite refuses the call instead, in T3's words.
+- **The tools take no thread or host.** A Session's tools are about its
+  own Thread (`api::tools`), and the Server reads only GitHub. A Codex
+  Thread resumed from before the tools existed keeps its old tools, and
+  watches through `ferrite pr watch`.
 - **The API answers in snake_case** (`was_watching`), as every operation
   of ADR 0027 does.
 - **What the window draws is not here.** The notice row, the Working

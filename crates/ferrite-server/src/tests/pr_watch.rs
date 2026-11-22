@@ -527,3 +527,28 @@ fn a_new_comment_wakes_the_agent() {
     assert_eq!(note.summary, "#7: new comments");
     assert!(text.contains("Please rename this."), "{text}");
 }
+
+/// The agent's own `watch_pull_request` hangs up as soon as it asks, and
+/// the answer, given after the fresh read, still reaches it. A
+/// subagent's watch is refused before the Server hears it.
+#[test]
+fn the_agents_own_tool_watches_its_pr() {
+    let world = world("prw-tool");
+    let tools = world.harness.tools.for_thread(world.thread, None);
+    let watch = |main: bool| {
+        let (told, said) = mpsc::channel();
+        let pr = serde_json::json!({ "url": URL });
+        tools.call("watch_pull_request", &pr, main, move |answer| {
+            told.send((answer.text, answer.is_error)).unwrap()
+        });
+        said.recv_timeout(PATIENCE).unwrap()
+    };
+    assert_eq!(
+        watch(false),
+        (ferrite_core::api::tools::SUBAGENT_WATCH.to_string(), true)
+    );
+    let (text, is_error) = watch(true);
+    assert!(!is_error, "{text}");
+    assert!(text.contains(r#""watching":true"#), "{text}");
+    assert!(world.watching());
+}

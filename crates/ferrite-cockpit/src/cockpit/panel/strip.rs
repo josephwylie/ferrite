@@ -162,7 +162,7 @@ impl CockpitView {
             return;
         }
         match opener {
-            Opener::Browser => self.open_browser(thread, cx),
+            Opener::Browser => self.open_browser(self.cockpit.read(cx).thread_key(thread), cx),
             Opener::Terminal => self.new_terminal_surface(thread, cx),
             Opener::Files => self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx),
             Opener::Changes => self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Changes, cx),

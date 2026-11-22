@@ -21,20 +21,20 @@ struct Dialog {
 /// The script dialog of every Thread's Browser.
 #[derive(Default)]
 pub(in crate::cockpit) struct BrowserDialogView {
-    threads: BTreeMap<ThreadId, Dialog>,
+    threads: BTreeMap<ThreadKey, Dialog>,
 }
 
 /// What the operator answered a page's dialog.
 pub(in crate::cockpit) enum BrowserDialogEvent {
     /// OK, Cancel, enter or escape: the shown page hears the answer.
-    Answer(ThreadId, DialogAnswer),
+    Answer(ThreadKey, DialogAnswer),
 }
 
 impl EventEmitter<BrowserDialogEvent> for BrowserDialogView {}
 
 impl BrowserDialogView {
     /// `thread`'s dialog, made the first time its Browser is.
-    pub(super) fn make(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(super) fn make(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         self.threads.entry(thread).or_insert_with(|| Dialog {
             prompt: cx.new(|cx| {
                 let mut field = Composer::new(cx);
@@ -50,17 +50,17 @@ impl BrowserDialogView {
 
     /// Every Thread `keep` refuses takes its dialog with it.
     pub(in crate::cockpit) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
-        self.threads.retain(|thread, _| keep(*thread));
+        self.threads.retain(|key, _| keep(key.thread()));
     }
 
     #[cfg(test)]
     pub(in crate::cockpit) fn held_for_test(&self, thread: ThreadId) -> usize {
-        usize::from(self.threads.contains_key(&thread))
+        self.threads.keys().filter(|key| key.thread() == thread).count()
     }
 
     /// The shown page asks `asked`: a new dialog sets the card up and waits
     /// for the keyboard.
-    pub(super) fn sync(&mut self, thread: ThreadId, asked: Option<DialogRequest>, cx: &mut Context<Self>) {
+    pub(super) fn sync(&mut self, thread: ThreadKey, asked: Option<DialogRequest>, cx: &mut Context<Self>) {
         let Some(dialog) = self.threads.get_mut(&thread) else {
             return;
         };
@@ -82,7 +82,7 @@ impl BrowserDialogView {
 
     /// The focus pump found the card on screen: a dialog that has not had
     /// the keyboard takes it. True when it did.
-    pub(super) fn take_keyboard(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(super) fn take_keyboard(&mut self, thread: ThreadKey, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(dialog) = self.threads.get_mut(&thread) else {
             return false;
         };
@@ -95,7 +95,7 @@ impl BrowserDialogView {
     }
 
     /// The keyboard is in `thread`'s dialog.
-    pub(super) fn holds_focus(&self, thread: ThreadId, window: &Window, cx: &gpui::App) -> bool {
+    pub(super) fn holds_focus(&self, thread: ThreadKey, window: &Window, cx: &gpui::App) -> bool {
         self.threads
             .get(&thread)
             .is_some_and(|dialog| dialog.request.is_some() && dialog.focus.contains_focused(window, cx))
@@ -103,7 +103,7 @@ impl BrowserDialogView {
 
     /// `thread`'s card over its page, while a page shows (`shown`) and has a
     /// dialog up.
-    pub(super) fn card(&mut self, thread: ThreadId, shown: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn card(&mut self, thread: ThreadKey, shown: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
         let dialog = self.threads.get(&thread)?;
         let request = dialog.request.clone().filter(|_| shown)?;
@@ -200,7 +200,7 @@ impl BrowserDialogView {
     }
 
     /// The card closes on its answer, which the page hears from the root.
-    fn answer(&mut self, thread: ThreadId, accept: bool, cx: &mut Context<Self>) {
+    fn answer(&mut self, thread: ThreadKey, accept: bool, cx: &mut Context<Self>) {
         let Some(dialog) = self.threads.get_mut(&thread) else {
             return;
         };
@@ -243,7 +243,7 @@ impl CockpitView {
     /// The dialog `thread`'s shown page has up: none while a new tab is being
     /// entered, or for a shown tab without a page (closed, not loaded yet,
     /// the Server gone).
-    pub(super) fn browser_dialog_inputs(&self, thread: ThreadId, cx: &gpui::App) -> Option<DialogRequest> {
+    pub(super) fn browser_dialog_inputs(&self, thread: ThreadKey, cx: &gpui::App) -> Option<DialogRequest> {
         let browser = self.browsers.threads.get(&thread)?;
         let shown = browser.shown_tab(self.browser_chrome.read(cx).new_tab(thread))?;
         browser.pages.get(&shown.id)?.native.state().dialog

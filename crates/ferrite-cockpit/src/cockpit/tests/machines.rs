@@ -651,7 +651,8 @@ fn seed_saved_files(dir: &std::path::Path, sets: &[(Option<&str>, u64, &str)]) {
     std::fs::write(dir.join("files.json"), serde_json::to_vec(&files).unwrap()).unwrap();
 }
 
-/// `machine_window`, its preferences (files.json among them) in `dir`.
+/// `machine_window`, its preferences (files.json and cited-sources.json
+/// among them) in `dir`.
 fn machine_window_saving_to<'a>(
     cx: &'a mut TestAppContext,
     core: Cockpit,
@@ -877,6 +878,152 @@ fn coming_home_from_a_machine_saves_its_drafts_as_its_own(cx: &mut TestAppContex
     assert_eq!(saved_drafts(&dir), expected, "home");
     on_box.update(cx, |view, cx| view.save_drafts(cx));
     assert_eq!(saved_drafts(&dir), expected, "the view left saves late");
+}
+
+/// cited-sources.json as `(machine, thread, [(quote, block)])`, sorted.
+fn saved_cited_sources(dir: &std::path::Path) -> Vec<(Option<String>, u64, Vec<(String, u64)>)> {
+    let file: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("cited-sources.json")).unwrap()).unwrap();
+    assert_eq!(file["version"], 2);
+    let mut kept: Vec<_> = file["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|kept| {
+            let sources = kept["sources"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(quote, block)| (quote.clone(), block.as_u64().unwrap()))
+                .collect();
+            (kept["machine"].as_str().map(str::to_string), kept["thread"].as_u64().unwrap(), sources)
+        })
+        .collect();
+    kept.sort();
+    kept
+}
+
+/// cited-sources.json in `dir` holding one source for each of `kept`, as
+/// `(machine, thread, quote, block)`: what earlier visits left.
+fn seed_cited_sources(dir: &std::path::Path, kept: &[(Option<&str>, u64, &str, u64)]) {
+    let threads: Vec<_> = kept
+        .iter()
+        .map(|(machine, thread, quote, block)| {
+            serde_json::json!({ "machine": machine, "thread": thread, "sources": { *quote: block } })
+        })
+        .collect();
+    let file = serde_json::json!({ "version": 2, "threads": threads });
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("cited-sources.json"), serde_json::to_vec(&file).unwrap()).unwrap();
+}
+
+/// Send `quote`, cited from Block `block` of `thread`, on `view`'s first
+/// Pane, as the operator does: the quote in its Composer, a line, ↵.
+fn send_cited(
+    view: &Entity<CockpitView>,
+    thread: ThreadId,
+    quote: &str,
+    block: u64,
+    cx: &mut gpui::VisualTestContext,
+) {
+    let source = ferrite_core::replies::Source {
+        thread,
+        block: serde_json::from_str(&block.to_string()).unwrap(),
+    };
+    view.update(cx, |view, cx| {
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.reply(ferrite_core::replies::Reply::new(quote, "").cited_from(source), cx)
+        })
+    });
+    tick(cx);
+    let line = cx.debug_bounds("focused-prompt-editor").expect("the line");
+    cx.simulate_click(line.center(), gpui::Modifiers::none());
+    cx.simulate_input("go on");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+}
+
+/// This computer's Thread cites a passage, and cited-sources.json holds
+/// box's sources from an earlier visit, one on a Thread of the same number.
+/// Going to box (which has not answered yet) and back keeps this
+/// computer's sources as this computer's and leaves box's alone.
+#[gpui::test]
+fn going_to_a_machine_and_back_keeps_each_machines_cited_sources(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _fake, _) = bound_cockpit("machines-cited-there", Provider::Claude);
+    let thread = core.known_threads().into_iter().next().unwrap();
+    let dir = scratch("machines-cited-there-prefs");
+    seed_cited_sources(
+        &dir,
+        &[
+            (None, thread.get(), "here before", 3),
+            (Some("me@box"), thread.get(), "box's", 11),
+            (Some("me@box"), 7, "box only", 17),
+        ],
+    );
+    let machines = cx.new(|_| machines("cited-there", None));
+    let (root, cx) = machine_window_saving_to(cx, core, machines, &dir);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let home = shown(&root, cx);
+    send_cited(&home, thread, "alpha", 5, cx);
+    let expected = [
+        (None, thread.get(), vec![("alpha".to_string(), 5), ("here before".to_string(), 3)]),
+        (Some("me@box".to_string()), thread.get(), vec![("box's".to_string(), 11)]),
+        (Some("me@box".to_string()), 7, vec![("box only".to_string(), 17)]),
+    ];
+    assert_eq!(saved_cited_sources(&dir), expected);
+
+    home.update(cx, |_, cx| cx.emit(GoToMachine { index: Some(1), open: None }));
+    tick(cx);
+    let on_box = shown(&root, cx);
+    assert_ne!(on_box.entity_id(), home.entity_id());
+    assert_eq!(saved_cited_sources(&dir), expected, "on box");
+
+    on_box.update(cx, |_, cx| cx.emit(GoToMachine { index: Some(0), open: None }));
+    tick(cx);
+    assert_ne!(shown(&root, cx).entity_id(), on_box.entity_id());
+    assert_eq!(saved_cited_sources(&dir), expected, "back home");
+}
+
+/// The other way: on box, whose Thread has the number of one of this
+/// computer's, a passage is cited. Coming home keeps it as box's, not over
+/// this computer's sources of the same Thread number.
+#[gpui::test]
+fn coming_home_from_a_machine_keeps_its_cited_sources_as_its_own(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let machines = cx.new(|_| machines_through("cited-back", Some("me@box"), serving));
+    let _ = ferrite_server::fixture_machine(
+        settings_dir("cited-back").join("box"),
+        Box::new(OnBox(Default::default())),
+    )
+    .unwrap();
+    let mut core = machines.update(cx, |machines, _| machines.cockpit()).unwrap();
+    ferrite_core::doorbell::until("box did not attach", || {
+        core.pump();
+        matches!(core.server(), Some(ferrite_core::cockpit::ServerState::Attached { .. }))
+    });
+    let thread = core
+        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .unwrap();
+    let dir = scratch("machines-cited-back-prefs");
+    seed_cited_sources(&dir, &[(None, thread.get(), "here before", 3), (Some("me@box"), 7, "box only", 17)]);
+    let (root, cx) = machine_window_saving_to(cx, core, machines, &dir);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let on_box = shown(&root, cx);
+    until(cx, |cx| on_box.read_with(cx, |view, _| !view.panes.is_empty()));
+    send_cited(&on_box, thread, "alpha", 5, cx);
+    let expected = [
+        (None, thread.get(), vec![("here before".to_string(), 3)]),
+        (Some("me@box".to_string()), thread.get(), vec![("alpha".to_string(), 5)]),
+        (Some("me@box".to_string()), 7, vec![("box only".to_string(), 17)]),
+    ];
+    assert_eq!(saved_cited_sources(&dir), expected);
+
+    on_box.update(cx, |_, cx| cx.emit(GoToMachine { index: Some(0), open: None }));
+    tick(cx);
+    let home = shown(&root, cx);
+    assert_ne!(home.entity_id(), on_box.entity_id());
+    assert_eq!(saved_cited_sources(&dir), expected, "home");
 }
 
 /// A machine with no `ferrited` says so, and while it is away its board,
@@ -2079,10 +2226,12 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
         cx.simulate_click(annotate.center(), gpui::Modifiers::none());
         tick(cx);
     };
-    // The editor starts once the Server has answered for the page's
-    // protection, a beat or more after the press.
+    // The button acts once the window has the page as loaded, and the
+    // editor starts once the Server has answered for the page's
+    // protection: each a beat or more later.
     let started = || engine.journal().iter().filter(|call| matches!(call, Call::AnnotationStarted(..))).count();
     let begin_live = |cx: &mut gpui::VisualTestContext| {
+        super::browser_chrome::page_shown(&view, thread, cx);
         let before = started();
         begin(cx);
         wait(cx, "the guest editor starts", &mut |_| started() > before);
@@ -2091,7 +2240,7 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
     begin_live(cx);
     assert!(protected(cx), "the live editor protects the exact page");
     assert!(cx.debug_bounds("browser-annotation-overlay").is_none(), "the editor lives in the guest page");
-    assert!(cx.update(|window, cx| view.read(cx).browser_annotation_focus(thread, cx).is_some_and(|focus| focus.is_focused(window))), "starting annotation focuses the rendered WebView");
+    assert!(cx.update(|window, cx| view.read(cx).browser_annotation_focus(view.read(cx).cockpit.read(cx).thread_key(thread), cx).is_some_and(|focus| focus.is_focused(window))), "starting annotation focuses the rendered WebView");
     cx.simulate_keystrokes("escape");
     wait(cx, "Escape reaches the guest", &mut |_| engine.journal().iter().any(|call| matches!(call, Call::Input(Input::Key { key, down: true, .. }) if key == "escape")));
     // simulate_keystrokes sends only key-down; a real release ends the

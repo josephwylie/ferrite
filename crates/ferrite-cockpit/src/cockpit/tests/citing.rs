@@ -502,7 +502,8 @@ fn a_sent_quote_offers_go_to_source(cx: &mut TestAppContext) {
         "the sent quote is drawn"
     );
     let kept = ferrite_core::cited_sources::CitedSources::load(&dir);
-    assert_eq!(kept.of(thread).map(|sources| sources.len()), Some(1));
+    let saved = ferrite_core::SavedThread { machine: ferrite_core::MachineKey(None), thread };
+    assert_eq!(kept.of(&saved).map(|sources| sources.len()), Some(1));
 
     let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
     let away = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
