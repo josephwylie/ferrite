@@ -1,10 +1,12 @@
 //! A Thread's Delegates in the window (ADR 0047), from its digest: T3's
 //! remote row in the details card's Lineage, the Working shelf and the
-//! background line while one is open, its stop, and the row of a Thread
+//! background line while one is open, its stop, its `delegate_task`
+//! call's row in the transcript, and the row and the divider of a Thread
 //! another machine delegated.
 use super::*;
 use ferrite_core::delegate::{DelegateId, Started, Status};
 use ferrite_core::server::ServerId;
+use ferrite_pane::pane::{AgentClock, AgentRun, Elsewhere};
 
 const ROW: &str = "details-lineage-delegate-Fix the tests";
 const STOP: &str = "details-lineage-delegate-Fix the tests-stop";
@@ -148,4 +150,78 @@ fn a_delegated_thread_heads_its_lineage_with_whose_it_is(cx: &mut TestAppContext
         view.facts.get(thread).and_then(|facts| facts.delegated_from.clone())
     });
     assert_eq!(kept.map(|from| from.title), Some("Ship it".into()));
+    until(cx, |cx| cx.debug_bounds("parent-divider").is_some());
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.delegator_link(0, cx)),
+        Some(ferrite_pane::transcript::ParentLink {
+            title: "Ship it".into(),
+            machine: "mac".into(),
+            opens: false,
+        }),
+        "T3's `Subagent of` divider heads Main's rows, `on` the label mac's Server sent"
+    );
+    assert!(
+        cx.debug_bounds("parent-divider-open").is_none(),
+        "this window does not reach mac: the divider opens nothing"
+    );
+}
+
+/// T3's `SubagentTimelineLink` for a task on another machine: once the
+/// parent hands the task over and stops, its `delegate_task` call's row is
+/// its Delegate's, `on pc`, running until the digest says it ended, then
+/// its result and how long it took. This window reaches no `pc`, so the
+/// row opens nothing.
+#[gpui::test]
+fn a_delegate_call_is_t3s_task_row_on_its_machine(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("delegates-row", 1);
+    let _ = core.send(core.threads()[0], "Hand the tests to pc".into());
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let id = start(&view, thread, cx);
+    let send = |event| fake.streams.borrow()[0].send(event).unwrap();
+    send(SessionEvent::ToolStarted {
+        id: "call-d".into(),
+        name: "mcp__ferrite__delegate_task".into(),
+        input: serde_json::json!({"title": "Fix the tests", "task": "Make cargo test pass", "machine": "pc"}),
+    });
+    send(SessionEvent::ToolCompleted {
+        id: "call-d".into(),
+        output: format!("{{\"taskId\":\"{id}\",\"status\":\"running\"}}"),
+        is_error: false,
+        result: ferrite_core::ToolResult::Opaque,
+    });
+    send(SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Completed,
+        cost_usd: None,
+    });
+    until(cx, |cx| cx.debug_bounds("agent-row-call-d").is_some());
+    let face = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            let open = view.cockpit.read(cx).thread(thread).unwrap();
+            let faces = view.delegate_faces(thread, open.transcript(), cx);
+            assert_eq!(faces.len(), 1, "the one call, by its id");
+            assert_eq!(faces[0].0, "call-d");
+            faces[0].1.clone()
+        })
+    };
+    let running = face(cx);
+    assert_eq!(running.run, AgentRun::Running, "the call returned at once; its Delegate runs");
+    assert!(matches!(running.clock, Some(AgentClock::Since(_))));
+    assert_eq!(
+        running.on,
+        Some(Elsewhere {
+            machine: "pc".into(),
+            reached: false
+        })
+    );
+    assert!(cx.debug_bounds("agent-on").is_some(), "`on pc` beside its title");
+    assert!(cx.debug_bounds("agent-open-call-d").is_none(), "pc is not reached here");
+
+    amend(&view, thread, |delegates| delegates.end(id, Status::Completed, "All green.".into()), cx);
+    let done = face(cx);
+    assert_eq!((done.run, done.result.as_deref()), (AgentRun::Done, Some("All green.")));
+    assert!(matches!(done.clock, Some(AgentClock::Took(_))));
 }

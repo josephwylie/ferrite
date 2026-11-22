@@ -3,15 +3,15 @@
 //! running, and the ones that finished, folded under one counted
 //! `Previous agents` row. Main's also has T3's rows for a Thread on another
 //! machine (ADR 0047): the Thread there that delegated it, first, and
-//! each Delegate it started, after its own agents.
+//! each Delegate it started, after its own agents in the order it started
+//! them (T3 lists a projection's subagents as they were recorded).
 
-use super::super::delegates::Serving;
+use super::super::delegates::{Delegator, Serving};
 use super::super::subagents::{agent_name, parent_of, state_word};
 use super::*;
 use ferrite_core::activity::{ActivityView, AgentStatus, Subject};
 use ferrite_core::delegate::{DelegateId, Delegated, Delegating, Status};
 use ferrite_core::server::ServerId;
-use ferrite_core::DelegatedFrom;
 use ferrite_ui::icons::{self, icon};
 use std::collections::HashMap;
 
@@ -36,9 +36,8 @@ pub(super) struct Relative {
 pub(super) enum Leads {
     /// Main or a Subagent, in this Pane.
     Subject(Subject),
-    /// A Thread on another machine, by its Server and its id there: one of
-    /// Main's Delegates (which `cancel` stops while it is open), or the
-    /// Thread that delegated this one. `reached`: a machine of this window
+    /// One of Main's Delegates, by its Server and its Thread there, which
+    /// `cancel` stops while it is open. `reached`: a machine of this window
     /// answers as that Server, so the row opens it (T3 opens it only while
     /// connected to that environment).
     Elsewhere {
@@ -46,6 +45,14 @@ pub(super) enum Leads {
         thread: ThreadId,
         reached: bool,
         cancel: Option<DelegateId>,
+    },
+    /// The Thread on another machine that delegated this one, opened as
+    /// `Elsewhere` is once its machine says it still has it
+    /// (`CockpitView::open_delegator`).
+    Delegator {
+        server: ServerId,
+        thread: ThreadId,
+        reached: bool,
     },
 }
 
@@ -80,8 +87,8 @@ impl Dot {
 }
 
 /// A Subject's Lineage: the Thread that delegated it (Main's alone), its
-/// parent (a Subagent's alone), then its own agents and Delegates, running
-/// ones apart from finished ones, each kind newest first.
+/// parent (a Subagent's alone), then its own agents newest first and its
+/// Delegates oldest first, running ones apart from finished ones.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Lineage {
     pub(super) delegated_from: Option<Relative>,
@@ -97,7 +104,7 @@ pub(super) struct Lineage {
 /// (`ThreadFacts`), and which machine of this window answers as a Server.
 pub(super) struct Elsewhere<'a, F: Fn(&ServerId) -> Option<Serving>> {
     pub(super) delegating: &'a Delegating,
-    pub(super) delegated_from: Option<&'a DelegatedFrom>,
+    pub(super) delegated_from: Option<Delegator>,
     pub(super) serving: F,
 }
 
@@ -174,10 +181,8 @@ pub(super) fn lineage<F: Fn(&ServerId) -> Option<Serving>>(
     if *subject != Subject::Main {
         return lineage;
     }
-    lineage.delegated_from = elsewhere
-        .delegated_from
-        .map(|from| delegated_from(from, (elsewhere.serving)(&from.server)));
-    for delegate in elsewhere.delegating.delegates.iter().rev() {
+    lineage.delegated_from = elsewhere.delegated_from.map(delegated_from);
+    for delegate in &elsewhere.delegating.delegates {
         let row = delegate_row(delegate, (elsewhere.serving)(&delegate.server).is_some());
         lineage.running_count += usize::from(delegate.status == Status::Running);
         match delegate.status.ended() {
@@ -188,12 +193,12 @@ pub(super) fn lineage<F: Fn(&ServerId) -> Option<Serving>>(
     lineage
 }
 
-/// T3's `RemoteSubagentRow`: its title (else T3's `Subagent`), and `on pc
-/// · Running`, its dot in T3's status inks. One held up says why under the
-/// pointer, in its Server's words: following it, or a stop that has not
-/// reached it.
+/// T3's `RemoteSubagentRow`: its title (else `Delegate`, where T3 says
+/// `Subagent`), and `on pc · Running`, its dot in T3's status inks. One
+/// held up says why under the pointer, in its Server's words: following
+/// it, or a stop that has not reached it.
 fn delegate_row(delegate: &Delegated, reached: bool) -> Relative {
-    let title = delegate.title.clone().unwrap_or_else(|| "Subagent".to_owned());
+    let title = delegate.title.clone().unwrap_or_else(|| "Delegate".to_owned());
     // T3's hint, pressable or not: this window has no read of a Thread
     // through another machine to offer instead (T3's `Read the thread on`).
     let hint = format!("Open on {}", delegate.machine);
@@ -223,28 +228,27 @@ fn delegate_row(delegate: &Delegated, reached: bool) -> Relative {
     }
 }
 
-/// T3's `DelegatedFromRow`: the delegating Thread's title as it was then,
-/// and `on mac`, by the name this window gives that machine when it
-/// reaches it (T3's `environment?.label ?? fallbackLabel`).
-fn delegated_from(from: &DelegatedFrom, serving: Option<Serving>) -> Relative {
-    let reached = serving.is_some();
-    let label = serving.map_or_else(|| from.label.clone(), |serving| serving.name);
-    let hint = match reached {
-        true => format!("Open parent agent on {label}"),
-        false => format!("Delegated from {label}. Connect to it to open the parent thread."),
+/// T3's `DelegatedFromRow`: the delegating Thread's title, and `on mac`
+/// (`Delegator`).
+fn delegated_from(from: Delegator) -> Relative {
+    let hint = match from.reached {
+        true => format!("Open parent agent on {}", from.machine),
+        false => format!(
+            "Delegated from {}. Connect to it to open the parent thread.",
+            from.machine
+        ),
     };
     Relative {
         tooltip: Some(format!("{}\n{hint}", from.title)),
-        meta: format!("on {label}"),
+        meta: format!("on {}", from.machine),
         state: Dot::Idle,
-        leads: Leads::Elsewhere {
-            server: from.server.clone(),
+        leads: Leads::Delegator {
+            server: from.server,
             thread: from.thread,
-            reached,
-            cancel: None,
+            reached: from.reached,
         },
         provider: None,
-        title: from.title.clone(),
+        title: from.title,
     }
 }
 
@@ -350,7 +354,9 @@ impl Lineage {
         }
         let agent = |agent: &Relative, cx: &mut Context<CockpitView>| {
             let selector = match &agent.leads {
-                Leads::Elsewhere { .. } => format!("details-lineage-delegate-{}", agent.title),
+                Leads::Elsewhere { .. } | Leads::Delegator { .. } => {
+                    format!("details-lineage-delegate-{}", agent.title)
+                }
                 Leads::Subject(_) => format!("details-lineage-agent-{}", agent.title),
             };
             let mark = ferrite_ui::provider::mark(agent.provider.unwrap_or(provider));
@@ -452,8 +458,9 @@ fn relative(
     let group = SharedString::from(format!("{selector}-group"));
     let cancel = match &relative.leads {
         Leads::Elsewhere { cancel, .. } => *cancel,
-        Leads::Subject(_) => None,
+        Leads::Subject(_) | Leads::Delegator { .. } => None,
     };
+    let delegator = matches!(relative.leads, Leads::Delegator { .. });
     let body = row(relative, glyph, ink, cancel.map(|_| group.clone()));
     let tooltip = relative.tooltip.clone();
     let row: AnyElement = match relative.leads.clone() {
@@ -474,6 +481,11 @@ fn relative(
             thread: there,
             reached: true,
             ..
+        }
+        | Leads::Delegator {
+            server,
+            thread: there,
+            reached: true,
         } => div()
             .id(SharedString::from(format!("{selector}-tip")))
             .w_full()
@@ -482,12 +494,15 @@ fn relative(
                 press(selector.clone(), body, cx).on_click(cx.listener(
                     move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
-                        view.open_elsewhere(&server, there, cx)
+                        match delegator {
+                            true => view.open_delegator(&server, there, cx),
+                            false => view.open_elsewhere(&server, there, cx),
+                        }
                     },
                 )),
             )
             .into_any_element(),
-        Leads::Elsewhere { reached: false, .. } => {
+        Leads::Elsewhere { reached: false, .. } | Leads::Delegator { reached: false, .. } => {
             let selector = selector.clone();
             div()
                 .id(SharedString::from(selector.clone()))
@@ -630,23 +645,29 @@ mod tests {
             status,
             problem: None,
             stop_owed: false,
+            result: None,
+            started_at: None,
+            ended_at: None,
+        }
+    }
+
+    /// `pc`, off screen, as this window saved it.
+    fn pc() -> Serving {
+        Serving {
+            name: Some("pc (box)".into()),
+            away: Some(MachineKey(Some("pc".into()))),
         }
     }
 
     /// Main's Lineage with these Delegates, `pc` reached off screen as
     /// `pc (box)` when `reached`, delegated `from` another Thread.
-    fn main_lineage(delegates: Vec<Delegated>, from: Option<&DelegatedFrom>, reached: bool) -> Lineage {
+    fn main_lineage(delegates: Vec<Delegated>, from: Option<Delegator>, reached: bool) -> Lineage {
         let activity = Activity::default();
         let delegating = Delegating {
             delegates,
             holds: true,
         };
-        let serving = |_: &ServerId| {
-            reached.then(|| Serving {
-                name: "pc (box)".into(),
-                away: Some(MachineKey(Some("pc".into()))),
-            })
-        };
+        let serving = |_: &ServerId| reached.then(pc);
         lineage(
             activity.view(),
             &Subject::Main,
@@ -659,9 +680,10 @@ mod tests {
         )
     }
 
-    /// T3's `RemoteSubagentRow`: the title, `on pc · Running` in T3's
-    /// status words, open ones after the agents and ended ones under
-    /// `Previous agents`; the heading counts the running ones alone.
+    /// T3's `RemoteSubagentRow`: the title (`Delegate` when it has none),
+    /// `on pc · Running` in T3's status words, open ones after the agents
+    /// and ended ones under `Previous agents`, each in the order they
+    /// started; the heading counts the running ones alone.
     #[test]
     fn a_delegate_is_t3s_remote_row_in_t3s_words() {
         let lineage = main_lineage(
@@ -683,20 +705,20 @@ mod tests {
         assert_eq!(
             rows(&lineage.running),
             [
-                ("Subagent".to_owned(), "on pc \u{b7} Waiting".to_owned(), Dot::Running),
                 ("Fix the tests".to_owned(), "on pc \u{b7} Running".to_owned(), Dot::Running),
+                ("Delegate".to_owned(), "on pc \u{b7} Waiting".to_owned(), Dot::Running),
             ]
         );
         assert_eq!(
             rows(&lineage.previous),
             [
-                ("Bench".to_owned(), "on pc \u{b7} Failed".to_owned(), Dot::Failed),
-                ("Docs".to_owned(), "on pc \u{b7} Stopped".to_owned(), Dot::Idle),
                 ("Lint".to_owned(), "on pc \u{b7} Done".to_owned(), Dot::Idle),
+                ("Docs".to_owned(), "on pc \u{b7} Stopped".to_owned(), Dot::Idle),
+                ("Bench".to_owned(), "on pc \u{b7} Failed".to_owned(), Dot::Failed),
             ]
         );
         assert_eq!(lineage.running_count, 1, "T3 counts the running alone");
-        let open = &lineage.running[1];
+        let open = &lineage.running[0];
         assert_eq!(open.provider, Some(Provider::Codex));
         assert_eq!(
             open.leads,
@@ -711,6 +733,11 @@ mod tests {
         assert!(
             matches!(lineage.previous[0].leads, Leads::Elsewhere { cancel: None, .. }),
             "an ended one has nothing to stop"
+        );
+        assert_eq!(
+            lineage.previous[0].tooltip.as_deref(),
+            Some("Lint\nOpen on pc"),
+            "a problem is said only where there is one"
         );
     }
 
@@ -738,33 +765,48 @@ mod tests {
         );
     }
 
-    /// T3's `DelegatedFromRow`: the delegating Thread's title, `on` the
-    /// name this window gives its machine, else the one it was sent with.
+    /// T3's `DelegatedFromRow`: the delegating Thread's title as its
+    /// machine says it now, else as it was sent, `on` the name this window
+    /// saved that machine by, else the label its Server sent: this
+    /// computer is not `local` to the Thread it delegated.
     #[test]
     fn a_delegated_thread_names_whose_it_is() {
+        use ferrite_core::DelegatedFrom;
         let from = DelegatedFrom {
             server: ServerId::new("s-mac"),
             label: "mac".into(),
             thread: ThreadId::new(3),
             title: "Ship it".into(),
         };
-        let reached = main_lineage(vec![], Some(&from), true).delegated_from.unwrap();
-        assert_eq!((reached.title.as_str(), reached.meta.as_str()), ("Ship it", "on pc (box)"));
-        assert_eq!(reached.tooltip.as_deref(), Some("Ship it\nOpen parent agent on pc (box)"));
+        let lineage = |delegator| main_lineage(vec![], Some(delegator), false).delegated_from.unwrap();
+        let reached = lineage(Delegator::of(&from, Some(pc()), Some("Ship it today")));
+        assert_eq!(
+            (reached.title.as_str(), reached.meta.as_str()),
+            ("Ship it today", "on pc (box)")
+        );
+        assert_eq!(
+            reached.tooltip.as_deref(),
+            Some("Ship it today\nOpen parent agent on pc (box)")
+        );
         assert_eq!(
             reached.leads,
-            Leads::Elsewhere {
+            Leads::Delegator {
                 server: ServerId::new("s-mac"),
                 thread: ThreadId::new(3),
                 reached: true,
-                cancel: None,
             }
         );
-        let alone = main_lineage(vec![], Some(&from), false).delegated_from.unwrap();
-        assert_eq!(alone.meta, "on mac");
+        let home = Serving {
+            name: None,
+            away: Some(MachineKey(None)),
+        };
+        assert_eq!(lineage(Delegator::of(&from, Some(home), None)).meta, "on mac");
+        let alone = lineage(Delegator::of(&from, None, None));
+        assert_eq!((alone.title.as_str(), alone.meta.as_str()), ("Ship it", "on mac"));
         assert_eq!(
             alone.tooltip.as_deref(),
             Some("Ship it\nDelegated from mac. Connect to it to open the parent thread.")
         );
+        assert!(matches!(alone.leads, Leads::Delegator { reached: false, .. }));
     }
 }

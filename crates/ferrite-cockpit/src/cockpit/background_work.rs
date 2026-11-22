@@ -203,7 +203,7 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>, facts: Option<&Thr
             kind: WorkKind::Subagent,
             label: format!(
                 "{} on {}",
-                delegate.title.as_deref().unwrap_or("Subagent"),
+                delegate.title.as_deref().unwrap_or("Delegate"),
                 delegate.machine
             ),
             launched: None,

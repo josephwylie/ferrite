@@ -443,7 +443,9 @@ impl CockpitView {
                     &self.facts.name(thread),
                     super::lineage::Elsewhere {
                         delegating: facts.map_or(&nothing, |facts| &facts.delegating),
-                        delegated_from: facts.and_then(|facts| facts.delegated_from.as_ref()),
+                        delegated_from: facts
+                            .and_then(|facts| facts.delegated_from.as_ref())
+                            .map(|from| self.delegator(from, cx)),
                         serving: |server: &ferrite_core::server::ServerId| self.serving(server, cx),
                     },
                 );
