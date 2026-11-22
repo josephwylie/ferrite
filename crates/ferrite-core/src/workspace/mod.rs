@@ -206,7 +206,7 @@ pub struct Listing {
     pub entries: Vec<DirEntry>,
 }
 
-/// Read a directory on this computer: how a window on a machine browses
+/// Read a directory on this computer: how a window holding a machine browses
 /// the machine's folders through its Server (ADR 0026). A name that is not
 /// UTF-8 is left out: it could not be typed back.
 pub fn list_dir(path: &Path) -> io::Result<Listing> {

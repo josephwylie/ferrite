@@ -58,6 +58,11 @@ impl MachineId {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }
+
+    /// Its number, for an element's id: unique for the run.
+    pub fn get(self) -> u32 {
+        self.0
+    }
 }
 
 /// A Thread and the machine it lives on. Only core makes one, stamping

@@ -670,7 +670,7 @@ fn an_invalid_answer_leaves_the_decision_pending() {
     assert_eq!(window.closed(), vec![ClosedBy::Answered { client: 1 }]);
 }
 
-/// A window on a machine browses the machine's folders through its Server
+/// A window holding a machine browses the machine's folders through its Server
 /// (ADR 0026): `list_dir` answers the directory's entries in name order,
 /// each saying whether it is a directory.
 #[test]
@@ -718,7 +718,7 @@ fn list_dir_answers_a_directory_on_the_servers_computer() {
     assert!(refused_with(&reply, ErrorCode::Failed), "{reply:?}");
 }
 
-/// A window on a machine offers the machine's worktrees and branches
+/// A window holding a machine offers the machine's worktrees and branches
 /// (ADR 0026): `list_repo` reads the Project's repo with git where the
 /// Server runs, off its pump, naming the main checkout's branch apart.
 #[test]
@@ -2762,7 +2762,7 @@ fn said(sent: &Arc<Mutex<Vec<u8>>>) -> Vec<String> {
         .collect()
 }
 
-/// ADR 0026: a window on a machine is a window on its Server, through the
+/// ADR 0026: a window holding a machine is a window on its Server, through the
 /// bridge — attached in the background, then driving its Threads exactly
 /// as a window on this computer's does.
 #[test]
