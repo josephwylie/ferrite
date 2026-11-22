@@ -263,9 +263,9 @@ operations! {
         "The providers this machine runs Threads on: their models, efforts and the modes a Thread may be capped at.";
     AgentResult(ThreadParams) => "agent.result", ["thread"], Anyone,
         "How a Thread's latest turn ended and its final reply in full, a parked Thread's too.";
-    PrWatch(PrWatchParams) => "pr.watch", ["url"], Operator,
+    PrWatch(PrWatchParams) => "pr.watch", ["url"], Anyone,
         "Watch an open PR for a Thread: its agent is woken on failed checks, passed required checks, new comments or reviews, conflicts, and once on merge or close.";
-    PrUnwatch(PrParams) => "pr.unwatch", ["url"], Operator,
+    PrUnwatch(PrParams) => "pr.unwatch", ["url"], Anyone,
         "Stop watching a PR for a Thread.";
 }
 

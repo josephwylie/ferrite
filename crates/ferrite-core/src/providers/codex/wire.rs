@@ -230,7 +230,7 @@ pub(super) fn answer_visual(
     true
 }
 
-/// Offer an owned Thread its Factory tools (`api::tools`). Dynamic tools
+/// Offer a Thread its own tools (`api::tools`). Dynamic tools
 /// are a Codex thread's from its start: a resumed one keeps what it was
 /// started with, and reports through the CLI as before.
 pub(super) fn offer_api_tools(
@@ -249,11 +249,13 @@ pub(super) fn offer_api_tools(
     }
 }
 
-/// Answer the server's `item/tool/call` for one of the Thread's Factory
-/// tools, off this thread. Returns whether `frame` was one.
+/// Answer the server's `item/tool/call` for one of the Thread's own tools,
+/// off this thread. Returns whether `frame` was one. A call on another
+/// thread than `main` is a subagent's.
 pub(super) fn answer_api_tool(
     frame: &Value,
     tools: Option<&crate::api::tools::ThreadTools>,
+    main: Option<&str>,
     stdin: std::sync::Arc<std::sync::Mutex<std::process::ChildStdin>>,
 ) -> bool {
     let params = &frame["params"];
@@ -268,7 +270,8 @@ pub(super) fn answer_api_tool(
     let Some(id) = frame.get("id").cloned() else {
         return false;
     };
-    tools.call(tool, &params["arguments"], move |answer| {
+    let main = called_by_main(params, main);
+    tools.call(tool, &params["arguments"], main, move |answer| {
         let _ = super::write_request(
             &stdin,
             &serde_json::json!({"jsonrpc": "2.0", "id": id, "result": {
@@ -278,6 +281,15 @@ pub(super) fn answer_api_tool(
         );
     });
     true
+}
+
+/// Whether a dynamic tool call came on Main's own thread, not a
+/// subagent's. Before Main's thread is known, it can only be Main's.
+fn called_by_main(params: &Value, main: Option<&str>) -> bool {
+    match (main, params["threadId"].as_str()) {
+        (Some(main), Some(thread)) => main == thread,
+        _ => true,
+    }
 }
 
 /// Translate only our browser dynamic call. The shared tool contract owns
@@ -1363,6 +1375,15 @@ pub(super) fn parse_thread_response(result: &Value) -> Option<ThreadHandshake> {
 
 #[cfg(test)]
 mod tests {
+    /// A subagent's dynamic tool call names its own thread.
+    #[test]
+    fn a_tool_call_on_another_thread_is_a_subagents() {
+        let on = |thread: &str| serde_json::json!({ "threadId": thread, "tool": "watch_pull_request" });
+        assert!(super::called_by_main(&on("main"), Some("main")));
+        assert!(!super::called_by_main(&on("child"), Some("main")));
+        assert!(super::called_by_main(&on("child"), None));
+    }
+
     use super::*;
 
     const FIXTURE: &str = include_str!("../../../tests/fixtures/codex-hello-0.149.1.jsonl");

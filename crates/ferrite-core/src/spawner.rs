@@ -75,8 +75,9 @@ pub struct Spawn {
     /// The Server's API socket, told to each agent (`FERRITE_SOCKET`) so it
     /// can drive other Threads (ADR 0027). `None` where there is no API.
     pub api: Option<PathBuf>,
-    /// Where an owned Thread's Factory tools are answered (`api::tools`).
-    /// `None`: they are not offered, and its agent reports by the CLI.
+    /// Where a Thread's own tools are answered (`api::tools`): every
+    /// Thread's PR watch, and an owned one's Factory tools. `None`: they are
+    /// not offered, and its agent uses the CLI.
     pub api_tools: Option<crate::api::tools::Tools>,
 }
 
@@ -306,8 +307,7 @@ impl Spawn {
         let api_tools = self
             .api_tools
             .as_ref()
-            .zip(request.owner)
-            .map(|(tools, owner)| tools.for_thread(request.thread, owner));
+            .map(|tools| tools.for_thread(request.thread, request.owner));
         let instructions = match request.owner {
             Some(crate::ThreadOwner::Factory(project)) => Some(crate::factory::briefing(*project)),
             _ => None,
@@ -482,7 +482,7 @@ mod tests {
     use crate::providers::{applied, SettingAck};
 
     /// A Worker's and a Coordinator's Session are bound to their Factory
-    /// tools; an ordinary Thread's is offered none.
+    /// tools; an ordinary Thread's is offered only the PR watch.
     #[test]
     fn an_owned_threads_session_gets_its_factory_tools() {
         let (heard, _hear) = mpsc::channel();
@@ -521,7 +521,9 @@ mod tests {
         let SessionConfig::Claude(ordinary) = served.config(request(Provider::Claude, None)) else {
             panic!("a Claude config");
         };
-        assert!(ordinary.api_tools.is_none());
+        let ordinary = ordinary.api_tools.expect("every Thread watches PRs");
+        assert!(ordinary.offers("watch_pull_request"));
+        assert!(!ordinary.offers("report_outcome"));
     }
 
     /// A Coordinator's Session is told its briefing as its own
