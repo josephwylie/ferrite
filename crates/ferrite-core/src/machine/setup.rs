@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use super::{auth, bridge_args, check_target, dir, lock, quoted, ssh_options, Machine, WINDOW};
 use crate::link;
 use crate::protocol::{self, ClientMessage, Peer, ServerMessage};
+use crate::spawn::NoConsoleWindow;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BOOTSTRAP: &str = include_str!("bootstrap.sh");
@@ -76,7 +77,9 @@ impl Attempt {
         broker.configure(&mut command);
         let reconnect = cfg!(windows).then(|| {
             let mut reconnect = Command::new("ssh");
-            reconnect.args(bridge_args(&machine.target, &directory.join("c"), WINDOW));
+            reconnect
+                .args(bridge_args(&machine.target, &directory.join("c"), WINDOW))
+                .no_console_window();
             reconnect
         });
         Self::launch(machine, command, reconnect, Some(broker), questions, WAIT)

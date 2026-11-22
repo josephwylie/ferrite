@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::link::{self, TryClone};
 use crate::protocol::ClientMessage;
+use crate::spawn::NoConsoleWindow;
 
 pub mod auth;
 pub mod hosts;
@@ -643,6 +644,7 @@ fn ssh_dial(target: String, control: PathBuf, remote: &'static [&'static str]) -
         }
         let mut child = Command::new("ssh")
             .args(bridge_args(&target, &control, remote))
+            .no_console_window()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -679,6 +681,7 @@ fn master_up(target: &str, control: &Path) -> bool {
     Command::new("ssh")
         .args(["-o", &format!("ControlPath={}", control.display())])
         .args(["-O", "check", "--", target])
+        .no_console_window()
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
