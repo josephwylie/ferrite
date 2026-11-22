@@ -603,6 +603,11 @@ pub struct CockpitView {
     /// The machines this window can be on (ADR 0026); `None` in a window
     /// on an Engine of its own.
     machines: Option<Entity<crate::machines::Machines>>,
+    /// The machine this view's core is on, as saved files name it (ADR
+    /// 0045); `None` with no environment. Taken once, when the view gets
+    /// its machines with its core: a swap has moved `Machines` on before
+    /// the view it leaves saves, and that save is still this machine's.
+    machine_key: Option<ferrite_core::MachineKey>,
 }
 
 /// The Cockpit asks its window to put it on machine `index` (ADR 0026),
@@ -1362,6 +1367,7 @@ impl CockpitView {
             columns: columns::Columns::new(),
             launch_provider,
             machines: None,
+            machine_key: Some(ferrite_core::MachineKey(None)),
         };
         // A Cockpit notification is the earliest common point after core
         // state changes and before GPUI draws cached transcript children.
@@ -1398,9 +1404,11 @@ impl CockpitView {
         view
     }
 
-    /// The window's machines (ADR 0026), listed in the nav and Settings.
+    /// The window's machines (ADR 0026), listed in the nav and Settings;
+    /// the one selected now is the one this view's core is on.
     pub fn with_machines(mut self, machines: Entity<crate::machines::Machines>, cx: &gpui::App) -> Self {
-        let here = machines.read(cx).selected_key().unwrap_or(ferrite_core::MachineKey(None));
+        self.machine_key = machines.read(cx).selected_key();
+        let here = self.machine_key.clone().unwrap_or(ferrite_core::MachineKey(None));
         self.panel.hold(here, self.cockpit.read(cx));
         self.machines = Some(machines);
         self
@@ -1887,9 +1895,9 @@ impl CockpitView {
                 return Some(Reader::Document(scroll));
             }
         }
-        let thread = pane.thread()?;
+        let thread = self.cockpit.read(cx).thread_key(pane.thread()?);
         let on_panel = self.panel_control_focused(window, cx) || self.panel_keys_held(window, cx);
-        if !on_panel || self.active_surface(self.cockpit.read(cx).thread_key(thread)) != Some(crate::cockpit::surfaces::SurfaceId::Files) {
+        if !on_panel || self.active_surface(thread) != Some(crate::cockpit::surfaces::SurfaceId::Files) {
             return None;
         }
         let files = self.files.read(cx);
@@ -2189,7 +2197,7 @@ impl CockpitView {
         }
         let frame = self.cockpit.update(cx, |cockpit, _| cockpit.pump());
         self.fetch_attachment_previews(cx);
-        self.note_work(&frame);
+        self.note_work(&frame, cx);
         self.prune_background_stops(cx);
         self.close_sheet_with_nothing_to_draw(cx);
         self.pump_browsers(cx);
@@ -3007,7 +3015,7 @@ impl CockpitView {
             MenuTarget::Thread(thread)
             | MenuTarget::Pane(thread)
             | MenuTarget::Snooze(thread) => self.thread_path(thread, cx),
-            MenuTarget::File(thread) => self.files.read(cx).pressed(thread),
+            MenuTarget::File(thread) => self.files.read(cx).pressed(self.cockpit.read(cx).thread_key(thread)),
             MenuTarget::FilesMore(_)
             | MenuTarget::ChangesScope(_)
             | MenuTarget::ChangesMore(_)

@@ -58,6 +58,7 @@ use super::editor::{self, Editor};
 use super::save::SaveState;
 use super::tree::{FileTree, Row, Status};
 use super::working_set::{OpenFile, WorkingSet};
+use ferrite_core::SavedThread;
 use super::*;
 use crate::cockpit::context_menu::Submenu;
 use crate::cockpit::panel::controls::focusable;
@@ -245,7 +246,7 @@ impl Files {
 /// buffers stay with it until they are written.
 pub(crate) struct FilesView {
     cockpit: WeakEntity<CockpitView>,
-    threads: HashMap<ThreadId, Files>,
+    threads: HashMap<ThreadKey, Files>,
     /// Files whose Thread is gone, kept while a buffer holds an edit the
     /// disk does not have: auto save still writes it, a quit still flushes
     /// it, and leaving still names it.
@@ -255,7 +256,7 @@ pub(crate) struct FilesView {
 /// What Files draws from, as the Cockpit has it this frame.
 pub(crate) struct FilesInputs {
     /// The Thread whose Panel shows Files.
-    thread: ThreadId,
+    thread: ThreadKey,
     /// Whether the Panel is wide enough for the tree beside the editor.
     beside: bool,
     doors: Doors,
@@ -269,16 +270,16 @@ pub(crate) struct FilesInputs {
 pub(crate) enum FilesEvent {
     /// A press in the tree, the filter's ⏎: an image opens in the Pane's
     /// lightbox, any other file in a tab.
-    Open { thread: ThreadId, path: PathBuf, keep: bool },
+    Open { thread: ThreadKey, path: PathBuf, keep: bool },
     /// `Show changes`: the file's diff, in Changes.
-    ShowChanges { thread: ThreadId, path: String },
+    ShowChanges { thread: ThreadKey, path: String },
     /// `Attach as context`: the file in the Thread's Composer, or on a
     /// machine a line naming it.
-    Attach { thread: ThreadId, path: PathBuf, remote: bool },
+    Attach { thread: ThreadKey, path: PathBuf, remote: bool },
     /// A right-click on a tree row: its menu, at the press.
-    Menu { thread: ThreadId, at: gpui::Point<Pixels> },
+    Menu { thread: ThreadKey, at: gpui::Point<Pixels> },
     /// `Go to file or search`: as ⌘P.
-    GoToFile { thread: ThreadId },
+    GoToFile { thread: ThreadKey },
     /// A press on the `⋯` button.
     Door(Door),
 }
@@ -307,7 +308,8 @@ impl CockpitView {
         keep: bool,
         cx: &mut Context<Self>,
     ) {
-        self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx);
+        let thread = self.cockpit.read(cx).thread_key(thread);
+        self.upsert_surface(thread, SurfaceId::Files, cx);
         let beside = self.files_tree_beside(cx);
         self.files
             .update(cx, |files, cx| files.open(thread, path, line, keep, beside, cx));
@@ -317,22 +319,27 @@ impl CockpitView {
     /// in the Thread's checkout, on the window's machine, with the tabs and
     /// settings it was left with.
     pub(in crate::cockpit) fn ensure_files(&self, thread: ThreadId, cx: &mut Context<Self>) {
-        if self.files.read(cx).holds(thread) {
+        let key = self.cockpit.read(cx).thread_key(thread);
+        if self.files.read(cx).holds(key) {
             return;
         }
         let Some(root) = self.thread_path(thread, cx) else {
             return;
         };
         let machine = self.cockpit.read(cx).machine().cloned();
-        let stored = self.panel.working_sets.get(thread.get()).cloned();
+        let stored = self
+            .machine_key
+            .clone()
+            .and_then(|machine| self.panel.working_sets.get(&SavedThread { machine, thread }).cloned());
         self.files
-            .update(cx, |files, cx| files.make(thread, root, machine, stored, cx));
+            .update(cx, |files, cx| files.make(key, root, machine, stored, cx));
     }
 
     /// ⌘P: the Files Surface shows, and the tree's filter takes the
     /// keyboard.
     pub(in crate::cockpit) fn go_to_file(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) {
-        self.upsert_surface(self.cockpit.read(cx).thread_key(thread), SurfaceId::Files, cx);
+        let thread = self.cockpit.read(cx).thread_key(thread);
+        self.upsert_surface(thread, SurfaceId::Files, cx);
         self.files.update(cx, |files, cx| files.go_to_file(thread, window, cx));
         cx.notify();
     }
@@ -352,12 +359,13 @@ impl CockpitView {
             return false;
         }
         let held = on_controls || self.panel_keys_held(window, cx);
+        let thread = self.cockpit.read(cx).thread_key(thread);
         self.files
             .update(cx, |files, cx| files.open_find(thread, held, window, cx))
     }
 
     pub(in crate::cockpit) fn uses_remote_files(&self, thread: ThreadId, cx: &gpui::App) -> bool {
-        self.on_machine(cx) || self.files.read(cx).is_remote(thread)
+        self.on_machine(cx) || self.files.read(cx).is_remote(self.cockpit.read(cx).thread_key(thread))
     }
 
     pub(crate) fn files_leave_error(&self, cx: &gpui::App) -> Option<&'static str> {
@@ -368,20 +376,24 @@ impl CockpitView {
     }
 
     /// The Panel's stored working sets take the live Files' tabs and
-    /// settings, for files.json.
+    /// settings, for files.json, as this view's machine's: its core's
+    /// Thread list prunes only that machine's sets.
     pub(in crate::cockpit) fn sync_working_sets(&mut self, cx: &gpui::App) {
-        let live = self.files.read(cx).working_sets();
+        let Some(machine) = self.machine_key.clone() else {
+            return;
+        };
+        let live = self.files.read(cx).working_sets().map(|(thread, set)| {
+            let thread = SavedThread {
+                machine: machine.clone(),
+                thread: thread.thread(),
+            };
+            (thread, set)
+        });
         if !self.panel.working_sets.sync(live) {
             return;
         }
-        let known = self
-            .cockpit
-            .read(cx)
-            .known_threads()
-            .into_iter()
-            .map(ThreadId::get)
-            .collect();
-        self.panel.working_sets.retain(&known);
+        let known = self.cockpit.read(cx).known_threads();
+        self.panel.working_sets.retain(&machine, &known);
     }
 
     /// Every way a file reaches the right pane: a file opened in a Pane's
@@ -417,19 +429,19 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match event {
-            FilesEvent::Open { thread, path, keep } => match self.pane_for(*thread) {
+            FilesEvent::Open { thread, path, keep } => match self.pane_for(thread.thread()) {
                 Some(index)
-                    if !self.uses_remote_files(*thread, cx)
+                    if !self.uses_remote_files(thread.thread(), cx)
                         && ferrite_pane::image_viewer::is_image(path) =>
                 {
                     self.panes[index].preview.open(path.clone(), None, &[], window, cx);
                     cx.notify();
                 }
-                _ => self.open_in_files(*thread, path.clone(), None, *keep, cx),
+                _ => self.open_in_files(thread.thread(), path.clone(), None, *keep, cx),
             },
-            FilesEvent::ShowChanges { thread, path } => self.show_changes_of(*thread, path, cx),
+            FilesEvent::ShowChanges { thread, path } => self.show_changes_of(thread.thread(), path, cx),
             FilesEvent::Attach { thread, path, remote } => {
-                if let Some(index) = self.pane_for(*thread) {
+                if let Some(index) = self.pane_for(thread.thread()) {
                     self.panes[index].composer.update(cx, |composer, cx| {
                         if *remote {
                             composer.insert(
@@ -444,9 +456,9 @@ impl CockpitView {
                 cx.notify();
             }
             FilesEvent::Menu { thread, at } => {
-                self.open_context_menu(MenuTarget::File(*thread), *at, cx)
+                self.open_context_menu(MenuTarget::File(thread.thread()), *at, cx)
             }
-            FilesEvent::GoToFile { thread } => self.go_to_file(*thread, window, cx),
+            FilesEvent::GoToFile { thread } => self.go_to_file(thread.thread(), window, cx),
             FilesEvent::Door(door) => self.toggle_door(*door, cx),
         }
     }
@@ -461,8 +473,8 @@ impl CockpitView {
 
     /// Everything Files draws from: the Thread whose Panel shows it.
     fn files_inputs(&self, cx: &gpui::App) -> Option<FilesInputs> {
-        let thread = self.panes[self.panel_drawn_pane(cx)?].thread()?;
-        (self.active_surface(self.cockpit.read(cx).thread_key(thread)) == Some(SurfaceId::Files)).then(|| FilesInputs {
+        let thread = self.cockpit.read(cx).thread_key(self.panes[self.panel_drawn_pane(cx)?].thread()?);
+        (self.active_surface(thread) == Some(SurfaceId::Files)).then(|| FilesInputs {
             thread,
             beside: self.files_tree_beside(cx),
             doors: self.doors(),
@@ -479,8 +491,9 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.ensure_files(thread, cx);
+        let key = self.cockpit.read(cx).thread_key(thread);
         self.files
-            .update(cx, |files, _| files.remote_for_test(thread, answer));
+            .update(cx, |files, _| files.remote_for_test(key, answer));
         if let Some(index) = self.pane_for(thread) {
             self.panes[index].preview.set_remote_files(true);
         }
@@ -496,21 +509,21 @@ impl FilesView {
         }
     }
 
-    fn files_of(&mut self, thread: ThreadId) -> Option<&mut Files> {
+    fn files_of(&mut self, thread: ThreadKey) -> Option<&mut Files> {
         self.threads.get_mut(&thread)
     }
 
-    fn files_ref(&self, thread: ThreadId) -> Option<&Files> {
+    fn files_ref(&self, thread: ThreadKey) -> Option<&Files> {
         self.threads.get(&thread)
     }
 
     /// Whether `thread`'s Files are made.
-    pub(in crate::cockpit) fn holds(&self, thread: ThreadId) -> bool {
+    pub(in crate::cockpit) fn holds(&self, thread: ThreadKey) -> bool {
         self.threads.contains_key(&thread)
     }
 
     /// Whether `thread`'s Files read and write on a machine.
-    fn is_remote(&self, thread: ThreadId) -> bool {
+    fn is_remote(&self, thread: ThreadKey) -> bool {
         self.files_ref(thread).is_some_and(|files| files.remote.is_some())
     }
 
@@ -518,7 +531,7 @@ impl FilesView {
     /// the window is on one, with the tabs and settings `stored` kept.
     fn make(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         root: PathBuf,
         machine: Option<std::sync::Arc<ferrite_core::machine::Bridge>>,
         stored: Option<WorkingSet>,
@@ -590,9 +603,9 @@ impl FilesView {
 
     /// Open `path` in `thread`'s editor (see `CockpitView::open_in_files`).
     /// `beside`: the tree stands beside the editor, else it gives way to it.
-    fn open(
+    pub(in crate::cockpit) fn open(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         path: PathBuf,
         line: Option<u32>,
         keep: bool,
@@ -649,7 +662,7 @@ impl FilesView {
         preview: bool,
         settings: editor::Settings,
         remote: Option<RemoteFiles>,
-        thread: ThreadId,
+        thread: ThreadKey,
         cx: &mut Context<Self>,
     ) -> Tab {
         static LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -724,7 +737,7 @@ impl FilesView {
         path: &Path,
         source: String,
         settings: editor::Settings,
-        thread: ThreadId,
+        thread: ThreadKey,
         cx: &mut Context<Self>,
     ) -> Entity<Editor> {
         let editor = cx.new(|cx| Editor::new(path, source, settings, cx));
@@ -756,7 +769,7 @@ impl FilesView {
 
     /// Swap a Markdown or prose file between its rendered face and its
     /// source, which edits and takes the keyboard.
-    fn toggle_reading(&mut self, thread: ThreadId, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+    fn toggle_reading(&mut self, thread: ThreadKey, at: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.files_of(thread).and_then(|files| files.tabs.get_mut(at)) else {
             return;
         };
@@ -787,7 +800,7 @@ impl FilesView {
 
     /// Read the tree and git's word again: the Files tab is brought forward
     /// again, and what changed in the checkout while it was away shows.
-    pub(in crate::cockpit) fn refresh(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(in crate::cockpit) fn refresh(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         let Some(files) = self.files_of(thread) else {
             return;
         };
@@ -845,7 +858,7 @@ impl FilesView {
         cx.notify();
     }
 
-    fn select_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
+    fn select_tab(&mut self, thread: ThreadKey, at: usize, cx: &mut Context<Self>) {
         if let Some(files) = self.files_of(thread) {
             files.active = Some(at);
             files.tab_scroll.reveal(at);
@@ -855,7 +868,7 @@ impl FilesView {
 
     /// Close a tab, unless its text is not on disk: it is written first, and
     /// stays with its status bar when that fails.
-    pub(in crate::cockpit) fn close_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
+    pub(in crate::cockpit) fn close_tab(&mut self, thread: ThreadKey, at: usize, cx: &mut Context<Self>) {
         let Some(files) = self.files_of(thread) else {
             return;
         };
@@ -867,7 +880,7 @@ impl FilesView {
         self.remove_tab(thread, at, cx);
     }
 
-    fn reload_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
+    fn reload_tab(&mut self, thread: ThreadKey, at: usize, cx: &mut Context<Self>) {
         let Some(files) = self.files_of(thread) else {
             return;
         };
@@ -884,7 +897,7 @@ impl FilesView {
         cx.notify();
     }
 
-    fn remove_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
+    fn remove_tab(&mut self, thread: ThreadKey, at: usize, cx: &mut Context<Self>) {
         let Some(files) = self.files_of(thread) else {
             return;
         };
@@ -899,22 +912,22 @@ impl FilesView {
         cx.notify();
     }
 
-    pub(in crate::cockpit) fn tab_count(&self, thread: ThreadId) -> usize {
+    pub(in crate::cockpit) fn tab_count(&self, thread: ThreadKey) -> usize {
         self.files_ref(thread).map_or(0, |files| files.tabs.len())
     }
 
     /// Where `path`'s tab stands in the tabs row.
-    pub(in crate::cockpit) fn tab_index(&self, thread: ThreadId, path: &Path) -> Option<usize> {
+    pub(in crate::cockpit) fn tab_index(&self, thread: ThreadKey, path: &Path) -> Option<usize> {
         self.files_ref(thread)?.tabs.iter().position(|tab| tab.path == path)
     }
 
     /// The file whose tab stands at `at`.
-    pub(in crate::cockpit) fn tab_path(&self, thread: ThreadId, at: usize) -> Option<PathBuf> {
+    pub(in crate::cockpit) fn tab_path(&self, thread: ThreadKey, at: usize) -> Option<PathBuf> {
         Some(self.files_ref(thread)?.tabs.get(at)?.path.clone())
     }
 
     /// Bring file tab `at` into view in the tabs row.
-    pub(in crate::cockpit) fn reveal_tab(&mut self, thread: ThreadId, at: usize) {
+    pub(in crate::cockpit) fn reveal_tab(&mut self, thread: ThreadKey, at: usize) {
         if let Some(files) = self.files_of(thread) {
             files.tab_scroll.reveal(at);
         }
@@ -958,16 +971,16 @@ impl FilesView {
         (lost > 0).then_some(lost)
     }
 
-    /// Each live Thread's tabs and settings, by the Thread's number.
-    fn working_sets(&self) -> impl Iterator<Item = (u64, WorkingSet)> + '_ {
+    /// Each live Thread's tabs and settings.
+    fn working_sets(&self) -> impl Iterator<Item = (ThreadKey, WorkingSet)> + '_ {
         self.threads
             .iter()
-            .map(|(thread, files)| (thread.get(), files.working_set()))
+            .map(|(&thread, files)| (thread, files.working_set()))
     }
 
     /// The buffers of `thread` that hold no edits of their own take their
     /// file's new text.
-    pub(in crate::cockpit) fn follow_disk(&self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(in crate::cockpit) fn follow_disk(&self, thread: ThreadKey, cx: &mut Context<Self>) {
         let editors: Vec<_> = self
             .files_ref(thread)
             .into_iter()
@@ -984,8 +997,8 @@ impl FilesView {
 
     /// Every Thread `keep` refuses takes its Files with it, but for a buffer
     /// that holds an edit the disk does not have yet.
-    pub(in crate::cockpit) fn forget(&mut self, keep: impl Fn(ThreadId) -> bool, cx: &gpui::App) {
-        let gone: Vec<ThreadId> = self.threads.keys().copied().filter(|&thread| !keep(thread)).collect();
+    pub(in crate::cockpit) fn forget(&mut self, keep: impl Fn(ThreadKey) -> bool, cx: &gpui::App) {
+        let gone: Vec<ThreadKey> = self.threads.keys().copied().filter(|&thread| !keep(thread)).collect();
         for thread in gone {
             self.orphaned.extend(self.threads.remove(&thread));
         }
@@ -993,7 +1006,7 @@ impl FilesView {
     }
 
     /// ⌘P: the tree's filter takes the keyboard.
-    fn go_to_file(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) {
+    fn go_to_file(&mut self, thread: ThreadKey, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(files) = self.files_of(thread) {
             files.show_tree = true;
             let focus = files.filter.read(cx).focus_target(window, cx);
@@ -1001,7 +1014,7 @@ impl FilesView {
         }
     }
 
-    fn open_first_match(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    fn open_first_match(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         let first = self.files_of(thread).and_then(|files| {
             files.tree.rows().rows.into_iter().find(|row| !row.entry.dir).map(|row| row.entry.path)
         });
@@ -1011,7 +1024,7 @@ impl FilesView {
     }
 
     /// A Files menu verb (the ⋯ menu's rows, a tree row's menu).
-    pub(in crate::cockpit) fn run_verb(&mut self, thread: ThreadId, verb: Verb, cx: &mut Context<Self>) {
+    pub(in crate::cockpit) fn run_verb(&mut self, thread: ThreadKey, verb: Verb, cx: &mut Context<Self>) {
         let Some(files) = self.files_of(thread) else {
             return;
         };
@@ -1059,12 +1072,12 @@ impl FilesView {
     }
 
     /// The path a tree row's right-click is on (`MenuTarget::File`).
-    pub(in crate::cockpit) fn pressed(&self, thread: ThreadId) -> Option<PathBuf> {
+    pub(in crate::cockpit) fn pressed(&self, thread: ThreadKey) -> Option<PathBuf> {
         self.files_ref(thread)?.pressed.clone()
     }
 
     /// The rows of the Files ⋯ menu.
-    pub(in crate::cockpit) fn more_rows(&self, thread: ThreadId) -> Vec<Option<(menu::Item, MenuVerb)>> {
+    pub(in crate::cockpit) fn more_rows(&self, thread: ThreadKey) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let Some(files) = self.files_ref(thread) else {
             return Vec::new();
         };
@@ -1094,7 +1107,7 @@ impl FilesView {
         ]
     }
 
-    pub(in crate::cockpit) fn sub_rows(&self, thread: ThreadId, sub: Sub) -> Vec<(menu::Item, MenuVerb)> {
+    pub(in crate::cockpit) fn sub_rows(&self, thread: ThreadKey, sub: Sub) -> Vec<(menu::Item, MenuVerb)> {
         match sub {
             Sub::Copy => [
                 ("Absolute path", Verb::CopyAbsolute),
@@ -1135,7 +1148,7 @@ impl FilesView {
     /// on the Panel's controls over it. The shown source's own bar, while
     /// held or while the editor has the keyboard; else, held, the rendered
     /// file's. Whether one opened.
-    fn open_find(&mut self, thread: ThreadId, held: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn open_find(&mut self, thread: ThreadKey, held: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if let Some(editor) = self
             .shown_editor(thread)
             .filter(|editor| held || editor.read(cx).holds_keyboard(window, cx))
@@ -1163,7 +1176,7 @@ impl FilesView {
     }
 
     /// The shown tab's path and rendered face, while it reads rendered.
-    fn shown_rendered(&mut self, thread: ThreadId) -> Option<(PathBuf, &mut Rendered)> {
+    fn shown_rendered(&mut self, thread: ThreadKey) -> Option<(PathBuf, &mut Rendered)> {
         let files = self.files_of(thread)?;
         let tab = &mut files.tabs[files.active?];
         match &mut tab.reading {
@@ -1174,7 +1187,7 @@ impl FilesView {
 
     /// The rendered bar's line changed: search the document again, a new
     /// query starting on its first occurrence in view.
-    fn refind_rendered(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    fn refind_rendered(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         let Some((_, Rendered { markup, find: Some(find), .. })) = self.shown_rendered(thread) else {
             return;
         };
@@ -1185,7 +1198,7 @@ impl FilesView {
         cx.notify();
     }
 
-    fn step_rendered_find(&mut self, thread: ThreadId, forward: bool, cx: &mut Context<Self>) {
+    fn step_rendered_find(&mut self, thread: ThreadKey, forward: bool, cx: &mut Context<Self>) {
         let Some((_, Rendered { find: Some(find), .. })) = self.shown_rendered(thread) else {
             return;
         };
@@ -1195,7 +1208,7 @@ impl FilesView {
         }
     }
 
-    fn close_rendered_find(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) {
+    fn close_rendered_find(&mut self, thread: ThreadKey, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((_, rendered)) = self.shown_rendered(thread) {
             rendered.find = None;
             window.blur(cx);
@@ -1205,20 +1218,20 @@ impl FilesView {
 
     /// Once per frame: settle `thread`'s shown rendered file's active
     /// occurrence into view.
-    pub(in crate::cockpit) fn tend_prose_find(&mut self, thread: ThreadId, window: &mut Window) {
+    pub(in crate::cockpit) fn tend_prose_find(&mut self, thread: ThreadKey, window: &mut Window) {
         if let Some((_, Rendered { scroll, find: Some(find), .. })) = self.shown_rendered(thread) {
             settle_markdown_found(find, scroll, window);
         }
     }
 
     /// The shown tab's editor, while its source is what shows.
-    pub(in crate::cockpit) fn shown_editor(&self, thread: ThreadId) -> Option<Entity<Editor>> {
+    pub(in crate::cockpit) fn shown_editor(&self, thread: ThreadKey) -> Option<Entity<Editor>> {
         let files = self.files_ref(thread)?;
         files.tabs[files.active?].shown_editor().cloned()
     }
 
     /// The shown tab's rendered face's scroll, while it reads rendered.
-    pub(in crate::cockpit) fn prose_scroll(&self, thread: ThreadId) -> Option<ScrollHandle> {
+    pub(in crate::cockpit) fn prose_scroll(&self, thread: ThreadKey) -> Option<ScrollHandle> {
         let files = self.files_ref(thread)?;
         match &files.tabs[files.active?].reading {
             Reading::Rendered(rendered) => Some(rendered.scroll.clone()),
@@ -1395,7 +1408,7 @@ impl FilesView {
             )
             .child(inputs.doors.button(
                 ferrite_ui::components::icon_button("files-more", icons::ELLIPSIS, IconSize::Standard, "More", cx),
-                Door::new(MenuTarget::FilesMore(thread), Edge::Right),
+                Door::new(MenuTarget::FilesMore(thread.thread()), Edge::Right),
                 "More",
                 cx,
             ))
@@ -1440,7 +1453,7 @@ impl FilesView {
         };
         let relative = tab.path.strip_prefix(files.tree.root()).unwrap_or(&tab.path);
         let relative_path = relative.to_string_lossy().into_owned();
-        let changed = inputs.changes.read(cx).lists(thread, &relative_path);
+        let changed = inputs.changes.read(cx).lists(thread.thread(), &relative_path);
         let text_action = |key: &'static str, label: &'static str| {
             div()
                 .id(key)
@@ -1626,7 +1639,7 @@ impl FilesView {
         column.child(breadcrumb).child(body)
     }
 
-    fn files_tree(&self, thread: ThreadId, files: &Files, cx: &mut Context<Self>) -> Div {
+    fn files_tree(&self, thread: ThreadKey, files: &Files, cx: &mut Context<Self>) -> Div {
         use theme::*;
         let empty = files.filter.read(cx).text().is_empty();
         let field = div()
@@ -1703,7 +1716,7 @@ impl FilesView {
 
     fn tree_row(
         &self,
-        thread: ThreadId,
+        thread: ThreadKey,
         at: usize,
         row: Row,
         active: Option<&Path>,
@@ -1803,9 +1816,14 @@ impl Render for FilesView {
 
 #[cfg(test)]
 impl FilesView {
+    /// `thread`'s Files in `root` on this computer, with no tabs kept.
+    pub(in crate::cockpit) fn make_for_test(&mut self, thread: ThreadKey, root: PathBuf, cx: &mut Context<Self>) {
+        self.make(thread, root, None, None, cx);
+    }
+
     fn remote_for_test(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
         answer: impl Fn(ferrite_core::file_operations::Request) -> std::io::Result<FileReply> + 'static,
     ) {
         if let Some(files) = self.files_of(thread) {
@@ -1820,14 +1838,14 @@ impl FilesView {
     /// What the shown rendered file's bar reads, and where its occurrence painted.
     pub(crate) fn prose_find_for_test(
         &mut self,
-        thread: ThreadId,
+        thread: ThreadKey,
     ) -> Option<(Option<SharedString>, Option<gpui::Bounds<Pixels>>)> {
         let (_, rendered) = self.shown_rendered(thread)?;
         rendered.find.as_ref().map(PreviewFind::state)
     }
 
     /// Each open tab's name and whether it is a preview tab.
-    pub(in crate::cockpit) fn tab_names(&self, thread: ThreadId) -> Vec<(String, bool)> {
+    pub(in crate::cockpit) fn tab_names(&self, thread: ThreadKey) -> Vec<(String, bool)> {
         self.files_ref(thread)
             .map(|files| {
                 files
@@ -1842,17 +1860,17 @@ impl FilesView {
             .unwrap_or_default()
     }
 
-    pub(in crate::cockpit) fn wraps(&self, thread: ThreadId) -> Option<bool> {
+    pub(in crate::cockpit) fn wraps(&self, thread: ThreadKey) -> Option<bool> {
         self.files_ref(thread).map(|files| files.settings.wrap)
     }
 
-    pub(in crate::cockpit) fn row_names(&self, thread: ThreadId) -> Vec<String> {
+    pub(in crate::cockpit) fn row_names(&self, thread: ThreadKey) -> Vec<String> {
         self.files_ref(thread)
             .map(|files| files.tree.rows().rows.into_iter().map(|row| row.entry.name).collect())
             .unwrap_or_default()
     }
 
-    pub(in crate::cockpit) fn rendered_markup(&self, thread: ThreadId) -> Option<String> {
+    pub(in crate::cockpit) fn rendered_markup(&self, thread: ThreadKey) -> Option<String> {
         let files = self.files_ref(thread)?;
         match &files.tabs[files.active?].reading {
             Reading::Rendered(rendered) => Some(rendered.markup.to_string()),
@@ -1860,7 +1878,7 @@ impl FilesView {
         }
     }
 
-    pub(in crate::cockpit) fn unshown_note(&self, thread: ThreadId) -> Option<String> {
+    pub(in crate::cockpit) fn unshown_note(&self, thread: ThreadKey) -> Option<String> {
         let files = self.files_ref(thread)?;
         match &files.tabs[files.active?].body {
             TabBody::Unshown(why) => Some(why.note().to_string()),
@@ -1869,20 +1887,20 @@ impl FilesView {
     }
 
     /// The path of the shown tab.
-    pub(in crate::cockpit) fn active_path(&self, thread: ThreadId) -> Option<PathBuf> {
+    pub(in crate::cockpit) fn active_path(&self, thread: ThreadKey) -> Option<PathBuf> {
         self.files_ref(thread)?.active_path().map(Path::to_path_buf)
     }
 
-    pub(in crate::cockpit) fn status_for_test(&self, thread: ThreadId, path: &Path) -> Option<Status> {
+    pub(in crate::cockpit) fn status_for_test(&self, thread: ThreadKey, path: &Path) -> Option<Status> {
         self.files_ref(thread)?.tree.status_of(path)
     }
 
-    pub(in crate::cockpit) fn filter_text_for_test(&self, thread: ThreadId, cx: &gpui::App) -> String {
+    pub(in crate::cockpit) fn filter_text_for_test(&self, thread: ThreadKey, cx: &gpui::App) -> String {
         self.files_ref(thread)
             .map_or_else(String::new, |files| files.filter.read(cx).text().to_string())
     }
 
-    pub(in crate::cockpit) fn set_filter_for_test(&mut self, thread: ThreadId, text: &str, cx: &mut Context<Self>) {
+    pub(in crate::cockpit) fn set_filter_for_test(&mut self, thread: ThreadKey, text: &str, cx: &mut Context<Self>) {
         if let Some(files) = self.files_ref(thread) {
             let field = files.filter.clone();
             field.update(cx, |field, cx| field.set(text.to_string(), cx));
