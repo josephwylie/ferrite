@@ -511,7 +511,7 @@ fn tool_call(
     let (told, said) = mpsc::channel();
     harness
         .tools
-        .for_thread(thread, Some(owner))
+        .for_thread(thread, Some(owner), false)
         .call(tool, &arguments, true, move |answer| {
             told.send((answer.text, answer.is_error)).unwrap()
         });

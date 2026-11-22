@@ -310,6 +310,7 @@ fn server_defaults() -> crate::settings::ServerDefaults {
         codex_sandbox: Some("workspace-write".into()),
         placeholder_suggestions: true,
         factory_tasks_at_once: 3,
+        linked_machines: false,
     }
 }
 
@@ -1348,6 +1349,19 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 id: 230,
                 ok: Some(Done::ServerDefaults {
                     defaults: server_defaults(),
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_server_defaults_linked_machines",
+            Sample::Server(ServerMessage::Reply {
+                id: 234,
+                ok: Some(Done::ServerDefaults {
+                    defaults: crate::settings::ServerDefaults {
+                        linked_machines: true,
+                        ..server_defaults()
+                    },
                 }),
                 error: None,
             }),

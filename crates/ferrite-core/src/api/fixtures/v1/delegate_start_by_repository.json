@@ -1,0 +1,1 @@
+{"id":"1","method":"delegate.start","params":{"machine":"pc","task":"Fix the flaky login test.","provider":"claude","model":"opus","effort":"high","mode":"auto_accept_edits"}}

@@ -106,6 +106,10 @@ pub struct Profile {
     pub origin: String,
     pub server_id: String,
     pub credential: String,
+    /// When the machine stops taking this session, in seconds since the
+    /// epoch; absent from a pairing with an older `ferrited`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -123,6 +127,9 @@ pub struct Granted {
     pub server_id: String,
     pub session_id: String,
     pub secret: String,
+    /// When the session ends there, in seconds since the epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires: Option<u64>,
 }
 
 fn profile_path(settings: &Path, target: &str) -> PathBuf {
@@ -139,6 +146,15 @@ pub(crate) fn profile(settings: &Path, target: &str) -> io::Result<Profile> {
     }
     check_identity(&profile.server_id).map_err(io::Error::other)?;
     Ok(profile)
+}
+
+/// When a paired link's session ends there, in seconds since the epoch:
+/// `None` for ssh, or a pairing that was not told.
+pub(super) fn expires(machine: &Machine, settings: &Path) -> Option<u64> {
+    machine
+        .is_link()
+        .then(|| profile(settings, &machine.target).ok()?.expires)
+        .flatten()
 }
 
 pub(super) fn display_target(machine: &Machine, settings: &Path) -> String {
@@ -198,7 +214,7 @@ fn json_body<T: serde::de::DeserializeOwned>(
 
 pub(crate) fn descriptor(origin: &str) -> io::Result<Descriptor> {
     let response = agent().get(format!("{origin}/.well-known/ferrite/environment")).call()
-        .map_err(|_| io::Error::other("Could not reach the remote server securely. Check its host, certificate, and network."))?;
+        .map_err(|_| io::Error::new(io::ErrorKind::NotConnected, "Could not reach the remote server securely. Check its host, certificate, and network."))?;
     let descriptor: Descriptor = json_body(response)?;
     check_identity(&descriptor.server_id).map_err(io::Error::other)?;
     Ok(descriptor)
@@ -387,10 +403,11 @@ fn pair(
         descriptor.server_id,
         random_secret(16)
     );
-    let profile = Profile {
+    let mut profile = Profile {
         origin: fields.host,
         server_id: descriptor.server_id.clone(),
         credential: entry_ref,
+        expires: None,
     };
     let entry = credential(&profile)?;
     cancelled_check(cancelled)?;
@@ -403,6 +420,7 @@ fn pair(
             "The remote environment identity changed during pairing.",
         ));
     }
+    profile.expires = granted.expires;
     let _ = send.send(Event::Progress(Phase::Verifying));
     let result = (|| {
         cancelled_check(cancelled)?;

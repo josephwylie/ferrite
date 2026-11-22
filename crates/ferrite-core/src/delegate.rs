@@ -17,6 +17,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{json, Value};
 
 use crate::server::ServerId;
+use crate::store::Provider;
 use crate::wake::{Outcome, Wake};
 use crate::ThreadId;
 
@@ -52,6 +53,12 @@ pub struct Delegate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub task: String,
+    /// The provider its Thread there runs on, and the model it was asked
+    /// to (none: that provider's default there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Provider>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub status: Status,
     /// Once ended: its final reply, a failed turn's error, or why it ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -184,6 +191,8 @@ pub struct Started {
     pub request: String,
     pub title: Option<String>,
     pub task: String,
+    pub provider: Provider,
+    pub model: Option<String>,
 }
 
 /// What a cancel did.
@@ -253,6 +262,8 @@ impl Delegates {
             request: started.request,
             title: started.title,
             task: started.task,
+            provider: Some(started.provider),
+            model: started.model,
             status: Status::Starting,
             result: None,
             problem: None,
@@ -457,6 +468,8 @@ impl Delegate {
             "server": self.server,
             "thread": self.thread,
             "title": self.title,
+            "provider": self.provider,
+            "model": self.model,
             "status": self.status,
             "result": self.result_text(),
             "problem": self.problem,

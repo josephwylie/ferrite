@@ -4080,9 +4080,10 @@ fn the_saved_machines_are_listed_by_name() {
     let listed = call(&harness).answer("1", "machine.list", serde_json::json!({}));
     assert_eq!(
         listed["result"]["machines"],
-        serde_json::json!([{ "id": "box", "label": "box", "target": "me@box" }]),
+        serde_json::json!([{ "id": "box", "label": "box", "target": "me@box", "expires_at": null }]),
         "{listed}"
     );
+    assert_eq!(listed["result"]["server_id"], call(&harness).answer("2", "identity.get", serde_json::json!({}))["result"]["server_id"]);
 }
 
 /// What the CLI prints, one write per line.

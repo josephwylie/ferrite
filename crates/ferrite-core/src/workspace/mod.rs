@@ -21,6 +21,9 @@ use std::process::Command;
 
 pub mod follow;
 pub mod registry;
+mod repository;
+
+pub use repository::repository_key;
 
 /// The checkout a Thread works in. Persisted by the store (as its own
 /// schema), resolved to a Session's working directory by the cockpit.

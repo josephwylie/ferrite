@@ -5694,6 +5694,13 @@ impl<'a> ThreadView<'a> {
         self.state.model.as_deref()
     }
 
+    /// The model it runs: what its Session announced, which its launch
+    /// arguments or the provider's default may have set, else the one it
+    /// chose.
+    pub fn running_model(&self) -> Option<&'a str> {
+        self.state.transcript().model().or(self.model())
+    }
+
     /// The reasoning effort this Thread chose, in the provider's own word.
     /// `None` is the operator's default for the provider.
     pub fn effort(&self) -> Option<&'a str> {

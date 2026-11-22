@@ -49,6 +49,13 @@ pub enum PeerFailure {
     Unreachable(String),
     /// ssh needs the operator to sign in, from a window.
     SignIn,
+    /// A paired link's address did not answer, at that address (T3's
+    /// "did not answer at").
+    Silent(String),
+    /// The machine no longer takes this paired link: its session expired
+    /// or was revoked there, and only a new pairing undoes it (T3's
+    /// `expired`).
+    Expired,
     /// The machine's shell has no `ferrited`.
     NoFerrited,
     /// The machine's `ferrited` is too old for what was asked.
@@ -106,10 +113,7 @@ impl Peers {
     /// answers as.
     pub fn identify(&self, name: &str) -> Result<Peer, PeerFailure> {
         let saved = self.saved()?;
-        let machine = saved
-            .iter()
-            .find(|machine| machine.name == name)
-            .or_else(|| saved.iter().find(|machine| machine.target == name))
+        let machine = saved_machine(&saved, name)
             .ok_or_else(|| PeerFailure::Final(format!("no saved machine `{name}`")))?;
         if !machine.enabled {
             return Err(turned_off(machine));
@@ -211,12 +215,38 @@ impl Peers {
     }
 
     fn connect(&self, machine: &Machine) -> Result<Connection, PeerFailure> {
+        let now = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        };
+        if machine
+            .expires(&self.settings_dir)
+            .is_some_and(|expires| expires <= now())
+        {
+            return Err(PeerFailure::Expired);
+        }
         let tunnel = (self.dial)(machine)().map_err(|error| match machine::failure(&error) {
             Some(failure) => unreached(failure.clone()),
-            None => PeerFailure::Unreachable(error.to_string()),
+            None => match error.kind() {
+                io::ErrorKind::PermissionDenied if machine.is_link() => PeerFailure::Expired,
+                io::ErrorKind::NotConnected if machine.is_link() => {
+                    PeerFailure::Silent(machine.display_target(&self.settings_dir))
+                }
+                _ => PeerFailure::Unreachable(error.to_string()),
+            },
         })?;
         Ok(Connection::new(tunnel))
     }
+}
+
+/// The saved machine `name` names: by its name, else its target.
+pub fn saved_machine<'a>(saved: &'a [Machine], name: &str) -> Option<&'a Machine> {
+    saved
+        .iter()
+        .find(|machine| machine.name == name)
+        .or_else(|| saved.iter().find(|machine| machine.target == name))
 }
 
 fn turned_off(machine: &Machine) -> PeerFailure {

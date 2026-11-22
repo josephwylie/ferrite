@@ -145,6 +145,7 @@ impl Access {
             server_id: self.id.as_str().into(),
             session_id: id,
             secret,
+            expires: Some(now + SESSION_TTL),
         })
     }
     pub fn authorize(&self, secret: &str) -> Option<String> {
