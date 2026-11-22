@@ -71,8 +71,8 @@ and a window that holds every machine at once.
   (`ferrite-core/src/cockpit/held.rs`) keeps what one link means: its
   `MachineId`, its saved name, the link (an Engine in this process or a
   Server's), the mirrors, the shared state, the parked rows, the logs,
-  what the Server was told of this window and what this window draws of
-  its Threads (`Drawn`). The Cockpit keeps them in
+  what the Server was told of this window and of what it has seen
+  (`seen_told`), and what this window draws of its Threads (`Drawn`). The Cockpit keeps them in
   `BTreeMap<MachineId, HeldMachine>`. What exists once per window stays
   on the Cockpit, keyed by `ThreadKey`: the Roster, focus, `composing`,
   `visible_subjects` and `window_active`. `Drawn` is per holder, not per
@@ -100,8 +100,7 @@ and a window that holds every machine at once.
 
 - **One `Cockpit` per machine under a registry**, which is T3 Code's
   literal shape. The Cockpit holds state that must exist once per window:
-  the Roster, focus, park order, `composing`, `Drawn` and
-  `window_active`. Splitting it N ways means either merging N Rosters
+  the Roster, focus, park order, `composing` and `window_active`. Splitting it N ways means either merging N Rosters
   wherever the board reads, or pulling the Roster out, which is the chosen
   shape plus a layer. And N public `Cockpit`s would each take any bare
   `ThreadId`, so the right machine would be a check at every call site. T3
