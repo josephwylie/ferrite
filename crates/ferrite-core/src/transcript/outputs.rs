@@ -165,6 +165,7 @@ mod tests {
             at: None,
             prompt_id: None,
             steer: false,
+            wake: None,
         }
     }
 

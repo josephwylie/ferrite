@@ -2,7 +2,7 @@
 //! cases for what the module doc says Ferrite leaves out: the required
 //! rebase, a host whose empty check list says nothing, and a watch saved
 //! before passed checks were recorded. The submodules hold the wake texts
-//! T3 really sent on Ferrite's own PRs and a real `gh pr view` read.
+//! T3 really sent on Ferrite's own PRs and a real `gh api graphql` read.
 
 use super::*;
 use CheckStatus::{ActionRequired, Failure, Pending, Skipped, Success};

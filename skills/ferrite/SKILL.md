@@ -159,6 +159,22 @@ many saw it); `thread focus` brings a Thread on screen, `project focus` a
 Project's first open Thread. Focus only when the user asked to see it: it
 moves their view.
 
+## Watch a pull request
+
+```bash
+"$F" pr watch https://github.com/acme/app/pull/7 --until merged
+"$F" pr unwatch https://github.com/acme/app/pull/7
+```
+
+`pr watch` has the Server read a PR for the Thread you run in (`--thread`
+for another) and wake its agent on failed checks, passed required checks,
+new comments or reviews, conflicts, and once on merge or close, unless the
+agent merged or closed it itself. `--until checks` (a new watch's default)
+or `merged` says how long the Thread stays working. A PR already merged or
+closed starts no watch: the answer's `state` and `next` say so. After the
+call, end your turn; do not watch again on a wake. `pr unwatch` stops it.
+Stopping the agent or parking its Thread ends its watches.
+
 ## Stop, close and clean up
 
 ```bash

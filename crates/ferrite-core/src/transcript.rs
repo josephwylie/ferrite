@@ -57,6 +57,10 @@ pub struct Block {
     /// prompt applies, so a replay marks it as the live thread did; false
     /// for every other Block.
     pub steer: bool,
+    /// A prompt the Server sent on its own (`Input::Wake`): what its
+    /// notice row draws in place of the operator's bubble. `None` for every
+    /// other Block.
+    pub wake: Option<crate::wake::WakeNote>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -931,6 +935,9 @@ pub enum Input {
     /// A line the operator just sent. Not a SessionEvent: it is Ferrite's own
     /// act, and the provider will never echo it back.
     Prompt(String),
+    /// A prompt the Server just sent on its own (`crate::wake`): a turn
+    /// begins as for a prompt, its Block marked as the Server's.
+    Wake(crate::wake::Wake),
     /// Something Ferrite itself needs to say — a send that failed, a session
     /// that was never spawned. Also not the provider's word.
     Notice(String),
@@ -1965,6 +1972,14 @@ impl Transcript {
     /// of a superset event model — a wildcard would silently render nothing.
     fn fold(&mut self, input: Input) -> Update {
         match input {
+            Input::Wake(wake) => {
+                let note = wake.note();
+                let update = self.fold(Input::Prompt(wake.text));
+                if let Some(block) = self.blocks.last_mut() {
+                    block.wake = Some(note);
+                }
+                update
+            }
             Input::CompletionObservation {
                 elapsed_ms,
                 completed_at,
@@ -3282,6 +3297,7 @@ impl Transcript {
             at,
             prompt_id: None,
             steer: false,
+            wake: None,
         });
         self.section.clear();
         id

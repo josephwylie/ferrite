@@ -243,3 +243,34 @@ fn a_fork_drops_who_delegated_its_source_and_its_start_key() {
     drop(writer);
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A watched PR's watch is kept on its Thread's header and comes back with
+/// it; a fork watches nothing, since the watch's wakes are its source's
+/// agent's. A wake is kept as a wake, never as the operator's prompt.
+#[test]
+fn a_fork_watches_nothing_and_a_wake_is_no_prompt() {
+    let dir = scratch("rewind-fork-watch");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = three_prompts(&store);
+    let mut fact = crate::pr_watch::WatchFact::default();
+    let target = crate::pr_watch::Target::of("acme/app", 7).unwrap();
+    assert!(!fact.watch(target, None, None, 1));
+    store
+        .set_pr_watch(id, fact.clone(), Some(&mut writer))
+        .unwrap();
+    writer
+        .record_wake(&crate::wake::Wake {
+            text: "Update on pull request #7".into(),
+            outcome: crate::wake::Outcome::Failed,
+            summary: "#7: checks failed".into(),
+        })
+        .unwrap();
+    writer.flush().unwrap();
+    let snapshot = store.load(id).unwrap();
+    assert_eq!(snapshot.pr_watch(), &fact);
+    assert_eq!(snapshot.prompt_texts(), vec!["one", "two", "three"]);
+    let fork = store.fork(id, None, None).unwrap();
+    assert!(store.load(fork).unwrap().pr_watch().is_empty());
+    drop(writer);
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -8,8 +8,8 @@
 //! watch has told) with a `Reading` (one poll of the PR) and answers a
 //! `Report`: the news, the cursor to save, and whether the watch ends.
 //! `wake_text` words a report as the prompt that wakes the agent. The
-//! `read` half names the `gh` commands a Server runs and parses what they
-//! print into a `Reading`.
+//! `read` half asks GitHub's GraphQL API for a `Reading` through a query
+//! runner the caller hands in (the Server's `gh api graphql`).
 //!
 //! Where it differs from T3, and why:
 //! - No `needs-rebase`: T3's GitHub host never reports a required rebase
@@ -19,11 +19,14 @@
 //! - No fallbacks for watches T3 saved before a field existed: Ferrite has
 //!   no such saves.
 
+mod closes;
 mod read;
 mod wake;
 
-pub use read::{parse_watch_json, pr_watch_required, pr_watch_view};
-pub use wake::{combine, wake_text, Outcome, Wake};
+pub use closes::{closed_by, Closes};
+pub use read::{fingerprint, reading, Ask, Fingerprint, ReadError};
+pub use crate::wake::{Outcome, Wake};
+pub use wake::{combine, wake_text};
 
 use crate::workspace::PrState;
 use serde::{Deserialize, Serialize};
@@ -47,6 +50,215 @@ pub struct WatchFact {
     pub ended: Vec<Watch>,
 }
 
+impl WatchFact {
+    /// No watch on, and none ended: what a Thread that never watched has.
+    pub fn is_empty(&self) -> bool {
+        self.on.is_empty() && self.ended.is_empty()
+    }
+
+    /// The watch on `repository#number`, while it is on.
+    pub fn on(&self, repository: &str, number: u64) -> Option<&Watch> {
+        self.on.iter().find(|watch| watch.is(repository, number))
+    }
+
+    /// Watch `target`, as T3's `thread.pull-request.watch` does. A watch
+    /// already on keeps its cursor and only takes `until`; a new one
+    /// starts at `Checks` unless told, from what the PR's ended watch had
+    /// told, so watching again repeats no check or conflict news.
+    /// `checks_pending` is a fresh read's word on whether checks were
+    /// still running, which lets the first read tell a failure CI made
+    /// after the call. Answers whether it was already watched.
+    pub fn watch(
+        &mut self,
+        target: Target,
+        until: Option<Until>,
+        checks_pending: Option<bool>,
+        now_ms: i64,
+    ) -> bool {
+        let (repository, number) = (target.repository.as_str(), target.number);
+        if let Some(watch) = self.on.iter_mut().find(|watch| watch.is(repository, number)) {
+            watch.until = until.unwrap_or(watch.until);
+            return true;
+        }
+        let ended = self
+            .ended
+            .iter()
+            .position(|watch| watch.is(repository, number))
+            .map(|at| self.ended.remove(at).cursor);
+        let cursor = match ended {
+            None => Cursor {
+                awaiting_baseline: Some(Baseline::All),
+                checks_pending: checks_pending.unwrap_or(false),
+                ..Cursor::default()
+            },
+            Some(ended) => Cursor {
+                head: ended.head,
+                failed_checks: ended.failed_checks,
+                passed: ended.passed,
+                passed_checks: ended.passed_checks,
+                owed_checks: ended.owed_checks,
+                awaiting_approval: ended.awaiting_approval,
+                approval_announced: ended.approval_announced,
+                conflicting: ended.conflicting,
+                awaiting_baseline: ended.awaiting_baseline,
+                checks_awaited_since_ms: ended.checks_awaited_since_ms,
+                // A finished-checks answer kept from the last watch may be
+                // an older head's.
+                checks_pending: checks_pending.unwrap_or(ended.checks_pending),
+                ..Cursor::default()
+            },
+        };
+        self.on.push(Watch {
+            url: target.url,
+            number,
+            repository: target.repository,
+            until: until.unwrap_or_default(),
+            cursor: Cursor {
+                started_ms: now_ms,
+                remarks_through_ms: now_ms,
+                ..cursor
+            },
+        });
+        false
+    }
+
+    /// Save what a read told the watch on `repository#number` started at
+    /// `started_ms`: only while that same watch is on, so a stop or a new
+    /// watch that landed during the read wins. Answers whether it saved.
+    pub fn advance(&mut self, repository: &str, number: u64, started_ms: i64, next: Cursor) -> bool {
+        match self
+            .on
+            .iter_mut()
+            .find(|watch| watch.is(repository, number) && watch.cursor.started_ms == started_ms)
+        {
+            Some(watch) => {
+                watch.cursor = next;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// End the watch on `repository#number`, keeping what it told as the
+    /// PR's ended watch: with `last`, what its final read saw (a watch the
+    /// Server ends), else its cursor as it stands (one the agent or the
+    /// operator stops). `started_ms`, when given, must be the watch's.
+    /// Answers whether one ended.
+    pub fn end(
+        &mut self,
+        repository: &str,
+        number: u64,
+        started_ms: Option<i64>,
+        last: Option<Cursor>,
+    ) -> bool {
+        let Some(at) = self.on.iter().position(|watch| {
+            watch.is(repository, number)
+                && started_ms.is_none_or(|started| watch.cursor.started_ms == started)
+        }) else {
+            return false;
+        };
+        let mut watch = self.on.remove(at);
+        if let Some(last) = last {
+            watch.cursor = last;
+        }
+        self.ended.retain(|ended| !ended.is(repository, number));
+        self.ended.push(watch);
+        true
+    }
+
+    /// End every watch, as parking or interrupting the Thread does.
+    /// Answers whether any was on.
+    pub fn end_all(&mut self) -> bool {
+        let on = std::mem::take(&mut self.on);
+        let any = !on.is_empty();
+        for watch in on {
+            self.ended
+                .retain(|ended| !ended.is(&watch.repository, watch.number));
+            self.ended.push(watch);
+        }
+        any
+    }
+}
+
+/// Which watch a waiting wake's news is about, so the wake is dropped once
+/// that news is stale (T3's `isStalePullRequestWatchStamp`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stamp {
+    pub repository: String,
+    pub number: u64,
+    pub started_ms: i64,
+    /// The head the news is about; `None` for news with remarks, which a
+    /// push leaves standing.
+    pub head: Option<String>,
+    /// The news ended the watch.
+    pub ended: bool,
+}
+
+impl WatchFact {
+    /// Whether the agent is still owed a wake about `stamp`: its watch is
+    /// still on, on the same head, or, for the notice that ended it, no
+    /// newer watch replaced it.
+    pub fn owes(&self, stamp: &Stamp) -> bool {
+        let (repository, number) = (stamp.repository.as_str(), stamp.number);
+        if stamp.ended {
+            let latest = self
+                .on(repository, number)
+                .or_else(|| self.ended.iter().find(|watch| watch.is(repository, number)));
+            return latest.is_some_and(|watch| watch.cursor.started_ms == stamp.started_ms);
+        }
+        self.on(repository, number).is_some_and(|watch| {
+            watch.cursor.started_ms == stamp.started_ms
+                && stamp
+                    .head
+                    .as_ref()
+                    .is_none_or(|head| watch.cursor.head.as_ref() == Some(head))
+        })
+    }
+}
+
+/// A PR to watch: where it is, and its number in its repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    pub url: String,
+    pub number: u64,
+    /// `owner/name`.
+    pub repository: String,
+}
+
+impl Target {
+    /// The PR a github.com URL names (`https://github.com/o/r/pull/7`).
+    pub fn of_url(url: &str) -> Option<Self> {
+        let rest = url
+            .trim()
+            .trim_end_matches('/')
+            .strip_prefix("https://github.com/")?;
+        let mut parts = rest.split('/');
+        let (owner, name, pull, number) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+        let number = number.parse().ok().filter(|_| pull == "pull" && parts.next().is_none())?;
+        Self::of(&format!("{owner}/{name}"), number)
+    }
+
+    /// The PR `number` in `repository` (`owner/name`) on github.com.
+    pub fn of(repository: &str, number: u64) -> Option<Self> {
+        let mut parts = repository.split('/');
+        let fine = |part: Option<&str>| {
+            part.is_some_and(|part| {
+                !part.is_empty()
+                    && part
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            })
+        };
+        (fine(parts.next()) && fine(parts.next()) && parts.next().is_none() && number > 0).then(|| {
+            Self {
+                url: format!("https://github.com/{repository}/pull/{number}"),
+                number,
+                repository: repository.to_string(),
+            }
+        })
+    }
+}
+
 /// One watched PR.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Watch {
@@ -56,6 +268,14 @@ pub struct Watch {
     pub repository: String,
     pub until: Until,
     pub cursor: Cursor,
+}
+
+impl Watch {
+    /// Whether this is the watch of `repository#number`. GitHub's names
+    /// ignore case.
+    pub fn is(&self, repository: &str, number: u64) -> bool {
+        self.number == number && self.repository.eq_ignore_ascii_case(repository)
+    }
 }
 
 /// How long the watch holds its Thread.

@@ -2650,6 +2650,7 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
             | SessionEvent::Closed { .. },
         )
         | Input::Prompt(_)
+        | Input::Wake(_)
         | Input::PromptObservation { .. }
         | Input::ClockObservation { .. }
         | Input::Rewind { .. }

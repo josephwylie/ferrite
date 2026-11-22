@@ -266,6 +266,23 @@ _Avoid_: Settled (T3's word; Parked is Ferrite's), Projects tree and
 Attention list (the nav's former structure), Needs-you view (the former
 name).
 
+**PR watch**
+A Thread's agent asking the Server to keep reading one of its pull requests
+and wake it with what changes: failed checks, passed required checks, new
+comments or reviews, conflicts, and once when the PR merges or closes,
+unless the agent merged or closed it itself. The Server reads it every two
+minutes with its own `gh` account and keeps the watch on the Thread, so it
+outlives windows and restarts. Stopping the agent or parking the Thread
+ends it. A fork watches nothing.
+_Avoid_: subscription, PR monitor.
+
+**Server wake**
+A prompt the Server sends a Thread's agent on its own, such as a PR watch's
+news. It is never the operator's prompt: the log keeps it as a wake, and a
+window draws it as a short notice. It waits while a Decision is pending or a
+turn runs, and starts an ended Session.
+_Avoid_: notification (a toast), message.
+
 **Snooze**
 A temporary deferral of an open Thread until a chosen local time or duration.
 Snoozing keeps its history and agent execution intact. A new Decision, a

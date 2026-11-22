@@ -1,0 +1,1 @@
+{"id":"1","method":"pr.watch","params":{"thread":14,"url":"https://github.com/acme/app/pull/7","until":"merged"}}

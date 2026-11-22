@@ -4,11 +4,13 @@
 //! costs nothing. Ferrite writes nothing to GitHub.
 //!
 //! [`GitHub`] is the seam: the Server's harness hands it a scripted
-//! reader, as it hands it a scripted Session spawner.
+//! reader, as it hands it a scripted Session spawner. A watched PR (ADR
+//! 0046) is read through the same seam, with `gh api graphql`.
 
 use std::path::Path;
 
 use crate::factory::{GitHubItem, GitHubQuery, GitHubRead, StartKind, Trigger};
+use crate::pr_watch::{Ask, Fingerprint, ReadError, Reading};
 
 /// What the Server reads from GitHub.
 pub trait GitHub: Send + Sync {
@@ -21,6 +23,11 @@ pub trait GitHub: Send + Sync {
     fn labels(&self, repository: &str) -> Result<Vec<String>, String>;
     /// A pull request's head commit.
     fn head(&self, repository: &str, number: u64) -> Result<String, String>;
+    /// A watched PR's cheap change check (`pr_watch::fingerprint`).
+    fn pr_fingerprint(&self, repository: &str, number: u64) -> Result<Fingerprint, ReadError>;
+    /// A watched PR whole (`pr_watch::reading`), its remarks too when
+    /// `remarks`.
+    fn pr_reading(&self, repository: &str, number: u64, remarks: bool) -> Result<Reading, ReadError>;
 }
 
 /// The operator's own `gh`.
@@ -178,6 +185,92 @@ fn names(args: &[&str]) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// One GraphQL query through `gh api graphql`, its body on stdin.
+fn graphql(ask: Ask) -> Result<serde_json::Value, ReadError> {
+    let body = serde_json::json!({ "query": ask.query, "variables": ask.variables });
+    gh_json(&["api", "graphql", "--input", "-"], Some(body.to_string()))
+}
+
+/// One REST read through `gh api`.
+fn rest(path: &str) -> Result<serde_json::Value, ReadError> {
+    gh_json(&["api", path], None)
+}
+
+/// `gh`'s JSON answer, or why there is none, as the watcher treats it.
+fn gh_json(args: &[&str], input: Option<String>) -> Result<serde_json::Value, ReadError> {
+    use crate::spawn::NoConsoleWindow;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let spawned = Command::new("gh")
+        .args(args)
+        .current_dir(dirs_home())
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .no_console_window()
+        .spawn();
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(ReadError::Unusable {
+                setup: "Install the GitHub CLI (gh) on the server and sign in with `gh auth login`."
+                    .into(),
+            })
+        }
+        Err(error) => return Err(ReadError::Failed(format!("the GitHub CLI could not run: {error}"))),
+    };
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        let _ = stdin.write_all(input.as_bytes());
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| ReadError::Failed(format!("the GitHub CLI could not run: {error}")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if output.status.success() {
+        return serde_json::from_str(&stdout)
+            .map_err(|error| ReadError::Failed(format!("GitHub's answer: {error}")));
+    }
+    // A GraphQL error still prints its answer: a missing PR is GitHub's
+    // word, not a failure of the read.
+    if let Ok(answer) = serde_json::from_str::<serde_json::Value>(&stdout) {
+        if answer["data"].is_object() && !rate_limited(&stdout) {
+            return Ok(answer);
+        }
+    }
+    Err(classify(&format!("{} {stdout}", String::from_utf8_lossy(&output.stderr))))
+}
+
+fn rate_limited(said: &str) -> bool {
+    let said = said.to_ascii_lowercase();
+    said.contains("rate limit") || said.contains("rate_limited")
+}
+
+/// What a failed `gh` call's words say about it.
+pub(crate) fn classify(said: &str) -> ReadError {
+    let said = said.trim();
+    let lower = said.to_ascii_lowercase();
+    if rate_limited(said) {
+        ReadError::RateLimited
+    } else if lower.contains("gh auth login") || lower.contains("http 401") || lower.contains("bad credentials") {
+        ReadError::Unusable {
+            setup: "Sign in to GitHub on the server with `gh auth login`.".into(),
+        }
+    } else if lower.contains("http 404")
+        || lower.contains("http 403")
+        || lower.contains("not_found")
+        || lower.contains("forbidden")
+        || lower.contains("could not resolve to")
+    {
+        ReadError::Refused(said.to_string())
+    } else {
+        ReadError::Failed(if said.is_empty() {
+            "the GitHub CLI failed".into()
+        } else {
+            said.to_string()
+        })
+    }
+}
+
 impl GitHub for Gh {
     fn matches(&self, query: &GitHubQuery) -> Result<GitHubRead, String> {
         let (path, search) = endpoint(query)?;
@@ -231,6 +324,14 @@ impl GitHub for Gh {
             .next()
             .ok_or_else(|| format!("GitHub said nothing of {repository}#{number}'s head"))
     }
+
+    fn pr_fingerprint(&self, repository: &str, number: u64) -> Result<Fingerprint, ReadError> {
+        crate::pr_watch::fingerprint(repository, number, &mut graphql)
+    }
+
+    fn pr_reading(&self, repository: &str, number: u64, remarks: bool) -> Result<Reading, ReadError> {
+        crate::pr_watch::reading(repository, number, remarks, &mut graphql, &mut rest)
+    }
 }
 
 #[cfg(test)]
@@ -273,6 +374,26 @@ mod tests {
         let mut odd = query(StartKind::GithubIssue, Trigger::Opened);
         odd.source.repository = Some("acme/app/../x?y".into());
         assert!(endpoint(&odd).is_err());
+    }
+
+    #[test]
+    fn a_failed_read_is_told_by_what_gh_says() {
+        assert_eq!(
+            classify("gh: API rate limit exceeded for user ID 1. (HTTP 403)"),
+            ReadError::RateLimited
+        );
+        assert!(matches!(
+            classify("To get started with GitHub CLI, please run:  gh auth login"),
+            ReadError::Unusable { .. }
+        ));
+        assert!(matches!(
+            classify("GraphQL: Could not resolve to a Repository with the name 'o/r'. (repository)"),
+            ReadError::Refused(_)
+        ));
+        assert!(matches!(
+            classify("error connecting to api.github.com"),
+            ReadError::Failed(_)
+        ));
     }
 
     #[test]

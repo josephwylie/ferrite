@@ -421,6 +421,7 @@ fn write(
         at: None,
         prompt_id: None,
         steer: false,
+        wake: None,
     });
     *open_id = Some(id);
     Some(id)

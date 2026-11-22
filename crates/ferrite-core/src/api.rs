@@ -744,9 +744,12 @@ pub struct Api {
     subscriptions: Vec<Subscription>,
     open: Vec<ThreadId>,
     attention: BTreeMap<ThreadId, Attention>,
-    /// Callers that ask nothing more, kept while a wait or subscription
-    /// still owes them lines.
+    /// Callers that ask nothing more, kept while a wait, a subscription
+    /// or an answer still owes them lines.
     hung_up: BTreeSet<CallerId>,
+    /// The requests the Server answers later ([`Api::owe`]), by caller and
+    /// request id.
+    owed: BTreeSet<(CallerId, String)>,
 }
 
 impl Api {
@@ -762,9 +765,17 @@ impl Api {
         self.release_hung_up();
     }
 
+    /// The Server answers `caller`'s request `id` later, with
+    /// [`Api::reply`]: `caller` is kept until then, though it hangs up
+    /// first, as an agent's tool call does at once.
+    pub fn owe(&mut self, caller: CallerId, id: &str) {
+        self.owed.insert((caller, id.to_owned()));
+    }
+
     fn release_hung_up(&mut self) {
         let owed = |caller: &CallerId| {
             self.waits.iter().any(|waiting| waiting.caller == *caller)
+                || self.owed.iter().any(|(owed, _)| owed == caller)
                 || self
                     .subscriptions
                     .iter()
@@ -785,17 +796,22 @@ impl Api {
     fn leave(&mut self, caller: CallerId) {
         self.callers.remove(&caller);
         self.hung_up.remove(&caller);
+        self.owed.retain(|(owed, _)| *owed != caller);
         self.waits.retain(|waiting| waiting.caller != caller);
         self.subscriptions
             .retain(|subscription| subscription.caller != caller);
     }
 
     pub fn reply(&mut self, caller: CallerId, id: String, result: Result<Value, ApiError>) {
+        let was_owed = self.owed.remove(&(caller, id.clone()));
         let response = match result {
             Ok(result) => Response::Result { id, result },
             Err(error) => Response::Error { id, error },
         };
         self.send(caller, &response);
+        if was_owed {
+            self.release_hung_up();
+        }
     }
 
     fn send(&mut self, caller: CallerId, response: &Response) {
