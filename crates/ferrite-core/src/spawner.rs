@@ -758,6 +758,7 @@ mod tests {
         spawns: usize,
         model: Option<String>,
         controls: Vec<crate::SessionControl>,
+        stopped: Vec<crate::activity::AgentKey>,
     }
 
     struct NativeProvider {
@@ -822,6 +823,10 @@ mod tests {
                 ));
             }
             self.calls.lock().unwrap().controls.push(action);
+            Ok(())
+        }
+        fn stop_subagent(&mut self, key: &crate::activity::AgentKey) -> io::Result<()> {
+            self.calls.lock().unwrap().stopped.push(key.clone());
             Ok(())
         }
     }
@@ -973,6 +978,26 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(error.to_string(), "native login refused");
+    }
+
+    /// The operator's `Stop` on a subagent reaches the provider through
+    /// the production Session, not the trait's refusal.
+    #[test]
+    fn production_wrapper_stops_a_subagent() {
+        let calls = Arc::new(Mutex::new(NativeCalls::default()));
+        let (sender, events) = mpsc::channel();
+        let mut session: Box<dyn Session> = Box::new(SessionWithDefaults {
+            inner: Box::new(NativeProvider {
+                calls: calls.clone(),
+                events,
+                sender,
+            }),
+            provider: Provider::Claude,
+            defaults: Arc::new(Mutex::new(SessionDefaults::default())),
+        });
+        let key = crate::activity::AgentKey::from_stored("toolu_reviewer".into());
+        session.stop_subagent(&key).unwrap();
+        assert_eq!(calls.lock().unwrap().stopped, [key]);
     }
 
     #[test]
