@@ -62,7 +62,10 @@ pub(super) fn rewind_gate(
 /// (its latest progress summary) while it runs or waits; once it has ended,
 /// its last words as its result. Every Subject's transcript reads the same
 /// faces: a subagent's own agent calls open its children.
-pub(super) fn agent_faces(activity: ActivityView<'_>) -> AgentFaces {
+pub(super) fn agent_faces(
+    activity: ActivityView<'_>,
+    provider: ferrite_core::store::Provider,
+) -> AgentFaces {
     let mut faces = AgentFaces::default();
     for (call, agent) in activity.invocations() {
         let run = match agent.status() {
@@ -94,6 +97,7 @@ pub(super) fn agent_faces(activity: ActivityView<'_>) -> AgentFaces {
         faces.insert(
             call,
             AgentFace {
+                provider,
                 run,
                 summary,
                 result,

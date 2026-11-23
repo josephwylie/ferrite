@@ -11,6 +11,7 @@
 //! grouped and drawn ([`AgentFaces::apply`]): the group's tense, its failure
 //! count and the shut card's live rows then read as any group's do.
 use super::*;
+use ferrite_core::store::Provider;
 use std::collections::BTreeMap;
 
 /// How a subagent stands, for its call's row (T3's subagent statuses).
@@ -28,10 +29,12 @@ pub enum AgentRun {
 
 /// One subagent as its call's row shows it: how it stands, what it is
 /// doing (its latest progress summary, Claude's `task_progress.summary`),
-/// what it answered once its turn ended, and how long it has run. A
-/// Delegate's also names the machine it runs `on` (T3's `on {environment}`).
+/// what it answered once its turn ended, how long it has run, and the
+/// provider running it (its avatar's mark). A Delegate's also names the
+/// machine it runs `on` (T3's `on {environment}`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentFace {
+    pub provider: Provider,
     pub run: AgentRun,
     pub summary: Option<String>,
     pub result: Option<String>,
@@ -294,7 +297,7 @@ pub(crate) fn render_agent(
     let title = div()
         .flex()
         .items_baseline()
-        .gap(px(theme::AGENT_ROW_GAP))
+        .gap(px(theme::SPACE_2))
         .min_w_0()
         .child(title)
         .children(on.map(|on| {
@@ -319,17 +322,11 @@ pub(crate) fn render_agent(
             .debug_selector(move || format!("agent-status-{word}"))
             .flex_shrink_0()
             .text_size(px(theme::FS_BADGE))
+            .line_height(px(theme::LH_META))
             .text_color(rgb(ink))
             .child(word)
     });
-    let elapsed = clock.map(|clock| {
-        div()
-            .debug_selector(|| "agent-elapsed".into())
-            .flex_shrink_0()
-            .text_size(px(theme::FS_BADGE))
-            .text_color(rgb(INK_SUBTLE))
-            .child(clock.face())
-    });
+    let elapsed = clock.map(|clock| elapsed("agent-elapsed", clock));
     let opens = open.is_some();
     let row_selector = format!("agent-row-{}", tool.call);
     let row = div()
@@ -346,7 +343,7 @@ pub(crate) fn render_agent(
         .py(px(theme::AGENT_ROW_PAD_Y))
         .rounded(px(theme::AGENT_ROW_RADIUS))
         .when(opens, |row| row.hover(|style| style.bg(theme::paint::HOVER)))
-        .child(avatar(Some(standing), ground))
+        .child(avatar(face.map(|face| face.provider), Some(standing), ground, false))
         .child(
             div()
                 .flex()
@@ -359,11 +356,8 @@ pub(crate) fn render_agent(
         .children(label)
         .children(elapsed)
         .children(opens.then(|| {
-            div()
-                .flex_shrink_0()
-                .text_color(rgb(theme::TEXT_FAINT))
+            icons::icon(icons::CHEVRON_RIGHT, theme::AGENT_CHEVRON, theme::TEXT_FAINT)
                 .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(INK_STRONG)))
-                .child(icons::icon(icons::CHEVRON_RIGHT, theme::AGENT_CHEVRON, theme::TEXT_FAINT))
         }))
         .children(open);
     match targeted {
@@ -397,7 +391,7 @@ pub(crate) struct AgentRowCx<'a> {
 /// subagents` over how they stand, how long they have run, a chevron that
 /// turns when it opens), and open, a panel of their rows that snaps open.
 /// The trigger recedes to `AGENT_CARD_SETTLED_OPACITY` once every agent is
-/// done and it is shut, coming up under the pointer.
+/// done and it is shut, coming up under the pointer ([`receding`]).
 pub(crate) fn render_agent_card(
     members: &[Block],
     row_cx: &RowCx,
@@ -407,6 +401,7 @@ pub(crate) fn render_agent_card(
         disclosure,
         open,
         clock,
+        providers,
         rows,
         ground,
     } = card;
@@ -429,21 +424,27 @@ pub(crate) fn render_agent_card(
     let key = tools
         .first()
         .map_or_else(|| format!("{:?}", leader.id), |tool| tool.call.clone());
-    let shown = tools.len().min(theme::AGENT_AVATARS);
-    let more = tools.len() - shown;
+    let more = tools.len().saturating_sub(theme::AGENT_AVATARS);
+    let receded = !open && !active;
     let stack = div()
+        .debug_selector(|| "agent-card-avatars".into())
         .flex()
         .flex_shrink_0()
-        .children((0..shown).map(|at| {
-            avatar(None, ground).when(at > 0, |avatar| avatar.ml(px(-theme::AGENT_AVATAR_OVERLAP)))
+        .children(providers.iter().take(theme::AGENT_AVATARS).enumerate().map(|(at, provider)| {
+            avatar(*provider, None, ground, receded)
+                .when(at > 0, |avatar| avatar.ml(px(-theme::AGENT_AVATAR_OVERLAP)))
         }))
         .children((more > 0).then(|| {
-            avatar_disc(ground)
-                .ml(px(-theme::AGENT_AVATAR_OVERLAP))
-                .text_size(px(theme::AGENT_MORE_FS))
-                .font_weight(theme::W_LABEL)
-                .text_color(rgb(INK_SUBTLE))
-                .child(SharedString::from(format!("+{more}")))
+            ringed(
+                disc()
+                    .text_size(px(theme::AGENT_MORE_FS))
+                    .font_weight(theme::W_LABEL)
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(SharedString::from(format!("+{more}"))),
+                ground,
+                receded,
+            )
+            .ml(px(-theme::AGENT_AVATAR_OVERLAP))
         }));
     let status_ink = match () {
         _ if failed => theme::BLOCKED,
@@ -469,10 +470,10 @@ pub(crate) fn render_agent_card(
                 .min_w_0()
                 .truncate()
                 .text_size(px(theme::AGENT_MORE_FS))
+                .line_height(px(theme::AGENT_MORE_LH))
                 .text_color(rgb(status_ink))
                 .child(row_cx.selection.line(leader.id, text::agent_card_status(&tools), Vec::new())),
         );
-    let receded = !open && !active;
     let trigger_key = SharedString::from(format!("agent-card-{key}"));
     let mut trigger = div()
         .id(trigger_key.clone())
@@ -487,28 +488,23 @@ pub(crate) fn render_agent_card(
         .py(px(theme::AGENT_CARD_PAD_Y))
         .pr(px(theme::AGENT_CARD_PAD_R))
         .text_color(rgb(if receded { INK_SUBTLE } else { INK_STRONG }))
-        .when(receded, |row| {
-            row.opacity(theme::AGENT_CARD_SETTLED_OPACITY)
-                .hover(|style| style.opacity(1.))
-        })
         .child(stack)
-        .child(words)
-        .children(clock.map(|clock| {
-            div()
-                .debug_selector(|| "agent-card-elapsed".into())
-                .flex_shrink_0()
-                .text_size(px(theme::FS_BADGE))
-                .text_color(rgb(INK_SUBTLE))
-                .child(clock.face())
-        }))
-        .child(
-            icons::icon(
-                if open { icons::CHEVRON_UP } else { icons::CHEVRON_DOWN },
-                theme::AGENT_CHEVRON,
-                INK_SUBTLE,
-            )
-            .flex_shrink_0(),
-        )
+        .child(receding(words, receded))
+        .children(clock.map(|clock| receding(elapsed("agent-card-elapsed", clock), receded)))
+        .child(receding(
+            div().flex_shrink_0().child(ferrite_ui::motion::settled(
+                SharedString::from(format!("agent-card-chevron-{key}")),
+                open,
+                ferrite_ui::motion::AGENT_CHEVRON,
+                |turn| {
+                    icons::icon(icons::CHEVRON_DOWN, theme::AGENT_CHEVRON, INK_SUBTLE)
+                        .with_transformation(gpui::Transformation::rotate(gpui::radians(
+                            std::f32::consts::PI * turn,
+                        )))
+                },
+            )),
+            receded,
+        ))
         .children(overlay);
     if targeted {
         trigger = trigger.bg(theme::paint::RAISED).child(
@@ -548,12 +544,14 @@ pub(crate) fn render_agent_card(
 }
 
 /// What a subagent card draws besides its calls: its disclosure, whether
-/// it is open, how long its agents have run, their rows (open), and the
-/// ground its avatars' rings are cut from.
+/// it is open, how long its agents have run, the provider of each (none for
+/// a call no agent answers), their rows (open), and the ground its avatars'
+/// rings are cut from.
 pub(crate) struct AgentCardCx {
     pub disclosure: Option<Disclosure>,
     pub open: bool,
     pub clock: Option<AgentClock>,
+    pub providers: Vec<Option<Provider>>,
     pub rows: Vec<AnyElement>,
     pub ground: u32,
 }
@@ -619,28 +617,41 @@ impl Standing {
 }
 
 /// A subagent's avatar (T3's `SubagentAvatar`): an `AGENT_AVATAR` disc
-/// holding the bot, ringed in the ground; with a `standing`, its status
-/// dot at the foot of its right side.
-fn avatar(standing: Option<Standing>, ground: u32) -> Div {
-    avatar_disc(ground)
-        .relative()
-        .child(icons::icon(icons::BOT, theme::AGENT_AVATAR_ICON, INK_SUBTLE))
-        .children(standing.map(|standing| {
-            div()
-                .when(standing == Standing::Running, |dot| {
-                    dot.debug_selector(|| "agent-running".into())
-                })
-                .absolute()
-                .right(px(-1.))
-                .bottom(px(-1.))
-                .size(px(theme::AGENT_DOT))
-                .rounded_full()
-                .bg(rgb(standing.ink()))
-                .shadow(vec![ring(ground)])
-        }))
+/// holding its provider's mark (the bot when no agent answers for the call),
+/// ringed in the ground; with a `standing`, its ringed status dot at the
+/// disc's lower right.
+fn avatar(
+    provider: Option<Provider>,
+    standing: Option<Standing>,
+    ground: u32,
+    receded: bool,
+) -> Div {
+    let (mark, ink) = provider.map_or((icons::BOT, INK_SUBTLE), ferrite_ui::provider::mark);
+    ringed(
+        disc()
+            .border_1()
+            .border_color(gpui::Hsla::from(theme::paint::LINE).opacity(0.7))
+            .child(icons::icon(mark, theme::AGENT_AVATAR_ICON, ink)),
+        ground,
+        receded,
+    )
+    .children(standing.map(|_| ring(theme::AGENT_DOT, ground)))
+    .children(standing.map(|standing| {
+        div()
+            .when(standing == Standing::Running, |dot| {
+                dot.debug_selector(|| "agent-running".into())
+            })
+            .absolute()
+            .right_0()
+            .bottom_0()
+            .size(px(theme::AGENT_DOT))
+            .rounded_full()
+            .bg(rgb(standing.ink()))
+    }))
 }
 
-fn avatar_disc(ground: u32) -> Div {
+/// The disc an avatar and T3's borderless `+N` share.
+fn disc() -> Div {
     div()
         .flex()
         .flex_shrink_0()
@@ -648,21 +659,59 @@ fn avatar_disc(ground: u32) -> Div {
         .justify_center()
         .size(px(theme::AGENT_AVATAR))
         .rounded_full()
-        .border_1()
-        .border_color(gpui::Hsla::from(theme::paint::LINE).opacity(0.7))
         .bg(rgba(theme::AGENT_AVATAR_FILL))
-        .shadow(vec![ring(ground)])
 }
 
-/// T3's `ring-2 ring-background`: the ground cut 2px round a disc.
-fn ring(ground: u32) -> gpui::BoxShadow {
-    gpui::BoxShadow {
-        inset: false,
-        color: rgb(ground).into(),
-        offset: gpui::point(px(0.), px(0.)),
-        blur_radius: px(0.),
-        spread_radius: px(theme::AGENT_RING),
-    }
+/// `disc` on its ring, in a slot of its size that a status dot can sit in.
+/// The ring and the dot are layers beside the disc, not its shadow and
+/// child: GPUI paints a border over children, which would run the disc's
+/// edge through the dot, and a shadow's spread keeps the disc's radius, so
+/// the ring would not come out round. Only the disc recedes: the ring stays
+/// solid, to hide the avatar it overlaps.
+fn ringed(disc: Div, ground: u32, receded: bool) -> Div {
+    div()
+        .relative()
+        .flex_shrink_0()
+        .size(px(theme::AGENT_AVATAR))
+        .child(ring(theme::AGENT_AVATAR, ground))
+        .child(receding(disc, receded))
+}
+
+/// A settled card's part at `AGENT_CARD_SETTLED_OPACITY`, whole under the
+/// pointer. Each part fades on its own because GPUI's opacity multiplies
+/// every primitive under it rather than compositing them as a group, so
+/// fading the whole card would show one avatar through the next one's ring.
+fn receding(part: Div, receded: bool) -> Div {
+    part.when(receded, |part| {
+        part.opacity(theme::AGENT_CARD_SETTLED_OPACITY)
+            .group_hover(DISCLOSURE_ROW, |style| style.opacity(1.))
+    })
+}
+
+/// T3's `ring-2 ring-background` round a `size` mark at its slot's lower
+/// right: the ground, `AGENT_RING` wider on every side.
+fn ring(size: f32, ground: u32) -> Div {
+    div()
+        .absolute()
+        .right(px(-theme::AGENT_RING))
+        .bottom(px(-theme::AGENT_RING))
+        .size(px(size + 2. * theme::AGENT_RING))
+        .rounded_full()
+        .bg(rgb(ground))
+}
+
+/// How long it has run, at a row's or card's right (T3's `text-xs
+/// tabular-nums`).
+fn elapsed(selector: &'static str, clock: AgentClock) -> Div {
+    ferrite_ui::components::tabular(
+        div()
+            .debug_selector(move || selector.into())
+            .flex_shrink_0()
+            .text_size(px(theme::FS_BADGE))
+            .line_height(px(theme::LH_META))
+            .text_color(rgb(INK_SUBTLE)),
+    )
+    .child(clock.face())
 }
 
 /// How long an agent has run, as T3's `AgentElapsed` reads: `45s`, `2m 05s`,
@@ -719,33 +768,15 @@ mod tests {
         let mut faces = AgentFaces::default();
         faces.insert(
             "a".into(),
-            AgentFace {
-                run: AgentRun::Running,
-                summary: Some("Reading nav.rs".into()),
-                result: None,
-                clock: None,
-                on: None,
-            },
+            face(AgentRun::Running, Some("Reading nav.rs"), None),
         );
         faces.insert(
             "b".into(),
-            AgentFace {
-                run: AgentRun::Failed,
-                summary: None,
-                result: None,
-                clock: None,
-                on: None,
-            },
+            face(AgentRun::Failed, None, None),
         );
         faces.insert(
             "c".into(),
-            AgentFace {
-                run: AgentRun::Done,
-                summary: None,
-                result: None,
-                clock: None,
-                on: None,
-            },
+            face(AgentRun::Done, None, None),
         );
         faces.apply(&mut blocks);
         assert_eq!(tool(&blocks[0]).state, ToolState::Running);
@@ -783,6 +814,7 @@ mod tests {
 
     fn face(run: AgentRun, summary: Option<&str>, result: Option<&str>) -> AgentFace {
         AgentFace {
+            provider: Provider::Claude,
             run,
             summary: summary.map(Into::into),
             result: result.map(Into::into),

@@ -608,14 +608,17 @@ fn group_at(blocks: &[Block], start: usize, projection: &Projection) -> (Vec<usi
 }
 
 /// The run a block folds into with its neighbours (T3's work groups): a
-/// call's (`run_of`) unless it failed, since a failure stands on a row of
-/// its own; a shown thought, the routine calls'.
+/// call's (`run_of`), though a routine call that failed stands on a row of
+/// its own while a failed agent stays on its card, which counts it; a shown
+/// thought, the routine calls'.
 fn run_at(block: &Block, shape: &RowShape) -> Option<tools::Grouping> {
     if block.markdown.is_some() {
         return None;
     }
     match &block.body {
-        Body::Tool(tool) if !matches!(tool.state, ToolState::Failed(_)) => run_of(tool, shape),
+        Body::Tool(tool) => run_of(tool, shape).filter(|run| {
+            *run == tools::Grouping::Agents || !matches!(tool.state, ToolState::Failed(_))
+        }),
         Body::Thinking(_) => Some(tools::Grouping::RollsUp),
         _ => None,
     }
@@ -1881,6 +1884,22 @@ mod tests {
                 (RowKind::Activity, vec!["r".into()]),
                 (RowKind::Activity, vec!["lone".into()]),
             ]
+        );
+    }
+
+    /// A failed agent stays on its card, which counts it (T3 groups agents
+    /// by their run alone); a failed routine call still stands apart.
+    #[test]
+    fn a_failed_agent_stays_on_its_card() {
+        let mut transcript = Transcript::default();
+        for id in ["a", "b"] {
+            call(&mut transcript, id, "Agent");
+        }
+        settle(&mut transcript, "a", true);
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        assert_eq!(
+            calls(&rows),
+            [(RowKind::Group, vec!["a".to_string(), "b".into()])]
         );
     }
 

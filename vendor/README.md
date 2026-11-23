@@ -435,14 +435,23 @@ Its MIT license is copied from that commit because the published archive
 omits the license file. Its manifest, source, README, and declared examples
 are retained; registry cache markers and its own lockfile are omitted.
 
-One source change: flexbox's `resolved_minimum_main_size` uses
-`unwrap_or_else` instead of `unwrap_or`. The fallback recursively measures
-minimum content size, so eager evaluation did that work even when an
-explicit minimum or scroll-container minimum already supplied the result.
-Lazy evaluation preserves the chosen size and avoids the unused measurement.
-It also avoids populating measurement-cache entries from that unused traversal;
-required later measurements still run through Taffy's normal cache path.
+Two source changes, both in flexbox:
+
+- `resolved_minimum_main_size` uses `unwrap_or_else` instead of `unwrap_or`.
+  The fallback recursively measures minimum content size, so eager evaluation
+  did that work even when an explicit minimum or scroll-container minimum
+  already supplied the result. Lazy evaluation preserves the chosen size and
+  avoids the unused measurement. It also avoids populating measurement-cache
+  entries from that unused traversal; required later measurements still run
+  through Taffy's normal cache path. Layout and application checks must verify
+  that skipping the unused measurement has no observable layout effect.
+- `determine_container_main_size` multiplies a negative flex fraction by the
+  same scaled shrink factor it divided by. Upstream divides by
+  `max(1, shrink * basis)` and multiplies by `max(1, shrink) * basis`, so a
+  non-shrinking item with a negative margin counted that margin times its own
+  inner width: two 24px discs overlapping by 6px measured below zero, and
+  their content-sized row collapsed to 0 under what sat beside it. A browser
+  sums them to 42px, and `a_cards_avatars_stand_beside_its_words` holds it.
 
 The root `[patch.crates-io]` applies this patch. Remove it when an upstream
-release makes the fallback lazy. Layout and application checks must verify
-that skipping the unused measurement has no observable layout effect.
+release has both.

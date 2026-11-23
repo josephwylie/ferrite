@@ -2057,6 +2057,9 @@ impl TranscriptView {
                     disclosure,
                     open: expanded,
                     clock,
+                    providers: pane::group_tools(row.blocks())
+                        .map(|tool| Some(self.input.presentation.agents.get(&tool.call)?.provider))
+                        .collect(),
                     rows,
                     ground: theme::tx_ground(self.input.presentation.solo),
                 },

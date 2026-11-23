@@ -361,6 +361,9 @@ pub const CHEVRON: MotionSpec = spec(theme::MOTION_CHEVRON_MS, EASE_STANDARD);
 /// A transcript work row's chevron (T3's `transition-transform
 /// duration-200`): the nav's and the Panel's keep `CHEVRON`.
 pub const WORK_CHEVRON: MotionSpec = spec(theme::MOTION_WORK_CHEVRON_MS, EASE_STANDARD);
+/// A subagent card's chevron turning over (T3's `transition-transform`, at
+/// its default duration).
+pub const AGENT_CHEVRON: MotionSpec = spec(theme::MOTION_AGENT_CHEVRON_MS, EASE_STANDARD);
 /// A turn fold's words brightening under the pointer, both ways.
 pub const FOLD_HOVER: MotionSpec = spec(theme::MOTION_FOLD_HOVER_MS, EASE_STANDARD);
 /// A receded working nav card coming up to full opacity under the pointer.

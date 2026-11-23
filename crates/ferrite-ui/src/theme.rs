@@ -1587,7 +1587,7 @@ pub const PARENT_DETAIL_W: f32 = 320.0;
 /// `AGENT_ROW_PAD_Y` row at `AGENT_ROW_RADIUS`, `AGENT_ROW_GAP` between its
 /// parts, the `paint::HOVER` ground under the pointer: its `AGENT_AVATAR`
 /// disc (a 1px `LINE` ring at 70% on `AGENT_AVATAR_FILL`, cut
-/// `AGENT_RING` from the ground) holding the `AGENT_AVATAR_ICON` bot, an
+/// `AGENT_RING` from the ground) holding the `AGENT_AVATAR_ICON` provider mark, an
 /// `AGENT_DOT` status dot at its foot; its task in `FS_BADGE` at `W_LABEL`
 /// over `AGENT_DETAIL_FS` on `AGENT_DETAIL_LH`; its time; an
 /// `AGENT_CHEVRON` `›`.
@@ -1606,7 +1606,8 @@ pub const AGENT_CHEVRON: f32 = 14.0;
 /// **A subagent card** (T3's `V2SubagentGroup`): its trigger
 /// `AGENT_CARD_PAD_Y` above and below and `AGENT_CARD_PAD_R` at its right,
 /// at most `AGENT_AVATARS` avatars overlapping by `AGENT_AVATAR_OVERLAP`
-/// and a `+N` disc in `AGENT_MORE_FS` (the status line's size too);
+/// and a `+N` disc in `AGENT_MORE_FS` (the status line's size too, on
+/// `AGENT_MORE_LH`: T3's `text-3xs`);
 /// settled and shut, it recedes to `AGENT_CARD_SETTLED_OPACITY`. Open, its
 /// rows stand in a panel `AGENT_PANEL_MARGIN_Y` off it, `AGENT_PANEL_PAD`
 /// in, at `AGENT_PANEL_RADIUS` in a `LINE` ring at 60% on `CARD` at 30%.
@@ -1615,6 +1616,7 @@ pub const AGENT_CARD_PAD_R: f32 = 13.0;
 pub const AGENT_AVATARS: usize = 3;
 pub const AGENT_AVATAR_OVERLAP: f32 = SPACE_1_5;
 pub const AGENT_MORE_FS: f32 = 10.0;
+pub const AGENT_MORE_LH: f32 = 14.0;
 pub const AGENT_CARD_SETTLED_OPACITY: f32 = 0.55;
 pub const AGENT_PANEL_MARGIN_Y: f32 = SPACE_1;
 pub const AGENT_PANEL_PAD: f32 = SPACE_1;
@@ -1849,6 +1851,7 @@ pub const WORK_TIME_END: f32 = SPACE_1;
 pub const WORK_CHEVRON_SLOT: f32 = 16.0;
 pub const WORK_CHEVRON: f32 = 12.0;
 pub const MOTION_WORK_CHEVRON_MS: u64 = 200;
+pub const MOTION_AGENT_CHEVRON_MS: u64 = 150;
 pub const WORK_LOG_PAD_B: f32 = SPACE_2;
 pub const TOOL_ERROR_ICON: u32 = 0xfca5a5;
 pub const TOOL_ERROR_ALPHA: f32 = 0.4;

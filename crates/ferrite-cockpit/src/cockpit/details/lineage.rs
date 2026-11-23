@@ -22,6 +22,9 @@ pub(super) struct Relative {
     pub(super) title: String,
     /// At the right: how long it has run or ran, else its state word.
     pub(super) meta: String,
+    /// Whether `meta` is a clock, which T3 sets in tabular figures at the
+    /// regular weight.
+    pub(super) timed: bool,
     pub(super) state: Dot,
     /// The provider it runs on when not the Thread's: a Delegate's, there.
     pub(super) provider: Option<Provider>,
@@ -129,6 +132,7 @@ pub(super) fn lineage<F: Fn(&ServerId) -> Option<Serving>>(
         };
         Some(Relative {
             meta: state_word(view.status(), view.fresh()).to_owned(),
+            timed: false,
             state: Dot::of(view.status(), view.fresh()),
             leads: Leads::Subject(parent),
             title,
@@ -156,17 +160,15 @@ pub(super) fn lineage<F: Fn(&ServerId) -> Option<Serving>>(
     };
     for agent in own {
         let state = Dot::of(agent.status(), agent.fresh());
-        let meta = elapsed
+        let clock = elapsed
             .get(&agent.subject())
             .filter(|_| state != Dot::Failed)
-            .map_or_else(
-                || state_word(agent.status(), agent.fresh()).to_owned(),
-                |elapsed| crate::nav::working_for(*elapsed),
-            );
+            .map(|elapsed| crate::nav::working_for(*elapsed));
         let row = Relative {
             leads: Leads::Subject(agent.subject()),
             title: agent_name(agent.info()),
-            meta,
+            timed: clock.is_some(),
+            meta: clock.unwrap_or_else(|| state_word(agent.status(), agent.fresh()).to_owned()),
             state,
             provider: None,
             tooltip: None,
@@ -212,6 +214,7 @@ fn delegate_row(delegate: &Delegated, reached: bool) -> Relative {
                 .join("\n"),
         ),
         meta: format!("on {} \u{b7} {}", delegate.machine, status_label(delegate.status)),
+        timed: false,
         state: match delegate.status {
             Status::Starting | Status::Running | Status::Waiting => Dot::Running,
             Status::Failed => Dot::Failed,
@@ -241,6 +244,7 @@ fn delegated_from(from: Delegator) -> Relative {
     Relative {
         tooltip: Some(format!("{}\n{hint}", from.title)),
         meta: format!("on {}", from.machine),
+        timed: false,
         state: Dot::Idle,
         leads: Leads::Delegator {
             server: from.server,
@@ -569,7 +573,15 @@ fn press(selector: String, body: Div, cx: &gpui::App) -> gpui::component::button
     .child(lineage_body(body))
 }
 
-/// A row's body as a row lays it out.
+/// T3's Lineage row: a `text-sm` title in `foreground/85` and `text-2xs`
+/// meta on `leading-4`.
+const TITLE_INK: u32 = (INK_STRONG << 8) | 0xd9;
+const TITLE_FS: f32 = 14.;
+const META_FS: f32 = 11.;
+const ROW_LH: f32 = 16.;
+
+/// A row's body as a row lays it out. It sets T3's line height, since a kit
+/// button's is the font size alone.
 fn lineage_body(body: Div) -> Div {
     body.flex()
         .items_center()
@@ -578,6 +590,7 @@ fn lineage_body(body: Div) -> Div {
         .min_w_0()
         .gap(px(10.))
         .text_size(px(13.))
+        .line_height(px(ROW_LH))
         .font_weight(W_LABEL)
 }
 
@@ -586,41 +599,57 @@ fn lineage_body(body: Div) -> Div {
 /// stop under the pointer on `stop_group`.
 fn row(relative: &Relative, glyph: &'static str, ink: u32, stop_group: Option<SharedString>) -> Div {
     div()
-        .text_color(rgba(0xffffffcc))
+        .text_color(rgba(TITLE_INK))
         .child(
             div()
                 .relative()
                 .flex_shrink_0()
                 .size(px(16.))
                 .child(icon(glyph, 16., ink))
+                // T3's `size-2 border-2 border-card` at `-right-1 -bottom-1`,
+                // as two discs: a GPUI border leaves the fill's edge showing
+                // round its outside.
                 .child(
                     div()
                         .absolute()
-                        .right(px(-3.))
-                        .bottom(px(-3.))
+                        .right(px(-4.))
+                        .bottom(px(-4.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
                         .size(px(8.))
                         .rounded_full()
-                        .border_2()
                         // The card's own ground, so the dot cuts into its icon.
-                        .border_color(rgb(0x111111))
-                        .bg(rgb(relative.state.ink())),
+                        .bg(rgb(0x111111))
+                        .child(div().size(px(4.)).rounded_full().bg(rgb(relative.state.ink()))),
                 ),
         )
         .child(
             div()
+                .debug_selector({
+                    let title = relative.title.clone();
+                    move || format!("details-lineage-title-{title}")
+                })
                 .flex_1()
                 .min_w_0()
-                .truncate()
+                // Cut to fit by its width alone: `truncate`'s clip would take
+                // the descenders, which reach below a 14px face's 16px line.
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .text_size(px(TITLE_FS))
                 .child(relative.title.clone()),
         )
         .child(
             div()
                 .flex_shrink_0()
-                .text_size(px(12.))
+                .text_size(px(META_FS))
                 .text_color(rgb(match relative.state {
                     Dot::Failed => BLOCKED,
                     _ => INK_SUBTLE,
                 }))
+                .when(relative.timed, |meta| {
+                    ferrite_ui::components::tabular(meta.font_weight(W_BODY))
+                })
                 .when_some(stop_group, |meta, group| {
                     meta.group_hover(group, |style| style.invisible())
                 })
