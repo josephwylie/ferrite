@@ -105,6 +105,30 @@ impl ShapedLine {
         Ok(())
     }
 
+    /// Ferrite's patch: [`Self::paint`] for a line already drawn this frame
+    /// and drawn again through another mask, as a fade's columns are. It is
+    /// still one line to `Window::debug_text`.
+    pub fn paint_again(
+        &self,
+        origin: Point<Pixels>,
+        line_height: Pixels,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Result<()> {
+        paint_line(
+            origin,
+            &self.layout,
+            line_height,
+            TextAlign::Left,
+            None,
+            &self.decoration_runs,
+            &[],
+            None,
+            window,
+            cx,
+        )
+    }
+
     /// Paint the background of the line to the window.
     pub fn paint_background(
         &self,

@@ -1942,7 +1942,7 @@ pub const LIGHTBOX_FOOT_H: f32 = SPACE_6 + SPACE_4;
 pub const LIGHTBOX_ARROW: f32 = SPACE_6 + SPACE_3;
 /// **The line-end fade** (Claude's sidebar titles): a line too long for its
 /// box fades into the ground over its last `LINE_FADE`, where it would
-/// otherwise end in "…" (`components::line_fade`).
+/// otherwise end in "…" (the nav's `fade::title_line`).
 pub const LINE_FADE: f32 = SPACE_6;
 /// The pinned prompt keeps at most this many of its lines, its plane
 /// `PINNED_PROMPT_PAD_Y` above and below the bubble.
@@ -3441,9 +3441,7 @@ pub const NAV_HOVER_CARD_INK: u32 = (INK_STRONG << 8) | 0xbf;
 /// The rule over the hover card's pull request (T3's `border-border/60`:
 /// the white 8% border at 60%).
 pub const NAV_HOVER_CARD_RULE: u32 = 0xffffff0f;
-/// The glass face (T3's `dropdown-glass`): the float's ground at 80%, a
-/// border of white 10%. gpui draws no backdrop blur.
-pub const NAV_GLASS: u32 = (FLOAT << 8) | 0xcc;
+/// The glass face's edge (T3's `dropdown-glass`): white 10%.
 pub const NAV_GLASS_BORDER: u32 = 0xffffff1a;
 /// The nav's tooltips: 12px, after 150ms, the next within 400ms at once.
 pub const FS_NAV_TOOLTIP: f32 = 12.0;

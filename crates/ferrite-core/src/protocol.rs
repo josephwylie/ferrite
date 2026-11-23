@@ -569,6 +569,12 @@ pub enum Op {
     PullRequest {
         path: PathBuf,
     },
+    /// The branch each of `paths` is on, read by git on the Server's
+    /// computer, in their order: what a window's row of a Thread on this
+    /// machine says (ADR 0045). Replied `branches`.
+    Branches {
+        paths: Vec<PathBuf>,
+    },
     /// Watch the PR at `url` for `thread`'s agent, or stop watching it,
     /// as T3 Code's details card and PR menu do (ADR 0046). A new watch
     /// is read fresh first, so a PR already merged or closed is refused.
@@ -677,6 +683,7 @@ impl Op {
             | Op::ListBases { .. }
             | Op::PickBase { .. }
             | Op::PullRequest { .. }
+            | Op::Branches { .. }
             | Op::Restart { .. }
             | Op::Stop { .. }
             | Op::Unknown => None,
@@ -1745,6 +1752,11 @@ pub enum Done {
     PullRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         json: Option<String>,
+    },
+    /// A `branches`' answers, in the order asked: none where a path is no
+    /// git checkout.
+    Branches {
+        branches: Vec<Option<String>>,
     },
     /// A `watch_pr`'s outcome: whether the PR is watched now.
     PrWatch {

@@ -126,7 +126,9 @@ impl CockpitView {
                     return None;
                 };
                 let (words, sign_in, reconnecting) = match attention {
-                    Some(Failure::SignIn) => (format!("Sign in to {name}"), true, false),
+                    Some(failure) if failure.needs_sign_in() => {
+                        (format!("Sign in to {name}"), true, false)
+                    }
                     Some(_) => (format!("{name} is offline"), false, false),
                     None => (format!("{name} is reconnecting"), false, true),
                 };
@@ -166,14 +168,48 @@ impl CockpitView {
         });
     }
 
-    /// Sign in to `machine`, in a terminal.
-    pub(super) fn sign_in(&mut self, machine: ferrite_core::MachineId, cx: &mut Context<Self>) {
+    /// Sign in to `machine`: over ssh in a terminal; a paired link whose
+    /// session ended, by pairing it again in Connections.
+    pub(super) fn sign_in(
+        &mut self,
+        machine: ferrite_core::MachineId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(
+            self.cockpit.read(cx).server(machine),
+            Some(ServerState::Detached { attention: Some(Failure::Revoked), .. })
+        ) {
+            self.pair_again(machine, window, cx);
+            return;
+        }
         let Some(bridge) = self.cockpit.read(cx).bridge(machine) else {
             return;
         };
         if let Err(error) = bridge.sign_in() {
             self.nav_notice.problem(format!("cannot sign in: {error}"));
             cx.notify();
+        }
+    }
+
+    /// Connections, its editor open on `machine` for a fresh pairing code.
+    fn pair_again(
+        &mut self,
+        machine: ferrite_core::MachineId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let saved = self.machines.as_ref().and_then(|machines| {
+            machines.machine(machines.listed_as(machine)?).cloned()
+        });
+        let settings = self.show_settings(cx);
+        settings.update(cx, |settings, _| settings.page = settings::PageKey::Connections);
+        if let Some(saved) = saved {
+            // Once this view's update is done: the editor reads it.
+            let connections = settings.read(cx).connections.clone();
+            window.defer(cx, move |window, cx| {
+                connections.update(cx, |connections, cx| connections.edit(Some(saved), window, cx));
+            });
         }
     }
 

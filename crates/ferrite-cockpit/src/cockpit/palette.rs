@@ -304,8 +304,9 @@ impl CockpitView {
         rows.into_iter().map(|(_, _, row)| row).collect()
     }
 
-    /// What the palette chose: ⏎ shuts it and runs the row; esc shuts it,
-    /// or from the machine pick goes back to the palette it came from.
+    /// What the palette chose: ⏎ shuts it and runs the row; esc shuts it
+    /// (T3's, from the machine pick too); the pick's arrow and backspace on
+    /// its empty line go back to the palette it came from.
     fn on_palette_event(
         &mut self,
         palette: &Entity<Palette>,

@@ -437,8 +437,9 @@ impl CockpitView {
     }
 }
 
-/// Scroll the list so `row` shows whole, by as little as it takes (none
-/// when it already does). Called while the list is drawn, too late for this
+/// Scroll the list so `row` shows whole with its margin, by as little as it
+/// takes (none when it already does): the first row brought back leaves the
+/// list at its very top, with nothing above it to fade. Called while the list is drawn, too late for this
 /// draw (a refresh mid-draw is dropped), so the view drawing the list draws
 /// again once this one is done.
 fn scroll_into_view(
@@ -449,10 +450,12 @@ fn scroll_into_view(
 ) {
     let view = scroll.bounds();
     let mut offset = scroll.offset();
-    if row.top() < view.top() {
-        offset.y += view.top() - row.top();
-    } else if row.bottom() > view.bottom() {
-        offset.y -= row.bottom() - view.bottom();
+    let margin = px(ferrite_ui::theme::NAV_CARD_ITEM_PAD_Y);
+    let (top, bottom) = (row.top() - margin, row.bottom() + margin);
+    if top < view.top() {
+        offset.y += view.top() - top;
+    } else if bottom > view.bottom() {
+        offset.y -= bottom - view.bottom();
     } else {
         return;
     }

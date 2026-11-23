@@ -46,12 +46,13 @@ pub fn float() -> Div {
 }
 
 /// The nav's glass face (T3's `dropdown-glass`), for its hover card and PR
-/// popover: the float ground at 80% (gpui draws no backdrop blur), a white
+/// popover: the float ground, solid as T3's is where nothing blurs the
+/// backdrop (gpui draws no blur, and words would read through), a white
 /// 10% edge and the float's shadow.
 pub fn glass() -> Div {
     div()
         .rounded(px(R_CONTROL))
-        .bg(rgba(NAV_GLASS))
+        .bg(rgb(FLOAT))
         .border_1()
         .border_color(rgba(NAV_GLASS_BORDER))
         .shadow(components::float_shadow())

@@ -218,15 +218,26 @@ Each lands green and proves something.
    digest-only Thread's through that clock. Where Projects are listed by
    name (the Filter menu), another machine's wears T3's icon, its tooltip
    "On box". The machine pick goes back a step on its arrow and on
-   backspace in an empty line, as T3's view does, and also on esc, by the
-   operator's call: T3's esc closes the palette there.
+   backspace in an empty line, and esc closes the palette, as T3's view
+   does.
+
+   Another machine's row is the same row as this computer's. Its branch
+   is read by git where the checkout is (`Op::Branches`), so its card has
+   the same three lines and height. On a slim row (parked, snoozed) the
+   glyph stands just before the age in the right column. T3's slim row
+   draws no machine icon; Ferrite keeps it so every row on another machine
+   says so. The hover card ends on the Provider's mark and the model, named
+   only once the window knows it: an unopened Thread on another machine
+   says its Provider until it is opened.
 
 ## Answered questions
 
 - **The icon.** One generic server glyph, T3's default kind. A kind per
   machine can come later, in Settings.
 - **Signing in.** "Sign in to box" is a notice row in the nav naming the
-  machine, plus the band on that machine's Panes.
+  machine, plus the band on that machine's Panes. A session the machine
+  refused or revoked says so too, also after a window restart, and pressing
+  it opens that link's pairing in Connections, where a new code renews it.
 - **The same repo on two machines** is two Projects. T3 Code groups them
   by repository unless set to keep them separate, and marks a Project on
   another environment with a machine icon whose tooltip says "On box".

@@ -34,7 +34,7 @@ use ferrite_ui::icons::{self, icon};
 use ferrite_ui::theme::*;
 use ferrite_ui::{components, motion};
 
-use super::{NavTooltip, cut_ground, fitted_in, hovered, Measure, NavTail, RowStatus, RowTag, ThreadRow};
+use super::{fade, fitted_in, hovered, Measure, NavTail, NavTooltip, RowStatus, RowTag, ThreadRow};
 
 /// A Thread's pull request as its card's chip reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -315,28 +315,6 @@ pub(crate) fn title_face(row: &ThreadRow, hover: f32) -> (Hsla, FontWeight) {
     }
 }
 
-/// A white fill (`NAV_CARD_*`, alpha in its low byte) as it lands over
-/// the column: the ground a title's fade melts into.
-fn over_column(fill: u32) -> Hsla {
-    motion::mix(
-        NAV_BACKGROUND.hsla(),
-        rgb(fill >> 8).into(),
-        (fill & 0xff) as f32 / 255.0,
-    )
-}
-
-/// The ground under a card's text: the active fill, or the column blended
-/// toward the hover fill as far as the pointer has brought it.
-pub(super) fn card_ground(key: &SharedString, active: bool, picked: bool) -> Hsla {
-    if active {
-        return over_column(NAV_CARD_ACTIVE);
-    }
-    if picked {
-        return over_column(NAV_CARD_SELECTED);
-    }
-    motion::mix(NAV_BACKGROUND.hsla(), over_column(NAV_CARD_HOVER), motion::hover_t(key))
-}
-
 /// The blend a receded card's opacity rides, apart from its fill's.
 fn recede_key(key: &str) -> SharedString {
     format!("{key}:recede").into()
@@ -401,12 +379,19 @@ pub fn thread_card(
 /// fade (`flip::ListMotion`): no doors, no hover, and none of a live
 /// card's ids or selectors, so nothing addresses it.
 pub fn ghost_card(row: &ThreadRow, measure: &Measure) -> Stateful<Div> {
-    card(row, row.name.clone(), CardDoors::default(), false, measure, false)
+    card(
+        row,
+        fade::title_line(row.name.clone()),
+        CardDoors::default(),
+        false,
+        measure,
+        false,
+    )
 }
 
 /// `debug_selector(name-tag)` on a live card's part; nothing on a
 /// ghost's.
-fn tag<E: Styled>(element: E, live: bool, name: &'static str, tag: RowTag) -> E
+pub(super) fn tag<E: Styled>(element: E, live: bool, name: &'static str, tag: RowTag) -> E
 where
     E: gpui::InteractiveElement,
 {
@@ -451,12 +436,6 @@ fn card(
     };
     let title_w = text_w - if checkout { 0.0 } else { logo_w };
     let (ink, weight) = title_face(row, hover);
-    let ground = (!editing)
-        .then(|| {
-            let ground = card_ground(&key, active, row.picked);
-            cut_ground(measure, &row.name, FS_NAV_TITLE, weight, title_w, ground)
-        })
-        .flatten();
     let receded = if row.dims_whole() && live {
         motion::lerp(
             NAV_CARD_RECEDED_OPACITY,
@@ -555,7 +534,7 @@ fn card(
         .gap(px(NAV_CARD_GAP))
         .child(
             tag(
-                fitted_in(title_w, FS_NAV_TITLE, ink, weight, title, ground),
+                fitted_in(title_w, FS_NAV_TITLE, ink, weight, title),
                 live,
                 "nav-title",
                 id,

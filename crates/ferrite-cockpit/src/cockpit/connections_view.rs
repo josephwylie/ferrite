@@ -306,10 +306,13 @@ impl ConnectionsView {
             username: field(username, "root"),
             port: field(port, "22"),
         };
+        // A saved link keeps its host: what it needs is a new code.
         let initial = if mode == ConnectionMode::Ssh {
             &fields.host
-        } else {
+        } else if remote_host.is_empty() {
             &fields.remote_host
+        } else {
+            &fields.pairing_code
         };
         initial.update(cx, |field, cx| field.focus(window, cx));
         self.generation = self.generation.wrapping_add(1);
@@ -682,7 +685,12 @@ impl ConnectionsView {
                     };
                     parsed.and_then(|fields| {
                         let target = fields.host.clone();
-                        remote::PairAttempt::start(fields, dir.clone())
+                        let again = editor
+                            .original
+                            .as_ref()
+                            .filter(|machine| machine.is_link())
+                            .map(|machine| machine.target.clone());
+                        remote::PairAttempt::start(fields, again, dir.clone())
                             .map(|attempt| (Attempt::Remote(attempt), target))
                             .map_err(|error| error.to_string())
                     })
@@ -1014,6 +1022,11 @@ impl ConnectionsView {
         settings::ConnectionForm::Editing {
             fields: editor.fields.clone(),
             mode: editor.mode,
+            signing_in: editor
+                .original
+                .as_ref()
+                .filter(|machine| machine.is_link())
+                .map(|machine| machine.name.clone().into()),
             focus: editor.focus.clone(),
             suggestions,
             choose_mode,
@@ -1092,11 +1105,14 @@ impl ConnectionsView {
             }];
             if machine.enabled && row.connection != Connection::Online {
                 let machine = machine.clone();
-                let label = match &state {
-                    Some(ServerState::Detached {
-                        attention: Some(machine::Failure::NotInstalled),
-                        ..
-                    }) => "Set up",
+                let attention = match &state {
+                    Some(ServerState::Detached { attention, .. }) => attention.as_ref(),
+                    _ => None,
+                };
+                let revoked = attention == Some(&machine::Failure::Revoked);
+                let label = match attention {
+                    Some(machine::Failure::NotInstalled) => "Set up",
+                    Some(machine::Failure::Revoked) => "Sign in",
                     _ => "Retry",
                 };
                 actions.push(settings::ConnectionAction {
@@ -1105,7 +1121,10 @@ impl ConnectionsView {
                     enabled: self.editor.is_none(),
                     act: action(cx, move |view, window, cx| {
                         view.edit(Some(machine.clone()), window, cx);
-                        view.submit(window, cx);
+                        // Its session is gone: the editor waits for a code.
+                        if !revoked {
+                            view.submit(window, cx);
+                        }
                     }),
                 });
             }

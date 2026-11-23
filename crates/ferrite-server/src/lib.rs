@@ -1086,6 +1086,17 @@ impl Server {
                 });
                 return;
             }
+            Op::Branches { paths } => {
+                let paths = paths.clone();
+                self.read_off_pump(id, request, move || {
+                    let branches = paths
+                        .iter()
+                        .map(|path| ferrite_core::workspace::checkout_branch(path))
+                        .collect();
+                    Ok(Some(Done::Branches { branches }))
+                });
+                return;
+            }
             Op::WatchPr {
                 thread,
                 url,

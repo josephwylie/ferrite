@@ -310,7 +310,7 @@ impl Remote {
     /// sign-in is not asked again (each ask is a refused login on it) until
     /// they have signed in, or ask.
     fn waits_for_operator(&mut self) -> bool {
-        if self.attention != Some(Failure::SignIn) {
+        if !self.attention.as_ref().is_some_and(Failure::needs_sign_in) {
             return false;
         }
         if self.bridge().is_some_and(|bridge| bridge.take_signed_in()) {
@@ -972,6 +972,17 @@ impl Remote {
         };
         self.ask(op, |done| match done {
             Done::PullRequest { json } => Some(json.as_deref().and_then(parse_pr_json)),
+            _ => None,
+        })
+    }
+
+    /// The branch each of `paths` is on there, in their order.
+    pub(crate) fn branches(
+        &mut self,
+        paths: Vec<PathBuf>,
+    ) -> io::Result<Receiver<io::Result<Vec<Option<String>>>>> {
+        self.ask(Op::Branches { paths }, |done| match done {
+            Done::Branches { branches } => Some(branches),
             _ => None,
         })
     }

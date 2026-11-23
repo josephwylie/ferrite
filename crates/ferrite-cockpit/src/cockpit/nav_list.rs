@@ -184,7 +184,7 @@ impl NavView {
         rows.extend(inputs.machines.iter().map(|notice| {
             let machine = notice.machine;
             let sign_in = notice.sign_in;
-            nav::machine_notice(machine.get(), notice.words.clone())
+            nav::machine_notice(machine.get(), notice.words.clone(), cx)
                 .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                     cx.emit(if sign_in {
                         NavEvent::SignIn(machine)
@@ -519,15 +519,10 @@ impl NavView {
         if let Some(worktree) = &row.worktree {
             lines.push((ferrite_ui::icons::FOLDER, worktree.clone()));
         }
-        if let Some(provider) = row.provider {
-            lines.push((
-                ferrite_ui::icons::LAPTOP,
-                SharedString::from(ferrite_ui::provider::title(provider)),
-            ));
-        }
+        let provider = row.provider.map(|provider| (provider, self.row_model(row, provider, cx)));
         Some(crate::nav::chrome::hover_card(
             row,
-            crate::nav::chrome::HoverLines { lines },
+            crate::nav::chrome::HoverLines { lines, provider },
             inputs.width,
         ))
     }

@@ -149,6 +149,9 @@ pub enum ConnectionForm {
     Editing {
         fields: ConnectionFields,
         mode: ConnectionMode,
+        /// The saved link this form signs back in to, by name: its session
+        /// ended there and a new pairing code renews it.
+        signing_in: Option<SharedString>,
         focus: FocusHandle,
         suggestions: Option<ConnectionSuggestions>,
         choose_mode: Rc<dyn Fn(ConnectionMode, &mut Window, &mut App)>,

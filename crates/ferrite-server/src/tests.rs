@@ -719,6 +719,28 @@ fn list_dir_answers_a_directory_on_the_servers_computer() {
 }
 
 /// A window holding a machine offers the machine's worktrees and branches
+/// (ADR 0045): `branches` names each path's branch with git where the
+/// Server runs, in the order asked, and nothing for a path git has no
+/// checkout at: what another machine's row says.
+#[test]
+fn branches_are_read_where_the_checkouts_are() {
+    let harness = start("branches");
+    let repo = repository(&harness.dir);
+    let plain = harness.dir.join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    let mut window = cockpit(&harness);
+    let machine = window.first_machine();
+    let answer = window.machine_branches(machine, vec![repo, plain]).unwrap();
+    let read = std::cell::RefCell::new(None);
+    pump_until(&mut window, |_| {
+        if let Ok(answered) = answer.try_recv() {
+            *read.borrow_mut() = Some(answered);
+        }
+        read.borrow().is_some()
+    });
+    assert_eq!(read.into_inner().unwrap().unwrap(), [Some("main".to_string()), None]);
+}
+
 /// (ADR 0026): `list_repo` reads the Project's repo with git where the
 /// Server runs, off its pump, naming the main checkout's branch apart.
 #[test]

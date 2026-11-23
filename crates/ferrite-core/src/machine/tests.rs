@@ -293,6 +293,38 @@ fn a_failed_tunnel_tells_the_window_why() {
     assert!(bridge.sign_in().is_err(), "a fake is not reached over ssh");
 }
 
+/// A paired link's session ended on the machine: the dial is refused, and
+/// the window is told to sign in, which asking again would not undo.
+#[test]
+fn a_refused_session_tells_the_window_to_sign_in() {
+    let socket = std::env::temp_dir()
+        .join(format!("fm-refused-{}", std::process::id()))
+        .join("bridge.sock");
+    let bridge = Bridge::new(
+        "box",
+        socket,
+        Box::new(|| {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                Failure::Revoked,
+            ))
+        }),
+    );
+    let hello = ClientMessage::Hello {
+        generation: crate::protocol::GENERATION,
+        client: crate::protocol::Peer {
+            name: "test".into(),
+            version: "0".into(),
+        },
+        capabilities: Vec::new(),
+    };
+    let Err(error) = bridge.attach(hello) else {
+        panic!("attached through a refused dial");
+    };
+    assert_eq!(failure(&error), Some(&Failure::Revoked));
+    assert!(Failure::Revoked.needs_operator() && Failure::Revoked.needs_sign_in());
+}
+
 /// Each Ferrite serves a socket of its own; the ones left by Ferrites
 /// that are gone are removed, and a live one's never is.
 #[cfg(unix)]

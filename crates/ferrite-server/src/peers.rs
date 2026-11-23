@@ -355,6 +355,7 @@ fn refused(error: &Value) -> PeerFailure {
 fn unreached(failure: machine::Failure) -> PeerFailure {
     match failure {
         machine::Failure::SignIn => PeerFailure::SignIn,
+        machine::Failure::Revoked => PeerFailure::Expired,
         machine::Failure::NotInstalled => PeerFailure::NoFerrited,
         failure if failure.older_ferrited() => PeerFailure::Unsupported(
             "the machine's `ferrited` is older than `api-bridge`: update it there".into(),

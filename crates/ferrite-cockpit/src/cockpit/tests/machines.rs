@@ -38,6 +38,11 @@ fn needs_sign_in(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
     failing(machine, settings_dir, Failure::SignIn)
 }
 
+/// The machine no longer takes this link's session.
+fn revoked(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
+    failing(machine, settings_dir, Failure::Revoked)
+}
+
 /// The machine's shell has no `ferrited`.
 fn not_installed(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
     failing(machine, settings_dir, Failure::NotInstalled)
@@ -661,6 +666,74 @@ fn a_machine_that_needs_a_sign_in_has_a_notice_that_signs_in(cx: &mut TestAppCon
     });
 }
 
+/// A session the machine refuses says "Sign in", not "reconnecting", on
+/// the rows' left edge and across their width, and its press opens
+/// Connections on box to pair it again.
+#[gpui::test]
+fn a_revoked_session_asks_to_sign_in_and_opens_its_pairing(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::{NAV_ICON, NAV_ICON_GAP, NAV_ROW_PAD_X};
+    let (mut core, _fake) = cockpit("machines-revoked", 1);
+    let mine = core.threads()[0];
+    fresh("revoked");
+    let link = Machine {
+        name: "box".into(),
+        target: "ferrite-link:00112233445566778899aabbccddeeff".into(),
+        enabled: true,
+    };
+    let mut machines = Machines::new(reach("revoked", revoked), &[link], None, true);
+    machines.beside(&mut core);
+    let on_box = machines.held(1).unwrap();
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    until(cx, |cx| connection(&view, 1, cx) == Connection::Attention);
+    tick(cx);
+    assert_eq!(machine_notices(&view, cx), ["Sign in to box"]);
+    let notice = debug_bounds(cx, format!("nav-machine-notice-{}", on_box.get()))
+        .expect("box's notice");
+    let card = debug_bounds(cx, format!("nav-thread-{}", mine.thread().get())).expect("a row");
+    assert_eq!((notice.left(), notice.size.width), (card.left(), card.size.width));
+    let words = cx.debug_bounds("nav-notice-words").expect("its words");
+    assert_eq!(
+        words.left(),
+        notice.left() + px(NAV_ROW_PAD_X + NAV_ICON + NAV_ICON_GAP),
+        "its words start where a row's do, not centred"
+    );
+    cx.simulate_click(notice.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let settings = view.sheets.read(cx).settings().expect("Settings opened");
+        assert!(settings.read(cx).connections.read(cx).editing(), "on box's pairing");
+    });
+    let dialog = cx
+        .update(|window, _| window.debug_text("connection-dialog"))
+        .expect("its dialog");
+    assert!(dialog.iter().any(|line| line == "Sign in to box"), "{dialog:?}");
+    assert!(!dialog.iter().any(|line| line == "SSH"), "a link stays a link: {dialog:?}");
+}
+
+/// Another machine's Thread draws the row this computer's does: its
+/// branch, read by its Server, on a card of the same height.
+#[gpui::test]
+fn a_machines_row_has_its_branch_and_a_local_rows_height(cx: &mut TestAppContext) {
+    let (mut core, _fake, machines, _agents) = two_machines("branch-row", 1);
+    let on_box = machines.held(1).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    let branch = ferrite_core::workspace::checkout_branch(&here()).expect("this checkout's branch");
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    until(cx, |cx| {
+        view.update(cx, |view, cx| view.refresh_branches(cx));
+        view.read_with(cx, |view, cx| {
+            view.nav_state(cx)
+                .active
+                .iter()
+                .any(|row| row.key == theirs && row.branch.as_deref() == Some(branch.as_str()))
+        })
+    });
+    tick(cx);
+    let card = debug_bounds(cx, format!("nav-thread-{}", on(on_box, theirs))).expect("box's card");
+    assert_eq!(card.size.height, px(ferrite_ui::theme::NAV_CARD_H));
+}
+
 /// Removing box asks first, then lets box go; this computer's Pane stays.
 #[gpui::test]
 fn removing_a_connection_confirms_then_lets_its_machine_go(cx: &mut TestAppContext) {
@@ -725,6 +798,28 @@ fn a_machines_threads_sit_in_the_one_list_with_its_icon(cx: &mut TestAppContext)
     assert!(cx.debug_bounds("nav-hover-card").is_some(), "its detail");
     let said = crate::nav::testing::drawn_hover_card();
     assert_eq!(said.first().map(String::as_str), Some("box"), "{said:?}");
+    assert_eq!(
+        said.last().map(String::as_str),
+        Some("Claude"),
+        "a model box has not said is not guessed"
+    );
+
+    view.update(cx, |view, cx| {
+        view.cockpit
+            .update(cx, |cockpit, _| cockpit.set_model(theirs, Some("claude-haiku-4-5".into())))
+            .unwrap();
+    });
+    until(cx, |cx| {
+        view.read_with(cx, |view, cx| {
+            view.cockpit.read(cx).thread(theirs).is_some_and(|open| open.model().is_some())
+        })
+    });
+    cx.simulate_mouse_move(gpui::point(px(900.), px(500.)), None, gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let said = crate::nav::testing::drawn_hover_card();
+    assert_eq!(said.last().map(String::as_str), Some("Haiku 4.5"), "it ends on the model, as T3's does");
 }
 
 /// This computer's rows keep their bare ids and draw no glyph, beside
@@ -834,10 +929,10 @@ fn add_project_with_no_machine_reached_offers_to_connect_one(cx: &mut TestAppCon
 }
 
 /// The machine pick goes back a step, to the palette it was opened from
-/// with its line as it was: by esc, by backspace on an empty line (T3's
-/// key), and by its arrow.
+/// with its line as it was, by backspace on an empty line and by its arrow.
+/// Esc closes the whole palette from it (T3's `CommandPalette`).
 #[gpui::test]
-fn the_machine_pick_goes_back_a_step(cx: &mut TestAppContext) {
+fn the_machine_pick_goes_back_a_step_and_esc_closes(cx: &mut TestAppContext) {
     use crate::palette::PaletteScope;
     bind_production_keys(cx);
     let (core, _fake, machines, _agents) = two_machines("pick-back", 1);
@@ -864,10 +959,7 @@ fn the_machine_pick_goes_back_a_step(cx: &mut TestAppContext) {
     assert_eq!(open(cx), Some((PaletteScope::Machines, String::new())));
     cx.simulate_keystrokes("escape");
     tick(cx);
-    assert_eq!(open(cx), Some((PaletteScope::All, "new project".into())), "esc: back");
-    cx.simulate_keystrokes("escape");
-    tick(cx);
-    assert_eq!(open(cx), None, "esc there shuts it");
+    assert_eq!(open(cx), None, "esc closes the palette");
 
     pick(cx);
     cx.simulate_keystrokes("backspace");

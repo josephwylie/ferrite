@@ -748,7 +748,7 @@ impl Render for Palette {
         // The footer's hints: what each key does here, as the Claude
         // app's search says them; the cursor row's directory at the right.
         let mut hints: Vec<(&'static str, &'static str)> =
-            vec![(if picking_machine { "Back" } else { "Close" }, "esc")];
+            vec![("Close", "esc")];
         if !tabs.is_empty() {
             hints.push(("Change type", "\u{2190} \u{2192}"));
         }
@@ -779,13 +779,7 @@ impl Render for Palette {
                 .on_action(cx.listener(|palette, _: &SelectNext, _, cx| palette.step(1, cx)))
                 .on_action(cx.listener(|palette, _: &SelectPrevious, _, cx| palette.step(-1, cx)))
                 .on_action(cx.listener(|palette, _: &Confirm, _, cx| palette.confirm(cx)))
-                .on_action(cx.listener(move |_, _: &Dismiss, _, cx| {
-                    cx.emit(if picking_machine {
-                        PaletteEvent::Back
-                    } else {
-                        PaletteEvent::Dismiss
-                    })
-                }))
+                .on_action(cx.listener(|_, _: &Dismiss, _, cx| cx.emit(PaletteEvent::Dismiss)))
                 .when(picking_machine, |dialog| {
                     dialog.capture_action(cx.listener(
                         |palette, _: &ferrite_pane::composer::Backspace, _, cx| {

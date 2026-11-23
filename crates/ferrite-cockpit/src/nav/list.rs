@@ -14,7 +14,7 @@ use ferrite_ui::icons::{self, icon};
 use ferrite_ui::theme::*;
 use ferrite_ui::{components, motion};
 
-use super::{card, chord_glyphs, fitted_in, Measure, NavTooltip, RowStatus, RowTag, Shelf, ThreadRow};
+use super::{card, chord_glyphs, fade, fitted_in, Measure, NavTooltip, RowStatus, RowTag, Shelf, ThreadRow};
 
 /// The list (T3's `ul.flex.flex-col.gap-px.flex-1`): at least the scroll
 /// area's height, so the spacer can push the shelves to its foot; rows 1px
@@ -143,9 +143,9 @@ pub(crate) fn slim_fade_key(key: &str) -> SharedString {
 
 /// A slim row (T3's `SidebarThreadRow` slim variant, the Snoozed and Parked
 /// shelves): 36px, 10px in, its Project badge at 40% in greyscale, its
-/// title, and at its right its time; under the pointer or the cursor the
-/// badge comes up to colour and the time gives way to `action` (Revive,
-/// Wake), over 150ms. Everything is the secondary label ink until then,
+/// title, and at its right its time, after another machine's glyph; under
+/// the pointer or the cursor the badge comes up to colour and those give
+/// way to `action` (Revive, Wake), over 150ms. Everything is the secondary label ink until then,
 /// but the shown Thread's and a waiting one's title. The fills are a
 /// card's. The cockpit wires the press.
 pub fn slim_row(
@@ -196,23 +196,21 @@ fn slim(
     } else {
         None
     };
-    let ground = card::card_ground(&key, row.selected, row.picked);
-    let title_w = measure.inner_width()
-        - 2.0 * NAV_SLIM_PAD_X
-        - NAV_BADGE
-        - NAV_SLIM_SLOT_MIN_W
-        - 2.0 * NAV_SLIM_GAP
-        - row
-            .elsewhere
-            .as_ref()
-            .map_or(0.0, |_| NAV_MACHINE_GLYPH + NAV_SLIM_GAP);
-    let machine = if live {
-        card::named_machine_glyph(row).map(IntoElement::into_any_element)
-    } else {
-        row.elsewhere
-            .as_ref()
-            .map(|_| card::machine_glyph(id, false).into_any_element())
+    // The right column's width at rest: another machine's glyph (T3's
+    // `size-3.5`) before the time, the two `SPACE_1` apart, at the row's
+    // right edge. The title has the rest.
+    let time_w = match &time {
+        SlimTime::Parked(age) if age.is_empty() => 0.0,
+        SlimTime::Parked(age) => measure.ui(age, FS_NAV_META, W_BODY),
+        SlimTime::Snoozed(wake) => {
+            NAV_ALARM_GLYPH + SPACE_1 + measure.ui(wake, FS_NAV_META, W_BODY)
+        }
     };
+    let machine_w = row.elsewhere.as_ref().map_or(0.0, |_| {
+        NAV_MACHINE_GLYPH + if time_w > 0.0 { SPACE_1 } else { 0.0 }
+    });
+    let slot_w = (time_w + machine_w).max(NAV_SLIM_SLOT_MIN_W);
+    let title_w = measure.inner_width() - 2.0 * NAV_SLIM_PAD_X - NAV_BADGE - slot_w - 2.0 * NAV_SLIM_GAP;
     let title = match title {
         SlimTitle::Editor(field) => div().w(px(title_w)).child(field).into_any_element(),
         SlimTitle::Row => fitted_in(
@@ -220,20 +218,25 @@ fn slim(
             FS_NAV_TITLE,
             ink,
             W_BODY,
-            row.name.clone(),
-            super::cut_ground(measure, &row.name, FS_NAV_TITLE, W_BODY, title_w, ground),
+            fade::title_line(row.name.clone()),
         )
         .into_any_element(),
     };
+    let rest = div()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_1))
+        .children(row.elsewhere.as_ref().map(|_| card::machine_glyph(id, live)));
     let rest = match &time {
-        SlimTime::Parked(age) => div()
-            .flex()
-            .items_center()
-            .child(components::tabular(div().child(age.clone()))),
-        SlimTime::Snoozed(wake) => div()
-            .flex()
-            .items_center()
-            .gap(px(SPACE_1))
+        SlimTime::Parked(age) => rest.when(!age.is_empty(), |rest| {
+            rest.child(card::tag(
+                components::tabular(div().child(age.clone())),
+                live,
+                "nav-slim-time",
+                id,
+            ))
+        }),
+        SlimTime::Snoozed(wake) => rest
             .child(icon(icons::ALARM_CLOCK, NAV_ALARM_GLYPH, NAV_WORKING_INK))
             .child(components::tabular(div().child(wake.clone()))),
     };
@@ -274,6 +277,11 @@ fn slim(
                     fade(hovered, window, cx);
                 }
             })
+            // T3's row tooltip names the machine: the glyph gives way to
+            // the action under the pointer.
+            .when_some(row.elsewhere.as_ref(), |frame, elsewhere| {
+                frame.nav_tooltip(elsewhere.machine.clone())
+            })
     } else {
         div().id(id.id("nav-slim-ghost"))
     };
@@ -297,7 +305,6 @@ fn slim(
                 .opacity(motion::lerp(NAV_SLIM_BADGE_OPACITY, 1.0, lit))
         }))
         .child(title)
-        .children(machine)
         .child(slot)
 }
 

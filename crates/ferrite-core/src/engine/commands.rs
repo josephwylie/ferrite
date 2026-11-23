@@ -294,6 +294,7 @@ impl Engine {
             | Op::ListBases { .. }
             | Op::PickBase { .. }
             | Op::PullRequest { .. }
+            | Op::Branches { .. }
             | Op::Restart { .. }
             | Op::Stop { .. }
             | Op::Task { .. }

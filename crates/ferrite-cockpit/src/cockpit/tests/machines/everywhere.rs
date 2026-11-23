@@ -120,6 +120,8 @@ fn search_and_the_parked_shelf_hold_every_machines_threads(cx: &mut TestAppConte
     core.rename_thread(mine, "Needle here").unwrap();
     core.rename_thread(open_there, "Needle open on box").unwrap();
     core.rename_thread(parked_there, "Needle parked on box").unwrap();
+    // A prompt gives its parked row an age.
+    let _ = core.send(parked_there, "go".into());
     core.park(parked_there).unwrap();
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
@@ -172,6 +174,18 @@ fn search_and_the_parked_shelf_hold_every_machines_threads(cx: &mut TestAppConte
         .expect("the slim row wears its machine's glyph");
     assert!(row.contains(&glyph.center()), "{glyph:?} on {row:?}");
     assert_eq!(glyph.size.width, px(ferrite_ui::theme::NAV_MACHINE_GLYPH));
+    let time = debug_bounds(cx, format!("nav-slim-time-{}", on(on_box, parked_there)))
+        .expect("its age");
+    assert_eq!(
+        time.right(),
+        row.right() - px(ferrite_ui::theme::NAV_SLIM_PAD_X),
+        "the age ends the row's right column"
+    );
+    assert_eq!(
+        glyph.right() + px(ferrite_ui::theme::SPACE_1),
+        time.left(),
+        "the glyph stands just before it"
+    );
     assert_eq!(tooltip_at(cx, glyph.center()).as_deref(), Some("box"), "it names box");
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     until_said(cx, "box's parked Thread never revived", |cx| {

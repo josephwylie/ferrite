@@ -36,7 +36,7 @@ use ferrite_core::ThreadKey;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, rgba, App, Div, FontWeight, Hsla, ScrollHandle, SharedString,
+    div, px, rgb, rgba, AnyElement, App, Div, FontWeight, Hsla, ScrollHandle, SharedString,
     Stateful,
 };
 
@@ -47,6 +47,7 @@ use ferrite_ui::motion;
 use ferrite_ui::theme::*;
 
 mod card;
+mod fade;
 pub(crate) mod chrome;
 pub(crate) mod flip;
 pub(crate) mod list;
@@ -449,10 +450,8 @@ thread_local! {
 
 /// A line pinned to `width` that fades out at its right edge, as Claude's
 /// sidebar titles do, rather than ending in "…": the line lays out whole,
-/// the box clips it, and `components::line_fade` in `ground` — the row's
-/// fill under it (`row_ground`) — fades the cut. `ground` is `None` where
-/// the line fits (`cut_ground`), so a whole name keeps its last letters,
-/// and where the box holds a rename field, whose caret the fade would hide.
+/// the box clips it, and its leaf (`fade::title_line`) fades its own ink
+/// where it is cut. A rename field in the box has no fade over its caret.
 ///
 /// A pinned line needs a **definite** width on its very first measure.
 /// gpui caches a nowrap line's first measure permanently, and taffy only
@@ -467,7 +466,6 @@ fn fitted_in(
     ink: Hsla,
     weight: FontWeight,
     text: impl IntoElement,
-    ground: Option<Hsla>,
 ) -> Div {
     div()
         .relative()
@@ -493,20 +491,6 @@ fn fitted_in(
                     .child(text),
             ),
         )
-        .children(ground.map(components::line_fade))
-}
-
-/// `ground`, for `fitted_in`'s fade, only where `text` at `size` and `weight`
-/// runs past `width`: a line that fits is drawn whole.
-fn cut_ground(
-    measure: &Measure,
-    text: &str,
-    size: f32,
-    weight: FontWeight,
-    width: f32,
-    ground: Hsla,
-) -> Option<Hsla> {
-    (measure.ui(text, size, weight) > width).then_some(ground)
 }
 
 // ------------------------------------------------------------- the column
@@ -670,29 +654,36 @@ pub fn scrollbar(scroll: &ScrollHandle, revealed: bool) -> Div {
         )
 }
 
-pub fn edge_fades(scroll: &ScrollHandle) -> Vec<Div> {
-    let y = scroll.offset().y;
-    let below = scroll.max_offset().y + y > px(0.);
+/// The list's edge fades, each drawn while rows run past its edge. Laid
+/// after the scroller, so each reads the scroll this frame's layout left.
+pub fn edge_fades(scroll: &ScrollHandle) -> [AnyElement; 2] {
     let fill = NAV_BACKGROUND.hsla();
-    let top = (y < px(0.)).then(|| {
-        div()
-            .debug_selector(|| "nav-fade-top".into())
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .child(components::edge_fade_over(fill, false, NAV_EDGE_FADE))
-    });
-    let foot = below.then(|| {
-        div()
-            .debug_selector(|| "nav-fade-foot".into())
-            .absolute()
-            .bottom_0()
-            .left_0()
-            .right_0()
-            .child(components::edge_fade_over(fill, true, NAV_EDGE_FADE))
-    });
-    top.into_iter().chain(foot).collect()
+    let top = div()
+        .debug_selector(|| "nav-fade-top".into())
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .child(components::edge_fade_over(fill, false, NAV_EDGE_FADE));
+    let foot = div()
+        .debug_selector(|| "nav-fade-foot".into())
+        .absolute()
+        .bottom_0()
+        .left_0()
+        .right_0()
+        .child(components::edge_fade_over(fill, true, NAV_EDGE_FADE));
+    [
+        // As `f32`: the scroller clamps a list that fits to `-0`, which
+        // `Pixels`' total order puts below zero.
+        fade::past_edge(scroll, |scroll| f32::from(scroll.offset().y) < 0., top)
+            .into_any_element(),
+        fade::past_edge(
+            scroll,
+            |scroll| scroll.max_offset().y + scroll.offset().y > px(0.),
+            foot,
+        )
+        .into_any_element(),
+    ]
 }
 
 /// The Thread card at root — see `card::thread_card`.
@@ -700,7 +691,7 @@ pub fn edge_fades(scroll: &ScrollHandle) -> Vec<Div> {
 pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
     thread_card(
         row,
-        row.name.clone(),
+        fade::title_line(row.name.clone()),
         CardDoors::default(),
         false,
         &Measure::Cells(7.0),
@@ -711,33 +702,53 @@ pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
 /// the list, until the next change succeeds: a `BLOCKED` dot and the refusal, dim, wrapping.
 /// Colour on the dot, never the row.
 pub fn notice(text: SharedString) -> Div {
-    notice_face(text).debug_selector(|| "nav-notice".into())
+    notice_row(text, NAV_LINE)
+        .debug_selector(|| "nav-notice".into())
+        .py(px(SPACE_1))
+        .text_size(px(FS_META))
+        .text_color(rgb(INK_SUBTLE))
 }
 
 /// A machine the window holds and cannot reach, at the top of the list in
-/// T3 Code's words for it (`machine_notices`): the notice's face, a
-/// button the cockpit wires — it signs in or tries again.
-pub fn machine_notice(machine: u32, text: SharedString) -> gpui::component::button::Button {
-    components::button(("nav-machine-notice", machine as usize))
+/// T3 Code's words for it (`machine_notices`), on the rows' left edge in
+/// the sidebar's notice type (T3's `SidebarThreadUndoNotice`: 11px on a
+/// 24px line in the muted ink), strong under the pointer as T3's inline
+/// button is. A button the cockpit wires: it signs in or tries again.
+pub fn machine_notice(
+    machine: u32,
+    text: SharedString,
+    cx: &App,
+) -> gpui::component::button::Button {
+    let id: gpui::ElementId = ("nav-machine-notice", machine as usize).into();
+    let ink = motion::mix(
+        rgb(INK_SUBTLE).into(),
+        rgb(INK_STRONG).into(),
+        motion::hover_t(&ferrite_ui::pointer::hover_key(&id)),
+    );
+    let clear: Hsla = rgba(TRANSPARENT).into();
+    components::faded_button(id, clear, clear, clear, ink, cx)
         .debug_selector(move || format!("nav-machine-notice-{machine}"))
         .w_full()
         .h_auto()
         .p_0()
-        .justify_start()
-        .child(notice_face(text))
+        .child(
+            notice_row(text, NAV_NOTICE_LH)
+                .w_full()
+                .text_size(px(FS_NAV_NOTICE))
+                .text_color(ink),
+        )
 }
 
-fn notice_face(text: SharedString) -> Div {
+/// A notice's row on lines `line` tall: a `BLOCKED` dot in the badge's
+/// column, on the first line, and its words where a row's words start.
+fn notice_row(text: SharedString, line: f32) -> Div {
     div()
         .flex()
         .flex_shrink_0()
         .items_start()
         .gap(px(NAV_ICON_GAP))
         .px(px(NAV_ROW_PAD_X))
-        .py(px(SPACE_1))
-        .text_size(px(FS_META))
-        .line_height(px(NAV_LINE))
-        .text_color(rgb(INK_SUBTLE))
+        .line_height(px(line))
         .child(
             div()
                 .flex()
@@ -745,10 +756,17 @@ fn notice_face(text: SharedString) -> Div {
                 .items_center()
                 .justify_center()
                 .w(px(NAV_ICON))
-                .h(px(NAV_LINE))
+                .h(px(line))
                 .child(div().size(px(NAV_DOT)).rounded_full().bg(rgb(BLOCKED))),
         )
-        .child(div().flex_1().min_w_0().whitespace_normal().child(text))
+        .child(
+            div()
+                .debug_selector(|| "nav-notice-words".into())
+                .flex_1()
+                .min_w_0()
+                .whitespace_normal()
+                .child(text),
+        )
 }
 
 // ------------------------------------------------------------- rename and drag
@@ -764,7 +782,7 @@ pub fn rename_target_thread(tag: RowTag, title: SharedString) -> Stateful<Div> {
         .min_w_0()
         .overflow_hidden()
         .whitespace_nowrap()
-        .child(title)
+        .child(fade::title_line(title))
 }
 
 #[cfg(test)]
@@ -1136,29 +1154,8 @@ mod tests {
         assert_eq!(crate::cockpit::focus_thread_action(10), None);
     }
 
-    #[test]
-    fn a_title_fades_into_its_cards_ground() {
-        let key = SharedString::from("nav-thread-0-fade");
-        assert_ne!(card::card_ground(&key, true, false), NAV_BACKGROUND.hsla());
-        assert_eq!(card::card_ground(&key, false, false), NAV_BACKGROUND.hsla());
-        assert_eq!(NAV_BACKGROUND, Paint::solid(0x000000));
-    }
-
-    /// CP7 regression 1: the fade is drawn only over a line that runs
-    /// past its box — `ferrite` at seven 7px cells fits 49px whole and
-    /// keeps its `e`; in 40px it is cut, and fades.
-    #[test]
-    fn only_a_cut_line_fades() {
-        let measure = Measure::Cells(7.0);
-        let ground = NAV_BACKGROUND.hsla();
-        let cut = |width| cut_ground(&measure, "ferrite", FS_META, W_BODY, width, ground);
-        assert_eq!(cut(49.0), None, "a name that fits is whole");
-        assert_eq!(cut(120.0), None);
-        assert_eq!(cut(40.0), Some(ground), "a cut name fades");
-    }
-
-    /// CP7 regression 2: a title the box cuts ends in the fade alone —
-    /// clipped on one line, never ellipsized under it.
+    /// A title the box cuts ends in the fade alone — clipped on one line,
+    /// never ellipsized under it.
     #[test]
     fn a_title_is_clipped_not_ellipsized() {
         let mut title = rename_target_thread(

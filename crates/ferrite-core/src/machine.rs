@@ -229,6 +229,9 @@ pub enum Failure {
     NotInstalled,
     /// `ssh` could not sign in on its own: the operator signs in.
     SignIn,
+    /// The machine no longer takes this paired link's session: it expired
+    /// or was revoked there, and only a new pairing undoes it.
+    Revoked,
     /// Anything else, in ssh's (or the remote bridge's) last words.
     Unreachable(String),
 }
@@ -263,7 +266,13 @@ impl Failure {
 
     /// Retrying will not help until the operator does something.
     pub fn needs_operator(&self) -> bool {
-        matches!(self, Self::NotInstalled | Self::SignIn)
+        matches!(self, Self::NotInstalled | Self::SignIn | Self::Revoked)
+    }
+
+    /// The operator must sign in before asking again helps: each ask is a
+    /// refused login on the machine.
+    pub fn needs_sign_in(&self) -> bool {
+        matches!(self, Self::SignIn | Self::Revoked)
     }
 
     /// The machine's `ferrited` is older than `api-bridge`: it refuses the
@@ -278,6 +287,9 @@ impl fmt::Display for Failure {
         match self {
             Self::NotInstalled => f.write_str("`ferrited` is not on the machine's PATH"),
             Self::SignIn => f.write_str("ssh needs you to sign in"),
+            Self::Revoked => {
+                f.write_str("This machine no longer takes this session. Pair it again with a new code.")
+            }
             Self::Unreachable(said) => f.write_str(said),
         }
     }
@@ -537,9 +549,9 @@ fn carry(mut stream: link::Stream, dial: &Dial, failure: &Mutex<Option<Failure>>
             }
             ended()
         }
-        Err(error) => Some(Failure::Unreachable(format!(
-            "The remote connection could not start: {error}"
-        ))),
+        Err(error) => Some(self::failure(&error).cloned().unwrap_or_else(|| {
+            Failure::Unreachable(format!("The remote connection could not start: {error}"))
+        })),
     };
     if let Some(ended) = ended {
         crate::log!("machine: the tunnel ended: {ended}");

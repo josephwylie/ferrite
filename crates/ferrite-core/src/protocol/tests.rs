@@ -1451,6 +1451,15 @@ fn samples() -> Vec<(&'static str, Sample)> {
         ),
         ("command_list_repo", command(39, Op::ListRepo { project })),
         (
+            "command_branches",
+            command(
+                317,
+                Op::Branches {
+                    paths: vec!["/home/me/src/ferrite".into(), "/home/me/notes".into()],
+                },
+            ),
+        ),
+        (
             "command_review_diff",
             command(
                 40,
@@ -2243,6 +2252,16 @@ fn samples() -> Vec<(&'static str, Sample)> {
             Sample::Server(ServerMessage::Reply {
                 id: 34,
                 ok: Some(Done::Changed { changed: true }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_branches",
+            Sample::Server(ServerMessage::Reply {
+                id: 317,
+                ok: Some(Done::Branches {
+                    branches: vec![Some("main".into()), None],
+                }),
                 error: None,
             }),
         ),

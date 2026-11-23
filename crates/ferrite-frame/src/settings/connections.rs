@@ -288,6 +288,7 @@ pub(super) fn form(form: ConnectionForm, window: &Window, cx: &App) -> AnyElemen
     let ConnectionForm::Editing {
         fields,
         mode,
+        signing_in,
         focus,
         suggestions: list,
         choose_mode,
@@ -305,6 +306,20 @@ pub(super) fn form(form: ConnectionForm, window: &Window, cx: &App) -> AnyElemen
     };
     let busy = progress.is_some();
     let compact = window.viewport_size().height < px(600.);
+    let (title, lead, verb, doing): (SharedString, SharedString, &str, &str) = match &signing_in {
+        Some(name) => (
+            format!("Sign in to {name}").into(),
+            format!("Enter a new pairing code from {name}.").into(),
+            "Sign in",
+            "Signing in…",
+        ),
+        None => (
+            "Add Environment".into(),
+            "Pair another environment to this client.".into(),
+            "Add environment",
+            "Adding…",
+        ),
+    };
     let host = field(
         "connection-host",
         "SSH host or alias",
@@ -378,27 +393,19 @@ pub(super) fn form(form: ConnectionForm, window: &Window, cx: &App) -> AnyElemen
             ),
     };
     let submit_button = || {
-        button(
-            "connection-submit",
-            "Add environment",
-            !busy,
-            submit.clone(),
-            cx,
-        )
-        .w_full()
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .gap(px(8.))
-                .child(icon(icons::PLUS, 14., muted(cx)))
-                .child(text(
-                    if busy { "Adding…" } else { "Add environment" },
-                    14.,
-                    ink(cx),
-                )),
-        )
+        button("connection-submit", verb, !busy, submit.clone(), cx)
+            .w_full()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(8.))
+                    .when(signing_in.is_none(), |row| {
+                        row.child(icon(icons::PLUS, 14., muted(cx)))
+                    })
+                    .child(text(if busy { doing } else { verb }, 14., ink(cx))),
+            )
     };
     let close = cancel.clone();
     let card = div()
@@ -426,20 +433,14 @@ pub(super) fn form(form: ConnectionForm, window: &Window, cx: &App) -> AnyElemen
                 .flex_col()
                 .gap(px(8.))
                 .child(
-                    text("Add Environment", if compact { 18. } else { 20. }, ink(cx))
+                    text(title.clone(), if compact { 18. } else { 20. }, ink(cx))
                         .font_weight(gpui::FontWeight::SEMIBOLD),
                 )
-                .when(!compact, |header| {
-                    header.child(text(
-                        "Pair another environment to this client.",
-                        14.,
-                        muted(cx),
-                    ))
-                }),
+                .when(!compact, |header| header.child(text(lead, 14., muted(cx)))),
         )
         .child(
             div().absolute().top(px(8.)).right(px(8.)).child(
-                button("connection-close", "Close Add Environment", true, close, cx)
+                button("connection-close", format!("Close {title}"), true, close, cx)
                     .size(px(32.))
                     .p_0()
                     .border_0()
@@ -457,27 +458,30 @@ pub(super) fn form(form: ConnectionForm, window: &Window, cx: &App) -> AnyElemen
                 .pt(px(4.))
                 .pb(px(if compact { 0. } else { 24. }))
                 .gap(px(if compact { 10. } else { 16. }))
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(12.))
-                        .child(mode_card(
-                            ConnectionMode::Remote,
-                            mode == ConnectionMode::Remote,
-                            busy,
-                            compact,
-                            choose_mode.clone(),
-                            cx,
-                        ))
-                        .child(mode_card(
-                            ConnectionMode::Ssh,
-                            mode == ConnectionMode::Ssh,
-                            busy,
-                            compact,
-                            choose_mode,
-                            cx,
-                        )),
-                )
+                // A link signing back in stays the link it is.
+                .when(signing_in.is_none(), |body| {
+                    body.child(
+                        div()
+                            .flex()
+                            .gap(px(12.))
+                            .child(mode_card(
+                                ConnectionMode::Remote,
+                                mode == ConnectionMode::Remote,
+                                busy,
+                                compact,
+                                choose_mode.clone(),
+                                cx,
+                            ))
+                            .child(mode_card(
+                                ConnectionMode::Ssh,
+                                mode == ConnectionMode::Ssh,
+                                busy,
+                                compact,
+                                choose_mode,
+                                cx,
+                            )),
+                    )
+                })
                 .child(fields)
                 .children(error.map(|error| {
                     text(error, 12., RED)

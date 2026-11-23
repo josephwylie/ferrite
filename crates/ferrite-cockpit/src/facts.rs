@@ -252,6 +252,25 @@ impl Facts {
         changed
     }
 
+    /// Adopt the branches another machine's Server read for its Threads.
+    /// It says no status: its counts are not read here (ADR 0026). Answers
+    /// the Threads whose labels moved.
+    pub fn set_machine_branches(
+        &mut self,
+        branches: impl IntoIterator<Item = (ThreadKey, Option<String>)>,
+    ) -> Vec<ThreadKey> {
+        let mut changed = Vec::new();
+        for (thread, branch) in branches {
+            let facts = self.threads.entry(thread).or_default();
+            let branch = branch.map(SharedString::from);
+            if facts.branch != branch {
+                facts.branch = branch;
+                changed.push(thread);
+            }
+        }
+        changed
+    }
+
     /// Whether to ask `gh` for the Thread's PR now (`PrReading::ask`).
     pub fn ask_pr(&mut self, thread: ThreadKey, now: Instant, manual: bool) -> bool {
         self.threads.entry(thread).or_default().pr.ask(now, manual)

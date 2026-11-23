@@ -251,6 +251,28 @@ impl NavView {
     /// Read what the nav draws from the Cockpit and the model, note which
     /// Threads came into a section, and redraw when any of it moved. It
     /// runs as either notifies, never in a draw, so a draw never writes.
+    /// The model a row's Thread runs, named as its Composer names it; the
+    /// Provider's name until the window is told, since a Thread on another
+    /// machine says only once it is opened and the default may not be it.
+    pub(super) fn row_model(
+        &self,
+        row: &nav::ThreadRow,
+        provider: ferrite_core::store::Provider,
+        cx: &App,
+    ) -> SharedString {
+        let model = self.model.read(cx);
+        let open = model.thread(row.key);
+        match open.and_then(|open| open.model().or(open.transcript().model())) {
+            Some(known) => ferrite_core::providers::models::footer_name(
+                provider,
+                Some(known),
+                open.map_or(&[][..], |open| open.models()),
+            )
+            .into(),
+            None => ferrite_ui::provider::title(provider).into(),
+        }
+    }
+
     pub(super) fn look(&mut self, cx: &mut Context<Self>) {
         let Some(cockpit) = self.cockpit.upgrade() else {
             return;
@@ -630,7 +652,7 @@ impl CockpitView {
                 cx.notify();
             }
             NavEvent::Undo(UndoAct::Snoozed(key)) => self.snooze_thread(key, None, cx),
-            NavEvent::SignIn(machine) => self.sign_in(machine, cx),
+            NavEvent::SignIn(machine) => self.sign_in(machine, window, cx),
             NavEvent::Reconnect(machine) => {
                 self.cockpit.update(cx, |cockpit, _| cockpit.retry_server(machine));
                 cx.notify();

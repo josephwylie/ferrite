@@ -29,15 +29,12 @@ pub async fn connect(profile: &Profile, secret: &str, path: &str) -> io::Result<
     let (socket, response) = tokio::time::timeout(TIMEOUT, tokio_tungstenite::connect_async_with_config(request, Some(config), false)).await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "The remote link timed out."))?
         .map_err(|error| {
-            // The machine no longer takes this session: it expired or was
-            // revoked there, which only a new pairing undoes.
-            let kind = match &error {
+            match &error {
                 tokio_tungstenite::tungstenite::Error::Http(response) if response.status() == 401 => {
-                    io::ErrorKind::PermissionDenied
+                    io::Error::new(io::ErrorKind::PermissionDenied, Failure::Revoked)
                 }
-                _ => io::ErrorKind::Other,
-            };
-            io::Error::new(kind, "The remote link was refused. Check the certificate or pair again if access was revoked.")
+                _ => io::Error::other("The remote link was refused. Check the certificate or pair again if access was revoked."),
+            }
         })?;
     if response
         .headers()
