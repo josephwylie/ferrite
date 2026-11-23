@@ -807,10 +807,9 @@ fn a_machines_threads_sit_in_the_one_list_with_its_icon(cx: &mut TestAppContext)
     assert_eq!(project, words("nav-hover-fact"), "one edge");
     assert_eq!(project, words("nav-hover-provider"), "one edge");
 
-    view.update(cx, |view, cx| {
+    let _asked = view.update(cx, |view, cx| {
         view.cockpit
             .update(cx, |cockpit, _| cockpit.set_model(theirs, Some("claude-haiku-4-5".into())))
-            .unwrap();
     });
     until(cx, |cx| {
         view.read_with(cx, |view, cx| {
