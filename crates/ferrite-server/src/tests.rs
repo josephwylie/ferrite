@@ -1466,11 +1466,11 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     let allow = DecisionAnswer::Allow {
         input: serde_json::json!({}),
     };
-    assert!(window
-        .respond_decision(thread, &handle, allow.clone())
-        .unwrap());
+    let answered = window.respond_decision(thread, &handle, allow.clone());
+    assert!(window.wait_for(answered).unwrap());
+    let again = second.respond_decision(theirs, &handle, allow);
     assert!(
-        !second.respond_decision(theirs, &handle, allow).unwrap(),
+        !second.wait_for(again).unwrap(),
         "already answered"
     );
     assert_eq!(harness.answers.lock().unwrap().len(), 1);
@@ -1518,15 +1518,14 @@ fn a_reopened_window_can_answer_questions() {
         let first_handle = window.thread(thread).unwrap().pending_decisions()[0]
             .handle
             .clone();
-        assert!(window
-            .respond_decision(
-                thread,
-                &first_handle,
-                DecisionAnswer::Allow {
-                    input: serde_json::json!({})
-                }
-            )
-            .unwrap());
+        let answered = window.respond_decision(
+            thread,
+            &first_handle,
+            DecisionAnswer::Allow {
+                input: serde_json::json!({}),
+            },
+        );
+        assert!(window.wait_for(answered).unwrap());
         pump_until(&mut window, |window| !pending(window, thread));
 
         let question = SessionEvent::DecisionRequested {
@@ -1599,9 +1598,8 @@ fn a_reopened_window_can_answer_questions() {
                 }
             }],
         };
-        let sent = reopened
-            .respond_decision(thread, &handle, answer.clone())
-            .unwrap();
+        let sent = reopened.respond_decision(thread, &handle, answer.clone());
+        let sent = reopened.wait_for(sent).unwrap();
         assert!(
             sent,
             "Send must reach the provider after reopening the window: {delivery:?}, {handle:?}"
