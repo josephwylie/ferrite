@@ -1661,7 +1661,7 @@ impl CockpitView {
                 focused,
                 reduce_motion,
             });
-            let mut agents = transcript_glue::agent_faces(open.activity());
+            let mut agents = transcript_glue::agent_faces(open.activity(), open.provider());
             for (call, face) in delegates {
                 agents.insert(call, face);
             }

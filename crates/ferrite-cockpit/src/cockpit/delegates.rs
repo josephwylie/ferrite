@@ -143,6 +143,10 @@ impl CockpitView {
         else {
             return Vec::new();
         };
+        let Some(provider) = self.cockpit.read(cx).thread(thread).map(|open| open.provider())
+        else {
+            return Vec::new();
+        };
         transcript
             .blocks()
             .iter()
@@ -154,7 +158,7 @@ impl CockpitView {
                 let id = delegate::started_by(tool)?;
                 let delegated = delegates.iter().find(|delegated| delegated.id == id)?;
                 let reached = self.serving(&delegated.server, cx).is_some();
-                Some((tool.call.clone(), delegate_face(delegated, reached)))
+                Some((tool.call.clone(), delegate_face(delegated, reached, provider)))
             })
             .collect()
     }
@@ -404,8 +408,13 @@ impl CockpitView {
 /// it starts or works, waiting while a Decision waits there, then done,
 /// failed, or stopped (cancelled, or stopped with its parent); once ended,
 /// its result (its problem when it has none); and its clock from the
-/// stamps its Server wrote, counting while it runs.
-fn delegate_face(delegated: &Delegated, reached: bool) -> AgentFace {
+/// stamps its Server wrote, counting while it runs. Its provider is the one
+/// it was started on, the delegating Thread's (`provider`) when none was named.
+fn delegate_face(
+    delegated: &Delegated,
+    reached: bool,
+    provider: ferrite_core::store::Provider,
+) -> AgentFace {
     use ferrite_core::clock;
     use ferrite_core::delegate::Status;
     let run = match delegated.status {
@@ -418,13 +427,12 @@ fn delegate_face(delegated: &Delegated, reached: bool) -> AgentFace {
     let ended = delegated.status.ended();
     let stamp = |stamp: &Option<String>| stamp.as_deref().and_then(clock::parse_stamp);
     let clock = match (stamp(&delegated.started_at), stamp(&delegated.ended_at)) {
-        (Some(started), Some(stopped)) if ended => {
-            stopped.duration_since(started).ok().map(AgentClock::Took)
-        }
+        (Some(from), Some(to)) if ended => (from <= to).then_some(AgentClock::Ran { from, to }),
         (Some(started), None) if !ended => Some(AgentClock::Since(clock::instant_at(started))),
         _ => None,
     };
     AgentFace {
+        provider: delegated.provider.unwrap_or(provider),
         run,
         summary: None,
         result: ended
@@ -442,6 +450,17 @@ fn delegate_face(delegated: &Delegated, reached: bool) -> AgentFace {
 mod tests {
     use super::*;
     use ferrite_core::delegate::Status;
+    use ferrite_core::store::Provider;
+
+    /// A Delegate's avatar is the provider it was started on, else the
+    /// delegating Thread's.
+    #[test]
+    fn a_delegates_face_names_its_provider() {
+        let mut named = delegated(1, "s-pc", None, Status::Running);
+        assert_eq!(delegate_face(&named, true, Provider::Claude).provider, Provider::Claude);
+        named.provider = Some(Provider::Codex);
+        assert_eq!(delegate_face(&named, true, Provider::Claude).provider, Provider::Codex);
+    }
 
     fn delegated(id: u32, server: &str, title: Option<&str>, status: Status) -> Delegated {
         Delegated {
@@ -547,7 +566,7 @@ mod tests {
     fn a_delegates_row_reads_its_digest() {
         let mut running = delegated(1, "s-pc", Some("Fix the tests"), Status::Running);
         running.started_at = Some("2026-11-23T09:00:00+10:30".into());
-        let face = delegate_face(&running, true);
+        let face = delegate_face(&running, true, Provider::Claude);
         assert_eq!(face.run, AgentRun::Running);
         assert!(matches!(face.clock, Some(AgentClock::Since(_))));
         assert_eq!((face.opens(), face.result), (true, None));
@@ -563,22 +582,22 @@ mod tests {
         done.status = Status::Completed;
         done.result = Some("All green.".into());
         done.ended_at = Some("2026-11-23T09:04:10+10:30".into());
-        let face = delegate_face(&done, false);
+        let face = delegate_face(&done, false, Provider::Claude);
         assert_eq!(face.run, AgentRun::Done);
-        assert_eq!(face.clock, Some(AgentClock::Took(std::time::Duration::from_secs(250))));
+        assert_eq!(face.clock.map(AgentClock::elapsed), Some(std::time::Duration::from_secs(250)));
         assert_eq!(face.result.as_deref(), Some("All green."));
         assert!(!face.opens(), "a machine this window does not reach opens nothing");
 
         let mut failed = done.clone();
         (failed.status, failed.result) = (Status::Failed, None);
         failed.problem = Some("codex exited".into());
-        assert_eq!(delegate_face(&failed, true).run, AgentRun::Failed);
-        assert_eq!(delegate_face(&failed, true).result.as_deref(), Some("codex exited"));
+        assert_eq!(delegate_face(&failed, true, Provider::Claude).run, AgentRun::Failed);
+        assert_eq!(delegate_face(&failed, true, Provider::Claude).result.as_deref(), Some("codex exited"));
         for stopped in [Status::Cancelled, Status::Interrupted] {
-            let face = delegate_face(&Delegated { status: stopped, ..done.clone() }, true);
+            let face = delegate_face(&Delegated { status: stopped, ..done.clone() }, true, Provider::Claude);
             assert_eq!(face.run, AgentRun::Stopped);
         }
         let waiting = Delegated { status: Status::Waiting, ..running };
-        assert_eq!(delegate_face(&waiting, true).run, AgentRun::Waiting);
+        assert_eq!(delegate_face(&waiting, true, Provider::Claude).run, AgentRun::Waiting);
     }
 }

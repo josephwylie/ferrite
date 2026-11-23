@@ -1,5 +1,5 @@
 ---
-status: accepted, amended by the 2026-11-17 updates below (Groups removed; a Pane has one drawing)
+status: accepted, amended by the 2026-11-17 and 2026-11-23 updates below (Groups removed; a Pane has one drawing; an agent's status dot is T3's)
 date: 2026-10-21
 ---
 
@@ -214,3 +214,9 @@ that was in a Group shows as an ordinary row.
 A Pane always draws its transcript and its Composer. The Wall level, its
 tile and its quick answers are gone, so no Pane falls to a wall tile
 however narrow the board gets. The nav still folds to its rail.
+
+## Amendment (2026-11-23): an agent's status dot is T3's
+
+An agent's row on its card and in Lineage draws T3 Code's status dot: blue
+while it runs or waits, green done, red failed, muted stopped. Every other
+surface keeps this ADR's state hues, the nav's Thread rows among them.
