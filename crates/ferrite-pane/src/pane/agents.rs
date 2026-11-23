@@ -447,8 +447,8 @@ pub(crate) fn render_agent_card(
             .ml(px(-theme::AGENT_AVATAR_OVERLAP))
         }));
     let status_ink = match () {
-        _ if failed => theme::BLOCKED,
         _ if active => theme::BLUE,
+        _ if failed => theme::BLOCKED,
         _ => INK_SUBTLE,
     };
     let words = div()
