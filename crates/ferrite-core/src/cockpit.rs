@@ -2130,20 +2130,6 @@ impl Cockpit {
         }
     }
 
-    /// The branch each of `paths` is on, read by git on `machine`'s Server,
-    /// where its checkouts are (ADR 0045): no git here can name them.
-    pub fn machine_branches(
-        &mut self,
-        machine: MachineId,
-        paths: Vec<PathBuf>,
-    ) -> io::Result<Receiver<io::Result<Vec<Option<String>>>>> {
-        self.machines
-            .get_mut(&machine)
-            .ok_or_else(|| io::Error::from(gone()))?
-            .remote()?
-            .branches(paths)
-    }
-
     /// Whether a PR watch can start on `machine`: only a Server runs the
     /// watcher (T3's `canStartWatch`). Any window can stop one.
     pub fn starts_pr_watches(&self, machine: MachineId) -> bool {

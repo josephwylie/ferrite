@@ -407,7 +407,6 @@ pub struct CockpitView {
     /// refresh while one was under way: another follows it.
     branch_refresh_queued: bool,
     /// The machines whose Threads' branches are being read there.
-    machine_branch_reads: std::collections::HashSet<ferrite_core::MachineId>,
     /// What a draft's workspace chip and its menu read of its Project's
     /// repo, as git or the machine's Server last answered.
     checkouts: checkouts::Checkouts,
@@ -1286,7 +1285,6 @@ impl CockpitView {
             message_minute: ferrite_core::clock::now().timestamp().div_euclid(60),
             branch_refreshing: false,
             branch_refresh_queued: false,
-            machine_branch_reads: Default::default(),
             selection: TranscriptText::default(),
             side_chat,
             held_sends: Default::default(),
@@ -2504,7 +2502,8 @@ impl CockpitView {
     /// worktrees each Thread's repo has, and hands the answer to the core:
     /// that is how a binding follows the agent into a worktree it made
     /// (`workspace::follow`), and the labels re-read on the very next pass.
-    /// None of it for another machine: no git here can read its checkouts.
+    /// None of it for another machine: no git here can read its checkouts,
+    /// and its Server sends each Thread's branch in its digest.
     pub(crate) fn refresh_branches(&mut self, cx: &mut Context<Self>) {
         // A draft has no Thread yet, but its workspace chip names its
         // Project's checkout, which the operator may switch under it.
@@ -2515,7 +2514,6 @@ impl CockpitView {
             .map(|draft| draft.binding.project())
             .collect();
         self.look_up_checkouts(drafted, cx);
-        self.read_machine_branches(cx);
         if self.branch_refreshing {
             return;
         }
@@ -2653,62 +2651,6 @@ impl CockpitView {
             .ok();
         })
         .detach();
-    }
-
-    /// Ask each other machine the window reaches for its open Threads'
-    /// branches: only its git can name them, and a row of another machine
-    /// wears its branch as a row of this one does. One ask per machine at
-    /// a time.
-    fn read_machine_branches(&mut self, cx: &mut Context<Self>) {
-        let mut asks: std::collections::BTreeMap<_, Vec<(ThreadKey, std::path::PathBuf)>> =
-            Default::default();
-        for thread in self.cockpit.read(cx).threads() {
-            let machine = thread.machine();
-            if !self.elsewhere(machine, cx)
-                || !self.attached(machine, cx)
-                || self.machine_branch_reads.contains(&machine)
-            {
-                continue;
-            }
-            let Some(open) = self.cockpit.read(cx).thread(thread) else {
-                continue;
-            };
-            let cwd = ferrite_core::workspace::effective_cwd(
-                open.session_project_root(),
-                open.workspace(),
-            );
-            if let Some(cwd) = cwd {
-                asks.entry(machine).or_default().push((thread, cwd.to_path_buf()));
-            }
-        }
-        for (machine, threads) in asks {
-            let paths = threads.iter().map(|(_, path)| path.clone()).collect();
-            let answer = self
-                .cockpit
-                .update(cx, |cockpit, _| cockpit.machine_branches(machine, paths));
-            self.machine_branch_reads.insert(machine);
-            cx.spawn(async move |this, cx| {
-                let branches = beside::answered(answer, cx).await;
-                this.update(cx, |view, cx| {
-                    view.machine_branch_reads.remove(&machine);
-                    // An older Server cannot say: its rows stay as they are.
-                    let Ok(branches) = branches else {
-                        return;
-                    };
-                    let read = threads.into_iter().map(|(thread, _)| thread).zip(branches);
-                    let moved = view.facts.set_machine_branches(read);
-                    if !moved.is_empty() {
-                        for thread in moved {
-                            view.notify_thread_pane(thread, cx);
-                        }
-                        view.notify_part(parts::Part::Nav, cx);
-                        view.notify_frame(cx);
-                    }
-                })
-                .ok();
-            })
-            .detach();
-        }
     }
 
     /// Transcript membership changes only through the pump. Prune stale

@@ -673,6 +673,9 @@ struct Thread {
     /// `None` — today's behavior — means work in the binding itself. Never
     /// changes under a live Session: the setter ends the Session first.
     session_project_root: Option<PathBuf>,
+    /// The branch its checkout is on, as its Server last read it
+    /// (`set_branch`): its digest carries it to the windows.
+    branch: Option<String>,
     /// What Main has been seen doing that bears on where it works: the
     /// binding follows it (`workspace::follow`).
     follow: Follow,
@@ -788,6 +791,7 @@ impl Thread {
             resume,
             workspace,
             session_project_root,
+            branch: None,
             follow: Follow::default(),
             preface_pending: true,
             carry: None,
@@ -5334,6 +5338,31 @@ impl Engine {
         self.watched = Some(watched);
     }
 
+    /// Where each open Thread works: what a Server reads for its branch.
+    pub fn checkouts(&self) -> Vec<(ThreadId, PathBuf)> {
+        self.threads
+            .iter()
+            .filter_map(|(id, thread)| {
+                let cwd = workspace::effective_cwd(
+                    thread.session_project_root.as_deref(),
+                    thread.workspace.as_ref(),
+                )?;
+                Some((*id, cwd.to_path_buf()))
+            })
+            .collect()
+    }
+
+    /// The branch `thread`'s checkout is on: its digest says so, and sends
+    /// nothing while it stays.
+    pub fn set_branch(&mut self, thread: ThreadId, branch: Option<String>) {
+        if let Some(state) = self
+            .threads
+            .get_mut_if(&thread, |state| state.branch != branch)
+        {
+            state.branch = branch;
+        }
+    }
+
     /// Read a let-go Thread's Activity back from its log, as a revive does
     /// but on its live writer, its Session's generation kept: nothing a
     /// window holds of it changes.
@@ -5409,23 +5438,38 @@ impl Engine {
     /// Refold each digest its Thread's inputs left owing: at once when Main
     /// started or ended a turn, a Decision came or went, or the windows
     /// show another Subject; else once its `DIGEST_REFOLD` is up, the last
-    /// thing streamed included.
+    /// thing streamed included. A branch that moved goes at once, a let-go
+    /// Thread's on the digest its windows hold: it has no Activity to fold.
     fn publish_digests(&mut self) {
         let now = crate::clock::instant();
-        for (&id, thread) in self.threads.iter().filter(|(_, thread)| thread.held) {
+        for (&id, thread) in self.threads.iter() {
             let published = self.published.entry(id).or_default();
+            if !thread.held {
+                if let Some(digest) = published
+                    .digest
+                    .as_mut()
+                    .filter(|digest| digest.branch != thread.branch)
+                {
+                    digest.branch = thread.branch.clone();
+                    let digest = digest.clone();
+                    self.outbox
+                        .push(ServerMessage::Digest { thread: id, digest });
+                }
+                continue;
+            }
             let shown = self.visible_subjects.get(&id);
             let at_work = thread.at_work();
-            let current = published
-                .digest
-                .as_ref()
-                .is_some_and(|digest| digest.shows(shown) && digest.at_work == at_work);
+            let current = published.digest.as_ref().is_some_and(|digest| {
+                digest.shows(shown) && digest.at_work == at_work && digest.branch == thread.branch
+            });
             if !published.digest_owed && current {
                 continue;
             }
             let activity = thread.activity.view();
             let due = published.digest.as_ref().is_none_or(|digest| {
-                digest.outdated_by(activity, shown) || digest.at_work != at_work
+                digest.outdated_by(activity, shown)
+                    || digest.at_work != at_work
+                    || digest.branch != thread.branch
             }) || published
                 .digest_at
                 .is_none_or(|at| now.saturating_duration_since(at) >= DIGEST_REFOLD);
@@ -5439,6 +5483,7 @@ impl Engine {
             let digest = Digest {
                 at_work,
                 delegated_from: thread.delegated_from.clone(),
+                branch: thread.branch.clone(),
                 ..Digest::of(id, activity, shown, self.boot)
             };
             if published.digest.as_ref() != Some(&digest) {

@@ -439,9 +439,9 @@ impl CockpitView {
 
 /// Scroll the list so `row` shows whole with its margin, by as little as it
 /// takes (none when it already does): the first row brought back leaves the
-/// list at its very top, with nothing above it to fade. Called while the list is drawn, too late for this
-/// draw (a refresh mid-draw is dropped), so the view drawing the list draws
-/// again once this one is done.
+/// list at its very top, with nothing above it to fade. Called while the
+/// list is drawn, too late for this draw (a refresh mid-draw is dropped),
+/// so the view drawing the list draws again once this one is done.
 fn scroll_into_view(
     scroll: &ScrollHandle,
     row: Bounds<Pixels>,

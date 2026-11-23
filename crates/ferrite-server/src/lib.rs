@@ -37,6 +37,7 @@ use ferrite_core::ThreadId;
 mod bridge;
 mod browser;
 mod calls;
+mod checkouts;
 mod clis;
 mod coordinator;
 mod delegates;
@@ -447,6 +448,8 @@ struct Server {
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     /// The PR watcher (ADR 0046).
     watcher: pr_watch::Watcher,
+    /// Each open Thread's branch, for the windows on other computers.
+    checkouts: checkouts::Checkouts,
     /// Server wakes waiting for their Thread.
     wakes: wake::Wakes,
     /// The Delegates this Server follows (ADR 0047), through its client
@@ -514,6 +517,7 @@ impl Server {
             skills_seen: Vec::new(),
             clock: Arc::new(|| ferrite_core::clock::now().timestamp_millis()),
             watcher: Default::default(),
+            checkouts: Default::default(),
             wakes: Default::default(),
             delegation: delegates::Delegation::new(peers::Peers::new(settings_dir.clone())),
             settings_dir,
@@ -544,6 +548,9 @@ impl Server {
                 self.hear(heard);
             }
             self.tell_watched();
+            for (thread, branch) in self.checkouts.answered() {
+                self.engine.set_branch(thread, branch);
+            }
             self.engine.pump();
             self.step_factory();
             self.serve_pr_watches();
@@ -552,6 +559,9 @@ impl Server {
             if self.swept.elapsed() >= SWEEP_INTERVAL {
                 self.swept = Instant::now();
                 self.engine.sweep();
+                if self.clients.values().any(|client| client.welcomed) {
+                    self.checkouts.look(self.engine.checkouts());
+                }
                 for uploads in self.attachments.values() {
                     if let Ok(mut uploads) = uploads.try_lock() { uploads.expire(); }
                 }
@@ -1083,17 +1093,6 @@ impl Server {
                     Ok(Some(Done::PullRequest {
                         json: ferrite_core::workspace::pr_view(&path),
                     }))
-                });
-                return;
-            }
-            Op::Branches { paths } => {
-                let paths = paths.clone();
-                self.read_off_pump(id, request, move || {
-                    let branches = paths
-                        .iter()
-                        .map(|path| ferrite_core::workspace::checkout_branch(path))
-                        .collect();
-                    Ok(Some(Done::Branches { branches }))
                 });
                 return;
             }

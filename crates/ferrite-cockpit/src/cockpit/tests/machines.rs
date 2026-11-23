@@ -671,7 +671,7 @@ fn a_machine_that_needs_a_sign_in_has_a_notice_that_signs_in(cx: &mut TestAppCon
 /// Connections on box to pair it again.
 #[gpui::test]
 fn a_revoked_session_asks_to_sign_in_and_opens_its_pairing(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{NAV_ICON, NAV_ICON_GAP, NAV_ROW_PAD_X};
+    use ferrite_ui::theme::{NAV_BADGE, NAV_CARD_GAP, NAV_ROW_PAD_X};
     let (mut core, _fake) = cockpit("machines-revoked", 1);
     let mine = core.threads()[0];
     fresh("revoked");
@@ -694,8 +694,8 @@ fn a_revoked_session_asks_to_sign_in_and_opens_its_pairing(cx: &mut TestAppConte
     let words = cx.debug_bounds("nav-notice-words").expect("its words");
     assert_eq!(
         words.left(),
-        notice.left() + px(NAV_ROW_PAD_X + NAV_ICON + NAV_ICON_GAP),
-        "its words start where a row's do, not centred"
+        notice.left() + px(NAV_ROW_PAD_X + NAV_BADGE + NAV_CARD_GAP),
+        "its words start where a row's Project name does, not centred"
     );
     cx.simulate_click(notice.center(), gpui::Modifiers::none());
     tick(cx);
@@ -721,7 +721,6 @@ fn a_machines_row_has_its_branch_and_a_local_rows_height(cx: &mut TestAppContext
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
     until(cx, |cx| {
-        view.update(cx, |view, cx| view.refresh_branches(cx));
         view.read_with(cx, |view, cx| {
             view.nav_state(cx)
                 .active
@@ -803,6 +802,10 @@ fn a_machines_threads_sit_in_the_one_list_with_its_icon(cx: &mut TestAppContext)
         Some("Claude"),
         "a model box has not said is not guessed"
     );
+    let mut words = |selector: &'static str| cx.debug_bounds(selector).expect(selector).left();
+    let project = words("nav-hover-project");
+    assert_eq!(project, words("nav-hover-fact"), "one edge");
+    assert_eq!(project, words("nav-hover-provider"), "one edge");
 
     view.update(cx, |view, cx| {
         view.cockpit
@@ -820,6 +823,72 @@ fn a_machines_threads_sit_in_the_one_list_with_its_icon(cx: &mut TestAppContext)
     tick(cx);
     let said = crate::nav::testing::drawn_hover_card();
     assert_eq!(said.last().map(String::as_str), Some("Haiku 4.5"), "it ends on the model, as T3's does");
+}
+
+/// A Thread of box's the window does not mirror names the model its
+/// agent announced, as its digest says it: T3's shell carries the model.
+#[gpui::test]
+fn an_unopened_machines_thread_names_its_model(cx: &mut TestAppContext) {
+    let (mut core, _fake, machines, agents) = two_machines("digest-model", 1);
+    let on_box = machines.held(1).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(theirs).is_some()));
+    agents.say(
+        0,
+        SessionEvent::Init {
+            session_id: "box-session".into(),
+            model: "claude-haiku-4-5".into(),
+        },
+    );
+    until(cx, |cx| {
+        view.read_with(cx, |view, cx| {
+            view.cockpit.read(cx).thread(theirs).is_some_and(|open| {
+                open.digest().model.as_deref() == Some("claude-haiku-4-5")
+            })
+        })
+    });
+    view.read_with(cx, |view, cx| {
+        let open = view.cockpit.read(cx).thread(theirs);
+        assert_eq!(open.and_then(|open| open.transcript().model()), None, "not mirrored");
+    });
+    tick(cx);
+    let card = debug_bounds(cx, format!("nav-thread-{}", on(on_box, theirs))).expect("box's card");
+    cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let said = crate::nav::testing::drawn_hover_card();
+    assert_eq!(said.last().map(String::as_str), Some("Haiku 4.5"), "{said:?}");
+}
+
+/// A machine's notice sits on the grid of the cards under it: its dot on
+/// the edge the Project badge starts at, its words where the Project name
+/// starts, in both of its states' words.
+#[gpui::test]
+fn a_machines_notice_sits_on_a_cards_grid(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::{NAV_BADGE, NAV_CARD_GAP};
+    let (mut core, _fake) = cockpit("machines-notice-grid", 1);
+    let here = core.this_computer().unwrap();
+    let mine = core
+        .open(here, Provider::Claude, WorkspaceChoice::Main { checkout: self::here() })
+        .unwrap();
+    let machines = beside_box("notice-grid", &mut core, needs_sign_in);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    until(cx, |cx| connection(&view, 1, cx) == Connection::Attention);
+    until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(mine).is_some()));
+    tick(cx);
+    assert_eq!(machine_notices(&view, cx), ["Sign in to box"]);
+    let project = debug_bounds(cx, format!("nav-card-project-{}", mine.thread().get()))
+        .expect("the row's Project name");
+    let words = cx.debug_bounds("nav-notice-words").expect("the notice's words");
+    let dot = cx.debug_bounds("nav-notice-dot").expect("the notice's dot");
+    assert_eq!(words.left(), project.left(), "its words on the Project name's edge");
+    assert_eq!(
+        dot.left(),
+        project.left() - px(NAV_BADGE + NAV_CARD_GAP),
+        "its dot on the badge's edge"
+    );
 }
 
 /// This computer's rows keep their bare ids and draw no glyph, beside

@@ -373,11 +373,11 @@ feature, which only the app's dev-dependencies turn on).
 
 ## Not done here
 
-- On a machine, a Thread's branch label and drift (its PR label is
-  read there), the details card's Changes counts, and its binding
-  following the agent into a worktree it made: both need git on the
-  machine read as the Thread works, not once per chip open as
-  `list_repo` is.
+- On a machine, a Thread's drift (its branch comes in its digest, ADR
+  0045, and its PR label is read there), the details card's Changes
+  counts, and its binding following the agent into a worktree it made:
+  these need git on the machine read as the Thread works, not once per
+  chip open as `list_repo` is.
 - On a machine, a file opened beside a Pane and the operator's own
   commands (ADR 0024) still read or run on this computer.
 - An open Thread's Project on a machine: the `thread` state does not

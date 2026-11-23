@@ -976,17 +976,6 @@ impl Remote {
         })
     }
 
-    /// The branch each of `paths` is on there, in their order.
-    pub(crate) fn branches(
-        &mut self,
-        paths: Vec<PathBuf>,
-    ) -> io::Result<Receiver<io::Result<Vec<Option<String>>>>> {
-        self.ask(Op::Branches { paths }, |done| match done {
-            Done::Branches { branches } => Some(branches),
-            _ => None,
-        })
-    }
-
     /// A `watch_pr`: whether the PR is watched once the Server has it.
     pub(crate) fn watch_pr(&mut self, op: Op) -> io::Result<Receiver<io::Result<bool>>> {
         self.ask(op, |done| match done {

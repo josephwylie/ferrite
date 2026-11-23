@@ -13,7 +13,7 @@ use gpui::{
 
 use ferrite_core::store::Provider;
 use ferrite_ui::icons::{self, icon};
-use ferrite_ui::project_badge::project_badge;
+use ferrite_ui::project_badge::{project_badge, project_badge_sized};
 use ferrite_ui::theme::*;
 use ferrite_ui::components::{self, icon_button, IconSize};
 use ferrite_ui::motion;
@@ -261,14 +261,21 @@ pub struct HoverLines {
 }
 
 /// A fact's line on the hover card: its mark, then its words, cut to fit.
-fn hover_fact(mark: impl IntoElement, words: SharedString) -> Div {
+/// Every mark is `NAV_HOVER_CARD_ICON` wide, so the words share an edge.
+fn hover_fact(selector: &'static str, mark: impl IntoElement, words: SharedString) -> Div {
     div()
         .flex()
         .items_center()
         .gap(px(NAV_HOVER_CARD_LINE_GAP))
         .text_color(rgba(NAV_HOVER_CARD_INK))
         .child(mark)
-        .child(div().min_w_0().truncate().child(words))
+        .child(
+            div()
+                .debug_selector(move || selector.into())
+                .min_w_0()
+                .truncate()
+                .child(words),
+        )
 }
 
 /// A card's hover detail (T3's row tooltip): placed to the right of the
@@ -309,14 +316,19 @@ pub fn hover_card(row: &ThreadRow, lines: HoverLines, width: f32) -> AnyElement 
                 .flex_col()
                 .gap(px(NAV_HOVER_CARD_LINE_GAP))
                 .children(row.project.as_deref().map(|project| {
-                    hover_fact(project_badge(project), SharedString::from(project.to_string()))
+                    hover_fact(
+                        "nav-hover-project",
+                        project_badge_sized(project, NAV_HOVER_CARD_ICON),
+                        SharedString::from(project.to_string()),
+                    )
                 }))
                 .children(lines.lines.into_iter().map(|(glyph, words)| {
-                    hover_fact(icon(glyph, NAV_HOVER_CARD_ICON, INK_SUBTLE), words)
+                    hover_fact("nav-hover-fact", icon(glyph, NAV_HOVER_CARD_ICON, INK_SUBTLE), words)
                 }))
                 .children(lines.provider.map(|(provider, model)| {
                     let (glyph, ink) = ferrite_ui::provider::mark(provider);
                     hover_fact(
+                        "nav-hover-provider",
                         div()
                             .flex()
                             .flex_shrink_0()

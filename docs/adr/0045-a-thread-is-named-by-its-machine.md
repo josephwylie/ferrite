@@ -221,14 +221,16 @@ Each lands green and proves something.
    backspace in an empty line, and esc closes the palette, as T3's view
    does.
 
-   Another machine's row is the same row as this computer's. Its branch
-   is read by git where the checkout is (`Op::Branches`), so its card has
-   the same three lines and height. On a slim row (parked, snoozed) the
-   glyph stands just before the age in the right column. T3's slim row
-   draws no machine icon; Ferrite keeps it so every row on another machine
-   says so. The hover card ends on the Provider's mark and the model, named
-   only once the window knows it: an unopened Thread on another machine
-   says its Provider until it is opened.
+   Another machine's row is the same row as this computer's, with the
+   same three lines and height. Its Server sends the branch in the
+   Thread's digest (`Digest.branch`): the sweep reads each open checkout's
+   `HEAD` file and runs git only for one that moved, so an idle link
+   carries nothing and an idle machine runs no git. On a slim row (parked,
+   snoozed) the glyph stands just before the age in the right column.
+   T3's slim row draws no machine icon; Ferrite keeps it so every row on
+   another machine says so. The hover card ends on the Provider's mark and
+   the model the digest names (`Digest.model`), its Provider until its
+   agent has said one.
 
 ## Answered questions
 

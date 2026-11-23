@@ -739,14 +739,15 @@ pub fn machine_notice(
         )
 }
 
-/// A notice's row on lines `line` tall: a `BLOCKED` dot in the badge's
-/// column, on the first line, and its words where a row's words start.
+/// A notice's row on lines `line` tall, on a card's grid: a `BLOCKED` dot
+/// on the first line at the edge the Project badge starts at, and its words
+/// where the Project name starts.
 fn notice_row(text: SharedString, line: f32) -> Div {
     div()
         .flex()
         .flex_shrink_0()
         .items_start()
-        .gap(px(NAV_ICON_GAP))
+        .gap(px(NAV_CARD_GAP))
         .px(px(NAV_ROW_PAD_X))
         .line_height(px(line))
         .child(
@@ -754,10 +755,15 @@ fn notice_row(text: SharedString, line: f32) -> Div {
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .justify_center()
-                .w(px(NAV_ICON))
+                .w(px(NAV_BADGE))
                 .h(px(line))
-                .child(div().size(px(NAV_DOT)).rounded_full().bg(rgb(BLOCKED))),
+                .child(
+                    div()
+                        .debug_selector(|| "nav-notice-dot".into())
+                        .size(px(NAV_DOT))
+                        .rounded_full()
+                        .bg(rgb(BLOCKED)),
+                ),
         )
         .child(
             div()
