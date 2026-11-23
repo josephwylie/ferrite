@@ -427,9 +427,7 @@ fn delegate_face(
     let ended = delegated.status.ended();
     let stamp = |stamp: &Option<String>| stamp.as_deref().and_then(clock::parse_stamp);
     let clock = match (stamp(&delegated.started_at), stamp(&delegated.ended_at)) {
-        (Some(started), Some(stopped)) if ended => {
-            stopped.duration_since(started).ok().map(AgentClock::Took)
-        }
+        (Some(from), Some(to)) if ended => (from <= to).then_some(AgentClock::Ran { from, to }),
         (Some(started), None) if !ended => Some(AgentClock::Since(clock::instant_at(started))),
         _ => None,
     };
@@ -586,7 +584,7 @@ mod tests {
         done.ended_at = Some("2026-11-23T09:04:10+10:30".into());
         let face = delegate_face(&done, false, Provider::Claude);
         assert_eq!(face.run, AgentRun::Done);
-        assert_eq!(face.clock, Some(AgentClock::Took(std::time::Duration::from_secs(250))));
+        assert_eq!(face.clock.map(AgentClock::elapsed), Some(std::time::Duration::from_secs(250)));
         assert_eq!(face.result.as_deref(), Some("All green."));
         assert!(!face.opens(), "a machine this window does not reach opens nothing");
 

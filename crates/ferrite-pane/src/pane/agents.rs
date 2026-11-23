@@ -59,10 +59,15 @@ pub struct Elsewhere {
 }
 
 /// How long a subagent has run: since its turn began while it runs (read
-/// as the row draws), else the time its last turn took.
+/// as the row draws), else between the wall times it started and ended,
+/// else (an older log, a launch that failed) only how long it took.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentClock {
     Since(std::time::Instant),
+    Ran {
+        from: std::time::SystemTime,
+        to: std::time::SystemTime,
+    },
     Took(std::time::Duration),
 }
 
@@ -70,6 +75,7 @@ impl AgentClock {
     pub fn elapsed(self) -> std::time::Duration {
         match self {
             Self::Since(at) => ferrite_core::clock::instant().saturating_duration_since(at),
+            Self::Ran { from, to } => to.duration_since(from).unwrap_or_default(),
             Self::Took(took) => took,
         }
     }
@@ -82,13 +88,40 @@ impl AgentClock {
             Self::Since(at) => {
                 super::working::counting_clock(at, "agent-elapsed-live", agent_elapsed)
             }
-            Self::Took(took) => SharedString::from(agent_elapsed(took)).into_any_element(),
+            settled => SharedString::from(agent_elapsed(settled.elapsed())).into_any_element(),
         }
     }
 
-    /// The longest of `clocks`: a card's, its agents' together.
-    pub(crate) fn longest(clocks: impl Iterator<Item = Self>) -> Option<Self> {
-        clocks.max_by_key(|clock| clock.elapsed())
+    /// A card's clock, T3's `subagentGroupTiming`: from its agents' earliest
+    /// start, counting while any runs, else to their latest end. An agent
+    /// known only by how long it took has no place on that line, so the card
+    /// reads at least its time.
+    pub(crate) fn across(clocks: impl Iterator<Item = Self>) -> Option<Self> {
+        let clocks: Vec<Self> = clocks.collect();
+        if clocks.iter().any(|clock| matches!(clock, Self::Since(_))) {
+            return clocks
+                .iter()
+                .filter_map(|clock| match *clock {
+                    Self::Since(at) => Some(at),
+                    Self::Ran { from, .. } => Some(ferrite_core::clock::instant_at(from)),
+                    Self::Took(_) => None,
+                })
+                .min()
+                .map(Self::Since);
+        }
+        let ran = clocks
+            .iter()
+            .filter_map(|clock| match *clock {
+                Self::Ran { from, to } => Some((from, to)),
+                _ => None,
+            })
+            .reduce(|(from, to), (next_from, next_to)| (from.min(next_from), to.max(next_to)))
+            .map(|(from, to)| Self::Ran { from, to });
+        clocks
+            .into_iter()
+            .filter(|clock| matches!(clock, Self::Took(_)))
+            .chain(ran)
+            .max_by_key(|clock| clock.elapsed())
     }
 }
 
@@ -787,6 +820,41 @@ mod tests {
         assert!(matches!(tool(&blocks[1]).state, ToolState::Failed(_)));
         assert_eq!(tool(&blocks[2]).state, ToolState::Ok);
         assert_eq!(tool(&blocks[3]).state, ToolState::Ok);
+    }
+
+    /// A card's clock is T3's `subagentGroupTiming`: earliest start to latest
+    /// end, not its longest agent, and it counts while any agent runs.
+    #[test]
+    fn a_cards_clock_runs_from_the_earliest_start_to_the_latest_end() {
+        use std::time::{Duration, SystemTime};
+        let at = |s: u64| SystemTime::UNIX_EPOCH + Duration::from_secs(1_000 + s);
+        let ran = |from, to| AgentClock::Ran { from: at(from), to: at(to) };
+        let card = |clocks: &[AgentClock]| AgentClock::across(clocks.iter().copied());
+
+        assert_eq!(card(&[]), None);
+        assert_eq!(
+            card(&[ran(0, 10), ran(5, 20)]).map(AgentClock::elapsed),
+            Some(Duration::from_secs(20)),
+            "overlapping agents: neither one's own 10s or 15s"
+        );
+        assert_eq!(
+            card(&[ran(0, 84), AgentClock::Took(Duration::ZERO)]).map(AgentClock::elapsed),
+            Some(Duration::from_secs(84)),
+            "a launch that failed at once does not stand for the card"
+        );
+        assert_eq!(
+            card(&[AgentClock::Took(Duration::from_secs(9)), ran(0, 4)]).map(AgentClock::elapsed),
+            Some(Duration::from_secs(9)),
+            "an agent known only by its length still counts"
+        );
+        let started = ferrite_core::clock::instant();
+        assert!(
+            matches!(
+                card(&[AgentClock::Since(started), AgentClock::Took(Duration::ZERO)]),
+                Some(AgentClock::Since(at)) if at == started
+            ),
+            "it counts while any agent runs"
+        );
     }
 
     /// A card counts its agents by how they stand, as T3's does.

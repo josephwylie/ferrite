@@ -6365,8 +6365,10 @@ fn completion_observation(
     event: &SessionEvent,
 ) -> Option<(Subject, crate::store::CompletionFacts)> {
     use crate::activity::ExecutionEvent;
+    let view = thread.activity.view();
     // Every outcome is timed: a completed turn's stamp, and the elapsed an
-    // interrupted or failed turn's row reports.
+    // interrupted or failed turn's row reports. A subagent's turn may end by
+    // its status alone: a background agent's only end is its notification.
     let subject = match event {
         SessionEvent::TurnEnded { .. } => Subject::Main,
         SessionEvent::Activity(ActivityEvent::Content {
@@ -6374,6 +6376,14 @@ fn completion_observation(
             event: ExecutionEvent::TurnEnded { .. },
             ..
         }) => Subject::Subagent(key.clone()),
+        SessionEvent::Activity(ActivityEvent::Status { key, state })
+            if state.turn_outcome().is_some()
+                && view
+                    .subject(&Subject::Subagent(key.clone()))
+                    .is_some_and(|agent| agent.status() != *state) =>
+        {
+            Subject::Subagent(key.clone())
+        }
         SessionEvent::Activity(ActivityEvent::MainContent {
             event: ExecutionEvent::TurnEnded { .. },
             ..
@@ -6381,7 +6391,6 @@ fn completion_observation(
         SessionEvent::Activity(ActivityEvent::BackgroundTurnEnded { .. }) => Subject::Main,
         _ => return None,
     };
-    let view = thread.activity.view();
     let transcript = view.subject(&subject)?.transcript();
     let elapsed = transcript.turn_elapsed()?;
     // The turn's token counts, as its usage reports summed them; a turn
@@ -6391,11 +6400,15 @@ fn completion_observation(
         transcript.turn_output_tokens(),
     );
     let reported = input > 0 || output > 0;
+    let completed_at = match subject {
+        Subject::Main => crate::clock::now_stamp(),
+        Subject::Subagent(_) => crate::clock::now_stamp_ms(),
+    };
     Some((
         subject,
         crate::store::CompletionFacts {
             elapsed_ms: elapsed.as_millis().min(u64::MAX as u128) as u64,
-            completed_at: crate::clock::now_stamp(),
+            completed_at,
             input_tokens: reported.then_some(input),
             output_tokens: reported.then_some(output),
         },

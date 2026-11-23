@@ -2038,7 +2038,7 @@ impl TranscriptView {
             .clone()
             .map(|view| self.disclosure_control(&id, true, view));
         if pane::is_agent_card(row.blocks(), &self.input.presentation.agents) {
-            let clock = pane::AgentClock::longest(
+            let clock = pane::AgentClock::across(
                 pane::group_tools(row.blocks())
                     .filter_map(|tool| self.input.presentation.agents.get(&tool.call)?.clock),
             );

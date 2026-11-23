@@ -766,11 +766,52 @@ fn an_agents_face_reads_its_agents_state_as_t3s(cx: &mut TestAppContext) {
         assert_eq!(read("Birch"), (AgentRun::Stopped, None, Some("Birch transcript".into())));
         assert_eq!(read("Cedar"), (AgentRun::Done, None, Some("Cedar transcript".into())));
         assert_eq!(read("Delta"), (AgentRun::Failed, None, Some("Delta transcript".into())));
-        assert!(
-            matches!(faces.get("Cedar").unwrap().clock, Some(ferrite_pane::pane::AgentClock::Took(_))),
-            "a settled agent its parent waited on reads how long the call took"
-        );
+        for name in ["Birch", "Cedar", "Delta"] {
+            assert!(
+                matches!(faces.get(name).unwrap().clock, Some(ferrite_pane::pane::AgentClock::Ran { .. })),
+                "{name} settled by its status alone keeps when it ran"
+            );
+        }
     });
+}
+
+/// A background agent's call returns at once and its own stream has no turn
+/// end: its notification's status is the only end it gets. It still reads
+/// the time it ran.
+#[gpui::test]
+fn a_finished_background_agent_keeps_its_own_time(cx: &mut TestAppContext) {
+    use ferrite_pane::pane::AgentClock;
+    let (core, fake) = cockpit("subagents-background-clock", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    agent_call(&fake, "Atlas");
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolCompleted {
+            id: "Atlas".into(),
+            output: "Async agent launched successfully.".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Background { task: "a1".into() },
+        })
+        .unwrap();
+    child(&fake, "Atlas", AgentStatus::Working);
+    tick(cx);
+    // It stopped to ask the operator on the way: that time is its time too.
+    for state in [AgentStatus::Waiting, AgentStatus::Working, AgentStatus::Idle] {
+        emit(&fake, ActivityEvent::Status { key: key("Atlas"), state });
+    }
+    tick(cx);
+    let clock = view.read_with(cx, |view, cx| {
+        let activity = view
+            .cockpit
+            .read(cx)
+            .thread(view.panes[0].thread().unwrap())
+            .unwrap()
+            .activity();
+        crate::cockpit::transcript_glue::agent_faces(activity, ferrite_core::store::Provider::Claude)
+            .get("Atlas")
+            .unwrap()
+            .clock
+    });
+    assert!(matches!(clock, Some(AgentClock::Ran { .. })), "its own time, on the wall clock");
 }
 
 /// A background agent's row is T3's row alone: no `View live output`; the

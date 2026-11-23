@@ -86,12 +86,7 @@ pub(super) fn agent_faces(
         let result = (!live).then(|| last_words(transcript.blocks())).flatten();
         let clock = match transcript.turn_started() {
             Some(at) if live => Some(AgentClock::Since(at)),
-            _ => transcript.blocks().iter().rev().find_map(|block| match &block.body {
-                ferrite_core::transcript::Body::TurnEnd(end) => end
-                    .elapsed_ms
-                    .map(|ms| AgentClock::Took(std::time::Duration::from_millis(ms))),
-                _ => None,
-            }),
+            _ => agent.ran().map(settled_clock),
         }
         .or_else(|| call_took(activity, agent, &call));
         faces.insert(
@@ -109,18 +104,23 @@ pub(super) fn agent_faces(
     faces
 }
 
-/// How long a settled agent ran where its own transcript does not say: the
-/// time its parent's `call` took, when the call waited on it (not one that
-/// launched it into the background and returned at once).
+/// A finished run's clock: placed on the wall clock when its end was
+/// stamped, else (an older log's `7:31 pm`) only how long it took.
+fn settled_clock(ran: ferrite_core::activity::AgentRan) -> AgentClock {
+    ran.ended
+        .and_then(|to| Some(AgentClock::Ran { from: to.checked_sub(ran.took)?, to }))
+        .unwrap_or(AgentClock::Took(ran.took))
+}
+
+/// How long a settled agent ran where no run of its own was observed: the
+/// time its parent's `call` took. A background launch's clock runs on to
+/// its handback, which reports the agent's own duration.
 fn call_took(
     activity: ActivityView<'_>,
     agent: ferrite_core::activity::AgentView<'_>,
     call: &str,
 ) -> Option<AgentClock> {
     let parent = activity.subject(agent.info().parent.as_ref()?)?;
-    if parent.transcript().tool(call)?.background.is_some() {
-        return None;
-    }
     match parent.timings().get(call)? {
         ferrite_core::activity::ToolTiming::Done(took) => Some(AgentClock::Took(*took)),
         ferrite_core::activity::ToolTiming::Running(_) => None,
