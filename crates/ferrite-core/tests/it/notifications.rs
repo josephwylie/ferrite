@@ -336,7 +336,7 @@ fn a_native_pending_prompt_suppresses_finish_until_provider_consumption() {
     h.control
         .emit(1, SessionEvent::TextDelta { text: "…".into() });
     h.cockpit.pump();
-    h.cockpit.queue(second, "and then this".into());
+    let _ = h.cockpit.queue(second, "and then this".into());
     h.control.emit(1, ended());
     h.cockpit.pump();
     assert_eq!(

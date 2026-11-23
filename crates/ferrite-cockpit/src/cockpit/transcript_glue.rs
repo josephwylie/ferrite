@@ -454,12 +454,12 @@ impl CockpitView {
             .thread(thread)
             .is_some_and(|open| open.needs_queue())
         {
-            if !self.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, prompt)) {
+            if !self.cockpit.update(cx, |cockpit, _| cockpit.queue_and_wait(thread, prompt)) {
                 return Err("The agent's queue did not take it.".into());
             }
             Ok(Handoff::Queued)
         } else {
-            match self.cockpit.update(cx, |cockpit, _| cockpit.send(thread, prompt)) {
+            match self.cockpit.update(cx, |cockpit, _| cockpit.send_and_wait(thread, prompt)) {
                 Admission::Delivered => {
                     self.scroll_transcript_to_new_prompt(index, cx);
                     Ok(Handoff::Sent)

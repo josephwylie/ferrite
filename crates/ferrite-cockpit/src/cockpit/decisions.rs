@@ -556,7 +556,7 @@ impl CockpitView {
                 };
                 self.respond_exact(*thread, handle, answer, cx);
                 if let Some(note) = note.clone().filter(|_| !self.still_waiting(*thread, handle, cx)) {
-                    self.cockpit.update(cx, |cockpit, _| cockpit.queue(*thread, note));
+                    let _ = self.cockpit.update(cx, |cockpit, _| cockpit.queue(*thread, note));
                 }
                 cx.notify();
             }
@@ -727,7 +727,7 @@ impl CockpitView {
             }
             _ => {
                 if let Some(note) = note {
-                    self.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, note));
+                    let _ = self.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, note));
                 }
             }
         }

@@ -172,6 +172,16 @@ impl<T> Clone for OnMachine<'_, T> {
 impl<T> Copy for OnMachine<'_, T> {}
 
 /// An act on a machine the window no longer holds.
+/// What became of a send, as its reply says.
+fn admission(sent: Executed) -> Admission {
+    match sent {
+        Ok(Some(Done::Held)) => Admission::Held,
+        Ok(_) => Admission::Delivered,
+        Err(error) if error.code == ErrorCode::Unconfirmed => Admission::Unconfirmed(error.message),
+        Err(error) => Admission::Refused(error.message),
+    }
+}
+
 fn gone() -> WireError {
     WireError {
         code: ErrorCode::UnknownThread,
@@ -823,6 +833,27 @@ impl Cockpit {
         }
     }
 
+
+    /// One act on a Thread whose reply the window reads (ADR 0041): a
+    /// Server is asked and answers through the `Ask`, so the window never
+    /// waits for it. An Engine in this process carries it out now, and the
+    /// `Ask` is answered already.
+    fn ask_on<T: Send + 'static>(
+        &mut self,
+        key: ThreadKey,
+        op: impl FnOnce(ThreadId) -> Op,
+        read: fn(Executed) -> T,
+    ) -> Ask<T> {
+        let (machine, op) = (key.machine(), op(key.thread()));
+        match self.machines.get_mut(&machine).map(|held| &mut held.link) {
+            Some(Link::Server(remote)) => {
+                let ask = remote.ask_act(op, move |reply| Ok(read(reply)));
+                crate::doorbell::ring();
+                ask
+            }
+            _ => Ask::answered(Ok(read(self.act_at(machine, op)))),
+        }
+    }
 
     /// A tell on one Thread, to its machine.
     fn tell_on(&mut self, key: ThreadKey, op: impl FnOnce(ThreadId) -> Op) {
@@ -1655,15 +1686,16 @@ impl Cockpit {
         Ok(ThreadKey::new(machine, thread))
     }
 
-    pub fn send(&mut self, thread: ThreadKey, text: String) -> Admission {
-        match self.act_on(thread, |thread| Op::Send { thread, text }) {
-            Ok(Some(Done::Held)) => Admission::Held,
-            Ok(_) => Admission::Delivered,
-            Err(error) if error.code == ErrorCode::Unconfirmed => {
-                Admission::Unconfirmed(error.message)
-            }
-            Err(error) => Admission::Refused(error.message),
-        }
+    /// Send `text` as `thread`'s next prompt. What became of it is the
+    /// `Ask`'s to say (`Ask::admission`); the window never waits for it.
+    pub fn send(&mut self, thread: ThreadKey, text: String) -> Ask<Admission> {
+        self.ask_on(thread, |thread| Op::Send { thread, text }, admission)
+    }
+
+    /// `send`, waited for: only a replayed prompt's, whose callers still
+    /// read where it went at once (ADR 0041's Turn and Session family).
+    pub fn send_and_wait(&mut self, thread: ThreadKey, text: String) -> Admission {
+        admission(self.act_on(thread, |thread| Op::Send { thread, text }))
     }
 
     /// Go back to before the prompt `prompt` names (`Engine::rewind`):
@@ -2482,7 +2514,14 @@ impl Cockpit {
         }))
     }
 
-    pub fn queue(&mut self, thread: ThreadKey, text: String) -> bool {
+    /// Hold `text` behind `thread`'s running turn. Whether the queue took
+    /// it is the `Ask`'s to say; the window never waits for it.
+    pub fn queue(&mut self, thread: ThreadKey, text: String) -> Ask<bool> {
+        self.ask_on(thread, |thread| Op::Queue { thread, text }, |queued| queued.is_ok())
+    }
+
+    /// `queue`, waited for: a replayed prompt's, as `send_and_wait` is.
+    pub fn queue_and_wait(&mut self, thread: ThreadKey, text: String) -> bool {
         self.act_on(thread, |thread| Op::Queue { thread, text })
             .is_ok()
     }

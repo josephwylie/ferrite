@@ -387,22 +387,36 @@ impl CockpitView {
     /// running); one the fork does not take goes back to the field.
     fn ask_side_chat(&mut self, tab: u64, fork: ThreadKey, draft: &SentDraft, cx: &mut Context<Self>) {
         let text = draft.prompt().trim().to_string();
-        let admitted = if self
+        let draft = draft.clone();
+        let settle = move |view: &mut Self, admitted: bool, cx: &mut Context<Self>| {
+            if !admitted {
+                view.side_chat
+                    .update(cx, |chat, cx| chat.unsent(tab, draft, cx));
+            }
+            cx.notify();
+        };
+        if self
             .cockpit
             .read(cx)
             .thread(fork)
             .is_some_and(|open| open.needs_queue())
         {
-            self.cockpit.update(cx, |cockpit, _| cockpit.queue(fork, text))
+            let queued = self.cockpit.update(cx, |cockpit, _| cockpit.queue(fork, text));
+            self.when_answered(
+                queued,
+                move |view, queued, cx| settle(view, queued.unwrap_or(false), cx),
+                cx,
+            );
         } else {
-            matches!(
-                self.cockpit.update(cx, |cockpit, _| cockpit.send(fork, text)),
-                Admission::Delivered | Admission::Held
-            )
-        };
-        if !admitted {
-            self.side_chat
-                .update(cx, |chat, cx| chat.unsent(tab, draft.clone(), cx));
+            let sent = self.cockpit.update(cx, |cockpit, _| cockpit.send(fork, text));
+            self.when_answered(
+                sent,
+                move |view, sent, cx| {
+                    let admitted = matches!(sent, Ok(Admission::Delivered | Admission::Held));
+                    settle(view, admitted, cx)
+                },
+                cx,
+            );
         }
         cx.notify();
     }

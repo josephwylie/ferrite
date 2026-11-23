@@ -49,3 +49,53 @@ fn a_turns_presses_that_read_no_reply_do_not_wait() {
     assert_eq!(ops, ["interrupt", "say", "send_queued_now", "cancel_queued", "settings_changed"]);
     assert!(waits.iter().all(|wait| !wait.waited), "none waits for its reply: {waits:?}");
 }
+
+/// A prompt's send and its queueing are asked, never waited for, and the
+/// Server's answer comes through the ask.
+#[test]
+fn a_send_and_a_queueing_do_not_wait_and_are_answered() {
+    let (mut core, thread, _) = super::machines::browser_core("send-asks");
+    waits::start();
+    let sent = core.send(thread, "first".into());
+    let queued = core.queue(thread, "second".into());
+    let waits = waits::take();
+    let ops: Vec<_> = waits.iter().map(|wait| wait.op.as_str()).collect();
+    assert_eq!(ops, ["send", "queue"]);
+    assert!(waits.iter().all(|wait| !wait.waited), "neither waits for its reply: {waits:?}");
+    let admission = core.wait_for(sent).expect("the Server answers a send");
+    let queued = core.wait_for(queued).expect("the Server answers a queueing");
+    assert_eq!(admission, ferrite_core::cockpit::Admission::Delivered);
+    assert!(!queued, "an idle Thread queues nothing");
+}
+
+/// ↵ twice in the Composer over a Server: neither waits, and the second
+/// draft is asked only once the first is answered, so it is queued behind
+/// the turn the first began, as it was when the window waited. A refusal
+/// that comes after the press puts the draft back.
+#[gpui::test]
+fn the_composers_sends_go_in_order_and_none_waits(cx: &mut gpui::TestAppContext) {
+    let (_engine, view, thread, cx) = super::browser_chrome::browser_window(cx, "send-outbox");
+    let asked = || -> Vec<waits::Wait> {
+        waits::take().into_iter().filter(|wait| ["send", "queue"].contains(&wait.op.as_str())).collect()
+    };
+    let on_the_way = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, _| view.outbox.count(thread));
+    waits::start();
+    for words in ["one", "two"] {
+        cx.simulate_input(words);
+        cx.simulate_keystrokes("enter");
+    }
+    let first = asked();
+    assert_eq!(first.len(), 1, "the second waits for the first's answer: {first:?}");
+    assert_eq!((first[0].op.as_str(), first[0].waited), ("send", false), "{first:?}");
+    assert_eq!(on_the_way(cx), 2);
+
+    waits::start();
+    until(cx, |cx| on_the_way(cx) == 0);
+    let second = asked();
+    assert_eq!(second.len(), 1, "then the second goes: {second:?}");
+    assert_eq!((second[0].op.as_str(), second[0].waited), ("queue", false), "{second:?}");
+    // The fixture Server's Thread has no agent to queue behind, so it
+    // refuses: the refusal arrives after the press, and the draft is back.
+    let left = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).text().to_string());
+    assert_eq!(left, "two", "a draft the Server refused later is back in the Composer");
+}
