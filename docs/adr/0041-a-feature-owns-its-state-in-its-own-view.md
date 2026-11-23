@@ -1237,10 +1237,30 @@ never waits. The rest still do.
      carries each act out at once.
   2. Turn and Session: the acts that read no reply are tells now
      (interrupt, stopping a Subagent, Ferrite's own words, sending or
-     taking back a queued prompt, settings changed). The ones whose
-     reply the window reads still block: send, answer, rewind, fork,
-     model, effort, provider, start fresh. Each needs its reply as an
-     `Ask` and a place to say a refusal.
+     taking back a queued prompt, settings changed). The Composer's ↵
+     is an ask now: `Cockpit::send` and `Cockpit::queue` return an
+     `Ask`, and the root runs what follows the answer
+     (`CockpitView::when_answered`, settled by the pump; an Engine in
+     this process answers in the press). A sent draft is on its way in
+     the root's `Outbox` until the Server answers. A Thread's drafts go
+     one at a time, in the order sent, so each is sent or queued by what
+     the Thread is doing once the one before it is settled, as it was
+     when the window waited. A refusal that comes after the press puts
+     the draft back in the Thread's Composer, ahead of newer typing, or
+     keeps it for when a Pane next shows the Thread. A side chat's
+     question goes the same way. A replayed prompt (`send_again`: edit
+     and resend, the PR card, the overview) still waits, through
+     `send_and_wait` and `queue_and_wait`, because its callers read
+     where it went at once. The others whose reply the window reads
+     are asks too, each with what follows its answer in
+     `when_answered`: answering a Decision (a refusal shows under the
+     request), rewind and fork (a refusal is said in the Thread), model,
+     effort and provider (the same), and start fresh, whose resend
+     needs the window and so goes out a beat after the answer. A side
+     chat's tab opens at once and says a refused fork when the refusal
+     comes. A test or a scene on an Engine in this process reads an
+     answer with `Ask::now`. What is left of this family is the
+     replayed prompt.
   3. Thread lifecycle: 16 asks, 31 sites. What follows an open, a park or
      a revive is the root's (the Panes, focus, the Project filter). Each
      needs a continuation like the Browser's `Then`.

@@ -9,9 +9,10 @@
 use super::super::delegates::{Delegator, Serving};
 use super::super::subagents::{agent_name, parent_of, state_word};
 use super::*;
-use ferrite_core::activity::{ActivityView, AgentStatus, Subject};
+use ferrite_core::activity::{ActivityView, AgentStatus, Subject, SubjectView};
 use ferrite_core::delegate::{DelegateId, Delegated, Delegating, Status};
 use ferrite_core::server::ServerId;
+use ferrite_core::TurnOutcome;
 use ferrite_ui::icons::{self, icon};
 use std::collections::HashMap;
 
@@ -22,6 +23,9 @@ pub(super) struct Relative {
     pub(super) title: String,
     /// At the right: how long it has run or ran, else its state word.
     pub(super) meta: String,
+    /// Whether `meta` is a clock, which T3 sets in tabular figures at the
+    /// regular weight.
+    pub(super) timed: bool,
     pub(super) state: Dot,
     /// The provider it runs on when not the Thread's: a Delegate's, there.
     pub(super) provider: Option<Provider>,
@@ -56,33 +60,46 @@ pub(super) enum Leads {
     },
 }
 
-/// The dot on a row's icon, in the shared state inks.
+/// The dot on a row's icon, T3's `ThreadRelationshipIcon`: blue while it
+/// runs or waits, red failed, green done, muted for anything else (stopped).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Dot {
     Running,
-    NeedsYou,
     Failed,
+    Done,
     Idle,
 }
 
 impl Dot {
     fn of(status: AgentStatus, fresh: bool) -> Self {
         match status {
-            _ if !fresh => Self::Idle,
-            AgentStatus::Working | AgentStatus::Pending => Self::Running,
-            AgentStatus::Waiting => Self::NeedsYou,
+            // How it ended outlives the Session that saw it end.
             AgentStatus::Failed | AgentStatus::NotFound => Self::Failed,
+            AgentStatus::Idle => Self::Done,
+            _ if !fresh => Self::Idle,
+            AgentStatus::Working | AgentStatus::Pending | AgentStatus::Waiting => Self::Running,
+            AgentStatus::Unknown => Self::Done,
             _ => Self::Idle,
         }
     }
 
     fn ink(self) -> u32 {
         match self {
-            Self::Running => RUNNING,
-            Self::NeedsYou => ATTENTION,
+            Self::Running => BLUE,
             Self::Failed => BLOCKED,
-            Self::Idle => IDLE,
+            Self::Done => GREEN,
+            Self::Idle => ferrite_ui::theme::TEXT_FAINT,
         }
+    }
+}
+
+/// How a parent stands (T3's `activityRunStatus`): at rest, as its last turn
+/// ended, so a Thread stopped with Escape does not read Done.
+fn parent_status(view: SubjectView<'_>) -> AgentStatus {
+    match (view.status(), view.last_outcome()) {
+        (AgentStatus::Idle, Some(TurnOutcome::Interrupted)) => AgentStatus::Interrupted,
+        (AgentStatus::Idle, Some(TurnOutcome::Error(_))) => AgentStatus::Failed,
+        (status, _) => status,
     }
 }
 
@@ -127,9 +144,11 @@ pub(super) fn lineage<F: Fn(&ServerId) -> Option<Serving>>(
                 activity.subject(&parent)?,
             ),
         };
+        let status = parent_status(view);
         Some(Relative {
-            meta: state_word(view.status(), view.fresh()).to_owned(),
-            state: Dot::of(view.status(), view.fresh()),
+            meta: state_word(status, view.fresh()).to_owned(),
+            timed: false,
+            state: Dot::of(status, view.fresh()),
             leads: Leads::Subject(parent),
             title,
             provider: None,
@@ -156,17 +175,15 @@ pub(super) fn lineage<F: Fn(&ServerId) -> Option<Serving>>(
     };
     for agent in own {
         let state = Dot::of(agent.status(), agent.fresh());
-        let meta = elapsed
+        let clock = elapsed
             .get(&agent.subject())
             .filter(|_| state != Dot::Failed)
-            .map_or_else(
-                || state_word(agent.status(), agent.fresh()).to_owned(),
-                |elapsed| crate::nav::working_for(*elapsed),
-            );
+            .map(|elapsed| crate::nav::working_for(*elapsed));
         let row = Relative {
             leads: Leads::Subject(agent.subject()),
             title: agent_name(agent.info()),
-            meta,
+            timed: clock.is_some(),
+            meta: clock.unwrap_or_else(|| state_word(agent.status(), agent.fresh()).to_owned()),
             state,
             provider: None,
             tooltip: None,
@@ -212,10 +229,12 @@ fn delegate_row(delegate: &Delegated, reached: bool) -> Relative {
                 .join("\n"),
         ),
         meta: format!("on {} \u{b7} {}", delegate.machine, status_label(delegate.status)),
+        timed: false,
         state: match delegate.status {
             Status::Starting | Status::Running | Status::Waiting => Dot::Running,
             Status::Failed => Dot::Failed,
-            Status::Completed | Status::Cancelled | Status::Interrupted => Dot::Idle,
+            Status::Completed => Dot::Done,
+            Status::Cancelled | Status::Interrupted => Dot::Idle,
         },
         leads: Leads::Elsewhere {
             server: delegate.server.clone(),
@@ -241,6 +260,7 @@ fn delegated_from(from: Delegator) -> Relative {
     Relative {
         tooltip: Some(format!("{}\n{hint}", from.title)),
         meta: format!("on {}", from.machine),
+        timed: false,
         state: Dot::Idle,
         leads: Leads::Delegator {
             server: from.server,
@@ -569,7 +589,15 @@ fn press(selector: String, body: Div, cx: &gpui::App) -> gpui::component::button
     .child(lineage_body(body))
 }
 
-/// A row's body as a row lays it out.
+/// T3's Lineage row: a `text-sm` title in `foreground/85` and `text-2xs`
+/// meta on `leading-4`.
+const TITLE_INK: u32 = (INK_STRONG << 8) | 0xd9;
+const TITLE_FS: f32 = 14.;
+const META_FS: f32 = 11.;
+const ROW_LH: f32 = 16.;
+
+/// A row's body as a row lays it out. It sets T3's line height, since a kit
+/// button's is the font size alone.
 fn lineage_body(body: Div) -> Div {
     body.flex()
         .items_center()
@@ -578,6 +606,7 @@ fn lineage_body(body: Div) -> Div {
         .min_w_0()
         .gap(px(10.))
         .text_size(px(13.))
+        .line_height(px(ROW_LH))
         .font_weight(W_LABEL)
 }
 
@@ -586,41 +615,57 @@ fn lineage_body(body: Div) -> Div {
 /// stop under the pointer on `stop_group`.
 fn row(relative: &Relative, glyph: &'static str, ink: u32, stop_group: Option<SharedString>) -> Div {
     div()
-        .text_color(rgba(0xffffffcc))
+        .text_color(rgba(TITLE_INK))
         .child(
             div()
                 .relative()
                 .flex_shrink_0()
                 .size(px(16.))
                 .child(icon(glyph, 16., ink))
+                // T3's `size-2 border-2 border-card` at `-right-1 -bottom-1`,
+                // as two discs: a GPUI border leaves the fill's edge showing
+                // round its outside.
                 .child(
                     div()
                         .absolute()
-                        .right(px(-3.))
-                        .bottom(px(-3.))
+                        .right(px(-4.))
+                        .bottom(px(-4.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
                         .size(px(8.))
                         .rounded_full()
-                        .border_2()
                         // The card's own ground, so the dot cuts into its icon.
-                        .border_color(rgb(0x111111))
-                        .bg(rgb(relative.state.ink())),
+                        .bg(rgb(0x111111))
+                        .child(div().size(px(4.)).rounded_full().bg(rgb(relative.state.ink()))),
                 ),
         )
         .child(
             div()
+                .debug_selector({
+                    let title = relative.title.clone();
+                    move || format!("details-lineage-title-{title}")
+                })
                 .flex_1()
                 .min_w_0()
-                .truncate()
+                // Cut to fit by its width alone: `truncate`'s clip would take
+                // the descenders, which reach below a 14px face's 16px line.
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .text_size(px(TITLE_FS))
                 .child(relative.title.clone()),
         )
         .child(
             div()
                 .flex_shrink_0()
-                .text_size(px(12.))
+                .text_size(px(META_FS))
                 .text_color(rgb(match relative.state {
                     Dot::Failed => BLOCKED,
                     _ => INK_SUBTLE,
                 }))
+                .when(relative.timed, |meta| {
+                    ferrite_ui::components::tabular(meta.font_weight(W_BODY))
+                })
                 .when_some(stop_group, |meta, group| {
                     meta.group_hover(group, |style| style.invisible())
                 })
@@ -631,7 +676,7 @@ fn row(relative: &Relative, glyph: &'static str, ink: u32, stop_group: Option<Sh
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrite_core::activity::Activity;
+    use ferrite_core::activity::{Activity, ActivityInput};
 
     fn delegated(id: u32, title: Option<&str>, status: Status) -> Delegated {
         Delegated {
@@ -679,6 +724,36 @@ mod tests {
         )
     }
 
+    /// A Server restart leaves every agent not fresh: how one ended still
+    /// reads as it did, and what one was doing no longer claims to go on.
+    #[test]
+    fn how_an_agent_ended_outlives_a_restart() {
+        let read = |status| (state_word(status, false), Dot::of(status, false));
+        assert_eq!(read(AgentStatus::Interrupted), ("Stopped", Dot::Idle));
+        assert_eq!(read(AgentStatus::Failed), ("Failed", Dot::Failed));
+        assert_eq!(read(AgentStatus::Idle), ("Done", Dot::Done));
+        assert_eq!(read(AgentStatus::Working), ("Unavailable", Dot::Idle));
+    }
+
+    /// A parent at rest reads as its last turn ended: stopped, not Done.
+    #[test]
+    fn a_parent_stopped_with_escape_reads_stopped() {
+        let ended = |outcome| {
+            let mut activity = Activity::default();
+            activity.apply(ActivityInput::Connect { generation: 1 });
+            activity.apply(ActivityInput::Main {
+                input: ferrite_core::transcript::Input::Event(
+                    ferrite_core::SessionEvent::TurnEnded { outcome, cost_usd: None },
+                ),
+                at: std::time::Instant::now(),
+            });
+            parent_status(activity.view().main())
+        };
+        assert_eq!(ended(TurnOutcome::Interrupted), AgentStatus::Interrupted);
+        assert_eq!(ended(TurnOutcome::Error("x".into())), AgentStatus::Failed);
+        assert_eq!(ended(TurnOutcome::Completed), AgentStatus::Idle);
+    }
+
     /// T3's `RemoteSubagentRow`: the title (`Delegate` when it has none),
     /// `on pc · Running` in T3's status words, open ones after the agents
     /// and ended ones under `Previous agents`, each in the order they
@@ -711,7 +786,7 @@ mod tests {
         assert_eq!(
             rows(&lineage.previous),
             [
-                ("Lint".to_owned(), "on pc \u{b7} Done".to_owned(), Dot::Idle),
+                ("Lint".to_owned(), "on pc \u{b7} Done".to_owned(), Dot::Done),
                 ("Docs".to_owned(), "on pc \u{b7} Stopped".to_owned(), Dot::Idle),
                 ("Bench".to_owned(), "on pc \u{b7} Failed".to_owned(), Dot::Failed),
             ]

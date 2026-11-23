@@ -348,22 +348,21 @@ fn pick_option(picks: &mut Vec<usize>, option: usize, multi: bool) {
     }
 }
 
-/// The word Lineage says of an agent: its state in the shared lexicon
-/// (`theme::words`), or `done` for an idle or unclassified one.
+/// The word Lineage says of an agent (T3's `threadRelationshipStatusLabel`).
+/// How it ended outlives the Session that saw it end; what it was doing
+/// needs a live one to say so.
 pub(super) fn state_word(status: AgentStatus, fresh: bool) -> &'static str {
-    use theme::words;
-    if !fresh {
-        return words::UNAVAILABLE;
-    }
     match status {
-        AgentStatus::Working => words::WORKING,
-        AgentStatus::Waiting => words::NEEDS_YOU,
-        AgentStatus::Pending => words::STARTING,
-        AgentStatus::Paused => words::PAUSED,
-        AgentStatus::Interrupted | AgentStatus::Shutdown => words::INTERRUPTED,
-        AgentStatus::Failed | AgentStatus::NotFound => words::FAILED,
-        AgentStatus::NotLoaded => words::UNAVAILABLE,
-        AgentStatus::Idle | AgentStatus::Unknown => words::DONE,
+        AgentStatus::Interrupted | AgentStatus::Shutdown => "Stopped",
+        AgentStatus::Failed | AgentStatus::NotFound => "Failed",
+        AgentStatus::Idle => "Done",
+        _ if !fresh => "Unavailable",
+        AgentStatus::Working => "Running",
+        AgentStatus::Waiting => "Waiting",
+        AgentStatus::Pending => "Queued",
+        AgentStatus::Paused => "Paused",
+        AgentStatus::NotLoaded => "Unavailable",
+        AgentStatus::Unknown => "Done",
     }
 }
 
@@ -524,7 +523,21 @@ impl CockpitView {
         answer: DecisionAnswer,
         cx: &mut Context<Self>,
     ) {
-        match self.cockpit.update(cx, |cockpit, _| cockpit.respond_decision(thread, handle, answer)) {
+        let answered = self.cockpit.update(cx, |cockpit, _| cockpit.respond_decision(thread, handle, answer));
+        let handle = handle.clone();
+        self.when_answered(answered, move |view, answered, cx| view.responded(thread, &handle, answered, cx), cx);
+    }
+
+    /// The Server's word on an answer to the Decision `handle` names: taken,
+    /// no longer waiting, or refused, which the Pane says under the request.
+    fn responded(
+        &mut self,
+        thread: ThreadKey,
+        handle: &DecisionHandle,
+        answered: std::io::Result<bool>,
+        cx: &mut Context<Self>,
+    ) {
+        match answered {
             Ok(true) => {
                 if let Some(index) = self.pane_for(thread) {
                     let pending = self.cockpit.read(cx).thread(thread).is_some_and(|open| {

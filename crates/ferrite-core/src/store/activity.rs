@@ -992,20 +992,9 @@ fn project_agent<R: std::borrow::Borrow<super::Record>>(
                 // Replaying Status against the current live status can omit
                 // an old interruption/failure row. Preserve the historical
                 // boundary as content, without resurrecting lifecycle state.
-                let outcome = if previous == last_status {
-                    None
-                } else {
-                    match last_status {
-                        AgentStatus::Idle => Some(crate::TurnOutcome::Completed),
-                        AgentStatus::Interrupted | AgentStatus::Shutdown => {
-                            Some(crate::TurnOutcome::Interrupted)
-                        }
-                        AgentStatus::Failed => {
-                            Some(crate::TurnOutcome::Error("Subagent failed".into()))
-                        }
-                        _ => None,
-                    }
-                };
+                let outcome = (previous != last_status)
+                    .then(|| last_status.turn_outcome())
+                    .flatten();
                 outcome.map(|outcome| ActivityEvent::HistoryContent {
                     key: key.clone(),
                     id: None,

@@ -456,7 +456,7 @@ pub(crate) fn agent_card_status(tools: &[&ToolBlock]) -> String {
 /// chosen (`Action::priority`) and the chosen put in the order they first
 /// appear, and the rest are `performed N other actions`. Joined with `and`,
 /// or an Oxford comma past two: `Ran 4 commands and changed 10 files`.
-/// Always in the past tense, and never a failure: a failed call stands
+/// Always in the past tense, and never a failure: a failed routine call stands
 /// apart from any group, and a failure tints its row's icon.
 pub(crate) fn group_summary(members: &[Block]) -> String {
     let tools: Vec<&ToolBlock> = group_tools(members).collect();

@@ -117,6 +117,12 @@ pub fn now_stamp() -> String {
     now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
 }
 
+/// [`now_stamp`] to the millisecond: a subagent's `completed_at`, the end
+/// its card measures it to, which whole seconds would misplace.
+pub fn now_stamp_ms() -> String {
+    now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false)
+}
+
 /// A Unix time, in seconds, as an RFC 3339 stamp in UTC
 /// (`2027-02-20T10:00:00Z`), as T3 Code says a link's `expiresAt`.
 pub fn utc_stamp(secs: u64) -> Option<String> {

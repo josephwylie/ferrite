@@ -278,9 +278,9 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
     // The crash fix runs Opus 5.5 at high effort, chosen before its first
     // prompt: the effort lands on the Session, then the model respawns it
     // fresh, which also clears the effort's notice.
-    core.set_effort(memory, Some("high".into()))
+    core.set_effort(memory, Some("high".into())).now()
         .expect("choose the crash fix's effort");
-    core.set_model(memory, Some("opus".into()))
+    core.set_model(memory, Some("opus".into())).now()
         .expect("choose the crash fix's model");
     let cast = Cast {
         memory,
@@ -312,7 +312,7 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
     clock.set(CAPTURE);
     core.pump();
     // The operator's follow-up, held until the crash fix's turn ends.
-    core.queue(memory, QUEUED.into());
+    let _ = core.queue(memory, QUEUED.into());
     core.pump();
 
     // The idle Threads were read when they finished: only Complete BB

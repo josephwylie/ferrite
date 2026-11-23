@@ -172,6 +172,16 @@ impl<T> Clone for OnMachine<'_, T> {
 impl<T> Copy for OnMachine<'_, T> {}
 
 /// An act on a machine the window no longer holds.
+/// What became of a send, as its reply says.
+fn admission(sent: Executed) -> Admission {
+    match sent {
+        Ok(Some(Done::Held)) => Admission::Held,
+        Ok(_) => Admission::Delivered,
+        Err(error) if error.code == ErrorCode::Unconfirmed => Admission::Unconfirmed(error.message),
+        Err(error) => Admission::Refused(error.message),
+    }
+}
+
 fn gone() -> WireError {
     WireError {
         code: ErrorCode::UnknownThread,
@@ -823,6 +833,27 @@ impl Cockpit {
         }
     }
 
+
+    /// One act on a Thread whose reply the window reads (ADR 0041): a
+    /// Server is asked and answers through the `Ask`, so the window never
+    /// waits for it. An Engine in this process carries it out now, and the
+    /// `Ask` is answered already.
+    fn ask_on<T: Send + 'static>(
+        &mut self,
+        key: ThreadKey,
+        op: impl FnOnce(ThreadId) -> Op,
+        read: fn(Executed) -> io::Result<T>,
+    ) -> Ask<T> {
+        let (machine, op) = (key.machine(), op(key.thread()));
+        match self.machines.get_mut(&machine).map(|held| &mut held.link) {
+            Some(Link::Server(remote)) => {
+                let ask = remote.ask_act(op, read);
+                crate::doorbell::ring();
+                ask
+            }
+            _ => Ask::answered(read(self.act_at(machine, op))),
+        }
+    }
 
     /// A tell on one Thread, to its machine.
     fn tell_on(&mut self, key: ThreadKey, op: impl FnOnce(ThreadId) -> Op) {
@@ -1600,18 +1631,22 @@ impl Cockpit {
         Ok(ThreadKey::new(first, started?))
     }
 
-    pub fn set_provider(&mut self, thread: ThreadKey, choice: ProviderChoice) -> io::Result<()> {
-        done(self.act_on(thread, |thread| Op::SetProvider {
+    pub fn set_provider(&mut self, thread: ThreadKey, choice: ProviderChoice) -> Ask<()> {
+        self.ask_on(
             thread,
-            provider: choice.provider,
-            model: choice.model,
-        }))
+            |thread| Op::SetProvider {
+                thread,
+                provider: choice.provider,
+                model: choice.model,
+            },
+            done,
+        )
     }
 
     /// Continue a Thread whose provider lost its saved conversation on a
     /// fresh one, the earlier turns going with the next prompt as context.
-    pub fn start_fresh_conversation(&mut self, thread: ThreadKey) -> io::Result<()> {
-        done(self.act_on(thread, |thread| Op::StartFresh { thread }))
+    pub fn start_fresh_conversation(&mut self, thread: ThreadKey) -> Ask<()> {
+        self.ask_on(thread, |thread| Op::StartFresh { thread }, done)
     }
 
     /// The Project `thread` is in, on its machine.
@@ -1655,51 +1690,45 @@ impl Cockpit {
         Ok(ThreadKey::new(machine, thread))
     }
 
-    pub fn send(&mut self, thread: ThreadKey, text: String) -> Admission {
-        match self.act_on(thread, |thread| Op::Send { thread, text }) {
-            Ok(Some(Done::Held)) => Admission::Held,
-            Ok(_) => Admission::Delivered,
-            Err(error) if error.code == ErrorCode::Unconfirmed => {
-                Admission::Unconfirmed(error.message)
-            }
-            Err(error) => Admission::Refused(error.message),
-        }
+    /// Send `text` as `thread`'s next prompt. What became of it is the
+    /// `Ask`'s to say (`Ask::admission`); the window never waits for it.
+    pub fn send(&mut self, thread: ThreadKey, text: String) -> Ask<Admission> {
+        self.ask_on(thread, |thread| Op::Send { thread, text }, |sent| Ok(admission(sent)))
+    }
+
+    /// `send`, waited for: only a replayed prompt's, whose callers still
+    /// read where it went at once (ADR 0041's Turn and Session family).
+    pub fn send_and_wait(&mut self, thread: ThreadKey, text: String) -> Admission {
+        admission(self.act_on(thread, |thread| Op::Send { thread, text }))
     }
 
     /// Go back to before the prompt `prompt` names (`Engine::rewind`):
-    /// `Err` says why not, in words.
-    pub fn rewind(
-        &mut self,
-        thread: ThreadKey,
-        prompt: &str,
-        files: bool,
-        edit: bool,
-    ) -> Result<(), String> {
-        self.act_on(thread, |thread| Op::Rewind {
+    /// an `Err` answer says why not, in words.
+    pub fn rewind(&mut self, thread: ThreadKey, prompt: &str, files: bool, edit: bool) -> Ask<()> {
+        self.ask_on(
             thread,
-            prompt: prompt.to_string(),
-            files,
-            edit,
-        })
-        .map(drop)
-        .map_err(|error| error.message)
+            |thread| Op::Rewind {
+                thread,
+                prompt: prompt.to_string(),
+                files,
+                edit,
+            },
+            done,
+        )
     }
 
     /// A new Thread from `thread`'s conversation before the prompt `prompt`
     /// names, or all of it, `draft` in its Composer (`Engine::fork`).
-    pub fn fork(
-        &mut self,
-        thread: ThreadKey,
-        prompt: Option<&str>,
-        draft: Option<String>,
-    ) -> Result<(), String> {
-        self.act_on(thread, |thread| Op::Fork {
+    pub fn fork(&mut self, thread: ThreadKey, prompt: Option<&str>, draft: Option<String>) -> Ask<()> {
+        self.ask_on(
             thread,
-            prompt: prompt.map(str::to_string),
-            draft,
-        })
-        .map(drop)
-        .map_err(|error| error.message)
+            |thread| Op::Fork {
+                thread,
+                prompt: prompt.map(str::to_string),
+                draft,
+            },
+            done,
+        )
     }
 
     pub fn interrupt(&mut self, thread: ThreadKey) {
@@ -1727,24 +1756,28 @@ impl Cockpit {
         }
     }
 
-    /// Answer exactly the request the operator saw. False when it no longer
-    /// waits — answered already, here or in another window. An answer is
-    /// never sent twice.
+    /// Answer exactly the request the operator saw. Answered false when
+    /// it no longer waits: answered already, here or in another window. An
+    /// answer is never sent twice.
     pub fn respond_decision(
         &mut self,
         thread: ThreadKey,
         handle: &DecisionHandle,
         answer: DecisionAnswer,
-    ) -> io::Result<bool> {
-        match self.act_on(thread, |thread| Op::Answer {
+    ) -> Ask<bool> {
+        self.ask_on(
             thread,
-            handle: handle.into(),
-            answer: (&answer).into(),
-        }) {
-            Ok(_) => Ok(true),
-            Err(error) if error.code == crate::protocol::ErrorCode::AlreadyAnswered => Ok(false),
-            Err(error) => Err(error.into()),
-        }
+            |thread| Op::Answer {
+                thread,
+                handle: handle.into(),
+                answer: (&answer).into(),
+            },
+            |answered| match answered {
+                Ok(_) => Ok(true),
+                Err(error) if error.code == ErrorCode::AlreadyAnswered => Ok(false),
+                Err(error) => Err(error.into()),
+            },
+        )
     }
 
     /// Something only `--demo` and the tests put in a Pane directly.
@@ -2487,7 +2520,14 @@ impl Cockpit {
         }))
     }
 
-    pub fn queue(&mut self, thread: ThreadKey, text: String) -> bool {
+    /// Hold `text` behind `thread`'s running turn. Whether the queue took
+    /// it is the `Ask`'s to say; the window never waits for it.
+    pub fn queue(&mut self, thread: ThreadKey, text: String) -> Ask<bool> {
+        self.ask_on(thread, |thread| Op::Queue { thread, text }, |queued| Ok(queued.is_ok()))
+    }
+
+    /// `queue`, waited for: a replayed prompt's, as `send_and_wait` is.
+    pub fn queue_and_wait(&mut self, thread: ThreadKey, text: String) -> bool {
         self.act_on(thread, |thread| Op::Queue { thread, text })
             .is_ok()
     }
@@ -2789,12 +2829,12 @@ impl Cockpit {
         crate::providers::models::catalog(provider, &self.announced_models(machine, provider))
     }
 
-    pub fn set_model(&mut self, thread: ThreadKey, model: Option<String>) -> io::Result<()> {
-        done(self.act_on(thread, |thread| Op::SetModel { thread, model }))
+    pub fn set_model(&mut self, thread: ThreadKey, model: Option<String>) -> Ask<()> {
+        self.ask_on(thread, |thread| Op::SetModel { thread, model }, done)
     }
 
-    pub fn set_effort(&mut self, thread: ThreadKey, effort: Option<String>) -> io::Result<()> {
-        done(self.act_on(thread, |thread| Op::SetEffort { thread, effort }))
+    pub fn set_effort(&mut self, thread: ThreadKey, effort: Option<String>) -> Ask<()> {
+        self.ask_on(thread, |thread| Op::SetEffort { thread, effort }, done)
     }
 
     pub fn next_blocked(&self, from: Option<ThreadKey>) -> Option<ThreadKey> {

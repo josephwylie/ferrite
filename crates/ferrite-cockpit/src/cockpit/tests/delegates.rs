@@ -223,7 +223,7 @@ fn a_delegate_call_is_t3s_task_row_on_its_machine(cx: &mut TestAppContext) {
     amend(&view, thread, |delegates| delegates.end(id, Status::Completed, "All green.".into()), cx);
     let done = face(cx);
     assert_eq!((done.run, done.result.as_deref()), (AgentRun::Done, Some("All green.")));
-    assert!(matches!(done.clock, Some(AgentClock::Took(_))));
+    assert!(matches!(done.clock, Some(AgentClock::Ran { .. })));
 }
 
 /// T3 keeps a call that started nothing as its ordinary tool row, with its

@@ -12,6 +12,7 @@
 
 use ferrite_core::transcript::{tools, Block, BlockId, Body, ToolState};
 use ferrite_core::TurnOutcome;
+use std::collections::HashSet;
 
 /// One fold over a turn's work, or over a steer's segment of it.
 #[derive(Clone, Debug, PartialEq)]
@@ -92,10 +93,35 @@ pub(crate) fn open_turn(blocks: &[Block]) -> Option<usize> {
     open
 }
 
+/// The calls of every agent card with an agent still running (T3's
+/// `liveSubagentCardEntryIds`): a card stays whole until its last agent
+/// settles, so one stopped early does not leave it for its turn's fold.
+fn live_cards(
+    blocks: &[Block],
+    is_agent: impl Fn(&Block) -> bool,
+    draws: impl Fn(&Block) -> bool,
+) -> HashSet<BlockId> {
+    let running =
+        |block: &&Block| matches!(&block.body, Body::Tool(tool) if tool.state == ToolState::Running);
+    let drawn: Vec<&Block> = blocks.iter().filter(|block| draws(block)).collect();
+    drawn
+        .chunk_by(|a, b| is_agent(a) && is_agent(b))
+        .filter(|run| is_agent(run[0]) && run.iter().any(|block| running(block)))
+        .flatten()
+        .map(|block| block.id)
+        .collect()
+}
+
 /// Every fold the window's settled turns draw, in order. `draws`: whether a
 /// block draws a row of its own (hidden thinking does not): a fold that
-/// would hide nothing that draws is no fold.
-pub(crate) fn folds(blocks: &[Block], draws: impl Fn(&Block) -> bool) -> Vec<Fold> {
+/// would hide nothing that draws is no fold. `is_agent`: whether a block is
+/// a call on an agent card.
+pub(crate) fn folds(
+    blocks: &[Block],
+    draws: impl Fn(&Block) -> bool,
+    is_agent: impl Fn(&Block) -> bool,
+) -> Vec<Fold> {
+    let live = live_cards(blocks, is_agent, &draws);
     let mut turns = Vec::new();
     let mut open: Option<Turn> = None;
     for (index, block) in blocks.iter().enumerate() {
@@ -134,7 +160,9 @@ pub(crate) fn folds(blocks: &[Block], draws: impl Fn(&Block) -> bool) -> Vec<Fol
     turns
         .into_iter()
         .enumerate()
-        .flat_map(|(at, (turn, end))| turn_folds(blocks, &turn, end, Some(at) == latest, &draws))
+        .flat_map(|(at, (turn, end))| {
+            turn_folds(blocks, &turn, end, Some(at) == latest, &live, &draws)
+        })
         .collect()
 }
 
@@ -145,6 +173,7 @@ fn turn_folds(
     turn: &Turn,
     end: usize,
     latest: bool,
+    live: &HashSet<BlockId>,
     draws: &impl Fn(&Block) -> bool,
 ) -> Vec<Fold> {
     let Body::TurnEnd(stamp) = &blocks[end].body else {
@@ -165,6 +194,7 @@ fn turn_folds(
     let hides = |at: usize| {
         let block = &blocks[at];
         match (answer_start, answer) {
+            _ if live.contains(&block.id) => false,
             (Some(start), Some(last)) if (start..=last).contains(&at) => false,
             (_, Some(last)) if at > last => foldable_after_answer(block),
             _ => foldable(block),

@@ -44,7 +44,7 @@ use ferrite_reviewr::git::{CommitRow, WorktreeEntry};
 use ferrite_reviewr::search::SearchResults;
 
 /// Where a later-answered command's reply goes (`Remote::ask`).
-type Answer = Box<dyn FnOnce(io::Result<Option<Done>>) + Send>;
+type Answer = Box<dyn FnOnce(Result<Option<Done>, WireError>) + Send>;
 
 /// A command whose reply the window takes later: where it goes, and when
 /// it is answered that the Server did not answer, if ever.
@@ -441,16 +441,26 @@ impl Remote {
         op: Op,
         read: fn(Option<Done>) -> io::Result<T>,
     ) -> super::Ask<T> {
+        self.ask_act(op, move |reply| reply.map_err(io::Error::from).and_then(read))
+    }
+
+    /// An ask whose answer is all of the Server's reply as `read` makes of
+    /// it, a refusal's code included: an act the window used to wait for.
+    pub(crate) fn ask_act<T: Send + 'static>(
+        &mut self,
+        op: Op,
+        read: impl FnOnce(Result<Option<Done>, WireError>) -> io::Result<T> + Send + 'static,
+    ) -> super::Ask<T> {
         let id = match self.send_command(op) {
             Ok(id) => id,
-            Err(error) => return super::Ask::answered(Err(error.into())),
+            Err(error) => return super::Ask::answered(read(Err(error))),
         };
         let (answer, answered) = crate::doorbell::channel();
         self.answers.insert(
             id,
             Waiting {
                 answer: Box::new(move |reply| {
-                    let _ = answer.send(reply.and_then(read));
+                    let _ = answer.send(read(reply));
                 }),
                 by: Some(crate::clock::instant() + REPLY_WAIT),
             },
@@ -469,10 +479,10 @@ impl Remote {
             .collect();
         for id in &late {
             if let Some(waiting) = self.answers.remove(id) {
-                (waiting.answer)(Err(io::Error::from(WireError {
+                (waiting.answer)(Err(WireError {
                     code: ErrorCode::Unconfirmed,
                     message: "the Ferrite server did not answer in time".into(),
-                })));
+                }));
             }
         }
         !late.is_empty()
@@ -1044,7 +1054,7 @@ impl Remote {
             id,
             Waiting {
                 answer: Box::new(move |result| {
-                    let read = result.and_then(|done| {
+                    let read = result.map_err(io::Error::from).and_then(|done| {
                         done.and_then(read)
                             .ok_or_else(|| io::Error::other("the server answered something else"))
                     });
@@ -1218,12 +1228,9 @@ impl Remote {
                     self.reviewed(review, reply);
                     return vec![Arrival::Answered];
                 }
-                let result = match error {
-                    Some(error) => Err(io::Error::from(error)),
-                    None => Ok(ok),
-                };
+                let result = error.map_or(Ok(ok), Err);
                 if let Some((draft, prompt)) = self.starting.remove(&id) {
-                    let result = result.and_then(|done| match done {
+                    let result = result.map_err(io::Error::from).and_then(|done| match done {
                         Some(Done::Thread { thread }) => Ok(Bootstrapped { thread }),
                         _ => Err(io::Error::other("the server started no Thread")),
                     });
@@ -1235,7 +1242,7 @@ impl Remote {
                 }
                 let answered = vec![Arrival::Answered];
                 if let Some(answer) = self.searches.remove(&id) {
-                    let _ = answer.send(result.map(|done| {
+                    let _ = answer.send(result.map_err(io::Error::from).map(|done| {
                         match done {
                             Some(Done::Files { files }) => files
                                 .into_iter()

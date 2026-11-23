@@ -1013,31 +1013,33 @@ fn a_threads_args_reach_the_cli_after_ferrites_flags() {
     );
 }
 
-/// What Ferrite tells a Session beyond the operator's words rides the CLI's
-/// appended system prompt, whole, so none of it is a message to show.
+/// What Ferrite tells a Session beyond the operator's words rides the
+/// handshake as the CLI's appended system prompt, whole, so none of it is a
+/// message to show and none of it is an argument: Windows refuses to start a
+/// `.cmd` CLI with a line break in one.
 #[test]
-fn a_sessions_instructions_ride_the_appended_system_prompt() {
-    let log = log_path("argv-instructions.log");
+fn a_sessions_instructions_ride_the_handshake_and_never_the_arguments() {
+    let log = log_path("handshake-instructions.log");
     let program = stub(
         "claude-echoes-instructions",
         &format!(
-            "{PRELUDE}\necho \"$@\" > '{}'\nexec cat > /dev/null",
-            log.display()
+            "{PRELUDE}\necho \"$@\" > '{log}'\nhead -n 1 >> '{log}'\nexec cat > /dev/null",
+            log = log.display()
         ),
     );
+    let told = "You are the Coordinator\n\nWatch the PR";
     let session = ClaudeSession::spawn(ClaudeConfig {
         program,
-        instructions: Some("You are the Coordinator".into()),
+        instructions: Some(told.into()),
         ..Default::default()
     })
     .unwrap();
-    let recorded = read_lines(&log, 1);
+    let recorded = read_lines(&log, 2);
     drop(session);
-    assert!(
-        recorded[0].contains("--append-system-prompt You are the Coordinator"),
-        "{}",
-        recorded[0]
-    );
+    assert!(!recorded[0].contains("Coordinator"), "{}", recorded[0]);
+    let handshake: serde_json::Value = serde_json::from_str(&recorded[1]).unwrap();
+    assert_eq!(handshake["request"]["subtype"], "initialize");
+    assert_eq!(handshake["request"]["appendSystemPrompt"], told);
 }
 
 #[test]

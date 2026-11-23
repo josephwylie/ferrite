@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{mpsc::Receiver, Arc};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::store::Provider;
 use crate::transcript::{self, BlockId, Input, Lexer, Transcript};
@@ -71,6 +71,29 @@ pub enum AgentStatus {
     Shutdown,
     NotFound,
     NotLoaded,
+}
+
+impl AgentStatus {
+    /// How a turn ends when its agent comes to stand this way; `None` for a
+    /// standing that ends no turn.
+    pub(crate) fn turn_outcome(self) -> Option<TurnOutcome> {
+        match self {
+            Self::Idle => Some(TurnOutcome::Completed),
+            Self::Interrupted | Self::Shutdown => Some(TurnOutcome::Interrupted),
+            Self::Failed => Some(TurnOutcome::Error("Subagent failed".into())),
+            _ => None,
+        }
+    }
+}
+
+/// A subagent's last finished run as its Server saw it end: how long it
+/// took and, when its stamp can be read, the wall time it ended (T3's
+/// `startedAt` and `completedAt`). Kept with the agent, not its transcript,
+/// so it outlives the transcript's eviction and comes back on replay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentRan {
+    pub took: Duration,
+    pub ended: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1033,6 +1056,7 @@ struct AgentState {
     last_live: u64,
     /// Whether this agent sorted as working when the order was last settled.
     sorted_working: bool,
+    ran: Option<AgentRan>,
 }
 
 impl AgentState {
@@ -1520,15 +1544,7 @@ impl Activity {
                         }));
                 }
                 if previous != *state {
-                    let outcome = match state {
-                        AgentStatus::Idle => Some(TurnOutcome::Completed),
-                        AgentStatus::Interrupted | AgentStatus::Shutdown => {
-                            Some(TurnOutcome::Interrupted)
-                        }
-                        AgentStatus::Failed => Some(TurnOutcome::Error("Subagent failed".into())),
-                        _ => None,
-                    };
-                    if let Some(outcome) = outcome {
+                    if let Some(outcome) = state.turn_outcome() {
                         let blocks = agent.state.append(
                             Input::Event(SessionEvent::TurnEnded {
                                 outcome,
@@ -1659,6 +1675,12 @@ impl Activity {
                 let subject = self.resolve_subject(subject);
                 if let Subject::Subagent(key) = &subject {
                     self.ensure_agent(key.clone());
+                    if let Some(agent) = self.agents.get_mut(key) {
+                        agent.ran = Some(AgentRan {
+                            took: Duration::from_millis(*elapsed_ms),
+                            ended: crate::clock::parse_stamp(completed_at),
+                        });
+                    }
                 }
                 let sequence = self.sequence;
                 let limits = self.limits;
@@ -1929,6 +1951,7 @@ impl Activity {
                 discovered: self.sequence,
                 last_live: 0,
                 sorted_working: false,
+                ran: None,
             },
         );
         self.tree_changed = true;
@@ -2130,6 +2153,11 @@ impl Activity {
                 target.discovered = target.discovered.min(source.discovered);
                 let source_is_newer = source.last_live > target.last_live;
                 let runtime = source_is_newer.then(|| RuntimeState::capture(&source.state));
+                target.ran = if source_is_newer {
+                    source.ran.or(target.ran)
+                } else {
+                    target.ran.or(source.ran)
+                };
                 target.last_live = target.last_live.max(source.last_live);
                 target.state.retained |= source.state.retained;
                 target.state.rehydrated |= source.state.rehydrated;
@@ -2461,6 +2489,10 @@ impl<'a> AgentView<'a> {
     }
     pub fn status(self) -> AgentStatus {
         self.agent.state.status
+    }
+    /// Its last finished run, when one was observed.
+    pub fn ran(self) -> Option<AgentRan> {
+        self.agent.ran
     }
     /// When the agent was first seen, on the activity's own sequence: its
     /// start order among its siblings (larger is newer).

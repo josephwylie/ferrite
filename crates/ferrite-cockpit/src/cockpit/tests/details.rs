@@ -459,6 +459,8 @@ fn lineage_lists_running_agents_and_folds_the_previous_ones(cx: &mut TestAppCont
         "the heading says how many run"
     );
     assert!(cx.debug_bounds("details-lineage-agent-Atlas").is_some());
+    let title = cx.debug_bounds("details-lineage-title-Atlas").expect("its title");
+    assert_eq!(title.size.height, px(16.), "T3's `leading-4`: a whole line box");
     assert!(
         cx.debug_bounds("details-lineage-previous-count-2").is_some(),
         "the finished agents fold under their count"

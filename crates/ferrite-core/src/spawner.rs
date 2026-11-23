@@ -875,7 +875,7 @@ mod tests {
             let calls = Arc::new(Mutex::new(NativeCalls::default()));
             let (mut cockpit, thread, path) =
                 native_cockpit("model", provider, Native::new(calls.clone()));
-            cockpit.set_model(thread, Some("selected".into())).unwrap();
+            cockpit.set_model(thread, Some("selected".into())).now().unwrap();
             assert_eq!(
                 calls.lock().unwrap().spawns,
                 1,
@@ -891,7 +891,7 @@ mod tests {
                 Some("same-native-conversation")
             );
             let error = cockpit
-                .set_model(thread, Some("unavailable".into()))
+                .set_model(thread, Some("unavailable".into())).now()
                 .unwrap_err();
             assert!(error.to_string().contains("native model unavailable"));
             assert_eq!(calls.lock().unwrap().spawns, 1);
@@ -905,7 +905,7 @@ mod tests {
                 cockpit.thread(thread).unwrap().transcript().session_id(),
                 Some("same-native-conversation")
             );
-            cockpit.set_model(thread, None).unwrap();
+            cockpit.set_model(thread, None).now().unwrap();
             assert_eq!(calls.lock().unwrap().model, None);
             assert_eq!(calls.lock().unwrap().spawns, 1);
             drop(cockpit);
@@ -924,8 +924,8 @@ mod tests {
                 effort: Some("high".into()),
             });
             let (mut cockpit, thread, path) = native_cockpit("effort", provider, spawner);
-            cockpit.set_effort(thread, Some("max".into())).unwrap();
-            cockpit.set_effort(thread, None).unwrap();
+            cockpit.set_effort(thread, Some("max".into())).now().unwrap();
+            cockpit.set_effort(thread, None).now().unwrap();
             assert_eq!(
                 calls.lock().unwrap().efforts,
                 [Some("max".into()), Some("high".into())]

@@ -467,7 +467,7 @@ fn a_draft_inherits_the_focused_provider_model_and_only_announced_models(cx: &mu
                     provider: Provider::Claude,
                     model: Some("opus".into()),
                 },
-            ))
+            ).now())
             .unwrap();
         view.open_draft(DraftTarget::Main, cx);
         view.open_band_menu(pane::BandChip::Provider, false, cx);
@@ -648,7 +648,7 @@ fn the_reasoning_column_takes_the_arrows_and_left_returns_to_search(cx: &mut Tes
     announce(&fake, 0, vec![model("sonnet", "Sonnet 5", &["low", "medium", "high"])]);
     tick(cx);
     view.update(cx, |view, cx| {
-        view.cockpit.update(cx, |cockpit, _| cockpit.set_model(thread, Some("sonnet".into())).unwrap());
+        view.cockpit.update(cx, |cockpit, _| cockpit.set_model(thread, Some("sonnet".into())).now().unwrap());
         view.open_effort_picker(thread, cx);
     });
     tick(cx);

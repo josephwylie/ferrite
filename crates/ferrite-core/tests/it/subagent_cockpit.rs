@@ -323,7 +323,7 @@ fn child_completion_cannot_release_mains_prompt_or_pending_decision() {
     );
     let child = h.child("alpha");
     h.cockpit.pump();
-    h.cockpit.queue(h.thread, "queued main prompt".to_owned());
+    let _ = h.cockpit.queue(h.thread, "queued main prompt".to_owned());
 
     h.content(
         0,
@@ -396,7 +396,7 @@ fn autonomous_background_completion_does_not_retire_mains_live_work() {
         },
     );
     h.cockpit.pump();
-    h.cockpit.queue(h.thread, "queued main prompt".to_owned());
+    let _ = h.cockpit.queue(h.thread, "queued main prompt".to_owned());
     h.control.activity(
         0,
         ActivityEvent::BackgroundTurnEnded {
@@ -605,7 +605,7 @@ fn hidden_child_decisions_reply_in_reverse_order_and_failed_writes_stay_pending(
     h.control.fail_next_reply(0);
     assert_eq!(
         h.cockpit
-            .respond_decision(h.thread, &beta_handle, allow())
+            .respond_decision(h.thread, &beta_handle, allow()).now()
             .unwrap_err()
             .to_string(),
         "scripted reply failure"
@@ -621,7 +621,7 @@ fn hidden_child_decisions_reply_in_reverse_order_and_failed_writes_stay_pending(
     );
     assert!(h
         .cockpit
-        .respond_decision(h.thread, &beta_handle, allow())
+        .respond_decision(h.thread, &beta_handle, allow()).now()
         .unwrap());
     assert_eq!(
         h.cockpit
@@ -634,11 +634,11 @@ fn hidden_child_decisions_reply_in_reverse_order_and_failed_writes_stay_pending(
     );
     assert!(h
         .cockpit
-        .respond_decision(h.thread, &alpha_handle, deny())
+        .respond_decision(h.thread, &alpha_handle, deny()).now()
         .unwrap());
     assert!(!h
         .cockpit
-        .respond_decision(h.thread, &beta_handle, allow())
+        .respond_decision(h.thread, &beta_handle, allow()).now()
         .unwrap());
     assert!(h
         .cockpit
@@ -691,7 +691,7 @@ fn an_unresolved_decision_remains_visible_without_guessing_its_owner() {
     assert_eq!(pending[0].subject, None);
     assert!(h
         .cockpit
-        .respond_decision(h.thread, &pending[0].handle, deny())
+        .respond_decision(h.thread, &pending[0].handle, deny()).now()
         .unwrap());
     assert_eq!(h.control.replies(0)[0].id, "unresolved");
 }
@@ -736,7 +736,7 @@ fn a_child_turn_end_retires_only_that_childs_pending_decisions() {
     assert_eq!(remaining, ["beta-request", "main-request"]);
     assert!(!h
         .cockpit
-        .respond_decision(h.thread, &alpha_handle, allow())
+        .respond_decision(h.thread, &alpha_handle, allow()).now()
         .unwrap());
     assert!(h.control.replies(0).is_empty());
 }
@@ -811,7 +811,7 @@ fn cancellation_retires_only_its_request_and_clears_waiting_after_the_last_one()
     for pending in old {
         assert!(!h
             .cockpit
-            .respond_decision(h.thread, &pending.handle, allow())
+            .respond_decision(h.thread, &pending.handle, allow()).now()
             .unwrap());
     }
     assert!(h.control.replies(0).is_empty());
@@ -918,7 +918,7 @@ fn stale_request_after_replacement(replacement: Replacement) {
             assert_eq!(h.cockpit.sweep().len(), 1);
         }
         Replacement::ParkAndRevive => {
-            h.cockpit.queue(h.thread, "unpersisted queue".to_owned());
+            let _ = h.cockpit.queue(h.thread, "unpersisted queue".to_owned());
             h.cockpit.park(h.thread).unwrap();
             assert_eq!(
                 h.cockpit.subagent_count(h.thread).unwrap(),
@@ -935,7 +935,7 @@ fn stale_request_after_replacement(replacement: Replacement) {
                         provider: Provider::Claude,
                         model: Some("replacement-model".to_owned()),
                     },
-                )
+                ).now()
                 .unwrap();
         }
     }
@@ -964,7 +964,7 @@ fn stale_request_after_replacement(replacement: Replacement) {
     assert!(text(view.transcript()).contains("MAIN history"));
     assert!(!h
         .cockpit
-        .respond_decision(h.thread, &old_handle, allow())
+        .respond_decision(h.thread, &old_handle, allow()).now()
         .unwrap());
 
     let current = if matches!(replacement, Replacement::Handover) {
@@ -984,12 +984,12 @@ fn stale_request_after_replacement(replacement: Replacement) {
     assert_ne!(current_handle, old_handle);
     assert!(!h
         .cockpit
-        .respond_decision(h.thread, &old_handle, deny())
+        .respond_decision(h.thread, &old_handle, deny()).now()
         .unwrap());
     assert!(h.control.replies(1).is_empty());
     assert!(h
         .cockpit
-        .respond_decision(h.thread, &current_handle, allow())
+        .respond_decision(h.thread, &current_handle, allow()).now()
         .unwrap());
     assert_eq!(h.control.replies(1).len(), 1);
     assert!(h.control.replies(0).is_empty());
@@ -1472,7 +1472,7 @@ fn aliasing_evicted_history_into_a_retained_child_recovers_both_prefixes_and_liv
         assert!(h.control.replies(0).is_empty());
         assert!(h
             .cockpit
-            .respond_decision(thread, &handle, allow())
+            .respond_decision(thread, &handle, allow()).now()
             .unwrap());
         assert_eq!(
             h.control.replies(0),

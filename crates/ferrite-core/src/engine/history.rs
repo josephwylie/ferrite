@@ -300,21 +300,13 @@ impl Engine {
             for event in pending.events {
                 let event = match event {
                     ActivityEvent::Status { key, state } => {
-                        use crate::activity::{AgentStatus, ExecutionEvent};
-                        let outcome = match state {
-                            AgentStatus::Idle => crate::TurnOutcome::Completed,
-                            AgentStatus::Interrupted | AgentStatus::Shutdown => {
-                                crate::TurnOutcome::Interrupted
-                            }
-                            AgentStatus::Failed => {
-                                crate::TurnOutcome::Error("Subagent failed".into())
-                            }
-                            _ => continue,
+                        let Some(outcome) = state.turn_outcome() else {
+                            continue;
                         };
                         ActivityEvent::HistoryContent {
                             key,
                             id: None,
-                            event: ExecutionEvent::TurnEnded {
+                            event: crate::activity::ExecutionEvent::TurnEnded {
                                 outcome,
                                 cost_usd: None,
                             },

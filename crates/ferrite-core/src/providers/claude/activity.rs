@@ -620,9 +620,20 @@ impl Decoder {
     }
 
     fn working(&mut self, key: &AgentKey, events: &mut Vec<SessionEvent>) {
-        if !self.waiting(key) {
+        if !self.waiting(key) && !self.cut_short(key) {
             self.status(key, AgentStatus::Working, events);
         }
+    }
+
+    /// Whether the provider ended `key`'s run before it finished. The CLI
+    /// still flushes what that run had in flight (a killed tool's refusal,
+    /// `[Request interrupted…]`): its tail, never the agent at work again.
+    /// Only a new run (`task_started`, a resume) reopens it.
+    fn cut_short(&self, key: &AgentKey) -> bool {
+        matches!(
+            self.states.get(key),
+            Some(AgentStatus::Interrupted | AgentStatus::Failed | AgentStatus::Shutdown)
+        )
     }
 
     fn content(
@@ -632,12 +643,13 @@ impl Decoder {
         event: ExecutionEvent,
         events: &mut Vec<SessionEvent>,
     ) {
+        let key = key.clone();
         push(
             events,
-            ActivityEvent::Content {
-                key: key.clone(),
-                id,
-                event,
+            if self.cut_short(&key) {
+                ActivityEvent::HistoryContent { key, id, event }
+            } else {
+                ActivityEvent::Content { key, id, event }
             },
         );
     }
@@ -1342,7 +1354,15 @@ impl Decoder {
         }
         self.discover(info, events);
         if failed {
-            self.status(&key, AgentStatus::Failed, events);
+            // The error result of a run already stopped says nothing new.
+            if !self.cut_short(&key) {
+                let ended = if rejected(result) {
+                    AgentStatus::Interrupted
+                } else {
+                    AgentStatus::Failed
+                };
+                self.status(&key, ended, events);
+            }
         } else if let Some(state) = result.and_then(|r| string(r, "status")).map(status) {
             self.status(&key, state, events);
         }
@@ -1463,7 +1483,13 @@ impl Decoder {
                 .or(info.description);
         }
         self.discover(info, events);
-        if matches!(subtype, "task_started" | "task_progress") && !self.waiting(&key) {
+        if subtype == "task_started" && self.cut_short(&key) {
+            self.states.remove(&key);
+        }
+        if matches!(subtype, "task_started" | "task_progress")
+            && !self.waiting(&key)
+            && !self.cut_short(&key)
+        {
             let detail = string(value, "summary")
                 .or_else(|| string(value, "description"))
                 .or_else(|| string(value, "last_tool_name"))
@@ -1482,7 +1508,9 @@ impl Decoder {
         }
         let state = match subtype {
             "task_started" => Some(AgentStatus::Working),
-            "task_progress" => (!self.waiting(&key)).then_some(AgentStatus::Working),
+            "task_progress" => {
+                (!self.waiting(&key) && !self.cut_short(&key)).then_some(AgentStatus::Working)
+            }
             "task_updated" => string(&value["patch"], "status").map(status),
             "task_notification" => string(value, "status").map(status),
             _ => None,
@@ -1562,7 +1590,13 @@ impl Decoder {
         };
         let id = delivery_id(value, "handback");
         match subject {
-            Subject::Main => self.main_content(value, id, event, events),
+            Subject::Main => {
+                // Stopped is the operator's side of the call, never a failure.
+                if matches!(string(value, "status"), Some("stopped" | "killed")) {
+                    events.push(SessionEvent::ToolDenied { id: call.to_owned() });
+                }
+                self.main_content(value, id, event, events)
+            }
             Subject::Subagent(key) => self.content(&key, id, event, events),
         }
     }
@@ -1692,6 +1726,12 @@ fn main_block_id(message: &str, index: u64) -> String {
 
 fn push(events: &mut Vec<SessionEvent>, event: ActivityEvent) {
     events.push(SessionEvent::Activity(event));
+}
+
+/// Whether a call's error result is the operator stopping it (Escape during
+/// a foreground agent), which `claude` 2.1.318 marks in `tool_use_result`.
+fn rejected(result: Option<&Value>) -> bool {
+    result.and_then(Value::as_str) == Some("User rejected tool use")
 }
 
 fn status(value: &str) -> AgentStatus {
@@ -2083,6 +2123,125 @@ mod tests {
         assert_eq!(children[0].key(), &original);
         assert_eq!(children[0].status(), AgentStatus::Idle);
         assert_eq!(children[0].info().parent, Some(Subject::Main));
+    }
+
+    /// A stop as the CLI sends it: the kill and the handback, then what the
+    /// run still had in flight (its killed tool's refusal, the interrupt
+    /// line). The agent stays stopped through all of it, live and replayed,
+    /// its call reads stopped, and only a new run opens it again.
+    /// Escape during a foreground agent: the CLI refuses its call, then
+    /// reports the task stopped. It never reads Failed on the way.
+    #[test]
+    fn a_foreground_agent_stopped_by_escape_never_reads_failed() {
+        let frames = [
+            json!({"type":"assistant","session_id":"s1","parent_tool_use_id":null,"uuid":"m1",
+                "message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"spawn",
+                "name":"Agent","input":{"description":"Stop me"}}]}}),
+            json!({"type":"system","subtype":"task_started","session_id":"s1","uuid":"t1",
+                "task_id":"task","tool_use_id":"spawn","task_type":"local_agent",
+                "description":"Stop me"}),
+            json!({"type":"user","session_id":"s1","parent_tool_use_id":null,"uuid":"m2",
+                "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"spawn",
+                "content":"The user doesn't want to proceed with this tool use.","is_error":true}]},
+                "tool_use_result":"User rejected tool use"}),
+            json!({"type":"system","subtype":"task_notification","session_id":"s1","uuid":"t2",
+                "task_id":"task","tool_use_id":"spawn","status":"stopped","summary":"Stop me"}),
+        ];
+        let mut decoder = Decoder::default();
+        let states: Vec<AgentStatus> = frames
+            .iter()
+            .flat_map(|frame| decoder.decode(&frame.to_string()))
+            .filter_map(|event| match event {
+                SessionEvent::Activity(ActivityEvent::Status { state, .. }) => Some(state),
+                _ => None,
+            })
+            .collect();
+        assert!(!states.contains(&AgentStatus::Failed), "{states:?}");
+        assert_eq!(states.last(), Some(&AgentStatus::Interrupted));
+    }
+
+    #[test]
+    fn a_stopped_agents_flushed_frames_leave_it_stopped() {
+        use crate::transcript::{Body, ToolState};
+        let child = |uuid: &str, role: &str, content: Value| {
+            json!({"type":role,"session_id":"s1","parent_tool_use_id":"spawn","uuid":uuid,
+                "message":{"id":uuid,"role":role,"content":content}})
+            .to_string()
+        };
+        let frames = [
+            json!({"type":"assistant","session_id":"s1","parent_tool_use_id":null,"uuid":"m1",
+                "message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"spawn",
+                "name":"Agent","input":{"description":"Stop me","run_in_background":true}}]}})
+            .to_string(),
+            json!({"type":"system","subtype":"task_started","session_id":"s1","uuid":"t1",
+                "task_id":"task","tool_use_id":"spawn","task_type":"local_agent",
+                "description":"Stop me","is_backgrounded":true})
+            .to_string(),
+            json!({"type":"user","session_id":"s1","parent_tool_use_id":null,"uuid":"m2",
+                "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"spawn",
+                "content":"launched"}]},
+                "tool_use_result":{"status":"async_launched","agentId":"agent"}})
+            .to_string(),
+            child("c1", "assistant", json!([{"type":"tool_use","id":"bash","name":"Bash",
+                "input":{"command":"ping"}}])),
+            json!({"type":"system","subtype":"task_updated","session_id":"s1","uuid":"t2",
+                "task_id":"task","patch":{"status":"killed"}})
+            .to_string(),
+            json!({"type":"system","subtype":"task_notification","session_id":"s1","uuid":"t3",
+                "task_id":"task","tool_use_id":"spawn","status":"stopped","summary":"Stop me"})
+            .to_string(),
+            child("c2", "user", json!([{"type":"tool_result","tool_use_id":"bash",
+                "content":"rejected","is_error":true}])),
+            child("c3", "user", json!([{"type":"text",
+                "text":"[Request interrupted by user for tool use]"}])),
+        ];
+        let mut decoder = Decoder::default();
+        let events: Vec<_> = frames.iter().flat_map(|line| decoder.decode(line)).collect();
+        let mut live = Activity::default();
+        live.apply(ActivityInput::Connect { generation: 1 });
+        let mut replayed = Activity::new(ActivityLimits::default());
+        for event in events {
+            if let SessionEvent::Activity(event) = &event {
+                replayed.apply(ActivityInput::ReplayEvent(event.clone()));
+            }
+            live.apply(match event {
+                SessionEvent::Activity(event) => ActivityInput::Observe {
+                    generation: 1,
+                    event,
+                    at: Instant::now(),
+                },
+                event => ActivityInput::Main {
+                    input: crate::transcript::Input::Event(event),
+                    at: Instant::now(),
+                },
+            });
+        }
+        assert_eq!(live.view().children()[0].status(), AgentStatus::Interrupted);
+        assert!(!live.view().children()[0].running());
+        assert_eq!(live.view().working_descendants(), 0);
+        assert_eq!(replayed.view().children()[0].status(), AgentStatus::Interrupted);
+        let main = live.view().main();
+        let transcript = main.transcript();
+        assert_eq!(transcript.tool("spawn").unwrap().state, ToolState::Stopped);
+        assert!(transcript.blocks().iter().any(|block| matches!(
+            &block.body,
+            Body::Notice(text) if text == "Background task stopped \u{b7} Agent \"Stop me\""
+        )));
+
+        let again = json!({"type":"system","subtype":"task_started","session_id":"s1",
+            "uuid":"t4","task_id":"task","tool_use_id":"spawn","task_type":"local_agent",
+            "description":"Stop me"})
+        .to_string();
+        for event in decoder.decode(&again) {
+            if let SessionEvent::Activity(event) = event {
+                live.apply(ActivityInput::Observe {
+                    generation: 1,
+                    event,
+                    at: Instant::now(),
+                });
+            }
+        }
+        assert_eq!(live.view().children()[0].status(), AgentStatus::Working);
     }
 
     #[test]

@@ -58,6 +58,40 @@ fn running(activity: &Activity) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// How long an agent ran is the agent's fact, not its transcript's: it
+/// outlives the transcript's eviction and comes back on a replay (a window
+/// or Server restart), where a child's content stays on disk until shown.
+#[test]
+fn a_finished_run_outlives_its_transcript_and_returns_on_replay() {
+    let mut activity = connected();
+    let agent = spawn(&mut activity, "first");
+    let completion = ActivityEvent::CompletionObservation {
+        subject: Subject::Subagent(agent.clone()),
+        elapsed_ms: 84_250,
+        completed_at: "2026-11-23T09:05:00.500+00:00".into(),
+        input_tokens: None,
+        output_tokens: None,
+    };
+    status(&mut activity, &agent, AgentStatus::Idle);
+    observe(&mut activity, completion.clone());
+    let expected = Some(AgentRan {
+        took: Duration::from_millis(84_250),
+        ended: crate::clock::parse_stamp("2026-11-23T09:05:00.500+00:00"),
+    });
+    let ran = |activity: &Activity| activity.view().children()[0].ran();
+    assert_eq!(ran(&activity), expected);
+    activity.apply(ActivityInput::Evict(Subject::Subagent(agent.clone())));
+    assert_eq!(ran(&activity), expected, "past its transcript's eviction");
+
+    let mut restarted = Activity::default();
+    let mut info = AgentInfo::new(agent.clone());
+    info.parent = Some(Subject::Main);
+    restarted.apply(ActivityInput::ReplayEvent(ActivityEvent::Discovered(info)));
+    restarted.apply(ActivityInput::ReplayEvent(completion));
+    restarted.apply(ActivityInput::Evict(Subject::Subagent(agent)));
+    assert_eq!(ran(&restarted), expected, "from the log, after a restart");
+}
+
 #[test]
 fn running_agents_names_each_running_agent_until_it_finishes() {
     let mut activity = connected();
