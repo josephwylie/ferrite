@@ -88,7 +88,7 @@ impl Dot {
             Self::Running => BLUE,
             Self::Failed => BLOCKED,
             Self::Done => GREEN,
-            Self::Idle => IDLE,
+            Self::Idle => ferrite_ui::theme::TEXT_FAINT,
         }
     }
 }
