@@ -323,7 +323,7 @@ fn child_completion_cannot_release_mains_prompt_or_pending_decision() {
     );
     let child = h.child("alpha");
     h.cockpit.pump();
-    h.cockpit.queue(h.thread, "queued main prompt".to_owned());
+    let _ = h.cockpit.queue(h.thread, "queued main prompt".to_owned());
 
     h.content(
         0,
@@ -396,7 +396,7 @@ fn autonomous_background_completion_does_not_retire_mains_live_work() {
         },
     );
     h.cockpit.pump();
-    h.cockpit.queue(h.thread, "queued main prompt".to_owned());
+    let _ = h.cockpit.queue(h.thread, "queued main prompt".to_owned());
     h.control.activity(
         0,
         ActivityEvent::BackgroundTurnEnded {
@@ -918,7 +918,7 @@ fn stale_request_after_replacement(replacement: Replacement) {
             assert_eq!(h.cockpit.sweep().len(), 1);
         }
         Replacement::ParkAndRevive => {
-            h.cockpit.queue(h.thread, "unpersisted queue".to_owned());
+            let _ = h.cockpit.queue(h.thread, "unpersisted queue".to_owned());
             h.cockpit.park(h.thread).unwrap();
             assert_eq!(
                 h.cockpit.subagent_count(h.thread).unwrap(),

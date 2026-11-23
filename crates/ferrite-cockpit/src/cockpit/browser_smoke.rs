@@ -235,7 +235,7 @@ impl CockpitView {
                         image.save(output.join("window-work-order-before.png")).map_err(|error| error.to_string())?;
                         view.update(cx, |view, cx| {
                             let thread = scenario_thread.expect("scenario Thread");
-                            view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "Complete the prescribed work order through browser tools".into()));
+                            let _ = view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "Complete the prescribed work order through browser tools".into()));
                         });
                         provider_started = true;
                         return Ok(false);
@@ -282,7 +282,7 @@ impl CockpitView {
                         }
                         view.update(cx, |view, cx| {
                             let thread = scenario_thread.expect("scenario Thread");
-                            view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "Observe the displayed fixture, click its button, and observe the result".into()));
+                            let _ = view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "Observe the displayed fixture, click its button, and observe the result".into()));
                         });
                         provider_started = true;
                         return Ok(false);

@@ -4,6 +4,7 @@
 //! Decision, the held prompt — is folded in core and read from there.
 
 pub(crate) mod archive;
+mod asks;
 mod attachments;
 mod background_dialog_view;
 mod background_work;
@@ -416,6 +417,10 @@ pub struct CockpitView {
     /// Drafts sent while a Session was starting, kept whole until it takes
     /// the prompt or hands it back.
     held_sends: sends::HeldSends,
+    /// The Composer drafts on their way to each Thread (`sends`).
+    outbox: sends::Outbox,
+    /// What follows each Server answer the window waits for (`asks`).
+    awaited: asks::Awaited,
     tools: tools::Tools,
     /// Every Thread's Files: its tree, editor tabs and their unsaved edits.
     files: Entity<tools::FilesView>,
@@ -1287,6 +1292,8 @@ impl CockpitView {
             selection: TranscriptText::default(),
             side_chat,
             held_sends: Default::default(),
+            outbox: Default::default(),
+            awaited: Default::default(),
             tools: Default::default(),
             files,
             terminals,
@@ -2209,6 +2216,7 @@ impl CockpitView {
         self.poll_factory_skills(cx);
         self.poll_environment(cx);
         self.apply_thread_rules(&frame, cx);
+        self.settle_asks(cx);
         self.settle_held_sends(cx);
         for index in 0..self.panes.len() {
             if let Some(thread) = self.panes[index].thread() {
@@ -3971,38 +3979,7 @@ impl CockpitView {
             return;
         }
         // Typing does not wait for the agent; sending does.
-        let focused = self.focused(cx);
-        let admitted = if self
-            .cockpit
-            .read(cx)
-            .thread(thread)
-            .is_some_and(|open| open.needs_queue())
-        {
-            let queued = self.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, text.clone()));
-            if queued {
-                self.hold_queued(thread, draft);
-            } else {
-                self.put_back_send(focused, draft, true, cx);
-            }
-            queued
-        } else {
-            let admission = self.cockpit.update(cx, |cockpit, _| cockpit.send(thread, text.clone()));
-            let admitted = self.settle_send(focused, thread, draft, admission, cx);
-            if admitted {
-                self.scroll_transcript_to_new_prompt(focused, cx);
-            }
-            admitted
-        };
-        if admitted {
-            self.keep_cited_sources(thread, &cited, cx);
-        }
-        self.facts.acted(self.cockpit.read(cx), thread);
-        // A first prompt names an untitled Thread.
-        self.facts.renamed(self.cockpit.read(cx), thread);
-        self.refresh_names();
-        if admitted && self.is_first_prompt(thread, cx) {
-            self.start_titling(thread, text, cx);
-        }
+        self.send_draft(thread, draft, text, cited, cx);
         cx.notify();
     }
 

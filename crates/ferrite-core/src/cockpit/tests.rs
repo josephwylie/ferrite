@@ -2404,7 +2404,7 @@ fn native_queue_history_records_consumption_once() {
     let (mut cockpit, fake) = cockpit("native-history");
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let _ = cockpit.send(thread, "sent".into());
-    assert!(cockpit.queue(thread, "held".into()));
+    assert!(cockpit.queue_and_wait(thread, "held".into()));
     let delivery = |cockpit: &Cockpit| {
         cockpit
             .thread(thread)
@@ -2787,7 +2787,7 @@ fn a_send_with_a_vanished_root_is_refused_naming_the_path_and_the_remedy() {
         .unwrap();
     std::fs::remove_dir_all(&root).unwrap();
 
-    let admission = cockpit.send(thread, "into the void".into());
+    let admission = cockpit.send_and_wait(thread, "into the void".into());
 
     assert!(
         matches!(&admission, crate::cockpit::Admission::Refused(words) if words.contains("re-pick")),
@@ -2817,7 +2817,7 @@ fn a_send_with_a_vanished_root_is_refused_naming_the_path_and_the_remedy() {
 fn replacing_a_claude_session_does_not_resubmit_native_pending_work() {
     let (mut cockpit, fake) = cockpit("native-replacement");
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
-    assert!(cockpit.queue(thread, "pending text".into()));
+    assert!(cockpit.queue_and_wait(thread, "pending text".into()));
     cockpit.pump();
     cockpit
         .set_session_project_root(thread, Some(existing_root("native-replacement-root")))
@@ -3308,7 +3308,7 @@ fn native_pending_prompts_survive_turn_end_without_client_dispatch() {
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     fake.streams.borrow()[0].send(text("working")).unwrap();
     cockpit.pump();
-    assert!(cockpit.queue(thread, "and then run the tests".into()));
+    assert!(cockpit.queue_and_wait(thread, "and then run the tests".into()));
     cockpit.pump();
     fake.streams.borrow()[0].send(ended()).unwrap();
     cockpit.pump();
@@ -3334,7 +3334,7 @@ fn a_queued_prompt_is_removed_by_its_own_id() {
     let _ = cockpit.send(thread, "start".into());
     cockpit.pump();
     for text in ["first", "second", "third"] {
-        assert!(cockpit.queue(thread, text.into()));
+        assert!(cockpit.queue_and_wait(thread, text.into()));
     }
     cockpit.pump();
     let queue = cockpit.thread(thread).unwrap().queue().to_vec();
@@ -3372,7 +3372,7 @@ fn send_now_steers_a_queued_prompt_into_the_running_turn() {
     fake.streams.borrow()[0].send(text("working")).unwrap();
     cockpit.pump();
     for text in ["first", "second", "third"] {
-        assert!(cockpit.queue(thread, text.into()));
+        assert!(cockpit.queue_and_wait(thread, text.into()));
     }
     cockpit.pump();
     let queue = cockpit.thread(thread).unwrap().queue().to_vec();
@@ -3416,7 +3416,7 @@ fn a_queue_that_folds_says_steering_and_send_now_never_interrupts() {
     let _ = cockpit.send(thread, "start".into());
     fake.streams.borrow()[0].send(text("working")).unwrap();
     cockpit.pump();
-    assert!(cockpit.queue(thread, "also this".into()));
+    assert!(cockpit.queue_and_wait(thread, "also this".into()));
     cockpit.pump();
     let item = cockpit.thread(thread).unwrap().queue()[0].clone();
     assert_eq!(item.delivery, crate::engine::Delivery::Folding);
@@ -3438,7 +3438,7 @@ fn send_now_interrupts_a_provider_that_cannot_steer() {
     let _ = cockpit.send(thread, "start".into());
     fake.streams.borrow()[0].send(text("working")).unwrap();
     cockpit.pump();
-    assert!(cockpit.queue(thread, "then this".into()));
+    assert!(cockpit.queue_and_wait(thread, "then this".into()));
     cockpit.pump();
     let id = cockpit.thread(thread).unwrap().queue()[0].id.clone();
 
@@ -3460,8 +3460,8 @@ fn escape_on_codex_resends_the_whole_pile_as_one_prompt() {
     let _ = cockpit.send(thread, "start".into());
     fake.streams.borrow()[0].send(text("working")).unwrap();
     cockpit.pump();
-    assert!(cockpit.queue(thread, "first".into()));
-    assert!(cockpit.queue(thread, "second".into()));
+    assert!(cockpit.queue_and_wait(thread, "first".into()));
+    assert!(cockpit.queue_and_wait(thread, "second".into()));
     cockpit.pump();
     let open = cockpit.thread(thread).unwrap();
     assert_eq!(
@@ -3536,7 +3536,7 @@ fn escape_on_claude_leaves_the_native_queue_to_the_provider() {
     let _ = cockpit.send(thread, "start".into());
     fake.streams.borrow()[0].send(text("working")).unwrap();
     cockpit.pump();
-    assert!(cockpit.queue(thread, "held".into()));
+    assert!(cockpit.queue_and_wait(thread, "held".into()));
     cockpit.pump();
     cockpit.interrupt(thread);
     fake.streams.borrow()[0]
@@ -3562,7 +3562,7 @@ fn escape_on_claude_leaves_the_native_queue_to_the_provider() {
 fn a_native_prompt_is_retrieved_only_after_cancel_receipt() {
     let (mut cockpit, fake) = cockpit("native-unqueue");
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
-    assert!(cockpit.queue(thread, "run the tets".into()));
+    assert!(cockpit.queue_and_wait(thread, "run the tets".into()));
     cockpit.pump();
     assert_eq!(cockpit.unqueue(thread), None);
     assert_eq!(cockpit.take_retrieved_prompt(thread), None);

@@ -312,7 +312,7 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
     clock.set(CAPTURE);
     core.pump();
     // The operator's follow-up, held until the crash fix's turn ends.
-    core.queue(memory, QUEUED.into());
+    let _ = core.queue(memory, QUEUED.into());
     core.pump();
 
     // The idle Threads were read when they finished: only Complete BB

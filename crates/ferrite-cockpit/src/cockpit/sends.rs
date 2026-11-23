@@ -6,13 +6,19 @@
 //! waits under its Thread for the prompt to come back if the Session never
 //! starts. It belongs to the Thread, not to the Pane that sent it, so
 //! switching or closing the Pane does not lose it.
+//!
+//! The window never waits for the admission (ADR 0041). A sent draft is
+//! on its way in the `Outbox` until the Server answers; a Thread's drafts
+//! go one at a time, in the order sent, so each is sent or queued by what
+//! the Thread is doing once the one before it is settled.
 
 use super::*;
 use ferrite_core::cockpit::Admission;
 use ferrite_core::draft_content::DraftContent;
 use ferrite_core::ThreadKey;
 use ferrite_pane::composer::SentDraft;
-use std::collections::HashMap;
+use ferrite_core::replies::Reply;
+use std::collections::{HashMap, VecDeque};
 
 /// How much of a prompt names it in a notice.
 const NAMED_CHARS: usize = 48;
@@ -31,6 +37,38 @@ struct Held {
     lost: bool,
 }
 
+/// The drafts on their way to each Thread, oldest first: the first is
+/// asked of the Server, the rest wait for its answer.
+#[derive(Default)]
+pub(crate) struct Outbox(HashMap<ThreadKey, VecDeque<Outgoing>>);
+
+struct Outgoing {
+    draft: SentDraft,
+    /// The prompt as sent: the draft's, trimmed.
+    text: String,
+    cited: Vec<Reply>,
+}
+
+impl Outbox {
+    #[cfg(test)]
+    pub(crate) fn count(&self, thread: ThreadKey) -> usize {
+        self.0.get(&thread).map_or(0, VecDeque::len)
+    }
+}
+
+/// What the Server said of a draft on its way.
+enum Answered {
+    Sent(Admission),
+    /// Whether the Thread's queue took it.
+    Queued(bool),
+}
+
+/// A send's answer as an admission: a link that went before it answered
+/// leaves the prompt unconfirmed.
+pub(super) fn admission(answer: std::io::Result<Admission>) -> Admission {
+    answer.unwrap_or_else(|error| Admission::Unconfirmed(error.to_string()))
+}
+
 impl HeldSends {
     #[cfg(test)]
     pub(crate) fn count(&self, thread: ThreadKey) -> usize {
@@ -39,11 +77,126 @@ impl HeldSends {
 }
 
 impl CockpitView {
+    /// The Composer's draft goes to `thread`: now, or once the drafts sent
+    /// before it are settled.
+    pub(super) fn send_draft(
+        &mut self,
+        thread: ThreadKey,
+        draft: SentDraft,
+        text: String,
+        cited: Vec<Reply>,
+        cx: &mut Context<Self>,
+    ) {
+        let waiting = self.outbox.0.entry(thread).or_default();
+        waiting.push_back(Outgoing { draft, text, cited });
+        if waiting.len() == 1 {
+            self.ask_next_send(thread, cx);
+        }
+    }
+
+    /// Ask the Server to take `thread`'s oldest draft on its way: queued
+    /// behind a running turn, else sent.
+    fn ask_next_send(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
+        let Some(text) = self
+            .outbox
+            .0
+            .get(&thread)
+            .and_then(|waiting| waiting.front())
+            .map(|next| next.text.clone())
+        else {
+            self.outbox.0.remove(&thread);
+            return;
+        };
+        if self
+            .cockpit
+            .read(cx)
+            .thread(thread)
+            .is_some_and(|open| open.needs_queue())
+        {
+            let queued = self.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, text));
+            self.when_answered(
+                queued,
+                move |view, queued, cx| {
+                    view.sent(thread, Answered::Queued(queued.unwrap_or(false)), cx)
+                },
+                cx,
+            );
+        } else {
+            let sent = self.cockpit.update(cx, |cockpit, _| cockpit.send(thread, text));
+            self.when_answered(
+                sent,
+                move |view, sent, cx| view.sent(thread, Answered::Sent(admission(sent)), cx),
+                cx,
+            );
+        }
+    }
+
+    /// The Server answered for `thread`'s oldest draft on its way: settle
+    /// it, follow an admitted prompt, and ask for the next.
+    fn sent(&mut self, thread: ThreadKey, answered: Answered, cx: &mut Context<Self>) {
+        let Some(Outgoing { draft, text, cited }) = self
+            .outbox
+            .0
+            .get_mut(&thread)
+            .and_then(VecDeque::pop_front)
+        else {
+            return;
+        };
+        let admitted = match answered {
+            Answered::Queued(true) => {
+                self.hold_queued(thread, draft);
+                true
+            }
+            Answered::Queued(false) => {
+                self.return_send(thread, draft, cx);
+                false
+            }
+            Answered::Sent(admission) => {
+                let admitted = self.settle_send(thread, draft, admission, cx);
+                if let Some(index) = self.pane_sending(thread).filter(|_| admitted) {
+                    self.scroll_transcript_to_new_prompt(index, cx);
+                }
+                admitted
+            }
+        };
+        if admitted {
+            self.keep_cited_sources(thread, &cited, cx);
+        }
+        self.facts.acted(self.cockpit.read(cx), thread);
+        // A first prompt names an untitled Thread.
+        self.facts.renamed(self.cockpit.read(cx), thread);
+        self.refresh_names();
+        if admitted && self.is_first_prompt(thread, cx) {
+            self.start_titling(thread, text, cx);
+        }
+        cx.notify();
+        self.ask_next_send(thread, cx);
+    }
+
+    /// The Pane whose Composer sends to `thread`, while one shows it.
+    fn pane_sending(&self, thread: ThreadKey) -> Option<usize> {
+        self.panes
+            .iter()
+            .position(|pane| pane.is_main() && pane.thread() == Some(thread))
+    }
+
+    /// A draft `thread` did not take goes back to its Composer, ahead of
+    /// newer typing: now while a Pane shows the Thread, else when one does.
+    fn return_send(&mut self, thread: ThreadKey, draft: SentDraft, cx: &mut Context<Self>) {
+        match self.pane_sending(thread) {
+            Some(index) => self.put_back_send(index, draft, true, cx),
+            None => self.held_sends.0.entry(thread).or_default().push(Held {
+                draft,
+                listed: false,
+                lost: true,
+            }),
+        }
+    }
+
     /// Settle `draft` against what became of its send. Whether the prompt
     /// is on its way (the caller then follows it: scroll, title).
     pub(super) fn settle_send(
         &mut self,
-        index: usize,
         thread: ThreadKey,
         draft: SentDraft,
         admission: Admission,
@@ -65,7 +218,7 @@ impl CockpitView {
                 true
             }
             Admission::Refused(_) => {
-                self.put_back_send(index, draft, true, cx);
+                self.return_send(thread, draft, cx);
                 false
             }
             Admission::Unconfirmed(reason) => {
@@ -76,7 +229,7 @@ impl CockpitView {
                         "\"{named}\" may or may not have been sent ({reason}). It is back in the composer: check the transcript before sending it again."
                     ),
                 ));
-                self.put_back_send(index, draft, true, cx);
+                self.return_send(thread, draft, cx);
                 false
             }
         }

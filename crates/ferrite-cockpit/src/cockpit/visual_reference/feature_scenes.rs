@@ -553,7 +553,7 @@ fn scroll_to_end() -> (Scene, Setup) {
         .core
         .send(thread, "Now check the parked rows by hand.".into());
     scene.core.pump();
-    scene.core.queue(thread, "Then push the branch.".into());
+    let _ = scene.core.queue(thread, "Then push the branch.".into());
     scene.core.pump();
     let setup: Setup = Box::new(|view, _, cx| {
         if let Some(transcript) = view.panes[view.focused(cx)].transcript() {

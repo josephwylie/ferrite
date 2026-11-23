@@ -2472,7 +2472,7 @@ fn composer() -> (Scene, Setup) {
         .ok("read", "6,569 lines")
         .text("The queued rows sit at `CELL_HEADER_H`; checking how the stack clips when three or more are held");
     scene.core.pump();
-    scene.core.queue(thread, "Then run the pane tests.".into());
+    let _ = scene.core.queue(thread, "Then run the pane tests.".into());
     scene.core.queue(
         thread,
         "Also check the take-back key still only applies to the top row.".into(),
