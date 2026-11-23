@@ -122,7 +122,8 @@ pub struct ClaudeConfig {
     /// A Worker's or Coordinator's Factory tools, bound to its Thread.
     pub api_tools: Option<crate::api::tools::ThreadTools>,
     /// What Ferrite tells this Session beyond the operator's words, as the
-    /// CLI's appended system prompt: never a message in its transcript.
+    /// CLI's appended system prompt: never a message in its transcript. It
+    /// rides the handshake, so it may hold any text.
     pub instructions: Option<String>,
     /// Ferrite's caller context for the agent (`api::caller_environment`):
     /// set over whatever the CLI inherited, after the Thread's own
@@ -371,9 +372,6 @@ impl ClaudeSession {
         {
             command.args(["--allowedTools", &mcp::claude_name(&definition.name)]);
         }
-        if let Some(instructions) = &config.instructions {
-            command.args(["--append-system-prompt", instructions]);
-        }
         command.args(&config.args);
         let mut child = command
             .stdin(Stdio::piped())
@@ -476,6 +474,13 @@ impl ClaudeSession {
         // The in-band server (`mcp`): the CLI tunnels its MCP traffic back
         // over this pipe, starting before it answers this request.
         initialize["sdkMcpServers"] = serde_json::json!([crate::visual::SERVER]);
+        // Over the pipe, never as an argument: Windows refuses to start a
+        // `.cmd` shim, which an npm install of the CLI is, with a line break
+        // in an argument ("batch file arguments are invalid"). Verified by
+        // capture on 2.1.329.
+        if let Some(instructions) = &config.instructions {
+            initialize["appendSystemPrompt"] = instructions.as_str().into();
+        }
         let _ = session.write_line(&serde_json::json!({
             "type": "control_request",
             "request_id": id,
