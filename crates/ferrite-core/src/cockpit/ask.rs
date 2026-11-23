@@ -29,6 +29,14 @@ impl<T> Ask<T> {
         Self { answer: answered }
     }
 
+    /// The answer of an ask an Engine in this process took: it answers
+    /// as it is asked. What a scene and a test of such an Engine read; a
+    /// window on a Server never has it yet.
+    pub fn now(mut self) -> io::Result<T> {
+        self.answer()
+            .expect("only an Engine in this process answers as it is asked")
+    }
+
     /// The answer, once it came; `None` while it is on its way.
     pub fn answer(&mut self) -> Option<io::Result<T>> {
         match self.answer.try_recv() {

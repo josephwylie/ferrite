@@ -99,3 +99,27 @@ fn the_composers_sends_go_in_order_and_none_waits(cx: &mut gpui::TestAppContext)
     let left = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).text().to_string());
     assert_eq!(left, "two", "a draft the Server refused later is back in the Composer");
 }
+
+/// The Turn and Session presses whose reply the window reads are asked,
+/// never waited for, and each is answered through its ask.
+#[test]
+fn a_turns_presses_that_read_a_reply_do_not_wait_and_are_answered() {
+    use ferrite_core::store::Provider;
+    let (mut core, thread, _) = super::machines::browser_core("turn-asks");
+    waits::start();
+    let model = core.set_model(thread, Some("sonnet".into()));
+    let effort = core.set_effort(thread, Some("high".into()));
+    let provider = core.set_provider(thread, ferrite_core::cockpit::ProviderChoice { provider: Provider::Codex, model: None });
+    let fresh = core.start_fresh_conversation(thread);
+    let rewind = core.rewind(thread, "none", false, false);
+    let fork = core.fork(thread, None, None);
+    let waits = waits::take();
+    let ops: Vec<_> = waits.iter().map(|wait| wait.op.as_str()).collect();
+    assert_eq!(ops, ["set_model", "set_effort", "set_provider", "start_fresh", "rewind", "fork"]);
+    assert!(waits.iter().all(|wait| !wait.waited), "none waits for its reply: {waits:?}");
+    for ask in [model, effort, provider, fresh, rewind, fork] {
+        // The fixture Server's Thread has no agent, so some are refused:
+        // either way the Server's word came through the ask.
+        let _ = core.wait_for(ask);
+    }
+}

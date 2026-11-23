@@ -524,7 +524,21 @@ impl CockpitView {
         answer: DecisionAnswer,
         cx: &mut Context<Self>,
     ) {
-        match self.cockpit.update(cx, |cockpit, _| cockpit.respond_decision(thread, handle, answer)) {
+        let answered = self.cockpit.update(cx, |cockpit, _| cockpit.respond_decision(thread, handle, answer));
+        let handle = handle.clone();
+        self.when_answered(answered, move |view, answered, cx| view.responded(thread, &handle, answered, cx), cx);
+    }
+
+    /// The Server's word on an answer to the Decision `handle` names: taken,
+    /// no longer waiting, or refused, which the Pane says under the request.
+    fn responded(
+        &mut self,
+        thread: ThreadKey,
+        handle: &DecisionHandle,
+        answered: std::io::Result<bool>,
+        cx: &mut Context<Self>,
+    ) {
+        match answered {
             Ok(true) => {
                 if let Some(index) = self.pane_for(thread) {
                     let pending = self.cockpit.read(cx).thread(thread).is_some_and(|open| {

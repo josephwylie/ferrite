@@ -3840,7 +3840,7 @@ fn choosing_a_provider_pre_lock_respawns_eagerly_and_the_first_send_uses_it() {
                 provider: Provider::Codex,
                 model: Some("gpt-5.4-mini".into()),
             },
-        )
+        ).now()
         .unwrap();
 
     assert_eq!(fake.streams.borrow().len(), 2, "the respawn is eager");
@@ -3918,7 +3918,7 @@ fn a_provider_switch_after_the_first_prompt_hands_the_conversation_over() {
                 provider: Provider::Codex,
                 model: Some("gpt-5.6-sol".into()),
             },
-        )
+        ).now()
         .unwrap();
 
     assert_eq!(fake.streams.borrow().len(), 2, "the new Provider spawned");
@@ -3988,7 +3988,7 @@ fn a_provider_switch_after_the_first_prompt_hands_the_conversation_over() {
                 provider: Provider::Claude,
                 model: None,
             },
-        )
+        ).now()
         .unwrap_err()
         .to_string(),
         ProvisionError::Busy.to_string()
@@ -4071,7 +4071,7 @@ fn trimming_the_displayed_history_never_loses_agent_context() {
                 provider: Provider::Codex,
                 model: Some("gpt-5.6-sol".into()),
             },
-        )
+        ).now()
         .unwrap();
     // Past 2 MiB the exchanges are read off the UI thread, and the
     // switch commits on the pump that finds them read.
@@ -4112,10 +4112,10 @@ fn changing_effort_after_handover_keeps_the_session_and_delivers_context() {
                 provider: Provider::Codex,
                 model: Some("gpt-5.6-sol".into()),
             },
-        )
+        ).now()
         .unwrap();
     // A choice before Init must not require a resume target either.
-    cockpit.set_effort(thread, Some("high".into())).unwrap();
+    cockpit.set_effort(thread, Some("high".into())).now().unwrap();
     fake.streams.borrow()[1]
         .send(SessionEvent::Init {
             session_id: "empty-codex-thread".into(),
@@ -4124,7 +4124,7 @@ fn changing_effort_after_handover_keeps_the_session_and_delivers_context() {
         .unwrap();
     cockpit.pump();
 
-    cockpit.set_effort(thread, Some("max".into())).unwrap();
+    cockpit.set_effort(thread, Some("max".into())).now().unwrap();
     let _ = cockpit.send(thread, "next".into());
 
     assert_eq!(*fake.attempts.borrow(), 2, "effort must not replace Codex");
@@ -4167,7 +4167,7 @@ fn the_carry_rides_between_the_preface_and_the_prompt() {
                 provider: Provider::Codex,
                 model: None,
             },
-        )
+        ).now()
         .unwrap();
     let _ = cockpit.send(thread, "next".into());
 
@@ -4241,7 +4241,7 @@ fn the_model_can_change_after_the_first_prompt_by_resuming() {
     assert!(cockpit.thread(thread).is_some_and(|open| open.busy()));
     let attempts = *fake.attempts.borrow();
     assert_eq!(
-        cockpit.set_model(thread, Some("claude-fable-5-1".into()))
+        cockpit.set_model(thread, Some("claude-fable-5-1".into())).now()
         .unwrap_err()
         .to_string(),
         ProvisionError::Busy.to_string()
@@ -4258,7 +4258,7 @@ fn the_model_can_change_after_the_first_prompt_by_resuming() {
     let blocks_before = cockpit.thread(thread).unwrap().transcript().blocks().len();
 
     cockpit
-        .set_model(thread, Some("claude-fable-5-1".into()))
+        .set_model(thread, Some("claude-fable-5-1".into())).now()
         .unwrap();
 
     // A new Session, resuming the conversation, under the new model.
@@ -4286,13 +4286,13 @@ fn the_model_can_change_after_the_first_prompt_by_resuming() {
     // The same choice again is a no-op.
     let attempts = *fake.attempts.borrow();
     cockpit
-        .set_model(thread, Some("claude-fable-5-1".into()))
+        .set_model(thread, Some("claude-fable-5-1".into())).now()
         .unwrap();
     assert_eq!(*fake.attempts.borrow(), attempts);
 
     // Parked: the header alone changes.
     cockpit.park(thread).unwrap();
-    cockpit.set_model(thread, None).unwrap();
+    cockpit.set_model(thread, None).now().unwrap();
     assert_eq!(cockpit.peek(thread).unwrap().model, None);
 }
 
@@ -4363,7 +4363,7 @@ fn a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries() {
                 provider: Provider::Codex,
                 model: None,
             },
-        )
+        ).now()
         .unwrap_err()
         .to_string(),
         ProvisionError::Locked.to_string()
@@ -4381,7 +4381,7 @@ fn a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries() {
                 provider: Provider::Codex,
                 model: None,
             },
-        )
+        ).now()
         .unwrap();
     wake(&mut cockpit, thread);
     // Codex can name a thread before a first prompt creates its rollout.
@@ -4442,10 +4442,10 @@ fn a_refused_effort_keeps_the_choice_and_pending_handover() {
                 provider: Provider::Codex,
                 model: None,
             },
-        )
+        ).now()
         .unwrap();
     *fake.fail_effort.borrow_mut() = true;
-    assert!(cockpit.set_effort(thread, Some("max".into())).is_err());
+    assert!(cockpit.set_effort(thread, Some("max".into())).now().is_err());
     assert_eq!(cockpit.peek(thread).unwrap().effort, None);
     assert_eq!(cockpit.thread(thread).unwrap().effort(), None);
     assert_eq!(*fake.attempts.borrow(), 2);
@@ -4466,7 +4466,7 @@ fn effort_changes_in_place_and_persists() {
     assert_eq!(cockpit.thread(thread).and_then(|open| open.effort()), None);
     assert_eq!(fake.efforts.borrow().last().unwrap(), &None);
 
-    cockpit.set_effort(thread, Some("high".into())).unwrap();
+    cockpit.set_effort(thread, Some("high".into())).now().unwrap();
     assert_eq!(fake.streams.borrow().len(), 1, "no respawn pre-lock");
     assert_eq!(
         fake.tuned_efforts.borrow().last().unwrap().as_deref(),
@@ -4494,7 +4494,7 @@ fn effort_changes_in_place_and_persists() {
     cockpit.pump();
     let attempts = *fake.attempts.borrow();
     assert_eq!(
-        cockpit.set_effort(thread, Some("max".into()))
+        cockpit.set_effort(thread, Some("max".into())).now()
         .unwrap_err()
         .to_string(),
         ProvisionError::Busy.to_string()
@@ -4503,7 +4503,7 @@ fn effort_changes_in_place_and_persists() {
     stream.send(ended()).unwrap();
     cockpit.pump();
 
-    cockpit.set_effort(thread, Some("max".into())).unwrap();
+    cockpit.set_effort(thread, Some("max".into())).now().unwrap();
     assert_eq!(
         fake.tuned_efforts.borrow().last().unwrap().as_deref(),
         Some("max")
@@ -4517,13 +4517,13 @@ fn effort_changes_in_place_and_persists() {
     ));
     // The same choice again is a no-op.
     let attempts = *fake.attempts.borrow();
-    cockpit.set_effort(thread, Some("max".into())).unwrap();
+    cockpit.set_effort(thread, Some("max".into())).now().unwrap();
     assert_eq!(*fake.attempts.borrow(), attempts);
     assert_eq!(fake.tuned_efforts.borrow().len(), 2);
 
     // A model change keeps the effort.
     cockpit
-        .set_model(thread, Some("claude-fable-5-1".into()))
+        .set_model(thread, Some("claude-fable-5-1".into())).now()
         .unwrap();
     assert_eq!(
         fake.efforts.borrow().last().unwrap().as_deref(),
@@ -4541,7 +4541,7 @@ fn effort_changes_in_place_and_persists() {
 
     // Parked: the header alone changes, and a revive reads it.
     cockpit.park(thread).unwrap();
-    cockpit.set_effort(thread, None).unwrap();
+    cockpit.set_effort(thread, None).now().unwrap();
     let store = &cockpit.engine().store;
     assert_eq!(store.peek(thread.thread()).unwrap().effort, None);
     assert_eq!(
@@ -4554,7 +4554,7 @@ fn effort_changes_in_place_and_persists() {
 
     // A provider change pre-lock resets the effort.
     let fresh = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
-    cockpit.set_effort(fresh, Some("xhigh".into())).unwrap();
+    cockpit.set_effort(fresh, Some("xhigh".into())).now().unwrap();
     cockpit
         .set_provider(
             fresh,
@@ -4562,7 +4562,7 @@ fn effort_changes_in_place_and_persists() {
                 provider: Provider::Codex,
                 model: None,
             },
-        )
+        ).now()
         .unwrap();
     assert_eq!(fake.efforts.borrow().last().unwrap(), &None);
     assert_eq!(cockpit.peek(fresh).unwrap().effort, None);
@@ -4587,13 +4587,13 @@ fn an_effort_change_commits_when_the_provider_accepts_it() {
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     *fake.answer_later.borrow_mut() = true;
 
-    cockpit.set_effort(thread, Some("high".into())).unwrap();
+    cockpit.set_effort(thread, Some("high".into())).now().unwrap();
     let open = cockpit.thread(thread).unwrap();
     assert!(open.tuning());
     assert_eq!(open.effort(), None, "not before the provider accepts it");
     assert_eq!(cockpit.peek(thread).unwrap().effort, None);
     assert_eq!(
-        cockpit.set_effort(thread, Some("max".into()))
+        cockpit.set_effort(thread, Some("max".into())).now()
         .unwrap_err()
         .to_string(),
         ProvisionError::Tuning.to_string()
@@ -4622,7 +4622,7 @@ fn an_effort_change_refused_after_the_fact_changes_nothing() {
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     *fake.answer_later.borrow_mut() = true;
 
-    cockpit.set_effort(thread, Some("max".into())).unwrap();
+    cockpit.set_effort(thread, Some("max".into())).now().unwrap();
     fake.answers
         .borrow_mut()
         .remove(0)
@@ -4637,7 +4637,7 @@ fn an_effort_change_refused_after_the_fact_changes_nothing() {
         "effort unchanged: unsupported effort"
     );
 
-    cockpit.set_effort(thread, Some("max".into())).unwrap();
+    cockpit.set_effort(thread, Some("max".into())).now().unwrap();
     // The provider went away without answering.
     fake.answers.borrow_mut().clear();
     cockpit.pump();
@@ -4667,7 +4667,7 @@ fn a_thread_s_title_reaches_its_session_and_every_respawn() {
     );
 
     cockpit
-        .set_model(thread, Some("gpt-5.6-sol".into()))
+        .set_model(thread, Some("gpt-5.6-sol".into())).now()
         .unwrap();
     assert_eq!(
         fake.names.borrow().last().unwrap().as_deref(),
@@ -4699,7 +4699,7 @@ fn a_park_then_revive_keeps_the_chosen_provider_and_model() {
                 provider: Provider::Codex,
                 model: Some("gpt-5.4-mini".into()),
             },
-        )
+        ).now()
         .unwrap();
 
     cockpit.park(thread).unwrap();
@@ -4743,7 +4743,7 @@ fn a_failed_provider_spawn_leaves_the_old_session_serving() {
             provider: Provider::Codex,
             model: None,
         },
-    );
+    ).now();
 
     let Err(e) = refused else {
         panic!("expected the spawn refusal: {refused:?}");
@@ -4779,7 +4779,7 @@ fn re_picking_the_current_provider_and_model_is_a_no_op() {
                 provider: Provider::Claude,
                 model: None,
             },
-        )
+        ).now()
         .unwrap();
 
     assert_eq!(fake.streams.borrow().len(), 1, "nothing respawned");
@@ -5010,7 +5010,7 @@ fn stale_board_launch_after_handover_resumes_the_current_provider() {
                 provider: to,
                 model: None,
             },
-        )
+        ).now()
         .unwrap();
         fake.streams
             .borrow()

@@ -284,7 +284,7 @@ fn delayed_replacement_failure_preserves_header_and_the_original_session() {
     let mut cockpit = cockpit("replace-fail", vec![old, new]);
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, workspace()).unwrap();
     cockpit
-        .set_provider(thread, choice(Provider::Codex))
+        .set_provider(thread, choice(Provider::Codex)).now()
         .unwrap();
     assert!(cockpit.thread(thread).unwrap().starting());
     assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
@@ -310,7 +310,7 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
     original.ended();
     cockpit.pump();
     cockpit
-        .set_provider(thread, choice(Provider::Codex))
+        .set_provider(thread, choice(Provider::Codex)).now()
         .unwrap();
     let _ = cockpit.send(thread, "after".into());
     assert!(cockpit
@@ -372,7 +372,7 @@ fn failed_handover_rewrite_leaves_no_durable_handover_and_keeps_serving() {
     original.ended();
     cockpit.pump();
     cockpit
-        .set_provider(thread, choice(Provider::Codex))
+        .set_provider(thread, choice(Provider::Codex)).now()
         .unwrap();
     cockpit
         .engine()
@@ -400,7 +400,7 @@ fn effort_waits_for_startup_without_losing_the_pending_prompt() {
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, workspace()).unwrap();
     let _ = cockpit.send(thread, "waiting".into());
     assert_eq!(
-        cockpit.set_effort(thread, Some("high".into()))
+        cockpit.set_effort(thread, Some("high".into())).now()
         .unwrap_err()
         .to_string(),
         ProvisionError::Busy.to_string()
@@ -423,10 +423,10 @@ fn effort_waits_for_startup_without_losing_the_pending_prompt() {
     assert_eq!(provider.sent(), ["waiting"]);
     provider.ended();
     cockpit.pump();
-    cockpit.set_effort(thread, Some("high".into())).unwrap();
-    cockpit.set_effort(thread, None).unwrap();
+    cockpit.set_effort(thread, Some("high".into())).now().unwrap();
+    cockpit.set_effort(thread, None).now().unwrap();
     // Default is refreshable even when the stored choice was already None.
-    cockpit.set_effort(thread, None).unwrap();
+    cockpit.set_effort(thread, None).now().unwrap();
     assert_eq!(
         *provider.efforts.lock().unwrap(),
         [Some("high".into()), None, None]
@@ -444,11 +444,11 @@ fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
     original.ended();
     cockpit.pump();
     cockpit
-        .set_provider(thread, choice(Provider::Codex))
+        .set_provider(thread, choice(Provider::Codex)).now()
         .unwrap();
     let _ = cockpit.send(thread, "after".into());
     assert_eq!(
-        cockpit.set_effort(thread, Some("high".into()))
+        cockpit.set_effort(thread, Some("high".into())).now()
         .unwrap_err()
         .to_string(),
         ProvisionError::Busy.to_string()
@@ -469,7 +469,7 @@ fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
         cockpit.pump();
         !cockpit.thread(thread).unwrap().starting()
     });
-    cockpit.set_effort(thread, Some("high".into())).unwrap();
+    cockpit.set_effort(thread, Some("high".into())).now().unwrap();
     assert_eq!(replacement.dropped.load(Ordering::SeqCst), 0);
     assert_eq!(*replacement.efforts.lock().unwrap(), [Some("high".into())]);
     assert!(

@@ -124,7 +124,7 @@ fn exercise_model_control(reject: bool) {
     cockpit.pump();
     let previous = cockpit.peek(thread).unwrap().model;
     native.0.lock().unwrap().reject = reject;
-    let result = cockpit.set_model(thread, Some("selected".into()));
+    let result = cockpit.set_model(thread, Some("selected".into())).now();
     assert_eq!(
         native.0.lock().unwrap().streams.len(),
         1,

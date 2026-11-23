@@ -4859,16 +4859,35 @@ impl CockpitView {
             .read(cx)
             .thread(thread)
             .is_some_and(|open| open.provider() == choice.provider);
-        let result = if same_provider {
+        let asked = if same_provider {
             self.cockpit.update(cx, |cockpit, _| cockpit.set_model(thread, choice.model))
         } else {
             self.cockpit.update(cx, |cockpit, _| cockpit.set_provider(thread, choice))
         };
-        if let Err(e) = result {
-            self.cockpit.update(cx, |cockpit, _| cockpit.say(thread, format!("model unchanged: {e}")));
-        }
-        self.facts.acted(self.cockpit.read(cx), thread);
-        cx.notify();
+        self.when_tuned(thread, asked, "model", cx);
+    }
+
+    /// What follows a model or effort pick's answer: a refusal changed
+    /// nothing, and says so in the Thread.
+    fn when_tuned(
+        &mut self,
+        thread: ThreadKey,
+        asked: ferrite_core::cockpit::Ask<()>,
+        what: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        self.when_answered(
+            asked,
+            move |view, answered, cx| {
+                if let Err(error) = answered {
+                    view.cockpit
+                        .update(cx, |cockpit, _| cockpit.say(thread, format!("{what} unchanged: {error}")));
+                }
+                view.facts.acted(view.cockpit.read(cx), thread);
+                cx.notify();
+            },
+            cx,
+        );
     }
 
     /// The machine an import for `into` lists and adopts on: the blank
@@ -7875,17 +7894,39 @@ impl CockpitView {
         if !self.cockpit.read(cx).thread(thread).is_some_and(|open| open.resume_lost()) {
             return;
         }
-        if let Err(error) = self.cockpit.update(cx, |cockpit, _| cockpit.start_fresh_conversation(thread)) {
-            self.cockpit
-                .update(cx, |cockpit, _| cockpit.say(thread, format!("could not start a fresh conversation: {error}")));
-            cx.notify();
-            return;
-        }
-        self.focus_pane(index, cx);
-        if !self.panes[index].composer.read(cx).is_empty() {
-            self.submit(&Submit, window, cx);
-        }
-        cx.notify();
+        let pane = self.panes[index].identity;
+        let window = window.window_handle();
+        let asked = self.cockpit.update(cx, |cockpit, _| cockpit.start_fresh_conversation(thread));
+        self.when_answered(
+            asked,
+            move |view, answered, cx| {
+                cx.notify();
+                if let Err(error) = answered {
+                    view.cockpit.update(cx, |cockpit, _| {
+                        cockpit.say(thread, format!("could not start a fresh conversation: {error}"))
+                    });
+                    return;
+                }
+                // The answer comes with no window in hand, so the resend
+                // goes out once this one is back in the window's.
+                let cockpit = cx.entity().downgrade();
+                cx.defer(move |cx| {
+                    let _ = window.update(cx, |_, window, cx| {
+                        let _ = cockpit.update(cx, |view, cx| {
+                            let Some(index) = view.index_of(pane) else {
+                                return;
+                            };
+                            view.focus_pane(index, cx);
+                            if !view.panes[index].composer.read(cx).is_empty() {
+                                view.submit(&Submit, window, cx);
+                            }
+                            cx.notify();
+                        });
+                    });
+                });
+            },
+            cx,
+        );
     }
 
     /// Where a card hangs (`FloatPlace::card_corner`). Until its trigger
@@ -8189,11 +8230,8 @@ impl CockpitView {
     /// first prompt, by resuming after it, refused mid-turn — its own
     /// words land in the transcript either way).
     fn pick_effort(&mut self, thread: ThreadKey, effort: Option<String>, cx: &mut Context<Self>) {
-        if let Err(e) = self.cockpit.update(cx, |cockpit, _| cockpit.set_effort(thread, effort)) {
-            self.cockpit.update(cx, |cockpit, _| cockpit.say(thread, format!("effort unchanged: {e}")));
-        }
-        self.facts.acted(self.cockpit.read(cx), thread);
-        cx.notify();
+        let asked = self.cockpit.update(cx, |cockpit, _| cockpit.set_effort(thread, effort));
+        self.when_tuned(thread, asked, "effort", cx);
     }
 
     /// ⌘I (and the Bar's needs-you count): the list takes the keys on its

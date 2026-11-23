@@ -1252,8 +1252,15 @@ never waits. The rest still do.
      and resend, the PR card, the overview) still waits, through
      `send_and_wait` and `queue_and_wait`, because its callers read
      where it went at once. The others whose reply the window reads
-     still block too: answer, rewind, fork, model, effort, provider,
-     start fresh. Each goes through `when_answered` next.
+     are asks too, each with what follows its answer in
+     `when_answered`: answering a Decision (a refusal shows under the
+     request), rewind and fork (a refusal is said in the Thread), model,
+     effort and provider (the same), and start fresh, whose resend
+     needs the window and so goes out a beat after the answer. A side
+     chat's tab opens at once and says a refused fork when the refusal
+     comes. A test or a scene on an Engine in this process reads an
+     answer with `Ask::now`. What is left of this family is the
+     replayed prompt.
   3. Thread lifecycle: 16 asks, 31 sites. What follows an open, a park or
      a revive is the root's (the Panes, focus, the Project filter). Each
      needs a continuation like the Browser's `Then`.

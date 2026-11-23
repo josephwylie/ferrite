@@ -384,9 +384,17 @@ impl CockpitView {
             PromptAction::Rewind => self.cockpit.update(cx, |cockpit, _| cockpit.rewind(thread, &prompt, files, true)),
             PromptAction::Fork => return self.fork_thread(thread, Some(prompt), None, cx),
         };
-        if let Err(why) = asked {
-            self.cockpit.update(cx, |cockpit, _| cockpit.say(thread, format!("rewind refused: {why}")));
-        }
+        self.when_answered(
+            asked,
+            move |view, asked, cx| {
+                if let Err(why) = asked {
+                    view.cockpit
+                        .update(cx, |cockpit, _| cockpit.say(thread, format!("rewind refused: {why}")));
+                }
+                cx.notify();
+            },
+            cx,
+        );
         cx.notify();
     }
 
@@ -400,13 +408,20 @@ impl CockpitView {
         draft: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        match self.cockpit.update(cx, |cockpit, _| cockpit.fork(thread, before.as_deref(), draft)) {
-            Ok(()) => {
-                let owner = thread;
-                self.side_chat.update(cx, |chat, _| chat.forget_fork(owner))
-            }
-            Err(why) => self.cockpit.update(cx, |cockpit, _| cockpit.say(thread, format!("fork refused: {why}"))),
-        }
+        let asked = self.cockpit.update(cx, |cockpit, _| cockpit.fork(thread, before.as_deref(), draft));
+        self.when_answered(
+            asked,
+            move |view, asked, cx| {
+                match asked {
+                    Ok(()) => view.side_chat.update(cx, |chat, _| chat.forget_fork(thread)),
+                    Err(why) => view
+                        .cockpit
+                        .update(cx, |cockpit, _| cockpit.say(thread, format!("fork refused: {why}"))),
+                }
+                cx.notify();
+            },
+            cx,
+        );
         cx.notify();
     }
 

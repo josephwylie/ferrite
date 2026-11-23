@@ -165,8 +165,8 @@ fn composer_escape_stops_a_running_turn_with_text_in_the_line(cx: &mut TestAppCo
 fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("composer-busy-tuning", 1);
     let thread = core.threads()[0];
-    core.set_model(thread, Some("sonnet".into())).unwrap();
-    core.set_effort(thread, Some("high".into())).unwrap();
+    core.set_model(thread, Some("sonnet".into())).now().unwrap();
+    core.set_effort(thread, Some("high".into())).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
     view.update_in(cx, |view, window, cx| {

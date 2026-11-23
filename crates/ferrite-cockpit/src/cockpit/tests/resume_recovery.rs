@@ -190,7 +190,7 @@ fn a_conversation_in_use_is_refused_and_never_forked(cx: &mut TestAppContext) {
     );
     let attempts = fake.resumed.borrow().len();
     view.update(cx, |view, cx| {
-        assert!(view.cockpit.update(cx, |cockpit, _| cockpit.start_fresh_conversation(thread).is_ok()));
+        assert!(view.cockpit.update(cx, |cockpit, _| cockpit.start_fresh_conversation(thread).now().is_ok()));
     });
     assert_eq!(
         fake.resumed.borrow().len(),

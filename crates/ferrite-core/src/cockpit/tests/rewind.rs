@@ -54,7 +54,7 @@ fn an_edit_takes_its_turn_back_and_hands_its_words_to_the_composer() {
     let (first, second) = (sent[0].1.clone().unwrap(), sent[1].1.clone().unwrap());
     assert_ne!(first, second, "every prompt goes out under its own id");
 
-    cockpit.rewind(thread, &second, false, true).unwrap();
+    cockpit.rewind(thread, &second, false, true).now().unwrap();
     cockpit.pump();
 
     let asked = fake.rewinds.borrow().last().unwrap().clone();
@@ -73,7 +73,7 @@ fn an_edit_takes_its_turn_back_and_hands_its_words_to_the_composer() {
 fn a_rewind_of_code_says_what_came_back() {
     let (mut cockpit, _fake, thread) = two_turns("rewind-code");
     let first = prompts(&cockpit, thread)[0].1.clone().unwrap();
-    cockpit.rewind(thread, &first, true, false).unwrap();
+    cockpit.rewind(thread, &first, true, false).now().unwrap();
     cockpit.pump();
     assert!(prompts(&cockpit, thread).is_empty());
     assert_eq!(cockpit.take_retrieved_prompt(thread), None);
@@ -99,7 +99,7 @@ fn a_rewind_never_races_a_running_turn() {
     let _ = cockpit.send(thread, "three".into());
     live(&fake).send(text("thi")).unwrap();
     cockpit.pump();
-    let refused = cockpit.rewind(thread, &first, false, false).unwrap_err();
+    let refused = cockpit.rewind(thread, &first, false, false).now().unwrap_err().to_string();
     assert!(refused.contains("turn is running"), "{refused}");
     assert!(fake.rewinds.borrow().is_empty());
 }
@@ -108,7 +108,7 @@ fn a_rewind_never_races_a_running_turn() {
 fn a_fork_opens_a_new_thread_with_the_conversation_before_its_prompt() {
     let (mut cockpit, _fake, thread) = two_turns("rewind-fork");
     let second = prompts(&cockpit, thread)[1].1.clone().unwrap();
-    cockpit.fork(thread, Some(&second), None).unwrap();
+    cockpit.fork(thread, Some(&second), None).now().unwrap();
     cockpit.pump();
     let fork = cockpit
         .threads()
@@ -135,7 +135,7 @@ fn a_whole_fork_opens_focused_with_its_draft() {
     let (mut cockpit, fake, thread) = two_turns("rewind-fork-whole");
     cockpit.take_asked();
     cockpit
-        .fork(thread, None, Some("> the passage".into()))
+        .fork(thread, None, Some("> the passage".into())).now()
         .unwrap();
     cockpit.pump();
     let asked = fake.forks.borrow().last().unwrap().clone();
@@ -177,10 +177,10 @@ fn a_whole_fork_is_asked_while_a_turn_runs() {
     live(&fake).send(text("working")).unwrap();
     cockpit.pump();
     assert_eq!(
-        cockpit.fork(thread, Some(&second), None),
+        cockpit.fork(thread, Some(&second), None).now().map_err(|why| why.to_string()),
         Err("a turn is running; stop it first".to_string())
     );
-    cockpit.fork(thread, None, None).unwrap();
+    cockpit.fork(thread, None, None).now().unwrap();
     cockpit.pump();
     assert_eq!(fake.forks.borrow().last().unwrap().before, None);
     assert_eq!(*fake.interrupts.borrow(), 0, "the running turn goes on");
