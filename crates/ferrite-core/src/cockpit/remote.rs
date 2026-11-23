@@ -168,7 +168,6 @@ struct Attachment {
     boot_id: String,
     server: ServerInfo,
     id: Option<ServerId>,
-    clock: ServerClock,
     /// The Server's boot on this side's clock: `at_ms` counts from it.
     boot: Instant,
     /// It welcomed this connection with `Capability::ForkOf`.
@@ -178,6 +177,10 @@ struct Attachment {
 pub(crate) struct Remote {
     attach: Attach,
     attachment: Option<Attachment>,
+    /// How the Server's wall clock reads on this side's, as last measured:
+    /// a time it stamped keeps reading on this computer's clock after its
+    /// link has gone.
+    clock: ServerClock,
     /// Why there is no attachment, while there is none.
     detached: String,
     /// The last attach failed in a way only the operator can fix.
@@ -221,6 +224,7 @@ impl Remote {
         Self {
             attach,
             attachment: None,
+            clock: ServerClock::default(),
             detached,
             attention: None,
             attaching: None,
@@ -253,7 +257,7 @@ impl Remote {
                 server: attachment.server.clone(),
                 id: attachment.id.clone(),
                 since: attachment.boot,
-                clock: attachment.clock,
+                clock: self.clock,
             },
             None => ServerState::Detached {
                 reason: self.detached.clone(),
@@ -268,6 +272,11 @@ impl Remote {
         self.attachment
             .as_ref()
             .is_some_and(|attachment| attachment.names_fork_owners)
+    }
+
+    /// How the Server's wall clock reads on this side's, as last measured.
+    pub(crate) fn clock(&self) -> ServerClock {
+        self.clock
     }
 
     /// Where this boot's `at_ms` count from.
@@ -301,7 +310,7 @@ impl Remote {
     /// sign-in is not asked again (each ask is a refused login on it) until
     /// they have signed in, or ask.
     fn waits_for_operator(&mut self) -> bool {
-        if self.attention != Some(Failure::SignIn) {
+        if !self.attention.as_ref().is_some_and(Failure::needs_sign_in) {
             return false;
         }
         if self.bridge().is_some_and(|bridge| bridge.take_signed_in()) {
@@ -1172,12 +1181,12 @@ impl Remote {
             }
         }
         self.last_boot = Some(snapshot.boot_id.clone());
+        self.clock = clock;
         self.attachment = Some(Attachment {
             client,
             boot_id: snapshot.boot_id.clone(),
             server,
             id: server_id,
-            clock,
             boot,
             names_fork_owners: capabilities.contains(&Capability::ForkOf),
         });

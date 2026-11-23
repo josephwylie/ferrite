@@ -24,8 +24,6 @@ pub(super) enum MenuTarget {
     NavFilter,
     /// The search row's Factory button: a Project's board to open.
     NavFactory,
-    /// A machine's heading in the nav: what is made on that machine.
-    Machine(ferrite_core::MachineId),
     /// A diff line in the Review beside the Thread's Pane (ADR 0021).
     Review {
         thread: ThreadKey,
@@ -92,8 +90,6 @@ pub(super) enum MenuVerb {
     Comment,
     OpenAtLine,
     NewThread,
-    /// A new Project on the heading's machine (`MenuTarget::Machine`).
-    NewProject,
     Reveal,
     CopyPath,
     /// The Thread's PR: ask `gh` again now, or open it in the browser.
@@ -371,9 +367,6 @@ impl CockpitView {
             // exists for — clearing the parked history it holds.
             MenuTarget::NavFilter => rows.extend(self.filter_rows(cx)),
             MenuTarget::NavFactory => rows.extend(self.factory_rows(cx)),
-            MenuTarget::Machine(_) => {
-                rows.push(Some((menu::Item::new("New project\u{2026}"), MenuVerb::NewProject)));
-            }
             MenuTarget::Parked => {
                 rows.push(Some((
                     menu::Item::new(if self.shelf_open(nav::Shelf::Parked) {
@@ -997,9 +990,6 @@ impl CockpitView {
             (MenuTarget::NavFactory, MenuVerb::OpenFactory(project)) => {
                 self.open_factory(project, cx)
             }
-            (MenuTarget::Machine(machine), MenuVerb::NewProject) => {
-                self.open_project_creator_on(machine, cx)
-            }
             (MenuTarget::Parked, MenuVerb::DeleteAllParked) => {
                 self.delete_parked_threads(cx);
             }
@@ -1013,7 +1003,6 @@ impl CockpitView {
                     MenuTarget::Parked
                     | MenuTarget::NavFilter
                     | MenuTarget::NavFactory
-                    | MenuTarget::Machine(_)
                     | MenuTarget::Review { .. }
                     | MenuTarget::Prompt { .. }
                     | MenuTarget::File(_)

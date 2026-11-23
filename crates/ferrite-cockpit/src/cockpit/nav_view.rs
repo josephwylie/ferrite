@@ -10,8 +10,8 @@
 
 use super::nav_chrome::{NavUndo, UndoAct};
 use super::nav_pick::ParkSweep;
+use super::machines::{MachineNotice, RECONNECT_GRACE};
 use super::*;
-use crate::nav::NavMachine;
 use crate::nav::{NavCursor, Shelf};
 use ferrite_core::transcript::RateLimits;
 use ferrite_pane::link_target::Open;
@@ -86,6 +86,11 @@ pub(crate) struct NavView {
     /// menu's rows (`factory_rows`). The door draws only whether one needs
     /// the operator, so a change here alone does not redraw the nav.
     factories: Vec<ProjectKey>,
+    /// Since when each machine has been reached again, for its notice's
+    /// grace (`RECONNECT_GRACE`), and the look due once the first ends.
+    /// Only `look` writes them.
+    reconnecting: HashMap<ferrite_core::MachineId, std::time::Instant>,
+    grace: Option<gpui::Task<()>>,
     /// The Cockpit's notify and the model's `Arrived`, each of which has
     /// the nav look again.
     watching: Vec<gpui::Subscription>,
@@ -95,9 +100,9 @@ pub(crate) struct NavView {
 #[derive(Clone, PartialEq)]
 pub(crate) struct NavInputs {
     pub state: nav::NavState,
-    /// Every machine's heading and, under each but this computer's, its
-    /// Threads; `None` with this computer alone.
-    pub machines: Option<Vec<NavMachine>>,
+    /// The notice of each machine the window cannot reach, once it has
+    /// something to say.
+    pub machines: Vec<MachineNotice>,
     pub inbox: Vec<NoticeRow>,
     pub open_shelves: Vec<Shelf>,
     pub width: f32,
@@ -131,14 +136,6 @@ impl NavInputs {
     pub(crate) fn shelf_open(&self, shelf: Shelf) -> bool {
         self.open_shelves.contains(&shelf)
     }
-
-    /// This computer's cards fold under its heading.
-    pub(crate) fn machine_folded(&self) -> bool {
-        self.machines
-            .as_ref()
-            .and_then(|rows| rows.iter().find(|machine| machine.home))
-            .is_some_and(|home| home.row.folded)
-    }
 }
 
 /// Where a menu the nav asks for stands.
@@ -170,7 +167,10 @@ pub(crate) enum NavEvent {
     Door(menu_button::Door),
     SetShelfOpen(Shelf, bool),
     Undo(UndoAct),
-    FoldMachine(usize),
+    /// A machine's notice: sign in to it, in a terminal.
+    SignIn(ferrite_core::MachineId),
+    /// A machine's notice: reach it again now.
+    Reconnect(ferrite_core::MachineId),
     /// The Snooze field's ⏎ on a time it read: snooze the Thread until
     /// then, and answer the field (`snooze_answered`).
     Snooze(ThreadKey, std::time::SystemTime),
@@ -231,6 +231,8 @@ impl NavView {
             inputs: None,
             arrivals: nav::Arrivals::default(),
             factories: Vec::new(),
+            reconnecting: HashMap::new(),
+            grace: None,
             watching: Vec::new(),
         }
     }
@@ -246,6 +248,33 @@ impl NavView {
         self.look(cx);
     }
 
+    /// The model a row's Thread runs, named as its Composer names it; the
+    /// Provider's name until the window is told, since a Thread on another
+    /// machine says only once it is opened and the default may not be it.
+    pub(super) fn row_model(
+        &self,
+        row: &nav::ThreadRow,
+        provider: ferrite_core::store::Provider,
+        cx: &App,
+    ) -> SharedString {
+        let model = self.model.read(cx);
+        let open = model.thread(row.key);
+        // A Thread not mirrored here has no transcript: its digest says.
+        let digest = open.map(|open| open.digest());
+        let known = open
+            .and_then(|open| open.model().or(open.transcript().model()))
+            .or_else(|| digest.as_deref().and_then(|digest| digest.model.as_deref()));
+        match known {
+            Some(known) => ferrite_core::providers::models::footer_name(
+                provider,
+                Some(known),
+                open.map_or(&[][..], |open| open.models()),
+            )
+            .into(),
+            None => ferrite_ui::provider::title(provider).into(),
+        }
+    }
+
     /// Read what the nav draws from the Cockpit and the model, note which
     /// Threads came into a section, and redraw when any of it moved. It
     /// runs as either notifies, never in a draw, so a draw never writes.
@@ -258,12 +287,44 @@ impl NavView {
         let listed = listed_threads(view, model, cx);
         self.arrivals
             .note(&listed, ferrite_core::clock::system_time());
-        let (inputs, factories) = nav_inputs(view, model, &listed, &self.arrivals, cx);
+        let (mut inputs, factories) = nav_inputs(view, model, &listed, &self.arrivals, cx);
         self.factories = factories;
+        inputs.machines = self.past_grace(view.machine_notices(cx), cx);
         if self.inputs.as_ref() != Some(&inputs) {
             self.inputs = Some(inputs);
             cx.notify();
         }
+    }
+
+    /// `notices` but those of a machine being reached again for less than
+    /// `RECONNECT_GRACE` (T3 Code's grace), noting since when each has
+    /// been; the nav looks again as the first grace ends.
+    fn past_grace(&mut self, notices: Vec<MachineNotice>, cx: &mut Context<Self>) -> Vec<MachineNotice> {
+        let now = cx.background_executor().now();
+        let since = |machine| self.reconnecting.get(&machine).copied().unwrap_or(now);
+        self.reconnecting = notices
+            .iter()
+            .filter(|notice| notice.reconnecting)
+            .map(|notice| (notice.machine, since(notice.machine)))
+            .collect();
+        let due = self
+            .reconnecting
+            .values()
+            .map(|since| *since + RECONNECT_GRACE)
+            .filter(|due| *due > now)
+            .min();
+        self.grace = due.map(|due| {
+            cx.spawn(async move |nav, cx| {
+                cx.background_executor().timer(due - now).await;
+                nav.update(cx, |nav, cx| nav.look(cx)).ok();
+            })
+        });
+        notices
+            .into_iter()
+            .filter(|notice| {
+                !notice.reconnecting || self.reconnecting[&notice.machine] + RECONNECT_GRACE <= now
+            })
+            .collect()
     }
 
     /// `look`, once the update under way has ended: what the Cockpit's
@@ -345,7 +406,7 @@ fn nav_inputs(
 ) -> (NavInputs, Vec<ProjectKey>) {
     use crate::ferrite_update::State;
     let state = nav_state(view, model, listed, arrivals, cx);
-    let inbox = view.inbox_rows(&state, listed, cx);
+    let inbox = view.inbox_rows(&state, cx);
     let projects = factory_projects(view, model, &state);
     let factory = (!projects.is_empty()).then(|| {
         projects.iter().any(|project| {
@@ -384,7 +445,7 @@ fn nav_inputs(
         _ => None,
     };
     let inputs = NavInputs {
-        machines: view.machine_rows(cx),
+        machines: Vec::new(),
         inbox,
         open_shelves: view.prefs.settings.open_shelves.clone(),
         width: view.nav_expanded_width(),
@@ -471,18 +532,12 @@ fn nav_state(
         ..view.thread_row(key, cx)
     };
     let pins = view.pins(cx);
-    // The latest arrival first; arrivals alike keep creation order.
-    let latest = |row: &nav::ThreadRow| (std::cmp::Reverse(arrivals.since(row.key)), row.key);
+    let latest = |row: &nav::ThreadRow| arrivals.latest_first(row.key);
     let mut state = nav::NavState::default();
     let mut pinned = Vec::new();
     let mut snoozed = Vec::new();
     for &(key, section, _) in listed {
         if !view.admitted(key, cx) {
-            continue;
-        }
-        // Another machine's open Thread is a row under its heading.
-        if !view.home_card(key, cx) {
-            state.elsewhere.push(row(key));
             continue;
         }
         match section {
@@ -602,7 +657,11 @@ impl CockpitView {
                 cx.notify();
             }
             NavEvent::Undo(UndoAct::Snoozed(key)) => self.snooze_thread(key, None, cx),
-            NavEvent::FoldMachine(index) => self.fold_machine(index, cx),
+            NavEvent::SignIn(machine) => self.sign_in(machine, window, cx),
+            NavEvent::Reconnect(machine) => {
+                self.cockpit.update(cx, |cockpit, _| cockpit.retry_server(machine));
+                cx.notify();
+            }
             NavEvent::Snooze(key, until) => {
                 let refused = match self.cockpit.update(cx, |cockpit, _| cockpit.snooze_thread(key, Some(until))) {
                     Ok(()) => {
@@ -615,7 +674,7 @@ impl CockpitView {
                     .update(cx, |nav, cx| nav.snooze_answered(refused, cx));
                 cx.notify();
             }
-            NavEvent::AddProject => self.open_project_creator(cx),
+            NavEvent::AddProject => self.add_project(window, cx),
             NavEvent::Settings => self.toggle_settings(cx),
             NavEvent::PullRequests => self.open_prs_from_foot(window, cx),
             NavEvent::Update => self.press_ferrite_update(window, cx),

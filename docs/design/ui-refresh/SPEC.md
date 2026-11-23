@@ -394,8 +394,11 @@ and the tree. The folded rail (§5.1.7) is unchanged.
 open, `NAV_HEADING_CARET`), always shown. `Projects` has a
 22px `+` icon button (new Project, the same act as today's) at the right.
 The existing `groups` section (Groups spanning Projects) keeps its own
-heading in this style, above `Projects`. The machine heading (ADR 0026)
-and the group-error notice keep their places, restyled in this type.
+heading in this style, above `Projects`. The group-error notice keeps
+its place, restyled in this type. Machines have no heading: every
+machine's Threads share the one list, another machine's wearing a 14px
+server glyph (ADR 0045), and a machine the window cannot reach has a
+notice row at the list's top.
 
 **5.1.4 Project heading (30) and its tree.** A `folder` icon in
 `TEXT_DIM`, the lowercased Project label in 13/500 `TEXT`, and a

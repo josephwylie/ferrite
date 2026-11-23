@@ -1,10 +1,11 @@
 //! Machines in the window (ADR 0026, ADR 0045), with fake bridges: no ssh
-//! runs. The window holds every enabled machine at once. Each heads its
-//! rows with its connection; a press on any machine's Thread opens it in
-//! place; every act goes to its Thread's machine; a machine that went
-//! dims only its own rows and Panes; each machine's saved state is its
-//! own; and a Project and its first Thread are made on a machine in a
-//! directory typed there.
+//! runs. The window holds every enabled machine at once, and the nav lists
+//! every machine's Threads in its one list, another machine's with its
+//! server glyph; a machine the window cannot reach says so in a notice; a
+//! press on any machine's Thread opens it in place; every act goes to its
+//! Thread's machine; a machine that went dims only its own rows and Panes;
+//! each machine's saved state is its own; and a Project and its first
+//! Thread are made on a machine in a directory typed there.
 
 use super::*;
 use crate::cockpit::server::Gone;
@@ -35,6 +36,11 @@ fn failing(machine: &Machine, settings_dir: &std::path::Path, failure: Failure) 
 /// Ssh needs the operator to sign in.
 fn needs_sign_in(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
     failing(machine, settings_dir, Failure::SignIn)
+}
+
+/// The machine no longer takes this link's session.
+fn revoked(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
+    failing(machine, settings_dir, Failure::Revoked)
 }
 
 /// The machine's shell has no `ferrited`.
@@ -418,14 +424,29 @@ fn shown(
     })
 }
 
-/// Machine `index`'s connection, as its heading says it.
+/// Machine `index`'s connection, as Settings › Connections says it.
 fn connection(
     view: &Entity<CockpitView>,
     index: usize,
     cx: &mut gpui::VisualTestContext,
 ) -> Connection {
     view.read_with(cx, |view, cx| {
-        view.machine_rows(cx).unwrap()[index].row.connection
+        view.machines.as_ref().unwrap().rows(view.cockpit.read(cx))[index].connection
+    })
+}
+
+/// What `thread`'s rows' ids end with: its machine's number first.
+fn on(machine: MachineId, thread: ThreadKey) -> String {
+    format!("{}-{}", machine.get(), thread.thread().get())
+}
+
+/// The notices of the machines the window cannot reach, as the nav draws
+/// them.
+fn machine_notices(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<String> {
+    view.read_with(cx, |view, cx| {
+        let nav = view.nav_view.read(cx);
+        let inputs = nav.inputs().expect("the nav has looked");
+        inputs.machines.iter().map(|notice| notice.words.to_string()).collect()
     })
 }
 
@@ -549,12 +570,12 @@ fn each_machines_pin_is_its_own(cx: &mut TestAppContext) {
     );
 }
 
-/// box's row opens its Thread's menu on a right-click, as a card does,
-/// without what only this computer's paths can do; its Pin pins box's
-/// Thread, saved under box's name, and the Inbox still lists it: no
-/// Pinned card stands for another machine's Thread.
+/// box's card opens its Thread's menu on a right-click, as every card
+/// does, without what only this computer's paths can do; its Pin pins
+/// box's Thread, saved under box's name, and it moves from the Inbox to
+/// a Pinned card wearing the pin, its ids box's own.
 #[gpui::test]
-fn a_machines_row_opens_its_threads_menu(cx: &mut TestAppContext) {
+fn a_machines_card_opens_its_threads_menu_and_wears_its_pin(cx: &mut TestAppContext) {
     bind_production_keys(cx);
     let (mut core, _fake, machines, _agents) = two_machines("row-menu", 1);
     let on_box = machines.held(1).unwrap();
@@ -562,8 +583,8 @@ fn a_machines_row_opens_its_threads_menu(cx: &mut TestAppContext) {
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
     tick(cx);
-    let row = debug_bounds(cx, format!("nav-machine-{}-{}", on_box.get(), theirs.thread().get()))
-        .expect("box's row");
+    let row = debug_bounds(cx, format!("nav-thread-{}", on(on_box, theirs)))
+        .expect("box's card");
     cx.simulate_mouse_down(row.center(), gpui::MouseButton::Right, gpui::Modifiers::none());
     tick(cx);
     let labels = view.read_with(cx, |view, _| {
@@ -585,9 +606,14 @@ fn a_machines_row_opens_its_threads_menu(cx: &mut TestAppContext) {
         })
     };
     assert_eq!(inbox(cx), 1);
+    assert!(debug_bounds(cx, format!("nav-card-pin-{}", on(on_box, theirs))).is_none());
     cx.simulate_keystrokes("p");
     tick(cx);
-    assert_eq!(inbox(cx), 1, "pinned, still in the Inbox");
+    assert_eq!(inbox(cx), 0, "pinned, it leaves the Inbox");
+    assert!(
+        debug_bounds(cx, format!("nav-card-pin-{}", on(on_box, theirs))).is_some(),
+        "its Pinned card wears the pin"
+    );
     view.read_with(cx, |view, cx| {
         assert_eq!(view.pins(cx), [theirs]);
         assert_eq!(
@@ -600,19 +626,28 @@ fn a_machines_row_opens_its_threads_menu(cx: &mut TestAppContext) {
     });
 }
 
+/// box needs a sign-in: the nav's notice at the top of its list says
+/// so in its words, and its press is the sign-in (here, a bridge with no
+/// ssh refuses it, and the nav says that). No machine has a heading.
 #[gpui::test]
-fn every_machine_heads_its_rows_with_its_connection(cx: &mut TestAppContext) {
+fn a_machine_that_needs_a_sign_in_has_a_notice_that_signs_in(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("machines-listed", 1);
     let machines = beside_box("listed", &mut core, needs_sign_in);
+    let on_box = machines.held(1).unwrap();
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
-    tick(cx);
-    assert!(
-        debug_bounds(cx, "nav-machine-0".into()).is_some(),
-        "this computer"
-    );
-    assert!(debug_bounds(cx, "nav-machine-1".into()).is_some(), "box");
     until(cx, |cx| connection(&view, 1, cx) == Connection::Attention);
     assert_eq!(connection(&view, 0, cx), Connection::Online);
+    tick(cx);
+    assert_eq!(machine_notices(&view, cx), ["Sign in to box"]);
+    let notice = debug_bounds(cx, format!("nav-machine-notice-{}", on_box.get()))
+        .expect("box's notice");
+    assert!(debug_bounds(cx, "nav-machine-0".into()).is_none(), "no headings");
+    cx.simulate_click(notice.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        let said = view.nav_notice.text().map(|text| text.to_string()).unwrap_or_default();
+        assert!(said.starts_with("cannot sign in"), "the press signs in: {said:?}");
+    });
     view.update(cx, |view, cx| {
         let machines = view.machines.as_ref().unwrap();
         assert!(matches!(
@@ -629,6 +664,73 @@ fn every_machine_heads_its_rows_with_its_connection(cx: &mut TestAppContext) {
             "Retry also releases an authentication stop"
         );
     });
+}
+
+/// A session the machine refuses says "Sign in", not "reconnecting", on
+/// the rows' left edge and across their width, and its press opens
+/// Connections on box to pair it again.
+#[gpui::test]
+fn a_revoked_session_asks_to_sign_in_and_opens_its_pairing(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::{NAV_BADGE, NAV_CARD_GAP, NAV_ROW_PAD_X};
+    let (mut core, _fake) = cockpit("machines-revoked", 1);
+    let mine = core.threads()[0];
+    fresh("revoked");
+    let link = Machine {
+        name: "box".into(),
+        target: "ferrite-link:00112233445566778899aabbccddeeff".into(),
+        enabled: true,
+    };
+    let mut machines = Machines::new(reach("revoked", revoked), &[link], None, true);
+    machines.beside(&mut core);
+    let on_box = machines.held(1).unwrap();
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    until(cx, |cx| connection(&view, 1, cx) == Connection::Attention);
+    tick(cx);
+    assert_eq!(machine_notices(&view, cx), ["Sign in to box"]);
+    let notice = debug_bounds(cx, format!("nav-machine-notice-{}", on_box.get()))
+        .expect("box's notice");
+    let card = debug_bounds(cx, format!("nav-thread-{}", mine.thread().get())).expect("a row");
+    assert_eq!((notice.left(), notice.size.width), (card.left(), card.size.width));
+    let words = cx.debug_bounds("nav-notice-words").expect("its words");
+    assert_eq!(
+        words.left(),
+        notice.left() + px(NAV_ROW_PAD_X + NAV_BADGE + NAV_CARD_GAP),
+        "its words start where a row's Project name does, not centred"
+    );
+    cx.simulate_click(notice.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let settings = view.sheets.read(cx).settings().expect("Settings opened");
+        assert!(settings.read(cx).connections.read(cx).editing(), "on box's pairing");
+    });
+    let dialog = cx
+        .update(|window, _| window.debug_text("connection-dialog"))
+        .expect("its dialog");
+    assert!(dialog.iter().any(|line| line == "Sign in to box"), "{dialog:?}");
+    assert!(!dialog.iter().any(|line| line == "SSH"), "a link stays a link: {dialog:?}");
+}
+
+/// Another machine's Thread draws the row this computer's does: its
+/// branch, read by its Server, on a card of the same height.
+#[gpui::test]
+fn a_machines_row_has_its_branch_and_a_local_rows_height(cx: &mut TestAppContext) {
+    let (mut core, _fake, machines, _agents) = two_machines("branch-row", 1);
+    let on_box = machines.held(1).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    let branch = ferrite_core::workspace::checkout_branch(&here()).expect("this checkout's branch");
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    until(cx, |cx| {
+        view.read_with(cx, |view, cx| {
+            view.nav_state(cx)
+                .active
+                .iter()
+                .any(|row| row.key == theirs && row.branch.as_deref() == Some(branch.as_str()))
+        })
+    });
+    tick(cx);
+    let card = debug_bounds(cx, format!("nav-thread-{}", on(on_box, theirs))).expect("box's card");
+    assert_eq!(card.size.height, px(ferrite_ui::theme::NAV_CARD_H));
 }
 
 /// Removing box asks first, then lets box go; this computer's Pane stays.
@@ -659,19 +761,353 @@ fn removing_a_connection_confirms_then_lets_its_machine_go(cx: &mut TestAppConte
     });
 }
 
+/// Both machines' Threads are cards in the one list, box's after this
+/// computer's as they arrived: box's ends its meta line with the server
+/// glyph, at the card's right, and resting the pointer on it shows its
+/// detail, which names box.
 #[gpui::test]
-fn a_window_with_only_this_computer_lists_no_machines(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("machines-none", 1);
-    fresh("none");
-    let mut alone = Machines::new(reach("none", needs_sign_in), &[], None, true);
-    alone.beside(&mut core);
-    let (_view, cx) = window_of(cx, core, alone, Preferences::ephemeral());
+fn a_machines_threads_sit_in_the_one_list_with_its_icon(cx: &mut TestAppContext) {
+    let (mut core, _fake, machines, _agents) = two_machines("one-list", 1);
+    let mine = core.threads()[0];
+    let on_box = machines.held(1).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(theirs).is_some()));
     tick(cx);
-    assert!(debug_bounds(cx, "nav-machine-0".into()).is_none());
+    let active = view.read_with(cx, |view, cx| {
+        view.nav_state(cx)
+            .active
+            .iter()
+            .map(|row| (row.key, row.project.clone()))
+            .collect::<Vec<_>>()
+    });
+    let project = |thread| active.iter().find(|(key, _)| *key == thread).map(|(_, project)| project);
+    assert!(project(mine).is_some() && project(theirs).is_some(), "{active:?}");
+    assert!(project(theirs).unwrap().is_some(), "box's card names its Project: {active:?}");
+    let card = debug_bounds(cx, format!("nav-thread-{}", on(on_box, theirs))).expect("box's card");
+    let glyph = debug_bounds(cx, format!("nav-card-machine-{}", on(on_box, theirs)))
+        .expect("its server glyph");
+    assert!(card.contains(&glyph.center()), "{glyph:?} on {card:?}");
+    assert!(glyph.left() > card.center().x, "at the line's right end");
+    assert_eq!(glyph.size.width, px(ferrite_ui::theme::NAV_MACHINE_GLYPH));
+
+    cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("nav-hover-card").is_some(), "its detail");
+    let said = crate::nav::testing::drawn_hover_card();
+    assert_eq!(said.first().map(String::as_str), Some("box"), "{said:?}");
+    assert_eq!(
+        said.last().map(String::as_str),
+        Some("Claude"),
+        "a model box has not said is not guessed"
+    );
+    let mut words = |selector: &'static str| cx.debug_bounds(selector).expect(selector).left();
+    let project = words("nav-hover-project");
+    assert_eq!(project, words("nav-hover-fact"), "one edge");
+    assert_eq!(project, words("nav-hover-provider"), "one edge");
+
+    let _asked = view.update(cx, |view, cx| {
+        view.cockpit
+            .update(cx, |cockpit, _| cockpit.set_model(theirs, Some("claude-haiku-4-5".into())))
+    });
+    until(cx, |cx| {
+        view.read_with(cx, |view, cx| {
+            view.cockpit.read(cx).thread(theirs).is_some_and(|open| open.model().is_some())
+        })
+    });
+    cx.simulate_mouse_move(gpui::point(px(900.), px(500.)), None, gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let said = crate::nav::testing::drawn_hover_card();
+    assert_eq!(said.last().map(String::as_str), Some("Haiku 4.5"), "it ends on the model, as T3's does");
 }
 
-/// box needs a sign-in: its band offers one and its heading says so, while
-/// this computer, there, has no band and its Pane no cover.
+/// A Thread of box's the window does not mirror names the model its
+/// agent announced, as its digest says it: T3's shell carries the model.
+#[gpui::test]
+fn an_unopened_machines_thread_names_its_model(cx: &mut TestAppContext) {
+    let (mut core, _fake, machines, agents) = two_machines("digest-model", 1);
+    let on_box = machines.held(1).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(theirs).is_some()));
+    agents.say(
+        0,
+        SessionEvent::Init {
+            session_id: "box-session".into(),
+            model: "claude-haiku-4-5".into(),
+        },
+    );
+    until(cx, |cx| {
+        view.read_with(cx, |view, cx| {
+            view.cockpit.read(cx).thread(theirs).is_some_and(|open| {
+                open.digest().model.as_deref() == Some("claude-haiku-4-5")
+            })
+        })
+    });
+    view.read_with(cx, |view, cx| {
+        let open = view.cockpit.read(cx).thread(theirs);
+        assert_eq!(open.and_then(|open| open.transcript().model()), None, "not mirrored");
+    });
+    tick(cx);
+    let card = debug_bounds(cx, format!("nav-thread-{}", on(on_box, theirs))).expect("box's card");
+    cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let said = crate::nav::testing::drawn_hover_card();
+    assert_eq!(said.last().map(String::as_str), Some("Haiku 4.5"), "{said:?}");
+}
+
+/// A machine's notice sits on the grid of the cards under it: its dot on
+/// the edge the Project badge starts at, its words where the Project name
+/// starts, in both of its states' words.
+#[gpui::test]
+fn a_machines_notice_sits_on_a_cards_grid(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::{NAV_BADGE, NAV_CARD_GAP};
+    let (mut core, _fake) = cockpit("machines-notice-grid", 1);
+    let here = core.this_computer().unwrap();
+    let mine = core
+        .open(here, Provider::Claude, WorkspaceChoice::Main { checkout: self::here() })
+        .unwrap();
+    let machines = beside_box("notice-grid", &mut core, needs_sign_in);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    until(cx, |cx| connection(&view, 1, cx) == Connection::Attention);
+    until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(mine).is_some()));
+    tick(cx);
+    assert_eq!(machine_notices(&view, cx), ["Sign in to box"]);
+    let project = debug_bounds(cx, format!("nav-card-project-{}", mine.thread().get()))
+        .expect("the row's Project name");
+    let words = cx.debug_bounds("nav-notice-words").expect("the notice's words");
+    let dot = cx.debug_bounds("nav-notice-dot").expect("the notice's dot");
+    assert_eq!(words.left(), project.left(), "its words on the Project name's edge");
+    assert_eq!(
+        dot.left(),
+        project.left() - px(NAV_BADGE + NAV_CARD_GAP),
+        "its dot on the badge's edge"
+    );
+}
+
+/// This computer's rows keep their bare ids and draw no glyph, beside
+/// another machine's.
+#[gpui::test]
+fn this_computers_rows_draw_no_icon(cx: &mut TestAppContext) {
+    let (mut core, _fake, machines, _agents) = two_machines("no-icon", 1);
+    let mine = core.threads()[0];
+    let on_box = machines.held(1).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    let here = core.this_computer().unwrap();
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(theirs).is_some()));
+    tick(cx);
+    let card = debug_bounds(cx, format!("nav-thread-{}", mine.thread().get()))
+        .expect("this computer's card, its id bare");
+    cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    assert!(debug_bounds(cx, format!("nav-card-machine-{}", mine.thread().get())).is_none());
+    assert!(debug_bounds(cx, format!("nav-card-machine-{}", on(here, mine))).is_none());
+    assert!(cx.debug_bounds("nav-hover-card").is_some(), "its detail");
+    assert!(
+        !crate::nav::testing::drawn_hover_card().iter().any(|line| line == "box"),
+        "names no machine"
+    );
+    assert!(machine_notices(&view, cx).is_empty(), "both are there");
+}
+
+/// The same repository on two machines is two Projects, and the Filter
+/// menu marks the other machine's with T3 Code's icon, its tooltip saying
+/// where it is (`ProjectEnvironmentBadge`'s "On box").
+#[gpui::test]
+fn the_same_repository_on_two_machines_is_two_projects(cx: &mut TestAppContext) {
+    let (mut core, _fake, machines, _agents) = two_machines("same-repo", 1);
+    let on_box = machines.held(1).unwrap();
+    let here_machine = core.this_computer().unwrap();
+    let mine = core.register_project(here_machine, &here()).unwrap();
+    let theirs = core.register_project(on_box, &here()).unwrap();
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    let rows = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.filter_rows(cx)
+                .into_iter()
+                .flatten()
+                .filter_map(|(item, verb)| match verb {
+                    MenuVerb::FilterProject(Some(key)) if key == mine || key == theirs => {
+                        Some((key, item.label.to_string(), item.detail.is_some(), item.mark))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    until(cx, |cx| rows(cx).len() == 2);
+    let rows = rows(cx);
+    assert_eq!(rows[0].0, mine, "this computer's first");
+    assert_eq!(rows[0].1, rows[1].1, "one name: {rows:?}");
+    assert!(!rows[0].2 && !rows[1].2, "neither has detail text: {rows:?}");
+    assert_eq!(rows[0].3, None, "this computer's says nothing more");
+    assert_eq!(
+        rows[1].3,
+        Some((ferrite_ui::icons::SERVER, "On box".into())),
+        "{rows:?}"
+    );
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    let filter = cx.debug_bounds("nav-filter").expect("the Filter");
+    cx.simulate_click(filter.center(), gpui::Modifiers::none());
+    tick(cx);
+    let mark = cx.debug_bounds("menu-row-mark").expect("box's row wears the icon");
+    assert_eq!(tooltip_at(cx, mark.center()).as_deref(), Some("On box"));
+}
+
+/// What the tooltip says once the pointer has rested on `at`.
+fn tooltip_at(cx: &mut gpui::VisualTestContext, at: gpui::Point<gpui::Pixels>) -> Option<String> {
+    cx.simulate_mouse_move(at, None, gpui::Modifiers::none());
+    cx.simulate_mouse_move(at + gpui::point(px(1.), px(0.)), None, gpui::Modifiers::none());
+    cx.executor().advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    cx.update(|window, _| window.debug_text("tooltip")).map(|lines| lines.join(" "))
+}
+
+/// With no machine reachable, Add project offers T3 Code's one row,
+/// "Connect an environment", and it opens Settings on Connections.
+#[gpui::test]
+fn add_project_with_no_machine_reached_offers_to_connect_one(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, machines) = box_alone("add-none", needs_sign_in);
+    let (root, cx) = machine_window(cx, core, machines, Preferences::ephemeral());
+    let view = shown(&root, cx);
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    view.update_in(cx, |view, window, cx| view.add_project(window, cx));
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let palette = view.floats.palette.as_ref().expect("the pick").read(cx);
+        let row = palette.selected().expect("its one row");
+        assert_eq!(palette.survivors().len(), 1);
+        assert_eq!(row.name.as_ref(), "Connect an environment");
+        assert_eq!(row.context.as_ref(), "No connected environment can add a project");
+    });
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    let sheet = view.read_with(cx, |view, cx| view.settings_sheet(cx).expect("Settings"));
+    assert_eq!(sheet.read_with(cx, |sheet, _| sheet.page), settings::PageKey::Connections);
+}
+
+/// The machine pick goes back a step, to the palette it was opened from
+/// with its line as it was, by backspace on an empty line and by its arrow.
+/// Esc closes the whole palette from it (T3's `CommandPalette`).
+#[gpui::test]
+fn the_machine_pick_goes_back_a_step_and_esc_closes(cx: &mut TestAppContext) {
+    use crate::palette::PaletteScope;
+    bind_production_keys(cx);
+    let (core, _fake, machines, _agents) = two_machines("pick-back", 1);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    let open = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.floats.palette.as_ref().map(|palette| {
+                let palette = palette.read(cx);
+                (palette.scope, palette.query(cx))
+            })
+        })
+    };
+    let pick = |cx: &mut gpui::VisualTestContext| {
+        cx.simulate_keystrokes("cmd-k");
+        tick(cx);
+        cx.simulate_input("new project");
+        tick(cx);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+    };
+    pick(cx);
+    assert_eq!(open(cx), Some((PaletteScope::Machines, String::new())));
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert_eq!(open(cx), None, "esc closes the palette");
+
+    pick(cx);
+    cx.simulate_keystrokes("backspace");
+    tick(cx);
+    assert_eq!(open(cx), Some((PaletteScope::All, "new project".into())), "backspace: back");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+
+    pick(cx);
+    let arrow = cx.debug_bounds("palette-back").expect("its arrow");
+    cx.simulate_click(arrow.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(open(cx), Some((PaletteScope::All, "new project".into())), "the arrow: back");
+}
+
+/// The pick's row for this computer is named as T3 names it: its host,
+/// described as this computer; with no host to say, the words alone.
+#[test]
+fn the_pick_describes_this_computer() {
+    use crate::cockpit::palette::this_computer_row;
+    assert_eq!(this_computer_row(Some("pc".into())), ("pc".into(), "This computer".into()));
+    assert_eq!(this_computer_row(Some("  ".into())), ("This computer".into(), String::new()));
+    assert_eq!(this_computer_row(None), ("This computer".into(), String::new()));
+}
+
+/// A draft aimed at box's Project names box first in the strip over its
+/// Composer, as T3's locked environment control does; one on this
+/// computer names no machine.
+#[gpui::test]
+fn a_draft_on_a_machine_names_it(cx: &mut TestAppContext) {
+    let (mut core, _fake, machines, _agents) = two_machines("draft-machine", 1);
+    let on_box = machines.held(1).unwrap();
+    let here_machine = core.this_computer().unwrap();
+    let mine = core.register_project(here_machine, &here()).unwrap();
+    let theirs = core.register_project(on_box, &here()).unwrap();
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    view.update(cx, |view, cx| view.open_draft_in_project(theirs, cx));
+    tick(cx);
+    let word = cx.debug_bounds("band-machine").expect("the draft names box");
+    let project = cx.debug_bounds("band-chip-0").expect("its Project's chip");
+    assert!(word.right() <= project.left(), "first: {word:?} {project:?}");
+    let said = cx.update(|window, _| window.debug_text("band-machine"));
+    assert_eq!(said.map(|lines| lines.join(" ")).as_deref(), Some("box"));
+
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    assert!(cx.debug_bounds("band-machine").is_none(), "this computer's names none");
+}
+
+/// A Thread on box is one row in the one list: no second listing under
+/// this computer's cards or the Inbox's.
+#[gpui::test]
+fn a_machines_thread_is_listed_once(cx: &mut TestAppContext) {
+    let (mut core, _fake, machines, _agents) = two_machines("listed-once", 1);
+    let on_box = machines.held(1).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(theirs).is_some()));
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let state = view.nav_state(cx);
+        let listed = state
+            .pinned
+            .iter()
+            .chain(&state.active)
+            .chain(&state.working)
+            .filter(|row| row.key == theirs)
+            .count();
+        assert_eq!(listed, 1, "one row");
+        let inbox = view.inbox_rows(&state, cx);
+        assert_eq!(inbox.iter().filter(|row| row.thread == theirs).count(), 1);
+    });
+    assert!(debug_bounds(cx, format!("nav-thread-{}", on(on_box, theirs))).is_some());
+}
+
+/// box needs a sign-in: its band offers one and the nav's notice says so,
+/// while this computer, there, has no band and its Pane no cover.
 #[gpui::test]
 fn a_machine_that_needs_a_sign_in_says_so_beside_the_rest(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("machines-sign-in", 1);
@@ -733,7 +1169,9 @@ fn a_machine_without_ferrited_says_so(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| {
         assert_eq!(view.server_bands.detached(on_box), Some(Gone::NotInstalled));
     });
-    assert_eq!(connection(&view, 0, cx), Connection::Attention, "box's heading");
+    assert_eq!(connection(&view, 0, cx), Connection::Attention, "Settings says so");
+    tick(cx);
+    assert_eq!(machine_notices(&view, cx), ["box is offline"], "T3's words");
     cx.update(|window, cx| {
         assert!(
             view.read(cx).focus.is_focused(window),
@@ -742,8 +1180,8 @@ fn a_machine_without_ferrited_says_so(cx: &mut TestAppContext) {
     });
 }
 
-/// Turning box off in Settings lets it go: its heading says Off and its
-/// Panes leave; this computer's stay.
+/// Turning box off in Settings lets it go: Settings says it is off and
+/// its Panes leave; this computer's stay.
 #[gpui::test]
 fn turning_a_machine_off_lets_only_it_go(cx: &mut TestAppContext) {
     let (mut core, _fake, machines, _agents) = two_machines("off", 1);
@@ -760,11 +1198,8 @@ fn turning_a_machine_off_lets_only_it_go(cx: &mut TestAppContext) {
         view.machines_changed(cx);
     });
     tick(cx);
-    view.read_with(cx, |view, cx| {
-        assert_eq!(
-            view.machine_rows(cx).unwrap()[1].row.connection,
-            Connection::Disabled
-        );
+    assert_eq!(connection(&view, 1, cx), Connection::Disabled);
+    view.read_with(cx, |view, _| {
         assert!(view.pane_for(theirs).is_none(), "box's Pane went with it");
         assert!(view.pane_for(mine).is_some(), "this computer's stays");
     });
@@ -919,10 +1354,10 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
     });
 }
 
-/// The window holds both machines at once: box's Thread is a row under
-/// box's heading, and a press on it opens it in place, beside this
-/// computer's Thread, its turn streamed whole now it is drawn (F-A2). The
-/// window goes nowhere.
+/// The window holds both machines at once: box's Thread is a card in the
+/// one list, and a press on it opens it in place, beside this computer's
+/// Thread, its turn streamed whole now it is drawn (F-A2). The window goes
+/// nowhere.
 #[gpui::test]
 fn a_machines_thread_opens_in_place_beside_a_local_one(cx: &mut TestAppContext) {
     let (mut core, _fake, machines, agents) = two_machines("in-place", 1);
@@ -939,8 +1374,8 @@ fn a_machines_thread_opens_in_place_beside_a_local_one(cx: &mut TestAppContext) 
         debug_bounds(cx, format!("nav-thread-{}", mine.thread().get())).is_some(),
         "this computer's Thread, a card"
     );
-    let row = debug_bounds(cx, format!("nav-machine-{}-{}", on_box.get(), theirs.thread().get()))
-        .expect("box's Thread, under box's heading");
+    let row = debug_bounds(cx, format!("nav-thread-{}", on(on_box, theirs)))
+        .expect("box's Thread, a card");
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
@@ -1106,8 +1541,9 @@ fn prompt_stop_and_park_reach_the_threads_machine(cx: &mut TestAppContext) {
 }
 
 /// box's Server stops: its Pane stays, dimmed under the lost-link cover,
-/// and nothing else waits on it — this computer's Pane takes a prompt as
-/// before. Back, box's Pane is live again.
+/// its card stays, dimmed, the nav says box is reconnecting once that has
+/// taken T3's grace, and nothing else waits on it — this computer's Pane
+/// takes a prompt as before. Back, box's Pane is live again.
 #[gpui::test]
 fn a_lost_machine_holds_only_its_own_panes(cx: &mut TestAppContext) {
     bind_production_keys(cx);
@@ -1131,8 +1567,15 @@ fn a_lost_machine_holds_only_its_own_panes(cx: &mut TestAppContext) {
         assert!(view.pane_for(theirs).is_some(), "box's Pane stays");
         assert!(!view.machine_lost(mine.machine(), cx), "this computer is there");
     });
-    assert_ne!(connection(&view, 1, cx), Connection::Online, "box's heading");
+    assert_ne!(connection(&view, 1, cx), Connection::Online, "Settings says so");
     assert_eq!(connection(&view, 0, cx), Connection::Online);
+    let card = |thread| crate::nav::testing::drawn_card(thread).expect("its card").opacity;
+    assert!(card(theirs) <= ferrite_ui::theme::MACHINE_LOST_OPACITY, "box's card, dimmed");
+    assert_eq!(card(mine), 1.0, "this computer's, not");
+    assert!(machine_notices(&view, cx).is_empty(), "nothing said within T3's grace");
+    cx.executor().advance_clock(crate::cockpit::machines::RECONNECT_GRACE);
+    tick(cx);
+    assert_eq!(machine_notices(&view, cx), ["box is reconnecting"]);
     prompt(&view, mine, "still here", cx);
     assert!(
         fake.sent.borrow().iter().any(|sent| sent.contains("still here")),
@@ -1573,7 +2016,7 @@ fn a_toast_press_opens_its_machines_thread_in_place(cx: &mut TestAppContext) {
         assert!(view.chimed.is_empty(), "Claude is muted");
     });
 
-    let button = debug_bounds(cx, format!("toast-open-{}", theirs.thread().get())).expect("`⏎ open`");
+    let button = debug_bounds(cx, format!("toast-open-{}", on(on_box, theirs))).expect("`⏎ open`");
     cx.simulate_click(button.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {

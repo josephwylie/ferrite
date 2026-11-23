@@ -199,20 +199,55 @@ Each lands green and proves something.
    end, as in T3. ADR 0026's "The nav", the `CONTEXT.md` Machine entry and
    the UI spec follow.
 
+   Done. `nav::RowTag` names a row's elements, its machine in them only
+   for another machine's row, so this computer's ids stay bare. What a
+   heading carried went to a home or went: its connection glyph and word
+   to the notice row ("Sign in to box", "box is offline", "box is
+   reconnecting" after `RECONNECT_GRACE`); its name to the row's hover
+   card, or on a row with no hover card (a parked or snoozed row, a search
+   result) to the same glyph's tooltip; its "New project…" to Add project,
+   which on more than one machine opens the palette over the machines the
+   window reaches (T3's `choose-environment`, "Environments") and with
+   none offers T3's "Connect an environment"; its fold nowhere. A draft
+   aimed at another machine names it first in the strip over its Composer
+   (T3's locked environment control). Ages and
+   order read every machine's times on this computer's clock: a held
+   machine keeps its Server's clock (`ServerClock`, from `welcome`) after
+   its link goes, a Thread's digest carries its last activity
+   (`Digest.active_ms`), and `Cockpit::last_used` reads a parked or
+   digest-only Thread's through that clock. Where Projects are listed by
+   name (the Filter menu), another machine's wears T3's icon, its tooltip
+   "On box". The machine pick goes back a step on its arrow and on
+   backspace in an empty line, and esc closes the palette, as T3's view
+   does.
+
+   Another machine's row is the same row as this computer's, with the
+   same three lines and height. Its Server sends the branch in the
+   Thread's digest (`Digest.branch`): the sweep reads each open checkout's
+   `HEAD` file and runs git only for one that moved, so an idle link
+   carries nothing and an idle machine runs no git. On a slim row (parked,
+   snoozed) the glyph stands just before the age in the right column.
+   T3's slim row draws no machine icon; Ferrite keeps it so every row on
+   another machine says so. The hover card ends on the Provider's mark and
+   the model the digest names (`Digest.model`), its Provider until its
+   agent has said one.
+
 ## Answered questions
 
 - **The icon.** One generic server glyph, T3's default kind. A kind per
   machine can come later, in Settings.
 - **Signing in.** "Sign in to box" is a notice row in the nav naming the
-  machine, plus the band on that machine's Panes.
-- **The same repo on two machines** is two Projects.
+  machine, plus the band on that machine's Panes. A session the machine
+  refused or revoked says so too, also after a window restart, and pressing
+  it opens that link's pairing in Connections, where a new code renews it.
+- **The same repo on two machines** is two Projects. T3 Code groups them
+  by repository unless set to keep them separate, and marks a Project on
+  another environment with a machine icon whose tooltip says "On box".
+  Ferrite keeps them separate and marks the other machine's the same way.
 - **A new Thread with no Project** starts on this computer.
 
 ## Not done here
 
-- Ages and "newest send first" mix machines' clocks once the list merges.
-  T3 corrects each environment's clock. That needs an offset per machine,
-  taken when its Server says hello.
 - System notification tags already name the machine (ADR 0017), a Factory
   task's too (`ferrite-task-{task}@{target}`, this computer's bare). Anything
   else that saves a `ThreadId` across runs must save a `SavedThread`.

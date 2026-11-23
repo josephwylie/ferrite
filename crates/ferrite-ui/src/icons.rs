@@ -89,6 +89,7 @@ icons![
     // ---- WP-F icons (append names above the end line)
     "laptop",
     "plug",
+    "server",
     // (end WP-F)
 
     // ---- WP-G icons (append names above the end line)
@@ -117,6 +118,7 @@ icons![
     "arrow-up",
     "arrow-down",
     "arrow-right",
+    "arrow-left",
     "corner-down-left",
     "git-pull-request",
     "git-merge",
@@ -265,6 +267,9 @@ pub const BOARD: &str = "icons/board.svg";
 pub const LAPTOP: &str = "icons/laptop.svg";
 /// An MCP server (the Panel's Details: Connectors), Lucide's plug.
 pub const PLUG: &str = "icons/plug.svg";
+/// Another machine (the nav row of a Thread that lives on one, and its
+/// hover card), Lucide's server: T3 Code's `EnvironmentMachineIcon`.
+pub const SERVER: &str = "icons/server.svg";
 // (end WP-F)
 
 // ---- WP-G icon names (append consts above the end line)
@@ -324,6 +329,8 @@ pub const ARROW_UP: &str = "icons/arrow-up.svg";
 pub const ARROW_DOWN: &str = "icons/arrow-down.svg";
 /// A pull request's head branch into its base.
 pub const ARROW_RIGHT: &str = "icons/arrow-right.svg";
+/// A palette view's way back (T3's `ArrowLeftIcon`).
+pub const ARROW_LEFT: &str = "icons/arrow-left.svg";
 /// The palette cursor row's enter hint.
 pub const CORNER_DOWN_LEFT: &str = "icons/corner-down-left.svg";
 /// Reply to a selection: quote it into the Composer.
@@ -706,7 +713,7 @@ mod tests {
     }
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 46] = [
+    const REFRESH_ICONS: [&str; 47] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -732,6 +739,7 @@ mod tests {
         ELLIPSIS,
         LAPTOP,
         PLUG,
+        SERVER,
         PAPERCLIP,
         SQUARE_SLASH,
         BLOCKS,

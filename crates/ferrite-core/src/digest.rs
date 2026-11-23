@@ -59,6 +59,11 @@ pub struct Digest {
     /// What a Thread with no title is called: its first prompt, shortened.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_title: Option<String>,
+    /// When Main's newest prompt went out or turn ended, in milliseconds
+    /// since the epoch on the Server's clock: the nav's age and order for a
+    /// Thread whose log is on another machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_ms: Option<i64>,
     /// Prompts Main holds.
     #[serde(default)]
     pub turns: usize,
@@ -84,6 +89,15 @@ pub struct Digest {
     /// header keeps it (ADR 0047): the Lineage's delegated-from row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegated_from: Option<crate::DelegatedFrom>,
+    /// The branch its checkout is on, as the Server that owns the checkout
+    /// read it (ADR 0045): what a window on another computer names on its
+    /// row. A digest goes out for it only when it moved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The model Main's Session runs on: what a window that does not mirror
+    /// the Thread names on its hover card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// Main's turn as the state word reads it: what Main does, how its last
@@ -162,6 +176,9 @@ impl Digest {
             at_work: false,
             // Its header's, which no Activity holds (`Engine::publish_digests`).
             delegated_from: None,
+            // Its Server's, which read git (`Engine::set_branch`).
+            branch: None,
+            model: transcript.model().map(str::to_string),
             pending: pending
                 .iter()
                 .map(|pending| PendingEntry {
@@ -184,6 +201,7 @@ impl Digest {
                         .unwrap_or_default(),
                 }),
             prompt_title: prompt_title(transcript),
+            active_ms: transcript.last_activity_ms(),
             turns: transcript
                 .blocks()
                 .iter()

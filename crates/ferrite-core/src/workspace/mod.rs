@@ -488,6 +488,27 @@ pub fn checkout_branch(cwd: &Path) -> Option<String> {
     (!head.is_empty()).then(|| head.to_string())
 }
 
+/// What `HEAD` says for the checkout `cwd` is in, read from its file with
+/// no git process: the same words mean `checkout_branch` would answer the
+/// same, so a caller on a cadence runs git only when they change. `None`
+/// outside a checkout.
+pub fn head_of(cwd: &Path) -> Option<String> {
+    let root = cwd.ancestors().find(|dir| dir.join(".git").exists())?;
+    let dot_git = root.join(".git");
+    let admin = if dot_git.is_dir() {
+        dot_git
+    } else {
+        let pointer = fs::read_to_string(&dot_git).ok()?;
+        root.join(pointer.trim().strip_prefix("gitdir:")?.trim())
+    };
+    let mut said = fs::read_to_string(admin.join("HEAD")).ok()?.trim().to_string();
+    // A reftable repository's `HEAD` is a placeholder: its table list moves.
+    if let Ok(tables) = fs::read_to_string(admin.join("reftable").join("tables.list")) {
+        said.push_str(&tables);
+    }
+    Some(said)
+}
+
 /// The branch a repo calls its default: what `origin/HEAD` points at, else
 /// `main` when that branch exists, else `master` when it does, else `main`.
 /// Each probe is a `git` call, so the UI reads it once per Project into its

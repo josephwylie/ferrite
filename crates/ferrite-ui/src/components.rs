@@ -421,24 +421,6 @@ fn layer(color: u32, y: f32, blur: f32, spread: f32) -> BoxShadow {
     }
 }
 
-/// A line's right-end fade, `LINE_FADE` wide, from clear to `fill` — the
-/// ground under the line — so text cut at a box's right edge fades out
-/// rather than ending in "…" (Claude's sidebar mask). The caller lays it
-/// in a `relative` box over the clipped line; it answers no pointer.
-pub fn line_fade(fill: Hsla) -> Div {
-    div()
-        .absolute()
-        .top_0()
-        .right_0()
-        .h_full()
-        .w(px(theme::LINE_FADE))
-        .bg(gpui::linear_gradient(
-            90.,
-            gpui::linear_color_stop(Hsla { a: 0., ..fill }, 0.),
-            gpui::linear_color_stop(fill, 1.),
-        ))
-}
-
 /// A rung's shadow: nothing, except a floating surface's one small shadow
 /// (`float_shadow`).
 pub fn elevation(rung: Elevation) -> Vec<BoxShadow> {
@@ -1692,6 +1674,9 @@ pub struct MenuItem {
     /// Why a disabled row is disabled, in its tooltip: a row stays one
     /// line, as Claude's do.
     pub why: Option<SharedString>,
+    /// A small icon after the label, what it marks said in its own tooltip
+    /// (T3's `ProjectEnvironmentBadge`: a Project on another machine).
+    pub mark: Option<(&'static str, SharedString)>,
 }
 
 impl MenuItem {
@@ -1715,6 +1700,10 @@ impl MenuItem {
     }
     pub fn detail(mut self, text: impl Into<SharedString>) -> Self {
         self.detail = Some(text.into());
+        self
+    }
+    pub fn mark(mut self, path: &'static str, tip: impl Into<SharedString>) -> Self {
+        self.mark = Some((path, tip.into()));
         self
     }
     /// An empty shortcut is no shortcut.
@@ -2435,23 +2424,6 @@ mod tests {
         assert_eq!(shadow.offset.y, px(theme::SHADOW_FLOAT_Y));
         assert_eq!(shadow.blur_radius, px(theme::SHADOW_FLOAT_BLUR));
         assert_eq!(shadow.spread_radius, px(0.));
-    }
-
-    /// The line-end fade runs `LINE_FADE` wide at the right of its box,
-    /// from clear to the ground it is given.
-    #[test]
-    fn a_line_fade_runs_clear_to_its_ground() {
-        let fill: Hsla = rgb(theme::SIDEBAR).into();
-        let style = line_fade(fill).style().clone();
-        assert_eq!(style.size.width, Some(px(theme::LINE_FADE).into()));
-        assert_eq!(
-            style.background,
-            Some(gpui::Fill::Color(gpui::linear_gradient(
-                90.,
-                gpui::linear_color_stop(Hsla { a: 0., ..fill }, 0.),
-                gpui::linear_color_stop(fill, 1.),
-            )))
-        );
     }
 
     /// Theme rule 2: square and flat inside. Only a float (and a sheet,

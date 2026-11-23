@@ -497,3 +497,21 @@ fn a_command_the_server_does_not_know_reads_as_unsupported() {
     .into();
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
 }
+
+/// A Server's clock outlives its link (F-A4): what it stamped still reads
+/// on this computer's clock while the window is away from it.
+#[test]
+fn a_servers_clock_is_kept_after_its_link_goes() {
+    let store = scratch("clock");
+    // This Server's clock reads the epoch: it runs behind this one by today.
+    let _taken = server_answering_nothing(&store, 1);
+    let mut remote = remote(&store);
+    let today = crate::clock::now().timestamp_millis();
+    let reads_today = |remote: &Remote| (remote.clock().local_ms(0) - today).abs() < 60_000;
+    assert!(reads_today(&remote), "{:?}", remote.clock());
+
+    assert!(remote.execute(Op::SettingsChanged).is_err());
+    assert!(!matches!(remote.state(), ServerState::Attached { .. }));
+    assert!(reads_today(&remote), "{:?}", remote.clock());
+    let _ = std::fs::remove_dir_all(&store);
+}

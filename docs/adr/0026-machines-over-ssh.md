@@ -1,9 +1,10 @@
 # 0026 — Machines: another computer's Server, over ssh
 
 Status: accepted 2026-10-15 (Herdr benchmark, §6 Remote over SSH).
-"One machine on screen" and "Alerts from machines off screen" are
-superseded by ADR 0045 (2026-11-23): the window holds every enabled
-machine at once, and a Thread of any of them opens in place.
+"One machine on screen", "Alerts from machines off screen" and the
+headings in "The nav" are superseded by ADR 0045 (2026-11-23): the
+window holds every enabled machine at once, its nav is one list across
+them, and a Thread of any of them opens in place.
 
 ## Context
 
@@ -211,6 +212,16 @@ its status link; bridges and their masters live for the run.
 
 ### The nav
 
+> Superseded by ADR 0045 (P7). The nav is one list across machines, as
+> T3 Code's sidebar is: no machine has a heading, every machine's Threads
+> sit in the same sections, ordered by the same rule on times read on
+> this computer's clock, and a Thread on another machine wears a 14px
+> server glyph at its meta line's right end, its machine named first in
+> the row's hover card. A machine the window cannot reach says so in a
+> notice row at the top of the list instead of a heading's glyph and word.
+> The heading's fold is gone, and its "New project…" is Add project's
+> machine pick.
+
 With more than this computer, the nav's tree is headed by the machine
 the window is on — a heading in the heading style: triangle, connection
 glyph, name, and a word when it is not up — and the other machines
@@ -226,9 +237,11 @@ Pane under a cover that takes every press, and what acts on a Thread
 from the keyboard does nothing on its Threads (escape no longer
 interrupts); every other machine works on (ADR 0045). A band says
 why — "Sign in to box" (a click signs in), "box has no
-ferrited", or "box is not connected" once it was. A machine still being
-reached for the first time says so only by its glyph. A machine that
-goes keeps its last rows and Panes, dimmed.
+ferrited", or "box is not connected" once it was — and so does a notice
+row at the top of the nav, in T3 Code's words: "Sign in to box" (its
+press signs in), "box is offline", or, once box has been reached again
+for two seconds, "box is reconnecting" (its press tries again now). A
+machine that goes keeps its last rows and Panes, dimmed.
 
 ### Alerts from machines off screen
 
@@ -360,11 +373,11 @@ feature, which only the app's dev-dependencies turn on).
 
 ## Not done here
 
-- On a machine, a Thread's branch label and drift (its PR label is
-  read there), the details card's Changes counts, and its binding
-  following the agent into a worktree it made: both need git on the
-  machine read as the Thread works, not once per chip open as
-  `list_repo` is.
+- On a machine, a Thread's drift (its branch comes in its digest, ADR
+  0045, and its PR label is read there), the details card's Changes
+  counts, and its binding following the agent into a worktree it made:
+  these need git on the machine read as the Thread works, not once per
+  chip open as `list_repo` is.
 - On a machine, a file opened beside a Pane and the operator's own
   commands (ADR 0024) still read or run on this computer.
 - An open Thread's Project on a machine: the `thread` state does not

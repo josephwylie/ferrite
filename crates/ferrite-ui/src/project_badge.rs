@@ -57,12 +57,23 @@ fn hue(name: &str) -> usize {
 /// one glyph); gpui has no `textLength`, so each glyph takes a fixed
 /// `PROJECT_BADGE_GLYPH_W` cell, which spaces any two letters alike.
 pub fn project_badge(name: &str) -> Div {
-    project_badge_saturated(name, 1.0)
+    badge(name, NAV_BADGE, 1.0)
 }
 
 /// The badge with its hue's saturation scaled by `saturation`: 0 is T3's
 /// `grayscale` (a slim row at rest), 1 the hue.
 pub fn project_badge_saturated(name: &str, saturation: f32) -> Div {
+    badge(name, NAV_BADGE, saturation)
+}
+
+/// The badge `size` square, its monogram in proportion: T3's hover card
+/// draws it as small as the icons of its other lines (`size-3`).
+pub fn project_badge_sized(name: &str, size: f32) -> Div {
+    badge(name, size, 1.0)
+}
+
+fn badge(name: &str, size: f32, saturation: f32) -> Div {
+    let scale = size / NAV_BADGE;
     let (letters, hue) = project_monogram(name);
     let ink = PROJECT_HUES[hue];
     let toned = |color: gpui::Hsla| gpui::Hsla {
@@ -75,19 +86,19 @@ pub fn project_badge_saturated(name: &str, saturation: f32) -> Div {
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .size(px(NAV_BADGE))
-        .rounded(px(NAV_BADGE / 4.0))
+        .size(px(size))
+        .rounded(px(size / 4.0))
         .bg(toned(rgba((ink << 8) | PROJECT_BADGE_GROUND_ALPHA).into()))
         .font_family(FONT_CODE)
-        .text_size(px(FS_PROJECT_BADGE))
-        .line_height(px(NAV_BADGE))
+        .text_size(px(FS_PROJECT_BADGE * scale))
+        .line_height(px(size))
         .font_weight(FontWeight::BOLD)
         .text_color(toned(rgb(ink).into()))
         .children(letters.chars().map(|letter| {
             div()
                 .flex()
                 .justify_center()
-                .w(px(PROJECT_BADGE_GLYPH_W))
+                .w(px(PROJECT_BADGE_GLYPH_W * scale))
                 .child(letter.to_string())
         }))
 }

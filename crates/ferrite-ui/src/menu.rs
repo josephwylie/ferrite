@@ -46,12 +46,13 @@ pub fn float() -> Div {
 }
 
 /// The nav's glass face (T3's `dropdown-glass`), for its hover card and PR
-/// popover: the float ground at 80% (gpui draws no backdrop blur), a white
+/// popover: the float ground, solid as T3's is where nothing blurs the
+/// backdrop (gpui draws no blur, and words would read through), a white
 /// 10% edge and the float's shadow.
 pub fn glass() -> Div {
     div()
         .rounded(px(R_CONTROL))
-        .bg(rgba(NAV_GLASS))
+        .bg(rgb(FLOAT))
         .border_1()
         .border_color(rgba(NAV_GLASS_BORDER))
         .shadow(components::float_shadow())
@@ -233,6 +234,17 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
             )
         })
         .child(label)
+        .when_some(item.mark.clone(), |row, (path, tip)| {
+            row.child(
+                div()
+                    .id("menu-row-mark")
+                    .debug_selector(|| "menu-row-mark".into())
+                    .flex()
+                    .flex_shrink_0()
+                    .tooltip(tooltip(tip))
+                    .child(icons::icon(path, NAV_MACHINE_GLYPH, dim)),
+            )
+        })
         .map(|row| match item.detail.clone() {
             Some(detail) => row.child(
                 div()

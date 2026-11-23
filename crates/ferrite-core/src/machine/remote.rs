@@ -255,7 +255,13 @@ pub struct PairAttempt {
 }
 
 impl PairAttempt {
-    pub fn start(fields: PairingFields, settings: PathBuf) -> io::Result<Self> {
+    /// Pair with `fields`. `again` is the saved link this pairing renews,
+    /// when its session ended there: its profile is replaced, not refused.
+    pub fn start(
+        fields: PairingFields,
+        again: Option<String>,
+        settings: PathBuf,
+    ) -> io::Result<Self> {
         let (send, events) = crate::doorbell::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let stopped = cancelled.clone();
@@ -266,12 +272,17 @@ impl PairAttempt {
             .name("ferrite-pair".into())
             .spawn(move || {
                 let _ = send.send(Event::Progress(Phase::Inspecting));
-                let result = pair(fields, &worker_settings, &stopped, &send);
+                let renewing = again.is_some();
+                let result = pair(fields, again, &worker_settings, &stopped, &send);
                 let mut pending = registration.lock().unwrap_or_else(|e| e.into_inner());
                 match result {
                     Ok(machine) if stopped.load(Ordering::Acquire) => {
                         drop(pending);
-                        cleanup_pairing(&machine, &worker_settings);
+                        // A renewal has replaced the dead session: the new
+                        // one is the link's only way back.
+                        if !renewing {
+                            cleanup_pairing(&machine, &worker_settings);
+                        }
                     }
                     Ok(machine) => {
                         *pending = Some(machine.clone());
@@ -378,6 +389,7 @@ fn cleanup_pairing(machine: &Machine, settings: &Path) {
 
 fn pair(
     fields: PairingFields,
+    again: Option<String>,
     settings: &Path,
     cancelled: &AtomicBool,
     send: &crate::doorbell::Sender<Event>,
@@ -393,11 +405,16 @@ fn pair(
         ));
     }
     let target = format!("ferrite-link:{}", descriptor.server_id);
-    if profile_path(settings, &target).exists() {
-        return Err(io::Error::other(
-            "This environment is already paired. Remove its saved connection before pairing again.",
-        ));
-    }
+    let renewed = if profile_path(settings, &target).exists() {
+        if again.as_deref() != Some(target.as_str()) {
+            return Err(io::Error::other(
+                "This environment is already paired. Remove its saved connection before pairing again.",
+            ));
+        }
+        profile(settings, &target).ok()
+    } else {
+        None
+    };
     let entry_ref = format!(
         "{}-{}",
         descriptor.server_id,
@@ -430,10 +447,16 @@ fn pair(
             io::Error::other("Could not save the remote credential in the system credential store.")
         })?;
         cancelled_check(cancelled)?;
-        write_private_new(
-            &profile_path(settings, &target),
-            &serde_json::to_vec(&profile)?,
-        )?;
+        let saved = serde_json::to_vec(&profile)?;
+        match &renewed {
+            Some(_) => write_private(&profile_path(settings, &target), &saved)?,
+            None => write_private_new(&profile_path(settings, &target), &saved)?,
+        }
+        if let Some(old) = &renewed {
+            if let Ok(entry) = credential(old) {
+                let _ = entry.delete_credential();
+            }
+        }
         Ok(Machine {
             name: descriptor.name,
             target,

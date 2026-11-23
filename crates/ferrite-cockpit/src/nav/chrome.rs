@@ -11,8 +11,9 @@ use gpui::{
     Stateful,
 };
 
+use ferrite_core::store::Provider;
 use ferrite_ui::icons::{self, icon};
-use ferrite_ui::project_badge::project_badge;
+use ferrite_ui::project_badge::{project_badge, project_badge_sized};
 use ferrite_ui::theme::*;
 use ferrite_ui::components::{self, icon_button, IconSize};
 use ferrite_ui::motion;
@@ -154,12 +155,11 @@ pub fn results(rows: Vec<AnyElement>) -> Div {
 /// One result (T3's `SidebarSearchResultRow`): the badge, the title, the
 /// PR's number, and the age in a fixed 32px column at 12px, muted at 55%.
 pub fn result_row(row: &ThreadRow, age: SharedString, lit: bool) -> Stateful<Div> {
-    let thread = row.key.thread().get();
-    let key = SharedString::from(format!("nav-result-{thread}"));
+    let key = row.tag().key("nav-result");
     let hovered = motion::hover_t(&key) > 0.0;
     let selector = key.clone();
     div()
-        .id(("nav-result", thread as usize))
+        .id(key.clone())
         .debug_selector(move || selector.to_string())
         .relative()
         .flex()
@@ -184,6 +184,7 @@ pub fn result_row(row: &ThreadRow, age: SharedString, lit: bool) -> Stateful<Div
                 .text_color(rgb(INK_SECONDARY_LABEL))
                 .child(format!("#{}", pr.number))
         }))
+        .children(super::card::named_machine_glyph(row))
         .child(components::tabular(
             div()
                 .flex_shrink_0()
@@ -254,6 +255,27 @@ pub fn free_disk(words: String, ink: u32) -> Div {
 /// words.
 pub struct HoverLines {
     pub lines: Vec<(&'static str, SharedString)>,
+    /// The Provider and the model serving the Thread: the last fact, under
+    /// the Provider's own mark (T3's).
+    pub provider: Option<(Provider, SharedString)>,
+}
+
+/// A fact's line on the hover card: its mark, then its words, cut to fit.
+/// Every mark is `NAV_HOVER_CARD_ICON` wide, so the words share an edge.
+fn hover_fact(selector: &'static str, mark: impl IntoElement, words: SharedString) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(NAV_HOVER_CARD_LINE_GAP))
+        .text_color(rgba(NAV_HOVER_CARD_INK))
+        .child(mark)
+        .child(
+            div()
+                .debug_selector(move || selector.into())
+                .min_w_0()
+                .truncate()
+                .child(words),
+        )
 }
 
 /// A card's hover detail (T3's row tooltip): placed to the right of the
@@ -261,6 +283,16 @@ pub struct HoverLines {
 /// face (`menu::glass`). The Title, a line per fact, then the pull
 /// request under a rule.
 pub fn hover_card(row: &ThreadRow, lines: HoverLines, width: f32) -> AnyElement {
+    #[cfg(test)]
+    super::testing::DRAWN_HOVER_CARD.with(|drawn| {
+        *drawn.borrow_mut() = lines
+            .lines
+            .iter()
+            .map(|(_, words)| words)
+            .chain(lines.provider.iter().map(|(_, model)| model))
+            .map(ToString::to_string)
+            .collect();
+    });
     let body = ferrite_ui::menu::glass()
         .debug_selector(|| "nav-hover-card".into())
         .flex()
@@ -284,22 +316,26 @@ pub fn hover_card(row: &ThreadRow, lines: HoverLines, width: f32) -> AnyElement 
                 .flex_col()
                 .gap(px(NAV_HOVER_CARD_LINE_GAP))
                 .children(row.project.as_deref().map(|project| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(NAV_HOVER_CARD_LINE_GAP))
-                        .text_color(rgba(NAV_HOVER_CARD_INK))
-                        .child(project_badge(project))
-                        .child(SharedString::from(project.to_string()))
+                    hover_fact(
+                        "nav-hover-project",
+                        project_badge_sized(project, NAV_HOVER_CARD_ICON),
+                        SharedString::from(project.to_string()),
+                    )
                 }))
                 .children(lines.lines.into_iter().map(|(glyph, words)| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(NAV_HOVER_CARD_LINE_GAP))
-                        .text_color(rgba(NAV_HOVER_CARD_INK))
-                        .child(icon(glyph, NAV_HOVER_CARD_ICON, INK_SUBTLE))
-                        .child(div().truncate().child(words))
+                    hover_fact("nav-hover-fact", icon(glyph, NAV_HOVER_CARD_ICON, INK_SUBTLE), words)
+                }))
+                .children(lines.provider.map(|(provider, model)| {
+                    let (glyph, ink) = ferrite_ui::provider::mark(provider);
+                    hover_fact(
+                        "nav-hover-provider",
+                        div()
+                            .flex()
+                            .flex_shrink_0()
+                            .opacity(NAV_PROVIDER_OPACITY)
+                            .child(icon(glyph, NAV_HOVER_CARD_ICON, ink)),
+                        model,
+                    )
                 })),
         )
         .children(row.pr.as_ref().map(|pr| {

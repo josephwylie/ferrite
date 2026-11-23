@@ -1743,6 +1743,20 @@ impl Transcript {
             .and_then(|block| block.sent_at.as_deref())
     }
 
+    /// When the newest prompt went out or turn ended, in milliseconds since
+    /// the epoch on the clock that stamped it: what `Store::last_activity`
+    /// reads off a log's tail, for a Thread whose log is on another machine.
+    pub fn last_activity_ms(&self) -> Option<i64> {
+        self.blocks.iter().rev().find_map(|block| {
+            let stamp = match &block.body {
+                Body::Prompt(_) => block.sent_at.as_deref(),
+                Body::TurnEnd(end) => end.completed_at.as_deref(),
+                _ => None,
+            }?;
+            crate::clock::parse_local(stamp).map(|at| at.timestamp_millis())
+        })
+    }
+
     /// How many turns have ended in this window.
     pub fn turn_count(&self) -> usize {
         self.blocks

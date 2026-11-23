@@ -139,6 +139,9 @@ pub struct Row {
     /// minute — no surface prints `now`, theme rule 11).
     pub when: SharedString,
     pub read: bool,
+    /// Its machine is not this computer: its toast's ids and selectors
+    /// say the machine (`nav::RowTag`).
+    pub elsewhere: bool,
 }
 
 impl Row {
@@ -641,7 +644,7 @@ pub fn toast_face(row: &Row, width: f32) -> Div {
 }
 
 fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
-    let thread = row.thread.thread().get() as usize;
+    let tag = crate::nav::RowTag::of(row.thread, row.elsewhere);
     let machine = row.thread.machine();
     let word = row.word();
     let body: AnyElement = match &row.detail {
@@ -693,8 +696,8 @@ fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
         let Some(handle) = handle.clone() else {
             return quick_pill(key, word, rgb(INK_STRONG).into()).into_any_element();
         };
-        quick_button((name, thread), key, word)
-            .debug_selector(move || format!("{name}-{thread}"))
+        quick_button(tag.id(name), key, word)
+            .debug_selector(move || tag.key(name).to_string())
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
                 handle(verb.clone(), window, cx)
@@ -703,7 +706,7 @@ fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
     });
     let card = match handle {
         Some(_) => ferrite_ui::menu::float()
-            .debug_selector(move || format!("toast-{thread}"))
+            .debug_selector(move || tag.key("toast").to_string())
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation()),
         None => components::float_ground()
             .p(px(0.))
@@ -837,6 +840,7 @@ mod tests {
             detail,
             when: "9m".into(),
             read: false,
+            elsewhere: false,
         }
     }
 

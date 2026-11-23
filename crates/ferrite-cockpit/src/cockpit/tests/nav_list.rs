@@ -920,6 +920,28 @@ fn the_list_fades_at_the_edges_rows_pass(cx: &mut TestAppContext) {
     assert!(!shows(cx, "nav-fade-foot"), "at the end: nothing below");
 }
 
+/// A list scrolled in a short window and grown back until it fits has
+/// nothing above it: its top fade goes with the frame that clamps the
+/// scroll, whatever the render before it read.
+#[gpui::test]
+fn a_list_grown_back_to_fit_drops_its_top_fade(cx: &mut TestAppContext) {
+    let (core, _) = cockpit("nav-fade-grown", 6);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(320.)));
+    cx.run_until_parked();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: gpui::point(px(100.), px(200.)),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-40_000.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("nav-fade-top").is_some(), "scrolled: the top fades");
+    cx.simulate_resize(gpui::size(px(1000.), px(1200.)));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("nav-fade-top").is_none(), "it all fits: no fade stays");
+}
+
 /// Claude's `Pinned`: the row menu's `Pin` puts a Thread's card at the
 /// top of the list, over the others, and nowhere else; the pin is saved
 /// with the settings; `Unpin` puts the card back among them.

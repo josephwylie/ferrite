@@ -691,8 +691,8 @@ impl CockpitView {
     }
 
     /// Open the card on a Project that does not exist yet on `machine`
-    /// (its heading's `New project…`): an empty name and no directories.
-    /// Nothing is registered until Create.
+    /// (the machine pick's row, `add_project`): an empty name and no
+    /// directories. Nothing is registered until Create.
     pub(super) fn open_project_creator_on(
         &mut self,
         machine: ferrite_core::MachineId,

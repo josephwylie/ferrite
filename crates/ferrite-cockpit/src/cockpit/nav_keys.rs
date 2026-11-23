@@ -31,21 +31,12 @@ use gpui::{App, Bounds};
 
 impl NavView {
     /// Every row the keyboard can stand on, in the list's drawing order:
-    /// the local cards (a connected machine's rows are the pointer's),
-    /// then each shelf's header and the rows it draws.
+    /// the cards, every machine's, then each shelf's header and the rows
+    /// it draws.
     pub(super) fn items(&self, inputs: &NavInputs) -> Vec<NavCursor> {
         let state = &inputs.state;
         let mut items = Vec::new();
-        if inputs.machine_folded() {
-            return items;
-        }
-        items.extend(
-            state
-                .pinned
-                .iter()
-                .chain(&state.active)
-                .map(|row| NavCursor::thread(row.key)),
-        );
+        items.extend(state.pinned.iter().chain(&state.active).map(NavCursor::thread));
         for shelf in SHELVES {
             if state.shelf(shelf).is_empty() {
                 continue;
@@ -54,7 +45,7 @@ impl NavView {
             items.extend(
                 self.shelf_rows(inputs, shelf)
                     .into_iter()
-                    .map(|row| NavCursor::thread(row.key)),
+                    .map(NavCursor::thread),
             );
         }
         items
@@ -446,10 +437,11 @@ impl CockpitView {
     }
 }
 
-/// Scroll the list so `row` shows whole, by as little as it takes (none
-/// when it already does). Called while the list is drawn, too late for this
-/// draw (a refresh mid-draw is dropped), so the view drawing the list draws
-/// again once this one is done.
+/// Scroll the list so `row` shows whole with its margin, by as little as it
+/// takes (none when it already does): the first row brought back leaves the
+/// list at its very top, with nothing above it to fade. Called while the
+/// list is drawn, too late for this draw (a refresh mid-draw is dropped),
+/// so the view drawing the list draws again once this one is done.
 fn scroll_into_view(
     scroll: &ScrollHandle,
     row: Bounds<Pixels>,
@@ -458,10 +450,12 @@ fn scroll_into_view(
 ) {
     let view = scroll.bounds();
     let mut offset = scroll.offset();
-    if row.top() < view.top() {
-        offset.y += view.top() - row.top();
-    } else if row.bottom() > view.bottom() {
-        offset.y -= row.bottom() - view.bottom();
+    let margin = px(ferrite_ui::theme::NAV_CARD_ITEM_PAD_Y);
+    let (top, bottom) = (row.top() - margin, row.bottom() + margin);
+    if top < view.top() {
+        offset.y += view.top() - top;
+    } else if bottom > view.bottom() {
+        offset.y -= bottom - view.bottom();
     } else {
         return;
     }

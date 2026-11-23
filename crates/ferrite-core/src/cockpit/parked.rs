@@ -5,7 +5,6 @@
 
 use std::collections::BTreeMap;
 use std::io;
-use std::time::{Duration, SystemTime};
 
 use crate::protocol::{ParkedThread, ServerMessage, Snapshot};
 use crate::store::{LoadError, ThreadMeta};
@@ -91,11 +90,11 @@ impl Parked {
         })
     }
 
-    pub(crate) fn last_used(&self, thread: ThreadId) -> Option<SystemTime> {
-        self.rows
-            .get(&thread)?
-            .last_used_ms
-            .map(|ms| SystemTime::UNIX_EPOCH + Duration::from_millis(ms))
+    /// When its log was last written, in milliseconds since the epoch on
+    /// its Server's clock.
+    pub(crate) fn last_used_ms(&self, thread: ThreadId) -> Option<i64> {
+        let ms = self.rows.get(&thread)?.last_used_ms?;
+        Some(i64::try_from(ms).unwrap_or(i64::MAX))
     }
 
     /// The first prompt, shortened: what an untitled Thread is called.

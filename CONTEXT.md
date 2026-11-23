@@ -331,9 +331,11 @@ Another computer whose Server a window reaches over ssh (`ferrite --remote
 serve`, `docs/guides/remote-links.md`). The window holds every enabled
 machine at once — this computer, `local`, and the others — each a held
 machine in its one Cockpit, and opens any of their Threads in place
-(ADR 0045). Another machine streams a Thread's transcript only while the
-window draws it, and its status, Decisions and Notices for every Thread.
-A machine runs `ferrited`, the Server without a window.
+(ADR 0045). The nav is one list across them: a Thread on another
+machine sits among this computer's and wears a small server glyph.
+Another machine streams a Thread's transcript only while the window
+draws it, and its status, Decisions and Notices for every Thread. A
+machine runs `ferrited`, the Server without a window.
 _Avoid_: host, remote (as a noun), node.
 
 **Peer**

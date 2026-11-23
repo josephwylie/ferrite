@@ -975,6 +975,7 @@ mod tests {
                 connections::form(
                     ConnectionForm::Editing {
                         fields: self.fields.clone(),
+                        signing_in: None,
                         mode: ferrite_ui::frame::settings::ConnectionMode::Ssh,
                         focus: cx.focus_handle(),
                         suggestions: None,
@@ -1041,6 +1042,7 @@ mod tests {
                 connections::form(
                     ConnectionForm::Editing {
                         fields: self.fields.clone(),
+                        signing_in: None,
                         mode: self.mode.get(),
                         focus: cx.focus_handle(),
                         suggestions: None,
@@ -1154,6 +1156,7 @@ mod tests {
                 connections::form(
                     ConnectionForm::Editing {
                         fields: self.fields.clone(),
+                        signing_in: None,
                         mode: ferrite_ui::frame::settings::ConnectionMode::Ssh,
                         focus: cx.focus_handle(),
                         suggestions: None,

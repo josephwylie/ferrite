@@ -36,12 +36,10 @@ use ferrite_core::ThreadKey;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, rgba, App, Div, FontWeight, Hsla, ScrollHandle, SharedString,
+    div, px, rgb, rgba, AnyElement, App, Div, FontWeight, Hsla, ScrollHandle, SharedString,
     Stateful,
 };
 
-use crate::machines::{Connection, MachineRow};
-use crate::notifications::{Row as NoticeRow, State as NoticeState};
 pub use ferrite_pane::mark::{mark, NavTail, RowStatus};
 use ferrite_ui::components;
 use ferrite_ui::icons::{self, icon};
@@ -49,6 +47,7 @@ use ferrite_ui::motion;
 use ferrite_ui::theme::*;
 
 mod card;
+mod fade;
 pub(crate) mod chrome;
 pub(crate) mod flip;
 pub(crate) mod list;
@@ -134,10 +133,10 @@ impl NavCursor {
     }
 
     /// The key mirrors the row's own (`thread_card`, `list::slim_row`).
-    pub fn thread(thread: ThreadKey) -> Self {
+    pub fn thread(row: &ThreadRow) -> Self {
         NavCursor {
-            item: NavItem::Thread(thread),
-            key: card::card_key(thread),
+            item: NavItem::Thread(row.key),
+            key: card::card_key(row.tag()),
         }
     }
 }
@@ -168,9 +167,6 @@ pub struct NavState {
     pub snoozed: Vec<ThreadRow>,
     /// Parked Threads, every machine's, in the park order.
     pub parked: Vec<ThreadRow>,
-    /// Every other machine's open Threads, each drawn under its machine's
-    /// heading (ADR 0045, P6), in creation order.
-    pub elsewhere: Vec<ThreadRow>,
 }
 
 impl NavState {
@@ -190,7 +186,6 @@ impl NavState {
             .chain(&self.active)
             .chain(&self.working)
             .chain(&self.snoozed)
-            .chain(&self.elsewhere)
     }
 }
 
@@ -243,6 +238,12 @@ impl Arrivals {
     pub fn since(&self, thread: ThreadKey) -> Option<SystemTime> {
         self.at.get(&thread).and_then(|(_, since)| *since)
     }
+
+    /// The list's and the Working shelf's order: the latest arrival first,
+    /// whatever machine it is on; arrivals alike keep creation order.
+    pub fn latest_first(&self, thread: ThreadKey) -> (std::cmp::Reverse<Option<SystemTime>>, ThreadKey) {
+        (std::cmp::Reverse(self.since(thread)), thread)
+    }
 }
 
 /// What a set of rows rolls up to: the most urgent of them. `None` for
@@ -287,6 +288,67 @@ pub struct ThreadRow {
     /// In the operator's ⌘/⇧-click selection, or swept by a Park press:
     /// it wears `NAV_CARD_SELECTED`, and Park takes it with the rest.
     pub picked: bool,
+    /// The machine it lives on, when that is not this computer.
+    pub elsewhere: Option<Elsewhere>,
+}
+
+impl ThreadRow {
+    /// What its ids and selectors end with.
+    pub fn tag(&self) -> RowTag {
+        RowTag::of(self.key, self.elsewhere.is_some())
+    }
+
+    /// Its machine is not there: the row stays, dimmed.
+    pub fn lost(&self) -> bool {
+        self.elsewhere.as_ref().is_some_and(|elsewhere| elsewhere.lost)
+    }
+}
+
+/// Another machine's Thread, as its row says so (ADR 0045, T3 Code's
+/// remote row): the server glyph at the end of its meta line and the line
+/// its hover card gives the machine.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Elsewhere {
+    /// The machine's name.
+    pub machine: SharedString,
+    /// The window cannot reach it now.
+    pub lost: bool,
+}
+
+/// What a Thread's row's ids and selectors end with: its Thread's number,
+/// after its machine's for another machine's Thread — Thread numbers are
+/// per Server. This computer's rows keep the bare number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RowTag {
+    thread: ThreadKey,
+    elsewhere: bool,
+}
+
+impl RowTag {
+    pub fn of(thread: ThreadKey, elsewhere: bool) -> Self {
+        Self { thread, elsewhere }
+    }
+
+    /// `name-tag`, as a key or a selector.
+    pub fn key(self, name: &str) -> SharedString {
+        format!("{name}-{self}").into()
+    }
+
+    /// `name-tag`, as an element's id.
+    pub fn id(self, name: &str) -> gpui::ElementId {
+        self.key(name).into()
+    }
+}
+
+impl std::fmt::Display for RowTag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let thread = self.thread.thread().get();
+        if self.elsewhere {
+            write!(f, "{}-{thread}", self.thread.machine().get())
+        } else {
+            write!(f, "{thread}")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -309,6 +371,7 @@ impl ThreadRow {
             pinned: false,
             retitling: false,
             picked: false,
+            elsewhere: None,
         }
     }
 }
@@ -387,36 +450,22 @@ thread_local! {
 
 /// A line pinned to `width` that fades out at its right edge, as Claude's
 /// sidebar titles do, rather than ending in "…": the line lays out whole,
-/// the box clips it, and `components::line_fade` in `ground` — the row's
-/// fill under it (`row_ground`) — fades the cut. `ground` is `None` where
-/// the line fits (`cut_ground`), so a whole name keeps its last letters,
-/// and where the box holds a rename field, whose caret the fade would hide.
+/// the box clips it, and its leaf (`fade::title_line`) fades its own ink
+/// where it is cut. A rename field in the box has no fade over its caret.
 ///
 /// A pinned line needs a **definite** width on its very first measure.
 /// gpui caches a nowrap line's first measure permanently, and taffy only
 /// hands a text leaf a definite width when the leaf's flex container is a
 /// **column** whose own available width is definite — which taffy derives
 /// from the child's own min/max width. Hence: flex **column**, with min and
-/// max width pinned to the box.
-fn fitted(
-    width: f32,
-    size: f32,
-    ink: u32,
-    weight: FontWeight,
-    text: impl IntoElement,
-    ground: Option<Hsla>,
-) -> Div {
-    fitted_in(width, size, rgb(ink).into(), weight, text, ground)
-}
-
-/// `fitted` in any ink, an alpha one included (a receded card's title).
+/// max width pinned to the box. Its ink may be an alpha one (a receded
+/// card's title).
 fn fitted_in(
     width: f32,
     size: f32,
     ink: Hsla,
     weight: FontWeight,
     text: impl IntoElement,
-    ground: Option<Hsla>,
 ) -> Div {
     div()
         .relative()
@@ -442,121 +491,6 @@ fn fitted_in(
                     .child(text),
             ),
         )
-        .children(ground.map(components::line_fade))
-}
-
-/// `ground`, for `fitted`'s fade, only where `text` at `size` and `weight`
-/// runs past `width`: a line that fits is drawn whole.
-fn cut_ground(
-    measure: &Measure,
-    text: &str,
-    size: f32,
-    weight: FontWeight,
-    width: f32,
-    ground: Hsla,
-) -> Option<Hsla> {
-    (measure.ui(text, size, weight) > width).then_some(ground)
-}
-
-/// What sits at a line's right: never cut, `NAV_WORD_GAP` after what it
-/// follows.
-fn trailing(text: impl Into<SharedString>, size: f32, ink: u32) -> Div {
-    div()
-        .flex_shrink_0()
-        .pl(px(NAV_WORD_GAP))
-        .text_size(px(size))
-        .line_height(px(NAV_LINE))
-        .text_color(rgb(ink))
-        .whitespace_nowrap()
-        .child(text.into())
-}
-
-// ------------------------------------------------------------- the rows
-
-/// The nav's one pointer role: nothing at rest, white 8% under the
-/// pointer at once (T3's rows snap), and the selected row white 11%
-/// whatever the pointer does: no ring, the fill alone.
-fn wash<E: Styled + InteractiveElement>(mut element: E, key: SharedString, selected: bool) -> E {
-    if selected {
-        element = element.bg(rgba(NAV_CARD_ACTIVE));
-    } else {
-        let t = motion::hover_t(&key);
-        #[cfg(test)]
-        testing::DRAWN_HOVER.with(|drawn| drawn.borrow_mut().insert(key.clone(), t));
-        if t > 0.0 {
-            element = element.bg(motion::mix(
-                rgba(TRANSPARENT).into(),
-                rgba(NAV_CARD_HOVER).into(),
-                t,
-            ));
-        }
-    }
-    element.interactivity().on_hover(motion::hover_snap(key));
-    element
-}
-
-/// The frame every row shares: rounded, washed under the pointer.
-fn row_frame(id: impl Into<gpui::ElementId>, key: SharedString, selected: bool) -> Stateful<Div> {
-    wash(
-        div()
-            .id(id)
-            .relative()
-            .flex()
-            .flex_shrink_0()
-            .rounded(px(R_CONTROL))
-            .cursor_pointer()
-            .whitespace_nowrap()
-            .text_size(px(FS_NAV))
-            .line_height(px(NAV_LINE)),
-        key,
-        selected,
-    )
-}
-
-/// A one-line row's frame: 30 high, its items centred, `NAV_ROW_PAD_X` in.
-fn line_frame(id: impl Into<gpui::ElementId>, key: SharedString, selected: bool) -> Stateful<Div> {
-    pitched(row_frame(id, key, selected))
-        .flex_row()
-        .items_center()
-        .h(px(NAV_ROW_H))
-        .px(px(NAV_ROW_PAD_X))
-}
-
-/// A list row's share of the gap between rows (`NAV_ROW_GAP`), half above
-/// and half below, so a run of rows steps 34.
-fn pitched<E: Styled>(row: E) -> E {
-    row.my(px(NAV_ROW_GAP / 2.0))
-}
-
-// ------------------------------------------------------------- the marks
-
-/// The row a mark sits in, in a view's list: on line 1 of a two-line
-/// Notice row, or small, centred on a machine's one-line row.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum MarkSeat {
-    TwoLine,
-    Member,
-}
-
-/// A row's mark where the mockups place it (`NAV_*_AT`), from its mark
-/// column's left (`x`) and its row's top.
-fn mark_at(status: RowStatus, x: f32, seat: MarkSeat) -> Div {
-    let small = seat == MarkSeat::Member;
-    let dot = matches!(
-        status,
-        RowStatus::NeedsYou | RowStatus::Failed | RowStatus::Background
-    );
-    let (left, top) = match seat {
-        MarkSeat::TwoLine if dot => NAV_DOT_AT,
-        MarkSeat::Member if dot => NAV_DOT_AT_SMALL,
-        MarkSeat::TwoLine => NAV_ICON_AT,
-        MarkSeat::Member => NAV_ICON_AT_LINE,
-    };
-    div()
-        .absolute()
-        .left(px(x + left))
-        .top(px(top))
-        .child(mark(status, small))
 }
 
 // ------------------------------------------------------------- the column
@@ -720,29 +654,36 @@ pub fn scrollbar(scroll: &ScrollHandle, revealed: bool) -> Div {
         )
 }
 
-pub fn edge_fades(scroll: &ScrollHandle) -> Vec<Div> {
-    let y = scroll.offset().y;
-    let below = scroll.max_offset().y + y > px(0.);
+/// The list's edge fades, each drawn while rows run past its edge. Laid
+/// after the scroller, so each reads the scroll this frame's layout left.
+pub fn edge_fades(scroll: &ScrollHandle) -> [AnyElement; 2] {
     let fill = NAV_BACKGROUND.hsla();
-    let top = (y < px(0.)).then(|| {
-        div()
-            .debug_selector(|| "nav-fade-top".into())
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .child(components::edge_fade_over(fill, false, NAV_EDGE_FADE))
-    });
-    let foot = below.then(|| {
-        div()
-            .debug_selector(|| "nav-fade-foot".into())
-            .absolute()
-            .bottom_0()
-            .left_0()
-            .right_0()
-            .child(components::edge_fade_over(fill, true, NAV_EDGE_FADE))
-    });
-    top.into_iter().chain(foot).collect()
+    let top = div()
+        .debug_selector(|| "nav-fade-top".into())
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .child(components::edge_fade_over(fill, false, NAV_EDGE_FADE));
+    let foot = div()
+        .debug_selector(|| "nav-fade-foot".into())
+        .absolute()
+        .bottom_0()
+        .left_0()
+        .right_0()
+        .child(components::edge_fade_over(fill, true, NAV_EDGE_FADE));
+    [
+        // As `f32`: the scroller clamps a list that fits to `-0`, which
+        // `Pixels`' total order puts below zero.
+        fade::past_edge(scroll, |scroll| f32::from(scroll.offset().y) < 0., top)
+            .into_any_element(),
+        fade::past_edge(
+            scroll,
+            |scroll| scroll.max_offset().y + scroll.offset().y > px(0.),
+            foot,
+        )
+        .into_any_element(),
+    ]
 }
 
 /// The Thread card at root — see `card::thread_card`.
@@ -750,224 +691,88 @@ pub fn edge_fades(scroll: &ScrollHandle) -> Vec<Div> {
 pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
     thread_card(
         row,
-        row.name.clone(),
+        fade::title_line(row.name.clone()),
         CardDoors::default(),
         false,
         &Measure::Cells(7.0),
     )
 }
 
-/// A Notice or request among the Active cards that has no card of its
-/// own (another machine's Thread), two lines: its mark, its title
-/// (`INK_STRONG` while unread) and its age, then its state's word and
-/// detail in the word's ink. The cursor's row is selected.
-pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure) -> Stateful<Div> {
-    let key = SharedString::from(format!("notice-row-{index}"));
-    let status = match row.state {
-        NoticeState::NeedsYou(_) => RowStatus::NeedsYou,
-        NoticeState::Failed => RowStatus::Failed,
-        NoticeState::Done => RowStatus::Done,
-        NoticeState::Idle => RowStatus::Idle,
-    };
-    let ink = match row.state {
-        NoticeState::NeedsYou(_) => ATTENTION,
-        NoticeState::Failed => BLOCKED,
-        NoticeState::Done | NoticeState::Idle => {
-            if cursor {
-                INK_STRONG
-            } else {
-                INK_SUBTLE
-            }
-        }
-    };
-    let detail = row.detail.text();
-    let line = if detail.is_empty() {
-        row.word().to_string()
-    } else {
-        format!("{} \u{b7} {detail}", row.word())
-    };
-    let text_w = measure.inner_width() - NAV_TITLE_X - NAV_ROW_PAD_X;
-    // In its first minute a Notice has no age to say: the title takes the
-    // line.
-    let age = (!row.when.is_empty()).then(|| row.when.clone());
-    let age_w = age
-        .as_ref()
-        .map_or(0.0, |age| measure.ui(age, FS_META, W_BODY) + NAV_WORD_GAP);
-    // Primary ink, as every nav title; unread says so in weight.
-    let title_weight = if cursor || !row.read { W_LABEL } else { W_BODY };
-    let ground = card::card_ground(&key, cursor, false);
-    let line_ground = cut_ground(measure, &line, FS_META, W_BODY, text_w, ground);
-    row_frame(("notice-row", index), key, cursor)
-        .debug_selector(move || format!("notice-row-{index}"))
-        .flex_col()
-        .justify_center()
-        .h(px(NAV_ROW2_H))
-        .pl(px(NAV_TITLE_X))
-        .pr(px(NAV_ROW_PAD_X))
-        .child(mark_at(status, NAV_ROW_PAD_X, MarkSeat::TwoLine))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .h(px(NAV_LINE))
-                .child(fitted(
-                    text_w - age_w,
-                    FS_NAV,
-                    INK_STRONG,
-                    title_weight,
-                    row.title.clone(),
-                    cut_ground(
-                        measure,
-                        &row.title,
-                        FS_NAV,
-                        title_weight,
-                        text_w - age_w,
-                        ground,
-                    ),
-                ))
-                .children(age.map(|age| {
-                    div()
-                        .flex()
-                        .flex_1()
-                        .justify_end()
-                        .child(components::tabular(trailing(age, FS_META, INK_SUBTLE)))
-                })),
-        )
-        .child(div().flex().h(px(NAV_LINE)).child(fitted(
-            text_w,
-            FS_META,
-            ink,
-            W_BODY,
-            SharedString::from(line),
-            line_ground,
-        )))
-}
-
 /// A refusal from the last change (a Park's, a Snooze's), at the top of
 /// the list, until the next change succeeds: a `BLOCKED` dot and the refusal, dim, wrapping.
 /// Colour on the dot, never the row.
 pub fn notice(text: SharedString) -> Div {
-    div()
+    notice_row(text, NAV_LINE)
         .debug_selector(|| "nav-notice".into())
+        .py(px(SPACE_1))
+        .text_size(px(FS_META))
+        .text_color(rgb(INK_SUBTLE))
+}
+
+/// A machine the window holds and cannot reach, at the top of the list in
+/// T3 Code's words for it (`machine_notices`), on the rows' left edge in
+/// the sidebar's notice type (T3's `SidebarThreadUndoNotice`: 11px on a
+/// 24px line in the muted ink), strong under the pointer as T3's inline
+/// button is. A button the cockpit wires: it signs in or tries again.
+pub fn machine_notice(
+    machine: u32,
+    text: SharedString,
+    cx: &App,
+) -> gpui::component::button::Button {
+    let id: gpui::ElementId = ("nav-machine-notice", machine as usize).into();
+    let ink = motion::mix(
+        rgb(INK_SUBTLE).into(),
+        rgb(INK_STRONG).into(),
+        motion::hover_t(&ferrite_ui::pointer::hover_key(&id)),
+    );
+    let clear: Hsla = rgba(TRANSPARENT).into();
+    components::faded_button(id, clear, clear, clear, ink, cx)
+        .debug_selector(move || format!("nav-machine-notice-{machine}"))
+        .w_full()
+        .h_auto()
+        .p_0()
+        .child(
+            notice_row(text, NAV_NOTICE_LH)
+                .w_full()
+                .text_size(px(FS_NAV_NOTICE))
+                .text_color(ink),
+        )
+}
+
+/// A notice's row on lines `line` tall, on a card's grid: a `BLOCKED` dot
+/// on the first line at the edge the Project badge starts at, and its words
+/// where the Project name starts.
+fn notice_row(text: SharedString, line: f32) -> Div {
+    div()
         .flex()
         .flex_shrink_0()
         .items_start()
-        .gap(px(NAV_ICON_GAP))
+        .gap(px(NAV_CARD_GAP))
         .px(px(NAV_ROW_PAD_X))
-        .py(px(SPACE_1))
-        .text_size(px(FS_META))
-        .line_height(px(NAV_LINE))
-        .text_color(rgb(INK_SUBTLE))
+        .line_height(px(line))
         .child(
             div()
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .justify_center()
-                .w(px(NAV_ICON))
-                .h(px(NAV_LINE))
-                .child(div().size(px(NAV_DOT)).rounded_full().bg(rgb(BLOCKED))),
+                .w(px(NAV_BADGE))
+                .h(px(line))
+                .child(
+                    div()
+                        .debug_selector(|| "nav-notice-dot".into())
+                        .size(px(NAV_DOT))
+                        .rounded_full()
+                        .bg(rgb(BLOCKED)),
+                ),
         )
-        .child(div().flex_1().min_w_0().whitespace_normal().child(text))
-}
-
-// ------------------------------------------------------------- machines
-
-/// A machine's heading as the nav draws it (ADR 0026). Under it, for a
-/// machine other than this computer, whose Threads are the list's own
-/// cards, go its open Threads (`NavState::elsewhere`).
-#[derive(Clone, Debug, PartialEq)]
-pub struct NavMachine {
-    pub row: MachineRow,
-    /// This computer, held: the list's cards are its Threads.
-    pub home: bool,
-}
-
-/// A machine's heading (ADR 0026), in the heading style: its chevron
-/// (`fold`, from `machine_fold`, with its own press), its connection mark,
-/// its name — the strong ink while the window holds it — and a word for a
-/// connection that is not up. The cockpit wires the press: it folds the
-/// machine.
-pub fn machine_heading(row: &MachineRow, fold: impl IntoElement) -> Stateful<Div> {
-    let index = row.index;
-    let word: Option<SharedString> = match row.connection {
-        Connection::Online => None,
-        Connection::Connecting => Some(words::CONNECTING.into()),
-        Connection::Attention => Some(words::NEEDS_YOU.into()),
-        Connection::Disabled => Some(words::OFF.into()),
-    };
-    let dot = |ink: u32| div().size(px(NAV_DOT)).rounded_full().bg(rgb(ink));
-    let ring = |ink: u32| {
-        div()
-            .size(px(NAV_DOT))
-            .rounded_full()
-            .border_1()
-            .border_color(rgb(ink))
-    };
-    let glyph = match row.connection {
-        Connection::Online => dot(RUNNING),
-        Connection::Connecting => ring(INK_SUBTLE),
-        Connection::Attention => dot(ATTENTION),
-        Connection::Disabled => ring(TEXT_FAINT),
-    };
-    let key = SharedString::from(format!("nav-machine-{index}"));
-    line_frame(("nav-machine", index), key, false)
-        .debug_selector(move || format!("nav-machine-{index}"))
-        .gap(px(SPACE_2))
-        .text_size(px(FS_META))
-        .font_weight(W_LABEL)
-        .child(fold)
-        .child(glyph)
         .child(
             div()
+                .debug_selector(|| "nav-notice-words".into())
                 .flex_1()
                 .min_w_0()
-                .truncate()
-                .text_color(rgb(if row.held.is_some() { INK_STRONG } else { INK_SUBTLE }))
-                .child(SharedString::from(row.name.clone())),
+                .whitespace_normal()
+                .child(text),
         )
-        .children(word.map(|word| trailing(word, FS_META, INK_SUBTLE)))
-}
-
-/// A machine heading's chevron: its press folds the machine to its
-/// heading.
-pub fn machine_fold(index: usize, folded: bool) -> Stateful<Div> {
-    div()
-        .id(("nav-machine-fold", index))
-        .debug_selector(move || format!("nav-machine-fold-{index}"))
-        .flex_shrink_0()
-        .child(components::fold_chevron(
-            ("nav-machine-chevron", index),
-            !folded,
-            NAV_CHEVRON,
-            INK_SUBTLE,
-        ))
-}
-
-/// One open Thread under its machine's heading: its mark, its title cell
-/// (`title`: the row's name, or the rename field while it renames) and its
-/// word. The cockpit wires the press: it opens the Thread in place. A
-/// machine that went keeps its rows, dimmed.
-pub fn machine_thread_row(row: &ThreadRow, lost: bool, title: impl IntoElement) -> Stateful<Div> {
-    let word = match row.status {
-        RowStatus::NeedsYou => Some((words::NEEDS_YOU, ATTENTION)),
-        RowStatus::Working | RowStatus::Failing => Some((words::WORKING, INK_SUBTLE)),
-        _ => None,
-    };
-    let (machine, thread) = (row.key.machine().get(), row.key.thread().get());
-    let key = SharedString::from(format!("nav-machine-{machine}-{thread}"));
-    // Thread ids are per Server: the machine is part of the id.
-    row_frame(key.clone(), key.clone(), row.selected)
-        .debug_selector(move || key.to_string())
-        .when(lost, |row| row.opacity(MACHINE_LOST_OPACITY))
-        .flex_row()
-        .items_center()
-        .h(px(NAV_ROW_H))
-        .pl(px(NAV_TITLE_X))
-        .pr(px(NAV_ROW_PAD_X))
-        .child(mark_at(row.status, NAV_ROW_PAD_X - 1.0, MarkSeat::Member))
-        .child(div().flex_1().min_w_0().truncate().child(title))
-        .children(word.map(|(word, ink)| trailing(word, FS_META, ink)))
 }
 
 // ------------------------------------------------------------- rename and drag
@@ -975,14 +780,15 @@ pub fn machine_thread_row(row: &ThreadRow, lost: bool, title: impl IntoElement) 
 /// A Thread title that can be renamed: the row's own title text, and
 /// nothing else. It wears **no** hover wash: the double click is the
 /// affordance; the row is the control.
-pub fn rename_target_thread(thread: ThreadKey, title: SharedString) -> Stateful<Div> {
+pub fn rename_target_thread(tag: RowTag, title: SharedString) -> Stateful<Div> {
+    let key = tag.key("rename-thread");
     div()
-        .id(("rename-thread", thread.thread().get() as usize))
-        .debug_selector(move || format!("rename-thread-{}", thread.thread().get()))
+        .id(tag.id("rename-thread"))
+        .debug_selector(move || key.to_string())
         .min_w_0()
         .overflow_hidden()
         .whitespace_nowrap()
-        .child(title)
+        .child(fade::title_line(title))
 }
 
 #[cfg(test)]
@@ -1238,12 +1044,6 @@ mod tests {
         assert_eq!(RowStatus::Done.ink(), IDLE);
         assert_eq!(RowStatus::Idle.ink(), IDLE);
         assert_eq!(RowStatus::Parked.ink(), IDLE);
-        let mut dot = mark_at(RowStatus::NeedsYou, NAV_ROW_PAD_X, MarkSeat::TwoLine);
-        assert_eq!(
-            dot.style().inset.left,
-            Some(px(NAV_ROW_PAD_X + 3.0).into()),
-            "the 8px dot centred where an icon is, no halo"
-        );
     }
 
     /// Herdr's four states over Ferrite's own, and a roll-up's order.
@@ -1360,33 +1160,12 @@ mod tests {
         assert_eq!(crate::cockpit::focus_thread_action(10), None);
     }
 
-    #[test]
-    fn a_title_fades_into_its_cards_ground() {
-        let key = SharedString::from("nav-thread-0-fade");
-        assert_ne!(card::card_ground(&key, true, false), NAV_BACKGROUND.hsla());
-        assert_eq!(card::card_ground(&key, false, false), NAV_BACKGROUND.hsla());
-        assert_eq!(NAV_BACKGROUND, Paint::solid(0x000000));
-    }
-
-    /// CP7 regression 1: the fade is drawn only over a line that runs
-    /// past its box — `ferrite` at seven 7px cells fits 49px whole and
-    /// keeps its `e`; in 40px it is cut, and fades.
-    #[test]
-    fn only_a_cut_line_fades() {
-        let measure = Measure::Cells(7.0);
-        let ground = NAV_BACKGROUND.hsla();
-        let cut = |width| cut_ground(&measure, "ferrite", FS_META, W_BODY, width, ground);
-        assert_eq!(cut(49.0), None, "a name that fits is whole");
-        assert_eq!(cut(120.0), None);
-        assert_eq!(cut(40.0), Some(ground), "a cut name fades");
-    }
-
-    /// CP7 regression 2: a title the box cuts ends in the fade alone —
-    /// clipped on one line, never ellipsized under it.
+    /// A title the box cuts ends in the fade alone — clipped on one line,
+    /// never ellipsized under it.
     #[test]
     fn a_title_is_clipped_not_ellipsized() {
         let mut title = rename_target_thread(
-            ThreadKey::fixture(0, 1),
+            RowTag::of(ThreadKey::fixture(0, 1), false),
             "UI test: color tokens and shell commands".into(),
         );
         let style = title.style().clone();
@@ -1414,6 +1193,37 @@ mod tests {
         );
         assert_eq!(arrivals.since(here), Some(start), "this computer's stays put");
         assert_eq!(arrivals.since(there), Some(later), "the other machine's moved");
+    }
+
+    /// Machines whose clocks disagree by an hour interleave as their work
+    /// happened (F-A4): a machine's times read on this computer's clock
+    /// (`ServerClock::local_ms`, as `Cockpit::last_used` reads them), so
+    /// the latest arrival tops the list whatever machine it is on.
+    #[test]
+    fn skewed_clocks_interleave_as_the_work_happened() {
+        use ferrite_core::clock::ServerClock;
+        const MINUTE: i64 = 60_000;
+        let now: i64 = 1_763_900_000_000;
+        let hour = 60 * MINUTE;
+        let at = |ms: i64| SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64);
+        // Each Server said its time as this computer read `now`.
+        let fast = ServerClock::sampled(Some(now + hour), now, now);
+        let slow = ServerClock::sampled(Some(now - hour), now, now);
+        let here = ThreadKey::fixture(0, 1);
+        let ahead = ThreadKey::fixture(1, 1);
+        let behind = ThreadKey::fixture(2, 1);
+        let listed = [
+            (here, Section::Active, Some(at(now - 5 * MINUTE))),
+            // Two minutes ago on a clock an hour fast.
+            (ahead, Section::Active, Some(at(fast.local_ms(now + hour - 2 * MINUTE)))),
+            // Nine minutes ago on a clock an hour slow.
+            (behind, Section::Active, Some(at(slow.local_ms(now - hour - 9 * MINUTE)))),
+        ];
+        let mut arrivals = Arrivals::default();
+        arrivals.note(&listed, at(now));
+        let mut order = vec![behind, here, ahead];
+        order.sort_by_key(|thread| arrivals.latest_first(*thread));
+        assert_eq!(order, [ahead, here, behind]);
     }
 
     /// The list's rows travel over T3's 150ms `ease-out`; a shelf's
@@ -1460,6 +1270,13 @@ pub(crate) mod testing {
             RefCell::new(HashMap::new());
         pub(super) static DRAWN_CARDS: RefCell<HashMap<ThreadKey, DrawnCard>> =
             RefCell::new(HashMap::new());
+        pub(super) static DRAWN_HOVER_CARD: RefCell<Vec<String>> = RefCell::default();
+    }
+
+    /// The lines under the title of the hover detail last drawn: what it
+    /// says beyond the card, in order.
+    pub(crate) fn drawn_hover_card() -> Vec<String> {
+        DRAWN_HOVER_CARD.with(|drawn| drawn.borrow().clone())
     }
 
     /// A Thread's card as last drawn: whether it receded, the opacity it

@@ -718,7 +718,96 @@ fn list_dir_answers_a_directory_on_the_servers_computer() {
     assert!(refused_with(&reply, ErrorCode::Failed), "{reply:?}");
 }
 
-/// A window holding a machine offers the machine's worktrees and branches
+/// Another machine's row names its branch (ADR 0045): the Server that owns
+/// the checkout reads it and says it in the Thread's digest, once. While
+/// nothing changes the link carries nothing at all, over several sweeps;
+/// a branch switched in the checkout then reaches the window by itself.
+#[test]
+fn a_branch_travels_in_the_digest_and_an_idle_link_carries_nothing() {
+    let harness = start("branch-digest");
+    let repo = repository(&harness.dir);
+    let mut window = attach(&harness.address);
+    let reply = window.command(
+        1,
+        Op::Open {
+            provider: Provider::Claude,
+            workspace: WireChoice::Main {
+                checkout: repo.clone(),
+            },
+        },
+    );
+    let ServerMessage::Reply {
+        ok: Some(Done::Thread { thread }),
+        ..
+    } = reply
+    else {
+        panic!("open failed: {reply:?}");
+    };
+    let _agent = harness.sessions.recv_timeout(PATIENCE).unwrap();
+    let on = |window: &Window, branch: &str| {
+        window
+            .digest(thread)
+            .is_some_and(|digest| digest.branch.as_deref() == Some(branch))
+    };
+    window.until(|window| on(window, "main"));
+
+    let quiet_until = Instant::now() + 3 * SWEEP_INTERVAL;
+    let mut carried = Vec::new();
+    while let Some(left) = quiet_until.checked_duration_since(Instant::now()) {
+        if let Ok(message) = window.client.messages.recv_timeout(left) {
+            carried.push(format!("{message:?}"));
+            window.receive(message);
+        }
+    }
+    assert!(carried.is_empty(), "an idle link carried: {carried:?}");
+
+    ferrite_core::workspace::git_for_tests(&repo, &["checkout", "-q", "-b", "next"]);
+    window.until(|window| on(window, "next"));
+}
+
+/// A Thread let go holds only its digest, and its checkout can still move:
+/// the branch goes out on that digest, with no Activity to fold, and only
+/// when it changed.
+#[test]
+fn a_let_go_threads_branch_still_reaches_its_windows() {
+    let (spawner, _started, providers) = recorded();
+    let (mut engine, thread, agent, clock) = at_rest("branch-let-go", spawner, &providers);
+    agent.send(text("All done here.
+
+")).unwrap();
+    agent
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    pump_engine_until(&mut engine, "the turn never ended", |engine| {
+        engine.thread(thread).unwrap().transcript().turn_completed()
+    });
+    engine.set_watched(BTreeSet::new());
+    clock.advance(HELD_AT_REST);
+    engine.pump();
+    engine.take_messages();
+    let blocks = engine.thread(thread).unwrap().transcript().blocks().len();
+    assert_eq!(blocks, 0, "let go: nothing held but the digest");
+    let branches = |messages: Vec<ServerMessage>| -> Vec<Option<String>> {
+        messages
+            .into_iter()
+            .filter_map(|message| match message {
+                ServerMessage::Digest { digest, .. } => Some(digest.branch),
+                _ => None,
+            })
+            .collect()
+    };
+
+    engine.set_branch(thread, Some("next".into()));
+    engine.pump();
+    assert_eq!(branches(engine.take_messages()), [Some("next".to_string())]);
+    engine.set_branch(thread, Some("next".into()));
+    engine.pump();
+    assert_eq!(branches(engine.take_messages()), [], "it did not move");
+}
+
 /// (ADR 0026): `list_repo` reads the Project's repo with git where the
 /// Server runs, off its pump, naming the main checkout's branch apart.
 #[test]

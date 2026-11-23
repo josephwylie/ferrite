@@ -407,6 +407,7 @@ pub struct CockpitView {
     /// A moment that must not be skipped (a turn ended) asked for a
     /// refresh while one was under way: another follows it.
     branch_refresh_queued: bool,
+    /// The machines whose Threads' branches are being read there.
     /// What a draft's workspace chip and its menu read of its Project's
     /// repo, as git or the machine's Server last answered.
     checkouts: checkouts::Checkouts,
@@ -2509,8 +2510,9 @@ impl CockpitView {
     /// worktrees each Thread's repo has, and hands the answer to the core:
     /// that is how a binding follows the agent into a worktree it made
     /// (`workspace::follow`), and the labels re-read on the very next pass.
-    /// None of it for another machine: no git here can read its checkouts.
-    fn refresh_branches(&mut self, cx: &mut Context<Self>) {
+    /// None of it for another machine: no git here can read its checkouts,
+    /// and its Server sends each Thread's branch in its digest.
+    pub(crate) fn refresh_branches(&mut self, cx: &mut Context<Self>) {
         // A draft has no Thread yet, but its workspace chip names its
         // Project's checkout, which the operator may switch under it.
         let drafted: Vec<ProjectKey> = self
@@ -3073,7 +3075,6 @@ impl CockpitView {
             MenuTarget::Parked
             | MenuTarget::NavFilter
             | MenuTarget::NavFactory
-            | MenuTarget::Machine(_)
             | MenuTarget::Review { .. }
             | MenuTarget::Prompt { .. }
             | MenuTarget::Factory
@@ -5660,6 +5661,9 @@ impl CockpitView {
             ),
             DraftTarget::New => (ferrite_ui::icons::FOLDER_GIT, SharedString::from("New worktree")),
         };
+        let machine = self
+            .machine_label(draft.binding.project().machine(), cx)
+            .map(|name| pane::env_machine(name.into()).into_any_element());
         let chips = [
             (
                 pane::BandChip::Project,
@@ -5670,7 +5674,7 @@ impl CockpitView {
                 pane::band_chip_label(&workspace_label),
             ),
         ];
-        chips
+        let chips = chips
             .into_iter()
             .enumerate()
             .map(|(slot, (chip, label))| {
@@ -5702,8 +5706,8 @@ impl CockpitView {
                     self.record_trigger(band_trigger(chip)),
                 )
                 .into_any_element()
-            })
-            .collect()
+            });
+        machine.into_iter().chain(chips).collect()
     }
 
     /// The focused draft's model chip (#29), where a live Thread's stands
@@ -6092,6 +6096,7 @@ impl CockpitView {
             retitling: self.titling.naming(key),
             // The nav wears its own picks (`NavView::card_picked`).
             picked: false,
+            elsewhere: self.elsewhere_row(key, cx),
         };
         #[cfg(test)]
         drawn::record_row(
@@ -8406,6 +8411,7 @@ impl CockpitView {
             detail,
             when: crate::facts::since_label(notice.at, now),
             read: notice.read,
+            elsewhere: self.machine_label(key.machine(), cx).is_some(),
         }
     }
 
@@ -8552,6 +8558,7 @@ impl CockpitView {
             detail,
             when: crate::facts::since_label(notice.at, now),
             read: notice.read,
+            elsewhere: self.machine_label(key.machine(), cx).is_some(),
         }
     }
 
@@ -8559,36 +8566,21 @@ impl CockpitView {
     /// Requests precede other rows, retaining each machine's attention order.
     #[cfg(test)]
     pub(super) fn needs_you_rows(&self, cx: &gpui::App) -> Vec<NoticeRow> {
-        let model = self.cockpit.read(cx);
-        let listed = nav_view::listed_threads(self, model, cx);
-        self.inbox_rows(&self.nav_state(cx), &listed, cx)
+        self.inbox_rows(&self.nav_state(cx), cx)
     }
 
-    /// The Active section as the Inbox's rows: this computer's cards',
-    /// then every other machine's Threads awaiting handling, pinned or
-    /// not, requests first.
+    /// The Active section as the Inbox's rows, every machine's, requests
+    /// first.
     pub(super) fn inbox_rows(
         &self,
         state: &nav::NavState,
-        listed: &[(ThreadKey, nav::Section, Option<std::time::SystemTime>)],
         cx: &gpui::App,
     ) -> Vec<NoticeRow> {
         let now = ferrite_core::clock::system_time();
-        // Another machine's Thread has no card, pinned or not, until the
-        // list merges across machines: pinned, it stays in the Inbox.
-        let others = listed
-            .iter()
-            .filter(|(key, section, _)| {
-                matches!(section, nav::Section::Active | nav::Section::Pinned)
-                    && !self.home_card(*key, cx)
-                    && self.admitted(*key, cx)
-            })
-            .map(|(key, _, _)| *key);
         let mut rows: Vec<_> = state
             .active
             .iter()
             .map(|entry| entry.key)
-            .chain(others)
             .map(|thread| {
                 let notifications = self.cockpit.read(cx).notifications(thread.machine());
                 if let Some(decision) = notifications.first_request(thread.thread()) {
@@ -8607,6 +8599,7 @@ impl CockpitView {
                         detail: crate::notifications::Detail::None,
                         when: "".into(),
                         read: true,
+                        elsewhere: self.machine_label(thread.machine(), cx).is_some(),
                     }
                 }
             })

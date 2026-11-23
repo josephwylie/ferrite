@@ -27,7 +27,7 @@ pub use background_work::{
 #[cfg(any(test, feature = "test-support"))]
 pub use composer::model_label;
 pub use composer::{
-    attach_button, composer_footer, composer_row_limit, env_strip, env_word,
+    attach_button, composer_footer, composer_row_limit, env_machine, env_strip, env_word,
     mode_chip, model_effort_chip, offers_import, ModelChip, permission_mode_label, queued_close, queued_count,
     primary_actions, queued_edit, queued_send_now, queued_sends_now, queued_takes_back, send_button,
     stop_button,

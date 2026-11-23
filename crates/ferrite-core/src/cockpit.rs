@@ -2377,15 +2377,20 @@ impl Cockpit {
     }
 
     /// When a Thread was last used, live or parked — the nav's default
-    /// order and its "3 days" line. A parked Thread's is in its row; an
-    /// open one's is a `stat`, so callers still cache it rather than ask
-    /// per frame.
-    pub fn last_used(&self, thread: ThreadKey) -> Option<std::time::SystemTime> {
-        let (machine, thread) = self.at(thread)?;
-        match machine.open_log(thread) {
-            Some(logs) => logs.last_used(thread),
-            None => machine.parked.last_used(thread),
+    /// order and its "3 days" line — on this computer's clock. A parked
+    /// Thread's is in its row; an open one's is a `stat` of its log, so
+    /// callers still cache it rather than ask per frame. Another machine's
+    /// open Thread has no log here: its digest's newest activity stands in.
+    pub fn last_used(&self, key: ThreadKey) -> Option<std::time::SystemTime> {
+        let (machine, thread) = self.at(key)?;
+        if let Some(logs) = machine.open_log(thread) {
+            return logs.last_used(thread);
         }
+        let server_ms = match machine.parked.last_used_ms(thread) {
+            Some(ms) => ms,
+            None => self.thread(key)?.digest().active_ms?,
+        };
+        Some(machine.wall(server_ms))
     }
 
     /// When an open Thread last had a prompt sent or a turn end

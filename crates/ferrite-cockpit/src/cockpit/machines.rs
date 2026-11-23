@@ -1,14 +1,32 @@
-//! The window's machines (ADR 0026, ADR 0045): their headings and their
-//! Threads in the nav, what a machine that went looks like, and Settings
-//! › Machines. The window holds every enabled machine at once; a press on
-//! any machine's Thread opens it in place. A window with only this
-//! computer draws no headings.
+//! The window's machines (ADR 0026, ADR 0045): what their Threads' rows
+//! say of them in the nav's one list, the notice of a machine the window
+//! cannot reach, what a machine that went looks like, and Settings ›
+//! Machines. The window holds every enabled machine at once; a press on
+//! any machine's Thread opens it in place.
 
 use super::*;
-use crate::nav::NavMachine;
 use crate::notifications::Alert;
 use ferrite_core::cockpit::ServerState;
+use ferrite_core::machine::Failure;
 use gpui::App;
+
+/// A machine the window holds and cannot reach, as the notice at the top
+/// of the nav's list says it, in T3 Code's words for an environment that
+/// is not there (`useSystemComposerBanners`), and what its press does.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MachineNotice {
+    pub machine: ferrite_core::MachineId,
+    pub words: SharedString,
+    /// Its press signs in, in a terminal; else it tries again now.
+    pub sign_in: bool,
+    /// It is reaching the machine again: T3 says so only once that has
+    /// taken `RECONNECT_GRACE`.
+    pub reconnecting: bool,
+}
+
+/// How long a machine is being reached again before its notice says so
+/// (T3 Code's `ENVIRONMENT_RECONNECT_WARNING_GRACE_MS`).
+pub(crate) const RECONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// What a lost machine still shows (ADR 0026): `element` dimmed under a
 /// cover, `id`, that takes every press until the machine is back.
@@ -29,27 +47,6 @@ pub(super) fn held(element: Div, id: impl Into<SharedString>) -> Div {
 }
 
 impl CockpitView {
-    /// Every machine's heading for the nav, when there is more than this
-    /// computer.
-    pub(super) fn machine_rows(&self, cx: &App) -> Option<Vec<NavMachine>> {
-        let machines = self.machines.as_ref()?;
-        if !machines.listed() {
-            return None;
-        }
-        let model = self.cockpit.read(cx);
-        let home = model.this_computer();
-        Some(
-            machines
-                .rows(model)
-                .into_iter()
-                .map(|row| NavMachine {
-                    home: row.held.is_some() && row.held == home,
-                    row,
-                })
-                .collect(),
-        )
-    }
-
     /// Where an act with no Thread or Project of its own goes
     /// (`Cockpit::start_machine`).
     pub(super) fn start_machine(&self, cx: &App) -> Option<ferrite_core::MachineId> {
@@ -98,6 +95,53 @@ impl CockpitView {
         !self.cockpit.read(cx).local(machine)
     }
 
+    /// What a row of `thread` says of its machine, when that is not this
+    /// computer: its name, and whether the window has lost it.
+    pub(super) fn elsewhere_row(&self, thread: ThreadKey, cx: &App) -> Option<nav::Elsewhere> {
+        let machine = thread.machine();
+        Some(nav::Elsewhere {
+            machine: self.machine_label(machine, cx)?.into(),
+            lost: self.machine_lost(machine, cx),
+        })
+    }
+
+    /// Every machine the window holds but cannot reach, other than this
+    /// computer, in the order Settings lists them: what the notice of
+    /// each says.
+    pub(super) fn machine_notices(&self, cx: &App) -> Vec<MachineNotice> {
+        let cockpit = self.cockpit.read(cx);
+        let mut machines: Vec<ferrite_core::MachineId> = cockpit.machines().collect();
+        let listed = |machine| {
+            self.machines
+                .as_ref()
+                .and_then(|machines| machines.listed_as(machine))
+        };
+        machines.sort_by_key(|machine| listed(*machine));
+        machines
+            .into_iter()
+            .filter_map(|machine| {
+                let name = self.machine_label(machine, cx)?;
+                let Some(ServerState::Detached { attention, .. }) = cockpit.server(machine)
+                else {
+                    return None;
+                };
+                let (words, sign_in, reconnecting) = match attention {
+                    Some(failure) if failure.needs_sign_in() => {
+                        (format!("Sign in to {name}"), true, false)
+                    }
+                    Some(_) => (format!("{name} is offline"), false, false),
+                    None => (format!("{name} is reconnecting"), false, true),
+                };
+                Some(MachineNotice {
+                    machine,
+                    words: words.into(),
+                    sign_in,
+                    reconnecting,
+                })
+            })
+            .collect()
+    }
+
     /// Whether `machine` is another machine whose Server is not there:
     /// its Panes stay, dimmed, and take no input until it is back.
     pub(super) fn machine_lost(&self, machine: ferrite_core::MachineId, cx: &App) -> bool {
@@ -117,21 +161,55 @@ impl CockpitView {
             .is_none_or(|server| matches!(server, ServerState::Attached { .. }))
     }
 
-    pub(super) fn fold_machine(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(machines) = &mut self.machines {
-            machines.toggle_fold(index);
-        }
-        cx.notify();
+    /// Settings, on Connections.
+    pub(super) fn open_connections(&mut self, cx: &mut Context<Self>) {
+        self.show_settings(cx).update(cx, |settings, _| {
+            settings.page = settings::PageKey::Connections;
+        });
     }
 
-    /// Sign in to `machine`, in a terminal.
-    pub(super) fn sign_in(&mut self, machine: ferrite_core::MachineId, cx: &mut Context<Self>) {
+    /// Sign in to `machine`: over ssh in a terminal; a paired link whose
+    /// session ended, by pairing it again in Connections.
+    pub(super) fn sign_in(
+        &mut self,
+        machine: ferrite_core::MachineId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(
+            self.cockpit.read(cx).server(machine),
+            Some(ServerState::Detached { attention: Some(Failure::Revoked), .. })
+        ) {
+            self.pair_again(machine, window, cx);
+            return;
+        }
         let Some(bridge) = self.cockpit.read(cx).bridge(machine) else {
             return;
         };
         if let Err(error) = bridge.sign_in() {
             self.nav_notice.problem(format!("cannot sign in: {error}"));
             cx.notify();
+        }
+    }
+
+    /// Connections, its editor open on `machine` for a fresh pairing code.
+    fn pair_again(
+        &mut self,
+        machine: ferrite_core::MachineId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let saved = self.machines.as_ref().and_then(|machines| {
+            machines.machine(machines.listed_as(machine)?).cloned()
+        });
+        let settings = self.show_settings(cx);
+        settings.update(cx, |settings, _| settings.page = settings::PageKey::Connections);
+        if let Some(saved) = saved {
+            // Once this view's update is done: the editor reads it.
+            let connections = settings.read(cx).connections.clone();
+            window.defer(cx, move |window, cx| {
+                connections.update(cx, |connections, cx| connections.edit(Some(saved), window, cx));
+            });
         }
     }
 
@@ -212,14 +290,6 @@ impl CockpitView {
             self.launch_project = super::startup_project(self.cockpit.read(cx));
         }
         self.put_away_drafts(gone, cx);
-    }
-
-    /// Whether `thread` is one of the list's own cards: this computer's,
-    /// or any while the window lists no other machine. Another machine's
-    /// Threads are rows under its heading.
-    pub(super) fn home_card(&self, thread: ThreadKey, cx: &App) -> bool {
-        let listed = self.machines.as_ref().is_some_and(|machines| machines.listed());
-        !listed || self.cockpit.read(cx).this_computer() == Some(thread.machine())
     }
 
     /// `thread`'s title as the Inbox and a toast say it: after its

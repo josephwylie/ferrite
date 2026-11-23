@@ -6,7 +6,7 @@
 //! carries its id, so two machines' Threads of the same number never meet.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::{mirror, parked, remote, shared, Asked, Said, Unread};
 use crate::engine::{BootstrapResult, Bootstrapped, Engine, PaneUpdate};
@@ -100,6 +100,18 @@ impl HeldMachine {
 
     pub(super) fn project_key(&self, project: crate::workspace::registry::ProjectId) -> ProjectKey {
         ProjectKey::new(self.id, project)
+    }
+
+    /// `server_ms`, milliseconds since the epoch on this machine's clock, as
+    /// a time on this computer's (F-A4, T3 Code's `toServerClock`): two
+    /// machines' times compare as they happened, however far apart their
+    /// clocks are. An Engine in this process reads this computer's clock.
+    pub(super) fn wall(&self, server_ms: i64) -> SystemTime {
+        let local_ms = match &self.link {
+            Link::InProcess(_) => server_ms,
+            Link::Server(server) => server.clock().local_ms(server_ms),
+        };
+        SystemTime::UNIX_EPOCH + Duration::from_millis(local_ms.max(0) as u64)
     }
 
     /// Whether this machine is this computer, reached: a path it names is

@@ -29,6 +29,8 @@ pub(crate) enum Gone {
     /// A machine went.
     Lost,
     SignIn,
+    /// A paired link's session ended there: only a new pairing undoes it.
+    Revoked,
     NotInstalled,
 }
 /// The offer to restart an older Server.
@@ -167,6 +169,7 @@ impl CockpitView {
                 let gone = match (&name, attention) {
                     (None, _) => Gone::NoServer,
                     (Some(_), Some(Failure::SignIn)) => Gone::SignIn,
+                    (Some(_), Some(Failure::Revoked)) => Gone::Revoked,
                     (Some(_), Some(_)) => Gone::NotInstalled,
                     (Some(_), None) if self.server_bands.attached.contains(&machine) => Gone::Lost,
                     // Being reached for the first time: the nav's glyph says so.
@@ -200,6 +203,12 @@ impl CockpitView {
                          Ferrite connects once you have."
                             .to_string(),
                     ),
+                    Gone::Revoked => (
+                        format!("Sign in to {name}"),
+                        "This machine no longer takes this session. Click to pair it \
+                         again; Ferrite connects once you have."
+                            .to_string(),
+                    ),
                     Gone::NotInstalled => (
                         format!("{name} has no ferrited"),
                         format!(
@@ -216,10 +225,10 @@ impl CockpitView {
                         .message(message)
                         .with_type(NotificationType::Warning)
                         .autohide(false)
-                        .on_click(move |_, _, cx| {
+                        .on_click(move |_, window, cx| {
                             view.update(cx, |view, cx| {
-                                if gone == Gone::SignIn {
-                                    view.sign_in(machine, cx);
+                                if matches!(gone, Gone::SignIn | Gone::Revoked) {
+                                    view.sign_in(machine, window, cx);
                                 } else {
                                     view.cockpit
                                         .update(cx, |cockpit, _| cockpit.retry_server(machine));
