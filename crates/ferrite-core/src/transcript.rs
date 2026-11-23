@@ -790,6 +790,7 @@ enum Retire {
 fn handback_line(tool: &ToolBlock, elapsed_ms: Option<u64>) -> String {
     let outcome = match tool.state {
         ToolState::Failed(_) => "failed",
+        ToolState::Stopped => "stopped",
         _ => "completed",
     };
     let label = tool.title.as_deref().unwrap_or(&tool.summary);
@@ -2539,7 +2540,11 @@ impl Transcript {
                         ..Update::default()
                     };
                 }
-                let handback = self.running_in_background(&id);
+                // A stop of the work reaches its call just before the handback.
+                let handback = self.tool(&id).is_some_and(|tool| {
+                    tool.background.is_some()
+                        && matches!(tool.state, ToolState::Running | ToolState::Stopped)
+                });
                 let elapsed_ms = result.duration_ms();
                 // A call the operator stopped stays stopped, whatever the
                 // provider says of it after (its refusal is no failure).
@@ -2600,8 +2605,9 @@ impl Transcript {
                     _ => (Vec::new(), None, row_line(None)),
                 };
                 // The picture is the result (its `[image]` stand-in is no
-                // output to disclose), and a refusal has nothing to show.
-                let output = if shows_image || stopped {
+                // output to disclose), and a refusal has nothing to show;
+                // work stopped in the background keeps what it printed.
+                let output = if shows_image || (stopped && !handback) {
                     None
                 } else {
                     retained_output(&output)

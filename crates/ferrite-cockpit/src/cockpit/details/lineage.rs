@@ -9,9 +9,10 @@
 use super::super::delegates::{Delegator, Serving};
 use super::super::subagents::{agent_name, parent_of, state_word};
 use super::*;
-use ferrite_core::activity::{ActivityView, AgentStatus, Subject};
+use ferrite_core::activity::{ActivityView, AgentStatus, Subject, SubjectView};
 use ferrite_core::delegate::{DelegateId, Delegated, Delegating, Status};
 use ferrite_core::server::ServerId;
+use ferrite_core::TurnOutcome;
 use ferrite_ui::icons::{self, icon};
 use std::collections::HashMap;
 
@@ -59,33 +60,46 @@ pub(super) enum Leads {
     },
 }
 
-/// The dot on a row's icon, in the shared state inks.
+/// The dot on a row's icon, T3's `ThreadRelationshipIcon`: blue while it
+/// runs or waits, red failed, green done, muted for anything else (stopped).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Dot {
     Running,
-    NeedsYou,
     Failed,
+    Done,
     Idle,
 }
 
 impl Dot {
     fn of(status: AgentStatus, fresh: bool) -> Self {
         match status {
-            _ if !fresh => Self::Idle,
-            AgentStatus::Working | AgentStatus::Pending => Self::Running,
-            AgentStatus::Waiting => Self::NeedsYou,
+            // How it ended outlives the Session that saw it end.
             AgentStatus::Failed | AgentStatus::NotFound => Self::Failed,
+            AgentStatus::Idle => Self::Done,
+            _ if !fresh => Self::Idle,
+            AgentStatus::Working | AgentStatus::Pending | AgentStatus::Waiting => Self::Running,
+            AgentStatus::Unknown => Self::Done,
             _ => Self::Idle,
         }
     }
 
     fn ink(self) -> u32 {
         match self {
-            Self::Running => RUNNING,
-            Self::NeedsYou => ATTENTION,
+            Self::Running => BLUE,
             Self::Failed => BLOCKED,
+            Self::Done => GREEN,
             Self::Idle => IDLE,
         }
+    }
+}
+
+/// How a parent stands (T3's `activityRunStatus`): at rest, as its last turn
+/// ended, so a Thread stopped with Escape does not read Done.
+fn parent_status(view: SubjectView<'_>) -> AgentStatus {
+    match (view.status(), view.last_outcome()) {
+        (AgentStatus::Idle, Some(TurnOutcome::Interrupted)) => AgentStatus::Interrupted,
+        (AgentStatus::Idle, Some(TurnOutcome::Error(_))) => AgentStatus::Failed,
+        (status, _) => status,
     }
 }
 
@@ -130,10 +144,11 @@ pub(super) fn lineage<F: Fn(&ServerId) -> Option<Serving>>(
                 activity.subject(&parent)?,
             ),
         };
+        let status = parent_status(view);
         Some(Relative {
-            meta: state_word(view.status(), view.fresh()).to_owned(),
+            meta: state_word(status, view.fresh()).to_owned(),
             timed: false,
-            state: Dot::of(view.status(), view.fresh()),
+            state: Dot::of(status, view.fresh()),
             leads: Leads::Subject(parent),
             title,
             provider: None,
@@ -218,7 +233,8 @@ fn delegate_row(delegate: &Delegated, reached: bool) -> Relative {
         state: match delegate.status {
             Status::Starting | Status::Running | Status::Waiting => Dot::Running,
             Status::Failed => Dot::Failed,
-            Status::Completed | Status::Cancelled | Status::Interrupted => Dot::Idle,
+            Status::Completed => Dot::Done,
+            Status::Cancelled | Status::Interrupted => Dot::Idle,
         },
         leads: Leads::Elsewhere {
             server: delegate.server.clone(),
@@ -660,7 +676,7 @@ fn row(relative: &Relative, glyph: &'static str, ink: u32, stop_group: Option<Sh
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrite_core::activity::Activity;
+    use ferrite_core::activity::{Activity, ActivityInput};
 
     fn delegated(id: u32, title: Option<&str>, status: Status) -> Delegated {
         Delegated {
@@ -708,6 +724,36 @@ mod tests {
         )
     }
 
+    /// A Server restart leaves every agent not fresh: how one ended still
+    /// reads as it did, and what one was doing no longer claims to go on.
+    #[test]
+    fn how_an_agent_ended_outlives_a_restart() {
+        let read = |status| (state_word(status, false), Dot::of(status, false));
+        assert_eq!(read(AgentStatus::Interrupted), ("Stopped", Dot::Idle));
+        assert_eq!(read(AgentStatus::Failed), ("Failed", Dot::Failed));
+        assert_eq!(read(AgentStatus::Idle), ("Done", Dot::Done));
+        assert_eq!(read(AgentStatus::Working), ("Unavailable", Dot::Idle));
+    }
+
+    /// A parent at rest reads as its last turn ended: stopped, not Done.
+    #[test]
+    fn a_parent_stopped_with_escape_reads_stopped() {
+        let ended = |outcome| {
+            let mut activity = Activity::default();
+            activity.apply(ActivityInput::Connect { generation: 1 });
+            activity.apply(ActivityInput::Main {
+                input: ferrite_core::transcript::Input::Event(
+                    ferrite_core::SessionEvent::TurnEnded { outcome, cost_usd: None },
+                ),
+                at: std::time::Instant::now(),
+            });
+            parent_status(activity.view().main())
+        };
+        assert_eq!(ended(TurnOutcome::Interrupted), AgentStatus::Interrupted);
+        assert_eq!(ended(TurnOutcome::Error("x".into())), AgentStatus::Failed);
+        assert_eq!(ended(TurnOutcome::Completed), AgentStatus::Idle);
+    }
+
     /// T3's `RemoteSubagentRow`: the title (`Delegate` when it has none),
     /// `on pc · Running` in T3's status words, open ones after the agents
     /// and ended ones under `Previous agents`, each in the order they
@@ -740,7 +786,7 @@ mod tests {
         assert_eq!(
             rows(&lineage.previous),
             [
-                ("Lint".to_owned(), "on pc \u{b7} Done".to_owned(), Dot::Idle),
+                ("Lint".to_owned(), "on pc \u{b7} Done".to_owned(), Dot::Done),
                 ("Docs".to_owned(), "on pc \u{b7} Stopped".to_owned(), Dot::Idle),
                 ("Bench".to_owned(), "on pc \u{b7} Failed".to_owned(), Dot::Failed),
             ]

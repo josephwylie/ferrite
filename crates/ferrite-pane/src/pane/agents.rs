@@ -175,13 +175,13 @@ impl AgentFaces {
                 AgentRun::Failed if !matches!(tool.state, ToolState::Failed(_)) => {
                     tool.state = ToolState::Failed(String::new());
                 }
-                AgentRun::Stopped if !matches!(tool.state, ToolState::Failed(_)) => {
-                    tool.state = ToolState::Stopped;
-                }
+                // T3 reads the agent's own status: the error result its
+                // stop left on the call is not a failure.
+                AgentRun::Stopped => tool.state = ToolState::Stopped,
                 AgentRun::Done if tool.state == ToolState::Running => {
                     tool.state = ToolState::Ok;
                 }
-                AgentRun::Failed | AgentRun::Stopped | AgentRun::Done => {}
+                AgentRun::Failed | AgentRun::Done => {}
             }
         }
     }
@@ -820,6 +820,19 @@ mod tests {
         assert!(matches!(tool(&blocks[1]).state, ToolState::Failed(_)));
         assert_eq!(tool(&blocks[2]).state, ToolState::Ok);
         assert_eq!(tool(&blocks[3]).state, ToolState::Ok);
+    }
+
+    /// T3 reads the agent's status: a stop's error result is no failure.
+    #[test]
+    fn a_stopped_agent_reads_stopped_though_its_call_ended_in_an_error() {
+        let mut blocks = agents(&[("a", "Agent")]);
+        if let Body::Tool(tool) = &mut blocks[0].body {
+            tool.state = ToolState::Failed("Stop me".into());
+        }
+        let mut faces = AgentFaces::default();
+        faces.insert("a".into(), face(AgentRun::Stopped, None, None));
+        faces.apply(&mut blocks);
+        assert_eq!(tool(&blocks[0]).state, ToolState::Stopped);
     }
 
     /// A card's clock is T3's `subagentGroupTiming`: earliest start to latest

@@ -348,22 +348,21 @@ fn pick_option(picks: &mut Vec<usize>, option: usize, multi: bool) {
     }
 }
 
-/// The word Lineage says of an agent: its state in the shared lexicon
-/// (`theme::words`), or `done` for an idle or unclassified one.
+/// The word Lineage says of an agent (T3's `threadRelationshipStatusLabel`).
+/// How it ended outlives the Session that saw it end; what it was doing
+/// needs a live one to say so.
 pub(super) fn state_word(status: AgentStatus, fresh: bool) -> &'static str {
-    use theme::words;
-    if !fresh {
-        return words::UNAVAILABLE;
-    }
     match status {
-        AgentStatus::Working => words::WORKING,
-        AgentStatus::Waiting => words::NEEDS_YOU,
-        AgentStatus::Pending => words::STARTING,
-        AgentStatus::Paused => words::PAUSED,
-        AgentStatus::Interrupted | AgentStatus::Shutdown => words::INTERRUPTED,
-        AgentStatus::Failed | AgentStatus::NotFound => words::FAILED,
-        AgentStatus::NotLoaded => words::UNAVAILABLE,
-        AgentStatus::Idle | AgentStatus::Unknown => words::DONE,
+        AgentStatus::Interrupted | AgentStatus::Shutdown => "Stopped",
+        AgentStatus::Failed | AgentStatus::NotFound => "Failed",
+        AgentStatus::Idle => "Done",
+        _ if !fresh => "Unavailable",
+        AgentStatus::Working => "Running",
+        AgentStatus::Waiting => "Waiting",
+        AgentStatus::Pending => "Queued",
+        AgentStatus::Paused => "Paused",
+        AgentStatus::NotLoaded => "Unavailable",
+        AgentStatus::Unknown => "Done",
     }
 }
 

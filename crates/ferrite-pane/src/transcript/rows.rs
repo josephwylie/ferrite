@@ -513,16 +513,16 @@ pub(crate) fn live_anchor(blocks: &[Block], shape: &RowShape) -> Option<Disclosu
 /// The disclosure that hides each block while shut: its turn's fold, or the
 /// running turn's live row. What a find opens to show a hit in it.
 pub(crate) fn hidden_by(blocks: &[Block], shape: &RowShape) -> HashMap<BlockId, DisclosureId> {
-    let mut hidden: HashMap<BlockId, DisclosureId> =
-        turns::folds(blocks, |block| !draws_nothing(block, shape))
-            .into_iter()
-            .flat_map(|fold| {
-                let id = DisclosureId::Turn(fold.prompt);
-                fold.hidden
-                    .into_iter()
-                    .map(move |block| (block, id.clone()))
-            })
-            .collect();
+    let mut hidden: HashMap<BlockId, DisclosureId> = shape
+        .folds(blocks)
+        .into_iter()
+        .flat_map(|fold| {
+            let id = DisclosureId::Turn(fold.prompt);
+            fold.hidden
+                .into_iter()
+                .map(move |block| (block, id.clone()))
+        })
+        .collect();
     if let (Some(start), Some(anchor)) = (live_start(blocks, shape), live_anchor(blocks, shape)) {
         hidden.extend(
             blocks[start..]
@@ -534,11 +534,21 @@ pub(crate) fn hidden_by(blocks: &[Block], shape: &RowShape) -> HashMap<BlockId, 
 }
 
 impl RowShape {
+    /// The folds these blocks draw under this shape.
+    fn folds(&self, blocks: &[Block]) -> Vec<Fold> {
+        turns::folds(
+            blocks,
+            |block| !draws_nothing(block, self),
+            |block| run_at(block, self) == Some(tools::Grouping::Agents),
+        )
+    }
+
     /// The shape with every fold and the live row's work open: every block
     /// that ever draws has its row.
     pub(crate) fn opened(&self, blocks: &[Block]) -> Self {
         Self {
-            open_folds: turns::folds(blocks, |block| !draws_nothing(block, self))
+            open_folds: self
+                .folds(blocks)
                 .into_iter()
                 .map(|fold| fold.prompt)
                 .collect(),
@@ -625,7 +635,8 @@ fn run_at(block: &Block, shape: &RowShape) -> Option<tools::Grouping> {
 }
 
 fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<TranscriptRow>> {
-    let folds: HashMap<BlockId, Fold> = turns::folds(blocks, |block| !draws_nothing(block, shape))
+    let folds: HashMap<BlockId, Fold> = shape
+        .folds(blocks)
         .into_iter()
         .map(|fold| (fold.prompt, fold))
         .collect();
@@ -1323,6 +1334,33 @@ mod tests {
         }));
         prompt(&mut unended, "again");
         assert!(folds(&unended, &shape()).is_empty());
+    }
+
+    /// A card stays whole until its last agent settles: one stopped early
+    /// keeps its row beside its running sibling, then the card folds.
+    #[test]
+    fn a_stopped_agent_stays_on_its_card_while_a_sibling_runs() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        for id in ["a", "b"] {
+            transcript.apply(Input::Event(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: "Agent".into(),
+                input: serde_json::json!({ "description": id, "run_in_background": true }),
+            }));
+            transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+                id: id.into(),
+                output: "launched".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Background { task: id.into() },
+            }));
+        }
+        text(&mut transcript, "Started.");
+        complete(&mut transcript, 2_000);
+        transcript.apply(Input::Event(SessionEvent::ToolDenied { id: "a".into() }));
+        assert!(folds(&transcript, &shape()).is_empty());
+        transcript.apply(Input::Event(SessionEvent::ToolDenied { id: "b".into() }));
+        assert_eq!(folds(&transcript, &shape()), ["Worked for 2s"]);
     }
 
     /// What must stay in view stays, shut: a notice, a question put to the
