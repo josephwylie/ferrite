@@ -248,9 +248,6 @@ impl NavView {
         self.look(cx);
     }
 
-    /// Read what the nav draws from the Cockpit and the model, note which
-    /// Threads came into a section, and redraw when any of it moved. It
-    /// runs as either notifies, never in a draw, so a draw never writes.
     /// The model a row's Thread runs, named as its Composer names it; the
     /// Provider's name until the window is told, since a Thread on another
     /// machine says only once it is opened and the default may not be it.
@@ -273,6 +270,9 @@ impl NavView {
         }
     }
 
+    /// Read what the nav draws from the Cockpit and the model, note which
+    /// Threads came into a section, and redraw when any of it moved. It
+    /// runs as either notifies, never in a draw, so a draw never writes.
     pub(super) fn look(&mut self, cx: &mut Context<Self>) {
         let Some(cockpit) = self.cockpit.upgrade() else {
             return;
