@@ -70,7 +70,8 @@ pub(super) fn search_line(cx: &mut Context<NavView>) -> Entity<Composer> {
 impl CockpitView {
     /// The Filter menu's rows: every Project, the scoped one checked. The
     /// same repository on two machines is two Projects: another machine's
-    /// says where it is, in T3 Code's words (`ProjectEnvironmentBadge`).
+    /// wears T3 Code's `ProjectEnvironmentBadge`, an icon whose tooltip
+    /// says where it is.
     pub(super) fn filter_rows(&self, cx: &gpui::App) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let mut rows = vec![Some((
             menu::Item::new("All projects").checked(self.nav_filter.is_none()),
@@ -79,7 +80,7 @@ impl CockpitView {
         rows.extend(self.every_project(cx).into_iter().map(|(key, project, _)| {
             let item = menu::Item::new(project.title.clone()).checked(self.nav_filter == Some(key));
             let item = match self.machine_label(key.machine(), cx) {
-                Some(machine) => item.detail(format!("On {machine}")),
+                Some(machine) => item.mark(ferrite_ui::icons::SERVER, format!("On {machine}")),
                 None => item,
             };
             Some((item, MenuVerb::FilterProject(Some(key))))

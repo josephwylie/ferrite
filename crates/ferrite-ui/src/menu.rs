@@ -233,6 +233,17 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
             )
         })
         .child(label)
+        .when_some(item.mark.clone(), |row, (path, tip)| {
+            row.child(
+                div()
+                    .id("menu-row-mark")
+                    .debug_selector(|| "menu-row-mark".into())
+                    .flex()
+                    .flex_shrink_0()
+                    .tooltip(tooltip(tip))
+                    .child(icons::icon(path, NAV_MACHINE_GLYPH, dim)),
+            )
+        })
         .map(|row| match item.detail.clone() {
             Some(detail) => row.child(
                 div()

@@ -159,6 +159,13 @@ impl CockpitView {
             .is_none_or(|server| matches!(server, ServerState::Attached { .. }))
     }
 
+    /// Settings, on Connections.
+    pub(super) fn open_connections(&mut self, cx: &mut Context<Self>) {
+        self.show_settings(cx).update(cx, |settings, _| {
+            settings.page = settings::PageKey::Connections;
+        });
+    }
+
     /// Sign in to `machine`, in a terminal.
     pub(super) fn sign_in(&mut self, machine: ferrite_core::MachineId, cx: &mut Context<Self>) {
         let Some(bridge) = self.cockpit.read(cx).bridge(machine) else {

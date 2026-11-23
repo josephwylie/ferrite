@@ -22,8 +22,7 @@ fn box_row(
     machine: MachineId,
     thread: ThreadKey,
 ) -> gpui::Bounds<Pixels> {
-    debug_bounds(cx, format!("nav-machine-{}-{}", machine.get(), thread.thread().get()))
-        .expect("box's row")
+    debug_bounds(cx, format!("nav-thread-{}", on(machine, thread))).expect("box's row")
 }
 
 /// Rename from box's row menu opens the field in that row, on its title,
@@ -45,7 +44,7 @@ fn rename_from_a_machines_row_menu_renames_it_there(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("r");
     tick(cx);
     let field = cx.debug_bounds("rename-field").expect("the rename field is drawn");
-    assert!(row.contains(&field.center()), "in box's row: {field:?} {row:?}");
+    assert!(row.contains(&field.origin), "in box's row: {field:?} {row:?}");
     let editor = view.read_with(cx, |view, _| view.rename.shown().unwrap().1.clone());
     editor.update(cx, |editor, cx| editor.set("Renamed on box".into(), cx));
     cx.simulate_keystrokes("enter");
@@ -144,6 +143,18 @@ fn search_and_the_parked_shelf_hold_every_machines_threads(cx: &mut TestAppConte
     let mut every = vec![mine, open_there, parked_there];
     every.sort();
     assert_eq!(found, every, "the search holds every machine's Threads");
+    for thread in [open_there, parked_there] {
+        let result = debug_bounds(cx, format!("nav-result-{}", on(on_box, thread)))
+            .expect("box's result");
+        let glyph = debug_bounds(cx, format!("nav-card-machine-{}", on(on_box, thread)))
+            .expect("a result wears its machine's glyph");
+        assert!(result.contains(&glyph.center()), "{glyph:?} on {result:?}");
+        assert_eq!(tooltip_at(cx, glyph.center()).as_deref(), Some("box"), "it names box");
+    }
+    assert!(
+        debug_bounds(cx, format!("nav-card-machine-{}", mine.thread().get())).is_none(),
+        "this computer's result draws none"
+    );
     cx.simulate_keystrokes("escape");
     tick(cx);
 
@@ -155,8 +166,13 @@ fn search_and_the_parked_shelf_hold_every_machines_threads(cx: &mut TestAppConte
     assert_eq!(parked, [parked_there], "box's parked Thread is on the shelf");
     let delete = view.read_with(cx, |view, cx| view.parked_threads(cx));
     assert_eq!(delete, parked, "Delete parked threads takes what the shelf lists");
-    let row = debug_bounds(cx, format!("nav-thread-{}", parked_there.thread().get()))
+    let row = debug_bounds(cx, format!("nav-thread-{}", on(on_box, parked_there)))
         .expect("its row on the shelf");
+    let glyph = debug_bounds(cx, format!("nav-card-machine-{}", on(on_box, parked_there)))
+        .expect("the slim row wears its machine's glyph");
+    assert!(row.contains(&glyph.center()), "{glyph:?} on {row:?}");
+    assert_eq!(glyph.size.width, px(ferrite_ui::theme::NAV_MACHINE_GLYPH));
+    assert_eq!(tooltip_at(cx, glyph.center()).as_deref(), Some("box"), "it names box");
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     until_said(cx, "box's parked Thread never revived", |cx| {
         view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(parked_there).is_some())

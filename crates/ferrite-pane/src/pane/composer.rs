@@ -347,6 +347,17 @@ pub fn env_word(mark: &'static str, label: SharedString) -> Div {
         .child(env_face(mark, label))
 }
 
+/// The machine a draft will run on, when that is not this computer (T3's
+/// locked environment control, first in the strip): a word, since its
+/// Project's chip is what moves it, whole in its tooltip.
+pub fn env_machine(name: SharedString) -> Stateful<Div> {
+    env_word(ferrite_ui::icons::SERVER, name.clone())
+        .id("band-machine")
+        .debug_selector(|| "band-machine".into())
+        .flex_shrink(1.)
+        .tooltip(ferrite_ui::menu::tooltip(name))
+}
+
 /// The Solo box's footer (`COMPOSER_FOOTER_H`, under the box, Claude's):
 /// at the right the model and effort, then the permission mode as plain
 /// words, then the plan-usage ring (where the work runs stands over the

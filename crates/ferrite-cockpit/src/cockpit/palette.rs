@@ -232,23 +232,26 @@ impl CockpitView {
 
     /// "Add project" — the nav's button, the palette's `New project` — as
     /// T3 Code resolves it (`resolveAddProjectEntry`): straight to the
-    /// card on the one machine the window reaches, else the palette over
-    /// the machines it reaches, to choose where the Project lives.
+    /// card on the one machine the window reaches, else the palette: over
+    /// the machines it reaches, to choose where the Project lives, or with
+    /// none, offering to connect one.
     pub(super) fn add_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.palette_machine_rows(cx).as_slice() {
-            [] => self.open_project_creator(cx),
-            [row] => {
-                if let Act::NewProjectOn { machine, .. } = row.act {
-                    self.open_project_creator_on(machine, cx);
-                }
-            }
-            _ => self.open_palette(PaletteScope::Machines, "", window, cx),
+        let rows = self.palette_machine_rows(cx);
+        if let [PaletteRow {
+            act: Act::NewProjectOn { machine, .. },
+            ..
+        }] = rows.as_slice()
+        {
+            self.open_project_creator_on(*machine, cx);
+        } else {
+            self.open_palette(PaletteScope::Machines, "", window, cx);
         }
     }
 
     /// The machine pick's rows (T3's `Environments`): every machine the
     /// window reaches, this computer first and the rest by name, each with
-    /// its target as T3 gives each its id.
+    /// its target as T3 gives each its id; with none, T3's one row that
+    /// goes to Connections.
     fn palette_machine_rows(&self, cx: &gpui::App) -> Vec<PaletteRow> {
         let cockpit = self.cockpit.read(cx);
         let mut rows: Vec<(bool, String, PaletteRow)> = cockpit
@@ -256,21 +259,26 @@ impl CockpitView {
             .filter(|machine| self.attached(*machine, cx))
             .map(|machine| {
                 let here = !self.elsewhere(machine, cx);
-                let name = match self.machine_label(machine, cx) {
-                    Some(name) if !here => name,
-                    _ => "This computer".to_string(),
+                let (name, context) = match self.machine_label(machine, cx) {
+                    Some(name) if !here => {
+                        let target = self
+                            .machines
+                            .as_ref()
+                            .and_then(|machines| machines.machine(machines.listed_as(machine)?))
+                            .map(|saved| saved.target.clone())
+                            .unwrap_or_default();
+                        (name, target)
+                    }
+                    _ => this_computer_row(
+                        std::env::var("HOSTNAME")
+                            .or_else(|_| std::env::var("COMPUTERNAME"))
+                            .ok(),
+                    ),
                 };
-                let target = self
-                    .machines
-                    .as_ref()
-                    .and_then(|machines| machines.machine(machines.listed_as(machine)?))
-                    .filter(|_| !here)
-                    .map(|saved| saved.target.clone())
-                    .unwrap_or_default();
                 let row = PaletteRow {
                     section: PaletteSection::Machines,
                     name: name.clone().into(),
-                    context: target.into(),
+                    context: context.into(),
                     status: None,
                     detail: None,
                     keys: None,
@@ -281,24 +289,46 @@ impl CockpitView {
             })
             .collect();
         rows.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+        if rows.is_empty() {
+            return vec![PaletteRow {
+                section: PaletteSection::Connect,
+                name: "Connect an environment".into(),
+                context: "No connected environment can add a project".into(),
+                status: None,
+                detail: None,
+                keys: None,
+                used: None,
+                act: Act::ConnectMachine,
+            }];
+        }
         rows.into_iter().map(|(_, _, row)| row).collect()
     }
 
-    /// What the palette chose: ⏎ shuts it and runs the row; esc shuts it.
+    /// What the palette chose: ⏎ shuts it and runs the row; esc shuts it,
+    /// or from the machine pick goes back to the palette it came from.
     fn on_palette_event(
         &mut self,
-        _: &Entity<Palette>,
+        palette: &Entity<Palette>,
         event: &PaletteEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {
             PaletteEvent::Run(act) => {
+                let query = palette.read(cx).query(cx);
                 self.floats.palette = None;
                 self.run_palette_act(act.clone(), window, cx);
+                // T3's `push`: a view this row opened goes back to this line.
+                if let Some(next) = &self.floats.palette {
+                    next.update(cx, |next, _| next.parent_query = query);
+                }
                 cx.notify();
             }
             PaletteEvent::Dismiss => self.close_palette(cx),
+            PaletteEvent::Back => {
+                let query = palette.read(cx).parent_query.clone();
+                self.open_palette(PaletteScope::All, &query, window, cx);
+            }
         }
     }
 
@@ -320,6 +350,7 @@ impl CockpitView {
             Act::Command(command) => self.run_command(command, window, cx),
             Act::Adopt { path, into } => self.adopt_file(into, &path, window, cx),
             Act::NewProjectOn { machine, .. } => self.open_project_creator_on(machine, cx),
+            Act::ConnectMachine => self.open_connections(cx),
         }
     }
 
@@ -1398,5 +1429,16 @@ impl CockpitView {
         .with_priority(float::VEIL_PRIORITY)
         .into_any_element();
         vec![veil, float::hang(view, anchor, place, window, cx)]
+    }
+}
+
+/// The machine pick's row for this computer, as T3 words it
+/// (`resolveEnvironmentOptionLabel`, "This device"): its host's name,
+/// described as this computer. With no name to say, the words alone.
+pub(super) fn this_computer_row(host: Option<String>) -> (String, String) {
+    const THIS_COMPUTER: &str = "This computer";
+    match host.filter(|host| !host.trim().is_empty()) {
+        Some(host) => (host, THIS_COMPUTER.into()),
+        None => (THIS_COMPUTER.into(), String::new()),
     }
 }

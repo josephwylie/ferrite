@@ -697,12 +697,24 @@ fn provider_logo(provider: Provider) -> Div {
 /// The server glyph that ends the meta line of another machine's Thread
 /// (T3's `EnvironmentMachineIcon`, `size-3.5`, the muted ink at 70%). It
 /// says no more: the card's hover detail names the machine.
-fn machine_glyph(id: RowTag, live: bool) -> Div {
+pub(super) fn machine_glyph(id: RowTag, live: bool) -> Div {
     tag(div(), live, "nav-card-machine", id)
         .flex()
         .flex_shrink_0()
         .opacity((NAV_MACHINE_INK & 0xff) as f32 / 255.0)
         .child(icon(icons::SERVER, NAV_MACHINE_GLYPH, NAV_MACHINE_INK >> 8))
+}
+
+/// That glyph on a row with no hover detail (a slim row, a search result):
+/// its own tooltip names the machine, as T3's `ThreadRowTrailingStatus`.
+pub(super) fn named_machine_glyph(row: &ThreadRow) -> Option<Stateful<Div>> {
+    let elsewhere = row.elsewhere.as_ref()?;
+    let id = row.tag();
+    Some(
+        machine_glyph(id, true)
+            .id(id.id("nav-row-machine"))
+            .nav_tooltip(elsewhere.machine.clone()),
+    )
 }
 
 /// The pin on line 1 of a pinned card; under the pointer it turns to

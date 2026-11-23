@@ -1692,6 +1692,9 @@ pub struct MenuItem {
     /// Why a disabled row is disabled, in its tooltip: a row stays one
     /// line, as Claude's do.
     pub why: Option<SharedString>,
+    /// A small icon after the label, what it marks said in its own tooltip
+    /// (T3's `ProjectEnvironmentBadge`: a Project on another machine).
+    pub mark: Option<(&'static str, SharedString)>,
 }
 
 impl MenuItem {
@@ -1715,6 +1718,10 @@ impl MenuItem {
     }
     pub fn detail(mut self, text: impl Into<SharedString>) -> Self {
         self.detail = Some(text.into());
+        self
+    }
+    pub fn mark(mut self, path: &'static str, tip: impl Into<SharedString>) -> Self {
+        self.mark = Some((path, tip.into()));
         self
     }
     /// An empty shortcut is no shortcut.

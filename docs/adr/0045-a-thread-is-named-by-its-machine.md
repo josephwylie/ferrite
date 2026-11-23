@@ -204,15 +204,22 @@ Each lands green and proves something.
    heading carried went to a home or went: its connection glyph and word
    to the notice row ("Sign in to box", "box is offline", "box is
    reconnecting" after `RECONNECT_GRACE`); its name to the row's hover
-   card; its "New project…" to Add project, which on more than one
-   machine opens the palette over the machines the window reaches (T3's
-   `choose-environment`, "Environments"); its fold nowhere. Ages and
+   card, or on a row with no hover card (a parked or snoozed row, a search
+   result) to the same glyph's tooltip; its "New project…" to Add project,
+   which on more than one machine opens the palette over the machines the
+   window reaches (T3's `choose-environment`, "Environments") and with
+   none offers T3's "Connect an environment"; its fold nowhere. A draft
+   aimed at another machine names it first in the strip over its Composer
+   (T3's locked environment control). Ages and
    order read every machine's times on this computer's clock: a held
    machine keeps its Server's clock (`ServerClock`, from `welcome`) after
    its link goes, a Thread's digest carries its last activity
    (`Digest.active_ms`), and `Cockpit::last_used` reads a parked or
    digest-only Thread's through that clock. Where Projects are listed by
-   name (the Filter menu), another machine's says "On box", T3's words.
+   name (the Filter menu), another machine's wears T3's icon, its tooltip
+   "On box". The machine pick goes back a step on its arrow and on
+   backspace in an empty line, as T3's view does, and also on esc, by the
+   operator's call: T3's esc closes the palette there.
 
 ## Answered questions
 
@@ -223,7 +230,7 @@ Each lands green and proves something.
 - **The same repo on two machines** is two Projects. T3 Code groups them
   by repository unless set to keep them separate, and marks a Project on
   another environment with a machine icon whose tooltip says "On box".
-  Ferrite keeps them separate and says "On box" beside the name.
+  Ferrite keeps them separate and marks the other machine's the same way.
 - **A new Thread with no Project** starts on this computer.
 
 ## Not done here

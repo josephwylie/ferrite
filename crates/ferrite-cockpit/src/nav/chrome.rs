@@ -183,6 +183,7 @@ pub fn result_row(row: &ThreadRow, age: SharedString, lit: bool) -> Stateful<Div
                 .text_color(rgb(INK_SECONDARY_LABEL))
                 .child(format!("#{}", pr.number))
         }))
+        .children(super::card::named_machine_glyph(row))
         .child(components::tabular(
             div()
                 .flex_shrink_0()

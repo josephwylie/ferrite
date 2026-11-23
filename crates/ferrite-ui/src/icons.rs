@@ -118,6 +118,7 @@ icons![
     "arrow-up",
     "arrow-down",
     "arrow-right",
+    "arrow-left",
     "corner-down-left",
     "git-pull-request",
     "git-merge",
@@ -328,6 +329,8 @@ pub const ARROW_UP: &str = "icons/arrow-up.svg";
 pub const ARROW_DOWN: &str = "icons/arrow-down.svg";
 /// A pull request's head branch into its base.
 pub const ARROW_RIGHT: &str = "icons/arrow-right.svg";
+/// A palette view's way back (T3's `ArrowLeftIcon`).
+pub const ARROW_LEFT: &str = "icons/arrow-left.svg";
 /// The palette cursor row's enter hint.
 pub const CORNER_DOWN_LEFT: &str = "icons/corner-down-left.svg";
 /// Reply to a selection: quote it into the Composer.

@@ -201,7 +201,18 @@ fn slim(
         - 2.0 * NAV_SLIM_PAD_X
         - NAV_BADGE
         - NAV_SLIM_SLOT_MIN_W
-        - 2.0 * NAV_SLIM_GAP;
+        - 2.0 * NAV_SLIM_GAP
+        - row
+            .elsewhere
+            .as_ref()
+            .map_or(0.0, |_| NAV_MACHINE_GLYPH + NAV_SLIM_GAP);
+    let machine = if live {
+        card::named_machine_glyph(row).map(IntoElement::into_any_element)
+    } else {
+        row.elsewhere
+            .as_ref()
+            .map(|_| card::machine_glyph(id, false).into_any_element())
+    };
     let title = match title {
         SlimTitle::Editor(field) => div().w(px(title_w)).child(field).into_any_element(),
         SlimTitle::Row => fitted_in(
@@ -286,6 +297,7 @@ fn slim(
                 .opacity(motion::lerp(NAV_SLIM_BADGE_OPACITY, 1.0, lit))
         }))
         .child(title)
+        .children(machine)
         .child(slot)
 }
 

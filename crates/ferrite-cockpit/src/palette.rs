@@ -82,6 +82,8 @@ pub(crate) enum Section {
     Commands,
     Sessions,
     Machines,
+    /// T3's add-project entry when nothing can take a Project: no heading.
+    Connect,
 }
 
 impl Section {
@@ -92,6 +94,7 @@ impl Section {
             Section::Commands => "Actions",
             Section::Sessions => "Sessions",
             Section::Machines => "Environments",
+            Section::Connect => "",
         }
     }
 }
@@ -262,6 +265,8 @@ pub(crate) enum Act {
         machine: ferrite_core::MachineId,
         here: bool,
     },
+    /// No machine can take a Project: Settings › Connections.
+    ConnectMachine,
 }
 
 /// One palette row, ready to draw and to run.
@@ -302,6 +307,9 @@ pub(crate) enum PaletteEvent {
     Run(Act),
     /// Esc: shut the palette and touch nothing else.
     Dismiss,
+    /// The machine pick's way back (esc, backspace on an empty line, its
+    /// arrow): the palette it came from, its line as it was.
+    Back,
 }
 
 /// A surviving row: its index into the rows, and the name's lit ranges.
@@ -344,6 +352,8 @@ pub(crate) struct Palette {
     scroll: ScrollHandle,
     /// The import picker's listing, until it answers.
     pub listing: Option<Listing>,
+    /// The machine pick: the line of the palette it was opened from.
+    pub parent_query: String,
     _edited: Subscription,
 }
 
@@ -381,6 +391,7 @@ impl Palette {
             input,
             scroll: ScrollHandle::new(),
             listing: None,
+            parent_query: String::new(),
             _edited: edited,
         };
         palette.refilter(cx);
@@ -636,7 +647,23 @@ impl Render for Palette {
         let rest = resting(self.scope, self.tab, &query);
         let tabs = self.tabs();
         // The tabs carry the list's hairline when there are any.
-        let mut input = input_row(
+        let picking_machine = self.scope == PaletteScope::Machines;
+        let lead = if picking_machine {
+            components::button("palette-back")
+                .debug_selector(|| "palette-back".into())
+                .p_0()
+                .child(ferrite_ui::icons::icon(
+                    ferrite_ui::icons::ARROW_LEFT,
+                    PALETTE_SEARCH_ICON,
+                    INK_SUBTLE,
+                ))
+                .on_click(cx.listener(|_, _: &gpui::ClickEvent, _, cx| cx.emit(PaletteEvent::Back)))
+                .into_any_element()
+        } else {
+            search_icon().into_any_element()
+        };
+        let mut input = input_row_after(
+            lead,
             "palette-input",
             self.input.clone(),
             query.is_empty().then_some("Search"),
@@ -693,10 +720,12 @@ impl Render for Palette {
                     Section::Threads if rest => "Recents",
                     section => section.title(),
                 };
-                list = list.child(
-                    section_heading(title, first)
-                        .debug_selector(move || format!("palette-section-{at}")),
-                );
+                if !title.is_empty() {
+                    list = list.child(
+                        section_heading(title, first)
+                            .debug_selector(move || format!("palette-section-{at}")),
+                    );
+                }
             }
             list = list.child(
                 row_element(at, row, &shown.lit, at == self.cursor).on_click(cx.listener(
@@ -718,7 +747,8 @@ impl Render for Palette {
         }
         // The footer's hints: what each key does here, as the Claude
         // app's search says them; the cursor row's directory at the right.
-        let mut hints: Vec<(&'static str, &'static str)> = vec![("Close", "esc")];
+        let mut hints: Vec<(&'static str, &'static str)> =
+            vec![(if picking_machine { "Back" } else { "Close" }, "esc")];
         if !tabs.is_empty() {
             hints.push(("Change type", "\u{2190} \u{2192}"));
         }
@@ -749,7 +779,23 @@ impl Render for Palette {
                 .on_action(cx.listener(|palette, _: &SelectNext, _, cx| palette.step(1, cx)))
                 .on_action(cx.listener(|palette, _: &SelectPrevious, _, cx| palette.step(-1, cx)))
                 .on_action(cx.listener(|palette, _: &Confirm, _, cx| palette.confirm(cx)))
-                .on_action(cx.listener(|_, _: &Dismiss, _, cx| cx.emit(PaletteEvent::Dismiss)))
+                .on_action(cx.listener(move |_, _: &Dismiss, _, cx| {
+                    cx.emit(if picking_machine {
+                        PaletteEvent::Back
+                    } else {
+                        PaletteEvent::Dismiss
+                    })
+                }))
+                .when(picking_machine, |dialog| {
+                    dialog.capture_action(cx.listener(
+                        |palette, _: &ferrite_pane::composer::Backspace, _, cx| {
+                            if palette.query(cx).is_empty() {
+                                cx.stop_propagation();
+                                cx.emit(PaletteEvent::Back);
+                            }
+                        },
+                    ))
+                })
                 .child(input)
                 .children(tab_row)
                 .child(list)
@@ -878,6 +924,22 @@ pub(crate) fn input_row(
     placeholder: Option<&'static str>,
     rule: bool,
 ) -> gpui::Div {
+    input_row_after(search_icon(), selector, input, placeholder, rule)
+}
+
+fn search_icon() -> impl IntoElement {
+    ferrite_ui::icons::icon(ferrite_ui::icons::SEARCH, PALETTE_SEARCH_ICON, INK_SUBTLE)
+}
+
+/// `input_row` with `lead` where its search glass stands (T3's start
+/// addon: a pushed view's back arrow).
+fn input_row_after(
+    lead: impl IntoElement,
+    selector: &'static str,
+    input: Entity<Composer>,
+    placeholder: Option<&'static str>,
+    rule: bool,
+) -> gpui::Div {
     div()
         .debug_selector(move || selector.into())
         .flex()
@@ -896,11 +958,7 @@ pub(crate) fn input_row(
                 row.h(px(PALETTE_INPUT_H))
             }
         })
-        .child(ferrite_ui::icons::icon(
-            ferrite_ui::icons::SEARCH,
-            PALETTE_SEARCH_ICON,
-            INK_SUBTLE,
-        ))
+        .child(lead)
         .child(
             div()
                 .relative()
@@ -989,6 +1047,10 @@ fn mark(row: &Row) -> Option<gpui::AnyElement> {
             };
             Some(ferrite_ui::icons::icon(icon, PALETTE_MARK_ICON, INK_STRONG).into_any_element())
         }
+        (None, Act::ConnectMachine) => Some(
+            ferrite_ui::icons::icon(ferrite_ui::icons::GEAR, PALETTE_MARK_ICON, INK_STRONG)
+                .into_any_element(),
+        ),
         _ => None,
     }
 }

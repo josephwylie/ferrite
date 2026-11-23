@@ -166,9 +166,6 @@ pub struct NavState {
     pub snoozed: Vec<ThreadRow>,
     /// Parked Threads, every machine's, in the park order.
     pub parked: Vec<ThreadRow>,
-    /// Every other machine's open Threads, each drawn under its machine's
-    /// heading (ADR 0045, P6), in creation order.
-    pub elsewhere: Vec<ThreadRow>,
 }
 
 impl NavState {
@@ -188,7 +185,6 @@ impl NavState {
             .chain(&self.active)
             .chain(&self.working)
             .chain(&self.snoozed)
-            .chain(&self.elsewhere)
     }
 }
 

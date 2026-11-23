@@ -5663,6 +5663,9 @@ impl CockpitView {
             ),
             DraftTarget::New => (ferrite_ui::icons::FOLDER_GIT, SharedString::from("New worktree")),
         };
+        let machine = self
+            .machine_label(draft.binding.project().machine(), cx)
+            .map(|name| pane::env_machine(name.into()).into_any_element());
         let chips = [
             (
                 pane::BandChip::Project,
@@ -5673,7 +5676,7 @@ impl CockpitView {
                 pane::band_chip_label(&workspace_label),
             ),
         ];
-        chips
+        let chips = chips
             .into_iter()
             .enumerate()
             .map(|(slot, (chip, label))| {
@@ -5705,8 +5708,8 @@ impl CockpitView {
                     self.record_trigger(band_trigger(chip)),
                 )
                 .into_any_element()
-            })
-            .collect()
+            });
+        machine.into_iter().chain(chips).collect()
     }
 
     /// The focused draft's model chip (#29), where a live Thread's stands
