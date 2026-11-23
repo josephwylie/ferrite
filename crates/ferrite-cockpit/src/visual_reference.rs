@@ -2090,7 +2090,7 @@ fn nav_card_states(scene: &mut Scene) {
                 provider: Provider::Claude,
                 model: None,
             },
-        )
+        ).now()
         .expect("hand the fixture Thread over");
     let claude = Feed(scene.feeds.borrow().last().expect("its Claude").clone());
     claude.boot(Provider::Claude, 20_000);

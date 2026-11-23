@@ -52,7 +52,7 @@ fn invariant_resume_ids_persist_exactly() {
                 provider: Provider::Codex,
                 model: None,
             },
-        )
+        ).now()
         .unwrap();
     cockpit.pump();
     cockpit.park(thread).unwrap();
@@ -124,7 +124,7 @@ fn invariant_a_hand_over_after_revive_carries_the_whole_history() {
                 provider: Provider::Codex,
                 model: None,
             },
-        )
+        ).now()
         .unwrap();
     // A long log's exchanges are read off the UI thread; the switch commits
     // once they are.
@@ -460,7 +460,7 @@ fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
                 provider: Provider::Codex,
                 model: None,
             },
-        )
+        ).now()
         .unwrap();
     assert!(
         cockpit.thread(thread).unwrap().starting(),

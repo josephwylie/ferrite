@@ -583,7 +583,7 @@ fn the_effort_ladder_always_has_a_chosen_step(cx: &mut TestAppContext) {
             let _ = view.cockpit.update(cx, |cockpit, _| cockpit.set_model(
                 thread,
                 Some(model.value.clone()).filter(|value| value != "default"),
-            ));
+            ).now());
         });
         tick(cx);
         let ladder = view.read_with(cx, |view, cx| view.effort_ladder(thread, cx));

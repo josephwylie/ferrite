@@ -241,17 +241,31 @@ impl CockpitView {
     /// The Panel's `+` Side chat: open `owner`'s side chat, or add a tab to
     /// it, asking the agent for the fork that holds the conversation.
     pub(super) fn open_side_chat(&mut self, owner: ThreadKey, cx: &mut Context<Self>) {
-        let asked = self.ask_side_fork(owner, cx);
+        let can = self.can_side_fork(owner, cx);
+        let asking = can.is_ok();
         let id = self
             .side_chat
-            .update(cx, |chat, cx| chat.open(owner, asked, cx));
+            .update(cx, |chat, cx| chat.open(owner, can, cx));
         self.upsert_surface(owner, SurfaceId::SideChat(id), cx);
+        if asking {
+            let asked = self.cockpit.update(cx, |cockpit, _| cockpit.fork(owner, None, None));
+            self.when_answered(
+                asked,
+                move |view, asked, cx| {
+                    if let Err(why) = asked {
+                        view.side_chat
+                            .update(cx, |chat, cx| chat.refused(owner, id, why.to_string().into(), cx));
+                    }
+                },
+                cx,
+            );
+        }
         cx.notify();
     }
 
-    /// Ask `owner`'s agent for a fork of the whole conversation, or say
-    /// why it cannot make one now.
-    fn ask_side_fork(&mut self, owner: ThreadKey, cx: &mut gpui::App) -> Result<(), SharedString> {
+    /// Whether `owner`'s agent can be asked for a fork of the whole
+    /// conversation now, or why not.
+    fn can_side_fork(&self, owner: ThreadKey, cx: &gpui::App) -> Result<(), SharedString> {
         let open = self
             .cockpit
             .read(cx)
@@ -260,9 +274,7 @@ impl CockpitView {
         if transcript_glue::rewind_gate(&open).is_none() {
             return Err("Its agent cannot start a side chat".into());
         }
-        self.cockpit
-            .update(cx, |cockpit, _| cockpit.fork(owner, None, None))
-            .map_err(|why| SharedString::from(why))
+        Ok(())
     }
 
     /// A scene's side chat: the tab as the agent would leave it before the
@@ -621,6 +633,18 @@ impl SideChatView {
             self.asked.insert(owner, id);
         }
         id
+    }
+
+    /// The agent refused the fork tab `id` of `owner`'s side chat was
+    /// opened for: the tab says why, and waits for no fork.
+    fn refused(&mut self, owner: ThreadKey, id: u64, why: SharedString, cx: &mut Context<Self>) {
+        if self.asked.get(&owner) == Some(&id) {
+            self.asked.remove(&owner);
+        }
+        if let Some(tab) = self.tab_mut(id) {
+            tab.refused = Some(why);
+        }
+        cx.notify();
     }
 
     /// A tab in `owner`'s side chat, shown, its field empty. `refused` is
