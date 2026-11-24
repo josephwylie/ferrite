@@ -60,7 +60,11 @@ pub enum Fallback {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Failure {
+    /// A workspace file that is not there.
     Missing,
+    /// A file of this computer that is no longer here: it went nowhere
+    /// else, so neither side can be sent it until it is put back.
+    Gone,
     Unreadable(String),
     /// A file of this computer, bound for another machine.
     NotOnMachine,
@@ -80,6 +84,7 @@ impl Readiness {
             Self::Uploading { .. } => Some("Uploading"),
             Self::Reference(_) => Some("Path only"),
             Self::Failed(Failure::Missing) => Some("Missing"),
+            Self::Failed(Failure::Gone) => Some("Gone from this computer"),
             Self::Failed(Failure::Unreadable(_)) => Some("Unreadable"),
             Self::Failed(Failure::NotOnMachine) => Some("Not on machine"),
             Self::Failed(Failure::Upload(_)) => Some("Upload failed"),
@@ -102,6 +107,9 @@ impl Readiness {
                 "Agents do not take this image format inline: it is sent as a path.".into()
             }
             Self::Failed(Failure::Missing) => "The file is gone. Restore it and retry, or remove it.".into(),
+            Self::Failed(Failure::Gone) => {
+                "This file is no longer on this computer. Put it back and retry, or remove it.".into()
+            }
             Self::Failed(Failure::Unreadable(why)) => format!("The file cannot be read ({why}). Fix it and retry, or remove it."),
             Self::Failed(Failure::NotOnMachine) => {
                 "This file has not been uploaded to the agent's machine. Upload it before sending.".into()
@@ -126,7 +134,10 @@ pub fn inspect(path: &Path, source: Source, destination: Destination) -> Readine
     let meta = match std::fs::metadata(path) {
         Ok(meta) => meta,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Readiness::Failed(Failure::Missing)
+            return Readiness::Failed(match source {
+                Source::Local => Failure::Gone,
+                Source::Workspace => Failure::Missing,
+            })
         }
         Err(error) => return Readiness::Failed(Failure::Unreadable(error.to_string())),
     };

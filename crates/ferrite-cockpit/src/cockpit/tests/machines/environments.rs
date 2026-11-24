@@ -604,6 +604,88 @@ fn a_draft_put_away_with_its_environment_comes_back_with_it(cx: &mut TestAppCont
     until(cx, |cx| drafts_saying(cx) == 1);
 }
 
+/// A draft's file of this computer is kept by its path here through its
+/// Machine going off and on: back on box it is box's copy, not sent again,
+/// and picked onto this computer it is sent from here, never looked for at
+/// box's copy of it.
+#[gpui::test]
+fn a_drafts_file_of_this_computer_goes_either_way_after_its_machine_comes_back(
+    cx: &mut TestAppContext,
+) {
+    let (mut core, _fake, machines, _agents) = two_machines("env-file-back", 0);
+    let here_machine = core.this_computer().unwrap();
+    let on_box = machines.held(1).unwrap();
+    let base = resolved_dir("env-file-back");
+    let remote = "https://github.com/acme/app.git";
+    let ours = project_folder(&base.join("here/app"), Some(remote));
+    let theirs = project_folder(&base.join("box/app"), Some(remote));
+    let mine = registered(&mut core, here_machine, &ours);
+    let theirs = registered(&mut core, on_box, &theirs);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    let draft = focused_draft(&view, cx);
+    let notes = base.join("notes.md");
+    std::fs::write(&notes, "notes").unwrap();
+    view.update(cx, |view, cx| {
+        view.panes[view.index_of(draft).unwrap()].composer.update(cx, |composer, cx| {
+            composer.set("Read the notes".into(), cx);
+            composer.add_local_files(std::slice::from_ref(&notes), cx);
+        });
+    });
+    tick(cx);
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    until(cx, |cx| draft_project(&view, draft, cx) == theirs);
+    let uploads = |cx: &mut gpui::VisualTestContext| {
+        String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap())
+            .matches(r#""op":"attachment","request":{"action":"begin","name":"notes.md""#)
+            .count()
+    };
+    until(cx, |cx| uploads(cx) == 1);
+    until(cx, |cx| cx.debug_bounds("attachment-upload-progress").is_none());
+
+    let toggle = |cx: &mut gpui::VisualTestContext| {
+        let connections = connections_view(&view, cx);
+        view.update(cx, |view, cx| {
+            view.on_connections_event(connections, &ConnectionsEvent::Toggle(box_machine().target), cx)
+        });
+        tick(cx);
+    };
+    toggle(cx);
+    toggle(cx);
+    let back = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.panes
+                .iter()
+                .position(|pane| pane.draft().is_some() && pane.composer.read(cx).text() == "Read the notes")
+        })
+    };
+    until(cx, |cx| back(cx).is_some());
+    let index = back(cx).unwrap();
+    let draft = view.update(cx, |view, cx| {
+        view.focus_pane(index, cx);
+        view.panes[index].identity
+    });
+    tick(cx);
+    assert_ne!(draft_project(&view, draft, cx).machine(), here_machine, "back on box");
+    let composer = view.read_with(cx, |view, _| view.panes[view.index_of(draft).unwrap()].composer.clone());
+    assert!(!composer.update(cx, |composer, cx| composer.has_blocked_file(cx)), "box has it");
+    assert_eq!(uploads(cx), 1, "not sent again");
+    view.update(cx, |view, cx| view.hide_sheet(cx));
+    settles(cx);
+
+    pick_on(&view, ENVIRONMENT, "Local", cx);
+    until(cx, |cx| draft_project(&view, draft, cx) == mine);
+    assert_eq!(composer.read_with(cx, |composer, _| composer.files().to_vec()), [notes.clone()]);
+    assert!(
+        !composer.update(cx, |composer, cx| composer.has_blocked_file(cx)),
+        "sent from here"
+    );
+    tick(cx);
+    assert!(debug_bounds(cx, "tray-file-0-retry".into()).is_none());
+}
+
 /// Tab walks a draft's files, then its band: one control holds the ring
 /// at a time, never a file and a chip at once.
 #[gpui::test]

@@ -248,6 +248,7 @@ mod tests {
             annotations: Vec::new(),
             chips: vec!["@src/lib.rs".into(), "/review".into()],
             local: Vec::new(),
+            uploaded: Vec::new(),
         }
     }
 

@@ -721,7 +721,7 @@ impl Composer {
         self.leaving.clear();
         self.reply_added = None;
         self.line.set(content.text);
-        self.files.replace(content.files, content.local);
+        self.files.replace(content.files, content.local, content.uploaded);
         self.replies = content.replies;
         self.reset_citations();
         self.browser_annotations = content.annotations;
@@ -730,11 +730,12 @@ impl Composer {
 
     /// Everything the Composer holds, as its typed parts.
     pub fn content(&self) -> DraftContent {
-        let (files, local) = self.files.content_paths();
+        let (files, local, uploaded) = self.files.content_paths();
         DraftContent {
             text: self.line.text().to_string(),
             files,
             local,
+            uploaded,
             replies: self.replies.clone(),
             review: self.review.iter().map(ReviewNote::from).collect(),
             annotations: self.browser_annotations.clone(),
@@ -794,7 +795,7 @@ impl Composer {
             (false, false, false) => format!("{typed}\n\n{}", content.text),
         };
         self.line.set(line);
-        self.files.merge(content.files, content.local, prepend);
+        self.files.merge(content.files, content.local, content.uploaded, prepend);
         merge(&mut self.replies, content.replies, prepend);
         self.reset_citations();
         merge(&mut self.browser_annotations, content.annotations, prepend);
