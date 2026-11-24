@@ -637,12 +637,12 @@ fn a_drafts_file_of_this_computer_goes_either_way_after_its_machine_comes_back(
     tick(cx);
     pick_on(&view, ENVIRONMENT, "box", cx);
     until(cx, |cx| draft_project(&view, draft, cx) == theirs);
-    let uploads = |cx: &mut gpui::VisualTestContext| {
+    let uploads = || {
         String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap())
             .matches(r#""op":"attachment","request":{"action":"begin","name":"notes.md""#)
             .count()
     };
-    until(cx, |cx| uploads(cx) == 1);
+    until(cx, |_| uploads() == 1);
     until(cx, |cx| cx.debug_bounds("attachment-upload-progress").is_none());
 
     let toggle = |cx: &mut gpui::VisualTestContext| {
@@ -671,7 +671,7 @@ fn a_drafts_file_of_this_computer_goes_either_way_after_its_machine_comes_back(
     assert_ne!(draft_project(&view, draft, cx).machine(), here_machine, "back on box");
     let composer = view.read_with(cx, |view, _| view.panes[view.index_of(draft).unwrap()].composer.clone());
     assert!(!composer.update(cx, |composer, cx| composer.has_blocked_file(cx)), "box has it");
-    assert_eq!(uploads(cx), 1, "not sent again");
+    assert_eq!(uploads(), 1, "not sent again");
     view.update(cx, |view, cx| view.hide_sheet(cx));
     settles(cx);
 
