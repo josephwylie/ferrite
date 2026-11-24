@@ -28,9 +28,9 @@ The API listens on `api.sock` beside `server.sock` (on Windows the pipe
 expected it to share the windows' listener with another `role` in `hello`;
 a second socket is simpler and keeps the windows' frozen contract untouched:
 the API has its own envelope and its own stability rules, a CLI never says
-`hello`, and nothing in `link`'s outbox (lanes, coalescing, the lag limit,
+`hello`, and nothing in `connection`'s outbox (lanes, coalescing, the lag limit,
 history) applies to one request and one answer. Both feed the pump's one
-channel (`link::Heard::Api`), so a request is answered on the pump thread
+channel (`connection::Heard::Api`), so a request is answered on the pump thread
 between passes, in order with the windows' commands. If `api.sock` cannot be
 bound the Server runs without it, and its agents are not told a socket.
 
