@@ -301,10 +301,12 @@ pub fn size(root: &Path, path: &str) -> u64 {
 /// A Project folder of this computer as a copy sends it: what git would
 /// check out on a Machine. From a computer that keeps no permission bits
 /// (Windows), each file gets its own ([`Checkout::list`]); a file git has
-/// as LF in its index and this checkout as CRLF goes as LF, edits and all;
-/// and the copy's `.git/config` goes without this computer's line-end and
-/// file-mode settings, so git there reads the files as unchanged and keeps
-/// the bits an agent gives them. Everything else goes byte for byte.
+/// as LF in its index and this checkout as CRLF goes as LF, edits and all,
+/// and the index lists it with no size, as git lists a file it must read
+/// again; and the copy's `.git/config` goes without this computer's
+/// line-end, file-mode and case settings. So git there reads the files as
+/// unchanged and keeps the bits an agent gives them. Everything else goes
+/// byte for byte.
 pub struct Checkout {
     root: PathBuf,
     /// Files git has as LF in its index and CRLF here.
@@ -313,10 +315,14 @@ pub struct Checkout {
     executable: BTreeSet<String>,
     /// What git ignores, each directory whole.
     ignored: Vec<String>,
+    /// How many bytes name an object in the repository: 20, or 32 where
+    /// it names them by SHA-256.
+    object_id_len: usize,
     from_windows: bool,
 }
 
 const GIT_CONFIG: &str = ".git/config";
+const GIT_INDEX: &str = ".git/index";
 
 impl Checkout {
     /// The checkout at `root`, as this computer's copies send it.
@@ -335,6 +341,7 @@ impl Checkout {
             crlf: BTreeSet::new(),
             executable: BTreeSet::new(),
             ignored: Vec::new(),
+            object_id_len: 20,
             from_windows: false,
         }
     }
@@ -363,6 +370,10 @@ impl Checkout {
             crlf,
             executable,
             ignored: ignored(root).into_iter().map(|ignored| ignored.path).collect(),
+            object_id_len: match lines(&["config", "--get", "extensions.objectformat"]).trim() {
+                "sha256" => 32,
+                _ => 20,
+            },
             from_windows: true,
         }
     }
@@ -394,7 +405,9 @@ impl Checkout {
     }
 
     fn converts(&self, path: &str) -> bool {
-        self.crlf.contains(path) || (self.from_windows && path == GIT_CONFIG)
+        self.crlf.contains(path)
+            || (self.from_windows && path == GIT_CONFIG)
+            || (path == GIT_INDEX && !self.crlf.is_empty())
     }
 
     fn is_ignored(&self, path: &str) -> bool {
@@ -434,11 +447,13 @@ impl Checkout {
     }
 
     fn converted(&self, path: &str, bytes: Vec<u8>) -> Vec<u8> {
-        if path == GIT_CONFIG {
-            let config = String::from_utf8_lossy(&bytes);
-            without_checkout_settings(&config).into_bytes()
-        } else {
-            lf(bytes)
+        match path {
+            GIT_CONFIG => without_checkout_settings(&String::from_utf8_lossy(&bytes)).into_bytes(),
+            GIT_INDEX => {
+                let mut index = bytes.clone();
+                without_sizes(&mut index, &self.crlf, self.object_id_len).map_or(bytes, |()| index)
+            }
+            _ => lf(bytes),
         }
     }
 }
@@ -465,8 +480,66 @@ fn lf(bytes: Vec<u8>) -> Vec<u8> {
     out
 }
 
-/// A git config without its `core.autocrlf` and `core.filemode`: how this
-/// computer checks files out, which is not how a Machine does.
+/// Mark each of `paths` in the git index `index` as git marks a file it
+/// must read again, its size 0, and sign the index again: git then
+/// compares what the file holds rather than the size this computer
+/// checked it out at. `hash` is how many bytes name an object. None, with
+/// `index` as it may be, for an index this cannot read.
+fn without_sizes(index: &mut [u8], paths: &BTreeSet<String>, hash: usize) -> Option<()> {
+    const SIZE: usize = 36;
+    let word = |index: &[u8], at: usize| Some(u32::from_be_bytes(index.get(at..at + 4)?.try_into().ok()?));
+    let version = word(index, 4)?;
+    if index.get(..4)? != b"DIRC" || !(2..=4).contains(&version) {
+        return None;
+    }
+    let mut at = 12;
+    let mut path: Vec<u8> = Vec::new();
+    for _ in 0..word(index, 8)? {
+        let flags = index.get(at + 40 + hash..at + 42 + hash)?;
+        let name = at + 42 + hash + if flags[0] & 0x40 != 0 { 2 } else { 0 };
+        let next = if version == 4 {
+            let (strip, used) = varint(index.get(name..)?)?;
+            let end = name + used + index.get(name + used..)?.iter().position(|&byte| byte == 0)?;
+            path.truncate(path.len().checked_sub(strip)?);
+            path.extend_from_slice(&index[name + used..end]);
+            end + 1
+        } else {
+            let end = name + index.get(name..)?.iter().position(|&byte| byte == 0)?;
+            path = index[name..end].to_vec();
+            at + ((end - at + 8) & !7)
+        };
+        if std::str::from_utf8(&path).is_ok_and(|path| paths.contains(path)) {
+            index.get_mut(at + SIZE..at + SIZE + 4)?.fill(0);
+        }
+        at = next;
+    }
+    let body = index.len().checked_sub(hash)?;
+    if index[body..].iter().all(|&byte| byte == 0) {
+        return Some(());
+    }
+    let sum = match hash {
+        20 => sha1::Sha1::digest(&index[..body]).to_vec(),
+        _ => Sha256::digest(&index[..body]).to_vec(),
+    };
+    index[body..].copy_from_slice(&sum);
+    Some(())
+}
+
+/// A number as a git index of version 4 writes it, and how many bytes it
+/// took.
+fn varint(bytes: &[u8]) -> Option<(usize, usize)> {
+    let mut value = usize::from(*bytes.first()? & 0x7f);
+    let mut used = 1;
+    while bytes[used - 1] & 0x80 != 0 {
+        value = value.checked_add(1)?.checked_mul(128)? + usize::from(*bytes.get(used)? & 0x7f);
+        used += 1;
+    }
+    Some((value, used))
+}
+
+/// A git config without its `core.autocrlf`, `core.filemode` and
+/// `core.ignorecase`: how this computer checks files out, which is not how
+/// a Machine does.
 fn without_checkout_settings(config: &str) -> String {
     let mut core = false;
     config
@@ -479,7 +552,7 @@ fn without_checkout_settings(config: &str) -> String {
                 return true;
             }
             let key = line.split('=').next().unwrap_or_default().trim();
-            !(core && ["autocrlf", "filemode"].iter().any(|setting| key.eq_ignore_ascii_case(setting)))
+            !(core && ["autocrlf", "filemode", "ignorecase"].iter().any(|setting| key.eq_ignore_ascii_case(setting)))
         })
         .collect()
 }

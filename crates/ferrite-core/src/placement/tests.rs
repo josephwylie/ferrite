@@ -273,8 +273,9 @@ fn a_copy_from_a_side_that_keeps_no_bits_takes_them_from_git() {
 /// A Windows checkout's text files are CRLF where git's index has LF. The
 /// copy sends what git would check out on a Machine: such a file as LF,
 /// an uncommitted edit included, its size and hash those of what is sent;
-/// a file committed with CRLF, or binary, byte for byte; and the copy's
-/// git config without this computer's line-end and file-mode settings.
+/// a file committed with CRLF, or binary, byte for byte; the copy's git
+/// config without this computer's line-end, file-mode and case settings;
+/// and its index read there as git would, so only the edit is a change.
 #[test]
 fn a_copy_from_windows_sends_what_git_would_check_out_on_the_machine() {
     let root = scratch("crlf");
@@ -290,7 +291,12 @@ fn a_copy_from_windows_sends_what_git_would_check_out_on_the_machine() {
     );
     git(&root, &["config", "core.filemode", "false"]);
     git(&root, &["config", "core.autocrlf", "true"]);
-    fs::write(root.join("scripts/run.sh"), b"#!/bin/sh\r\necho ran\r\n").unwrap();
+    git(&root, &["config", "core.ignorecase", "true"]);
+    for path in ["scripts/run.sh", "edited.txt"] {
+        fs::remove_file(root.join(path)).unwrap();
+    }
+    git(&root, &["checkout", "--", "."]);
+    assert_eq!(fs::read(root.join("scripts/run.sh")).unwrap(), b"#!/bin/sh\r\necho ran\r\n");
     fs::write(root.join("edited.txt"), b"one\r\ntwo\r\n").unwrap();
 
     let checkout = Checkout::from_windows(&root);
@@ -313,8 +319,38 @@ fn a_copy_from_windows_sends_what_git_would_check_out_on_the_machine() {
         assert_eq!((*size, sha256.as_str()), (bytes.len() as u64, chunked::hex(&Sha256::digest(&bytes)).as_str()), "{path}");
     }
     let config = String::from_utf8(sent(".git/config")).unwrap();
-    assert!(!config.contains("autocrlf") && !config.contains("filemode"), "{config}");
+    assert!(
+        ["autocrlf", "filemode", "ignorecase"].iter().all(|setting| !config.contains(setting)),
+        "{config}"
+    );
     assert!(config.contains("[user]") && config.contains("repositoryformatversion"), "{config}");
+
+    assert_eq!(status_there(&root, "crlf-there"), " M edited.txt\n", "only the edit is a change");
+    git(&root, &["update-index", "--index-version", "4"]);
+    assert_eq!(status_there(&root, "crlf-there-v4"), " M edited.txt\n", "an index of version 4 too");
+}
+
+/// What git on a Machine says of the Windows checkout at `root` once it
+/// lands in the folder `name`, line ends and modes as a Machine has them.
+fn status_there(root: &Path, name: &str) -> String {
+    let checkout = Checkout::from_windows(root);
+    let mut listed = tree::scan(root, &[]).unwrap();
+    checkout.list(&mut listed);
+    let there = scratch(name);
+    for (path, entry) in &listed.entries {
+        let at = there.join(path);
+        match entry {
+            Entry::Dir => fs::create_dir_all(&at).unwrap(),
+            Entry::File { .. } => {
+                let mut bytes = Vec::new();
+                tree::Source::open(&checkout, path).unwrap().read_to_end(&mut bytes).unwrap();
+                fs::create_dir_all(at.parent().unwrap()).unwrap();
+                fs::write(&at, bytes).unwrap();
+            }
+            Entry::Symlink { .. } | Entry::Unknown => {}
+        }
+    }
+    git(&there, &["-c", "core.autocrlf=false", "-c", "core.filemode=false", "status", "--porcelain"])
 }
 
 /// A Server in this process, each reply heard in the order asked. It

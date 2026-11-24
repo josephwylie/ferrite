@@ -305,12 +305,15 @@ Windows window.
   attribute, goes with each CRLF made LF, uncommitted edits and all; each
   file gets bits of its own, which Windows does not keep: 0755 for one the
   index has as 100755, 0600 for one git ignores (this computer's own, as a
-  `.env` is), 0644 for the rest; and the copy's `.git/config` goes without
-  `core.autocrlf` and `core.filemode`, which say how this computer checks
-  out. Everything else goes byte for byte, and the manifest's sizes and
-  hashes are of what is sent. So git there reads the tree as unchanged and
-  a script checked out here with CRLF runs there. From a side that keeps
-  bits, everything goes as it is.
+  `.env` is), 0644 for the rest; the copy's `.git/index` lists each file
+  sent as LF with no size, as git lists a racily clean file, so git there
+  reads what it holds rather than the CRLF size it had here; and its
+  `.git/config` goes without `core.autocrlf`, `core.filemode` and
+  `core.ignorecase`, which say how this computer checks out. Everything
+  else goes byte for byte, and the manifest's sizes and hashes are of what
+  is sent. So git there reads the tree as unchanged and a script checked
+  out here with CRLF runs there. From a side that keeps bits, everything
+  goes as it is.
 - **A Machine not reached or not set up** is listed dimmed with why
   ("connecting", "sign in", "not set up", "offline"). A press on it opens
   Connections; the arrows pass over it, as over every dimmed row.
@@ -536,10 +539,12 @@ Windows window.
   (the API's tools on `main`, each lane and read here), so a Server whose
   accept failed ran on with no way in. The accept loop now says so
   (`Heard::Stopped`). No test makes an accept fail.
-- **An executable inside a submodule lands 0644** from Windows. Bits come
-  from the Project's own index, which lists a submodule as one entry; the
-  submodule's own index is not read. `git status` in it then shows the
-  mode changed until `chmod +x` puts it right.
+- **A submodule goes as this computer checked it out.** Its files' line
+  ends, bits and checkout settings come from the Project's own index and
+  config, which list a submodule as one entry; the submodule's own are not
+  read. From Windows an executable in one lands 0644 and its text keeps
+  CRLF under its own `core.autocrlf`, so a script there does not run until
+  the submodule is checked out afresh on the Machine.
 - **Switching a Draft's environment sets its workspace target back to
   Main**, and whether the Draft's provider is installed on the Machine is
   not checked until the first send.
