@@ -11,7 +11,7 @@
 //! - Optional behaviour is negotiated by name in `capabilities`.
 //! - A change these rules cannot carry is generation 2, offered beside 1.
 //!
-//! Durable history crosses in the Store's own schema ([`LogRecord`]): the
+//! Durable history crosses in the log's own schema ([`LogRecord`]): the
 //! log's lines, not a second encoding of them. What the log never keeps —
 //! Decisions, menus, connection state — crosses as the small [`Live`]
 //! vocabulary. Fixtures for every message are in `protocol/fixtures/gen1`
@@ -27,7 +27,7 @@ use crate::activity::{ActivityEvent, ActivityInput, AgentKey, DecisionHandle, Su
 use crate::checkout::{WorkspaceBinding, WorkspaceChoice};
 use crate::project::ProjectId;
 use crate::provider::Provider;
-use crate::store::LogRecord;
+use crate::thread_log::LogRecord;
 use crate::transcript::Input;
 use crate::{SessionEvent, ThreadId};
 use ferrite_reviewr::ferrite::Read;

@@ -660,7 +660,7 @@ fn a_visual_is_persisted_and_reloads_as_it_was_shown() {
 #[test]
 fn a_workers_report_is_its_own_tool_needing_no_permission() {
     use ferrite_core::api::{self, tools::Tools};
-    use ferrite_core::{link, ThreadId, ThreadOwner};
+    use ferrite_core::{connection, ThreadId, ThreadOwner};
 
     let host = dir().join("claude-report.host.jsonl");
     let argv = dir().join("claude-report.argv");
@@ -697,7 +697,7 @@ fn a_workers_report_is_its_own_tool_needing_no_permission() {
     .unwrap();
     let server = std::thread::spawn(move || {
         let mut asked = None;
-        while let Ok(link::Heard::Api(heard)) = hear.recv_timeout(Duration::from_secs(10)) {
+        while let Ok(connection::Heard::Api(heard)) = hear.recv_timeout(Duration::from_secs(10)) {
             match heard {
                 api::Heard::Joined(_, answers) => asked = Some(answers),
                 api::Heard::Request(_, request) => {
@@ -757,7 +757,7 @@ fn a_workers_report_is_its_own_tool_needing_no_permission() {
 #[test]
 fn every_thread_watches_prs_and_a_subagents_watch_is_refused() {
     use ferrite_core::api::{self, tools::Tools};
-    use ferrite_core::{link, ThreadId};
+    use ferrite_core::{connection, ThreadId};
 
     let host = dir().join("claude-pr-watch.host.jsonl");
     let argv = dir().join("claude-pr-watch.argv");
@@ -801,7 +801,7 @@ fn every_thread_watches_prs_and_a_subagents_watch_is_refused() {
     let server = std::thread::spawn(move || {
         let mut asked = None;
         let mut requests = Vec::new();
-        while let Ok(link::Heard::Api(heard)) = hear.recv_timeout(Duration::from_secs(5)) {
+        while let Ok(connection::Heard::Api(heard)) = hear.recv_timeout(Duration::from_secs(5)) {
             match heard {
                 api::Heard::Joined(_, answers) => asked = Some(answers),
                 api::Heard::Request(_, request) => {

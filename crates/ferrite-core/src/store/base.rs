@@ -6,18 +6,9 @@
 //! recall needs. Nothing here is truth: a mark names a base, and a reader
 //! that ignores it replays the whole log and sees the same Thread.
 
-use super::activity::{Execution, PersistedActivity};
-use super::{PersistedProgress, Record};
-use serde::{Deserialize, Serialize};
+use crate::thread_log::activity::{Execution, PersistedActivity};
+use crate::thread_log::{Base, PersistedProgress, Record};
 use std::collections::{BTreeMap, VecDeque};
-
-/// A replay base, as a mark names it: the offset of a turn start, and the
-/// offsets of the records before it a replay from there needs first.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(super) struct Base {
-    pub(super) at: u64,
-    pub(super) carry: Vec<u64>,
-}
 
 /// Why a record before a base still matters to a replay from it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

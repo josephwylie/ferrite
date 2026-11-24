@@ -20,7 +20,8 @@ use std::time::{Duration, Instant};
 
 use ferrite_core::api::Api;
 use ferrite_core::engine::Engine;
-use ferrite_core::link::{self, ClientId, Connection, Heard, Ring};
+use ferrite_core::connection::{self, ClientId, Connection, Heard, Ring};
+use ferrite_core::link;
 use ferrite_core::protocol::{
     self, Capability, ClientMessage, ClosedBy, Command, Done, ErrorCode, Op, ServerInfo,
     ServerMessage, When, WireError, WireFile, WireHandle,
@@ -195,7 +196,7 @@ pub fn run(options: Options) -> i32 {
             ferrite_core::log!("server: cannot accept API connections: {error}");
         }
     }
-    if let Err(error) = link::accept_all(listener, heard.clone(), link::LAGGED_BYTES) {
+    if let Err(error) = connection::accept_all(listener, heard.clone(), link::LAGGED_BYTES) {
         ferrite_core::log!("server: cannot accept connections: {error}");
         return 1;
     }
@@ -255,7 +256,7 @@ pub fn fixture_browser_machine(
     }
     let address = link::address(&store);
     let (heard, hear) = mpsc::channel();
-    link::accept_all(link::listen(&address)?, heard.clone(), link::LAGGED_BYTES)?;
+    connection::accept_all(link::listen(&address)?, heard.clone(), link::LAGGED_BYTES)?;
     std::thread::spawn(move || {
         let id = server_id::open(&store).expect("the Store keeps an id");
         let engine = Engine::try_new(Store::open(&store).expect("the Store opens"), spawner)

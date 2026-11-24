@@ -3,6 +3,7 @@
 
 use super::compat_tests::{plant, scratch};
 use super::*;
+use crate::thread_log::LogRecord;
 
 fn main() -> WorkspaceBinding {
     WorkspaceBinding::Main {

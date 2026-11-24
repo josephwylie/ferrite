@@ -28,7 +28,7 @@ use serde_json::{json, Map, Value};
 
 use super::schema::{Callers, Operation};
 use super::{CallerId, Heard, Method, Request};
-use crate::link;
+use crate::connection;
 use crate::{ThreadId, ThreadOwner};
 
 mod delegation;
@@ -84,11 +84,11 @@ struct PrTool {
 
 /// The Server's end, where every Session's tools are bound.
 #[derive(Debug, Clone)]
-pub struct Tools(Sender<link::Heard>);
+pub struct Tools(Sender<connection::Heard>);
 
 impl Tools {
     /// `heard` is the pump's: a call is heard as an API connection's is.
-    pub fn new(heard: Sender<link::Heard>) -> Self {
+    pub fn new(heard: Sender<connection::Heard>) -> Self {
         Self(heard)
     }
 
@@ -115,7 +115,7 @@ impl Tools {
 /// One Session's tools, bound to its Thread.
 #[derive(Debug, Clone)]
 pub struct ThreadTools {
-    heard: Sender<link::Heard>,
+    heard: Sender<connection::Heard>,
     thread: ThreadId,
     /// An owned Thread's kind; `None` for the operator's own.
     callers: Option<Callers>,
@@ -280,7 +280,7 @@ const UNANSWERED: &str = "the Ferrite Server did not answer";
 
 /// Put `request` to the Server as a caller of its own: where its one
 /// answer line comes.
-fn send(heard: &Sender<link::Heard>, request: Request) -> Result<Receiver<Vec<u8>>, String> {
+fn send(heard: &Sender<connection::Heard>, request: Request) -> Result<Receiver<Vec<u8>>, String> {
     let caller: CallerId = NEXT_CALLER.fetch_add(1, Ordering::Relaxed);
     let (answers, answer) = mpsc::channel();
     let asked = [
@@ -289,7 +289,7 @@ fn send(heard: &Sender<link::Heard>, request: Request) -> Result<Receiver<Vec<u8
         Heard::Hungup(caller),
     ]
     .into_iter()
-    .all(|told| heard.send(link::Heard::Api(told)).is_ok());
+    .all(|told| heard.send(connection::Heard::Api(told)).is_ok());
     match asked {
         true => Ok(answer),
         false => Err("the Ferrite Server is not running".into()),
@@ -298,7 +298,7 @@ fn send(heard: &Sender<link::Heard>, request: Request) -> Result<Receiver<Vec<u8
 
 /// Ask the Server `method` from `thread` and wait for its `result`, or
 /// its refusal.
-fn ask(heard: &Sender<link::Heard>, thread: ThreadId, method: Method) -> Result<Value, Refusal> {
+fn ask(heard: &Sender<connection::Heard>, thread: ThreadId, method: Method) -> Result<Value, Refusal> {
     let request = Request {
         id: "1".into(),
         method,
@@ -537,7 +537,7 @@ fn answered(line: &[u8]) -> Answer {
 mod tests {
     use super::*;
 
-    fn tools(owner: ThreadOwner) -> (ThreadTools, mpsc::Receiver<link::Heard>) {
+    fn tools(owner: ThreadOwner) -> (ThreadTools, mpsc::Receiver<connection::Heard>) {
         let (heard, hear) = mpsc::channel();
         (Tools::new(heard).for_thread(ThreadId::new(7), Some(&owner), false), hear)
     }
@@ -614,12 +614,12 @@ mod tests {
             true,
             move |answer| told.send((answer.text, answer.is_error)).unwrap(),
         );
-        let Ok(link::Heard::Api(Heard::Joined(caller, answers))) =
+        let Ok(connection::Heard::Api(Heard::Joined(caller, answers))) =
             hear.recv_timeout(Duration::from_secs(5))
         else {
             panic!("joined first, not answered {:?}", said.try_recv());
         };
-        let Ok(link::Heard::Api(Heard::Request(asked, request))) = hear.recv() else {
+        let Ok(connection::Heard::Api(Heard::Request(asked, request))) = hear.recv() else {
             panic!("then asked");
         };
         assert_eq!((asked, request.caller), (caller, Some(ThreadId::new(7))));
@@ -672,10 +672,10 @@ mod tests {
         assert!(hear.try_recv().is_err(), "nothing reached the Server");
 
         tools.call("unwatch_pull_request", &pr, false, |_| {});
-        let Ok(link::Heard::Api(Heard::Joined(..))) = hear.recv() else {
+        let Ok(connection::Heard::Api(Heard::Joined(..))) = hear.recv() else {
             panic!("joined first");
         };
-        let Ok(link::Heard::Api(Heard::Request(_, request))) = hear.recv() else {
+        let Ok(connection::Heard::Api(Heard::Request(_, request))) = hear.recv() else {
             panic!("then asked");
         };
         assert_eq!(
@@ -745,7 +745,7 @@ mod tests {
     }
 
     /// What `tool` answers `arguments` with, and whether it asked the Server.
-    fn answer(tools: &ThreadTools, hear: &mpsc::Receiver<link::Heard>, tool: &str, arguments: Value) -> (String, bool) {
+    fn answer(tools: &ThreadTools, hear: &mpsc::Receiver<connection::Heard>, tool: &str, arguments: Value) -> (String, bool) {
         let (told, said) = mpsc::channel();
         tools.call(tool, &arguments, true, move |answer| {
             told.send(answer.text).unwrap()
@@ -804,8 +804,8 @@ mod tests {
         tools.call("delegate_task", &json!({ "task": "x", "target": target }), true, |_| {});
         let asked = || loop {
             match hear.recv_timeout(Duration::from_secs(5)) {
-                Ok(link::Heard::Api(Heard::Joined(_, answers))) => {
-                    let Ok(link::Heard::Api(Heard::Request(_, request))) = hear.recv() else {
+                Ok(connection::Heard::Api(Heard::Joined(_, answers))) => {
+                    let Ok(connection::Heard::Api(Heard::Request(_, request))) = hear.recv() else {
                         panic!("joined, then asked");
                     };
                     return (request.method, answers);

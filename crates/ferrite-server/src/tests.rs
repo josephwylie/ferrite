@@ -345,7 +345,7 @@ fn serve_configured(
         });
         configure(&mut server);
         ferrite_core::api::accept_all(api_listener, heard.clone()).unwrap();
-        link::accept_all(listener, heard, tuning.lag_bytes).unwrap();
+        connection::accept_all(listener, heard, tuning.lag_bytes).unwrap();
         server.serve(hear)
     });
     Harness {

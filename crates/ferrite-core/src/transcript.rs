@@ -4000,8 +4000,8 @@ mod tests {
         assert_eq!(stamps(&live), vec![None, None, at.clone(), at]);
         let mut replayed = Transcript::default();
         for input in &inputs {
-            let line = crate::store::LogRecord::of(input, None).expect("the log keeps it");
-            let line: crate::store::LogRecord =
+            let line = crate::thread_log::LogRecord::of(input, None).expect("the log keeps it");
+            let line: crate::thread_log::LogRecord =
                 serde_json::from_str(&serde_json::to_string(&line).unwrap()).unwrap();
             replayed.apply(line.input().expect("it replays"));
         }

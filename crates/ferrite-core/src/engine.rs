@@ -2114,7 +2114,7 @@ impl Engine {
                 state.carry = Some(carry_digest(handover.from, &handover.exchanges));
                 state.resume = None;
                 state.resume_lost = false;
-                state.apply(Input::Notice(crate::store::handover_notice(
+                state.apply(Input::Notice(crate::thread_log::handover_notice(
                     provider,
                     model.as_deref(),
                 )));
