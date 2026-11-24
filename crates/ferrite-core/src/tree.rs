@@ -24,7 +24,7 @@ mod serve;
 #[cfg(test)]
 mod tests;
 
-pub use scan::scan;
+pub use scan::{scan, scan_watched};
 pub(crate) use scan::{millis, mode, setup as scan_setup};
 pub(crate) use serve::{inside, permissions, remove as remove_entry, set_mode, MOST_WRITES};
 pub use serve::Session;
@@ -485,6 +485,19 @@ impl Side {
 }
 
 impl Sent {
+    /// What this send did, and what each side, as listed here and there,
+    /// could not list.
+    pub fn with_problems(mut self, here: Manifest, there: Manifest) -> Sent {
+        for (side, manifest) in [(Side::Here, here), (Side::There, there)] {
+            self.problems.extend(manifest.problems.into_iter().map(|(path, error)| Problem {
+                path,
+                side,
+                error,
+            }));
+        }
+        self
+    }
+
     fn took(&mut self, step: &Step) {
         match step {
             Step::Remove(_) => self.removed += 1,
@@ -498,8 +511,9 @@ impl Sent {
     }
 }
 
-/// Where a [`send`] reads the files its steps write: a directory's, or
-/// the operator's setup as `setup_sync` spells it.
+/// Where a [`send`] reads the files its steps write: a directory's, one
+/// that gives each file as it is to land there, or the operator's setup as
+/// `setup_sync` spells it.
 pub trait Source {
     fn open(&self, path: &str) -> io::Result<Box<dyn io::Read + '_>>;
 }
@@ -511,7 +525,7 @@ impl<T: AsRef<Path> + ?Sized> Source for T {
 }
 
 /// Take each of `steps` to `dest` through `exchange`, the files read from
-/// under `source`, asking ahead of the replies. `progress` hears how many
+/// `source`, asking ahead of the replies. `progress` hears how many
 /// bytes of all the steps' files the far side has. A file that cannot be
 /// read here as its step lists it (gone, held by another program, changed
 /// since it was listed) is left as the far side has it, a problem of this
@@ -745,33 +759,11 @@ pub fn mirror(
     progress: &mut dyn FnMut(Progress),
     cancel: &Cancellation,
 ) -> Result<Sent, Stopped> {
-    mirror_listed(source, dest, skip, &mut |_| {}, exchange, progress, cancel)
-}
-
-/// [`mirror`], what this side lists put as `listed` puts it before the
-/// plan: the bits each file lands with, where this computer keeps none.
-pub fn mirror_listed(
-    source: &Path,
-    dest: &Root,
-    skip: &[String],
-    listed: &mut dyn FnMut(&mut Manifest),
-    exchange: &mut dyn Exchange,
-    progress: &mut dyn FnMut(Progress),
-    cancel: &Cancellation,
-) -> Result<Sent, Stopped> {
     let asked = exchange.ask(scan_request(dest, skip, None))?;
-    let mut here = scan(source, skip)?;
-    listed(&mut here);
+    let here = scan(source, skip)?;
     let there = pages(exchange, dest, skip, asked)?;
-    let mut sent = send(source, &plan(&here, &there, skip), dest, exchange, progress, cancel)?;
-    for (side, manifest) in [(Side::Here, here), (Side::There, there)] {
-        sent.problems.extend(manifest.problems.into_iter().map(|(path, error)| Problem {
-            path,
-            side,
-            error,
-        }));
-    }
-    Ok(sent)
+    let sent = send(source, &plan(&here, &there, skip), dest, exchange, progress, cancel)?;
+    Ok(sent.with_problems(here, there))
 }
 
 /// What the far side holds at `root`: its scan, every page of it.

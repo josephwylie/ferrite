@@ -172,6 +172,7 @@ fn a_copy_from_a_side_that_keeps_no_bits_takes_them_from_git() {
             size: 0,
             sha256: String::new(),
             mode: Some(0o700),
+            modified: None,
         },
     );
     give_modes(&root, &mut listed);
