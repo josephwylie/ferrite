@@ -13,7 +13,9 @@ use super::settings_view::SettingsView;
 use super::*;
 use ferrite_ui::motion;
 use ferrite_ui::sheet::Drawn;
-use gpui::App;
+use gpui::{App, Bounds};
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Instant;
 
 /// A sheet the host can hold. The set is closed: one variant per sheet.
@@ -72,6 +74,8 @@ pub(crate) struct Sheets {
     shown: Option<Shown>,
     /// What held the keyboard before the sheet up took it.
     back: Option<FocusHandle>,
+    /// Where the card up was last drawn.
+    card: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 /// The operator pressed the veil, outside the card.
@@ -85,6 +89,11 @@ impl Sheets {
             Some(Shown::Up(sheet)) => Some(sheet),
             _ => None,
         }
+    }
+
+    /// Where the card up was last drawn; `None` while none is up.
+    pub(super) fn card(&self) -> Option<Bounds<Pixels>> {
+        self.up().and(self.card.get())
     }
 
     pub(super) fn settings(&self) -> Option<&Entity<SettingsView>> {
@@ -147,6 +156,20 @@ impl Sheets {
     }
 }
 
+impl Sheets {
+    /// The card's child that notes where the card is drawn, and draws the
+    /// window again when that moved: the toasts hang from it.
+    fn probe(&self) -> impl IntoElement {
+        let card = self.card.clone();
+        let noted = move |bounds: Bounds<Pixels>, window: &mut Window, _: &mut App| {
+            if card.replace(Some(bounds)) != Some(bounds) {
+                window.on_next_frame(|window, _| window.refresh());
+            }
+        };
+        gpui::canvas(noted, |_, _, _, _| {}).absolute().top_0().left_0().size_full()
+    }
+}
+
 impl Render for Sheets {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         ferrite_ui::loops_overlay::begin(window, cx.entity_id());
@@ -182,7 +205,7 @@ impl Render for Sheets {
                             cx.emit(Dismissed);
                         }),
                     )
-                    .child(motion::dialog_in(sheet.entrance(), card)),
+                    .child(motion::dialog_in(sheet.entrance(), card.child(self.probe()))),
             )
             .into_any_element(),
         };

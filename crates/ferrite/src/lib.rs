@@ -408,6 +408,10 @@ pub fn launch() {
                                     whats_new: whats_new.clone(),
                                     unreadable: unreadable.clone(),
                                     keys_refused: keys_refused.clone(),
+                                    setup_home: (!browser_smoke).then(|| {
+                                        ferrite_core::setup_sync::Home::from_env()
+                                            .map_err(|error| error.to_string())
+                                    }),
                                 },
                                 machines,
                                 cx,

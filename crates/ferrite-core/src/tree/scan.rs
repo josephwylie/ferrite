@@ -1,6 +1,6 @@
 //! A directory listed as a [`Manifest`], hashing only the files that moved.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read};
 use std::ops::Bound;
@@ -32,16 +32,37 @@ static HASHED: Mutex<Cache> = Mutex::new(Cache(Vec::new()));
 /// file is read only when what its metadata says of it moved since this
 /// process last listed `root`.
 pub fn scan(root: &Path, skip: &[String]) -> io::Result<Manifest> {
-    list(root, skip, false)
+    list(root, skip, Listing::default())
 }
 
 /// [`scan`], removing each temporary file a write that is over left behind:
 /// a Server's scan of a tree it writes to.
 pub(super) fn sweeping(root: &Path, skip: &[String]) -> io::Result<Manifest> {
-    list(root, skip, true)
+    list(root, skip, Listing { sweep: true, ..Listing::default() })
 }
 
-fn list(root: &Path, skip: &[String], sweep: bool) -> io::Result<Manifest> {
+/// One tree of the operator's setup: [`sweeping`], but each symlink is
+/// followed and listed as what it points to, its path kept in the
+/// manifest's `links`; each file's modification time is listed; and every
+/// directory called one of `left_out`, at any depth, is left out with all
+/// under it. A link to a directory that holds it is a problem.
+pub(crate) fn setup(root: &Path, skip: &[String], left_out: &[&str]) -> io::Result<Manifest> {
+    let listing = Listing {
+        sweep: true,
+        follow: true,
+        left_out,
+    };
+    list(root, skip, listing)
+}
+
+#[derive(Clone, Copy, Default)]
+struct Listing<'a> {
+    sweep: bool,
+    follow: bool,
+    left_out: &'a [&'a str],
+}
+
+fn list(root: &Path, skip: &[String], listing: Listing) -> io::Result<Manifest> {
     for path in skip {
         check_path(path)?;
     }
@@ -52,13 +73,15 @@ fn list(root: &Path, skip: &[String], sweep: bool) -> io::Result<Manifest> {
         ));
     }
     let mut walk = Walk {
+        root: root.to_path_buf(),
         skip,
-        sweep,
+        listing,
         started: SystemTime::now(),
         known: lock().take(root),
         kept: BTreeMap::new(),
         manifest: Manifest::default(),
         dirs: Vec::new(),
+        links_followed: BTreeSet::new(),
     };
     walk.list(root, "").map_err(|error| at(root, error))?;
     while let Some((dir, path)) = walk.dirs.pop() {
@@ -72,8 +95,9 @@ fn list(root: &Path, skip: &[String], sweep: bool) -> io::Result<Manifest> {
 
 /// A scan under way.
 struct Walk<'a> {
+    root: PathBuf,
     skip: &'a [String],
-    sweep: bool,
+    listing: Listing<'a>,
     started: SystemTime,
     /// The hashes the last scan kept, each taken as its file is listed.
     known: BTreeMap<String, Hashed>,
@@ -81,6 +105,8 @@ struct Walk<'a> {
     manifest: Manifest,
     /// Directories listed and not yet looked in, each with its path.
     dirs: Vec<(PathBuf, String)>,
+    /// Where each directory link it followed points.
+    links_followed: BTreeSet<PathBuf>,
 }
 
 impl Walk<'_> {
@@ -96,10 +122,10 @@ impl Walk<'_> {
                 continue;
             };
             let path = join(prefix, name);
-            if self.skip.contains(&path) {
+            if self.skip.contains(&path) || self.listing.left_out.contains(&name) {
                 continue;
             }
-            match self.entry(&entry, &path) {
+            match self.entry(dir, &entry, &path) {
                 Ok(Some(listed)) => {
                     self.manifest.entries.insert(path, listed);
                 }
@@ -113,19 +139,24 @@ impl Walk<'_> {
         Ok(())
     }
 
-    /// What `entry`, at `path`, is: `None` for what is listed as nothing.
-    fn entry(&mut self, entry: &fs::DirEntry, path: &str) -> io::Result<Option<Entry>> {
-        let meta = entry.metadata()?;
-        let kind = meta.file_type();
-        if kind.is_symlink() {
-            let target = fs::read_link(entry.path())?
-                .into_os_string()
-                .into_string()
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "its target is not UTF-8"))?;
-            return Ok(Some(Entry::Symlink {
-                target: if cfg!(windows) { target.replace('\\', "/") } else { target },
-            }));
+    /// What `entry`, at `path` in `dir`, is: `None` for what is listed as
+    /// nothing.
+    fn entry(&mut self, dir: &Path, entry: &fs::DirEntry, path: &str) -> io::Result<Option<Entry>> {
+        let mut meta = entry.metadata()?;
+        if meta.file_type().is_symlink() {
+            if !self.listing.follow {
+                let target = fs::read_link(entry.path())?
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "its target is not UTF-8"))?;
+                return Ok(Some(Entry::Symlink {
+                    target: if cfg!(windows) { target.replace('\\', "/") } else { target },
+                }));
+            }
+            meta = self.followed(dir, &entry.path())?;
+            self.manifest.links.insert(path.to_string());
         }
+        let kind = meta.file_type();
         if kind.is_dir() {
             self.dirs.push((entry.path(), path.to_string()));
             return Ok(Some(Entry::Dir));
@@ -134,7 +165,7 @@ impl Walk<'_> {
             return Ok(None);
         }
         if chunked::temporary(&entry.file_name()) {
-            if self.sweep && chunked::stale(&meta) {
+            if self.listing.sweep && chunked::stale(&meta) {
                 let _ = fs::remove_file(entry.path());
             }
             return Ok(None);
@@ -153,11 +184,30 @@ impl Walk<'_> {
                 },
             );
         }
+        let modified = self.listing.follow.then(|| millis(&meta)).flatten();
         Ok(Some(Entry::File {
             size: meta.len(),
             sha256,
             mode: mode(&meta),
+            modified,
         }))
+    }
+
+    /// What the symlink at `link`, in `dir`, points to. One whose target
+    /// is not there, holds the root or `dir`, or was followed already in
+    /// this listing is refused: following it again would never end.
+    fn followed(&mut self, dir: &Path, link: &Path) -> io::Result<fs::Metadata> {
+        let refused = |why: &str| io::Error::other(why.to_string());
+        let target = dunce::canonicalize(link).map_err(|_| refused("its target is not there"))?;
+        let meta = fs::metadata(&target)?;
+        if meta.is_dir() {
+            let within = |outer: &Path| dunce::canonicalize(outer).is_ok_and(|outer| super::holds(&target, &outer));
+            let root = self.root.clone();
+            if within(dir) || within(&root) || !self.links_followed.insert(target.clone()) {
+                return Err(refused("it links to a folder that holds it, or one listed already"));
+            }
+        }
+        Ok(meta)
     }
 
     /// The directory at `path` could not be listed: it is left out with all
@@ -292,14 +342,19 @@ fn hash(path: &Path) -> io::Result<String> {
     }
 }
 
+pub(crate) fn millis(meta: &fs::Metadata) -> Option<u64> {
+    let since = meta.modified().ok()?.duration_since(SystemTime::UNIX_EPOCH).ok()?;
+    u64::try_from(since.as_millis()).ok()
+}
+
 #[cfg(unix)]
-fn mode(meta: &fs::Metadata) -> Option<u32> {
+pub(crate) fn mode(meta: &fs::Metadata) -> Option<u32> {
     use std::os::unix::fs::PermissionsExt;
     Some(meta.permissions().mode() & 0o777)
 }
 
 #[cfg(not(unix))]
-fn mode(_: &fs::Metadata) -> Option<u32> {
+pub(crate) fn mode(_: &fs::Metadata) -> Option<u32> {
     None
 }
 

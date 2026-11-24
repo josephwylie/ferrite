@@ -63,6 +63,12 @@ impl MachineId {
     pub fn get(self) -> u32 {
         self.0
     }
+
+    /// One no Cockpit holds, for a test of what keys by a machine.
+    #[cfg(feature = "test-support")]
+    pub fn unheld() -> Self {
+        Self::mint()
+    }
 }
 
 /// A Thread and the machine it lives on. Only core makes one, stamping

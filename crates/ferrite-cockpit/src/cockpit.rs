@@ -62,6 +62,7 @@ mod session_control;
 mod new_task_view;
 mod project_editor_view;
 mod settings_view;
+mod setup_sync;
 mod sheets;
 mod side_chat_view;
 mod rename;
@@ -588,6 +589,8 @@ pub struct CockpitView {
     ferrite_update: crate::ferrite_update::FerriteUpdate,
     /// What the window has said about its Server (ADR 0025).
     server_bands: server::ServerBands,
+    /// The operator's setup kept in sync with each Machine (ADR 0048).
+    setup_sync: Entity<setup_sync::SetupSync>,
     /// Whether the window has said `settings.json` could not be used.
     unreadable_told: bool,
     /// The operator's commands running, and what they and the keys have
@@ -689,6 +692,11 @@ pub struct Preferences {
     /// The keys in `settings.json` the launch refused, a sentence each
     /// (`keymap::with_user_keys`): the window says them once.
     pub keys_refused: Vec<String>,
+    /// This computer's agent setup, which the window keeps in sync with
+    /// each Machine's (ADR 0048), or why it keeps none. `None` in the test
+    /// and demo constructors, so no suite reads or writes the operator's
+    /// setup.
+    pub setup_home: Option<Result<ferrite_core::setup_sync::Home, String>>,
 }
 
 impl Preferences {
@@ -726,6 +734,7 @@ impl Preferences {
             whats_new: None,
             unreadable: None,
             keys_refused: Vec::new(),
+            setup_home: None,
         }
     }
 }
@@ -1240,6 +1249,9 @@ impl CockpitView {
         ]);
         let cockpit_weak = cx.weak_entity();
         let cockpit = cx.new(|_| cockpit);
+        let setup_sync = cx.new(|_| {
+            setup_sync::SetupSync::new(prefs.setup_home.clone(), prefs.dir.clone(), cockpit.clone())
+        });
         let composer_menu = cx.new(|_| composer_menu::ComposerMenuView::default());
         // Whether a Composer's key context is the menu's follows the menu.
         cx.observe(&composer_menu, |view, _, cx| view.sync_composer_floats(cx))
@@ -1378,6 +1390,7 @@ impl CockpitView {
             environment: Default::default(),
             ferrite_update: Default::default(),
             server_bands: Default::default(),
+            setup_sync,
             unreadable_told: false,
             user_commands: Default::default(),
             leave_asked: false,
@@ -2226,6 +2239,7 @@ impl CockpitView {
             card.update(cx, |card, cx| card.poll_remote_path(cx));
         }
         self.poll_machine_repo(cx);
+        self.tick_setup_sync(cx);
         let server_moved = self.server_moved(cx);
         if server_moved {
             for pane in &self.panes {
@@ -5642,6 +5656,7 @@ impl CockpitView {
         let provider = binding.provider().clone();
         let effort = binding.effort().map(str::to_owned);
         let machine = binding.project().machine();
+        self.sync_setup_before_start(machine, cx);
         let resolved = binding
             .resolve(
                 self.cockpit.read(cx).project(binding.project()),
@@ -6926,6 +6941,7 @@ impl CockpitView {
         self.present_cli_updates(window, cx);
         self.present_ferrite_update(window, cx);
         self.present_server(window, cx);
+        self.present_setup_sync(window, cx);
         self.present_restart(window, cx);
         self.present_unreadable_settings(window, cx);
         self.present_user_commands(window, cx);
@@ -7541,7 +7557,23 @@ impl CockpitView {
             .children(self.sheet_floats(window, cx))
             .children(self.lightbox_element(cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
-            .children(gpui::component::Root::render_notification_layer(window, cx))
+            .children(gpui::component::Root::render_notification_layer(window, cx).map(|layer| {
+                let shifted = div().absolute().inset_0().right(self.toasts_shifted(window, cx)).child(layer);
+                deferred(shifted).with_priority(crate::float::FLOAT_PRIORITY)
+            }))
+    }
+
+    /// How far left of where they hang the toasts hang while a sheet is
+    /// up: short of the square at the end of its head that holds its close
+    /// button, so they never cover it, and at their own height, so they
+    /// cover as little of the sheet as they can.
+    fn toasts_shifted(&self, window: &Window, cx: &gpui::App) -> Pixels {
+        use ferrite_ui::theme::{MODAL_HEAD_H, TOAST_BOX_RIGHT};
+        let Some(card) = self.sheets.read(cx).card() else {
+            return px(0.);
+        };
+        let right = window.viewport_size().width - px(TOAST_BOX_RIGHT);
+        (right - (card.right() - px(MODAL_HEAD_H))).max(px(0.))
     }
 }
 

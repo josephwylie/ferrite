@@ -1,6 +1,7 @@
 use super::*;
 use ferrite_ui::frame::settings::{
-    ConnectionForm, ConnectionMode, ConnectionRow, ConnectionSuggestions, WindowAct,
+    ConnectionAction, ConnectionForm, ConnectionMode, ConnectionRow, ConnectionSuggestions,
+    ConnectionSync, WindowAct,
 };
 use gpui::component::{ActiveTheme, ElementExt};
 
@@ -717,6 +718,72 @@ pub(super) fn group(label: Option<SharedString>, group: &Group, cx: &App) -> Div
         )
 }
 
+/// Every Settings toggle's face (`Control::Toggle`): a stop that flips on
+/// a press, Enter or Space.
+fn switch(toggle: ConnectionAction, on: bool, label: String, cx: &App) -> Div {
+    let id = toggle.id.clone();
+    let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
+    div().debug_selector(move || id.to_string()).child(
+        components::faded_button(toggle.id.clone(), none, none, none, rgb(INK_STRONG).into(), cx)
+            .tab_stop(true)
+            .selected(on)
+            .disabled(!toggle.enabled)
+            .accessibility_label(label)
+            .h(px(SETTINGS_CONTROL_H))
+            .px(px(SPACE_1))
+            .child(components::switch(
+                SharedString::from(format!("{}-switch", toggle.id)),
+                on,
+            ))
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                (toggle.act)(window, cx)
+            }),
+    )
+}
+
+/// A remote environment's "Sync my setup": its switch, under the
+/// environment's own and past the room of its menu (`menu`), and where its
+/// last sync stands, under the environment's name.
+fn sync_line(sync: ConnectionSync, menu: bool, cx: &App) -> Div {
+    let selector = format!("{}-status", sync.toggle.id);
+    div()
+        .flex()
+        .items_center()
+        .min_w_0()
+        .gap(px(8.))
+        .pl(px(28.))
+        // A sync never takes a sign-in away: a side signed out is signed
+        // back in from the other (ADR 0048).
+        .child(
+            div()
+                .id(SharedString::from(format!("{}-label", sync.toggle.id)))
+                .flex_shrink_0()
+                .tooltip(ferrite_ui::menu::tooltip(
+                    "Sign-ins sync too. To stay signed out on one side, turn this off.",
+                ))
+                .child(text("Sync my setup", 12., ink(cx))),
+        )
+        .child(
+            text(sync.status, 12., if sync.failed { RED } else { muted(cx) })
+                .flex_1()
+                .truncate()
+                .debug_selector(move || selector.clone()),
+        )
+        .children(sync.actions.into_iter().map(|action| {
+            button(action.id.clone(), action.label.clone(), action.enabled, action.act.clone(), cx)
+                .h(px(24.))
+                .px(px(8.))
+                .flex_shrink_0()
+                .child(text(action.label, 12., ink(cx)))
+        }))
+        .child(switch(sync.toggle, sync.on, "Sync my setup".into(), cx))
+        .when(menu, |line| line.child(div().w(px(MENU_W)).flex_shrink_0()))
+}
+
+/// The side of a row's square menu button.
+const MENU_W: f32 = 28.;
+
 pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
     let enabled = row.enabled;
     // Only the Local environment has no target: it is this computer.
@@ -739,39 +806,18 @@ pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
         .map(|index| format!("connection-menu-{index}"))
         .unwrap_or_else(|| "connection-menu-local".into())
         .into();
+    let menu = !menu_actions.is_empty();
     let mut actions = div().flex().items_center().flex_shrink_0().gap(px(8.));
     if let Some(toggle) = toggle {
-        // Every Settings toggle's face (`Control::Toggle`): a stop that
-        // flips on a press, Enter or Space.
-        let id = toggle.id.clone();
-        let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
-        actions = actions.child(
-            div().debug_selector(move || id.to_string()).child(
-                components::faded_button(toggle.id.clone(), none, none, none, rgb(INK_STRONG).into(), cx)
-                    .tab_stop(true)
-                    .selected(enabled)
-                    .disabled(!toggle.enabled)
-                    .accessibility_label(format!("Enable {}", row.name))
-                    .h(px(SETTINGS_CONTROL_H))
-                    .px(px(SPACE_1))
-                    .child(components::switch(
-                        SharedString::from(format!("{}-switch", toggle.id)),
-                        enabled,
-                    ))
-                    .on_click(move |_, window, cx| {
-                        cx.stop_propagation();
-                        (toggle.act)(window, cx)
-                    }),
-            ),
-        );
+        actions = actions.child(switch(toggle, enabled, format!("Enable {}", row.name), cx));
     }
-    if !menu_actions.is_empty() {
+    if menu {
         let selector = menu_id.clone();
         actions = actions.child(
             components::form_button(menu_id, cx)
                 .debug_selector(move || selector.to_string())
                 .accessibility_label("Environment actions")
-                .size(px(28.))
+                .size(px(MENU_W))
                 .p_0()
                 .child(icon(icons::ELLIPSIS, 16., muted(cx)))
                 .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu, _, _| {
@@ -834,6 +880,7 @@ pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
                 )
                 .child(actions),
         )
+        .children(row.sync.map(|sync| sync_line(sync, menu, cx)))
         .children(row.removal.map(|(confirm, cancel)| {
             div()
                 .flex()
