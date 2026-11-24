@@ -70,7 +70,9 @@ All new code is in `ferrite-core` (ADR 0001: no GPUI there).
 The production `Spawner` (`ferrite/src/session.rs`) and the login-shell
 environment (`ferrite/src/shell.rs`) move to core, since the Server spawns.
 The scripted demo spawner stays in the app; `--demo`, `--load` and every
-app test run `Engine` in-process over the in-process link.
+app test run `Engine` in-process over the in-process link. Since ADR 0049
+that Engine is a fixture, and the demo is a development build's: `cargo run
+-p ferrite --features demo -- --demo`.
 
 ### Process lifecycle
 
