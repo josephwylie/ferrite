@@ -227,21 +227,36 @@ Windows window.
      attachments, provider and effort stay; its attachments are aimed at E
      and their upload there starts at once;
   2. none, and P is on this computer: the setup sheet (`PlacementView`).
-     The destination field starts at `<projects_dir>/<folder name>` and
-     completes against E's `list_dir` (`RemotePath`, the Project card's
-     own field); P's git-ignored entries are listed with their sizes,
-     unticked; Copy runs on a thread of its own over a connection of its
-     own (`Cockpit::tree`), with its progress and Cancel. Then the window
-     registers the destination on E, keeps a Placement if P has no
+     Where the copy goes is chosen by browsing E, never by typing a path
+     (though one can be typed): see **The folder browser** below. The copy
+     goes to `<folder browsed>/<name>`, its name P's folder name until
+     edited ("Copied to"). P's git-ignored entries are listed with their
+     sizes, unticked; Copy runs on a thread of its own over a connection
+     of its own (`Cockpit::tree`), with its progress and Cancel. Then the
+     window registers the destination on E, keeps a Placement if P has no
      repository key, and chooses the new Project on the Draft;
   3. none, and P is on another Machine: the Project card on E (a folder
      dialog when E is this computer), which chooses what it makes on the
      Draft.
+- **The folder browser** (`FolderBrowser`, a view of its own) shows E's
+  folders as a file explorer would, read by E's Server one directory at a
+  time (`list_dir`, ADR 0026) on a thread of its own, so a slow listing
+  holds up nothing: "Reading …" stands in its rows until it lands. It
+  opens at `projects_dir`, or at E's home when that cannot be read. A
+  line names the folder shown; under it, `..` and that folder's folders,
+  never its files, and a dot folder only once a dot is typed. A press goes
+  into a row, the arrows walk them and ↵ goes into the one they rest on,
+  so the sheet is finished with the mouse or with the arrows and ↵ alone.
+  "New folder" names a folder in the one shown, made by the copy; one
+  that cannot be read says so in place, and `..` leads out of it. The
+  Project card on a Machine uses the same browser in place of its path
+  field: "+ Add directory" under it, or ↵ once it has moved, adds the
+  folder shown, and the browser goes back to the folder that one is in.
 - **What is there is never overwritten.** Before it writes, the copy reads
   the destination as the mirror would (`placement::occupied`, through the
   same exchange). One that holds anything stops at **Occupied**: the sheet
-  says so and offers "Use what is there" (register, no copy); editing the
-  path chooses afresh. Only a destination this sheet already copied into
+  says so and offers "Use what is there" (register, no copy); another
+  folder or name chooses afresh. Only a destination this sheet already copied into
   (a retry, or a copy cancelled part way) is mirrored again.
 - **A destination is kept sane by the sheet**: `/` or `~/` first (or a
   drive, for a Server on Windows), not the home or a root itself, nothing
