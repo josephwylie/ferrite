@@ -308,7 +308,9 @@ list's 10 s) would race `REPLY_WAIT`. The window's walk of session files
 and its `session_file_roots` are gone. The Server lists the roots it
 finds on its own computer; an Engine in the window's process, a fixture,
 walks the roots a test gives it (`fixture_session_roots`) when its
-Spawner lists none.
+Spawner lists none. A Spawner that lists no commands answers an error, not
+an empty list: an empty list is what a Step's skill check reads as nothing
+installed.
 
 Titles, two shapes:
 

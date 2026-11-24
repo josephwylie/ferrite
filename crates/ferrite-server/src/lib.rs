@@ -925,19 +925,18 @@ impl Server {
                 self.read_off_pump(id, request, move || Ok(Some(read().into())));
                 return;
             }
-            Op::ListCommands { provider, cwd } => {
-                let listing = self.engine.discover_commands(*provider, cwd);
-                self.read_off_pump(id, request, move || {
-                    let commands = match listing {
-                        Some(listing) => listing.recv().map_err(failed)?.map_err(failed)?,
-                        None => Vec::new(),
-                    };
-                    Ok(Some(Done::Commands {
-                        commands: commands.iter().map(Into::into).collect(),
-                    }))
-                });
-                return;
-            }
+            Op::ListCommands { provider, cwd } => match self.engine.discover_commands(*provider, cwd) {
+                Some(listing) => {
+                    self.read_off_pump(id, request, move || {
+                        let commands = listing.recv().map_err(failed)?.map_err(failed)?;
+                        Ok(Some(Done::Commands {
+                            commands: commands.iter().map(Into::into).collect(),
+                        }))
+                    });
+                    return;
+                }
+                None => Err(failed("this server lists no commands")),
+            },
             Op::ListSessions { cap } => {
                 let roots = ferrite_core::session_file::default_roots();
                 match self.engine.discover_sessions(roots, *cap) {

@@ -281,10 +281,12 @@ impl Link for InProcess {
         }
     }
 
+    /// What its Spawner lists; one that lists none says so, as a Server's
+    /// does, rather than claim nothing is installed.
     fn list_commands(&mut self, provider: Provider, cwd: &Path) -> Ask<Vec<ferrite_core::SessionCommand>> {
         match self.engine.discover_commands(provider, cwd) {
             Some(listing) => Ask::of(listing),
-            None => Ask::answered(Ok(Vec::new())),
+            None => Ask::answered(Err(io::Error::other("this machine lists no commands"))),
         }
     }
 

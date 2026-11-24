@@ -744,6 +744,10 @@ fn with_no_session_files_found_the_picker_says_so(cx: &mut TestAppContext) {
 #[gpui::test]
 fn draft_import_replaces_the_draft_and_focuses_the_imported_thread(cx: &mut TestAppContext) {
     let fake = Fake::default();
+    // Its CLI lists no commands of its own: `/im` finds the import door alone.
+    let (listing, listed) = ferrite_core::doorbell::channel();
+    let _ = listing.send(Ok(Vec::new()));
+    *fake.command_discovery.borrow_mut() = Some(listed);
     let store = Store::open(scratch("draft-import-store")).unwrap();
     let core = Cockpit::new(store, Box::new(fake));
     let base = scratch("draft-import-roots");

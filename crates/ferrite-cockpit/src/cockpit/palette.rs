@@ -381,6 +381,8 @@ impl CockpitView {
             palette.update(cx, |palette, _| palette.listen(into, machine, reply));
         }
         self.show_sessions(Vec::new(), "searching sessions\u{2026}".into(), cx);
+        // An answer already in hand fills the picker now.
+        self.poll_session_discovery(cx);
     }
 
     /// The listing's answer, once it lands, into the picker that asked for
