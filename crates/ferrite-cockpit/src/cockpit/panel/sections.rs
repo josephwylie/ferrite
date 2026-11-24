@@ -80,7 +80,7 @@ fn environment_section(inputs: &OverviewInputs) -> Div {
         .child(panel_section_head("panel-environment-head", "Environment"))
         .child(detail_row(
             "panel-environment-machine",
-            icons::LAPTOP,
+            icons::machine(inputs.on_this_computer),
             inputs.machine.clone(),
             None,
         ));

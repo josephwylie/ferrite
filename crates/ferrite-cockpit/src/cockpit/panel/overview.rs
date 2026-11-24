@@ -49,6 +49,8 @@ pub(in crate::cockpit) struct OverviewInputs<'a> {
     pub(super) thread: ThreadKey,
     /// The machine the Thread runs on, as the Environment names it.
     pub(super) machine: String,
+    /// Whether that machine is this computer, for its icon.
+    pub(super) on_this_computer: bool,
     /// The Thread's checkout.
     pub(super) folder: Option<std::path::PathBuf>,
     /// The branch the checkout is on (`thread_branch`).
@@ -130,6 +132,7 @@ impl CockpitView {
                 || "This computer".to_string(),
                 |bridge| bridge.name().to_string(),
             ),
+            on_this_computer: model.bridge(key.machine()).is_none(),
             folder,
             branch: self.thread_branch(key),
             facts,

@@ -340,13 +340,11 @@ impl CockpitView {
         use super::super::surfaces::SurfaceId;
         use ContextCardItem as Item;
         let mut rows = Vec::new();
+        let bridge = self.cockpit.read(cx).bridge(thread.machine());
         let mut environment = Row::new(
             Item::Environment,
-            self.cockpit
-                .read(cx)
-                .bridge(thread.machine())
-                .map_or_else(|| "Local".to_string(), |machine| machine.name().to_string()),
-            icons::LAPTOP,
+            bridge.map_or_else(|| "Local".to_string(), |machine| machine.name().to_string()),
+            icons::machine(bridge.is_none()),
         );
         environment.meta = self.facts.get(thread).map(|facts| {
             if facts.worktree.is_some() {

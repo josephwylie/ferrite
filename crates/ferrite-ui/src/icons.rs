@@ -270,6 +270,16 @@ pub const PLUG: &str = "icons/plug.svg";
 /// Another machine (the nav row of a Thread that lives on one, and its
 /// hover card), Lucide's server: T3 Code's `EnvironmentMachineIcon`.
 pub const SERVER: &str = "icons/server.svg";
+
+/// A machine's icon, T3 Code's `EnvironmentMachineIcon`: this computer's
+/// laptop, any other machine's server.
+pub const fn machine(here: bool) -> &'static str {
+    if here {
+        LAPTOP
+    } else {
+        SERVER
+    }
+}
 // (end WP-F)
 
 // ---- WP-G icon names (append consts above the end line)
