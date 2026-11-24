@@ -1094,7 +1094,7 @@ impl CockpitView {
                 );
                 let label = ferrite_core::providers::models::footer_name(
                     current,
-                    open.model().or(open.transcript().model()),
+                    open.running_model(),
                     open.models(),
                 );
                 let efforts = self

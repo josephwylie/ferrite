@@ -300,9 +300,9 @@ impl Spawn {
             .lock()
             .map(|defaults| defaults.clone())
             .unwrap_or_default();
-        // The Thread's own effort, else its launch arguments', else the
-        // operator's default for the provider, else nothing — the
-        // provider's own.
+        // The Thread's own effort, which its launch arguments may have
+        // made, else the operator's default for the provider, else
+        // nothing — the provider's own.
         let own_effort = request.effort.map(|effort| effort.to_string());
         let default_effort = || defaults.effort_for(request.provider);
         // The newest installed copy of the CLI, wherever it is — not
@@ -359,8 +359,7 @@ impl Spawn {
                 ..ClaudeConfig::default()
             }),
             Provider::Codex => {
-                // Written for Codex's terminal UI (ADR 0030); what they set
-                // gives way only to the Thread's own choice.
+                // Written for Codex's terminal UI (ADR 0030).
                 let launch = crate::providers::codex_launch::from_tui_args(&args);
                 let approval_policy = request
                     .permission_mode
@@ -376,8 +375,8 @@ impl Spawn {
                 SessionConfig::Codex(CodexConfig {
                     program: program.clone(),
                     cwd,
-                    model: model.or(launch.model),
-                    effort: own_effort.or(launch.effort).or_else(default_effort),
+                    model,
+                    effort: own_effort.or_else(default_effort),
                     approval_policy: Some(approval_policy),
                     sandbox,
                     resume,

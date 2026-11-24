@@ -739,6 +739,14 @@ impl Thread {
         launch_args::for_provider(self.agent_args.as_ref(), provider)
     }
 
+    /// The model it runs: its own choice, which its launch arguments may
+    /// have made, else what its Session announced, the provider's default.
+    /// A window names it as its Composer's footer does
+    /// (`mirror::ThreadView::running_model`).
+    fn running_model(&self) -> Option<&str> {
+        self.model.as_deref().or(self.transcript().model())
+    }
+
     /// A Thread ready to serve: its own Lexer, a fresh Transcript, and its
     /// Session when it starts with one. Revival replays history into the
     /// Transcript afterwards.
@@ -1618,7 +1626,15 @@ impl Engine {
         make: MakeCheckout,
     ) -> io::Result<ThreadId> {
         let ProviderChoice { provider, model } = choice;
-        let first_args = launch_args::LaunchArgs::of(provider, &launch);
+        let mut first_args = launch_args::LaunchArgs::of(provider, &launch);
+        // What the launch names wins, as on the CLI's command line, where
+        // its arguments come after Ferrite's own.
+        let named = first_args
+            .as_mut()
+            .map(launch_args::LaunchArgs::take_choice)
+            .unwrap_or_default();
+        let model = named.model.or(model);
+        let effort = named.effort.or(effort);
         let agent_args = first_args.clone().and_then(launch_args::LaunchArgs::later);
         let Launch {
             resume,
@@ -2479,19 +2495,31 @@ impl Engine {
         }
         let saved = launch_args::path(self.store.dir(), thread);
         // A new launch's own arguments start this Session; every later one
-        // starts with what is saved of them.
-        let (first_args, agent_args, unreadable_args) = match &launch {
-            Some(launch) => {
-                let first_args = launch_args::LaunchArgs::of(provider, launch);
-                let agent_args = first_args.clone().and_then(launch_args::LaunchArgs::later);
-                launch_args::save(&saved, agent_args.as_ref())?;
-                (first_args, agent_args, None)
-            }
+        // starts with what is saved of them. The model and effort a launch
+        // names are the Thread's, as at its start; those an earlier Ferrite
+        // saved among the arguments move to its header now.
+        let (mut first_args, unreadable_args) = match &launch {
+            Some(launch) => (launch_args::LaunchArgs::of(provider, launch), None),
             None => match launch_args::load(&saved) {
-                Ok(saved) => (saved.clone(), saved, None),
-                Err(error) => (None, None, Some(error)),
+                Ok(saved) => (saved, None),
+                Err(error) => (None, Some(error)),
             },
         };
+        let named = first_args
+            .as_mut()
+            .map(launch_args::LaunchArgs::take_choice)
+            .unwrap_or_default();
+        let agent_args = first_args.clone().and_then(launch_args::LaunchArgs::later);
+        let retuned = named.names_any();
+        if launch.is_some() || retuned {
+            launch_args::save(&saved, agent_args.as_ref())?;
+        }
+        let model = named.model.or(model);
+        let effort = named.effort.or(effort);
+        if retuned {
+            self.store
+                .set_tuning(thread, model.clone(), effort.clone(), Some(revival.writer()))?;
+        }
         let writer = revival.take_writer();
 
         let mut state = Thread::fresh(
@@ -5451,8 +5479,9 @@ impl Engine {
     /// Refold each digest its Thread's inputs left owing: at once when Main
     /// started or ended a turn, a Decision came or went, or the windows
     /// show another Subject; else once its `DIGEST_REFOLD` is up, the last
-    /// thing streamed included. A branch that moved goes at once, a let-go
-    /// Thread's on the digest its windows hold: it has no Activity to fold.
+    /// thing streamed included. A branch or model that moved goes at once;
+    /// a let-go Thread's branch on the digest its windows hold: it has no
+    /// Activity to fold.
     fn publish_digests(&mut self) {
         let now = crate::clock::instant();
         for (&id, thread) in self.threads.iter() {
@@ -5472,8 +5501,12 @@ impl Engine {
             }
             let shown = self.visible_subjects.get(&id);
             let at_work = thread.at_work();
+            let model = thread.running_model();
             let current = published.digest.as_ref().is_some_and(|digest| {
-                digest.shows(shown) && digest.at_work == at_work && digest.branch == thread.branch
+                digest.shows(shown)
+                    && digest.at_work == at_work
+                    && digest.branch == thread.branch
+                    && digest.model.as_deref() == model
             });
             if !published.digest_owed && current {
                 continue;
@@ -5483,6 +5516,7 @@ impl Engine {
                 digest.outdated_by(activity, shown)
                     || digest.at_work != at_work
                     || digest.branch != thread.branch
+                    || digest.model.as_deref() != model
             }) || published
                 .digest_at
                 .is_none_or(|at| now.saturating_duration_since(at) >= DIGEST_REFOLD);
@@ -5497,6 +5531,7 @@ impl Engine {
                 at_work,
                 delegated_from: thread.delegated_from.clone(),
                 branch: thread.branch.clone(),
+                model: model.map(str::to_string),
                 ..Digest::of(id, activity, shown, self.boot)
             };
             if published.digest.as_ref() != Some(&digest) {
@@ -5778,17 +5813,16 @@ impl<'a> ThreadView<'a> {
         self.state.provider
     }
 
-    /// The model this Thread chose before its first prompt (#25) — the ✓ in
-    /// the provider picker. `None` is the provider's default.
+    /// The model this Thread chose, in the window or by its launch
+    /// arguments (#25) — the ✓ in the provider picker. `None` is the
+    /// provider's default.
     pub fn model(&self) -> Option<&'a str> {
         self.state.model.as_deref()
     }
 
-    /// The model it runs: what its Session announced, which its launch
-    /// arguments or the provider's default may have set, else the one it
-    /// chose.
+    /// The model it runs (`Thread::running_model`).
     pub fn running_model(&self) -> Option<&'a str> {
-        self.state.transcript().model().or(self.model())
+        self.state.running_model()
     }
 
     /// The reasoning effort this Thread chose, in the provider's own word.
