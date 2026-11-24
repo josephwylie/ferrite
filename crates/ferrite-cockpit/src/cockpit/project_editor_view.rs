@@ -36,6 +36,9 @@ pub(crate) struct ProjectEditorView {
     scroll: ScrollHandle,
     /// On a machine, the path field that stands in for the folder dialog.
     pub(super) remote: Option<RemotePath>,
+    /// The draft the card was opened for: the Project it creates is chosen
+    /// on it.
+    pub(super) draft: Option<PaneIdentity>,
     pub(super) focus: FocusHandle,
 }
 
@@ -103,6 +106,7 @@ impl ProjectEditorView {
             committing: false,
             scroll: ScrollHandle::new(),
             remote,
+            draft: None,
             focus: cx.focus_handle(),
         }
     }
@@ -551,6 +555,20 @@ impl CockpitView {
         self.show_project_editor(machine, None, None, cx);
     }
 
+    /// Open the card on a Project that does not exist yet on `machine`, for
+    /// the draft in Pane `draft`, which chooses it once it is created.
+    pub(super) fn open_project_creator_for(
+        &mut self,
+        machine: ferrite_core::MachineId,
+        draft: PaneIdentity,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_project_creator_on(machine, cx);
+        if let Some(card) = self.project_card(cx) {
+            card.update(cx, |card, _| card.draft = Some(draft));
+        }
+    }
+
     /// The card is modal: everything else floating goes down with it.
     fn show_project_editor(
         &mut self,
@@ -641,7 +659,10 @@ impl CockpitView {
         outcome: std::io::Result<ProjectKey>,
         cx: &mut Context<Self>,
     ) {
-        card.update(cx, |card, _| card.committing = false);
+        let draft = card.update(cx, |card, _| {
+            card.committing = false;
+            card.draft
+        });
         match outcome {
             Ok(project) => {
                 if self.project_card(cx).as_ref() == Some(&card) {
@@ -657,6 +678,9 @@ impl CockpitView {
                         self.prefs.settings.default_provider,
                         cx,
                     );
+                }
+                if let Some(draft) = draft {
+                    self.rebind_draft(draft, project, cx);
                 }
                 self.nav_notice.clear();
                 self.refresh_names();

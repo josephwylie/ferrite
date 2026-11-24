@@ -15,6 +15,7 @@ use ferrite_core::{MachineId, MachineKey, SavedThread};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+mod environments;
 mod everywhere;
 
 /// A bridge whose every tunnel ends as ssh does after `failure`.
@@ -53,6 +54,9 @@ static SENT_TO_BOX: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 /// While set, box's Server is down: its links have ended and no tunnel
 /// reaches it (`box_down`).
 static BOX_DOWN: AtomicBool = AtomicBool::new(false);
+/// While set, what a window sends box's Server crawls, as over a slow
+/// line: a copy there takes long enough to stop part way.
+static BOX_SLOW: AtomicBool = AtomicBool::new(false);
 /// Box's links as `serving` made them, to end when it goes down.
 static BOX_LINKS: Mutex<Vec<ferrite_core::link::Stream>> = Mutex::new(Vec::new());
 
@@ -76,6 +80,9 @@ fn serving(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
     struct Kept(link::Stream);
     impl std::io::Write for Kept {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if BOX_SLOW.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_micros(buf.len() as u64 / 4));
+            }
             SENT_TO_BOX.lock().unwrap().extend_from_slice(buf);
             self.0.write(buf)
         }
@@ -302,6 +309,11 @@ fn attached(core: &Cockpit, machine: MachineId) -> bool {
 /// beside it, whose Server runs in this process with `Agents` for its
 /// Sessions: both attached.
 fn two_machines(name: &str, panes: usize) -> (Cockpit, Fake, Machines, Agents) {
+    two_machines_with(name, panes, box_machine())
+}
+
+/// `two_machines`, box saved as `saved`.
+fn two_machines_with(name: &str, panes: usize, saved: Machine) -> (Cockpit, Fake, Machines, Agents) {
     let (mut core, fake) = cockpit(&format!("machines-{name}"), panes);
     fresh(name);
     let agents = Agents::default();
@@ -311,7 +323,7 @@ fn two_machines(name: &str, panes: usize) -> (Cockpit, Fake, Machines, Agents) {
         Box::new(agents.clone()),
     )
     .unwrap();
-    let mut machines = Machines::new(reach(name, serving), &[box_machine()], None, true);
+    let mut machines = Machines::new(reach(name, serving), &[saved], None, true);
     machines.beside(&mut core);
     let on_box = machines.held(1).expect("box is held");
     ferrite_core::doorbell::until("box never attached", || {
@@ -1085,9 +1097,10 @@ fn the_pick_describes_this_computer() {
     assert_eq!(this_computer_row(None), ("This computer".into(), String::new()));
 }
 
-/// A draft aimed at box's Project names box first in the strip over its
-/// Composer, as T3's locked environment control does; one on this
-/// computer names no machine.
+/// A draft on box, the one environment on, names box first in the strip
+/// over its Composer, a word with nothing to choose; beside this computer
+/// the environment chip stands there instead, naming box, then this
+/// computer's draft `Local`.
 #[gpui::test]
 fn a_draft_on_a_machine_names_it(cx: &mut TestAppContext) {
     let (mut core, _fake, machines, _agents) = two_machines("draft-machine", 1);
@@ -1102,15 +1115,45 @@ fn a_draft_on_a_machine_names_it(cx: &mut TestAppContext) {
     tick(cx);
     view.update(cx, |view, cx| view.open_draft_in_project(theirs, cx));
     tick(cx);
-    let word = cx.debug_bounds("band-machine").expect("the draft names box");
+    assert!(cx.debug_bounds("band-machine").is_none(), "the chip stands there");
+    let chip = cx.debug_bounds("band-chip-2").expect("the environment chip");
     let project = cx.debug_bounds("band-chip-0").expect("its Project's chip");
-    assert!(word.right() <= project.left(), "first: {word:?} {project:?}");
-    let said = cx.update(|window, _| window.debug_text("band-machine"));
-    assert_eq!(said.map(|lines| lines.join(" ")).as_deref(), Some("box"));
-
+    assert!(chip.right() <= project.left(), "first: {chip:?} {project:?}");
+    let said = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, _| window.debug_text("band-chip-2"))
+            .map(|lines| lines.join(" "))
+    };
+    assert_eq!(said(cx).as_deref(), Some("box"));
     view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
     tick(cx);
-    assert!(cx.debug_bounds("band-machine").is_none(), "this computer's names none");
+    assert_eq!(said(cx).as_deref(), Some("Local"));
+}
+
+/// With box the one environment on, its draft names it in a word.
+#[gpui::test]
+fn a_draft_on_the_one_machine_on_names_it_in_a_word(cx: &mut TestAppContext) {
+    fresh("draft-machine-alone");
+    let _ = ferrite_server::fixture_machine(
+        settings_dir("draft-machine-alone").join("box"),
+        Box::new(Agents::default()),
+    )
+    .unwrap();
+    let mut machines = Machines::new(reach("draft-machine-alone", serving), &[box_machine()], None, false);
+    let core = machines.cockpit().unwrap();
+    let on_box = machines.held(1).unwrap();
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    until(cx, |cx| view.read_with(cx, |view, cx| attached(view.cockpit.read(cx), on_box)));
+    let theirs = view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |core, _| {
+            let asked = core.register_project(on_box, &here());
+            core.wait_for(asked).unwrap()
+        })
+    });
+    view.update(cx, |view, cx| view.open_draft_in_project(theirs, cx));
+    tick(cx);
+    assert!(cx.debug_bounds("band-chip-2").is_none(), "nothing to choose");
+    let said = cx.update(|window, _| window.debug_text("band-machine"));
+    assert_eq!(said.map(|lines| lines.join(" ")).as_deref(), Some("box"));
 }
 
 /// A Thread on box is one row in the one list: no second listing under

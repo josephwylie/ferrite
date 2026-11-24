@@ -8,6 +8,7 @@
 use super::background_dialog_view::BackgroundDialogView;
 use super::direct_view::DirectView;
 use super::new_task_view::NewTaskView;
+use super::placement_view::PlacementView;
 use super::project_editor_view::ProjectEditorView;
 use super::settings_view::SettingsView;
 use super::*;
@@ -27,6 +28,8 @@ pub(crate) enum Sheet {
     NewTask(Entity<NewTaskView>),
     /// A Task's Rework or Direct this task sheet.
     Direct(Entity<DirectView>),
+    /// A draft's Project copied to the Machine it picked.
+    Placement(Entity<PlacementView>),
 }
 
 impl Sheet {
@@ -37,6 +40,7 @@ impl Sheet {
             Sheet::BackgroundDialog(view) => view.read(cx).focus.clone(),
             Sheet::NewTask(view) => view.read(cx).focus(cx),
             Sheet::Direct(view) => view.read(cx).focus(cx),
+            Sheet::Placement(view) => view.read(cx).focus(cx),
         }
     }
 
@@ -49,6 +53,7 @@ impl Sheet {
             Sheet::BackgroundDialog(_) => "background-dialog-in",
             Sheet::NewTask(_) => "new-task-card-in",
             Sheet::Direct(_) => "direct-card-in",
+            Sheet::Placement(_) => "placement-card-in",
         }
     }
 
@@ -59,6 +64,7 @@ impl Sheet {
             Sheet::BackgroundDialog(view) => view.update(cx, |view, cx| view.card(window, cx)),
             Sheet::NewTask(view) => view.update(cx, |view, cx| view.card(window, cx)),
             Sheet::Direct(view) => view.update(cx, |view, cx| view.card(window, cx)),
+            Sheet::Placement(view) => view.update(cx, |view, cx| view.card(window, cx)),
         }
     }
 }
@@ -127,6 +133,13 @@ impl Sheets {
     pub(super) fn direct(&self) -> Option<&Entity<DirectView>> {
         match self.up() {
             Some(Sheet::Direct(view)) => Some(view),
+            _ => None,
+        }
+    }
+
+    pub(super) fn placement(&self) -> Option<&Entity<PlacementView>> {
+        match self.up() {
+            Some(Sheet::Placement(view)) => Some(view),
             _ => None,
         }
     }
@@ -283,6 +296,8 @@ impl CockpitView {
             }
             Sheet::NewTask(sheet) => self.new_task_gone(&sheet, cx),
             Sheet::Direct(sheet) => self.direct_gone(&sheet, cx),
+            // A copy goes with its sheet: nothing would register it.
+            Sheet::Placement(sheet) => sheet.update(cx, |sheet, _| sheet.stop()),
             Sheet::ProjectEditor(_) | Sheet::BackgroundDialog(_) => {}
         }
     }
@@ -307,6 +322,10 @@ impl CockpitView {
                 let sheet = sheet.read(cx);
                 self.direct_inputs(sheet.project, &sheet.task, cx).is_none()
             }
+            Some(Sheet::Placement(sheet)) => self
+                .index_of(sheet.read(cx).placing.draft)
+                .and_then(|index| self.panes[index].draft())
+                .is_none(),
         };
         if gone {
             self.hide_sheet(cx);
