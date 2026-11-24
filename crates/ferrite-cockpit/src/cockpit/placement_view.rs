@@ -455,7 +455,7 @@ impl PlacementView {
         let machine = &self.placing.machine_name;
         let attached = matches!(
             self.model.read(cx).server(self.placing.machine),
-            Some(ferrite_core::cockpit::ServerState::Attached { .. })
+            Some(ferrite_client::cockpit::ServerState::Attached { .. })
         );
         if cut_off(error) || !attached {
             format!("The connection to {machine} was lost. {}", self.next_step(cx))

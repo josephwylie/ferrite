@@ -266,7 +266,7 @@ fn a_machine_the_window_cannot_reach_is_dimmed_and_opens_connections(cx: &mut Te
             view.cockpit.read(cx).server(on_box).is_some_and(|server| {
                 matches!(
                     server,
-                    ferrite_core::cockpit::ServerState::Detached {
+                    ferrite_client::cockpit::ServerState::Detached {
                         attention: Some(_),
                         ..
                     }
@@ -316,7 +316,7 @@ fn picking_a_machine_moves_the_draft_to_its_projects_counterpart_with_all_it_hol
     let draft = focused_draft(&view, cx);
     let shot = base.join("shot.png");
     std::fs::write(&shot, [0u8; 16]).unwrap();
-    let codex = ferrite_core::cockpit::ProviderChoice {
+    let codex = ferrite_client::cockpit::ProviderChoice {
         provider: Provider::Codex,
         model: None,
     };
