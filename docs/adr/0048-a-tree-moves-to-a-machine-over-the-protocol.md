@@ -306,8 +306,11 @@ Windows window.
 - **The CLI**: `ferrite --machine <name> setup sync [--allow-removals]`
   runs one sync and prints its outcome as JSON.
 - **macOS's Keychain** is reached through the `keyring` crate behind a
-  `Keychain` trait, whose errors are replaced by fixed words. The tests
-  use a fake one; no live proof ran on macOS.
+  `Keychain` trait, whose errors are replaced by fixed words. It belongs
+  to the account, not to `HOME`, so it holds the sign-in only when `HOME`
+  is the account's own home directory. Another `HOME` (a test, an
+  isolated run) keeps it as a file and never reaches the operator's
+  Keychain. The tests use a fake one; no live proof ran on macOS.
 
 ## Tradeoffs
 

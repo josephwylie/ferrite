@@ -41,6 +41,10 @@ pub trait Keychain: Send + Sync {
 impl Home {
     /// This process's: the home directory every other part of Ferrite
     /// reads (`HOME`, else `USERPROFILE`), and Codex's as Codex reads it.
+    /// macOS's Keychain is the account's, not the home directory's, so
+    /// Claude's sign-in is the Keychain's only when this is the account's
+    /// own home: a process given another HOME (a test, an isolated run)
+    /// never reaches the operator's Keychain.
     pub fn from_env() -> io::Result<Self> {
         let tilde = Path::new("~");
         let root = crate::workspace::expand_home(tilde);
@@ -51,7 +55,7 @@ impl Home {
             .filter(|codex| !codex.is_empty())
             .map(|codex| crate::workspace::expand_home(Path::new(&codex)));
         let home = Self::at(root, codex);
-        Ok(if cfg!(target_os = "macos") {
+        Ok(if cfg!(target_os = "macos") && account_home().is_some_and(|account| account == home.root) {
             home.with_keychain(Arc::new(SystemKeychain))
         } else {
             home
@@ -550,6 +554,30 @@ fn not_setup(path: &str) -> io::Error {
 
 fn invalid(message: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
+}
+
+/// The home directory the user database gives this process's account.
+#[cfg(unix)]
+fn account_home() -> Option<PathBuf> {
+    use std::ffi::{CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: getpwuid_r writes the entry's strings into `buffer`, which
+    // outlives every read of them here; a null `found` means no entry.
+    unsafe {
+        let mut entry: libc::passwd = std::mem::zeroed();
+        let mut buffer = vec![0 as libc::c_char; 16 * 1024];
+        let mut found = std::ptr::null_mut();
+        let status = libc::getpwuid_r(libc::getuid(), &mut entry, buffer.as_mut_ptr(), buffer.len(), &mut found);
+        if status != 0 || found.is_null() || entry.pw_dir.is_null() {
+            return None;
+        }
+        Some(PathBuf::from(OsStr::from_bytes(CStr::from_ptr(entry.pw_dir).to_bytes())))
+    }
+}
+
+#[cfg(not(unix))]
+fn account_home() -> Option<PathBuf> {
+    None
 }
 
 /// macOS's login Keychain, as Claude Code keeps its sign-in there: a
