@@ -275,6 +275,7 @@ impl Engine {
             | Op::Bootstrap { .. }
             | Op::CancelBootstrap { .. }
             | Op::SearchFiles { .. }
+            | Op::ReadTranscript { .. }
             | Op::Focused { .. }
             | Op::Composing { .. }
             | Op::ListDir { .. }

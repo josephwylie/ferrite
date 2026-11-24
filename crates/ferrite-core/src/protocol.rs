@@ -447,6 +447,12 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         retry: bool,
     },
+    /// Main's whole transcript as plain text, replayed from the log under
+    /// no Block limit: what Copy conversation copies once a window's view
+    /// dropped its earliest Blocks (ADR 0049). Replied `text`.
+    ReadTranscript {
+        thread: ThreadId,
+    },
     /// The Subject a window's Pane shows: its Decisions are the ones read
     /// when the window is looked at.
     ShowSubject {
@@ -656,6 +662,7 @@ impl Op {
             | Op::Delete { thread, .. }
             | Op::WorktreesListed { thread, .. }
             | Op::LoadSubject { thread, .. }
+            | Op::ReadTranscript { thread }
             | Op::ShowSubject { thread, .. }
             | Op::Say { thread, .. }
             | Op::SearchFiles { thread, .. }

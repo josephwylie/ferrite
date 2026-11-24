@@ -22,7 +22,6 @@ use ferrite_core::protocol::{
 };
 use ferrite_core::provider::Provider;
 use ferrite_core::roster::{BootstrapResult, Bootstrapped, DraftId, Roster};
-use ferrite_core::store::Store;
 use ferrite_core::{MachineId, MachineKey, ProjectKey, ThreadId, ThreadKey};
 use ferrite_reviewr::ferrite::{Bases, FileSides, Read};
 use ferrite_reviewr::git::{CommitRow, WorktreeEntry};
@@ -44,9 +43,6 @@ pub(super) struct HeldMachine {
     pub(super) arrived: bool,
     /// What a parked Thread says: the rows its Server published.
     pub(super) parked: parked::Parked,
-    /// This computer's logs, read-only, for what an open Thread's header
-    /// and last write say, which no message carries; `None` on a machine.
-    pub(super) logs: Option<Store>,
     /// The open Threads, as the Roster last followed them (`sync_roster`).
     synced: Vec<ThreadId>,
     /// Each open Thread as the Engine's messages built it.
@@ -72,22 +68,19 @@ pub(super) struct HeldMachine {
 }
 
 impl HeldMachine {
+    /// `limits` are what its Engine's Activity retains, so its mirrors
+    /// retain the same.
     pub(super) fn new(
         link: Box<dyn Link>,
-        logs: Option<Store>,
+        limits: ferrite_core::activity::ActivityLimits,
         saved_as: MachineKey,
     ) -> Self {
-        let limits = logs
-            .as_ref()
-            .map(Store::activity_limits)
-            .unwrap_or_default();
         Self {
             id: MachineId::mint(),
             saved_as,
             link,
             arrived: false,
             parked: parked::Parked::default(),
-            logs,
             synced: Vec::new(),
             mirrors: mirror::Mirrors::retaining(limits),
             shared: shared::Shared::new(),
@@ -372,13 +365,6 @@ impl HeldMachine {
             .chain(self.parked.thread_ids())
     }
 
-    /// This computer's logs, when `thread` is open and its log is here.
-    pub(super) fn open_log(&self, thread: ThreadId) -> Option<&Store> {
-        self.logs
-            .as_ref()
-            .filter(|_| self.mirrors.view(thread).is_some())
-    }
-
     /// Its Server, for what only a Server does.
     pub(super) fn remote(&mut self) -> io::Result<&mut remote::Remote> {
         self.link.remote().ok_or_else(|| {
@@ -482,6 +468,10 @@ pub(super) trait Link {
         provider: Provider,
         cwd: &Path,
     ) -> Ask<Vec<ferrite_core::SessionCommand>>;
+
+    /// Main's whole transcript as plain text, read back from the log by
+    /// its machine's Server.
+    fn read_transcript(&mut self, thread: ThreadId) -> Ask<String>;
 
     fn search_files(
         &mut self,

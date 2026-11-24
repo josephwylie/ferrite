@@ -1184,6 +1184,18 @@ impl Link for Remote {
         }
     }
 
+    /// Untimed, as `list_commands` is: a long log replays for a while.
+    fn read_transcript(&mut self, thread: ThreadId) -> super::Ask<String> {
+        let asked = self.ask(Op::ReadTranscript { thread }, |done| match done {
+            Done::Text { text } => Some(text),
+            _ => None,
+        });
+        match asked {
+            Ok(answer) => super::Ask::of(answer),
+            Err(error) => super::Ask::answered(Err(error)),
+        }
+    }
+
     fn search_files(
         &mut self,
         thread: ThreadId,

@@ -547,3 +547,42 @@ fn open_in_connections_names_the_machine_settings_edit(cx: &mut TestAppContext) 
     tick(cx);
     assert_eq!(scope(cx).as_deref(), Some("Applying settings on box"));
 }
+
+/// Copy conversation on box's Thread, once its view dropped its earliest
+/// Blocks, copies the whole conversation, first prompt included: box's
+/// Server replays the log, as this computer's does (ADR 0049).
+#[gpui::test]
+fn copy_conversation_on_a_machine_copies_all_of_it(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (mut core, _fake, machines, agents) = two_machines("copy-whole", 0);
+    let on_box = machines.held(1).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(theirs).is_some()));
+    view.update(cx, |view, cx| view.focus_thread(theirs, cx));
+    prompt(&view, theirs, "the very first question", cx);
+    until_said(cx, "box never took the prompt", |_| agents.sent("the very first question"));
+    // Past the Blocks a transcript keeps.
+    let turns = ferrite_core::activity::ActivityLimits::default().blocks_per_subject + 10;
+    for turn in 0..turns {
+        agents.say(0, SessionEvent::TextDelta { text: format!("turn {turn}\n\n") });
+        agents.say(0, SessionEvent::TurnEnded { outcome: ferrite_core::TurnOutcome::Completed, cost_usd: None });
+    }
+    let last = format!("turn {}", turns - 1);
+    until_said(cx, "box's turns never arrived", |cx| shows(&view, theirs, &last, cx));
+    let dropped = view.read_with(cx, |view, cx| {
+        view.cockpit.read(cx).thread(theirs).unwrap().transcript().earlier_dropped()
+    });
+    assert!(dropped, "the window keeps only the latest");
+
+    view.update_in(cx, |view, window, cx| {
+        view.run_menu_verb(MenuTarget::Pane(theirs), MenuVerb::CopyTranscript, window, cx)
+    });
+    let clipboard =
+        |cx: &mut gpui::VisualTestContext| cx.read_from_clipboard().and_then(|item| item.text());
+    until_said(cx, "nothing was copied", |cx| clipboard(cx).is_some());
+    let copied = clipboard(cx).unwrap();
+    assert!(copied.contains("> the very first question"), "{}", &copied[..copied.len().min(300)]);
+    assert!(copied.contains(&last), "and the newest turn too");
+}

@@ -1068,6 +1068,14 @@ impl Server {
                 });
                 return;
             }
+            Op::ReadTranscript { thread } => {
+                let (store, thread) = (self.engine.browser_store().clone(), *thread);
+                self.read_off_pump(id, request, move || {
+                    let text = store.full_history_text(thread).map_err(failed)?;
+                    Ok(Some(Done::Text { text }))
+                });
+                return;
+            }
             Op::ReadFile { path, file } => {
                 let (path, file) = (path.clone(), file.clone());
                 self.read_off_pump(id, request, move || {

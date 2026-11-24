@@ -1440,7 +1440,6 @@ fn cockpit(harness: &Harness) -> ferrite_client::cockpit::Cockpit {
         browser: false,
         driven: false,
     })
-    .unwrap()
 }
 
 /// `thread` of the harness's Server as `window` names it: this computer's,
@@ -2900,8 +2899,7 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
         renderer: None,
         browser: false,
         driven: false,
-    })
-    .unwrap();
+    });
     assert!(
         matches!(
             window.server(window.first_machine()),
@@ -2953,8 +2951,7 @@ fn every_window_learns_its_server_names_fork_owners() {
         renderer: None,
         browser: false,
         driven: false,
-    })
-    .unwrap();
+    });
     pump_until(&mut machine, |window| {
         matches!(
             window.server(window.first_machine()),
@@ -2980,8 +2977,7 @@ fn a_machine_streams_a_thread_whole_only_while_drawn() {
         renderer: None,
         browser: false,
         driven: false,
-    })
-    .unwrap();
+    });
     let machine = window.first_machine();
     pump_until(&mut window, |window| {
         matches!(
@@ -4683,6 +4679,42 @@ fn a_digest_refolds_four_times_a_second_and_a_decision_at_once() {
         Some(1),
         "at once"
     );
+}
+
+/// A digest says when its Server last wrote the Thread's log: what a
+/// window reads for a working Thread's order and its last use, which it
+/// once read off the log itself (ADR 0049).
+#[test]
+fn a_digest_says_when_its_log_was_last_written() {
+    let (spawner, providers) = spawn();
+    let (mut engine, thread, agent, _clock) = at_rest("digest-written", spawner, &providers);
+    agent.send(text("All done")).unwrap();
+    agent
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    pump_engine_until(&mut engine, "the turn never ended", |engine| {
+        engine.thread(thread).unwrap().transcript().turn_completed()
+    });
+    engine.pump();
+
+    let written = engine
+        .take_messages()
+        .into_iter()
+        .filter_map(|message| match message {
+            ServerMessage::Digest { thread: of, digest } if of == thread => digest.written_ms,
+            _ => None,
+        })
+        .last();
+    let log = engine
+        .browser_store()
+        .last_used(thread)
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| since.as_millis() as i64);
+    assert!(log.is_some(), "the log is on disk");
+    assert_eq!(written, log, "the turn's end is written, then folded");
 }
 
 /// A window mirrors the settled Threads it draws at Transcript level (ADR

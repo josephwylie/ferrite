@@ -102,7 +102,5 @@
  "shipped": [
   "cef"
  ],
- "crossings": {
-  "ferrite-client -> store": 2
- }
+ "crossings": {}
 }

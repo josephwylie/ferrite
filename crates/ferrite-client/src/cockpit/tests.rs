@@ -337,17 +337,14 @@ fn an_open_thread_keeps_its_project_without_local_header() {
         .project_of(thread)
         .expect("the Server registered the project");
     let local_header = core
-        .history_log(thread)
-        .unwrap()
+        .engine()
+        .store()
         .dir()
         .join(thread.thread().to_string())
         .join("log.jsonl");
     std::fs::remove_file(local_header).unwrap();
 
-    assert!(
-        core.peek(thread).is_err(),
-        "the project must not require an accessible local header"
-    );
+    // The window reads no log: its mirror says the Project.
     assert_eq!(core.try_project_of(thread).unwrap(), Some(project));
     assert!(core
         .registry(core.first_machine())
@@ -506,7 +503,7 @@ fn a_thread_follows_the_worktree_its_main_creates() {
         })
     );
     assert_eq!(
-        cockpit.peek(thread).unwrap().workspace,
+        cockpit.engine().store().peek(thread.thread()).unwrap().workspace,
         bound,
         "the header says so without the live Thread"
     );
@@ -556,7 +553,7 @@ fn exiting_a_worktree_returns_the_thread_to_main() {
         checkout: repo.clone(),
     });
     assert_eq!(cockpit.thread(thread).unwrap().workspace().cloned(), main);
-    assert_eq!(cockpit.peek(thread).unwrap().workspace, main);
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().workspace, main);
 }
 
 /// A worktree the agent made is the agent's, not Ferrite's: removed
@@ -602,7 +599,7 @@ fn a_followed_worktree_that_vanishes_returns_the_thread_to_main() {
         Some(repo.clone())
     );
     assert_eq!(cockpit.thread(thread).unwrap().workspace().cloned(), main);
-    assert_eq!(cockpit.peek(thread).unwrap().workspace, main);
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().workspace, main);
     assert!(
         !parked.exists(),
         "an adopted worktree is never rebuilt on revive"
@@ -884,7 +881,7 @@ fn opening_registers_the_project_and_places_the_worktree_inside_it() {
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0].title, "repo");
     let project = projects[0].id;
-    assert_eq!(cockpit.peek(thread).unwrap().project_id, Some(project));
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().project_id, Some(project));
 
     let entries = registry.worktrees(project);
     assert_eq!(entries.len(), 1);
@@ -3841,7 +3838,7 @@ fn choosing_a_provider_pre_lock_respawns_eagerly_and_the_first_send_uses_it() {
         "the old Init and prose must not linger"
     );
     // Durable: a crash right now still revives onto the choice.
-    let meta = cockpit.peek(thread).unwrap();
+    let meta = cockpit.engine().store().peek(thread.thread()).unwrap();
     assert_eq!(meta.provider, Provider::Codex);
     assert_eq!(meta.model, Some("gpt-5.4-mini".into()));
 
@@ -3917,7 +3914,7 @@ fn a_provider_switch_after_the_first_prompt_hands_the_conversation_over() {
         Body::Notice(line)
             if line == "continued on Codex · GPT-5.6 Sol — the earlier conversation is handed over as context"
     ));
-    let meta = cockpit.peek(thread).unwrap();
+    let meta = cockpit.engine().store().peek(thread.thread()).unwrap();
     assert_eq!(meta.provider, Provider::Codex);
     assert_eq!(meta.model, Some("gpt-5.6-sol".into()));
 
@@ -3961,7 +3958,7 @@ fn a_provider_switch_after_the_first_prompt_hands_the_conversation_over() {
         ProvisionError::Busy.to_string()
     );
     assert_eq!(*fake.attempts.borrow(), attempts);
-    assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Codex);
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().provider, Provider::Codex);
 }
 
 /// The displayed history is bounded and trims its oldest turns; the
@@ -4107,7 +4104,7 @@ fn changing_effort_after_handover_keeps_the_session_and_delivers_context() {
         cockpit.thread(thread).unwrap().transcript().session_id(),
         Some("empty-codex-thread")
     );
-    assert_eq!(cockpit.peek(thread).unwrap().effort.as_deref(), Some("max"));
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().effort.as_deref(), Some("max"));
 }
 
 /// The carry rides between the session-context preface and the
@@ -4247,7 +4244,7 @@ fn the_model_can_change_after_the_first_prompt_by_resuming() {
         "the conversation stays, and says the model changed"
     );
     assert_eq!(
-        cockpit.peek(thread).unwrap().model.as_deref(),
+        cockpit.engine().store().peek(thread.thread()).unwrap().model.as_deref(),
         Some("claude-fable-5-1")
     );
     // The same choice again is a no-op.
@@ -4335,7 +4332,7 @@ fn a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries() {
         .to_string(),
         ProvisionError::Locked.to_string()
     );
-    assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().provider, Provider::Claude);
 
     cockpit.revive(thread).now().unwrap();
     assert!(cockpit
@@ -4413,7 +4410,7 @@ fn a_refused_effort_keeps_the_choice_and_pending_handover() {
         .unwrap();
     *fake.fail_effort.borrow_mut() = true;
     assert!(cockpit.set_effort(thread, Some("max".into())).now().is_err());
-    assert_eq!(cockpit.peek(thread).unwrap().effort, None);
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().effort, None);
     assert_eq!(cockpit.thread(thread).unwrap().effort(), None);
     assert_eq!(*fake.attempts.borrow(), 2);
     let _ = cockpit.send(thread, "next".into());
@@ -4445,7 +4442,7 @@ fn effort_changes_in_place_and_persists() {
         Some("high")
     );
     assert_eq!(
-        cockpit.peek(thread).unwrap().effort.as_deref(),
+        cockpit.engine().store().peek(thread.thread()).unwrap().effort.as_deref(),
         Some("high")
     );
 
@@ -4476,7 +4473,7 @@ fn effort_changes_in_place_and_persists() {
         Some("max")
     );
     assert_eq!(*fake.attempts.borrow(), 1, "no respawn post-lock");
-    assert_eq!(cockpit.peek(thread).unwrap().effort.as_deref(), Some("max"));
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().effort.as_deref(), Some("max"));
     let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
     assert!(matches!(
         &blocks.last().unwrap().body,
@@ -4532,7 +4529,7 @@ fn effort_changes_in_place_and_persists() {
         ).now()
         .unwrap();
     assert_eq!(fake.efforts.borrow().last().unwrap(), &None);
-    assert_eq!(cockpit.peek(fresh).unwrap().effort, None);
+    assert_eq!(cockpit.engine().store().peek(fresh.thread()).unwrap().effort, None);
     assert_eq!(cockpit.thread(fresh).and_then(|open| open.effort()), None);
 }
 
@@ -4558,7 +4555,7 @@ fn an_effort_change_commits_when_the_provider_accepts_it() {
     let open = cockpit.thread(thread).unwrap();
     assert!(open.tuning());
     assert_eq!(open.effort(), None, "not before the provider accepts it");
-    assert_eq!(cockpit.peek(thread).unwrap().effort, None);
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().effort, None);
     assert_eq!(
         cockpit.set_effort(thread, Some("max".into())).now()
         .unwrap_err()
@@ -4575,7 +4572,7 @@ fn an_effort_change_commits_when_the_provider_accepts_it() {
     assert!(!open.tuning());
     assert_eq!(open.effort(), Some("high"));
     assert_eq!(
-        cockpit.peek(thread).unwrap().effort.as_deref(),
+        cockpit.engine().store().peek(thread.thread()).unwrap().effort.as_deref(),
         Some("high")
     );
     assert_eq!(last_notice(&cockpit, thread), "effort changed to high");
@@ -4598,7 +4595,7 @@ fn an_effort_change_refused_after_the_fact_changes_nothing() {
     cockpit.pump();
     assert!(!cockpit.thread(thread).unwrap().tuning());
     assert_eq!(cockpit.thread(thread).unwrap().effort(), None);
-    assert_eq!(cockpit.peek(thread).unwrap().effort, None);
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().effort, None);
     assert_eq!(
         last_notice(&cockpit, thread),
         "effort unchanged: unsupported effort"
@@ -4720,7 +4717,7 @@ fn a_failed_provider_spawn_leaves_the_old_session_serving() {
         cockpit.thread(thread).map(|open| open.provider()),
         Some(Provider::Claude)
     );
-    assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().provider, Provider::Claude);
     // The old Session still serves: the next send spawns nothing new.
     *fake.fail.borrow_mut() = false;
     let _ = cockpit.send(thread, "still here".into());

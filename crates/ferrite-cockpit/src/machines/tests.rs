@@ -39,20 +39,28 @@ fn holding(machines: &Machines) -> Vec<bool> {
         .collect()
 }
 
+/// A Store that cannot be read is its Server's to say: the window reads
+/// none of it (ADR 0049), so it holds this computer, detached, as it
+/// holds a machine whose Server does not start.
 #[test]
-fn a_store_that_cannot_be_read_builds_no_cockpit() {
+fn a_store_that_cannot_be_read_is_its_servers_to_say() {
     let reach = reach("unbuilt");
     // A file where this computer's Threads would go.
     std::fs::create_dir_all(&reach.settings_dir).unwrap();
     std::fs::write(&reach.store, "").unwrap();
     let mut machines = Machines::new(reach, &saved(), None, true);
-    assert!(machines.cockpit().is_err());
+    let cockpit = machines.cockpit();
+    let here = cockpit.this_computer().expect("this computer is held");
+    assert!(matches!(
+        cockpit.server(here),
+        Some(ferrite_client::cockpit::ServerState::Detached { .. })
+    ));
 }
 
 #[test]
 fn this_computer_alone_lists_no_machines() {
     let mut machines = Machines::new(reach("alone"), &[], None, true);
-    let cockpit = machines.cockpit().unwrap();
+    let cockpit = machines.cockpit();
     assert!(!machines.listed());
     assert_eq!(holding(&machines), [true]);
     assert_eq!(cockpit.machines().count(), 1);
@@ -62,7 +70,7 @@ fn this_computer_alone_lists_no_machines() {
 #[test]
 fn every_enabled_machine_is_held_at_once() {
     let mut machines = Machines::new(reach("every"), &saved(), None, true);
-    let cockpit = machines.cockpit().unwrap();
+    let cockpit = machines.cockpit();
     assert!(machines.listed());
     assert_eq!(holding(&machines), [true, true, false]);
     assert_eq!(cockpit.machines().count(), 2);
@@ -94,12 +102,12 @@ fn a_driven_window_answers_only_the_first_machine_enabled() {
 #[test]
 fn a_remote_launch_is_held_beside_the_rest_saved_or_not() {
     let mut machines = Machines::new(reach("by-name"), &saved(), Some("me@build"), true);
-    machines.cockpit().unwrap();
+    machines.cockpit();
     assert!(machines.unsaved().is_none());
     assert_eq!(holding(&machines), [true, true, false]);
 
     let mut machines = Machines::new(reach("unsaved"), &saved(), Some("me@new"), true);
-    let mut cockpit = machines.cockpit().unwrap();
+    let mut cockpit = machines.cockpit();
     assert_eq!(machines.unsaved().unwrap().target, "me@new");
     assert_eq!(holding(&machines), [true, true, false, true]);
 
@@ -116,7 +124,7 @@ fn a_remote_launch_is_held_beside_the_rest_saved_or_not() {
 #[test]
 fn forgetting_the_unsaved_machine_lets_it_go() {
     let mut machines = Machines::new(reach("forget"), &[], Some("me@new"), true);
-    let mut cockpit = machines.cockpit().unwrap();
+    let mut cockpit = machines.cockpit();
     let held = machines.held(1).unwrap();
     assert!(machines.forget_unsaved("me@new", &mut cockpit));
     assert!(!machines.listed());
@@ -126,7 +134,7 @@ fn forgetting_the_unsaved_machine_lets_it_go() {
 #[test]
 fn turning_a_machine_on_and_off_holds_it_and_lets_it_go() {
     let mut machines = Machines::new(reach("turned"), &saved(), None, true);
-    let mut cockpit = machines.cockpit().unwrap();
+    let mut cockpit = machines.cockpit();
     let build = machines.held(1).unwrap();
 
     let mut changed = saved();
@@ -153,7 +161,7 @@ fn this_computer_turned_off_is_never_opened() {
     let reach = reach("local-off");
     let store = reach.store.clone();
     let mut machines = Machines::new(reach, &saved(), None, false);
-    let mut cockpit = machines.cockpit().unwrap();
+    let mut cockpit = machines.cockpit();
     assert_eq!(holding(&machines), [false, true, false]);
     assert_eq!(cockpit.this_computer(), None);
     assert_eq!(

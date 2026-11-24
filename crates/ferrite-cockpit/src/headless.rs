@@ -67,13 +67,7 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
         None,
         settings.local_environment_enabled,
     );
-    let core = match machines.cockpit() {
-        Ok(core) => core,
-        Err(e) => {
-            eprintln!("ferrite --headless: cannot reach the Ferrite server: {e}");
-            std::process::exit(1);
-        }
-    };
+    let core = machines.cockpit();
     let provider = settings.default_provider;
     let prefs = Preferences {
         settings,

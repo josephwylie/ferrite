@@ -284,7 +284,9 @@ fn parking_never_waits_for_the_drive() {
     cockpit.revive(thread).now().unwrap();
     assert_eq!(
         cockpit
-            .peek(thread)
+            .engine()
+            .store()
+            .peek(thread.thread())
             .unwrap()
             .summary
             .map(|summary| summary.turns),

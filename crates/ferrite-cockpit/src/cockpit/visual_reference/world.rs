@@ -739,7 +739,7 @@ pub(crate) fn play(
 }
 
 /// Stamp `thread`'s log as last written at `at`: recency is the log's
-/// mtime (`Store::last_used`).
+/// mtime (`Store::last_used`), as its Server reads it into a digest.
 pub(crate) fn last_used(store: &Path, thread: ThreadKey, at: SystemTime) {
     let log = store.join(thread.thread().to_string()).join("log.jsonl");
     if let Ok(file) = std::fs::File::options().append(true).open(&log) {

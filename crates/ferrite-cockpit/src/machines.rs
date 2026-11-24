@@ -108,17 +108,16 @@ impl Machines {
         machines
     }
 
-    /// The window's Cockpit, holding every enabled machine. This
-    /// computer's Store that cannot be read is an error; a machine is
+    /// The window's Cockpit, holding every enabled machine. A machine is
     /// attached to in the background, so one that is not there holds only
-    /// its own rows.
-    pub fn cockpit(&mut self) -> io::Result<Cockpit> {
+    /// its own rows; this computer's Store is its Server's to read.
+    pub fn cockpit(&mut self) -> Cockpit {
         let mut cockpit = Cockpit::empty();
         if !self.entries[0].disabled(self.local_enabled) {
-            self.entries[0].held = Some(cockpit.hold(self.attach(0))?);
+            self.entries[0].held = Some(cockpit.hold(self.attach(0)));
         }
         self.sync(&mut cockpit);
-        Ok(cockpit)
+        cockpit
     }
 
     /// Take as its own each machine `cockpit` already holds, by the name
@@ -298,13 +297,7 @@ impl Machines {
             match (wanted, self.entries[index].held) {
                 (true, None) => {
                     let attach = self.attach(index);
-                    match cockpit.hold(attach) {
-                        Ok(machine) => self.entries[index].held = Some(machine),
-                        Err(error) => ferrite_core::log!(
-                            "the window cannot hold {}: {error}",
-                            self.entries[index].name()
-                        ),
-                    }
+                    self.entries[index].held = Some(cockpit.hold(attach));
                 }
                 (false, Some(machine)) => {
                     cockpit.let_go(machine);

@@ -3,6 +3,7 @@
 use super::*;
 use ferrite_core::providers::{Session, SettingAck};
 use ferrite_core::session::SessionLifecycle;
+use ferrite_core::store::Store;
 use ferrite_core::SessionEvent;
 use ferrite_core::engine::*;
 use crate::cockpit::{BootstrapResult, Cockpit};
@@ -291,14 +292,14 @@ fn delayed_replacement_failure_preserves_header_and_the_original_session() {
         .set_provider(thread, choice(Provider::Codex)).now()
         .unwrap();
     assert!(cockpit.thread(thread).unwrap().starting());
-    assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().provider, Provider::Claude);
     assert_eq!(original.dropped.load(Ordering::SeqCst), 0);
     replacement.fail();
     until(|| {
         cockpit.pump();
         !cockpit.thread(thread).unwrap().starting()
     });
-    assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().provider, Provider::Claude);
     assert_eq!(original.dropped.load(Ordering::SeqCst), 0);
     let _ = cockpit.send(thread, "old still serves".into());
     assert_eq!(original.sent(), ["old still serves"]);
@@ -324,7 +325,7 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
         .unwrap()
         .last_handover()
         .is_none());
-    assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().provider, Provider::Claude);
     assert_eq!(original.sent(), ["before"]);
     replacement.fail_send.store(true, Ordering::SeqCst);
     replacement.ready();
@@ -332,7 +333,7 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
         cockpit.pump();
         !cockpit.thread(thread).unwrap().starting()
     });
-    assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Codex);
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().provider, Provider::Codex);
     assert!(
         !cockpit
             .engine()
@@ -409,7 +410,7 @@ fn effort_waits_for_startup_without_losing_the_pending_prompt() {
         .to_string(),
         ProvisionError::Busy.to_string()
     );
-    assert_eq!(cockpit.peek(thread).unwrap().effort, None);
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().effort, None);
     assert_eq!(
         cockpit
             .thread(thread)
@@ -457,7 +458,7 @@ fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
         .to_string(),
         ProvisionError::Busy.to_string()
     );
-    assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
+    assert_eq!(cockpit.engine().store().peek(thread.thread()).unwrap().provider, Provider::Claude);
     assert_eq!(
         cockpit
             .thread(thread)
@@ -491,7 +492,7 @@ fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
     assert_eq!(sent.len(), 1);
     assert!(sent[0].contains("before") && sent[0].ends_with("after"));
     assert_eq!(
-        cockpit.peek(thread).unwrap().effort.as_deref(),
+        cockpit.engine().store().peek(thread.thread()).unwrap().effort.as_deref(),
         Some("high")
     );
 }
@@ -530,5 +531,5 @@ fn halting_sessions_drops_ready_and_starting_sessions_alike() {
     assert!(!cockpit.thread(pending).unwrap().starting());
     drop(starting);
     // The logs are untouched: the halted Threads are still on disk.
-    assert!(cockpit.peek(live).is_ok());
+    assert!(cockpit.engine().store().peek(live.thread()).is_ok());
 }

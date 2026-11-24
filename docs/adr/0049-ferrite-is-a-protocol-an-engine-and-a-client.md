@@ -29,19 +29,20 @@ other. When that holds, an edit to a provider rebuilds no window code, an
 edit to the window rebuilds no Server code, and each side's tests run
 without the other.
 
-It does not hold yet. `scripts/core-sides.json` puts every top-level module
-of `ferrite-core` on the shared side or the engine's.
+It holds between modules, not yet between crates: the three parts are
+still one crate. `scripts/core-sides.json` puts every top-level module of
+`ferrite-core` on the shared side or the engine's.
 `scripts/check_core_sides.py` counts each **crossing**: a path to an engine
 module from a shared module, or from one of the window's crates
 (`ferrite-client`, `ferrite-cockpit`, `ferrite-pane`, `ferrite-frame`,
-`ferrite-ui`, `ferrite-terminal`). There are 2:
+`ferrite-ui`, `ferrite-terminal`). There are none:
 
-| From | Crossings | Mostly |
-| --- | --- | --- |
-| shared modules | 0 | |
-| `ferrite-client` | 2 | the Store a window on this computer reads logs from |
-| `ferrite-cockpit` | 0 | |
-| `ferrite-pane`, `ferrite-ui` | 0 | |
+| From | Crossings |
+| --- | --- |
+| shared modules | 0 |
+| `ferrite-client` | 0 |
+| `ferrite-cockpit` | 0 |
+| `ferrite-pane`, `ferrite-ui` | 0 |
 
 CI fails when a pair's count rises, a new pair appears, or a module is on
 no side. The baseline only goes down. What a released app cannot compile
@@ -344,6 +345,68 @@ default.
 from 8 to 2: what is left is `Store::reader` in `Cockpit::hold` and
 `HeldMachine::logs`.
 
+## Built: a window reads this computer's Threads as a Machine's
+
+A window on this computer opened its Store itself (`Store::reader`,
+`HeldMachine::logs`) for what no message carried. A Thread on a Machine
+already did without each read:
+
+| Read | Who reads it | On a Machine |
+| --- | --- | --- |
+| an open Thread's header: Project, workspace | the Project label, Open in | its mirror |
+| an idle Thread's newest prompt or turn end (`last_activity`, the log's tail) | the nav's age and order | `Digest.active_ms` |
+| a working Thread's last write (`last_used`, the log's mtime) | Working's order on first sight, the empty board's recent list, the startup Project | `Digest.active_ms` |
+| Main's whole history once the view dropped its earliest Blocks | Copy conversation | not offered |
+| what its Engine's Activity retains | its mirrors' limits | the default |
+
+Two shapes:
+
+- **A. The Server's messages, and asks for the rest.** The header is the
+  mirror's and an idle Thread's age is `active_ms`, the same times the
+  log's tail carries. The last write is a new digest field, `written_ms`:
+  the Server reads the log's mtime each time it folds a digest. The whole
+  history is a new command, `read_transcript {thread}`, replied `text`,
+  which the Server replays off its pump as it reads `turn_result`. The
+  limits are passed in, a Store's defaults, as a Server's Store has them.
+- **B. A read-only log reader on the shared side.** The log's schema is
+  shared already, so `Store::reader` could move. It keeps two ways of
+  reading each fact above, one here and one on a Machine, and a window
+  reading files its Server writes.
+
+A was built. B keeps nothing A loses: every read has a message, and the
+Machine's way becomes the only way. Reading `active_ms` for a working
+Thread too was considered and not built. A working Thread's newest
+prompt can be an hour old while it streamed a second ago, so Working's
+order, the empty board's recent list and the startup Project would move
+on this computer.
+
+What changes:
+
+- On this computer, the nav's order and ages and every header read as
+  before. `written_ms` is the mtime at the last fold, and a streaming
+  Thread folds up to four times a second (`DIGEST_REFOLD`), so it trails
+  the log only by what is written after
+  its last fold: up to one flush interval when a stream stops between
+  flushes, and a write no fold follows (a rename, a mark) until the next
+  fold. `Store::last_activity` capped its time at the mtime; `active_ms`
+  is the time itself.
+- On a Machine, a working Thread's order and last use read `written_ms`,
+  as this computer's do, and Copy conversation copies the whole history
+  when the view dropped its start. A Server from before `read_transcript`
+  refuses it as `unsupported`: the copy is what the view holds, headed
+  to update ferrited on that Machine. One from before `written_ms` sends
+  none, and `active_ms` stands in.
+- A Store that cannot be read no longer stops the window at launch. The
+  window reads none of it, so holding a machine cannot fail
+  (`Cockpit::hold`), and the window shows this computer detached, as it
+  does when its Server does not start.
+- The mockups stamp each log's time to the scripted clock, as before, and
+  have their Engine fold each digest again
+  (`Engine::fixture_refold_digest`).
+
+`Store::reader`, `HeldMachine::logs`, `Cockpit::history_log` and the
+window's log reads are gone. The crossings went from 2 to 0.
+
 ## What comes next, in order
 
 Each step is one PR and drives its pairs in the baseline to zero.
@@ -353,12 +416,11 @@ Each step is one PR and drives its pairs in the baseline to zero.
    alike. No crate changes. Done (above): what is left is work.
 2. **A released window runs no Engine.** Done (above): the Engine in a
    window's process is a fixture, and the demo is a development build's.
-3. **`ferrite-core` splits in two.** First the window's last work goes
-   to its Server: the titler and session and command discovery did
-   (above), and the logs a window reads itself become questions over the
-   protocol. With no
-   crossings left, the shared modules become one crate and the engine
-   modules another. The window's crates drop the engine crate, and
+3. **`ferrite-core` splits in two.** The window's last work went to its
+   Server (above): the titler, session and command discovery, and the
+   logs it read itself. No crossings are left, so this is the only step
+   left: the shared modules become one crate and the engine modules
+   another. The window's crates drop the engine crate, and
    `ferrite-server` is the one crate that depends on it.
 
 ## Considered

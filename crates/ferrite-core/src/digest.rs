@@ -64,6 +64,12 @@ pub struct Digest {
     /// Thread whose log is on another machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_ms: Option<i64>,
+    /// When the Server last wrote the Thread's log: the log's time as the
+    /// Server read it when it folded this digest, in milliseconds since the
+    /// epoch on its computer's clock. What a window orders a working Thread
+    /// by, and its last use. A Server older than it sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub written_ms: Option<i64>,
     /// Prompts Main holds.
     #[serde(default)]
     pub turns: usize,
@@ -202,6 +208,8 @@ impl Digest {
                 }),
             prompt_title: prompt_title(transcript),
             active_ms: transcript.last_activity_ms(),
+            // Its Server's, which reads the log (`Engine::publish_digests`).
+            written_ms: None,
             turns: transcript
                 .blocks()
                 .iter()

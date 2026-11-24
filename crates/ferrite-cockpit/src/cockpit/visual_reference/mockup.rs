@@ -345,11 +345,16 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
     core.pump();
 
     // Recency is the log's mtime: each Thread was last written when it
-    // last acted on the fixture clock, not when the world was built.
+    // last acted on the fixture clock, not when the world was built. An
+    // open Thread's digest says that time, so each folds again.
     let store = root.join("store");
     for (thread, at) in last {
         last_used(&store, thread, clock.instant(at));
+        if core.thread(thread).is_some() {
+            core.fixture_refold_digest(thread);
+        }
     }
+    core.pump();
 
     // Both PR reads of the crash fix's worktree answer the chosen snapshot.
     core.fixture_forge(worktree, pr.view(clock));
