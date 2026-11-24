@@ -18,7 +18,7 @@ use gpui::WeakEntity;
 
 use super::*;
 use super::destination::{Destination, Shows};
-use ferrite_core::factory::{self as core_factory, Task, TaskId};
+use ferrite_core::factory_board::{self, Task, TaskId};
 use ferrite_core::protocol::TaskAction;
 use ferrite_core::ThreadKey;
 use ferrite_pane::composer::{Composer, Role};
@@ -112,7 +112,7 @@ impl ArchiveView {
         } = task;
         let key = format!("factory-archive-{id}");
         let when = |label: &str, at: Option<i64>| {
-            at.map(|at| format!("{label} {}", core_factory::when_label(at)))
+            at.map(|at| format!("{label} {}", factory_board::when_label(at)))
         };
         let meta: Vec<String> = [
             Some(format!("#{id}")),

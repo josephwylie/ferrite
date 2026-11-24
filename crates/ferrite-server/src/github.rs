@@ -4,7 +4,8 @@
 use std::sync::mpsc;
 use std::sync::Arc;
 
-use ferrite_core::factory::{Command, GitHubQuery, GitHubRead};
+use ferrite_core::factory::Command;
+use ferrite_core::factory_board::{GitHubQuery, GitHubRead};
 use ferrite_core::server::github::GitHub;
 
 use super::Server;

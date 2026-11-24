@@ -297,7 +297,7 @@ pub(super) fn mention_rows(files: &[String], filter: &str) -> Vec<pane::MenuRow>
 
 /// Preserve provider order and matches, while keeping repository metadata
 /// and repeated paths from crowding working files out of the bounded menu.
-pub(super) fn native_mention_rows(files: &[ferrite_core::providers::FileSuggestion]) -> Vec<pane::MenuRow> {
+pub(super) fn native_mention_rows(files: &[ferrite_core::prompt_files::FileSuggestion]) -> Vec<pane::MenuRow> {
     let mut seen = std::collections::HashSet::new();
     files
         .iter()

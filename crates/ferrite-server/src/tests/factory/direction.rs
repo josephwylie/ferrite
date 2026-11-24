@@ -193,7 +193,7 @@ fn a_question_waits_across_a_restart_and_the_answer_resumes_the_asker() {
 /// one Step to the next.
 #[test]
 fn the_windows_are_alerted_on_the_four_task_events_and_not_between_steps() {
-    use ferrite_core::factory::Status;
+    use ferrite_core::factory_board::Status;
     let (harness, project, repo) = factory_project("factory-alerts");
     let mut window = cockpit(&harness);
     let (workflow, _) = workflow(
@@ -475,7 +475,7 @@ fn a_workers_provider_decision_needs_the_operator_in_the_task_not_the_inbox() {
             matches!(
                 asked,
                 ferrite_client::cockpit::Asked::TaskAlert {
-                    status: ferrite_core::factory::Status::NeedsHuman,
+                    status: ferrite_core::factory_board::Status::NeedsHuman,
                     ..
                 }
             )

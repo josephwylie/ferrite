@@ -14,7 +14,7 @@ use super::direction::{meta, picker_button, read, segmented, DirectSheet};
 use super::workflows::{Pick, Trigger};
 use super::*;
 use ferrite_core::draft_content::DraftContent;
-use ferrite_core::factory::{Destination, Status, StepId, Task, TaskId, ThenReturn};
+use ferrite_core::factory_board::{Destination, Status, StepId, Task, TaskId, ThenReturn};
 use ferrite_core::ProjectKey;
 use ferrite_pane::composer::{Composer, Role};
 use gpui::{App, WeakEntity};

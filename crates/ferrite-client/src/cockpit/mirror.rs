@@ -14,7 +14,8 @@ use ferrite_core::activity::{
 };
 use ferrite_core::checkout::WorkspaceBinding;
 use ferrite_core::digest::{Digest, Turn};
-use ferrite_core::engine::{event_changes_content, Delivery, PaneUpdate, QueueItem};
+use ferrite_core::pane_update::{event_changes_content, PaneUpdate};
+use ferrite_core::prompt_queue::{Delivery, QueueItem};
 use ferrite_core::protocol::{self, ServerMessage, ThreadState, WireInput};
 use ferrite_core::provider::Provider;
 use ferrite_core::transcript::{Input, Transcript};

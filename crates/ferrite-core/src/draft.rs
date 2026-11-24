@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::checkout::WorkspaceChoice;
-use crate::engine::ProviderChoice;
+use crate::models::efforts_for;
 use crate::project::ProjectId;
-use crate::providers::models::efforts_for;
+use crate::provider::ProviderChoice;
 use crate::workspace::registry::Registry;
 use crate::{MachineKey, ModelInfo, ProjectKey};
 

@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 
 use super::*;
-use ferrite_core::factory::{
+use ferrite_core::factory_board::{
     ApprovalChange, Approver, Catalog, Definition, Destination, Problem, RouteKind, Step,
     StepChange, StepId, Switch, Template, Workflow, WorkflowId,
 };

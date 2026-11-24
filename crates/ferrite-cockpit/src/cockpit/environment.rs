@@ -342,8 +342,8 @@ impl CockpitView {
                         "Tasks working at once",
                         "In the Factory · the rest wait in Queued",
                         at_once.to_string().into(),
-                        at_once > *ferrite_core::factory::LIMIT_RANGE.start(),
-                        at_once < *ferrite_core::factory::LIMIT_RANGE.end(),
+                        at_once > *ferrite_core::factory_board::LIMIT_RANGE.start(),
+                        at_once < *ferrite_core::factory_board::LIMIT_RANGE.end(),
                         {
                             let view = cx.entity().downgrade();
                             move |delta, cx| {

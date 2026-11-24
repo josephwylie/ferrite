@@ -2,7 +2,7 @@
 //! the board's columns and cards, a Task's panel, and a Task's alerts.
 #[allow(unused_imports)]
 use super::*;
-use ferrite_core::factory::{Board, Status, Task};
+use ferrite_core::factory_board::{Board, Status, Task};
 
 /// A Task as the Server would publish it.
 fn task(

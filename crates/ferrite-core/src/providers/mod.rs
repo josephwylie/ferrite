@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{sync_channel, Receiver};
 
 use crate::activity::AgentKey;
+use crate::prompt_files::FileSuggestion;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
 mod claude;
@@ -16,10 +17,9 @@ pub mod commands;
 pub mod discover;
 mod elicitation;
 pub mod limits;
-pub mod models;
+pub(crate) mod model_cache;
 pub(crate) mod oneshot;
 mod resume;
-pub mod shell;
 pub mod update;
 // The Win32 calls are cfg(windows); the pid-selection logic inside is pure
 // and part of the host suite, like `cmd_shim` below.
@@ -321,15 +321,6 @@ pub enum Forked {
 
 pub type ForkAck = Receiver<io::Result<Forked>>;
 
-/// A native match, in provider ranking order. Highlight offsets are character
-/// indices in `path`, not byte offsets. Paths are relative to the Session cwd or absolute.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileSuggestion {
-    pub path: String,
-    pub is_directory: bool,
-    pub matched: Vec<usize>,
-}
-
 /// Where a file search is answered (`Session::search_files`): the answer
 /// rings the window's bell (ADR 0041).
 pub type FileSearchReply = crate::doorbell::SyncSender<io::Result<Vec<FileSuggestion>>>;
@@ -497,7 +488,6 @@ pub use claude::{
 };
 pub use codex::catalog::list as codex_models;
 pub use codex::discovery::list as codex_sessions;
-pub(crate) use codex::file_change_diffs;
 pub(crate) use codex::is_steer_id;
 pub(crate) use codex::launch as codex_launch;
 pub use codex::title as codex_title;

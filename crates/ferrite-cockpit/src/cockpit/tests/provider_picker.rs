@@ -376,7 +376,7 @@ fn the_slash_provider_row_opens_the_picker_and_picks_codex(cx: &mut TestAppConte
     assert_eq!(
         spawned.model.as_deref(),
         Some(
-            ferrite_core::providers::models::fallback(Provider::Codex)[0]
+            ferrite_core::models::fallback(Provider::Codex)[0]
                 .value
                 .as_str()
         ),
@@ -851,7 +851,7 @@ fn a_provider_that_cannot_serve_is_dimmed_on_the_rail(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.cli_updates.checked(
             Provider::Codex,
-            Ok(ferrite_core::providers::update::Status::Missing),
+            Ok(ferrite_core::cli_update::Status::Missing),
             true,
         );
         view.open_provider_picker(thread, cx);

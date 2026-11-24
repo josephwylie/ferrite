@@ -2,16 +2,16 @@
 //! footer's chips and the send button.
 
 use super::*;
-use ferrite_core::engine::{Delivery, QueueItem};
+use ferrite_core::prompt_queue::{Delivery, QueueItem};
 
 /// The name a model shows under, from any spelling the wire uses:
 /// `claude-sonnet-4-5` → `Sonnet 4.5`, `gpt-5.4-mini` → `GPT-5.4 Mini`.
 /// Public because every chip and row must spell a model exactly one way —
 /// one grooming, never two; the catalog's own display names win where a
-/// Session announced them (see `providers::models::label`).
+/// Session announced them (see `models::label`).
 #[cfg(any(test, feature = "test-support"))]
 pub fn model_label(model: &str) -> SharedString {
-    SharedString::from(ferrite_core::providers::models::display_name(model))
+    SharedString::from(ferrite_core::models::display_name(model))
 }
 
 /// The model chip's face (T3's model trigger, Claude's `Opus 5.5 Medium`):

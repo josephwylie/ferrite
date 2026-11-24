@@ -382,7 +382,7 @@ pub fn prompt_title(transcript: &Transcript) -> Option<String> {
         .blocks()
         .iter()
         .find_map(|block| match &block.body {
-            Body::Prompt(text) if block.wake.is_none() => Some(crate::engine::title_from_prompt(text)),
+            Body::Prompt(text) if block.wake.is_none() => Some(crate::digest::title_from_prompt(text)),
             _ => None,
         })
 }
@@ -545,6 +545,30 @@ fn questions_of(decision: &Decision) -> Option<&[crate::questions::Question]> {
     match &decision.kind {
         crate::DecisionKind::Questions(questions) => Some(questions),
         _ => None,
+    }
+}
+
+/// How long a Thread at rest stays held: its Session on the Server, its
+/// transcript in a window (ADR 0032).
+pub const HELD_AT_REST: Duration = Duration::from_secs(5 * 60);
+
+/// A Thread's name from its first prompt: the first non-blank line,
+/// whitespace collapsed, cut to `TITLE_CHARS` characters with an ellipsis.
+/// A prompt that is only whitespace names nothing.
+pub fn title_from_prompt(text: &str) -> String {
+    const TITLE_CHARS: usize = 48;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    let collapsed: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = collapsed.chars();
+    let cut: String = chars.by_ref().take(TITLE_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{}…", cut.trim_end())
+    } else {
+        cut
     }
 }
 

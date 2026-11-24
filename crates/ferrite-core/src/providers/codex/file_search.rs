@@ -3,7 +3,8 @@ use std::io;
 
 use serde_json::Value;
 
-use crate::providers::{FileSearchReply, FileSuggestion};
+use crate::prompt_files::FileSuggestion;
+use crate::providers::FileSearchReply;
 
 #[derive(Default)]
 pub(super) struct Requests {

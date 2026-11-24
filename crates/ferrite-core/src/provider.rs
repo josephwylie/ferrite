@@ -26,3 +26,12 @@ impl std::fmt::Display for Provider {
         })
     }
 }
+
+/// A provider and the model to serve it with — what the #25 picker picks,
+/// whole. `None` is the provider's own default, which is also what every
+/// Thread starts on.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ProviderChoice {
+    pub provider: Provider,
+    pub model: Option<String>,
+}

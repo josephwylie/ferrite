@@ -1095,7 +1095,7 @@ impl CockpitView {
                     Consequence::Provision,
                     cx,
                 );
-                let label = ferrite_core::providers::models::footer_name(
+                let label = ferrite_core::models::footer_name(
                     current,
                     open.running_model(),
                     open.models(),
@@ -1138,7 +1138,7 @@ impl CockpitView {
                 }, cx);
                 let announced = self.cockpit.read(cx).announced_models(machine, current);
                 let label =
-                    ferrite_core::providers::models::footer_name(current, model.as_deref(), &announced);
+                    ferrite_core::models::footer_name(current, model.as_deref(), &announced);
                 let efforts = self
                     .draft_effort_ladder(index, cx)
                     .map(|(steps, _, chosen)| {
@@ -1164,7 +1164,7 @@ impl CockpitView {
             .filter_map(|provider| {
                 matches!(
                     self.cli_updates.state(provider),
-                    crate::cli_updates::State::Current(ferrite_core::providers::update::Status::Missing)
+                    crate::cli_updates::State::Current(ferrite_core::cli_update::Status::Missing)
                 )
                 .then(|| {
                     (

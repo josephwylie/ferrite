@@ -1498,7 +1498,7 @@ mod tests {
         let memory = core.thread(world.cast.memory).unwrap();
         assert_eq!(memory.model(), Some("opus"));
         assert_eq!(
-            ferrite_core::providers::models::label("opus", memory.models()),
+            ferrite_core::models::label("opus", memory.models()),
             "Opus 5.5",
             "the model chip names it as the mockups do"
         );

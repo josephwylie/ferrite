@@ -23,9 +23,8 @@ use gpui::WeakEntity;
 
 use super::workflows::{Field, Inspected, Pick};
 use super::*;
-use ferrite_core::factory::{
-    self as core_factory, Missed, Overlap, Recurrence, Start, StartKind, Switch, Trigger, Turn,
-    WorkflowId,
+use ferrite_core::factory_board::{
+    self, Missed, Overlap, Recurrence, Start, StartKind, Switch, Trigger, Turn, WorkflowId,
 };
 use ferrite_core::protocol::{GitHubAsk, WorkflowAction};
 use ferrite_pane::composer::Composer;
@@ -241,7 +240,7 @@ impl StartsView {
     }
 
     fn weekday_picks(start: &Start) -> Vec<(ferrite_ui::menu::Item, Pick)> {
-        core_factory::WEEKDAYS
+        factory_board::WEEKDAYS
             .iter()
             .enumerate()
             .map(|(day, name)| {
@@ -255,7 +254,7 @@ impl StartsView {
     }
 
     fn interval_picks(start: &Start) -> Vec<(ferrite_ui::menu::Item, Pick)> {
-        core_factory::INTERVAL_HOURS
+        factory_board::INTERVAL_HOURS
             .into_iter()
             .map(|hours| {
                 let plural = if hours == 1 { "" } else { "s" };
@@ -505,7 +504,7 @@ impl StartsView {
                             .child(label("On".into()))
                             .child(Self::start_chooser(
                                 "start-weekday",
-                                core_factory::WEEKDAYS[usize::from(schedule.weekday.min(6))].into(),
+                                factory_board::WEEKDAYS[usize::from(schedule.weekday.min(6))].into(),
                                 false,
                                 false,
                                 Self::weekday_picks(&start),
@@ -553,7 +552,7 @@ impl StartsView {
                 let now = ferrite_core::clock::now().timestamp_millis();
                 let next = schedule
                     .next_after_ms(now)
-                    .map(|at| format!(" Next: {}.", core_factory::when_label(at)))
+                    .map(|at| format!(" Next: {}.", factory_board::when_label(at)))
                     .unwrap_or_default();
                 body = body
                     .child(row)
@@ -561,7 +560,7 @@ impl StartsView {
                         "start-schedule-when",
                         format!(
                             "Host-local time \u{b7} {} (this computer's time zone). {}.{next}",
-                            core_factory::zone_label(now),
+                            factory_board::zone_label(now),
                             schedule.describe()
                         ),
                     ))
@@ -821,7 +820,7 @@ impl StartsView {
                     switch.word()
                 );
                 if let Some(due) = inputs.due_ms.filter(|_| switch == Switch::On) {
-                    hint.push_str(&format!(" Next run: {}.", core_factory::when_label(due)));
+                    hint.push_str(&format!(" Next run: {}.", factory_board::when_label(due)));
                 }
                 if inputs.waiting {
                     hint.push_str(" A run waits for the last one to finish.");
@@ -987,9 +986,9 @@ impl CockpitView {
             return;
         };
         let next = if delta == 0 {
-            core_factory::DEFAULT_LIMIT
+            factory_board::DEFAULT_LIMIT
         } else {
-            core_factory::clamp_limit(now.saturating_add_signed(delta as isize))
+            factory_board::clamp_limit(now.saturating_add_signed(delta as isize))
         };
         if next != now {
             self.change_defaults(|defaults| defaults.factory_tasks_at_once = next, cx);

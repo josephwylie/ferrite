@@ -30,8 +30,8 @@ use ferrite_core::roster::DraftId;
 use ferrite_core::server::clis::{Clis, Host};
 use ferrite_core::server::github::{GitHub, Gh};
 use ferrite_core::server::{settings_dir, store_dir, ServerId};
-use ferrite_core::settings::{ServerDefaults, Settings};
-use ferrite_core::spawner::{ProcessRss, SessionDefaults, Spawn, RSS_LIMIT};
+use ferrite_core::settings::{ServerDefaults, SessionDefaults, Settings};
+use ferrite_core::spawner::{ProcessRss, Spawn, RSS_LIMIT};
 use ferrite_core::store::Store;
 use ferrite_core::ThreadId;
 
@@ -347,7 +347,7 @@ type Relaunch = dyn FnMut(&std::path::Path) -> io::Result<()>;
 type Search = (
     ClientId,
     u64,
-    Receiver<io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
+    Receiver<io::Result<Vec<ferrite_core::prompt_files::FileSuggestion>>>,
 );
 
 /// A browser capture's image read off the pump: who asked, in which
@@ -433,10 +433,10 @@ struct Server {
     /// The Archive's revision the windows were last sent.
     told_archive: Option<u64>,
     /// What a one-off Task's Worker runs on: the operator's defaults.
-    factory_agent: ferrite_core::factory::Agent,
+    factory_agent: ferrite_core::factory_board::Agent,
     /// The settings each Coordinator's Session was last tuned to (#224),
     /// so one it refused is not tried again every pass.
-    coordinators_tuned: std::collections::BTreeMap<ferrite_core::ThreadId, ferrite_core::factory::Agent>,
+    coordinators_tuned: std::collections::BTreeMap<ferrite_core::ThreadId, ferrite_core::factory_board::Agent>,
     /// What the Factory's GitHub starts are read through (#225): the
     /// operator's `gh`, or a test's scripted reader.
     github: Arc<dyn GitHub>,

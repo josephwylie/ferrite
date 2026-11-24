@@ -5,6 +5,7 @@
 //!
 //! [`Clis`] is the seam: the Server's harness hands it a scripted machine.
 
+use crate::cli_update;
 use crate::protocol::{CliAction, CliBinary, CliReport, CliStatus, Done, WireError};
 use crate::provider::Provider;
 use crate::providers::{discover, update};
@@ -14,7 +15,7 @@ pub trait Clis: Send + Sync {
     /// The copy of `provider`'s CLI the machine runs, looked for afresh.
     fn binary(&self, provider: Provider) -> Option<CliBinary>;
     /// How that copy compares to the newest release. Reaches the registry.
-    fn check(&self, provider: Provider) -> std::io::Result<update::Status>;
+    fn check(&self, provider: Provider) -> std::io::Result<cli_update::Status>;
     /// Install `provider`'s newest release; the copy that answers after.
     fn update(&self, provider: Provider) -> Result<CliBinary, String>;
 }
@@ -28,13 +29,13 @@ impl Clis for Host {
         located(provider)
     }
 
-    fn check(&self, provider: Provider) -> std::io::Result<update::Status> {
+    fn check(&self, provider: Provider) -> std::io::Result<cli_update::Status> {
         update::check(provider)
     }
 
     fn update(&self, provider: Provider) -> Result<CliBinary, String> {
         match update::check(provider).map_err(|error| error.to_string())? {
-            update::Status::Available {
+            cli_update::Status::Available {
                 upgrade: Some(upgrade),
                 ..
             } => {
@@ -42,11 +43,11 @@ impl Clis for Host {
                 located(provider)
                     .ok_or_else(|| "the upgrade finished, but no copy answers `--version`".into())
             }
-            update::Status::Available { latest, .. } => Err(format!(
+            cli_update::Status::Available { latest, .. } => Err(format!(
                 "{latest} is available, but Ferrite cannot tell how this copy was installed"
             )),
-            update::Status::UpToDate { current } => Err(format!("{current} is the latest release")),
-            update::Status::Missing => Err("no copy is installed".into()),
+            cli_update::Status::UpToDate { current } => Err(format!("{current} is the latest release")),
+            cli_update::Status::Missing => Err("no copy is installed".into()),
         }
     }
 }

@@ -651,7 +651,7 @@ mod tests {
 
     #[test]
     fn model_choices_keep_default_alias_and_custom_values_selected() {
-        use ferrite_core::{provider::Provider, providers::models::fallback};
+        use ferrite_core::{models::fallback, provider::Provider};
         for provider in Provider::ALL {
             let options = model_options(fallback(provider), None);
             assert_eq!(options.iter().filter(|(_, on, _)| *on).count(), 1);

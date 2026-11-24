@@ -15,57 +15,12 @@ use crate::providers::{
     ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, ResumeRefused, Session,
 };
 use crate::session::SessionLifecycle;
-use crate::settings::Settings;
+use crate::settings::SessionDefaults;
 use crate::ThreadId;
 
 /// One Session may hold this much before the watchdog replaces it. Generous:
 /// a busy agent legitimately grows, and a restart costs the operator context.
 pub const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
-
-/// What every new Session is started with beyond the Thread's own choice:
-/// the operator's permission, sandbox and effort defaults, read from
-/// Settings and shared between the window (which edits them) and the
-/// spawner (which reads them at each spawn — so a change applies to the
-/// next Session). A Thread's own effort, once chosen, wins over the
-/// default.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct SessionDefaults {
-    pub claude_permission_mode: Option<String>,
-    pub codex_approval_policy: Option<String>,
-    pub codex_sandbox: Option<String>,
-    pub claude_effort: Option<String>,
-    pub codex_effort: Option<String>,
-    pub placeholder_suggestions: bool,
-    /// How readily agents are offered `show_visual` (Settings).
-    pub visuals: crate::visual::Level,
-    /// Settings › Labs › Linked machines: Sessions started while it is on
-    /// are offered the Delegate tools (`api::tools`).
-    pub linked_machines: bool,
-}
-
-impl SessionDefaults {
-    pub fn from_settings(settings: &Settings) -> Self {
-        Self {
-            claude_permission_mode: settings.claude_permission_mode.clone(),
-            codex_approval_policy: Some(settings.codex_approval_policy.clone())
-                .filter(|policy| !policy.is_empty()),
-            codex_sandbox: settings.codex_sandbox.clone(),
-            claude_effort: settings.claude_effort.clone(),
-            codex_effort: settings.codex_effort.clone(),
-            placeholder_suggestions: settings.placeholder_suggestions,
-            visuals: settings.visuals,
-            linked_machines: settings.labs.linked_machines,
-        }
-    }
-
-    /// The effort a spawn on `provider` gets when the Thread chose none.
-    fn effort_for(&self, provider: Provider) -> Option<String> {
-        match provider {
-            Provider::Claude => self.claude_effort.clone(),
-            Provider::Codex => self.codex_effort.clone(),
-        }
-    }
-}
 
 /// How the app starts Sessions: the Thread's stored choice becomes a
 /// provider CLI process working in its binding.
@@ -113,7 +68,7 @@ impl Spawner for Spawn {
         &mut self,
         roots: Vec<(Provider, std::path::PathBuf)>,
         cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
+    ) -> Option<Receiver<io::Result<Vec<crate::session_file::Candidate>>>> {
         let (tx, rx) = crate::doorbell::channel();
         std::thread::Builder::new()
             .name("ferrite-session-discovery".into())
@@ -489,6 +444,7 @@ pub fn rss_bytes(pid: u32) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::Settings;
 
     /// A Worker's and a Coordinator's Session are bound to their Factory
     /// tools; an ordinary Thread's is offered the PR watch, and the

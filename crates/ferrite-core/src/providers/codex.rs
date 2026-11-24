@@ -24,7 +24,6 @@ mod requests;
 mod rewind;
 pub(super) mod wire;
 pub(crate) use queue::is_steer_id;
-pub(crate) use wire::file_change_diffs;
 
 use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use std::collections::HashMap;

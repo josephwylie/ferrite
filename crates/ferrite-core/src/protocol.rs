@@ -965,12 +965,12 @@ pub enum TaskAction {
         task: String,
         feedback: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        to: Option<crate::factory::Destination>,
+        to: Option<crate::factory_board::Destination>,
     },
     /// One Task's direction; the saved Workflow is unchanged.
     Redirect {
         task: String,
-        direction: crate::factory::Override,
+        direction: crate::factory_board::Override,
     },
     /// The Completed column's Clear: the Project's Completed Tasks go to
     /// its Archive (#226).
@@ -987,7 +987,7 @@ pub enum TaskAction {
 pub enum WorkflowAction {
     Create {
         project: ProjectId,
-        template: crate::factory::Template,
+        template: crate::factory_board::Template,
     },
     Rename {
         workflow: String,
@@ -1001,7 +1001,7 @@ pub enum WorkflowAction {
     EditStep {
         workflow: String,
         step: String,
-        change: crate::factory::StepChange,
+        change: crate::factory_board::StepChange,
     },
     MoveStep {
         workflow: String,
@@ -1023,17 +1023,17 @@ pub enum WorkflowAction {
     /// Who approves the draft's results, and what follows (#222).
     EditApproval {
         workflow: String,
-        change: crate::factory::ApprovalChange,
+        change: crate::factory_board::ApprovalChange,
     },
     /// How the draft's Tasks start (#225), whole.
     EditStart {
         workflow: String,
-        start: crate::factory::Start,
+        start: crate::factory_board::Start,
     },
     /// Turn automatic starts on, pause, resume or off.
     Automation {
         workflow: String,
-        turn: crate::factory::Turn,
+        turn: crate::factory_board::Turn,
     },
     /// Take what already matched when a GitHub start was turned on, or
     /// pass it over.
@@ -1057,7 +1057,7 @@ pub enum CoordinatorAction {
     /// Its Provider, model and effort, from its next turn.
     Agent {
         project: ProjectId,
-        agent: crate::factory::Agent,
+        agent: crate::factory_board::Agent,
     },
     /// Run a proposal's act as the operator's. `skills`, as a save's are.
     Accept {
@@ -1119,15 +1119,15 @@ pub enum CliStatus {
         current: String,
         latest: String,
         #[serde(default)]
-        upgrade: Option<crate::providers::update::Upgrade>,
+        upgrade: Option<crate::cli_update::Upgrade>,
     },
     #[serde(other)]
     Unknown,
 }
 
-impl From<crate::providers::update::Status> for CliStatus {
-    fn from(status: crate::providers::update::Status) -> Self {
-        use crate::providers::update::Status;
+impl From<crate::cli_update::Status> for CliStatus {
+    fn from(status: crate::cli_update::Status) -> Self {
+        use crate::cli_update::Status;
         match status {
             Status::Missing => CliStatus::Missing,
             Status::UpToDate { current } => CliStatus::UpToDate { current },
@@ -1146,8 +1146,8 @@ impl From<crate::providers::update::Status> for CliStatus {
 
 impl CliStatus {
     /// The check's finding, or `None` for one this build does not know.
-    pub fn known(self) -> Option<crate::providers::update::Status> {
-        use crate::providers::update::Status;
+    pub fn known(self) -> Option<crate::cli_update::Status> {
+        use crate::cli_update::Status;
         match self {
             CliStatus::Missing => Some(Status::Missing),
             CliStatus::UpToDate { current } => Some(Status::UpToDate { current }),
@@ -1394,7 +1394,7 @@ pub enum ServerMessage {
     /// wins.
     Factory {
         revision: u64,
-        board: crate::factory::Board,
+        board: crate::factory_board::Board,
     },
     /// A Task needs the operator, stopped or completed: a toast, a chime
     /// and a system notification. It follows the board that shows the
@@ -1402,7 +1402,7 @@ pub enum ServerMessage {
     TaskAlert {
         project: ProjectId,
         task: String,
-        status: crate::factory::Status,
+        status: crate::factory_board::Status,
         title: String,
         /// What the event said: the result, or why.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1481,7 +1481,7 @@ pub struct Snapshot {
     pub digests: Option<Vec<ThreadDigest>>,
     /// Every Factory's Tasks (ADR 0037).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub factory: Option<crate::factory::Board>,
+    pub factory: Option<crate::factory_board::Board>,
 }
 
 /// One open Thread's digest, as the snapshot lists them.
@@ -1904,7 +1904,7 @@ pub struct ThreadState {
     /// Every prompt not yet picked up, newest first, with its delivery and
     /// the id cancel takes. A Server older than this sends only `queued`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub queue: Vec<crate::engine::QueueItem>,
+    pub queue: Vec<crate::prompt_queue::QueueItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggestion: Option<String>,
     #[serde(default)]
@@ -3497,9 +3497,9 @@ impl TryFrom<&WireBinding> for WorkspaceBinding {
     }
 }
 
-impl From<crate::providers::limits::LimitWindow> for WireLimitWindow {
-    fn from(window: crate::providers::limits::LimitWindow) -> Self {
-        use crate::providers::limits::LimitWindow;
+impl From<crate::allowance::LimitWindow> for WireLimitWindow {
+    fn from(window: crate::allowance::LimitWindow) -> Self {
+        use crate::allowance::LimitWindow;
         match window {
             LimitWindow::FiveHour => Self::FiveHour,
             LimitWindow::Weekly => Self::Weekly,
@@ -3507,7 +3507,7 @@ impl From<crate::providers::limits::LimitWindow> for WireLimitWindow {
     }
 }
 
-impl TryFrom<WireLimitWindow> for crate::providers::limits::LimitWindow {
+impl TryFrom<WireLimitWindow> for crate::allowance::LimitWindow {
     type Error = Unknown;
     fn try_from(window: WireLimitWindow) -> Result<Self, Unknown> {
         Ok(match window {

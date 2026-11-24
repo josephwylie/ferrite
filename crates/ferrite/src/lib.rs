@@ -31,7 +31,8 @@ use ferrite_core::window_frame;
 use ferrite_core::ThreadKey;
 
 use cockpit::CockpitView;
-use ferrite_core::spawner::{self, ProcessRss, SessionDefaults};
+use ferrite_core::settings::SessionDefaults;
+use ferrite_core::spawner::{self, ProcessRss};
 
 /// Transcript Markdown can show remote images (`![alt](https://…)`); GPUI
 /// loads them through the application's HTTP client, whose default refuses

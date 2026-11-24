@@ -403,7 +403,7 @@ impl Default for Settings {
             machines: Vec::new(),
             local_environment_enabled: true,
             forge_hosts: ForgeHosts::default(),
-            factory_tasks_at_once: crate::factory::DEFAULT_LIMIT,
+            factory_tasks_at_once: crate::factory_board::DEFAULT_LIMIT,
             favourite_models: Vec::new(),
             labs: Labs::default(),
         }
@@ -605,6 +605,51 @@ fn saved_pins<'de, D: serde::Deserializer<'de>>(pins: D) -> Result<Vec<SavedThre
             },
         })
         .collect())
+}
+
+/// What every new Session is started with beyond the Thread's own choice:
+/// the operator's permission, sandbox and effort defaults, read from
+/// Settings and shared between the window (which edits them) and the
+/// spawner (which reads them at each spawn — so a change applies to the
+/// next Session). A Thread's own effort, once chosen, wins over the
+/// default.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct SessionDefaults {
+    pub claude_permission_mode: Option<String>,
+    pub codex_approval_policy: Option<String>,
+    pub codex_sandbox: Option<String>,
+    pub claude_effort: Option<String>,
+    pub codex_effort: Option<String>,
+    pub placeholder_suggestions: bool,
+    /// How readily agents are offered `show_visual` (Settings).
+    pub visuals: crate::visual::Level,
+    /// Settings › Labs › Linked machines: Sessions started while it is on
+    /// are offered the Delegate tools (`api::tools`).
+    pub linked_machines: bool,
+}
+
+impl SessionDefaults {
+    pub fn from_settings(settings: &Settings) -> Self {
+        Self {
+            claude_permission_mode: settings.claude_permission_mode.clone(),
+            codex_approval_policy: Some(settings.codex_approval_policy.clone())
+                .filter(|policy| !policy.is_empty()),
+            codex_sandbox: settings.codex_sandbox.clone(),
+            claude_effort: settings.claude_effort.clone(),
+            codex_effort: settings.codex_effort.clone(),
+            placeholder_suggestions: settings.placeholder_suggestions,
+            visuals: settings.visuals,
+            linked_machines: settings.labs.linked_machines,
+        }
+    }
+
+    /// The effort a spawn on `provider` gets when the Thread chose none.
+    pub(crate) fn effort_for(&self, provider: Provider) -> Option<String> {
+        match provider {
+            Provider::Claude => self.claude_effort.clone(),
+            Provider::Codex => self.codex_effort.clone(),
+        }
+    }
 }
 
 #[cfg(test)]

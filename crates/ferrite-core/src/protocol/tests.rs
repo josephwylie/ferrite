@@ -12,7 +12,7 @@ use serde_json::json;
 
 use super::*;
 use crate::activity::{ActivityInput, AgentKey, ExecutionEvent};
-use crate::engine::{Delivery, QueueItem};
+use crate::prompt_queue::{Delivery, QueueItem};
 use crate::server::ServerId;
 
 fn fixtures(kind: &str) -> PathBuf {
@@ -863,14 +863,14 @@ fn samples() -> Vec<(&'static str, Sample)> {
             "factory",
             Sample::Server(ServerMessage::Factory {
                 revision: 3,
-                board: crate::factory::Board {
-                    tasks: vec![crate::factory::Task {
+                board: crate::factory_board::Board {
+                    tasks: vec![crate::factory_board::Task {
                         id: "t-1".into(),
                         project,
                         title: "Fix the flaky login test".into(),
                         instructions: "Fix the flaky login test".into(),
-                        status: crate::factory::Status::NeedsHuman,
-                        agent: crate::factory::Agent {
+                        status: crate::factory_board::Status::NeedsHuman,
+                        agent: crate::factory_board::Agent {
                             provider: crate::provider::Provider::Claude,
                             model: Some("claude-opus-4".into()),
                             effort: None,
@@ -880,9 +880,9 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         worktree: Some("/src/ferrite/.worktrees/factory/t-1".into()),
                         result: None,
                         reason: Some("No access to the staging database".into()),
-                        activity: vec![crate::factory::Entry {
+                        activity: vec![crate::factory_board::Entry {
                             at_ms: 1_700_000_000_000,
-                            by: crate::factory::Actor::Agent,
+                            by: crate::factory_board::Actor::Agent,
                             text: "Unable to finish: No access to the staging database".into(),
                             revision: None,
                         }],
@@ -926,9 +926,9 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     action: WorkflowAction::EditStep {
                         workflow: "w-1".into(),
                         step: "s-2".into(),
-                        change: crate::factory::StepChange {
+                        change: crate::factory_board::StepChange {
                             instructions: Some("Review the PR".into()),
-                            on_unable: Some(crate::factory::Destination::Step("s-1".into())),
+                            on_unable: Some(crate::factory_board::Destination::Step("s-1".into())),
                             fresh: Some(true),
                             ..Default::default()
                         },
@@ -969,7 +969,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     action: TaskAction::Rework {
                         task: "t-1".into(),
                         feedback: "Add a test for the flag".into(),
-                        to: Some(crate::factory::Destination::Step("s-3".into())),
+                        to: Some(crate::factory_board::Destination::Step("s-3".into())),
                     },
                 },
             ),
@@ -981,10 +981,10 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 Op::Task {
                     action: TaskAction::Redirect {
                         task: "t-1".into(),
-                        direction: crate::factory::Override {
+                        direction: crate::factory_board::Override {
                             to: "s-3".into(),
                             skip: vec!["s-2".into()],
-                            then: crate::factory::ThenReturn::Me,
+                            then: crate::factory_board::ThenReturn::Me,
                             note: "Only the docs changed".into(),
                         },
                     },
@@ -998,12 +998,12 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 Op::Workflow {
                     action: WorkflowAction::EditApproval {
                         workflow: "w-1".into(),
-                        change: crate::factory::ApprovalChange {
-                            by: Some(crate::factory::Approver::Agent),
+                        change: crate::factory_board::ApprovalChange {
+                            by: Some(crate::factory_board::Approver::Agent),
                             step: Some("s-4".into()),
                             instructions: Some("Approve when the checks pass".into()),
-                            after: Some(crate::factory::Destination::Complete),
-                            rework_to: Some(crate::factory::Destination::Step("s-3".into())),
+                            after: Some(crate::factory_board::Destination::Complete),
+                            rework_to: Some(crate::factory_board::Destination::Step("s-3".into())),
                         },
                     },
                 },
@@ -1024,17 +1024,17 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 Op::Workflow {
                     action: WorkflowAction::EditStart {
                         workflow: "w-1".into(),
-                        start: crate::factory::Start {
-                            kind: crate::factory::StartKind::Schedule,
-                            schedule: crate::factory::Schedule {
-                                recurrence: crate::factory::Recurrence::Weekdays,
+                        start: crate::factory_board::Start {
+                            kind: crate::factory_board::StartKind::Schedule,
+                            schedule: crate::factory_board::Schedule {
+                                recurrence: crate::factory_board::Recurrence::Weekdays,
                                 time: Some("09:00".into()),
                                 instructions: "Triage new issues".into(),
-                                missed: crate::factory::Missed::RunOnce,
-                                overlap: crate::factory::Overlap::Queue,
+                                missed: crate::factory_board::Missed::RunOnce,
+                                overlap: crate::factory_board::Overlap::Queue,
                                 ..Default::default()
                             },
-                            github: crate::factory::GitHubSource {
+                            github: crate::factory_board::GitHubSource {
                                 repository: Some("acme/app".into()),
                                 ..Default::default()
                             },
@@ -1050,7 +1050,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 Op::Workflow {
                     action: WorkflowAction::Automation {
                         workflow: "w-1".into(),
-                        turn: crate::factory::Turn::Pause,
+                        turn: crate::factory_board::Turn::Pause,
                     },
                 },
             ),
@@ -1138,7 +1138,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 Op::Coordinator {
                     action: crate::protocol::CoordinatorAction::Agent {
                         project,
-                        agent: crate::factory::Agent {
+                        agent: crate::factory_board::Agent {
                             provider: Provider::Codex,
                             model: Some("gpt-5-codex".into()),
                             effort: Some("high".into()),
@@ -1216,7 +1216,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
             "factory_troubles",
             Sample::Server(ServerMessage::Factory {
                 revision: 7,
-                board: crate::factory::Board {
+                board: crate::factory_board::Board {
                     troubles: [(
                         project_id(),
                         "The Factory could not be saved: No space left on device".to_string(),
@@ -1230,26 +1230,26 @@ fn samples() -> Vec<(&'static str, Sample)> {
             "factory_workflows",
             Sample::Server(ServerMessage::Factory {
                 revision: 4,
-                board: crate::factory::Board {
+                board: crate::factory_board::Board {
                     tasks: Vec::new(),
                     trouble: None,
-                    workflows: vec![crate::factory::Workflow {
+                    workflows: vec![crate::factory_board::Workflow {
                         id: "w-1".into(),
                         project,
-                        draft: crate::factory::Definition {
+                        draft: crate::factory_board::Definition {
                             name: "Docs fixes".into(),
-                            steps: vec![crate::factory::Step {
+                            steps: vec![crate::factory_board::Step {
                                 id: "s-1".into(),
                                 name: "Writer".into(),
                                 instructions: "Fix the docs".into(),
                                 skills: vec!["docs".into()],
-                                agent: crate::factory::Agent {
+                                agent: crate::factory_board::Agent {
                                     provider: crate::provider::Provider::Codex,
                                     model: Some("gpt-5.5".into()),
                                     effort: Some("high".into()),
                                 },
-                                on_finished: crate::factory::Destination::Complete,
-                                on_unable: crate::factory::Destination::Human,
+                                on_finished: crate::factory_board::Destination::Complete,
+                                on_unable: crate::factory_board::Destination::Human,
                                 fresh: false,
                                 outcome_routes: None,
                             }],
@@ -1269,7 +1269,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
             Sample::Server(ServerMessage::TaskAlert {
                 project,
                 task: "t-1".into(),
-                status: crate::factory::Status::Completed,
+                status: crate::factory_board::Status::Completed,
                 title: "Task completed: Fix the flaky login test".into(),
                 detail: None,
             }),
@@ -1279,7 +1279,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
             Sample::Server(ServerMessage::TaskAlert {
                 project,
                 task: "t-1".into(),
-                status: crate::factory::Status::NeedsHuman,
+                status: crate::factory_board::Status::NeedsHuman,
                 title: "Task needs you: Fix the flaky login test".into(),
                 detail: Some("No access to the staging data".into()),
             }),

@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
+use crate::factory_board::*;
 use crate::provider::Provider;
 
 fn project_id(id: u64) -> ProjectId {

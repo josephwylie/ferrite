@@ -850,7 +850,7 @@ pub struct TaskRedirectParams {
     pub skip: Vec<String>,
     /// `routes` (the default) or `me`: return it to you to approve.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub then: Option<crate::factory::ThenReturn>,
+    pub then: Option<crate::factory_board::ThenReturn>,
     /// Context for the agent that takes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -863,7 +863,7 @@ pub struct TaskRedirectParams {
 pub struct WorkflowApprovalParams {
     pub workflow: String,
     #[serde(flatten)]
-    pub change: crate::factory::ApprovalChange,
+    pub change: crate::factory_board::ApprovalChange,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -871,7 +871,7 @@ pub struct WorkflowCreateParams {
     /// What it starts from: `blank` (the default) or
     /// `issue_to_reviewed_pr`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub template: Option<crate::factory::Template>,
+    pub template: Option<crate::factory_board::Template>,
     /// Its name; the template's when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -918,7 +918,7 @@ pub struct StepEditParams {
     pub workflow: String,
     pub step: String,
     #[serde(flatten)]
-    pub change: crate::factory::StepChange,
+    pub change: crate::factory_board::StepChange,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -934,13 +934,13 @@ pub struct WorkflowStartParams {
     pub workflow: String,
     /// `{"type": "schedule", "schedule": {...}, "github": {...}}`: every
     /// source's settings, kept while another is chosen.
-    pub start: crate::factory::Start,
+    pub start: crate::factory_board::Start,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkflowAutomationParams {
     pub workflow: String,
-    pub turn: crate::factory::Turn,
+    pub turn: crate::factory_board::Turn,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -988,7 +988,7 @@ pub struct ProposalRaiseParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skip: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub then: Option<crate::factory::ThenReturn>,
+    pub then: Option<crate::factory_board::ThenReturn>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }

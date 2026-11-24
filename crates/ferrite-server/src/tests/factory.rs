@@ -212,7 +212,7 @@ fn a_worker_that_never_reports_is_prompted_once_then_needs_the_operator() {
             matches!(
                 asked,
                 ferrite_client::cockpit::Asked::TaskAlert {
-                    status: ferrite_core::factory::Status::NeedsHuman,
+                    status: ferrite_core::factory_board::Status::NeedsHuman,
                     ..
                 }
             )
@@ -270,7 +270,7 @@ fn a_task_alert_follows_its_board_and_says_its_event() {
     let ServerMessage::TaskAlert { status, .. } = &alert else {
         unreachable!()
     };
-    assert_eq!(*status, ferrite_core::factory::Status::NeedsHuman, "{alert:?}");
+    assert_eq!(*status, ferrite_core::factory_board::Status::NeedsHuman, "{alert:?}");
     assert_eq!(shown, Some(*status), "the board before the alert shows it");
     assert_eq!(
         serde_json::to_value(&alert).unwrap()["detail"],

@@ -20,7 +20,7 @@
 //! `processId` — the handle `thread/backgroundTerminals/terminate` wants —
 //! so a chip's `×` needs no translation.
 
-use crate::providers::shell::unwrap_shell;
+use crate::shell::unwrap_shell;
 use std::collections::BTreeMap;
 
 use serde_json::Value;

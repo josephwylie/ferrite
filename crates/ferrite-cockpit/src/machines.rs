@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex};
 use ferrite_client::cockpit::{Attach, Cockpit, Endpoint, ServerState};
 use ferrite_core::machine::{self, Bridge, Machine};
 use ferrite_core::protocol::Peer;
-use ferrite_core::spawner::{self, SessionDefaults};
+use ferrite_core::settings::SessionDefaults;
+use ferrite_core::spawner;
 use ferrite_core::visual::Renderer;
 use ferrite_core::{MachineId, MachineKey};
 

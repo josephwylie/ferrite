@@ -26,6 +26,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::allowance::{AllowanceWarning, LimitWindow};
 use crate::provider::Provider;
 use crate::transcript::RateLimits;
 use crate::RateLimitWindow;
@@ -53,23 +54,6 @@ struct Snapshot {
     schema: u32,
     five_hour: Option<Window>,
     weekly: Option<Window>,
-}
-
-/// One of a provider's two subscription windows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LimitWindow {
-    FiveHour,
-    Weekly,
-}
-
-/// A window's use rising across one of the operator's thresholds.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AllowanceWarning {
-    pub provider: Provider,
-    pub window: LimitWindow,
-    /// The highest threshold crossed, in percent.
-    pub threshold: u8,
-    pub used_fraction: f32,
 }
 
 /// The warnings one change of reading earns: per window, the highest

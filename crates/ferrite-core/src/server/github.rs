@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use crate::factory::{GitHubItem, GitHubQuery, GitHubRead, StartKind, Trigger};
+use crate::factory_board::{GitHubItem, GitHubQuery, GitHubRead, StartKind, Trigger};
 use crate::pr_watch::{Ask, Fingerprint, ReadError, Reading};
 
 /// What the Server reads from GitHub.
@@ -337,7 +337,7 @@ impl GitHub for Gh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::factory::GitHubSource;
+    use crate::factory_board::GitHubSource;
 
     fn query(kind: StartKind, trigger: Trigger) -> GitHubQuery {
         GitHubQuery {

@@ -691,7 +691,7 @@ pub(crate) struct PaneCtx<'a> {
     /// Activity requests (or a question expander) exist for this Pane, so
     /// the plain Decision card steps aside.
     pub has_activity_decisions: bool,
-    pub queued: &'a [ferrite_core::engine::QueueItem],
+    pub queued: &'a [ferrite_core::prompt_queue::QueueItem],
     pub composer_empty: bool,
     pub suggestion: Option<&'a str>,
     // ---- pre-plumbed for the work packages: wired, not read yet

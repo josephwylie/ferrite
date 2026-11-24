@@ -20,12 +20,12 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use serde_json::Value;
 
 use crate::checkout::WorkspaceBinding;
 use crate::provider::Provider;
+use crate::session_file::Candidate;
 use crate::store::Store;
 use crate::{SessionEvent, ThreadId, ToolResult, TurnOutcome};
 
@@ -92,18 +92,6 @@ pub fn default_roots() -> Vec<(Provider, PathBuf)> {
         (Provider::Claude, home.join(".claude").join("projects")),
         (Provider::Codex, home.join(".codex").join("sessions")),
     ]
-}
-
-/// One session file discovery found: which vendor's root it was under, and
-/// when the vendor last wrote it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Candidate {
-    pub provider: Provider,
-    pub path: PathBuf,
-    pub modified: Option<SystemTime>,
-    pub title: Option<String>,
-    pub cwd: Option<PathBuf>,
-    pub session_id: Option<String>,
 }
 
 /// Candidate session files under the vendors' roots: every `.jsonl` in

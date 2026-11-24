@@ -148,9 +148,9 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "cite" => cite(),
         "factory" => factory(),
         "factory-workflows" => factory_workflows(),
-        "factory-start-schedule" => factory_start(ferrite_core::factory::StartKind::Schedule),
-        "factory-start-github" => factory_start(ferrite_core::factory::StartKind::GithubIssue),
-        "factory-start-script" => factory_start(ferrite_core::factory::StartKind::External),
+        "factory-start-schedule" => factory_start(ferrite_core::factory_board::StartKind::Schedule),
+        "factory-start-github" => factory_start(ferrite_core::factory_board::StartKind::GithubIssue),
+        "factory-start-script" => factory_start(ferrite_core::factory_board::StartKind::External),
         "factory-coordinator" => factory_coordinator(),
         _ => unreachable!("`handles` lists every state"),
     }
@@ -871,7 +871,7 @@ fn toast_done() -> (Scene, Setup) {
 /// approve, the one that needs the operator open in its panel on its
 /// Activity.
 fn factory() -> (Scene, Setup) {
-    use ferrite_core::factory::{Board, Status, Task};
+    use ferrite_core::factory_board::{Board, Status, Task};
     let mut scene = Scene::new("factory");
     let ferrite = scene.project("ferrite");
     let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
@@ -1274,7 +1274,7 @@ fn factory_workflows() -> (Scene, Setup) {
     scene.core.fixture_live_factory();
     let setup: Setup = Box::new(move |view, _, cx| {
         view.open_factory(project, cx);
-        view.create_workflow(ferrite_core::factory::Template::IssueToReviewedPr, cx);
+        view.create_workflow(ferrite_core::factory_board::Template::IssueToReviewedPr, cx);
         view.save_workflow(cx);
         view.select_step("s-4".into(), cx);
         view.delete_step("s-3".into(), cx);
@@ -1286,8 +1286,10 @@ fn factory_workflows() -> (Scene, Setup) {
 /// A saved Workflow's "Tasks start" settings for one source (#225): a
 /// weekday schedule, an issue start with its repository and label from
 /// the login, or a script's command, each with automatic starts on.
-fn factory_start(kind: ferrite_core::factory::StartKind) -> (Scene, Setup) {
-    use ferrite_core::factory::{GitHubSource, Recurrence, Schedule, Start, StartKind, Trigger};
+fn factory_start(kind: ferrite_core::factory_board::StartKind) -> (Scene, Setup) {
+    use ferrite_core::factory_board::{
+        GitHubSource, Recurrence, Schedule, Start, StartKind, Trigger,
+    };
     let mut scene = Scene::new(match kind {
         StartKind::Schedule => "factory-start-schedule",
         StartKind::External => "factory-start-script",
@@ -1304,7 +1306,7 @@ fn factory_start(kind: ferrite_core::factory::StartKind) -> (Scene, Setup) {
     )]);
     let setup: Setup = Box::new(move |view, _, cx| {
         view.open_factory(project, cx);
-        view.create_workflow(ferrite_core::factory::Template::IssueToReviewedPr, cx);
+        view.create_workflow(ferrite_core::factory_board::Template::IssueToReviewedPr, cx);
         view.edit_start(
             |start| {
                 *start = Start {
@@ -1327,7 +1329,7 @@ fn factory_start(kind: ferrite_core::factory::StartKind) -> (Scene, Setup) {
         );
         view.save_workflow(cx);
         view.open_start(cx);
-        view.turn_automation(ferrite_core::factory::Turn::On, cx);
+        view.turn_automation(ferrite_core::factory_board::Turn::On, cx);
     });
     (scene, setup)
 }
@@ -1337,8 +1339,9 @@ fn factory_start(kind: ferrite_core::factory::StartKind) -> (Scene, Setup) {
 /// Task), saving a version, turning automatic starts on and redirecting a
 /// Task (waiting), and a dismissed one.
 fn factory_coordinator() -> (Scene, Setup) {
-    use ferrite_core::factory::{
-        Act, Agent, Catalog, Command, Override, Start, StartKind, Template, ThenReturn,
+    use ferrite_core::factory::Command;
+    use ferrite_core::factory_board::{
+        Act, Agent, Catalog, Override, Start, StartKind, Template, ThenReturn,
     };
     let mut scene = Scene::new("factory-coordinator");
     let ferrite = scene.project("ferrite");

@@ -5,7 +5,7 @@
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 
 use super::*;
-use ferrite_core::factory::{GitHubItem, GitHubQuery, GitHubRead};
+use ferrite_core::factory_board::{GitHubItem, GitHubQuery, GitHubRead};
 use ferrite_core::server::github::GitHub;
 
 fn ok_call(harness: &Harness, method: &str, params: serde_json::Value) -> serde_json::Value {

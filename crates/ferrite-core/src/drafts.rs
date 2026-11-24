@@ -209,9 +209,8 @@ fn this_computers(thread: ThreadId) -> SavedThread {
 mod tests {
     use super::*;
     use crate::draft::{DraftBinding, DraftTarget};
-    use crate::engine::ProviderChoice;
     use crate::project::ProjectId;
-    use crate::provider::Provider;
+    use crate::provider::{Provider, ProviderChoice};
     use crate::replies::Reply;
 
     fn scratch(name: &str) -> std::path::PathBuf {

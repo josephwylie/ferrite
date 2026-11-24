@@ -5,7 +5,7 @@
 
 use super::direction::{meta, section};
 use super::*;
-use ferrite_core::factory::{self as core_factory, EvidenceKind, Status, Task};
+use ferrite_core::factory_board::{self, EvidenceKind, Status, Task};
 
 /// The PR's line on a card: `acme/widgets#12 · revision 2`.
 pub(crate) fn card_line(task: &Task) -> Option<String> {
@@ -30,7 +30,7 @@ pub(crate) fn approving_line(task: &Task) -> Option<String> {
             "You approve {} at revision {} (head {}).",
             pr.label(),
             now.revision,
-            core_factory::short(&now.head)
+            factory_board::short(&now.head)
         ),
         None => format!(
             "You approve {}; no revision of it has been reported yet.",
@@ -154,7 +154,7 @@ pub(super) fn task_delivery<V: 'static>(task: &Task, cx: &mut Context<V>) -> Vec
                         SharedString::from(format!(
                             "Revision {} \u{b7} {}",
                             each.revision,
-                            core_factory::short(&each.head)
+                            factory_board::short(&each.head)
                         )),
                     ))
                     .child(div().flex_1().min_w_0().text_color(rgb(INK_SUBTLE)).child(

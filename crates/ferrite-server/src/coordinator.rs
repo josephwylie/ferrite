@@ -14,7 +14,8 @@ use ferrite_core::api::schema::{
 use ferrite_core::api::{ApiError, Code};
 use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::engine::Launch;
-use ferrite_core::factory::{Act, Agent, Answer, Command, Override};
+use ferrite_core::factory::{Answer, Command};
+use ferrite_core::factory_board::{Act, Agent, Override};
 use ferrite_core::project::ProjectId;
 use ferrite_core::protocol::{CoordinatorAction, Done, Op, WireError};
 use ferrite_core::{ThreadId, ThreadOwner};
@@ -164,7 +165,7 @@ impl Server {
         &mut self,
         action: &CoordinatorAction,
     ) -> Result<Option<Done>, WireError> {
-        let catalog = ferrite_core::factory::Catalog::default();
+        let catalog = ferrite_core::factory_board::Catalog::default();
         let Some(mut command) =
             ferrite_core::factory::coordinator_command(action.clone(), &self.factory_agent, catalog)
         else {

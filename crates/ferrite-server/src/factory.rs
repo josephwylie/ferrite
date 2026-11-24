@@ -18,10 +18,12 @@ use ferrite_core::api::schema::{
 };
 use ferrite_core::api::{ApiError, Code};
 use ferrite_core::checkout::{WorkspaceBinding, WorkspaceChoice};
-use ferrite_core::engine::{Launch, ProviderChoice};
-use ferrite_core::factory::{self, Agent, Answer, Command, Effect, Outcome, Seen};
+use ferrite_core::engine::Launch;
+use ferrite_core::factory::{self, Answer, Command, Effect, Seen};
+use ferrite_core::factory_board::{self, Agent, Outcome};
 use ferrite_core::project::ProjectId;
 use ferrite_core::protocol::{Done, ServerMessage, TaskAction, WireError, WorkflowAction};
+use ferrite_core::provider::ProviderChoice;
 use ferrite_core::settings::Settings;
 use ferrite_core::workspace;
 use ferrite_core::{Attention, ThreadId, ThreadOwner};
@@ -554,14 +556,14 @@ impl Server {
         &mut self,
         workflow: Option<&str>,
         from_window: Vec<(ferrite_core::provider::Provider, Vec<String>)>,
-    ) -> factory::Catalog {
+    ) -> factory_board::Catalog {
         let mut skills = self.installed_skills(workflow);
         for (provider, listed) in from_window {
             if !skills.iter().any(|(each, _)| *each == provider) {
                 skills.push((provider, listed));
             }
         }
-        factory::Catalog {
+        factory_board::Catalog {
             models: self.models(),
             skills,
         }
@@ -711,7 +713,7 @@ impl Server {
         let project = self.project_of(params.project.as_deref(), params.cwd.as_deref())?;
         let create = Command::CreateWorkflow {
             project,
-            template: params.template.unwrap_or(factory::Template::Blank),
+            template: params.template.unwrap_or(factory_board::Template::Blank),
             agent: self.factory_agent.clone(),
         };
         let (Answer::Workflow(workflow), _) = self.factory_command(create)? else {
@@ -733,7 +735,7 @@ impl Server {
             .map(|project| self.project(project))
             .transpose()?;
         let board = self.factory.board();
-        let workflows: Vec<&factory::Workflow> = board
+        let workflows: Vec<&factory_board::Workflow> = board
             .workflows
             .iter()
             .filter(|workflow| project.is_none_or(|project| workflow.project == project))
@@ -860,7 +862,7 @@ impl Server {
             .map(|project| self.project(project))
             .transpose()?;
         let board = self.factory.board();
-        let tasks: Vec<&factory::Task> = board
+        let tasks: Vec<&factory_board::Task> = board
             .tasks
             .iter()
             .chain(board.archive.iter().flatten())
@@ -913,12 +915,12 @@ impl Server {
             ReportedOutcome::Rejected => Outcome::Rejected { reasons: summary },
             merge => Outcome::Merge {
                 result: match merge {
-                    ReportedOutcome::Merged => factory::MergeOutcome::Merged,
-                    ReportedOutcome::Conflict => factory::MergeOutcome::Conflict,
-                    ReportedOutcome::Pending => factory::MergeOutcome::Pending,
-                    ReportedOutcome::Denied => factory::MergeOutcome::Denied,
-                    ReportedOutcome::HeadChanged => factory::MergeOutcome::HeadChanged,
-                    _ => factory::MergeOutcome::Unknown,
+                    ReportedOutcome::Merged => factory_board::MergeOutcome::Merged,
+                    ReportedOutcome::Conflict => factory_board::MergeOutcome::Conflict,
+                    ReportedOutcome::Pending => factory_board::MergeOutcome::Pending,
+                    ReportedOutcome::Denied => factory_board::MergeOutcome::Denied,
+                    ReportedOutcome::HeadChanged => factory_board::MergeOutcome::HeadChanged,
+                    _ => factory_board::MergeOutcome::Unknown,
                 },
                 summary,
             },
@@ -973,7 +975,7 @@ impl Server {
         let to = params
             .to
             .as_deref()
-            .map(str::parse::<factory::Destination>)
+            .map(str::parse::<factory_board::Destination>)
             .transpose()
             .map_err(|why| ApiError::new(Code::InvalidRequest, why))?;
         let task = params.task.clone();
@@ -996,7 +998,7 @@ impl Server {
             &task,
             Command::Redirect {
                 task: params.task,
-                direction: factory::Override {
+                direction: factory_board::Override {
                     to: params.to,
                     skip: params.skip,
                     then: params.then.unwrap_or_default(),

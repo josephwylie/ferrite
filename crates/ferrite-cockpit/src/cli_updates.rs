@@ -10,8 +10,8 @@
 
 use std::time::{Duration, Instant};
 
+use ferrite_core::cli_update::Status;
 use ferrite_core::provider::Provider;
-use ferrite_core::providers::update::Status;
 use gpui::SharedString;
 
 /// How long after launch the first check waits: startup is busy enough.
@@ -300,7 +300,7 @@ pub fn describe(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrite_core::providers::update::Upgrade;
+    use ferrite_core::cli_update::Upgrade;
     use std::path::PathBuf;
 
     fn available(latest: &str) -> Status {

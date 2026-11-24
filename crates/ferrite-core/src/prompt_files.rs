@@ -128,6 +128,15 @@ pub(crate) fn audio_type(path: &Path) -> Option<&'static str> {
     }
 }
 
+/// A native match, in provider ranking order. Highlight offsets are character
+/// indices in `path`, not byte offsets. Paths are relative to the Session cwd or absolute.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSuggestion {
+    pub path: String,
+    pub is_directory: bool,
+    pub matched: Vec<usize>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

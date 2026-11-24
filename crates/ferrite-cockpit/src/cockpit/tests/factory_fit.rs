@@ -5,7 +5,8 @@
 #[allow(unused_imports)]
 use super::*;
 use crate::cockpit::workflows::Surface;
-use ferrite_core::factory::{Board, Command, Status, Task, Template};
+use ferrite_core::factory::Command;
+use ferrite_core::factory_board::{Board, Status, Task, Template};
 
 const WIDE: f32 = 1440.;
 const TALL: f32 = 900.;

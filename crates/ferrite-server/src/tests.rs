@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use ferrite_core::engine::HELD_AT_REST;
+use ferrite_core::digest::HELD_AT_REST;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
@@ -138,7 +138,7 @@ impl Session for Scripted {
         query: &str,
         reply: ferrite_core::providers::FileSearchReply,
     ) -> io::Result<()> {
-        let _ = reply.send(Ok(vec![ferrite_core::providers::FileSuggestion {
+        let _ = reply.send(Ok(vec![ferrite_core::prompt_files::FileSuggestion {
             path: query.into(),
             is_directory: false,
             matched: Vec::new(),
@@ -2254,7 +2254,7 @@ fn a_choice_made_without_an_agent_is_the_next_agents() {
     engine
         .set_provider(
             thread,
-            ferrite_core::engine::ProviderChoice {
+            ferrite_core::provider::ProviderChoice {
                 provider: Provider::Codex,
                 model: None,
             },
@@ -2447,7 +2447,7 @@ fn writing_during_a_provider_change_starts_no_other_agent() {
     engine
         .set_provider(
             thread,
-            ferrite_core::engine::ProviderChoice {
+            ferrite_core::provider::ProviderChoice {
                 provider: Provider::Codex,
                 model: None,
             },
@@ -2680,7 +2680,7 @@ fn the_parked_rows_follow_every_change_to_a_parked_thread() {
     engine
         .set_provider(
             thread,
-            ferrite_core::engine::ProviderChoice {
+            ferrite_core::provider::ProviderChoice {
                 provider: Provider::Codex,
                 model: None,
             },

@@ -6,7 +6,9 @@
 #[allow(unused_imports)]
 use super::*;
 use crate::cockpit::workflows::{Pick, Surface};
-use ferrite_core::factory::{Board, Destination, MergeOutcome, RouteKind, Status, Task, Template};
+use ferrite_core::factory_board::{
+    Board, Destination, MergeOutcome, RouteKind, Status, Task, Template,
+};
 use ferrite_core::protocol::TaskAction;
 
 fn shows(cx: &mut gpui::VisualTestContext, selector: &str) -> bool {

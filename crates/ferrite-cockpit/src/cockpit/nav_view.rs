@@ -265,7 +265,7 @@ impl NavView {
             .and_then(|open| open.running_model())
             .or_else(|| digest.as_deref().and_then(|digest| digest.model.as_deref()));
         match known {
-            Some(known) => ferrite_core::providers::models::footer_name(
+            Some(known) => ferrite_core::models::footer_name(
                 provider,
                 Some(known),
                 open.map_or(&[][..], |open| open.models()),
@@ -485,7 +485,7 @@ fn factory_projects(view: &CockpitView, model: &Cockpit, state: &nav::NavState) 
         board
             .workflows
             .iter()
-            .filter(|workflow| workflow.automation.switch == ferrite_core::factory::Switch::On)
+            .filter(|workflow| workflow.automation.switch == ferrite_core::factory_board::Switch::On)
             .map(|workflow| board.project_key(workflow.project))
     });
     let mut projects: Vec<ProjectKey> = state

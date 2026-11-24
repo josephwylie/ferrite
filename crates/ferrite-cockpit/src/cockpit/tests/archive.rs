@@ -4,7 +4,7 @@
 //! Worker history; an unreadable Factory store is said on the board.
 #[allow(unused_imports)]
 use super::*;
-use ferrite_core::factory::{Board, Status, Task};
+use ferrite_core::factory_board::{Board, Status, Task};
 use ferrite_core::protocol::TaskAction;
 
 fn shows(cx: &mut gpui::VisualTestContext, selector: &str) -> bool {

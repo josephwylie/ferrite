@@ -17,25 +17,25 @@ use std::time::{Duration, Instant};
 
 use crate::doorbell::Sender;
 
-pub use crate::activity::ToolTiming;
 use crate::activity::{
     Activity, ActivityEvent, ActivityInput, ActivityLimits, ActivityUpdate, ActivityView, AgentKey,
-    DecisionHandle, PendingDecision, Subject,
+    DecisionHandle, PendingDecision, Subject, ToolTiming,
 };
-use crate::digest::Digest;
+use crate::digest::{title_from_prompt, Digest, HELD_AT_REST};
 use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
-pub use crate::prompt_history::HistoryDirection;
 use crate::checkout::{self, WorkspaceBinding, WorkspaceChoice};
+use crate::pane_update::{event_changes_content, PaneUpdate};
 use crate::project::ProjectId;
-use crate::prompt_history::PromptHistory;
+use crate::prompt_history::{HistoryDirection, PromptHistory};
+use crate::prompt_queue::{Delivery, QueueItem};
 use crate::protocol::{self, Outgoing, ServerMessage, SharedRoster};
-use crate::provider::Provider;
+use crate::provider::{Provider, ProviderChoice};
 use crate::providers::{ResumeFailure, Session, SettingAck};
-use crate::roster::DraftId;
+use crate::roster::{BootstrapResult, Bootstrapped, DraftId};
 use crate::session::SessionLifecycle;
 use crate::store::{LoadError, Store, ThreadWriter};
 use crate::suggest::Suggestion;
-use crate::transcript::{BlockId, Input, Transcript, Update};
+use crate::transcript::{Input, Transcript, Update};
 use crate::workspace;
 use crate::workspace::follow::{self, Follow, Move};
 use crate::workspace::registry::{self, Registry};
@@ -56,7 +56,6 @@ mod windows;
 
 use threads::Threads;
 
-pub use queue::{Delivery, QueueItem};
 pub use windows::WindowId;
 
 /// How a Thread's first Session starts, beyond its provider and checkout
@@ -178,7 +177,7 @@ pub trait Spawner {
         &mut self,
         _roots: Vec<(Provider, PathBuf)>,
         _cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
+    ) -> Option<Receiver<io::Result<Vec<crate::session_file::Candidate>>>> {
         None
     }
 
@@ -251,84 +250,6 @@ pub struct Restart<T = ThreadId> {
     pub rss: u64,
 }
 
-/// What one frame changed for one Pane. Threads that produced nothing are
-/// absent: a quiet Pane costs the renderer nothing. The Engine names its
-/// Thread by id; a Cockpit, which holds several machines, by its key
-/// (`cockpit::PaneUpdate`, ADR 0045).
-#[derive(Debug, Clone, PartialEq)]
-pub struct PaneUpdate<T = ThreadId> {
-    pub thread: T,
-    /// Exactly the Blocks whose content moved.
-    pub dirty: Vec<BlockId>,
-    /// Blocks that fell off the far end and no longer exist.
-    pub evicted: Vec<BlockId>,
-    /// Child changes never enter the Main-only compatibility lists above.
-    pub subjects: Vec<SubjectUpdate>,
-    pub activity_changed: bool,
-    pub redirects: Vec<(AgentKey, AgentKey)>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SubjectUpdate {
-    pub subject: Subject,
-    pub dirty: Vec<BlockId>,
-    pub evicted: Vec<BlockId>,
-    pub content_changed: bool,
-}
-
-impl<T> PaneUpdate<T> {
-    pub fn new(thread: T) -> Self {
-        Self {
-            thread,
-            dirty: Vec::new(),
-            evicted: Vec::new(),
-            subjects: Vec::new(),
-            activity_changed: false,
-            redirects: Vec::new(),
-        }
-    }
-
-    pub fn absorb(&mut self, applied: ActivityUpdate, content_changed: bool) {
-        self.activity_changed |=
-            !applied.changed.is_empty() || applied.attention_changed || applied.order_changed;
-        self.redirects.extend(applied.redirects);
-        for subject in applied.changed {
-            if !self.subjects.iter().any(|change| change.subject == subject) {
-                self.subjects.push(SubjectUpdate {
-                    subject,
-                    dirty: Vec::new(),
-                    evicted: Vec::new(),
-                    content_changed: false,
-                });
-            }
-        }
-        for (subject, blocks) in applied.blocks {
-            if subject == Subject::Main {
-                self.dirty.extend(blocks.dirty.iter().copied());
-                self.evicted.extend(blocks.evicted.iter().copied());
-            }
-            let index = self
-                .subjects
-                .iter()
-                .position(|change| change.subject == subject)
-                .unwrap_or_else(|| {
-                    self.subjects.push(SubjectUpdate {
-                        subject,
-                        dirty: Vec::new(),
-                        evicted: Vec::new(),
-                        content_changed: false,
-                    });
-                    self.subjects.len() - 1
-                });
-            let change = &mut self.subjects[index];
-            change.content_changed |=
-                content_changed && (!blocks.dirty.is_empty() || !blocks.evicted.is_empty());
-            change.dirty.extend(blocks.dirty);
-            change.evicted.extend(blocks.evicted);
-        }
-    }
-}
-
 /// What became of a prompt the operator sent, as far as the Engine can
 /// tell at once. The caller keeps the whole draft until it knows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -358,15 +279,6 @@ pub enum WakeTaken {
     Gone,
     /// It cannot be sent: the words say why.
     Refused(String),
-}
-
-/// A provider and the model to serve it with — what the #25 picker picks,
-/// whole. `None` is the provider's own default, which is also what every
-/// Thread starts on.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ProviderChoice {
-    pub provider: Provider,
-    pub model: Option<String>,
 }
 
 /// Re-aiming a Thread's provider, model or effort failed — and changed
@@ -518,21 +430,9 @@ impl Tune {
 /// refused.
 const TUNE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long a Thread at rest stays held: its Session on the Server, its
-/// transcript in a window (ADR 0032).
-pub const HELD_AT_REST: Duration = Duration::from_secs(5 * 60);
-
 struct PendingBootstrap {
     prompt: String,
     draft: Option<DraftId>,
-}
-
-/// A deferred first send settled by `pump`. The draft and submitted text
-/// identify the original Pane even if the operator has since moved focus.
-pub struct BootstrapResult<T = ThreadId> {
-    pub draft: Option<DraftId>,
-    pub prompt: String,
-    pub result: io::Result<Bootstrapped<T>>,
 }
 
 /// A Thread's Activity, and every input applied to it since the Engine
@@ -1271,14 +1171,14 @@ pub struct Engine {
     revision: u64,
     spawner: Box<dyn Spawner>,
     model_discovery: Option<Receiver<(Provider, Vec<ModelInfo>)>>,
-    model_cache: crate::providers::models::ModelCache,
+    model_cache: crate::providers::model_cache::ModelCache,
     /// The last subscription windows each provider reported — an account
     /// fact the transcript log deliberately does not replay.
     limit_cache: crate::providers::limits::LimitCache,
     /// The use, in percent, at which a window rising past it warns the
     /// operator (`Settings::allowance_warnings`); and the warnings due.
     allowance_thresholds: Vec<u8>,
-    allowance_warnings: Vec<crate::providers::limits::AllowanceWarning>,
+    allowance_warnings: Vec<crate::allowance::AllowanceWarning>,
     models_changed: bool,
     bootstraps: HashMap<ThreadId, PendingBootstrap>,
     bootstrap_results: Vec<BootstrapResult>,
@@ -1340,7 +1240,7 @@ impl Engine {
     pub fn try_new(store: Store, mut spawner: Box<dyn Spawner>) -> io::Result<Self> {
         let registry = Registry::open(store.dir())?;
         let model_discovery = spawner.discover_models();
-        let model_cache = crate::providers::models::ModelCache::load(store.dir());
+        let model_cache = crate::providers::model_cache::ModelCache::load(store.dir());
         let limit_cache = crate::providers::limits::LimitCache::load(store.dir());
         Ok(Self {
             threads: Threads::default(),
@@ -2245,7 +2145,7 @@ impl Engine {
             }
             ReplacementKind::Retune => {
                 if state.model != model {
-                    let label = crate::providers::models::label(
+                    let label = crate::models::label(
                         model.as_deref().unwrap_or("default"),
                         state.announced.models(),
                     );
@@ -2875,7 +2775,7 @@ impl Engine {
         &mut self,
         roots: Vec<(Provider, PathBuf)>,
         cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
+    ) -> Option<Receiver<io::Result<Vec<crate::session_file::Candidate>>>> {
         self.spawner.discover_sessions(roots, cap)
     }
 
@@ -2885,7 +2785,7 @@ impl Engine {
         &mut self,
         thread: ThreadId,
         query: &str,
-    ) -> io::Result<Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>> {
+    ) -> io::Result<Receiver<io::Result<Vec<crate::prompt_files::FileSuggestion>>>> {
         let state = self.wake_for(thread)?;
         let (reply, answer) = crate::doorbell::sync_channel(1);
         match state.ready_session() {
@@ -4548,7 +4448,7 @@ impl Engine {
 
     /// The provider's announced model rows, else the fallback catalog.
     pub fn model_catalog(&self, provider: Provider) -> Vec<ModelInfo> {
-        crate::providers::models::catalog(provider, &self.announced_models(provider))
+        crate::models::catalog(provider, &self.announced_models(provider))
     }
 
     /// Change an idle Thread's model through its live native Session control.
@@ -4709,7 +4609,7 @@ impl Engine {
         let notice = match change {
             Tune::Model(_) => format!(
                 "model changed to {}",
-                crate::providers::models::label(
+                crate::models::label(
                     model.as_deref().unwrap_or("default"),
                     state.announced.models()
                 )
@@ -6017,34 +5917,8 @@ impl<'a> ThreadView<'a> {
     }
 }
 
-/// A draft's first send, done: the Thread it became.
-#[derive(Debug)]
-pub struct Bootstrapped<T = ThreadId> {
-    pub thread: T,
-}
-
 fn megabytes(bytes: u64) -> String {
     format!("{} MB", bytes / (1024 * 1024))
-}
-
-/// A Thread's name from its first prompt: the first non-blank line,
-/// whitespace collapsed, cut to `TITLE_CHARS` characters with an ellipsis.
-/// A prompt that is only whitespace names nothing.
-pub fn title_from_prompt(text: &str) -> String {
-    const TITLE_CHARS: usize = 48;
-    let line = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("");
-    let collapsed: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut chars = collapsed.chars();
-    let cut: String = chars.by_ref().take(TITLE_CHARS).collect();
-    if chars.next().is_some() {
-        format!("{}…", cut.trim_end())
-    } else {
-        cut
-    }
 }
 
 /// What became of a prompt handed to the provider's queue.
@@ -6386,33 +6260,6 @@ fn changes_decisions(event: &SessionEvent) -> bool {
                     | ActivityEvent::DecisionCancelled { .. }
             )
     )
-}
-
-pub fn event_changes_content(event: &SessionEvent) -> bool {
-    use crate::activity::ExecutionEvent;
-    match event {
-        SessionEvent::Activity(
-            ActivityEvent::Content { event, .. }
-            | ActivityEvent::HistoryContent { event, .. }
-            | ActivityEvent::MainContent { event, .. },
-        ) => !matches!(event, ExecutionEvent::TokenUsage { .. }),
-        SessionEvent::Activity(ActivityEvent::Status { .. }) => true,
-        SessionEvent::Activity(_)
-        | SessionEvent::TokenUsage { .. }
-        | SessionEvent::Commands { .. }
-        | SessionEvent::Models { .. }
-        | SessionEvent::PermissionMode { .. }
-        | SessionEvent::ContextDetails { .. }
-        | SessionEvent::McpServers { .. }
-        | SessionEvent::McpAuthorization { .. }
-        | SessionEvent::ThinkingTokens { .. }
-        | SessionEvent::AccountPlan { .. }
-        | SessionEvent::Handshake { .. }
-        | SessionEvent::HookRan { .. }
-        | SessionEvent::ControlRefused { .. }
-        | SessionEvent::ScheduledWork { .. } => false,
-        _ => true,
-    }
 }
 
 /// Run `action` on `session`, if it offers it.

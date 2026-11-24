@@ -10,8 +10,9 @@
 //! Thread can never be open without a Pane or shown without a Session.
 
 use std::collections::BTreeSet;
+use std::io;
 
-use crate::{MachineId, ThreadKey};
+use crate::{MachineId, ThreadId, ThreadKey};
 
 /// A draft Pane's identity (#29): a Composer and a pre-prompt band with no
 /// Thread yet. Minted here, stable until the first send makes a Thread of
@@ -258,6 +259,20 @@ impl Roster {
     pub fn pop_park_order(&mut self) -> Option<ThreadKey> {
         self.park_order.pop()
     }
+}
+
+/// A deferred first send settled by `pump`. The draft and submitted text
+/// identify the original Pane even if the operator has since moved focus.
+pub struct BootstrapResult<T = ThreadId> {
+    pub draft: Option<DraftId>,
+    pub prompt: String,
+    pub result: io::Result<Bootstrapped<T>>,
+}
+
+/// A draft's first send, done: the Thread it became.
+#[derive(Debug)]
+pub struct Bootstrapped<T = ThreadId> {
+    pub thread: T,
 }
 
 #[cfg(test)]

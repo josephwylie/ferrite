@@ -621,7 +621,7 @@ pub struct CockpitView {
     /// The PRs destination, kept as it was left while another view shows.
     prs: Entity<prs_view::PrsView>,
     /// The Tasks whose needs-you toast stands, and the state it announced.
-    task_toasts: std::collections::HashMap<(MachineId, String), ferrite_core::factory::Status>,
+    task_toasts: std::collections::HashMap<(MachineId, String), ferrite_core::factory_board::Status>,
     /// The empty board: its selected row and the list's own focus.
     empty_board: Entity<empty_board::EmptyBoardView>,
     /// Each Thread's reader slot (its Review) sliding open or shut
@@ -667,7 +667,7 @@ enum Reader {
 pub struct Preferences {
     pub settings: ferrite_core::settings::Settings,
     pub dir: std::path::PathBuf,
-    pub defaults: std::sync::Arc<std::sync::Mutex<ferrite_core::spawner::SessionDefaults>>,
+    pub defaults: std::sync::Arc<std::sync::Mutex<ferrite_core::settings::SessionDefaults>>,
     /// Whether a model writes Thread titles (each Provider's own CLI, the
     /// cheap model, one turn). False in the test and demo constructors,
     /// so no suite ever spawns a real CLI for a name.
@@ -718,7 +718,7 @@ impl Preferences {
                 dir
             },
             defaults: std::sync::Arc::new(std::sync::Mutex::new(
-                ferrite_core::spawner::SessionDefaults::default(),
+                ferrite_core::settings::SessionDefaults::default(),
             )),
             titler: false,
             cli_updates: false,
@@ -3797,7 +3797,7 @@ impl CockpitView {
     /// operator's thresholds: one toast per crossing, left up — the
     /// allowance is the account's, and every Thread on it draws it down.
     fn present_allowance_warnings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use ferrite_core::providers::limits::LimitWindow;
+        use ferrite_core::allowance::LimitWindow;
         use gpui::component::notification::{Notification, NotificationType};
         use gpui::component::WindowExt as _;
         for warning in self.cockpit.update(cx, |cockpit, _| cockpit.take_allowance_warnings()) {
@@ -3842,7 +3842,7 @@ impl CockpitView {
         self.cockpit.update(cx, |cockpit, _| cockpit.settings_changed(&self.prefs.settings));
         self.machines_changed(cx);
         if let Ok(mut defaults) = self.prefs.defaults.lock() {
-            *defaults = ferrite_core::spawner::SessionDefaults::from_settings(&self.prefs.settings);
+            *defaults = ferrite_core::settings::SessionDefaults::from_settings(&self.prefs.settings);
         }
         ferrite_pane::visual::diagram::set_enabled(
             self.prefs.settings.visuals != ferrite_core::visual::Level::Off,
@@ -4830,7 +4830,7 @@ impl CockpitView {
                 active: false,
                 consequence: Consequence::Inert,
             });
-            let mut catalog = ferrite_core::providers::models::menu(
+            let mut catalog = ferrite_core::models::menu(
                 self.cockpit.read(cx).model_catalog(machine, provider),
                 chosen.filter(|_| provider == current),
             );
@@ -4867,7 +4867,7 @@ impl CockpitView {
                 let name = if model.value == "default" {
                     "Default".to_string()
                 } else {
-                    ferrite_core::providers::models::footer_name(
+                    ferrite_core::models::footer_name(
                         provider,
                         Some(&model.value),
                         std::slice::from_ref(&model),
@@ -4878,7 +4878,7 @@ impl CockpitView {
                         insert: SharedString::default(),
                         name: SharedString::from(name),
                         matched: Vec::new(),
-                        detail: SharedString::from(ferrite_core::providers::models::groom_detail(
+                        detail: SharedString::from(ferrite_core::models::groom_detail(
                             &model.detail,
                         )),
                         prose_detail: true,
@@ -5796,10 +5796,10 @@ impl CockpitView {
             .read(cx)
             .announced_models(draft.binding.project().machine(), provider);
         // The model's name, the provider's default until one is chosen.
-        let model_label = SharedString::from(ferrite_core::providers::models::footer_name(
+        let model_label = SharedString::from(ferrite_core::models::footer_name(
             provider, model, &announced,
         ));
-        let effort = (!ferrite_core::providers::models::efforts_for(provider, model, &announced)
+        let effort = (!ferrite_core::models::efforts_for(provider, model, &announced)
             .is_empty())
         .then(|| {
             effort_in_force(
@@ -6669,7 +6669,7 @@ fn effort_value(
     if let Some(effort) = chosen.or(saved) {
         return Some(effort_chip_label(effort));
     }
-    let rows = ferrite_core::providers::models::catalog(provider, announced);
+    let rows = ferrite_core::models::catalog(provider, announced);
     let row = match model {
         Some(model) => rows.iter().find(|row| row.is(model)),
         None => rows.first(),
@@ -6688,7 +6688,7 @@ fn effort_in_force(
     announced: &[ferrite_core::ModelInfo],
 ) -> Option<SharedString> {
     effort_value(chosen, saved, provider, model, announced).or_else(|| {
-        ferrite_core::providers::models::cli_default_effort(provider, model).map(effort_chip_label)
+        ferrite_core::models::cli_default_effort(provider, model).map(effort_chip_label)
     })
 }
 
@@ -6702,7 +6702,7 @@ fn effort_ladder_of(
     model: Option<&str>,
     announced: &[ferrite_core::ModelInfo],
 ) -> Option<(Vec<String>, Vec<SharedString>, Option<usize>)> {
-    let steps = ferrite_core::providers::models::efforts_for(provider, model, announced);
+    let steps = ferrite_core::models::efforts_for(provider, model, announced);
     if steps.is_empty() {
         return None;
     }
@@ -7949,7 +7949,7 @@ impl CockpitView {
                 if argument == "default" {
                     return Some(Tuning::Effort(None));
                 }
-                let ladder = ferrite_core::providers::models::efforts_for(
+                let ladder = ferrite_core::models::efforts_for(
                     open.provider(),
                     open.model(),
                     open.models(),
@@ -8268,7 +8268,7 @@ impl CockpitView {
     fn thread_effort(&self, open: &ThreadView) -> Option<SharedString> {
         let provider = open.provider();
         let ladder =
-            ferrite_core::providers::models::efforts_for(provider, open.model(), open.models());
+            ferrite_core::models::efforts_for(provider, open.model(), open.models());
         (!ladder.is_empty())
             .then(|| {
                 effort_in_force(
@@ -8289,7 +8289,7 @@ impl CockpitView {
         let hold = tuning_hold(&open);
         // The model it runs; until one is known, the provider's default
         // model — never the provider, and never the id on the wire.
-        let label = SharedString::from(ferrite_core::providers::models::footer_name(
+        let label = SharedString::from(ferrite_core::models::footer_name(
             provider,
             open.running_model(),
             open.models(),

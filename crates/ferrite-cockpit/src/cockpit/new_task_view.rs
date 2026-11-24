@@ -13,7 +13,7 @@ use super::factory::TaskTab;
 use super::workflows::{Surface, Trigger};
 use super::*;
 use ferrite_core::draft_content::DraftContent;
-use ferrite_core::factory::WorkflowId;
+use ferrite_core::factory_board::WorkflowId;
 use ferrite_core::protocol::{Done, TaskAction};
 use ferrite_core::ProjectKey;
 use ferrite_pane::composer::{Composer, Role};

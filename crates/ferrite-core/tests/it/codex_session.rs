@@ -1098,7 +1098,7 @@ fn astra_from_the_installed_cli_reaches_the_model_picker() {
         }
     };
     let rows =
-        ferrite_core::providers::models::catalog(ferrite_core::provider::Provider::Codex, &announced);
+        ferrite_core::models::catalog(ferrite_core::provider::Provider::Codex, &announced);
     assert_eq!(rows, announced, "the provider's list wins in full");
     let astra = &rows[0];
     assert_eq!(astra.value, "gpt-6-astra");
