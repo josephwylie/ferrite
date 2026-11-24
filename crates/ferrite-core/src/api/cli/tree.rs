@@ -85,7 +85,7 @@ fn send(
     settings_dir: &Path,
 ) -> Result<Sent, ApiError> {
     if machine.is_none() {
-        let here = crate::workspace::expand_home(&dest);
+        let here = crate::folder::expand_home(&dest);
         let overlap = tree::overlap(source, &here)
             .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
         if overlap {

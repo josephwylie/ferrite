@@ -4,7 +4,7 @@ use ferrite_core::activity::{
     Activity, ActivityEvent, ActivityInput, ActivityLimits, ActivityUpdate, AgentInfo, AgentKey,
     AgentStatus, ExecutionEvent, Subject, ToolTiming,
 };
-use ferrite_core::store::Provider;
+use ferrite_core::provider::Provider;
 use ferrite_core::ToolResult;
 
 fn activity() -> Activity {

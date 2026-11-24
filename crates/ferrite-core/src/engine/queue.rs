@@ -366,7 +366,7 @@ impl Queue {
         let temporary = self.path.with_extension("queue.tmp");
         let mut file = std::fs::File::create(&temporary)?;
         file.write_all(&serde_json::to_vec(&self.metadata)?)?;
-        crate::store::sync_ordered(&file)?;
+        crate::disk::sync_ordered(&file)?;
         std::fs::rename(temporary, &self.path)
     }
 }

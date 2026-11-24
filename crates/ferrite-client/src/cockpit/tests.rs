@@ -11,7 +11,7 @@ use super::*;
 use ferrite_core::providers::SettingAck;
 use ferrite_core::session::SessionLifecycle;
 use ferrite_core::suggest::Suggestion;
-use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::checkout::WorkspaceBinding;
 use ferrite_core::SessionEvent;
 use ferrite_core::engine::*;
 use crate::cockpit::Cockpit;
@@ -21,7 +21,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Sender};
 
-use ferrite_core::store::{Provider, Store};
+use ferrite_core::provider::Provider;
+use ferrite_core::store::Store;
 use ferrite_core::transcript::{Body, Class};
 use ferrite_core::TurnOutcome;
 

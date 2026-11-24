@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use crate::activity::{
     ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject, TranscriptCoverage,
 };
-use crate::store::Provider;
+use crate::provider::Provider;
 use crate::{SessionEvent, TurnOutcome};
 
 use super::wire;

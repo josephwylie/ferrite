@@ -464,7 +464,7 @@ fn a_workers_provider_decision_needs_the_operator_in_the_task_not_the_inbox() {
     agent.send(decision()).unwrap();
     let held = task_until(&mut caller, &task, |task| task["status"] == "needs_human");
     assert_eq!(held["permission"], "ferrite-perm.txt", "{held}");
-    let project_id: ferrite_core::workspace::registry::ProjectId =
+    let project_id: ferrite_core::project::ProjectId =
         serde_json::from_value(serde_json::json!(project.parse::<u64>().unwrap())).unwrap();
     pump_until(&mut window, |window| {
         window.factory(window.first_machine()).needs_you(project_id) == 1 && window.blocked().len() == 1

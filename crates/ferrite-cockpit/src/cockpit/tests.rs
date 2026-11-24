@@ -131,9 +131,9 @@ use ferrite_core::store::Store;
 use ferrite_core::transcript::Body;
 
 #[allow(unused_imports)]
-use ferrite_core::workspace::registry::ProjectId;
+use ferrite_core::project::ProjectId;
 
-use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::checkout::WorkspaceBinding;
 
 use ferrite_core::{Decision, SessionEvent};
 
@@ -865,8 +865,8 @@ fn decision(id: &str) -> SessionEvent {
 
 /// A PR whose checks are mixed — one Actions job failing, one passing,
 /// and a posted commit status beside them.
-fn pr_with_checks() -> ferrite_core::workspace::PullRequest {
-    use ferrite_core::workspace::{Check, CheckState, PrState, PullRequest};
+fn pr_with_checks() -> ferrite_core::pull_request::PullRequest {
+    use ferrite_core::pull_request::{Check, CheckState, PrState, PullRequest};
     let run = |name: &str, workflow: Option<&str>, state, detail: &str, url: Option<&str>| Check {
         name: name.to_string(),
         workflow: workflow.map(str::to_string),

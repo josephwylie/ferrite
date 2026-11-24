@@ -24,8 +24,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::Provider;
-use crate::workspace::registry::ProjectId;
+use crate::project::ProjectId;
+use crate::provider::Provider;
 use crate::ThreadId;
 
 mod archive;
@@ -400,7 +400,7 @@ mod troubles_as_list {
 
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    use crate::workspace::registry::ProjectId;
+    use crate::project::ProjectId;
 
     #[derive(Serialize, Deserialize)]
     struct Trouble<T> {

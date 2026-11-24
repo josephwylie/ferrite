@@ -129,9 +129,9 @@ mod factory {
     use crate::factory::{
         Answer, Catalog, Command, Effect, Factory, Refusal, RefusalCode, Source, Status, Template,
     };
-    use crate::store::Provider;
+    use crate::provider::Provider;
 
-    fn project() -> crate::workspace::registry::ProjectId {
+    fn project() -> crate::project::ProjectId {
         serde_json::from_value(1.into()).unwrap()
     }
 

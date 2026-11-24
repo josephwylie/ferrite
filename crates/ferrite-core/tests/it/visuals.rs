@@ -19,13 +19,14 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use ferrite_core::activity::{Activity, ActivityEvent, ActivityInput, ExecutionEvent};
+use ferrite_core::checkout::WorkspaceBinding;
+use ferrite_core::provider::Provider;
 use ferrite_core::providers::{ClaudeConfig, ClaudeSession, CodexConfig, CodexSession};
-use ferrite_core::store::{Provider, Store};
+use ferrite_core::store::Store;
 use ferrite_core::transcript::{Body, Input};
 use ferrite_core::visual::{
     self, Level, RenderRequest, Rendered, Renderer, Reply, Status, Visual, Visuals,
 };
-use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::SessionEvent;
 
 /// A tiny PNG's bytes; what matters is that exactly these reach the wire.

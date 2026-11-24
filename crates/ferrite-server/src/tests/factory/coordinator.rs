@@ -13,7 +13,7 @@ fn ok(harness: &Harness, method: &str, params: serde_json::Value) -> serde_json:
     said[0]["result"].clone()
 }
 
-fn project_id(project: &str) -> ferrite_core::workspace::registry::ProjectId {
+fn project_id(project: &str) -> ferrite_core::project::ProjectId {
     serde_json::from_value(serde_json::json!(project.parse::<u64>().unwrap())).unwrap()
 }
 

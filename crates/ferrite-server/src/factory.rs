@@ -17,12 +17,13 @@ use ferrite_core::api::schema::{
     TaskSubmitParams, WorkflowCreateParams,
 };
 use ferrite_core::api::{ApiError, Code};
+use ferrite_core::checkout::{WorkspaceBinding, WorkspaceChoice};
 use ferrite_core::engine::{Launch, ProviderChoice};
 use ferrite_core::factory::{self, Agent, Answer, Command, Effect, Outcome, Seen};
+use ferrite_core::project::ProjectId;
 use ferrite_core::protocol::{Done, ServerMessage, TaskAction, WireError, WorkflowAction};
 use ferrite_core::settings::Settings;
-use ferrite_core::workspace::registry::ProjectId;
-use ferrite_core::workspace::{self, WorkspaceBinding, WorkspaceChoice};
+use ferrite_core::workspace;
 use ferrite_core::{Attention, ThreadId, ThreadOwner};
 
 /// How long a Project's listing of skills is reused before it is asked
@@ -35,7 +36,7 @@ const SKILLS_KEPT_MS: i64 = 60_000;
 /// listed last, as the GitHub reader's poll does.
 pub(super) struct SkillsSeen {
     root: std::path::PathBuf,
-    provider: ferrite_core::store::Provider,
+    provider: ferrite_core::provider::Provider,
     /// When `listed` came back; `None` before any listing has.
     at_ms: Option<i64>,
     listed: Option<Vec<String>>,
@@ -80,8 +81,8 @@ fn decision_line(decision: &ferrite_core::protocol::WireDecision) -> String {
 pub(super) fn default_agent(settings: &Settings) -> Agent {
     let provider = settings.default_provider;
     let (model, effort) = match provider {
-        ferrite_core::store::Provider::Claude => (&settings.claude_model, &settings.claude_effort),
-        ferrite_core::store::Provider::Codex => (&settings.codex_model, &settings.codex_effort),
+        ferrite_core::provider::Provider::Claude => (&settings.claude_model, &settings.claude_effort),
+        ferrite_core::provider::Provider::Codex => (&settings.codex_model, &settings.codex_effort),
     };
     Agent {
         provider,
@@ -552,7 +553,7 @@ impl Server {
     pub(super) fn catalog(
         &mut self,
         workflow: Option<&str>,
-        from_window: Vec<(ferrite_core::store::Provider, Vec<String>)>,
+        from_window: Vec<(ferrite_core::provider::Provider, Vec<String>)>,
     ) -> factory::Catalog {
         let mut skills = self.installed_skills(workflow);
         for (provider, listed) in from_window {
@@ -566,8 +567,8 @@ impl Server {
         }
     }
 
-    fn models(&self) -> Vec<(ferrite_core::store::Provider, Vec<ferrite_core::ModelInfo>)> {
-        ferrite_core::store::Provider::ALL
+    fn models(&self) -> Vec<(ferrite_core::provider::Provider, Vec<ferrite_core::ModelInfo>)> {
+        ferrite_core::provider::Provider::ALL
             .into_iter()
             .map(|provider| (provider, self.engine.announced_models(provider)))
             .collect()
@@ -580,7 +581,7 @@ impl Server {
     fn installed_skills(
         &mut self,
         workflow: Option<&str>,
-    ) -> Vec<(ferrite_core::store::Provider, Vec<String>)> {
+    ) -> Vec<(ferrite_core::provider::Provider, Vec<String>)> {
         let Some(found) = workflow.and_then(|workflow| self.factory.workflow(workflow)) else {
             return Vec::new();
         };

@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use super::pr::{MergeOutcome, MergeRoutes};
 use super::starts::{Automation, Start};
 use super::Agent;
-use crate::store::Provider;
-use crate::workspace::registry::ProjectId;
+use crate::project::ProjectId;
+use crate::provider::Provider;
 use crate::ModelInfo;
 
 /// A Workflow's id: `w-<n>`, never given twice by one Server.

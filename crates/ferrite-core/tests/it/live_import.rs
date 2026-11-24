@@ -16,8 +16,9 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use ferrite_core::import::import;
+use ferrite_core::provider::Provider;
 use ferrite_core::providers::{ClaudeConfig, ClaudeSession, CodexConfig, CodexSession};
-use ferrite_core::store::{Provider, Store};
+use ferrite_core::store::Store;
 use ferrite_core::{SessionEvent, TurnOutcome};
 
 /// Generous: a real turn crosses the network and may be rate limited.

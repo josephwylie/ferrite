@@ -119,7 +119,7 @@ impl CitedSources {
                 })
                 .collect(),
         };
-        crate::store::replace_file(
+        crate::disk::replace_file(
             &dir.join(Self::FILE),
             &serde_json::to_vec(&stored).map_err(io::Error::other)?,
         )

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
-use crate::store::Provider;
+use crate::provider::Provider;
 
 /// One installed copy of a CLI.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::Provider;
+use crate::provider::Provider;
 use crate::ModelInfo;
 
 #[derive(Serialize, Deserialize)]

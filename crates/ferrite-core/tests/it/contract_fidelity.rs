@@ -49,7 +49,7 @@ fn claude_child_retraction_removes_only_the_owning_childs_content() {
     let a = fold(r.drain());
     assert_eq!(prose(&a), ["Keep Main"]);
     let key = ferrite_core::activity::AgentKey::new(
-        ferrite_core::store::Provider::Claude,
+        ferrite_core::provider::Provider::Claude,
         "root",
         "spawn",
     );
@@ -66,8 +66,9 @@ fn claude_child_retraction_removes_only_the_owning_childs_content() {
 fn conversation_reset_clears_child_order_and_persists_the_new_resume_target() {
     use ferrite_core::{
         activity::Activity,
-        store::{Provider, Store},
-        workspace::WorkspaceBinding,
+        checkout::WorkspaceBinding,
+        provider::Provider,
+        store::Store,
     };
     let r = Replay::new(
         "claude",

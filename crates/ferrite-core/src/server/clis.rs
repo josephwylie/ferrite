@@ -6,8 +6,8 @@
 //! [`Clis`] is the seam: the Server's harness hands it a scripted machine.
 
 use crate::protocol::{CliAction, CliBinary, CliReport, CliStatus, Done, WireError};
+use crate::provider::Provider;
 use crate::providers::{discover, update};
-use crate::store::Provider;
 
 /// What the Server's machine has installed.
 pub trait Clis: Send + Sync {

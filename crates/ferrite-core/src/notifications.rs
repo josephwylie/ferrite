@@ -614,7 +614,7 @@ mod tests {
         Activity, ActivityEvent, ActivityInput, ActivityUpdate, AgentInfo, AgentKey, AgentStatus,
         Subject,
     };
-    use crate::store::Provider;
+    use crate::provider::Provider;
     use crate::transcript::Input;
     use crate::SessionEvent;
 
@@ -861,7 +861,7 @@ mod tests {
     /// Session, which a watch never keeps.
     #[test]
     fn a_turn_end_with_a_pr_watch_holding_waits_until_it_lets_go() {
-        use crate::pr_watch::{WatchedPr, Watching};
+        use crate::pull_request::{WatchedPr, Watching};
         let watching = |holds| Watching {
             prs: vec![WatchedPr {
                 url: "https://github.com/o/r/pull/48".into(),

@@ -13,7 +13,7 @@ impl CockpitView {
     /// runs a watcher on its machine.
     pub(super) fn pr_watch_target(&self, thread: ThreadKey, cx: &gpui::App) -> Option<(String, bool)> {
         let pr = self.facts.pr(thread)?;
-        if pr.state != ferrite_core::workspace::PrState::Open {
+        if pr.state != ferrite_core::pull_request::PrState::Open {
             return None;
         }
         match self.facts.watched_pr(thread) {

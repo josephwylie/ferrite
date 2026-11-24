@@ -14,7 +14,7 @@ use super::{
     Actor, Agent, Answer, Board, Catalog, Command, Definition, Effect, Override, Refusal,
     RefusalCode, State, Task, TaskId, ThenReturn, Turn, WorkflowId,
 };
-use crate::workspace::registry::ProjectId;
+use crate::project::ProjectId;
 use crate::ThreadId;
 
 /// A proposal's id: `p-<n>`, never given twice by one Server.
@@ -459,7 +459,7 @@ impl State {
         // refuses now.
         let mut trial = self.clone();
         let agent = Agent {
-            provider: crate::store::Provider::Claude,
+            provider: crate::provider::Provider::Claude,
             model: None,
             effort: None,
         };

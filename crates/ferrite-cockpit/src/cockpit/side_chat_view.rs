@@ -47,7 +47,7 @@ use super::*;
 use ferrite_core::activity::Subject;
 use ferrite_client::cockpit::Admission;
 use ferrite_core::replies::Reply;
-use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::checkout::WorkspaceBinding;
 use ferrite_core::ThreadKey;
 use ferrite_pane::composer::{Role, SentDraft};
 use ferrite_pane::transcript::{TranscriptEvent, TranscriptView};
@@ -182,7 +182,7 @@ impl CockpitView {
                 reduce_motion,
             });
             let workspace =
-                ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
+                ferrite_core::checkout::effective_cwd(open.session_project_root(), open.workspace())
                     .map(std::path::Path::to_path_buf);
             let presentation = ferrite_pane::transcript::TranscriptPresentation {
                 thread: thread.thread(),

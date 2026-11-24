@@ -13,8 +13,8 @@ use ferrite_client::cockpit::mirror::Mirrors;
 use ferrite_core::engine::{SpawnRequest, Spawner};
 use ferrite_core::link::{Attached, Client};
 use ferrite_core::protocol::{Peer, Resume, WireAnswer, WireChoice, WireEntry};
+use ferrite_core::provider::Provider;
 use ferrite_core::providers::Session;
-use ferrite_core::store::Provider;
 use ferrite_core::transcript::Body;
 use ferrite_core::{Decision, DecisionAnswer, SessionEvent, ThreadKey};
 
@@ -211,7 +211,7 @@ impl Spawner for Spawn {
     }
     fn discover_commands(
         &mut self,
-        _provider: ferrite_core::store::Provider,
+        _provider: ferrite_core::provider::Provider,
         _cwd: &Path,
     ) -> Option<ferrite_core::providers::commands::Discovery> {
         let installed = self.installed.lock().unwrap().clone()?;
@@ -841,7 +841,7 @@ fn list_repo_answers_a_projects_worktrees_and_branches_read_by_the_server() {
     }
     assert_eq!(
         worktrees,
-        [ferrite_core::workspace::ListedWorktree {
+        [ferrite_core::checkout::ListedWorktree {
             path: dunce::canonicalize(&tree).unwrap(),
             branch: Some("fix".into()),
         }]
@@ -1519,7 +1519,7 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
         .open(
             window.first_machine(),
             Provider::Claude,
-            ferrite_core::workspace::WorkspaceChoice::Main {
+            ferrite_core::checkout::WorkspaceChoice::Main {
                 checkout: harness.dir.clone(),
             },
         )
@@ -1593,7 +1593,7 @@ fn a_reopened_window_can_answer_questions() {
             .open(
                 window.first_machine(),
                 Provider::Claude,
-                ferrite_core::workspace::WorkspaceChoice::Main {
+                ferrite_core::checkout::WorkspaceChoice::Main {
                     checkout: harness.dir.clone(),
                 },
             )
@@ -1829,7 +1829,7 @@ pub(super) fn open_in(engine: &mut Engine, dir: &Path) -> ThreadId {
     engine
         .open(
             Provider::Claude,
-            ferrite_core::workspace::WorkspaceChoice::Main {
+            ferrite_core::checkout::WorkspaceChoice::Main {
                 checkout: dir.to_path_buf(),
             },
         )
@@ -1885,7 +1885,7 @@ fn a_boot_starts_the_agent_of_a_thread_with_queued_prompts() {
     let queued = first
         .open(
             Provider::Codex,
-            ferrite_core::workspace::WorkspaceChoice::Main {
+            ferrite_core::checkout::WorkspaceChoice::Main {
                 checkout: dir.clone(),
             },
         )
@@ -2771,7 +2771,7 @@ fn a_window_on_this_computer_lists_its_parked_threads_off_the_published_rows() {
         .open(
             window.first_machine(),
             Provider::Claude,
-            ferrite_core::workspace::WorkspaceChoice::Main {
+            ferrite_core::checkout::WorkspaceChoice::Main {
                 checkout: harness.dir.clone(),
             },
         )
@@ -2899,7 +2899,7 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
         .open(
             window.first_machine(),
             Provider::Claude,
-            ferrite_core::workspace::WorkspaceChoice::Main {
+            ferrite_core::checkout::WorkspaceChoice::Main {
                 checkout: harness.dir.clone(),
             },
         )
@@ -6336,7 +6336,7 @@ fn snooze_is_shared_and_survives_server_restart_without_a_session() {
         .open(
             first.first_machine(),
             Provider::Claude,
-            ferrite_core::workspace::WorkspaceChoice::Main {
+            ferrite_core::checkout::WorkspaceChoice::Main {
                 checkout: harness.dir.clone(),
             },
         )

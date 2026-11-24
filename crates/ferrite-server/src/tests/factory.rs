@@ -202,7 +202,7 @@ fn a_worker_that_never_reports_is_prompted_once_then_needs_the_operator() {
     );
     assert!(stuck["reason"].as_str().is_some(), "{stuck}");
 
-    let project_id: ferrite_core::workspace::registry::ProjectId =
+    let project_id: ferrite_core::project::ProjectId =
         serde_json::from_value(serde_json::json!(project.parse::<u64>().unwrap())).unwrap();
     pump_until(&mut window, |window| {
         window.factory(window.first_machine()).needs_you(project_id) == 1
@@ -309,7 +309,7 @@ fn a_worker_with_background_work_or_a_subagent_running_is_not_prompted() {
             detail: String::new(),
         },
     };
-    let child = AgentKey::new(ferrite_core::store::Provider::Claude, "claude-1", "child");
+    let child = AgentKey::new(ferrite_core::provider::Provider::Claude, "claude-1", "child");
     let mut info = AgentInfo::new(child.clone());
     info.parent = Some(Subject::Main);
     let subagent = |state| {
@@ -529,7 +529,7 @@ fn a_save_is_checked_against_the_servers_skills_from_the_cli_and_a_window() {
     );
     let from_cli = refused[0]["error"]["message"].to_string();
     assert!(from_cli.contains(missing), "{refused:?}");
-    let believed = vec![(ferrite_core::store::Provider::Claude, vec!["changelog".into()])];
+    let believed = vec![(ferrite_core::provider::Provider::Claude, vec!["changelog".into()])];
     let from_window = match window.command(
         1,
         Op::Workflow {

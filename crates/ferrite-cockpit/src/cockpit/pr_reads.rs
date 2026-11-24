@@ -133,7 +133,7 @@ impl CockpitView {
     pub(super) fn pr_landed(
         &mut self,
         thread: ThreadKey,
-        reading: Option<ferrite_core::workspace::PullRequest>,
+        reading: Option<ferrite_core::pull_request::PullRequest>,
         cx: &mut Context<Self>,
     ) {
         if self.facts.pr_answered(thread, reading) {

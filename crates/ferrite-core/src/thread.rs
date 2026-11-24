@@ -11,7 +11,7 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::workspace::registry::ProjectId;
+use crate::project::ProjectId;
 
 /// A Thread's identity. The store numbers Threads as it creates them; tests
 /// mint their own.
@@ -174,7 +174,7 @@ pub enum ThreadOwner {
     /// A Worker: the Task it runs a Step for, by the Task's id.
     Task(String),
     /// A Coordinator: the Project whose Factory it directs.
-    Factory(crate::workspace::registry::ProjectId),
+    Factory(crate::project::ProjectId),
 }
 
 /// The Thread on another machine whose agent started this one to do a

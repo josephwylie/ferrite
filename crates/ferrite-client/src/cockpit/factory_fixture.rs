@@ -7,7 +7,7 @@ use std::io;
 
 use ferrite_core::factory::{Board, Factory};
 use ferrite_core::protocol::{Done, GitHubAsk, Op, TaskAction};
-use ferrite_core::store::Provider;
+use ferrite_core::provider::Provider;
 
 #[derive(Default)]
 pub(crate) struct FactoryFixture {

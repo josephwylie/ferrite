@@ -25,13 +25,14 @@ use ferrite_core::protocol::{
     self, Capability, ClientMessage, ClosedBy, Command, Done, ErrorCode, Op, ServerInfo,
     ServerMessage, When, WireError, WireFile, WireHandle,
 };
+use ferrite_core::provider::Provider;
 use ferrite_core::roster::DraftId;
 use ferrite_core::server::clis::{Clis, Host};
 use ferrite_core::server::github::{GitHub, Gh};
 use ferrite_core::server::{settings_dir, store_dir, ServerId};
 use ferrite_core::settings::{ServerDefaults, Settings};
 use ferrite_core::spawner::{ProcessRss, SessionDefaults, Spawn, RSS_LIMIT};
-use ferrite_core::store::{Provider, Store};
+use ferrite_core::store::Store;
 use ferrite_core::ThreadId;
 
 mod bridge;

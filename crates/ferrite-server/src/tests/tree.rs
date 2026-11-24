@@ -419,7 +419,7 @@ fn a_root_that_is_the_home_directory_however_it_is_spelled_is_refused() {
     let sent = Arc::default();
     let mut cockpit = machine(&harness, &sent);
     let mut exchange = connect(&mut cockpit);
-    let home = ferrite_core::workspace::expand_home(Path::new("~"));
+    let home = ferrite_core::folder::expand_home(Path::new("~"));
     let link = harness.dir.join("homelink");
     dir_link(&home, &link);
     let parent = harness.dir.join("parentlink");

@@ -5,7 +5,7 @@ use crate::activity::{
     Activity, ActivityEvent, ActivityInput, AgentInfo, AgentKey, ExecutionEvent, Subject,
 };
 use crate::protocol::{WireOutcome, WireStatus, WireSubject};
-use crate::store::Provider;
+use crate::provider::Provider;
 use crate::transcript::{Input, Todos};
 use crate::{SessionEvent, ThreadId, ToolResult};
 

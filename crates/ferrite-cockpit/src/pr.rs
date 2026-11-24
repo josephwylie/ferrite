@@ -11,7 +11,7 @@
 use std::time::{Duration, Instant};
 
 use ferrite_core::protocol::WireReviewState;
-use ferrite_core::workspace::{PrState, PullRequest};
+use ferrite_core::pull_request::{PrState, PullRequest};
 use ferrite_ui::theme::{GREEN, INK_SUBTLE, RED};
 
 /// The least time between two automatic readings of one Thread's PR.
@@ -76,7 +76,7 @@ impl PrReading {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrite_core::workspace::{CheckState, PrState};
+    use ferrite_core::pull_request::{CheckState, PrState};
 
     #[test]
     fn a_review_verdict_reads_in_words() {

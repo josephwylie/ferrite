@@ -59,7 +59,7 @@ impl CockpitView {
     pub(super) fn every_project<'a>(
         &self,
         cx: &'a App,
-    ) -> Vec<(ProjectKey, &'a ferrite_core::workspace::registry::Project, String)> {
+    ) -> Vec<(ProjectKey, &'a ferrite_core::project::Project, String)> {
         let cockpit = self.cockpit.read(cx);
         let mut machines: Vec<ferrite_core::MachineId> = cockpit.machines().collect();
         machines.sort_by_key(|machine| cockpit.this_computer() != Some(*machine));

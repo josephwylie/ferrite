@@ -871,7 +871,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         instructions: "Fix the flaky login test".into(),
                         status: crate::factory::Status::NeedsHuman,
                         agent: crate::factory::Agent {
-                            provider: crate::store::Provider::Claude,
+                            provider: crate::provider::Provider::Claude,
                             model: Some("claude-opus-4".into()),
                             effort: None,
                         },
@@ -943,7 +943,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 Op::Workflow {
                     action: WorkflowAction::Save {
                         workflow: "w-1".into(),
-                        skills: vec![(crate::store::Provider::Claude, vec!["code-review".into()])],
+                        skills: vec![(crate::provider::Provider::Claude, vec!["code-review".into()])],
                     },
                 },
             ),
@@ -1244,7 +1244,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                                 instructions: "Fix the docs".into(),
                                 skills: vec!["docs".into()],
                                 agent: crate::factory::Agent {
-                                    provider: crate::store::Provider::Codex,
+                                    provider: crate::provider::Provider::Codex,
                                     model: Some("gpt-5.5".into()),
                                     effort: Some("high".into()),
                                 },
@@ -1343,7 +1343,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 233,
                 Op::Cli {
                     action: CliAction::Update {
-                        provider: crate::store::Provider::Codex,
+                        provider: crate::provider::Provider::Codex,
                     },
                 },
             ),
@@ -1377,7 +1377,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 id: 232,
                 ok: Some(Done::Clis {
                     clis: vec![CliReport {
-                        provider: crate::store::Provider::Claude,
+                        provider: crate::provider::Provider::Claude,
                         binary: Some(CliBinary {
                             version: "2.1.259".into(),
                             path: "/opt/box/bin/claude".into(),
@@ -1395,7 +1395,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
             Sample::Server(ServerMessage::Reply {
                 id: 233,
                 ok: Some(Done::CliUpdated {
-                    provider: crate::store::Provider::Codex,
+                    provider: crate::provider::Provider::Codex,
                     binary: CliBinary {
                         version: "0.160.0".into(),
                         path: "/opt/box/bin/codex".into(),
@@ -2131,8 +2131,8 @@ fn samples() -> Vec<(&'static str, Sample)> {
             Sample::Server(ServerMessage::Digest {
                 thread,
                 digest: crate::digest::Digest {
-                    watching: crate::pr_watch::Watching {
-                        prs: vec![crate::pr_watch::WatchedPr {
+                    watching: crate::pull_request::Watching {
+                        prs: vec![crate::pull_request::WatchedPr {
                             url: "https://github.com/o/r/pull/48".into(),
                             number: 48,
                             holds: true,
@@ -2176,7 +2176,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                             machine: "pc".into(),
                             thread: ThreadId::new(7),
                             title: Some("Fix the tests".into()),
-                            provider: Some(crate::store::Provider::Claude),
+                            provider: Some(crate::provider::Provider::Claude),
                             status: crate::delegate::Status::Running,
                             problem: Some("pc did not answer".into()),
                             stop_owed: true,

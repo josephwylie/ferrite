@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{codex, discover, spawnable_program};
-use crate::store::Provider;
+use crate::provider::Provider;
 
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_millis(25);

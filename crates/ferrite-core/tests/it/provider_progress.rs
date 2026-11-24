@@ -317,9 +317,9 @@ mod tests {
         let store = ferrite_core::store::Store::open(&path).unwrap();
         let (id, mut writer) = store
             .create(
-                ferrite_core::store::Provider::Codex,
+                ferrite_core::provider::Provider::Codex,
                 None,
-                ferrite_core::workspace::WorkspaceBinding::Main {
+                ferrite_core::checkout::WorkspaceBinding::Main {
                     checkout: std::env::temp_dir(),
                 },
             )

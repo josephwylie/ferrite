@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use ferrite_core::activity::{Activity, ActivityEvent, ActivityInput, AgentKey, Subject};
+use ferrite_core::provider::Provider;
 use ferrite_core::providers::{CodexConfig, CodexSession, Session};
-use ferrite_core::store::Provider;
 use ferrite_core::{DecisionAnswer, SessionEvent};
 use serde_json::{json, Value};
 

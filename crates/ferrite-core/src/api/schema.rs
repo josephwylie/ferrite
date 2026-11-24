@@ -60,8 +60,8 @@ use serde::{Deserialize, Serialize};
 use crate::delegate::DelegateId;
 use crate::drive;
 use crate::protocol::{WireAnswer, WireSound};
+use crate::provider::Provider;
 use crate::runtime_mode::RuntimeMode;
-use crate::store::Provider;
 use crate::{Attention, DelegatedFrom, ThreadId};
 
 /// One operation as the CLI and `ferrite help` know it.
@@ -1012,7 +1012,7 @@ pub struct CoordinatorSayParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CoordinatorSetParams {
-    pub provider: crate::store::Provider,
+    pub provider: crate::provider::Provider,
     /// The provider's default when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,

@@ -25,7 +25,7 @@
 //!   is the same.
 
 use super::{Check, CheckStatus, Mergeable, QueueRemoval, Reading, Remark};
-use crate::workspace::PrState;
+use crate::pull_request::PrState;
 use serde_json::{json, Value};
 
 /// Pages of one connection read before a read is called incomplete (T3's

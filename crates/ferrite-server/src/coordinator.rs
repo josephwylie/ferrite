@@ -12,11 +12,11 @@ use ferrite_core::api::schema::{
     CoordinatorSayParams, CoordinatorSetParams, ProposalRaiseParams, ProposedAct, TaskListParams,
 };
 use ferrite_core::api::{ApiError, Code};
+use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::engine::Launch;
 use ferrite_core::factory::{Act, Agent, Answer, Command, Override};
+use ferrite_core::project::ProjectId;
 use ferrite_core::protocol::{CoordinatorAction, Done, Op, WireError};
-use ferrite_core::workspace::registry::ProjectId;
-use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{ThreadId, ThreadOwner};
 
 impl Server {

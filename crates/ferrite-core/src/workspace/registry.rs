@@ -19,36 +19,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::GitError;
-
-/// An opaque handle to a registered project. Minted by `register`, carried
-/// by Thread headers and the selector's rows — never a path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ProjectId(u64);
-
-impl ProjectId {
-    pub fn get(self) -> u64 {
-        self.0
-    }
-}
-
-/// One registered project: a root the operator (or a Thread binding) named.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Project {
-    pub id: ProjectId,
-    /// What a selector row says: the root's leaf name until the operator
-    /// `rename_project`s it.
-    pub title: String,
-    /// The canonicalized root path.
-    pub root: PathBuf,
-    /// Other canonicalized roots made available to Sessions in this Project.
-    /// `root` remains the primary working directory and git-worktree source.
-    pub additional_roots: Vec<PathBuf>,
-    /// The high-water mark `mint_branch` counts from. Never decremented —
-    /// a removed worktree's branch survives removal, so its number must
-    /// never be dealt to a "new worktree" again.
-    minted: u64,
-}
+use crate::project::{Project, ProjectId};
 
 /// One registered worktree of one project, labeled by its branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -632,7 +603,7 @@ impl Registry {
     /// file whole — the store's own rewrite discipline.
     fn persist(&self) -> io::Result<()> {
         fs::create_dir_all(&self.dir)?;
-        crate::store::replace_file(
+        crate::disk::replace_file(
             &self.dir.join(FILE_NAME),
             &serde_json::to_vec(&self.persisted()).map_err(io::Error::other)?,
         )
@@ -668,14 +639,6 @@ impl Registry {
     }
 }
 
-impl Project {
-    /// Primary first, then additional roots in the operator's order.
-    pub fn directories(&self) -> impl Iterator<Item = &Path> {
-        std::iter::once(self.root.as_path())
-            .chain(self.additional_roots.iter().map(PathBuf::as_path))
-    }
-}
-
 /// The adoption conflict check (#29): before a Thread spawns into an
 /// existing worktree, git itself must agree the path is a live worktree of
 /// `repo` — a directory merely squatting where a worktree once was, or a
@@ -705,7 +668,7 @@ pub fn adoption_check(repo: &Path, path: &Path) -> Result<(), GitError> {
 /// out for this computer — a window holding a machine sends the path as typed
 /// (ADR 0026) — then canonicalized.
 fn canonical_root(root: &Path) -> io::Result<PathBuf> {
-    dunce::canonicalize(super::expand_home(root))
+    dunce::canonicalize(crate::folder::expand_home(root))
 }
 
 /// A root's leaf name, for selector rows.

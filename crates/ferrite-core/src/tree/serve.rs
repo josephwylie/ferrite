@@ -167,7 +167,7 @@ fn resolve(root: &Root) -> io::Result<PathBuf> {
             "This server does not know that kind of root",
         ));
     };
-    let given = crate::workspace::expand_home(given);
+    let given = crate::folder::expand_home(given);
     if !given.is_absolute() || given.components().any(|part| part == Component::ParentDir) {
         return Err(invalid(format!("{} is not an absolute path", given.display())));
     }
@@ -183,7 +183,7 @@ fn resolve(root: &Root) -> io::Result<PathBuf> {
 
 /// Whether `root`, resolved, is the home directory or holds it.
 fn holds_home(root: &Path) -> bool {
-    holds_dir(root, &crate::workspace::expand_home(Path::new("~")))
+    holds_dir(root, &crate::folder::expand_home(Path::new("~")))
 }
 
 /// Whether `root`, resolved, is `home` or holds it, by either spelling of

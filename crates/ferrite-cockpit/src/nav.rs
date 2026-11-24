@@ -31,7 +31,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::{Instant, SystemTime};
 
-use ferrite_core::store::Provider;
+use ferrite_core::provider::Provider;
 use ferrite_core::ThreadKey;
 
 use gpui::prelude::*;

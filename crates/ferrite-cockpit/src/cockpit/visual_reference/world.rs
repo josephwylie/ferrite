@@ -17,10 +17,10 @@ use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ferrite_client::cockpit::{Cockpit, SpawnRequest, Spawner};
+use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::progress::{Phase, ProgressEvent};
+use ferrite_core::provider::Provider;
 use ferrite_core::providers::{applied, Session, SettingAck};
-use ferrite_core::store::Provider;
-use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{
     Decision, DecisionAnswer, DecisionChoice, DecisionKind, Hunk, ModelInfo, PermissionModeChoice,
     QueueEvent, QueuedPrompt, RateLimitWindow, SessionEvent, ThreadId, ThreadKey, ToolResult, TurnOutcome,

@@ -131,7 +131,7 @@ impl Spawner for OffLoop {
     }
 }
 
-fn first_send(workspace: ferrite_core::workspace::WorkspaceChoice) -> ferrite_core::protocol::Op {
+fn first_send(workspace: ferrite_core::checkout::WorkspaceChoice) -> ferrite_core::protocol::Op {
     ferrite_core::protocol::Op::Bootstrap {
         provider: Provider::Claude,
         model: None,
@@ -161,7 +161,7 @@ fn a_new_worktree_is_made_off_the_loop_while_other_threads_progress() {
     let asked = ferrite_core::workspace::git_spawns_on_this_thread();
     let started = engine.bootstrap_command(
         DraftId::new(1),
-        &first_send(ferrite_core::workspace::WorkspaceChoice::NewWorktree { repo: repo.clone() }),
+        &first_send(ferrite_core::checkout::WorkspaceChoice::NewWorktree { repo: repo.clone() }),
     );
     assert!(matches!(started, Ok(None)), "the first send is pending: {started:?}");
     other_provider
@@ -205,7 +205,7 @@ fn a_worktree_that_cannot_be_made_rolls_the_first_send_back() {
 
     let started = engine.bootstrap_command(
         DraftId::new(1),
-        &first_send(ferrite_core::workspace::WorkspaceChoice::NamedWorktree {
+        &first_send(ferrite_core::checkout::WorkspaceChoice::NamedWorktree {
             repo: repo.clone(),
             branch: "taken".into(),
             base: None,
@@ -248,7 +248,7 @@ fn a_squatted_worktree_path_rolls_the_first_send_back() {
 
     let started = engine.bootstrap_command(
         DraftId::new(1),
-        &first_send(ferrite_core::workspace::WorkspaceChoice::NamedWorktree {
+        &first_send(ferrite_core::checkout::WorkspaceChoice::NamedWorktree {
             repo: repo.clone(),
             branch: "squat".into(),
             base: None,
@@ -299,7 +299,7 @@ fn an_opened_thread_whose_worktree_is_refused_is_refused_in_the_reply() {
     let error = engine
         .open(
             Provider::Claude,
-            ferrite_core::workspace::WorkspaceChoice::NamedWorktree {
+            ferrite_core::checkout::WorkspaceChoice::NamedWorktree {
                 repo: repo.clone(),
                 branch: "taken".into(),
                 base: None,

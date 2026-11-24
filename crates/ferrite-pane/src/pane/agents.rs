@@ -11,7 +11,7 @@
 //! grouped and drawn ([`AgentFaces::apply`]): the group's tense, its failure
 //! count and the shut card's live rows then read as any group's do.
 use super::*;
-use ferrite_core::store::Provider;
+use ferrite_core::provider::Provider;
 use std::collections::BTreeMap;
 
 /// How a subagent stands, for its call's row (T3's subagent statuses).

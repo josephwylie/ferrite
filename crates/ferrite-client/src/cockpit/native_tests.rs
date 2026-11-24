@@ -6,8 +6,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use ferrite_core::providers::{applied, Session, SettingAck};
-use ferrite_core::store::{Provider, Store};
-use ferrite_core::workspace::WorkspaceChoice;
+use ferrite_core::checkout::WorkspaceChoice;
+use ferrite_core::provider::Provider;
+use ferrite_core::store::Store;
 
 use super::{Cockpit, SpawnRequest, Spawner};
 

@@ -21,15 +21,17 @@ pub use ferrite_core::engine::{
     title_from_prompt, Admission, AgentLaunch, Engine, HistoryDirection, Preparation,
     ProviderChoice, RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
 };
+use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::notifications::{DecisionNoticeId, NoticeId, Notifications};
+use ferrite_core::project::ProjectId;
 use ferrite_core::protocol::{
     Done, ErrorCode, NoticeAction, Op, ProjectAction, ServerMessage, When, WireError,
 };
+use ferrite_core::provider::Provider;
 use ferrite_core::roster::{DraftId, PaneIdentity, Roster};
-use ferrite_core::store::{LoadError, Provider, Store};
+use ferrite_core::store::{LoadError, Store};
 use ferrite_core::transcript::Input;
-use ferrite_core::workspace::registry::{ProjectId, Registry};
-use ferrite_core::workspace::WorkspaceChoice;
+use ferrite_core::workspace::registry::Registry;
 use ferrite_core::{
     Decision, DecisionAnswer, MachineId, MachineKey, ModelInfo, ProjectKey, SavedThread, ThreadId,
     ThreadKey,
@@ -1588,7 +1590,7 @@ impl Cockpit {
     }
 
     /// The Project `key` names, while its machine lists it.
-    pub fn project(&self, key: ProjectKey) -> Option<&ferrite_core::workspace::registry::Project> {
+    pub fn project(&self, key: ProjectKey) -> Option<&ferrite_core::project::Project> {
         self.shared(key.machine()).registry.project(key.project())
     }
 
@@ -2012,7 +2014,7 @@ impl Cockpit {
         &mut self,
         machine: MachineId,
         path: &Path,
-    ) -> io::Result<Receiver<io::Result<ferrite_core::workspace::Listing>>> {
+    ) -> io::Result<Receiver<io::Result<ferrite_core::folder::Listing>>> {
         self.held_mut(machine)?.remote()?.list_dir(path)
     }
 
@@ -2022,7 +2024,7 @@ impl Cockpit {
     pub fn list_repo(
         &mut self,
         project: ProjectKey,
-    ) -> io::Result<Receiver<io::Result<ferrite_core::workspace::RepoListing>>> {
+    ) -> io::Result<Receiver<io::Result<ferrite_core::checkout::RepoListing>>> {
         self.machines
             .get_mut(&project.machine())
             .ok_or_else(|| io::Error::from(gone()))?
@@ -2266,9 +2268,9 @@ impl Cockpit {
         &mut self,
         machine: MachineId,
         path: &Path,
-    ) -> io::Result<Receiver<io::Result<Option<ferrite_core::workspace::PullRequest>>>> {
+    ) -> io::Result<Receiver<io::Result<Option<ferrite_core::pull_request::PullRequest>>>> {
         if let Some(view) = self.forge_fixture.get(path) {
-            let reading = ferrite_core::workspace::PullRequest::of_view(view);
+            let reading = ferrite_core::pull_request::PullRequest::of_view(view);
             return Ok(read_here(move || Ok(reading)));
         }
         match &mut self.held_mut(machine)?.link {

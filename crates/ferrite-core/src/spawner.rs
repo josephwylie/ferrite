@@ -10,12 +10,12 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use crate::engine::{Preparation, RssSampler, SpawnRequest, Spawner};
+use crate::provider::Provider;
 use crate::providers::{
     ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, ResumeRefused, Session,
 };
 use crate::session::SessionLifecycle;
 use crate::settings::Settings;
-use crate::store::Provider;
 use crate::ThreadId;
 
 /// One Session may hold this much before the watchdog replaces it. Generous:

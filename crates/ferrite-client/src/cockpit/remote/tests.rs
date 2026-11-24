@@ -6,7 +6,7 @@ use std::sync::mpsc;
 use ferrite_core::engine::{SpawnRequest, Spawner};
 use ferrite_core::link::{Connection, Heard};
 use ferrite_core::protocol::{SharedRoster, WireChoice};
-use ferrite_core::store::Provider;
+use ferrite_core::provider::Provider;
 
 struct NoDiscovery;
 

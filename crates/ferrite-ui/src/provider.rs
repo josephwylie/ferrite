@@ -2,7 +2,7 @@
 //! provider can do is its bridge's and the shared view's (ferrite-core),
 //! never decided here by its name.
 
-use ferrite_core::store::Provider;
+use ferrite_core::provider::Provider;
 
 use crate::{icons, theme};
 

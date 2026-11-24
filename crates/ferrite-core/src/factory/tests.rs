@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::store::Provider;
+use crate::provider::Provider;
 
 fn project_id(id: u64) -> ProjectId {
     serde_json::from_value(id.into()).unwrap()

@@ -25,17 +25,20 @@ use crate::activity::{
 use crate::digest::Digest;
 use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
 pub use crate::prompt_history::HistoryDirection;
+use crate::checkout::{self, WorkspaceBinding, WorkspaceChoice};
+use crate::project::ProjectId;
 use crate::prompt_history::PromptHistory;
 use crate::protocol::{self, Outgoing, ServerMessage, SharedRoster};
+use crate::provider::Provider;
 use crate::providers::{ResumeFailure, Session, SettingAck};
 use crate::roster::DraftId;
 use crate::session::SessionLifecycle;
-use crate::store::{LoadError, Provider, Store, ThreadWriter};
+use crate::store::{LoadError, Store, ThreadWriter};
 use crate::suggest::Suggestion;
 use crate::transcript::{BlockId, Input, Transcript, Update};
+use crate::workspace;
 use crate::workspace::follow::{self, Follow, Move};
-use crate::workspace::registry::{self, ProjectId, Registry};
-use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
+use crate::workspace::registry::{self, Registry};
 use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
 
 mod announced;
@@ -1095,9 +1098,9 @@ impl Thread {
     }
 
     /// What the Server holds of it, as its digest says it.
-    fn server_holds(&self) -> (crate::pr_watch::Watching, crate::delegate::Delegating) {
+    fn server_holds(&self) -> (crate::pull_request::Watching, crate::delegate::Delegating) {
         (
-            crate::pr_watch::Watching::of(&self.pr_watch, self.wake_waiting),
+            self.pr_watch.watching(self.wake_waiting),
             crate::delegate::Delegating::of(&self.delegates),
         )
     }
@@ -1490,7 +1493,7 @@ impl Engine {
         let project = self.project_id(id);
         let thread = self.threads.get_mut(&id)?;
         let resume = thread.resume.clone();
-        let cwd = workspace::effective_cwd(
+        let cwd = checkout::effective_cwd(
             thread.session_project_root.as_deref(),
             thread.workspace.as_ref(),
         )
@@ -1781,7 +1784,7 @@ impl Engine {
             resume: resume.as_deref(),
             resume_at: None,
             permission_mode: None,
-            cwd: workspace::effective_cwd(None, Some(&binding)),
+            cwd: checkout::effective_cwd(None, Some(&binding)),
             name: None,
             additional_directories: project_additional_directories(
                 &self.registry,
@@ -2092,7 +2095,7 @@ impl Engine {
         {
             return Err(ProvisionError::Busy);
         }
-        let cwd = workspace::effective_cwd(
+        let cwd = checkout::effective_cwd(
             state.session_project_root.as_deref(),
             state.workspace.as_ref(),
         );
@@ -2709,7 +2712,7 @@ impl Engine {
         if !state.activity.view().connected() {
             state.replace_generation();
         }
-        let cwd = workspace::effective_cwd(
+        let cwd = checkout::effective_cwd(
             state.session_project_root.as_deref(),
             state.workspace.as_ref(),
         )
@@ -4038,7 +4041,7 @@ impl Engine {
                 state.session.is_some() || !state.held || state.activity.view().connected()
             })
             .filter_map(|(id, state)| {
-                let cwd = crate::workspace::effective_cwd(
+                let cwd = crate::checkout::effective_cwd(
                     state.session_project_root.as_deref(),
                     state.workspace.as_ref(),
                 )?;
@@ -5386,7 +5389,7 @@ impl Engine {
         self.threads
             .iter()
             .filter_map(|(id, thread)| {
-                let cwd = workspace::effective_cwd(
+                let cwd = checkout::effective_cwd(
                     thread.session_project_root.as_deref(),
                     thread.workspace.as_ref(),
                 )?;
@@ -6515,7 +6518,7 @@ fn completion_observation(
 fn follow_move(state: &mut Thread, event: &SessionEvent) -> Option<Move> {
     use crate::activity::ExecutionEvent;
     let binding = state.workspace.as_ref()?;
-    let current = workspace::effective_cwd(state.session_project_root.as_deref(), Some(binding))?
+    let current = checkout::effective_cwd(state.session_project_root.as_deref(), Some(binding))?
         .to_path_buf();
     match event {
         SessionEvent::ToolStarted { id, name, input }

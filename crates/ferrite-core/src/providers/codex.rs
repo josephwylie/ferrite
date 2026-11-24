@@ -37,7 +37,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::activity::AgentKey;
-use crate::store::Provider;
+use crate::provider::Provider;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
 use super::{FileSearchReply, ForkAck, ForkRequest, RewindAck, RewindRequest};

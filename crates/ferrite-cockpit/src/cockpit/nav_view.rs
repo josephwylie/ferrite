@@ -254,7 +254,7 @@ impl NavView {
     pub(super) fn row_model(
         &self,
         row: &nav::ThreadRow,
-        provider: ferrite_core::store::Provider,
+        provider: ferrite_core::provider::Provider,
         cx: &App,
     ) -> SharedString {
         let model = self.model.read(cx);

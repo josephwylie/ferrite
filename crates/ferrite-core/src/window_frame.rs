@@ -53,7 +53,7 @@ impl WindowFrame {
 
     pub fn save(&self, dir: &Path) -> io::Result<()> {
         std::fs::create_dir_all(dir)?;
-        crate::store::replace_file(
+        crate::disk::replace_file(
             &dir.join(Self::FILE),
             &serde_json::to_vec(self).map_err(io::Error::other)?,
         )

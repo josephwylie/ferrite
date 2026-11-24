@@ -56,14 +56,15 @@ use {
 use ferrite_core::activity::{AgentStatus, Subject};
 use ferrite_client::cockpit::ThreadView;
 pub use ferrite_core::digest::{Turn, WallCard, WallLine};
+use ferrite_core::checkout::WorkspaceBinding;
 use ferrite_core::docview::{is_test_run, passed_count};
 use ferrite_core::followup::{self, Followup};
 use ferrite_core::progress::Phase;
+use ferrite_core::pull_request::{Check, CheckState, PullRequest};
 use ferrite_core::roster::{DraftId, PaneIdentity};
 use ferrite_core::transcript::{
     Block, BlockId, Body, Diff, Span, Status, Style, Token, ToolBlock, ToolState, Transcript,
 };
-use ferrite_core::workspace::{Check, CheckState, PullRequest, WorkspaceBinding};
 use ferrite_core::{Decision, ThreadId, ThreadKey};
 use gpui::prelude::*;
 use gpui::{
@@ -3910,7 +3911,7 @@ fn joined_runs(
 mod tests {
     use super::*;
     use ferrite_core::docview::Instruments;
-    use ferrite_core::store::Provider;
+    use ferrite_core::provider::Provider;
     use ferrite_core::transcript::Class;
     /// A multi-line queued prompt reads as one line in its one-line row.
     #[test]

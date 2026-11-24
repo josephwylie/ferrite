@@ -52,9 +52,10 @@ fn captured_feedback_survives_prompt_roundtrip_without_a_live_page() {
 #[test]
 fn sent_annotation_reopens_through_the_thread_store() {
     use ferrite_core::{
-        store::{Provider, Store},
+        checkout::WorkspaceBinding,
+        provider::Provider,
+        store::Store,
         transcript::Input,
-        workspace::WorkspaceBinding,
     };
     let root = std::env::temp_dir().join(format!("ferrite-browser-history-{}", std::process::id()));
     let store = Store::open(&root).unwrap();

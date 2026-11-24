@@ -11,7 +11,7 @@ use gpui::{
     Stateful,
 };
 
-use ferrite_core::store::Provider;
+use ferrite_core::provider::Provider;
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::project_badge::{project_badge, project_badge_sized};
 use ferrite_ui::theme::*;

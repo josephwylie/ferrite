@@ -135,7 +135,7 @@ impl Announced {
     fn save(&self) {
         let written = serde_json::to_vec(&self.said)
             .map_err(io::Error::from)
-            .and_then(|bytes| crate::store::replace_file(&self.path, &bytes));
+            .and_then(|bytes| crate::disk::replace_file(&self.path, &bytes));
         if let Err(error) = written {
             crate::log!(
                 "{}: what the agent said of itself could not be kept: {error}",

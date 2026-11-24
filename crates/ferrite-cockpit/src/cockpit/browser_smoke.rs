@@ -173,8 +173,8 @@ impl CockpitView {
                                 // tools at thread/start. Imported Codex sessions
                                 // retain their original capabilities on resume.
                                 let here = view.start_machine(cx).ok_or("no machine held")?;
-                                let thread = view.cockpit.update(cx, |cockpit, _| cockpit.open(here, ferrite_core::store::Provider::Codex,
-                                    ferrite_core::workspace::WorkspaceChoice::Main {
+                                let thread = view.cockpit.update(cx, |cockpit, _| cockpit.open(here, ferrite_core::provider::Provider::Codex,
+                                    ferrite_core::checkout::WorkspaceChoice::Main {
                                         checkout: std::env::current_dir().map_err(|error| error.to_string())?,
                                     }).map_err(|error| error.to_string()))?;
                                 scenario_thread = Some(thread);

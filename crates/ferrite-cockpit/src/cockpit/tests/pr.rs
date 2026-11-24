@@ -19,7 +19,7 @@ fn reading(
 fn land(
     view: &Entity<CockpitView>,
     thread: ThreadKey,
-    reading: Option<ferrite_core::workspace::PullRequest>,
+    reading: Option<ferrite_core::pull_request::PullRequest>,
     cx: &mut gpui::VisualTestContext,
 ) {
     view.update(cx, |view, cx| view.pr_landed(thread, reading, cx));
@@ -397,7 +397,7 @@ fn merge_asks_twice_and_a_merged_pr_shows_its_pill(cx: &mut TestAppContext) {
 #[gpui::test]
 fn an_open_pr_surface_follows_a_merge(cx: &mut TestAppContext) {
     use ferrite_core::protocol::WirePrState;
-    use ferrite_core::workspace::{PrState, PullRequest};
+    use ferrite_core::pull_request::{PrState, PullRequest};
     let (view, thread, _fake, cx) = with_pr("pr-follows", WirePrState::Open, cx);
     view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
     tick(cx);

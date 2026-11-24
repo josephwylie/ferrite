@@ -3,7 +3,7 @@
 //! Claude supplies native suggestions through its live Session instead. Missing CLIs, failed runs and refused replies leave the
 //! generic idle line. No conversation is sent to a different Provider.
 
-use crate::store::Provider;
+use crate::provider::Provider;
 use crate::transcript::{Body, Span, Transcript};
 use crate::ThreadId;
 

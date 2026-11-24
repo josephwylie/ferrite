@@ -25,7 +25,7 @@ fn a_thread_card_is_three_lines_in_a_fixed_box(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.facts.set_branches(vec![(
             threads[0],
-            Some(ferrite_core::workspace::BranchStatus {
+            Some(ferrite_core::checkout::BranchStatus {
                 branch: Some("t3/improve-sidebar-architecture".into()),
                 ..Default::default()
             }),

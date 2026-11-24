@@ -27,8 +27,8 @@ use super::super::schema::{
 use super::super::Method;
 use super::{Answer, Definition, Refusal};
 use crate::delegate::{DelegateId, NEXT};
+use crate::provider::Provider;
 use crate::runtime_mode::RuntimeMode;
-use crate::store::Provider;
 use crate::ThreadId;
 
 /// The tools, by T3's names.

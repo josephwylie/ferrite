@@ -659,7 +659,7 @@ fn samples() -> Vec<Request> {
             checkout: Some("/home/me/app".into()),
             project: Some("p-1".into()),
             title: Some("Login test".into()),
-            provider: Some(crate::store::Provider::Codex),
+            provider: Some(crate::provider::Provider::Codex),
             request: Some("k-1".into()),
             ..DelegateStartParams::default()
         })),
@@ -715,7 +715,7 @@ fn later_samples() -> Vec<(&'static str, Request)> {
             request(Method::DelegateStart(DelegateStartParams {
                 machine: "pc".into(),
                 task: "Fix the flaky login test.".into(),
-                provider: Some(crate::store::Provider::Claude),
+                provider: Some(crate::provider::Provider::Claude),
                 model: Some("opus".into()),
                 effort: Some(Some("high".into())),
                 mode: Some(crate::runtime_mode::RuntimeMode::AutoAcceptEdits),

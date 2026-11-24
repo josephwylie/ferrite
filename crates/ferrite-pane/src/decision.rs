@@ -17,7 +17,7 @@ use std::borrow::Cow;
 use std::ops::Range;
 use std::path::Path;
 
-use ferrite_core::store::Provider;
+use ferrite_core::provider::Provider;
 use ferrite_core::{Decision, DecisionKind, ThreadKey};
 use gpui::prelude::*;
 use gpui::{

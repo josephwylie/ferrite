@@ -23,8 +23,8 @@
 
 use std::time::{Duration, Instant, SystemTime};
 
-use ferrite_core::store::Provider;
-use ferrite_core::workspace::{PrState, PullRequest};
+use ferrite_core::provider::Provider;
+use ferrite_core::pull_request::{PrState, PullRequest};
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, App, Div, FontWeight, Hsla, SharedString, Stateful, Window,

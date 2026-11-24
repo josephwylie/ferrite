@@ -10,8 +10,8 @@ use ferrite_core::protocol::{
     ReviewPullRequest, WireCheck, WireCheckStatus, WireMerge, WirePr, WirePrComment,
     WirePrCommentKind, WirePrState, WireReply, WireReviewState, WireSync,
 };
-use ferrite_core::store::Provider;
-use ferrite_core::workspace::{CheckState, PrState, PullRequest};
+use ferrite_core::provider::Provider;
+use ferrite_core::pull_request::{CheckState, PrState, PullRequest};
 use ferrite_core::{SessionEvent, TurnOutcome};
 use ferrite_reviewr::diff::Notice;
 use ferrite_reviewr::ferrite::FileSides;
@@ -881,7 +881,7 @@ fn factory() -> (Scene, Setup) {
         .core
         .fixture_open_owned(
             Provider::Claude,
-            ferrite_core::workspace::WorkspaceChoice::Main {
+            ferrite_core::checkout::WorkspaceChoice::Main {
                 checkout: ferrite.clone(),
             },
             ferrite_core::ThreadOwner::Task("t-2".into()),
@@ -1358,7 +1358,7 @@ fn factory_coordinator() -> (Scene, Setup) {
         .core
         .fixture_open_owned(
             Provider::Claude,
-            ferrite_core::workspace::WorkspaceChoice::Main { checkout: root },
+            ferrite_core::checkout::WorkspaceChoice::Main { checkout: root },
             ferrite_core::ThreadOwner::Factory(project),
         )
         .expect("the Coordinator");

@@ -6,7 +6,7 @@
 //! what was read.
 
 use super::*;
-use ferrite_core::workspace::PullRequest;
+use ferrite_core::pull_request::PullRequest;
 use ferrite_ui::theme::*;
 
 /// The plan card as it reads: the done and total counts and each step.

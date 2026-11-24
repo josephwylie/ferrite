@@ -11,12 +11,12 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 
 use ferrite_client::cockpit::Cockpit;
+use ferrite_core::checkout::{BranchStatus, WorkspaceBinding};
 use ferrite_core::delegate::Delegating;
 use ferrite_core::docview::FileChange;
-use ferrite_core::pr_watch::{WatchedPr, Watching};
-use ferrite_core::store::Provider;
+use ferrite_core::provider::Provider;
+use ferrite_core::pull_request::{PullRequest, WatchedPr, Watching};
 use ferrite_core::ProjectKey;
-use ferrite_core::workspace::{BranchStatus, PullRequest, WorkspaceBinding};
 use ferrite_core::{DelegatedFrom, ThreadKey};
 use ferrite_pane::pane::WallCard;
 use gpui::SharedString;
@@ -166,7 +166,7 @@ impl Facts {
         let open = cockpit.thread(thread);
         self.refresh_metadata(cockpit, thread);
         self.refresh_wall(cockpit, thread);
-        let cwd = ferrite_core::workspace::effective_cwd(
+        let cwd = ferrite_core::checkout::effective_cwd(
             open.and_then(|open| open.session_project_root()),
             open.and_then(|open| open.workspace()),
         );
@@ -834,7 +834,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let store = ferrite_core::store::Store::open(&dir).unwrap();
-        let project: ferrite_core::workspace::registry::ProjectId = serde_json::from_str("7").unwrap();
+        let project: ferrite_core::project::ProjectId = serde_json::from_str("7").unwrap();
         let binding = WorkspaceBinding::Main {
             checkout: dir.clone(),
         };
@@ -887,7 +887,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let store = ferrite_core::store::Store::open(&dir).unwrap();
         let checkout = std::env::current_dir().unwrap();
-        let project: ferrite_core::workspace::registry::ProjectId = serde_json::from_str("7").unwrap();
+        let project: ferrite_core::project::ProjectId = serde_json::from_str("7").unwrap();
         let (thread, writer) = store
             .create(
                 Provider::Claude,

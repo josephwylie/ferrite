@@ -26,10 +26,12 @@ use ferrite_client::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::{
     activity::TranscriptCoverage,
     activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject},
+    checkout::WorkspaceChoice,
+    provider::Provider,
     providers::Session,
+    pull_request::PrState,
     settings::ReadingSize,
-    store::{Provider, Store},
-    workspace::{PrState, WorkspaceChoice},
+    store::Store,
     ControlKind, Decision, DecisionAnswer, DecisionKind, Hunk, McpServer, McpStatus,
     PermissionModeChoice, QueueEvent, QueuedPrompt, SessionCommand, SessionEvent, ThreadKey,
     ToolResult, TurnOutcome,
@@ -980,9 +982,8 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "chrome" => {
             let (scene, _) = legacy("live");
             let setup: Setup = Box::new(|view, _, cx| {
-                use ferrite_core::workspace::{
-                    BranchStatus, Check, CheckState, PrState, PullRequest,
-                };
+                use ferrite_core::checkout::BranchStatus;
+                use ferrite_core::pull_request::{Check, CheckState, PrState, PullRequest};
                 let thread = view.panes[0].thread().expect("a Thread Pane");
                 let run = |name: &str, state, detail: &str, url: bool| Check {
                     name: name.into(),
@@ -1039,9 +1040,8 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "checkscard" => {
             let (scene, _) = legacy("live");
             let setup: Setup = Box::new(|view, _, cx| {
-                use ferrite_core::workspace::{
-                    BranchStatus, Check, CheckState, PrState, PullRequest,
-                };
+                use ferrite_core::checkout::BranchStatus;
+                use ferrite_core::pull_request::{Check, CheckState, PrState, PullRequest};
                 let thread = view.panes[0].thread().expect("a Thread Pane");
                 let run = |name: &str, state, detail: &str| Check {
                     name: name.into(),
@@ -2000,7 +2000,7 @@ fn nav() -> (Scene, Setup) {
     // the title keeps its floor, the branch and then the count give way.
     let setup: Setup = Box::new(move |view, _, cx| {
         let branch = |name: &str| {
-            Some(ferrite_core::workspace::BranchStatus {
+            Some(ferrite_core::checkout::BranchStatus {
                 branch: Some(name.into()),
                 ..Default::default()
             })
@@ -2025,8 +2025,8 @@ fn named_thread(view: &CockpitView, name: &str, cx: &gpui::App) -> ThreadKey {
         .unwrap_or_else(|| panic!("the fixture's {name}"))
 }
 
-fn fixture_pr(number: u64, state: PrState, draft: bool) -> ferrite_core::workspace::PullRequest {
-    ferrite_core::workspace::PullRequest {
+fn fixture_pr(number: u64, state: PrState, draft: bool) -> ferrite_core::pull_request::PullRequest {
+    ferrite_core::pull_request::PullRequest {
         number,
         state,
         draft,
