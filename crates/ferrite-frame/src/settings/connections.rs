@@ -753,7 +753,17 @@ fn sync_line(sync: ConnectionSync, menu: bool, cx: &App) -> Div {
         .min_w_0()
         .gap(px(8.))
         .pl(px(28.))
-        .child(text("Sync my setup", 12., ink(cx)).flex_shrink_0())
+        // A sync never takes a sign-in away: a side signed out is signed
+        // back in from the other (ADR 0048).
+        .child(
+            div()
+                .id(SharedString::from(format!("{}-label", sync.toggle.id)))
+                .flex_shrink_0()
+                .tooltip(ferrite_ui::menu::tooltip(
+                    "Sign-ins sync too. To stay signed out on one side, turn this off.",
+                ))
+                .child(text("Sync my setup", 12., ink(cx))),
+        )
         .child(
             text(sync.status, 12., if sync.failed { RED } else { muted(cx) })
                 .flex_1()

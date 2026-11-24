@@ -1224,23 +1224,26 @@ impl ConnectionsView {
                 };
                 let actions = match &status {
                     Status::Stopped(_) => vec![press("anyway", "Sync anyway", ConnectionsEvent::SyncAnyway(target.clone()))],
-                    Status::InSync { sign_ins: true, .. } => vec![
+                    status if status.sign_ins() => vec![
                         press("here", "Use this computer's", ConnectionsEvent::UseSignIns(target.clone(), Side::Here)),
-                        press("there", "Use the Machine's", ConnectionsEvent::UseSignIns(target.clone(), Side::There)),
+                        press("there", &format!("Use {}'s", machine.name), ConnectionsEvent::UseSignIns(target.clone(), Side::There)),
                     ],
                     _ => Vec::new(),
                 };
+                // A window that syncs no setup draws the switch off, and
+                // it does nothing.
+                let refused = matches!(status, Status::Refused(_));
                 settings::ConnectionSync {
-                    on: machine.sync_setup,
+                    on: machine.sync_setup && !refused,
                     toggle: settings::ConnectionAction {
                         id: format!("connection-sync-{index}").into(),
                         label: "Sync my setup".into(),
-                        enabled: !unsaved,
+                        enabled: !unsaved && !refused,
                         act: action(cx, move |_, _, cx| cx.emit(ConnectionsEvent::ToggleSync(toggled.clone()))),
                     },
                     actions,
                     failed: status.failed(),
-                    status: status.line().into(),
+                    status: status.line(&machine.name).into(),
                 }
             });
             let display_target = machine.display_target(&dir);

@@ -17,7 +17,7 @@ use super::*;
 use ferrite_core::chunked::Cancellation;
 use ferrite_core::cockpit::ServerState;
 use ferrite_core::setup_sync::{self, Hold, Home, Job, Kept, Outcome, Synced, Valve};
-use ferrite_core::tree::Side;
+use ferrite_core::tree::{Side, Stuck};
 use gpui::App;
 
 /// How often a connected Machine is looked at for what changed there.
@@ -67,6 +67,30 @@ struct Track {
     /// Before this, `again` waits: another sync held the Machine.
     retry: Option<Instant>,
     status: Status,
+    /// What its syncs found, each part as the last sync that read it left
+    /// it: neither a sync under way nor one that left a path unread moves
+    /// what it did not look at.
+    found: Found,
+}
+
+/// What the syncs of a Machine found.
+#[derive(Debug, Default)]
+struct Found {
+    /// Each path left as each side has it, and why.
+    held: BTreeMap<String, Why>,
+    /// Where a sync stopped, and what it was asked: "Sync anyway" asks it
+    /// again.
+    stop: Option<(Valve, Ask)>,
+}
+
+impl Found {
+    /// The line it makes.
+    fn status(&self) -> Status {
+        match &self.stop {
+            Some((valve, _)) => Status::Stopped(valve.clone()),
+            None => Status::InSync(self.held.clone()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,6 +135,12 @@ impl Ask {
             sign_ins: other.sign_ins.or(self.sign_ins),
         }
     }
+
+    /// Whether a sync of it reads `path`, a path of the setup.
+    fn reads(self, path: &str) -> bool {
+        let under = |unread: &&str| path.strip_prefix(*unread).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
+        self.read_sign_ins || !setup_sync::UNREAD_WITHOUT_SIGN_INS.iter().any(under)
+    }
 }
 
 struct Running {
@@ -132,39 +162,116 @@ pub(crate) enum Status {
     Refused(String),
     Waiting,
     Syncing(Option<usize>),
-    /// Synced, but for each path left as each side has it, with why, and
-    /// two sign-ins for the operator to choose between.
-    InSync { held: Vec<(String, String)>, sign_ins: bool },
+    /// Synced, but for each path left as each side has it, by why.
+    InSync(BTreeMap<String, Why>),
     Stopped(Valve),
-    Failed(String),
+    Failed(Failure),
     /// The Machine's Ferrite is older and syncs no setup.
     Older,
 }
 
+/// Why a sync left a path as each side has it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Why {
+    /// The sync held it: two sign-ins for the operator to choose between,
+    /// a link, or a file against a folder.
+    Held(Hold),
+    /// A side could not read or write it.
+    Problem(Side, String),
+}
+
+/// Why a sync did not finish: what failed, at the path and on the side it
+/// met it when it says.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Failure {
+    at: Option<(String, Side)>,
+    why: String,
+}
+
+impl Failure {
+    fn of(error: &std::io::Error) -> Self {
+        match error.get_ref().and_then(|inner| inner.downcast_ref::<Stuck>()) {
+            Some(stuck) => Self {
+                at: Some((stuck.path.clone(), stuck.side)),
+                why: plain(&stuck.error.to_string()),
+            },
+            None => Self {
+                at: None,
+                why: plain(&error.to_string()),
+            },
+        }
+    }
+
+    /// It in words, the Machine called `name`.
+    fn said(&self, name: &str) -> String {
+        match &self.at {
+            Some((path, on)) => format!("~/{path} on {}: {}", place(*on, name), self.why),
+            None => self.why.clone(),
+        }
+    }
+}
+
+/// The first line of an error, without the path a side's error may begin
+/// with or the number an OS error ends in.
+fn plain(error: &str) -> String {
+    let line = error.lines().next().unwrap_or_default();
+    let absolute = |head: &str| {
+        let bytes = head.as_bytes();
+        head.starts_with(['/', '\\']) || (bytes.len() > 2 && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/'))
+    };
+    let line = match line.split_once(": ") {
+        Some((head, rest)) if absolute(head) => rest,
+        _ => line,
+    };
+    match line.rfind(" (os error ") {
+        Some(at) if line.ends_with(')') => line[..at].to_string(),
+        _ => line.to_string(),
+    }
+}
+
 impl Status {
-    pub(crate) fn line(&self) -> String {
+    /// The line of the Machine called `name`.
+    pub(crate) fn line(&self, name: &str) -> String {
         match self {
             Status::Off => "Off".into(),
             Status::Refused(why) => why.clone(),
             Status::Waiting => "Not synced yet".into(),
             Status::Syncing(None) => "Syncing…".into(),
             Status::Syncing(Some(count)) => format!("Syncing {}", files(*count)),
-            Status::InSync { sign_ins: true, .. } => {
-                "Signed in differently on each side: choose which to keep".into()
-            }
-            Status::InSync { held, .. } => match held.as_slice() {
-                [] => "In sync".into(),
-                [(path, why)] => format!("In sync except ~/{path}: {why}"),
-                [(path, why), ..] => format!("In sync except {} paths. ~/{path}: {why}", held.len()),
+            Status::InSync(_) if self.sign_ins() => "Signed in differently on each side: choose which to keep".into(),
+            Status::InSync(held) => match held.iter().next() {
+                None => "In sync".into(),
+                Some((path, why)) if held.len() == 1 => format!("In sync except {}", why.said(path, name)),
+                Some((path, why)) => format!("In sync except {} paths. {}", held.len(), why.said(path, name)),
             },
-            Status::Stopped(valve) => format!("Stopped: {}", stopped(valve)),
-            Status::Failed(error) => error.clone(),
+            Status::Stopped(valve) => format!("Stopped: {}", stopped(valve, name)),
+            Status::Failed(failure) => failure.said(name),
             Status::Older => "Update Ferrite there to sync".into(),
         }
     }
 
     pub(crate) fn failed(&self) -> bool {
         matches!(self, Status::Failed(_) | Status::Stopped(_) | Status::Older)
+    }
+
+    /// Two sign-ins wait for the operator to say whose to keep.
+    pub(crate) fn sign_ins(&self) -> bool {
+        matches!(self, Status::InSync(held) if held.values().any(|why| *why == Why::Held(Hold::SignIn)))
+    }
+}
+
+impl Why {
+    /// `path` and why it was held, the Machine called `name`.
+    fn said(&self, path: &str, name: &str) -> String {
+        match self {
+            Why::Problem(on, error) => format!("~/{path} on {}: {}", place(*on, name), plain(error)),
+            Why::Held(Hold::Linked(on)) => format!(
+                "~/{path}: it lies through a link on {}, and Setup sync never writes through one",
+                place(*on, name)
+            ),
+            Why::Held(Hold::Kinds) => format!("~/{path}: it is a file on one side and a folder on the other"),
+            Why::Held(Hold::SignIn) => format!("~/{path}: it is signed in differently on each side"),
+        }
     }
 }
 
@@ -176,12 +283,13 @@ fn files(count: usize) -> String {
     }
 }
 
-/// What a stopped sync would have done, as a sentence's end.
-fn stopped(valve: &Valve) -> String {
+/// What a stopped sync with the Machine called `name` would have done, as
+/// a sentence's end.
+fn stopped(valve: &Valve, name: &str) -> String {
     if valve.vanished {
         let (gone, removed) = match valve.side {
-            Side::Here => ("from the Machine", "here"),
-            Side::There => ("here", "on the Machine"),
+            Side::Here => (format!("from {name}"), "here".to_string()),
+            Side::There => ("here".to_string(), format!("on {name}")),
         };
         format!(
             "~/{} is gone {gone}, so syncing would remove its {} {removed}",
@@ -194,15 +302,16 @@ fn stopped(valve: &Valve) -> String {
             valve.removing,
             files(valve.holding),
             valve.item,
-            side(valve.side)
+            place(valve.side, name)
         )
     }
 }
 
-fn side(side: Side) -> &'static str {
+/// `side` in words, the Machine called `name`.
+fn place(side: Side, name: &str) -> &str {
     match side {
         Side::Here => "this computer",
-        Side::There => "the Machine",
+        Side::There => name,
     }
 }
 
@@ -214,7 +323,7 @@ pub(crate) struct News {
     conflicts: Vec<String>,
     kept: Option<PathBuf>,
     stopped: Option<Valve>,
-    failed: Option<String>,
+    failed: Option<Failure>,
 }
 
 impl News {
@@ -242,11 +351,8 @@ impl News {
 
 /// The toast for `news`: its title, its message, and the folder its press
 /// opens. `None` when there is nothing to say.
-fn toast(news: &BTreeMap<String, News>, settings_dir: &Path) -> Option<(String, String, Option<PathBuf>)> {
-    let shown = |folder: &Path| {
-        let inside = folder.strip_prefix(settings_dir).unwrap_or(folder);
-        format!("{}, in Ferrite's settings folder", inside.to_string_lossy().replace('\\', "/"))
-    };
+fn toast(news: &BTreeMap<String, News>) -> Option<(String, String, Option<PathBuf>)> {
+    let kept = format!("Ferrite's {} folder", setup_sync::CONFLICTS);
     let mut said: Vec<(String, String, String)> = Vec::new();
     let mut folder = None;
     for (machine, news) in news {
@@ -255,7 +361,6 @@ fn toast(news: &BTreeMap<String, News>, settings_dir: &Path) -> Option<(String, 
                 1 => format!("~/{path} changed on both sides"),
                 count => format!("{count} files changed on both sides"),
             };
-            let kept = news.kept.as_deref().map(shown).unwrap_or_default();
             let message = match news.conflicts.len() {
                 1 => format!("Here and on {machine}. The newer copy is on both now; the other is kept in {kept}."),
                 _ => format!("Here and on {machine}. The newer copy of each is on both now; the others are kept in {kept}."),
@@ -265,22 +370,31 @@ fn toast(news: &BTreeMap<String, News>, settings_dir: &Path) -> Option<(String, 
             folder = news.kept.clone();
         }
         if let Some(valve) = &news.stopped {
+            let stopped = stopped(valve, machine);
             said.push((
                 format!("Setup sync with {machine} stopped"),
-                format!("{}. Sync anyway in Settings › Connections, or put it back.", capitalised(&stopped(valve))),
-                format!("{machine}: stopped, {}", stopped(valve)),
+                format!("{}. Sync anyway in Settings › Connections, or put it back.", capitalised(&stopped)),
+                format!("{machine}: stopped, {stopped}"),
             ));
         }
-        if let Some(error) = &news.failed {
-            said.push((format!("Setup sync with {machine} failed"), error.clone(), format!("{machine}: failed, {error}")));
+        if let Some(failure) = &news.failed {
+            let failure = failure.said(machine);
+            said.push((format!("Setup sync with {machine} failed"), failure.clone(), format!("{machine}: failed, {failure}")));
         }
     }
+    let act = if news.values().any(|news| news.stopped.is_some()) {
+        "Sync anyway in Settings › Connections.".to_string()
+    } else if news.values().any(|news| news.failed.is_some()) {
+        "More in Settings › Connections.".to_string()
+    } else {
+        format!("The others are kept in {kept}.")
+    };
     match said.as_slice() {
         [] => None,
         [(title, message, _)] => Some((title.clone(), message.clone(), folder)),
         _ => Some((
             format!("Setup sync: {} things to look at", said.len()),
-            said.iter().map(|(_, _, line)| line.as_str()).collect::<Vec<_>>().join("\n"),
+            said.iter().map(|(_, _, line)| line.as_str()).chain([act.as_str()]).collect::<Vec<_>>().join("\n"),
             folder,
         )),
     }
@@ -325,7 +439,7 @@ impl SetupSync {
 
     /// The toast, when what it says moved since it was put up.
     fn untold(&mut self) -> Option<Option<(String, String, Option<PathBuf>)>> {
-        std::mem::take(&mut self.untold).then(|| toast(&self.news, &self.settings_dir))
+        std::mem::take(&mut self.untold).then(|| toast(&self.news))
     }
 
     /// The operator closed the toast: what it said is heard.
@@ -372,6 +486,7 @@ impl SetupSync {
                 track.retry = None;
                 track.attached = want.attached;
                 track.status = Status::Off;
+                track.found = Found::default();
                 continue;
             }
             if track.status == Status::Off {
@@ -398,13 +513,12 @@ impl SetupSync {
         self.ask(|_, track| track.machine == machine, Ask::WHOLE, cx);
     }
 
-    /// Sync the Machine `target` names, removing what the plan removes.
+    /// Sync the Machine `target` names as the sync that stopped did,
+    /// removing what the plan removes.
     pub(crate) fn anyway(&mut self, target: &str, cx: &mut Context<Self>) {
-        let ask = Ask {
-            allow_removals: true,
-            ..Ask::WHOLE
-        };
-        self.ask(|named, _| named == target, ask, cx);
+        if let Some(ask) = self.machines.get(target).and_then(Track::anyway) {
+            self.ask(|named, _| named == target, ask, cx);
+        }
     }
 
     /// Sync the Machine `target` names, each sign-in that differs with
@@ -444,7 +558,20 @@ impl Track {
             check: None,
             retry: None,
             status: Status::Waiting,
+            found: Found::default(),
         }
+    }
+
+    /// What "Sync anyway" asks: what the sync that stopped asked, so it
+    /// reads all that one read, whole, and removing what it would remove.
+    /// Nothing when no sync stopped.
+    fn anyway(&self) -> Option<Ask> {
+        let (_, ask) = self.found.stop.as_ref()?;
+        Some(Ask {
+            only_if_changed_here: false,
+            allow_removals: true,
+            ..*ask
+        })
     }
 
     /// The sync due `now`, if any: all of it as the Machine connects and
@@ -488,7 +615,9 @@ impl Track {
     /// says of it. Whether the news moved. A sync of what changed here
     /// that found nothing changed learned nothing of the Machine, so the
     /// line and the news stand; one that found another under way looks at
-    /// all of it next, since the other may have moved anything.
+    /// all of it next, since the other may have moved anything. What a
+    /// sync did not read, a hold or a stop, stands as the last sync that
+    /// read it left it.
     fn finished(&mut self, done: std::io::Result<Outcome>, ask: Ask, now: Instant, news: &mut News) -> bool {
         if matches!(&done, Ok(Outcome::Synced(synced)) if ask.only_if_changed_here && *synced == Synced::default()) {
             return false;
@@ -496,17 +625,23 @@ impl Track {
         let before = news.clone();
         self.status = match done {
             Ok(Outcome::Synced(synced)) => {
-                news.stopped = None;
+                self.found.held.retain(|path, _| !ask.reads(path));
+                self.found.held.extend(held(&synced));
+                if self.found.stop.as_ref().is_some_and(|(valve, _)| ask.reads(&valve.item)) {
+                    self.found.stop = None;
+                    news.stopped = None;
+                }
                 news.failed = None;
                 news.conflicted(&synced.conflicts);
-                in_sync(&synced)
+                self.found.status()
             }
             Ok(Outcome::Stopped(valve)) => {
                 news.failed = None;
-                if self.status != Status::Stopped(valve.clone()) {
+                if self.found.stop.as_ref().is_none_or(|(stopped, _)| *stopped != valve) {
                     news.stopped = Some(valve.clone());
                 }
-                Status::Stopped(valve)
+                self.found.stop = Some((valve, ask));
+                self.found.status()
             }
             Ok(Outcome::Busy) => {
                 let ask = Ask {
@@ -519,11 +654,11 @@ impl Track {
             }
             Err(error) if error.kind() == std::io::ErrorKind::Unsupported => Status::Older,
             Err(error) => {
-                let error = error.to_string().lines().next().unwrap_or_default().to_string();
+                let failure = Failure::of(&error);
                 if !matches!(self.status, Status::Failed(_)) {
-                    news.failed = Some(error.clone());
+                    news.failed = Some(failure.clone());
                 }
-                Status::Failed(error)
+                Status::Failed(failure)
             }
         };
         *news != before
@@ -541,7 +676,7 @@ impl Track {
         let connect = match cockpit.update(cx, |cockpit, _| cockpit.tree(machine)) {
             Ok(connect) => connect,
             Err(error) => {
-                self.status = Status::Failed(error.to_string());
+                self.status = Status::Failed(Failure::of(&error));
                 return;
             }
         };
@@ -563,7 +698,7 @@ impl Track {
             let _ = said.send(Heard::Done(done));
         });
         if let Err(error) = spawned {
-            self.status = Status::Failed(error.to_string());
+            self.status = Status::Failed(Failure::of(&error));
             return;
         }
         self.running = Some(Running { heard, cancel, ask });
@@ -573,29 +708,13 @@ impl Track {
     }
 }
 
-/// The line a sync that finished leaves.
-fn in_sync(synced: &Synced) -> Status {
-    let mut held: Vec<(String, String)> = synced
-        .problems
-        .iter()
-        .map(|problem| {
-            let error = problem.error.lines().next().unwrap_or_default();
-            (problem.path.clone(), format!("{error} ({})", side(problem.side)))
-        })
-        .collect();
-    let mut sign_ins = false;
-    for (path, why) in &synced.held {
-        let why = match why {
-            Hold::SignIn => {
-                sign_ins = true;
-                continue;
-            }
-            Hold::Linked(on) => format!("it lies through a link on {}, and Setup sync never writes through one", side(*on)),
-            Hold::Kinds => "it is a file on one side and a folder on the other".to_string(),
-        };
-        held.push((path.clone(), why));
-    }
-    Status::InSync { held, sign_ins }
+/// Each path a sync that finished left as each side has it, and why.
+fn held(synced: &Synced) -> impl Iterator<Item = (String, Why)> + '_ {
+    let problems = synced.problems.iter().map(|problem| {
+        let error = problem.error.lines().next().unwrap_or_default().to_string();
+        (problem.path.clone(), Why::Problem(problem.side, error))
+    });
+    problems.chain(synced.held.iter().map(|(path, why)| (path.clone(), Why::Held(*why))))
 }
 
 /// A watcher that notes when anything the table names changes here.
@@ -761,12 +880,91 @@ mod tests {
         let mut track = track();
         let mut news = News::default();
         let now = Instant::now();
-        track.status = Status::InSync { held: Vec::new(), sign_ins: false };
+        track.status = Status::InSync(BTreeMap::new());
         assert!(!track.finished(Ok(Outcome::Busy), Ask::HERE, now, &mut news));
         assert_eq!(track.status, Status::Syncing(None));
         assert!(!track.status.failed());
         assert_eq!(track.due(now + Duration::from_secs(1), false, false), None, "it waits a moment");
         assert_eq!(track.due(now + SETTLE, false, false), Some(Ask::WHOLE), "all of it, as the other sync may have moved anything");
+    }
+
+    const SIGN_IN: &str = ".claude/.credentials.json";
+
+    fn valve(item: &str) -> Valve {
+        Valve {
+            side: Side::Here,
+            item: item.into(),
+            removing: 4,
+            holding: 4,
+            vanished: true,
+        }
+    }
+
+    fn moved_one() -> Outcome {
+        Outcome::Synced(Synced {
+            pushed: 1,
+            ..Synced::default()
+        })
+    }
+
+    /// "Sync anyway" asks what the sync that stopped asked, whole and
+    /// removing what it removes, so whatever stop the line shows, from
+    /// whichever sync, it clears.
+    #[test]
+    fn sync_anyway_asks_what_stopped_and_clears_any_stop() {
+        let now = Instant::now();
+        for ask in [Ask::CHECK, Ask::HERE, Ask::WHOLE] {
+            for item in setup_sync::ITEMS.iter().map(|item| item.path).filter(|item| ask.reads(item)) {
+                let mut track = track();
+                let mut news = News::default();
+                assert_eq!(track.anyway(), None, "nothing stopped");
+                track.finished(Ok(Outcome::Stopped(valve(item))), ask, now, &mut news);
+                let again = track.anyway().expect("a stop");
+                assert!(again.allow_removals && !again.only_if_changed_here, "{ask:?}");
+                track.status = Status::Syncing(Some(4));
+                track.finished(Ok(Outcome::Synced(Synced::default())), again, now, &mut news);
+                assert_eq!(track.status, Status::InSync(BTreeMap::new()), "{ask:?} stopped at {item}");
+                assert_eq!((news.stopped.as_ref(), track.anyway()), (None, None), "{ask:?} stopped at {item}");
+            }
+        }
+    }
+
+    /// A sync that leaves a path unread, as one a change here starts
+    /// leaves Claude's sign-in, never clears a hold or a stop about it,
+    /// whatever the line showed while it ran.
+    #[test]
+    fn a_narrower_sync_never_clears_what_it_did_not_read() {
+        let now = Instant::now();
+        let mut track = track();
+        let mut news = News::default();
+        let signed_in = |path: &str| {
+            Outcome::Synced(Synced {
+                held: BTreeMap::from([(path.to_string(), Hold::SignIn)]),
+                ..Synced::default()
+            })
+        };
+        track.finished(Ok(signed_in(SIGN_IN)), Ask::CHECK, now, &mut news);
+        for narrower in [Ask::HERE, Ask::WHOLE] {
+            track.status = Status::Syncing(Some(1));
+            track.finished(Ok(moved_one()), narrower, now, &mut news);
+            assert!(track.status.sign_ins(), "{narrower:?}: {:?}", track.status);
+        }
+        track.finished(Ok(Outcome::Synced(Synced::default())), Ask::CHECK, now, &mut news);
+        assert_eq!(track.status, Status::InSync(BTreeMap::new()), "the clock read it again");
+        track.finished(Ok(signed_in(".codex/auth.json")), Ask::CHECK, now, &mut news);
+        track.finished(Ok(moved_one()), Ask::HERE, now, &mut news);
+        assert_eq!(track.status, Status::InSync(BTreeMap::new()), "Codex's sign-in is read by every sync");
+
+        track.finished(Ok(Outcome::Stopped(valve(SIGN_IN))), Ask::CHECK, now, &mut news);
+        for narrower in [Ask::HERE, Ask::WHOLE] {
+            track.status = Status::Syncing(Some(1));
+            track.finished(Ok(moved_one()), narrower, now, &mut news);
+            assert_eq!(track.status, Status::Stopped(valve(SIGN_IN)), "{narrower:?}");
+            assert_eq!(news.stopped, Some(valve(SIGN_IN)));
+        }
+        track.finished(Ok(Outcome::Stopped(valve(".claude/skills"))), Ask::CHECK, now, &mut news);
+        track.finished(Ok(moved_one()), Ask::HERE, now, &mut news);
+        assert_eq!(track.status, Status::InSync(BTreeMap::new()), "it read the skills");
     }
 
     #[test]
@@ -798,19 +996,41 @@ mod tests {
         };
         assert!(track.finished(Ok(Outcome::Synced(synced)), Ask::CHECK, now, &mut news));
         let all = BTreeMap::from([("box".to_string(), news.clone())]);
-        let (title, message, folder) = toast(&all, Path::new("/settings")).unwrap();
+        let (title, message, folder) = toast(&all).unwrap();
         assert_eq!(title, "3 files changed on both sides");
-        assert!(message.contains("kept in sync-conflicts/1, in Ferrite's settings folder"), "{message}");
+        assert!(message.ends_with("the others are kept in Ferrite's sync-conflicts folder."), "{message}");
         assert_eq!(folder, Some(PathBuf::from("/settings/sync-conflicts/1")));
 
-        let failed = || Err(std::io::Error::other("connection reset\nmore"));
+        let failed = || {
+            let error = std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "/home/me/.claude/skills/a.md: Permission denied (os error 13)\nmore",
+            );
+            let stuck = Stuck {
+                path: ".claude/skills/a.md".into(),
+                side: Side::There,
+                error,
+            };
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, stuck))
+        };
         assert!(track.finished(failed(), Ask::CHECK, now, &mut news));
-        assert_eq!(track.status.line(), "connection reset");
+        assert_eq!(track.status.line("box"), "~/.claude/skills/a.md on box: Permission denied");
         assert!(!track.finished(failed(), Ask::CHECK, now, &mut news), "still failing: no second toast");
         let all = BTreeMap::from([("box".to_string(), news.clone())]);
-        let (title, message, _) = toast(&all, Path::new("/settings")).unwrap();
+        let (title, message, _) = toast(&all).unwrap();
         assert_eq!(title, "Setup sync: 2 things to look at", "one toast, the first not hidden");
-        assert_eq!(message, "box: 3 files changed on both sides\nbox: failed, connection reset");
+        assert_eq!(
+            message,
+            "box: 3 files changed on both sides\nbox: failed, ~/.claude/skills/a.md on box: Permission denied\nMore in Settings › Connections."
+        );
+        news.stopped = Some(valve(".claude/skills"));
+        let all = BTreeMap::from([("box".to_string(), news.clone())]);
+        let (_, message, _) = toast(&all).unwrap();
+        assert!(message.ends_with("\nSync anyway in Settings › Connections."), "{message}");
+        news.stopped = None;
+
+        let unplaced = std::io::Error::other("connection reset (os error 104)");
+        assert_eq!(Status::Failed(Failure::of(&unplaced)).line("box"), "connection reset");
 
         assert!(track.finished(Ok(Outcome::Synced(Synced::default())), Ask::CHECK, now, &mut news));
         assert_eq!(news.failed, None, "it synced again");
@@ -827,15 +1047,16 @@ mod tests {
             }],
             ..Synced::default()
         };
+        let line = |synced: &Synced| Status::InSync(held(synced).collect());
         assert_eq!(
-            in_sync(&synced).line(),
-            "In sync except ~/.claude/skills: it is a link to something not there (the Machine)"
+            line(&synced).line("box"),
+            "In sync except ~/.claude/skills on box: it is a link to something not there"
         );
         let signed_in = Synced {
-            held: BTreeMap::from([(".claude/.credentials.json".to_string(), Hold::SignIn)]),
+            held: BTreeMap::from([(SIGN_IN.to_string(), Hold::SignIn)]),
             ..Synced::default()
         };
-        assert!(matches!(in_sync(&signed_in), Status::InSync { sign_ins: true, .. }));
+        assert!(line(&signed_in).sign_ins());
         let gone = Valve {
             side: Side::Here,
             item: ".claude/skills".into(),
@@ -844,13 +1065,13 @@ mod tests {
             vanished: true,
         };
         assert_eq!(
-            Status::Stopped(gone.clone()).line(),
-            "Stopped: ~/.claude/skills is gone from the Machine, so syncing would remove its 4 files here"
+            Status::Stopped(gone.clone()).line("box"),
+            "Stopped: ~/.claude/skills is gone from box, so syncing would remove its 4 files here"
         );
         let gone_here = Valve { side: Side::There, ..gone };
         assert_eq!(
-            Status::Stopped(gone_here).line(),
-            "Stopped: ~/.claude/skills is gone here, so syncing would remove its 4 files on the Machine"
+            Status::Stopped(gone_here).line("box"),
+            "Stopped: ~/.claude/skills is gone here, so syncing would remove its 4 files on box"
         );
     }
 }

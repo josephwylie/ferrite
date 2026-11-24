@@ -1310,7 +1310,7 @@ mod tests {
                         failed: false,
                         actions: vec![
                             press("connection-sync-here-0", "Use this computer's"),
-                            press("connection-sync-there-0", "Use the Machine's"),
+                            press("connection-sync-there-0", "Use box's"),
                         ],
                     }),
                 };
