@@ -263,6 +263,7 @@ fn box_machine() -> Machine {
         name: "box".into(),
         target: "me@box".into(),
         enabled: true,
+        sync_setup: true,
     }
 }
 
@@ -679,6 +680,7 @@ fn a_revoked_session_asks_to_sign_in_and_opens_its_pairing(cx: &mut TestAppConte
         name: "box".into(),
         target: "ferrite-link:00112233445566778899aabbccddeeff".into(),
         enabled: true,
+        sync_setup: true,
     };
     let mut machines = Machines::new(reach("revoked", revoked), &[link], None, true);
     machines.beside(&mut core);

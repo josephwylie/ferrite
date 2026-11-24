@@ -1280,6 +1280,57 @@ mod tests {
         assert!(value.right() <= px(ROW_W), "the value ends inside the row");
     }
 
+    /// "Sync my setup"'s switch stands under the environment's own, with
+    /// its presses before it.
+    #[gpui::test]
+    fn the_sync_switch_lines_up_with_the_environments(cx: &mut gpui::TestAppContext) {
+        use ferrite_ui::frame::settings::{ConnectionAction, ConnectionRow, ConnectionSync};
+        struct Host;
+        impl Render for Host {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let press = |id: &str, label: &str| ConnectionAction {
+                    id: id.to_string().into(),
+                    label: label.to_string().into(),
+                    enabled: true,
+                    act: Rc::new(|_, _| {}),
+                };
+                let row = ConnectionRow {
+                    name: "box".into(),
+                    target: "me@box".into(),
+                    status: "Connected".into(),
+                    connected: true,
+                    enabled: true,
+                    detail: None,
+                    actions: vec![press("connection-toggle-0", "Enable"), press("connection-edit-0", "Edit")],
+                    removal: None,
+                    sync: Some(ConnectionSync {
+                        on: true,
+                        toggle: press("connection-sync-0", "Sync my setup"),
+                        status: "Signed in differently on each side: choose which to keep".into(),
+                        failed: false,
+                        actions: vec![
+                            press("connection-sync-here-0", "Use this computer's"),
+                            press("connection-sync-there-0", "Use box's"),
+                        ],
+                    }),
+                };
+                div().w(px(560.)).child(connections::row(row, cx))
+            }
+        }
+        cx.update(ferrite_pane::pane::init_components);
+        let (_, cx) = cx.add_window_view(|_, _| Host);
+        cx.run_until_parked();
+        let bounds = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+            cx.debug_bounds(selector).unwrap_or_else(|| panic!("{selector} is drawn"))
+        };
+        let environment = bounds(cx, "connection-toggle-0");
+        let sync = bounds(cx, "connection-sync-0");
+        assert_eq!(sync.right(), environment.right(), "{sync:?} under {environment:?}");
+        assert_eq!(sync.size.width, environment.size.width);
+        let there = bounds(cx, "connection-sync-there-0");
+        assert!(there.right() <= sync.left(), "its presses before it");
+    }
+
     /// A choice from a list shows its current value; its menu lists every
     /// option with the current one checked, and picking one makes it the
     /// value shown and the one checked.

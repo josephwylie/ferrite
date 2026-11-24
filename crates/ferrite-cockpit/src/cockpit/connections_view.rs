@@ -41,6 +41,14 @@ pub(crate) enum ConnectionsEvent {
     ToggleLocal,
     /// Turn the saved environment with this target on or off.
     Toggle(String),
+    /// Turn "Sync my setup" of the saved environment with this target on
+    /// or off.
+    ToggleSync(String),
+    /// Sync the environment with this target though it removes much.
+    SyncAnyway(String),
+    /// Sync the environment with this target, each sign-in that differs
+    /// taken from this side.
+    UseSignIns(String, ferrite_core::tree::Side),
     /// Remove a saved environment, as confirmed.
     Remove { machine: Machine, unsaved: bool },
     /// A setup or pairing finished: save `machine` in place of the
@@ -87,6 +95,8 @@ pub(crate) struct Listed {
     pub unsaved: bool,
     /// Settings' defaults and CLIs are about it now.
     pub editing: bool,
+    /// Where its setup sync stands; `None` when the window syncs none.
+    pub sync: Option<super::setup_sync::Status>,
 }
 
 pub(super) struct Editor {
@@ -1072,6 +1082,7 @@ impl ConnectionsView {
                 act: action(cx, |_, _, cx| cx.emit(ConnectionsEvent::ToggleLocal)),
             }],
             removal: None,
+            sync: None,
         });
         let form = self.form(&saved, window, cx);
         let mut remote = vec![settings::Row::new(
@@ -1086,6 +1097,7 @@ impl ConnectionsView {
             state,
             unsaved,
             editing,
+            sync,
         } in listed
         {
             let index = row.index;
@@ -1200,6 +1212,40 @@ impl ConnectionsView {
                 ),
                 _ => ("Connecting…", None),
             };
+            let sync = sync.map(|status| {
+                use super::setup_sync::Status;
+                use ferrite_core::tree::Side;
+                let toggled = target.clone();
+                let press = |name: &str, label: &str, event: ConnectionsEvent| settings::ConnectionAction {
+                    id: format!("connection-sync-{name}-{index}").into(),
+                    label: label.to_string().into(),
+                    enabled: true,
+                    act: action(cx, move |_, _, cx| cx.emit(event.clone())),
+                };
+                let actions = match &status {
+                    Status::Stopped(_) => vec![press("anyway", "Sync anyway", ConnectionsEvent::SyncAnyway(target.clone()))],
+                    status if status.sign_ins() => vec![
+                        press("here", "Use this computer's", ConnectionsEvent::UseSignIns(target.clone(), Side::Here)),
+                        press("there", &format!("Use {}'s", machine.name), ConnectionsEvent::UseSignIns(target.clone(), Side::There)),
+                    ],
+                    _ => Vec::new(),
+                };
+                // A window that syncs no setup draws the switch off, and
+                // it does nothing.
+                let refused = matches!(status, Status::Refused(_));
+                settings::ConnectionSync {
+                    on: machine.sync_setup && !refused,
+                    toggle: settings::ConnectionAction {
+                        id: format!("connection-sync-{index}").into(),
+                        label: "Sync my setup".into(),
+                        enabled: !unsaved && !refused,
+                        act: action(cx, move |_, _, cx| cx.emit(ConnectionsEvent::ToggleSync(toggled.clone()))),
+                    },
+                    actions,
+                    failed: status.failed(),
+                    status: status.line(&machine.name).into(),
+                }
+            });
             let display_target = machine.display_target(&dir);
             remote.push(connection_row(settings::ConnectionRow {
                 name: machine.name.into(),
@@ -1210,6 +1256,7 @@ impl ConnectionsView {
                 detail,
                 actions,
                 removal,
+                sync,
             }));
         }
         let mut group = settings::Group::new(Some("Environments")).rows(remote);
@@ -1241,12 +1288,14 @@ impl CockpitView {
                         let unsaved = machines
                             .unsaved()
                             .is_some_and(|unsaved| unsaved.target == machine.target);
+                        let sync = self.setup_sync.read(cx).status(&machine.target);
                         Some(Listed {
                             editing: row.held.is_some() && row.held == editing,
                             row,
                             machine,
                             state,
                             unsaved,
+                            sync,
                         })
                     })
                     .collect()
@@ -1294,6 +1343,20 @@ impl CockpitView {
                 );
                 view.update(cx, |view, cx| view.answered(saved.err(), cx));
             }
+            ConnectionsEvent::ToggleSync(target) => {
+                let saved = self.save_connections(
+                    |saved| {
+                        for machine in saved.iter_mut().filter(|machine| machine.target == target) {
+                            machine.sync_setup = !machine.sync_setup;
+                        }
+                    },
+                    cx,
+                );
+                self.tick_setup_sync(cx);
+                view.update(cx, |view, cx| view.answered(saved.err(), cx));
+            }
+            ConnectionsEvent::SyncAnyway(target) => self.sync_setup_anyway(&target, cx),
+            ConnectionsEvent::UseSignIns(target, side) => self.sync_setup_sign_ins(&target, side, cx),
             ConnectionsEvent::Remove { machine, unsaved } => {
                 self.remove_connection(&view, machine, unsaved, cx)
             }

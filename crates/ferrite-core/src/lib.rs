@@ -64,6 +64,7 @@ pub mod server;
 pub mod session;
 pub mod session_file;
 pub mod settings;
+pub mod setup_sync;
 pub mod shell;
 pub mod snooze;
 pub mod sound;

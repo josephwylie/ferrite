@@ -2364,6 +2364,7 @@ dependencies = [
  "gpui-pre-platform",
  "image",
  "libc",
+ "notify 7.0.0",
  "serde",
  "serde_json",
  "url",

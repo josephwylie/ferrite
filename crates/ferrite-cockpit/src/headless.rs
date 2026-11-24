@@ -86,6 +86,7 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
         whats_new: None,
         unreadable,
         keys_refused,
+        setup_home: Some(ferrite_core::setup_sync::Home::from_env().map_err(|error| error.to_string())),
     };
     let mut driver = Driver::open(cx, |cx| {
         CockpitView::new_with_machines(core, provider, prefs, Some(machines), cx)

@@ -729,6 +729,7 @@ mod tests {
                 name: "build box".into(),
                 target: "me@build.example.com".into(),
                 enabled: false,
+                sync_setup: false,
             }],
             forge_hosts: ForgeHosts {
                 github: Some("ghe.corp.example".into()),

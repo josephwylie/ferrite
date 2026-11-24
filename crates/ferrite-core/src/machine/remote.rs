@@ -461,6 +461,7 @@ fn pair(
             name: descriptor.name,
             target,
             enabled: true,
+            sync_setup: true,
         })
     })();
     if result.is_err() {

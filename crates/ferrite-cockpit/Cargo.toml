@@ -63,6 +63,8 @@ url = "2"
 futures = "0.3"
 # The nav's surface grain (`nav::list::grain`). Already in the tree via gpui.
 image = { version = "0.25.1", default-features = false, features = ["png"] }
+# Setup sync sees the operator's setup change. Already in the tree via gpui.
+notify = "7"
 
 [dev-dependencies]
 # The test programs' own temporary folder (ferrite-core/src/test_temp.rs).

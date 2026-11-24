@@ -1,0 +1,1 @@
+{"type":"reply","id":329,"ok":{"kind":"tree","reply":{"result":"scanned","manifest":{"entries":{".claude/skills/shared":{"kind":"dir"},".claude/skills/shared/SKILL.md":{"kind":"file","size":3,"sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","mode":420,"modified":1764000000000}},"links":[".claude/skills/shared"]}}}}
