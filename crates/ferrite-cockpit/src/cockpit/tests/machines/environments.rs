@@ -6,8 +6,12 @@
 //! gets the Project card. What the draft holds goes with it.
 
 use super::*;
+use crate::cockpit::connections_view::ConnectionsEvent;
 use crate::cockpit::placement_view::PlacementView;
 use std::path::{Path, PathBuf};
+
+mod folder_browser;
+mod setup_sheet;
 
 /// `settings_dir(name)` spelled as the registry keeps what it registers
 /// there, its links resolved: macOS reaches `/tmp` through one.
@@ -376,378 +380,9 @@ fn picking_a_machine_moves_the_draft_to_its_projects_counterpart_with_all_it_hol
     });
 }
 
-/// With none on box, the setup sheet copies the draft's Project there:
-/// its browser opens in box's projects folder, the copy named for the
-/// Project's folder, and can be aimed elsewhere; what git ignores is listed
-/// unticked, and what is ticked goes too. The copy is registered on box
-/// and chosen on the draft, its git reads it as unchanged, and from then on
-/// each environment's Project is the other's counterpart.
-#[gpui::test]
-fn a_project_with_none_there_is_copied_by_the_sheet_and_known_there_after(cx: &mut TestAppContext) {
-    let base = resolved_dir("env-copy");
-    let projects = base.join("projects");
-    let (mut core, _fake, machines, _agents) =
-        two_machines_keeping_projects_in("env-copy", &projects);
-    let on_box = machines.held(1).unwrap();
-    let source = project_folder(&base.join("here/app"), None);
-    let mine = registered_here(&mut core, &source);
-    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
-    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
-    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
-    tick(cx);
-    let draft = focused_draft(&view, cx);
-    view.update(cx, |view, cx| {
-        view.panes[view.index_of(draft).unwrap()]
-            .composer
-            .update(cx, |composer, cx| composer.set("hello".into(), cx));
-    });
-
-    pick_on(&view, ENVIRONMENT, "box", cx);
-    until(cx, |cx| {
-        debug_bounds(cx, "placement-ignored:.env".into()).is_some()
-    });
-    assert_eq!(
-        text_in(&sheet_line(&view, cx), cx),
-        format!("{}/", projects.display()),
-        "box's projects folder"
-    );
-    assert_eq!(
-        destination(&view, cx),
-        format!("{}/app", projects.display()),
-        "the Project's folder name in it"
-    );
-    assert!(debug_bounds(cx, "placement-ignored:target".into()).is_some());
-    let dest = projects.join("copied");
-    aim_sheet_at(&view, &dest, cx);
-    press(cx, "placement-ignored:.env");
-    press(cx, "placement-copy");
-    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
-    tick(cx);
-    assert!(
-        sheet(&view, cx).is_none(),
-        "it closes once the copy is chosen"
-    );
-    let copy = draft_project(&view, draft, cx);
-    assert!(
-        roots_on(&view, on_box, cx).contains(&dest),
-        "registered on box"
-    );
-    assert!(dest.join("main.rs").is_file());
-    assert!(dest.join(".git").is_dir());
-    assert!(dest.join(".env").is_file(), "the ticked entry went");
-    assert!(!dest.join("target").exists(), "the unticked one did not");
-    assert_eq!(
-        git(&dest, &["status", "--porcelain"]),
-        "",
-        "git there reads the copy as unchanged"
-    );
-    let title = |cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| {
-            view.cockpit
-                .read(cx)
-                .project(copy)
-                .map(|project| project.title.clone())
-        })
-    };
-    until(cx, |cx| title(cx).as_deref() == Some("app"));
-    assert_eq!(
-        text_of(cx, "band-chip-0").as_deref(),
-        Some("app"),
-        "named as the Project it copies, not as its folder"
-    );
-    assert_eq!(text_of(cx, ENVIRONMENT).as_deref(), Some("box"));
-    view.read_with(cx, |view, cx| {
-        assert_eq!(
-            view.panes[view.index_of(draft).unwrap()]
-                .composer
-                .read(cx)
-                .text(),
-            "hello"
-        );
-    });
-
-    pick_on(&view, ENVIRONMENT, "Local", cx);
-    until(cx, |cx| draft_project(&view, draft, cx) == mine);
-    pick_on(&view, ENVIRONMENT, "box", cx);
-    until(cx, |cx| draft_project(&view, draft, cx) == copy);
-    assert!(
-        sheet(&view, cx).is_none(),
-        "the copy is the counterpart now"
-    );
-}
-
-/// A copy says how far it has got, and stopped part way registers
-/// nothing and leaves the draft where it was; its retry finishes it.
-#[gpui::test]
-fn a_copy_cancelled_part_way_adds_nothing_and_its_retry_finishes_it(cx: &mut TestAppContext) {
-    let base = resolved_dir("env-cancel");
-    let projects = base.join("projects");
-    let (mut core, _fake, machines, _agents) =
-        two_machines_keeping_projects_in("env-cancel", &projects);
-    let on_box = machines.held(1).unwrap();
-    let source = project_folder(&base.join("here/app"), None);
-    let big = vec![9u8; 4 << 20];
-    std::fs::write(source.join("big.bin"), &big).unwrap();
-    let mine = registered_here(&mut core, &source);
-    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
-    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
-    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
-    tick(cx);
-    let draft = focused_draft(&view, cx);
-    pick_on(&view, ENVIRONMENT, "box", cx);
-    until(cx, |cx| {
-        debug_bounds(cx, "placement-ignored:.env".into()).is_some()
-    });
-
-    BOX_SLOW.store(true, Ordering::SeqCst);
-    press(cx, "placement-copy");
-    until(cx, |cx| {
-        text_of(cx, "placement-progress").is_some_and(|said| said.starts_with("Copying "))
-    });
-    press(cx, "placement-cancel");
-    BOX_SLOW.store(false, Ordering::SeqCst);
-    assert_eq!(
-        text_of(cx, "placement-failed").as_deref(),
-        Some("Cancelled")
-    );
-    for _ in 0..4 {
-        tick(cx);
-    }
-    assert_eq!(draft_project(&view, draft, cx), mine, "the draft stays");
-    assert!(roots_on(&view, on_box, cx).is_empty(), "nothing registered");
-
-    press(cx, "placement-retry");
-    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
-    let dest = projects.join("app");
-    assert_eq!(std::fs::read(dest.join("big.bin")).unwrap(), big);
-}
-
-/// While a copy runs, where it goes is held: a press on a folder or a
-/// tick and keys in the copy's name change nothing, and New folder is
-/// gone. The card keeps one size from Choosing through Copying to Failed,
-/// clear of the draft's band, and once failed the sheet is the operator's
-/// again.
-#[gpui::test]
-fn while_a_copy_runs_where_it_goes_is_held_and_the_card_keeps_its_size(cx: &mut TestAppContext) {
-    bind_production_keys(cx);
-    let base = resolved_dir("env-held");
-    let projects = base.join("projects");
-    let (mut core, _fake, machines, _agents) =
-        two_machines_keeping_projects_in("env-held", &projects);
-    let on_box = machines.held(1).unwrap();
-    std::fs::create_dir_all(projects.join("elsewhere")).unwrap();
-    let source = project_folder(&base.join("here/app"), None);
-    std::fs::write(source.join("big.bin"), vec![9u8; 4 << 20]).unwrap();
-    let mine = registered_here(&mut core, &source);
-    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
-    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
-    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
-    tick(cx);
-    let draft = focused_draft(&view, cx);
-    pick_on(&view, ENVIRONMENT, "box", cx);
-    drawn(cx, "folder-row:elsewhere");
-    drawn(cx, "placement-ignored:.env");
-    settles(cx);
-    let card = |cx: &mut gpui::VisualTestContext| {
-        debug_bounds(cx, "placement-card".into()).expect("the card").size
-    };
-    let choosing = card(cx);
-    let band = debug_bounds(cx, "composer-env".into()).expect("the draft's band");
-    let bottom = debug_bounds(cx, "placement-card".into()).unwrap().bottom();
-    assert!(bottom < band.top(), "the card ends at {bottom:?}, over the band at {:?}", band.top());
-
-    let (line, name) = sheet(&view, cx)
-        .unwrap()
-        .read_with(cx, |sheet, cx| (sheet.dest.read(cx).field.clone(), sheet.name.clone()));
-    let aimed = destination(&view, cx);
-    cx.update(|window, cx| window.focus(&name.read(cx).focus_handle(cx), cx));
-    BOX_SLOW.store(true, Ordering::SeqCst);
-    cx.simulate_keystrokes("enter");
-    until(cx, |cx| {
-        text_of(cx, "placement-progress").is_some_and(|said| said.starts_with("Copying "))
-    });
-    assert_eq!(card(cx), choosing, "Copying keeps the card's size");
-    cx.simulate_input("zz");
-    press(cx, "folder-row:elsewhere");
-    press(cx, "placement-ignored:target");
-    assert_eq!(destination(&view, cx), aimed, "neither the name nor the folder moved");
-    assert_eq!(text_in(&line, cx), format!("{}/", projects.display()));
-    assert!(debug_bounds(cx, "placement-new-folder".into()).is_none());
-
-    press(cx, "placement-cancel");
-    BOX_SLOW.store(false, Ordering::SeqCst);
-    assert_eq!(text_of(cx, "placement-failed").as_deref(), Some("Cancelled"));
-    assert_eq!(card(cx), choosing, "Failed keeps it too");
-    assert!(debug_bounds(cx, "placement-new-folder".into()).is_some(), "the sheet is free again");
-
-    press(cx, "placement-retry");
-    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
-    let dest = projects.join("app");
-    assert!(dest.join("big.bin").is_file());
-    assert!(!dest.join("target").exists(), "the tick pressed mid-copy did not take");
-}
-
-/// A destination that holds something takes no copy: the sheet says so
-/// and nothing there changes. Another path copies; `Use what is there`
-/// registers it as it is.
-#[gpui::test]
-fn a_destination_that_holds_something_is_never_copied_over(cx: &mut TestAppContext) {
-    let base = resolved_dir("env-occupied");
-    let projects = base.join("projects");
-    let (mut core, _fake, machines, _agents) =
-        two_machines_keeping_projects_in("env-occupied", &projects);
-    let on_box = machines.held(1).unwrap();
-    let source = project_folder(&base.join("here/app"), None);
-    let there = projects.join("app");
-    std::fs::create_dir_all(&there).unwrap();
-    std::fs::write(there.join("keep.txt"), "mine").unwrap();
-    let mine = registered_here(&mut core, &source);
-    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
-    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
-    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
-    tick(cx);
-    let draft = focused_draft(&view, cx);
-    pick_on(&view, ENVIRONMENT, "box", cx);
-    until(cx, |cx| {
-        debug_bounds(cx, "placement-ignored:.env".into()).is_some()
-    });
-
-    press(cx, "placement-copy");
-    until(cx, |cx| {
-        debug_bounds(cx, "placement-occupied".into()).is_some()
-    });
-    assert!(debug_bounds(cx, "placement-use".into()).is_some());
-    let listed = |dir: &Path| {
-        let mut names: Vec<String> = std::fs::read_dir(dir)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        names
-    };
-    assert_eq!(listed(&there), ["keep.txt"], "nothing there is touched");
-
-    aim_sheet_at(&view, &projects.join("other"), cx);
-    assert!(
-        debug_bounds(cx, "placement-occupied".into()).is_none(),
-        "another path is chosen afresh"
-    );
-    assert!(debug_bounds(cx, "placement-copy".into()).is_some());
-    aim_sheet_at(&view, &there, cx);
-    press(cx, "placement-copy");
-    until(cx, |cx| debug_bounds(cx, "placement-use".into()).is_some());
-    press(cx, "placement-use");
-    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
-    assert_eq!(roots_on(&view, on_box, cx), [there.clone()]);
-    assert_eq!(listed(&there), ["keep.txt"], "used as it is");
-}
-
-/// A file another program holds while the copy runs is left behind, and
-/// the sheet stays up to list it once the rest is chosen on the draft.
-#[gpui::test]
-fn a_file_in_use_while_copying_is_left_behind_and_listed(cx: &mut TestAppContext) {
-    let base = resolved_dir("env-busy");
-    let projects = base.join("projects");
-    let (mut core, _fake, machines, _agents) =
-        two_machines_keeping_projects_in("env-busy", &projects);
-    let on_box = machines.held(1).unwrap();
-    let source = project_folder(&base.join("here/app"), None);
-    let busy = source.join("server.log");
-    std::fs::write(&busy, "running").unwrap();
-    #[cfg(windows)]
-    let _held = {
-        use std::os::windows::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .share_mode(0)
-            .open(&busy)
-            .unwrap()
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&busy, std::fs::Permissions::from_mode(0o000)).unwrap();
-        if std::fs::read(&busy).is_ok() {
-            // Root reads it anyway: nothing here is busy.
-            return;
-        }
-    }
-    let mine = registered_here(&mut core, &source);
-    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
-    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
-    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
-    tick(cx);
-    let draft = focused_draft(&view, cx);
-    pick_on(&view, ENVIRONMENT, "box", cx);
-    until(cx, |cx| {
-        debug_bounds(cx, "placement-ignored:.env".into()).is_some()
-    });
-    press(cx, "placement-copy");
-    until(cx, |cx| {
-        debug_bounds(cx, "placement-skipped".into()).is_some()
-    });
-    assert_eq!(
-        text_of(cx, "placement-skipped").as_deref(),
-        Some("server.log")
-    );
-    assert_eq!(
-        draft_project(&view, draft, cx).machine(),
-        on_box,
-        "the rest is chosen"
-    );
-    assert!(projects.join("app/main.rs").is_file());
-    press(cx, "placement-done");
-    assert!(sheet(&view, cx).is_none());
-}
-
-/// A copy box cannot take says why, and once box is back its retry
-/// copies.
-#[gpui::test]
-fn a_copy_that_fails_says_why_and_its_retry_copies(cx: &mut TestAppContext) {
-    let base = resolved_dir("env-failed");
-    let projects = base.join("projects");
-    let (mut core, _fake, machines, _agents) =
-        two_machines_keeping_projects_in("env-failed", &projects);
-    let on_box = machines.held(1).unwrap();
-    let source = project_folder(&base.join("here/app"), None);
-    let mine = registered_here(&mut core, &source);
-    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
-    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
-    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
-    tick(cx);
-    let draft = focused_draft(&view, cx);
-    pick_on(&view, ENVIRONMENT, "box", cx);
-    until(cx, |cx| {
-        debug_bounds(cx, "placement-ignored:.env".into()).is_some()
-    });
-
-    box_down(true);
-    until(cx, |cx| {
-        view.read_with(cx, |view, cx| !attached(view.cockpit.read(cx), on_box))
-    });
-    press(cx, "placement-copy");
-    until(cx, |cx| {
-        debug_bounds(cx, "placement-failed".into()).is_some()
-    });
-    assert!(text_of(cx, "placement-failed").is_some_and(|said| said.starts_with("Not copied: ")));
-    assert_eq!(draft_project(&view, draft, cx), mine);
-
-    box_down(false);
-    view.update(cx, |view, cx| {
-        view.cockpit
-            .update(cx, |cockpit, _| cockpit.retry_server(on_box))
-    });
-    until(cx, |cx| {
-        view.read_with(cx, |view, cx| attached(view.cockpit.read(cx), on_box))
-    });
-    press(cx, "placement-retry");
-    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
-    assert!(projects.join("app/main.rs").is_file());
-}
-
 /// A draft's `Add project…` opens the Project card on the draft's
-/// machine, and the Project made there is chosen on the draft.
+/// machine, and the Project made there is chosen on the draft. The card
+/// holds its size as a directory is added to it.
 #[gpui::test]
 fn add_project_on_a_draft_makes_it_on_the_drafts_machine(cx: &mut TestAppContext) {
     bind_production_keys(cx);
@@ -777,12 +412,19 @@ fn add_project_on_a_draft_makes_it_on_the_drafts_machine(cx: &mut TestAppContext
         field.set(format!("{}/", base.display()), cx)
     });
     drawn(cx, "folder-row:second");
+    settles(cx);
+    let card_size = |cx: &mut gpui::VisualTestContext| {
+        debug_bounds(cx, "project-editor-card".into()).expect("the card").size
+    };
+    let before = card_size(cx);
     press(cx, "folder-row:second");
     press(cx, "project-add-shown");
     view.read_with(cx, |view, cx| {
         let card = view.project_card(cx).unwrap();
         assert_eq!(card.read(cx).staged, std::slice::from_ref(&second));
     });
+    settles(cx);
+    assert_eq!(card_size(cx), before, "the card holds its size");
     assert_eq!(
         field.read_with(cx, |field, _| field.text().to_string()),
         format!("{}/", base.display()),
@@ -859,164 +501,152 @@ fn a_machines_projects_folder_is_changed_on_its_connections_row(cx: &mut TestApp
     assert_eq!(destination(&view, cx), format!("{}/app", work.display()));
 }
 
-/// The sheet's browser is the Machine's folders, walked with the mouse:
-/// the folders in the one shown, never its files or its dot folders, a
-/// press into one, `..` out; New folder names one there, which the copy
-/// makes. Where the copy goes reads as the folder shown and its name.
+/// Set up again, a saved environment keeps its projects folder, and where
+/// its Projects were copied goes with it to its new address.
 #[gpui::test]
-fn the_sheet_aims_the_copy_by_browsing_the_machines_folders(cx: &mut TestAppContext) {
-    bind_production_keys(cx);
-    let base = resolved_dir("env-browse");
+fn an_environment_set_up_again_keeps_its_projects_folder_and_copies(cx: &mut TestAppContext) {
+    let base = resolved_dir("env-set-up-again");
     let projects = base.join("projects");
-    let (mut core, _fake, machines, _agents) =
-        two_machines_keeping_projects_in("env-browse", &projects);
-    let on_box = machines.held(1).unwrap();
-    for folder in ["work/clients", "play", ".cache"] {
-        std::fs::create_dir_all(projects.join(folder)).unwrap();
-    }
-    std::fs::write(projects.join("notes.txt"), "").unwrap();
-    let source = project_folder(&base.join("here/app"), None);
-    let mine = registered_here(&mut core, &source);
+    let (core, _fake, machines, _agents) =
+        two_machines_keeping_projects_in("env-set-up-again", &projects);
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
-    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
-    tick(cx);
-    let draft = focused_draft(&view, cx);
-    pick_on(&view, ENVIRONMENT, "box", cx);
-    drawn(cx, "folder-row:work");
-    assert!(debug_bounds(cx, "folder-row:play".into()).is_some());
-    assert!(
-        debug_bounds(cx, "folder-row-up".into()).is_some(),
-        "a way out"
-    );
-    assert!(
-        debug_bounds(cx, "folder-row:notes.txt".into()).is_none(),
-        "no files"
-    );
-    assert!(
-        debug_bounds(cx, "folder-row:.cache".into()).is_none(),
-        "no dot folders"
-    );
-    let line = sheet_line(&view, cx);
-    let at = |folder: &str| format!("{}/{folder}", projects.display());
+    let settings = view.read_with(cx, |view, _| view.prefs.dir.clone());
+    let old = box_machine().target;
+    let placed = ferrite_core::placement::Placement {
+        local_root: base.join("here/notes"),
+        remote_root: projects.join("notes"),
+    };
+    ferrite_core::placement::place(&ferrite_core::machine::dir(&settings, &old), placed.clone()).unwrap();
 
-    press(cx, "folder-row:work");
-    assert_eq!(text_in(&line, cx), at("work/"));
-    drawn(cx, "folder-row:clients");
-    assert_eq!(destination(&view, cx), at("work/app"));
-    press(cx, "folder-row-up");
-    assert_eq!(text_in(&line, cx), at(""));
-    drawn(cx, "folder-row:play");
-    press(cx, "folder-row:play");
-    assert_eq!(destination(&view, cx), at("play/app"));
-    drawn(cx, "folder-browser-empty");
-
-    press(cx, "placement-new-folder");
-    assert!(debug_bounds(cx, "folder-browser-naming".into()).is_some());
-    cx.simulate_input("fresh");
-    cx.simulate_keystrokes("enter");
-    assert!(
-        sheet(&view, cx).is_some(),
-        "the name's ↵ is not the sheet's"
-    );
-    assert_eq!(text_in(&line, cx), at("play/fresh/"));
-    assert!(debug_bounds(cx, "folder-browser-new".into()).is_some());
-    assert!(
-        !projects.join("play/fresh").exists(),
-        "named, not made until the copy"
-    );
-    assert_eq!(destination(&view, cx), at("play/fresh/app"));
-    let name = sheet(&view, cx)
-        .unwrap()
-        .read_with(cx, |sheet, _| sheet.name.clone());
-    name.update(cx, |name, cx| name.set(String::new(), cx));
-    let focus = name.read_with(cx, |name, cx| name.focus_handle(cx));
-    cx.update(|window, cx| window.focus(&focus, cx));
+    let connections = connections_view(&view, cx);
+    let again = Machine {
+        name: "box".into(),
+        ..Machine::new("me@box.example")
+    };
+    view.update(cx, |view, cx| {
+        view.on_connections_event(
+            connections,
+            &ConnectionsEvent::Ready {
+                machine: again.clone(),
+                replacing: Some(old.clone()),
+            },
+            cx,
+        )
+    });
     tick(cx);
-    cx.simulate_input("mirror");
+    view.read_with(cx, |view, _| {
+        let saved = &view.prefs.settings.machines[0];
+        assert_eq!(saved.target, again.target);
+        assert_eq!(saved.projects_dir, projects.display().to_string(), "its own folder kept");
+    });
     assert_eq!(
-        destination(&view, cx),
-        at("play/fresh/mirror"),
-        "the name keeps the keys"
+        ferrite_core::placement::placements(&ferrite_core::machine::dir(&settings, &again.target)),
+        [placed]
     );
-
-    drawn(cx, "placement-ignored:.env");
-    press(cx, "placement-copy");
-    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
-    let dest = projects.join("play/fresh/mirror");
-    assert!(dest.join("main.rs").is_file(), "the copy made the folder");
-    assert!(roots_on(&view, on_box, cx).contains(&dest));
+    assert_eq!(
+        ferrite_core::placement::placements(&ferrite_core::machine::dir(&settings, &old)),
+        []
+    );
 }
 
-/// A folder box cannot read says so where its rows would be, and the
-/// sheet goes on: `..` leads out of it.
+/// A draft whose environment is turned off goes with it, and Connections
+/// says so; turned on again, the draft comes back with its words.
 #[gpui::test]
-fn a_folder_that_cannot_be_read_says_so_in_place(cx: &mut TestAppContext) {
-    let base = resolved_dir("env-unread");
-    let projects = base.join("projects");
-    let (mut core, _fake, machines, _agents) =
-        two_machines_keeping_projects_in("env-unread", &projects);
-    let source = project_folder(&base.join("here/app"), None);
-    let mine = registered_here(&mut core, &source);
-    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
-    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
-    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
-    tick(cx);
-    pick_on(&view, ENVIRONMENT, "box", cx);
-    until(cx, |cx| sheet(&view, cx).is_some());
-    let line = sheet_line(&view, cx);
-    let missing = format!("{}/missing/", projects.display());
-    line.update(cx, |line, cx| line.set(missing.clone(), cx));
-    drawn(cx, "folder-browser-unread");
-    assert!(
-        text_of(cx, "folder-browser-unread")
-            .is_some_and(|said| said.starts_with(&format!("{missing} cannot be read"))),
-        "it names the folder"
-    );
-    assert_eq!(text_in(&line, cx), missing, "and stays where it was typed");
-    press(cx, "folder-row-up");
-    assert_eq!(text_in(&line, cx), format!("{}/", projects.display()));
-    assert!(debug_bounds(cx, "folder-browser-unread".into()).is_none());
-}
-
-/// A projects folder box does not have opens the browser in box's home,
-/// the copy named in it.
-#[gpui::test]
-fn a_projects_folder_the_machine_lacks_opens_the_browser_at_home(cx: &mut TestAppContext) {
-    let base = resolved_dir("env-no-projects");
-    let (mut core, _fake, machines, _agents) = two_machines_with(
-        "env-no-projects",
-        0,
-        Machine {
-            projects_dir: base.join("nowhere").display().to_string(),
-            ..box_machine()
-        },
-    );
-    let source = project_folder(&base.join("here/app"), None);
-    let mine = registered_here(&mut core, &source);
-    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
-    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
-    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
-    tick(cx);
-    pick_on(&view, ENVIRONMENT, "box", cx);
-    until(cx, |cx| sheet(&view, cx).is_some());
-    let line = sheet_line(&view, cx);
-    until(cx, |cx| text_in(&line, cx) == "~/");
-    assert_eq!(destination(&view, cx), "~/app");
-    assert!(debug_bounds(cx, "folder-browser-unread".into()).is_none());
-}
-
-/// The sheet is finished with the arrows and ↵ alone: ↓ walks the rows,
-/// ↵ goes into the one it rests on, and ↵ once more copies there.
-#[gpui::test]
-fn the_sheet_is_finished_with_the_arrows_and_enter(cx: &mut TestAppContext) {
-    bind_production_keys(cx);
-    let base = resolved_dir("env-keys");
-    let projects = base.join("projects");
-    let (mut core, _fake, machines, _agents) =
-        two_machines_keeping_projects_in("env-keys", &projects);
+fn a_draft_put_away_with_its_environment_comes_back_with_it(cx: &mut TestAppContext) {
+    let (mut core, _fake, machines, _agents) = two_machines("env-put-away", 0);
     let on_box = machines.held(1).unwrap();
-    std::fs::create_dir_all(projects.join("work")).unwrap();
+    let folder = resolved_dir("env-put-away").join("theirs");
+    std::fs::create_dir_all(&folder).unwrap();
+    let theirs = registered(&mut core, on_box, &folder);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft_in_project(theirs, cx));
+    tick(cx);
+    let draft = focused_draft(&view, cx);
+    view.update(cx, |view, cx| {
+        view.panes[view.index_of(draft).unwrap()]
+            .composer
+            .update(cx, |composer, cx| composer.set("keep these words".into(), cx));
+    });
+    tick(cx);
+    let drafts_saying = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.panes
+                .iter()
+                .filter(|pane| pane.draft().is_some())
+                .filter(|pane| pane.composer.read(cx).text() == "keep these words")
+                .count()
+        })
+    };
+    let toggle = |cx: &mut gpui::VisualTestContext| {
+        let connections = connections_view(&view, cx);
+        view.update(cx, |view, cx| {
+            view.on_connections_event(connections, &ConnectionsEvent::Toggle(box_machine().target), cx)
+        });
+        tick(cx);
+    };
+
+    toggle(cx);
+    assert_eq!(drafts_saying(cx), 0, "put away with box");
+    let warned = connection_groups(&view, cx)
+        .into_iter()
+        .filter_map(|group| group.note)
+        .any(|note| note == "Your draft on box is put away until box is on again.");
+    assert!(warned, "Connections says where the draft went");
+
+    toggle(cx);
+    until(cx, |cx| drafts_saying(cx) == 1);
+}
+
+/// Tab walks a draft's files, then its band: one control holds the ring
+/// at a time, never a file and a chip at once.
+#[gpui::test]
+fn tab_rings_one_control_of_a_draft_at_a_time(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (mut core, _fake, machines, _agents) = two_machines("env-one-ring", 0);
+    let base = resolved_dir("env-one-ring");
+    let folder = base.join("mine");
+    std::fs::create_dir_all(&folder).unwrap();
+    let note = base.join("note.txt");
+    std::fs::write(&note, "note").unwrap();
+    let mine = registered_here(&mut core, &folder);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    let draft = focused_draft(&view, cx);
+    let composer = view.read_with(cx, |view, _| view.panes[view.index_of(draft).unwrap()].composer.clone());
+    composer.update(cx, |composer, cx| {
+        composer.set("look".into(), cx);
+        composer.add_local_files(std::slice::from_ref(&note), cx);
+    });
+    cx.update(|window, cx| window.focus(&composer.read(cx).focus_handle(cx), cx));
+    tick(cx);
+    let mut chips = 0;
+    for _ in 0..8 {
+        cx.simulate_keystrokes("tab");
+        tick(cx);
+        let (on_file, chip) = cx.update(|window, cx| {
+            let view = view.read(cx);
+            let pane = &view.panes[view.index_of(draft).unwrap()];
+            let composer = pane.composer.read(cx);
+            let on_file = composer.focus_target(window, cx) != composer.focus_handle(cx);
+            (on_file, pane.draft().unwrap().band_focus)
+        });
+        assert!(!(on_file && chip.is_some()), "a file and {chip:?} ringed at once");
+        chips += usize::from(chip.is_some());
+    }
+    assert!(chips > 0, "the band was reached");
+}
+
+/// A sheet coming up over a draft takes the ring off its band.
+#[gpui::test]
+fn a_sheet_coming_up_takes_the_ring_off_the_band(cx: &mut TestAppContext) {
+    let base = resolved_dir("env-ring-sheet");
+    let projects = base.join("projects");
+    let (mut core, _fake, machines, _agents) =
+        two_machines_keeping_projects_in("env-ring-sheet", &projects);
     let source = project_folder(&base.join("here/app"), None);
     let mine = registered_here(&mut core, &source);
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
@@ -1024,18 +654,44 @@ fn the_sheet_is_finished_with_the_arrows_and_enter(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
     tick(cx);
     let draft = focused_draft(&view, cx);
+    let ring = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.panes[view.index_of(draft).unwrap()].draft().unwrap().band_focus)
+    };
+    view.update(cx, |view, cx| {
+        let index = view.index_of(draft).unwrap();
+        view.panes[index].draft_mut().unwrap().band_focus = Some(pane::BandChip::Environment);
+        cx.notify();
+    });
     pick_on(&view, ENVIRONMENT, "box", cx);
-    drawn(cx, "folder-row:work");
-    drawn(cx, "placement-ignored:.env");
-    let line = sheet_line(&view, cx);
-    let focus = line.read_with(cx, |line, cx| line.focus_handle(cx));
-    cx.update(|window, cx| window.focus(&focus, cx));
-    tick(cx);
+    until(cx, |cx| sheet(&view, cx).is_some());
+    assert_eq!(ring(cx), None);
+}
 
-    cx.simulate_keystrokes("down down");
-    cx.simulate_keystrokes("enter");
-    assert_eq!(text_in(&line, cx), format!("{}/work/", projects.display()));
-    cx.simulate_keystrokes("enter");
-    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
-    assert!(projects.join("work/app/main.rs").is_file());
+/// Send sends, even while a chip of the draft's band holds the ring: it
+/// opens no chip's menu.
+#[gpui::test]
+fn send_sends_while_a_band_chip_holds_the_ring(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (mut core, _fake, machines, _agents) = two_machines("env-send-ring", 0);
+    let folder = resolved_dir("env-send-ring").join("mine");
+    std::fs::create_dir_all(&folder).unwrap();
+    let mine = registered_here(&mut core, &folder);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    let draft = focused_draft(&view, cx);
+    let composer = view.read_with(cx, |view, _| view.panes[view.index_of(draft).unwrap()].composer.clone());
+    composer.update(cx, |composer, cx| composer.set("hello".into(), cx));
+    cx.update(|window, cx| window.focus(&composer.read(cx).focus_handle(cx), cx));
+    tick(cx);
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    let ringed = view.read_with(cx, |view, _| {
+        view.panes[view.index_of(draft).unwrap()].draft().unwrap().band_focus
+    });
+    assert!(ringed.is_some(), "a chip holds the ring");
+    press(cx, "composer-send");
+    assert!(view.read_with(cx, |view, _| view.band_menu().is_none()), "no chip's menu");
+    until(cx, |cx| view.read_with(cx, |view, _| view.index_of(draft).is_none()));
 }
