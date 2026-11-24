@@ -509,7 +509,7 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> AnyElement {
                         .text_color(rgb(INK_STRONG))
                         .child(row.title.clone()),
                 )
-                .when(hinted, |text| text.child(hint(row.hint.clone()))),
+                .when(hinted, |text| text.child(hint(row))),
         )
         .child(
             // The control stands on the label's line, at the right.
@@ -528,19 +528,18 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> AnyElement {
 }
 
 /// A row's description: `INK_SUBTLE` at 13, wrapping to a second line where
-/// it needs one. One that opens with a key table's chord (`cmd-B toggles it
-/// any time`) draws the chord as keys (`⌘B`, `components::key_combo`): the
-/// face has no command glyph.
-fn hint(detail: SharedString) -> Div {
+/// it needs one. A row whose hint opens with a chord (`Row::keys`) draws it
+/// as keys first (`components::key_combo`: `⌘B` on macOS, `⌃B` elsewhere).
+fn hint(row: &Row) -> Div {
     let line = components::text_ui().min_w_0().text_color(rgb(INK_SUBTLE));
-    match detail.split_once(' ') {
-        Some((chord, rest)) if chord.starts_with("cmd-") => line
+    match &row.keys {
+        Some(keys) => line
             .flex()
             .items_center()
             .gap(px(CH))
-            .child(components::key_combo(chord, INK_SUBTLE))
-            .child(SharedString::from(rest.to_string())),
-        _ => line.child(detail),
+            .child(components::key_combo(keys, INK_SUBTLE))
+            .child(row.hint.clone()),
+        None => line.child(row.hint.clone()),
     }
 }
 

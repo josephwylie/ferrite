@@ -245,6 +245,9 @@ pub enum Control {
 pub struct Row {
     pub title: SharedString,
     pub hint: SharedString,
+    /// The chord the hint opens with, as `components::bound_chord` spells
+    /// this platform's key table (`cmd-B`, `ctrl-B`): drawn as keys.
+    pub keys: Option<SharedString>,
     pub words: Vec<SharedString>,
     pub control: Control,
     /// A dependent setting, drawn indented under the row before it.
@@ -273,10 +276,22 @@ impl Row {
         Self {
             title: title.into(),
             hint: hint.into(),
+            keys: None,
             words,
             control,
             nested: false,
         }
+    }
+
+    /// Open the hint with the chord the key table binds `action` to, read
+    /// as the platform spells it. An unbound action leaves the row without
+    /// a hint: its words name a key that would not act.
+    pub fn bound_keys(mut self, action: &str) -> Self {
+        match crate::components::bound_chord(action) {
+            Some(keys) => self.keys = Some(keys.into()),
+            None => self.hint = SharedString::default(),
+        }
+        self
     }
 
     /// Stand under the row before it: a setting that depends on it.

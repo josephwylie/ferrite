@@ -2,7 +2,7 @@ use super::*;
 use ferrite_ui::frame::settings::{
     ConnectionForm, ConnectionMode, ConnectionRow, ConnectionSuggestions, WindowAct,
 };
-use gpui::component::{switch::Switch, ActiveTheme, ElementExt};
+use gpui::component::{ActiveTheme, ElementExt};
 
 fn ink(cx: &App) -> u32 {
     if cx.theme().is_dark() {
@@ -266,7 +266,8 @@ fn show_suggestions(
                         )
                         .child(text(host.address, 12., muted(cx)).flex_1().truncate())
                         .when(at < 9, |row| {
-                            row.child(text(format!("⌘{}", at + 1), 12., muted(cx)))
+                            let keys = ferrite_ui::keymap::PLATFORM.chord(&(at + 1).to_string());
+                            row.child(text(components::chord_text(&keys), 12., muted(cx)))
                         })
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             cx.stop_propagation();
@@ -718,6 +719,8 @@ pub(super) fn group(label: Option<SharedString>, group: &Group, cx: &App) -> Div
 
 pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
     let enabled = row.enabled;
+    // Only the Local environment has no target: it is this computer.
+    let here = row.target.is_empty();
     let toggle = row
         .actions
         .iter()
@@ -738,15 +741,27 @@ pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
         .into();
     let mut actions = div().flex().items_center().flex_shrink_0().gap(px(8.));
     if let Some(toggle) = toggle {
+        // Every Settings toggle's face (`Control::Toggle`): a stop that
+        // flips on a press, Enter or Space.
         let id = toggle.id.clone();
+        let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
         actions = actions.child(
             div().debug_selector(move || id.to_string()).child(
-                Switch::new(toggle.id)
-                    .checked(enabled)
+                components::faded_button(toggle.id.clone(), none, none, none, rgb(INK_STRONG).into(), cx)
+                    .tab_stop(true)
+                    .selected(enabled)
                     .disabled(!toggle.enabled)
-                    .small()
                     .accessibility_label(format!("Enable {}", row.name))
-                    .on_click(move |_, window, cx| (toggle.act)(window, cx)),
+                    .h(px(SETTINGS_CONTROL_H))
+                    .px(px(SPACE_1))
+                    .child(components::switch(
+                        SharedString::from(format!("{}-switch", toggle.id)),
+                        enabled,
+                    ))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        (toggle.act)(window, cx)
+                    }),
             ),
         );
     }
@@ -795,21 +810,19 @@ pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
                 .flex()
                 .items_center()
                 .gap(px(12.))
-                .when(!row.target.is_empty(), |row| {
-                    row.child(icon(icons::machine(false), 16., muted(cx)))
-                })
+                .child(icon(icons::machine(here), 16., muted(cx)))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .min_w_0()
                         .flex_1()
-                        .when(!enabled && !row.target.is_empty(), |identity| {
+                        .when(!enabled && !here, |identity| {
                             identity.opacity(0.5)
                         })
                         .child(text(row.name, 14., ink(cx)).font_weight(gpui::FontWeight::MEDIUM))
                         .child(text(
-                            if row.target.is_empty() {
+                            if here {
                                 row.status.to_string()
                             } else {
                                 format!("{} · {}", row.target, row.status)

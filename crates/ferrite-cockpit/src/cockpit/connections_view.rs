@@ -613,7 +613,7 @@ impl ConnectionsView {
             return;
         }
         let hosts = self.hosts_matching(&self.inputs(cx).saved, cx);
-        if modifiers.platform && !modifiers.alt && !modifiers.control && !modifiers.shift {
+        if modifiers == gpui::Modifiers::secondary_key() {
             if let Some(at) = key.parse::<usize>().ok().filter(|at| (1..=9).contains(at)) {
                 if let Some(host) = hosts.get(at - 1) {
                     cx.stop_propagation();
