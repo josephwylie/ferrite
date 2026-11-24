@@ -397,6 +397,9 @@ struct Server {
     /// The pump's own channel: what is answered off the pump is heard on
     /// it, and replied to at once.
     heard: mpsc::Sender<Heard>,
+    /// No connection can reach this Server any more: it ends, so a window
+    /// starts one that listens.
+    deaf: bool,
     attachments: HashMap<ClientId, Arc<Mutex<ferrite_core::attachment_transfer::Session>>>,
     trees: HashMap<ClientId, tree::Lane>,
     api_reads: Vec<ApiRead>,
@@ -497,6 +500,7 @@ impl Server {
             searches: Vec::new(),
             reads: Vec::new(),
             heard,
+            deaf: false,
             attachments: HashMap::new(),
             trees: HashMap::new(),
             api_reads: Vec::new(),
@@ -541,17 +545,18 @@ impl Server {
             match hear.recv_timeout(wait) {
                 Ok(heard) => self.hear(heard),
                 Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => {
-                    ferrite_core::log!("server: the listener stopped");
-                    self.stop();
-                    return 1;
-                }
+                Err(RecvTimeoutError::Disconnected) => self.deaf = true,
             }
             for _ in 1..INTAKE_BATCH {
                 let Ok(heard) = hear.try_recv() else {
                     break;
                 };
                 self.hear(heard);
+            }
+            if self.deaf {
+                ferrite_core::log!("server: the listener stopped");
+                self.stop();
+                return 1;
             }
             self.tell_watched();
             for (thread, branch) in self.checkouts.answered() {
@@ -623,6 +628,7 @@ impl Server {
             Heard::Message(id, message) => self.message(id, message),
             Heard::Api(heard) => self.api_heard(heard),
             Heard::Answered(id, request, answer) => self.reply(id, request, answer),
+            Heard::Stopped => self.deaf = true,
         }
     }
 

@@ -566,6 +566,10 @@ pub enum Heard {
     /// A client's command answered off the pump: the reply to its command
     /// of that id, to send as soon as it is heard.
     Answered(ClientId, u64, Result<Option<Done>, protocol::WireError>),
+    /// The listener stopped taking connections. The pump's own senders
+    /// keep its channel open, so it hears this instead of the channel
+    /// closing.
+    Stopped,
 }
 
 /// One client's end on the Server: its outbox, drained by a writer
@@ -744,6 +748,7 @@ pub fn accept_all(listener: Listener, heard: Sender<Heard>, lag_bytes: usize) ->
                     }
                     Err(error) => {
                         crate::log!("server: stopped accepting: {error}");
+                        let _ = heard.send(Heard::Stopped);
                         return;
                     }
                 }
