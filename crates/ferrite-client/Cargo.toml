@@ -6,6 +6,9 @@ license.workspace = true
 description = "Ferrite's window model: the Cockpit a window holds of its machines' Servers. No UI."
 
 [features]
+# The Engine in this process the tests, the demo and the visual reference
+# run in place of a Server (`cockpit::in_process`, ADR 0049). A released
+# window never turns it on, so it holds no Engine.
 test-support = ["ferrite-core/test-support"]
 
 [dependencies]
@@ -17,6 +20,8 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
+# The integration tests drive an Engine in their own process (`in_process`).
+ferrite-client = { path = ".", features = ["test-support"] }
 chrono = "0.4.45"
 # The test programs' own temporary folder (ferrite-core/src/test_temp.rs).
 ctor = "1"

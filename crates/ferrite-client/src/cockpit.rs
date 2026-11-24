@@ -3,14 +3,15 @@
 //! whether it has the operator's focus — lives here; everything that must
 //! keep running without a window is the Engine's, and the Cockpit changes
 //! it only through the Engine's acts. The Engine runs in the Server, and
-//! the acts are commands over its socket (`remote`); in `--demo`, `--load`
-//! and every test it runs in this process, and an act is the same command,
-//! answered by the same Engine code the Server runs (`Link::execute`).
-//! Either way the window reads what the Engine's messages built: each open
+//! the acts are commands over its socket (`remote`); for the tests and the
+//! demo it runs in this process (`in_process`, a fixture a released app
+//! never compiles), answering the same commands with the same Engine code
+//! the Server runs. Either way every act goes through the machine's `Link`,
+//! and the window reads what the Engine's messages built: each open
 //! Thread's mirror, and the shared state's copies. The open Threads are
 //! shared: the Roster follows them (`sync_roster`).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
@@ -19,7 +20,6 @@ use std::time::{Duration, Instant};
 use ferrite_core::activity::{AgentKey, DecisionHandle, Subject};
 pub use ferrite_core::activity::ToolTiming;
 pub use ferrite_core::digest::title_from_prompt;
-pub use ferrite_core::engine::{AgentLaunch, Engine, Preparation, RssSampler, SpawnRequest, Spawner};
 pub use ferrite_core::pane_update::SubjectUpdate;
 pub use ferrite_core::prompt_history::HistoryDirection;
 pub use ferrite_core::provider::ProviderChoice;
@@ -34,21 +34,23 @@ use ferrite_core::protocol::{
 use ferrite_core::provider::Provider;
 use ferrite_core::roster::{DraftId, PaneIdentity, Roster};
 use ferrite_core::store::Store;
-use ferrite_core::transcript::Input;
 use ferrite_core::{
     Decision, DecisionAnswer, MachineId, MachineKey, ModelInfo, ProjectKey, SavedThread, ThreadId,
     ThreadKey,
 };
 pub use ask::Ask;
-use held::{commanded, replied, Drawn, Executed, HeldMachine, Link};
+use held::{Drawn, Executed, HeldMachine, Link};
+#[cfg(any(test, feature = "test-support"))]
+pub use in_process::{AgentLaunch, Engine, HeldRead, Preparation, RssSampler, SpawnRequest, Spawner};
 pub use mirror::ThreadView;
 pub use remote::{Attach, Endpoint, ServerRestart, ServerState};
 #[cfg(any(test, feature = "test-support"))]
 pub use remote::waits;
 
 mod ask;
-mod factory_fixture;
 mod held;
+#[cfg(any(test, feature = "test-support"))]
+mod in_process;
 pub mod mirror;
 mod parked;
 mod remote;
@@ -81,9 +83,6 @@ pub struct Cockpit {
     said: Said,
     /// What the model does of its own once a Server says an act was done.
     follows: Follows,
-    /// A fixture world's Factory, answering its Factory asks as a
-    /// Server's would; a real window has none.
-    factory_fixture: Option<factory_fixture::FactoryFixture>,
     /// The Subject each Pane shows, where it is not Main: what this window
     /// reads when the operator looks at it.
     visible_subjects: BTreeMap<ThreadKey, Subject>,
@@ -96,27 +95,6 @@ pub struct Cockpit {
     /// The Threads whose Composer in this window holds unsent text, as the
     /// window says (`set_composing`).
     composing: BTreeSet<ThreadKey>,
-    /// The self-hosted forges a review's pull request is read from here,
-    /// when this window runs its agents itself (`settings_changed`).
-    forge: ferrite_reviewr::config::PluginConfig,
-    /// What a fixture world's forge says (`fixture_forge`), by checkout:
-    /// answered in place of its CLI. Empty outside fixtures.
-    forge_fixture: HashMap<PathBuf, ferrite_reviewr::forge::PrView>,
-    /// A fixture world's pull requests read by number, and its lists.
-    forge_numbered: HashMap<(PathBuf, u64), ferrite_core::protocol::ReviewPullRequest>,
-    forge_diffs: HashMap<(PathBuf, u64), Vec<ferrite_reviewr::ferrite::FileSides>>,
-    forge_lists:
-        HashMap<(PathBuf, ferrite_core::protocol::WirePrFilter), ferrite_core::protocol::ReviewPullRequests>,
-    /// The checkouts whose whole-PR reads wait for a test's answer
-    /// (`fixture_hold_pr_reads`), and the reads waiting.
-    forge_held: std::collections::HashSet<PathBuf>,
-    held_reads: Vec<HeldRead>,
-    /// What a fixture world's disk says is free (`fixture_free_disk`):
-    /// answered in place of the volume. `None` outside fixtures.
-    free_disk_fixture: Option<u64>,
-    /// A fixture world's Server accepts every browser act
-    /// (`fixture_browser_accepts`), answering an empty browser.
-    browser_fixture: bool,
 }
 
 /// What the model does of its own once an act is answered (ADR 0041): the
@@ -234,37 +212,6 @@ fn gone() -> WireError {
 }
 
 impl Cockpit {
-    /// A window driving an Engine of its own, in this process: this
-    /// computer.
-    pub fn try_new(store: Store, spawner: Box<dyn Spawner>) -> io::Result<Self> {
-        let mut cockpit = Self::empty();
-        cockpit.hold_machine(Self::in_process_machine(store, spawner, MachineKey(None))?);
-        Ok(cockpit)
-    }
-
-    /// An Engine of its own in this process, saved as `saved_as`.
-    fn in_process_machine(
-        store: Store,
-        spawner: Box<dyn Spawner>,
-        saved_as: MachineKey,
-    ) -> io::Result<HeldMachine> {
-        let logs = store.clone();
-        let mut engine = Engine::try_new(store, spawner)?;
-        // Its window pumps it: a park is listed by the pump that parked it.
-        engine.read_parked_in_place();
-        Ok(HeldMachine::new(
-            Link::InProcess(Box::new(engine)),
-            Some(logs),
-            saved_as,
-        ))
-    }
-
-    /// Test and embedding convenience. The application uses `try_new` so a
-    /// protected or incompatible registry is reported instead of replaced.
-    pub fn new(store: Store, spawner: Box<dyn Spawner>) -> Self {
-        Self::try_new(store, spawner).expect("the workspace registry opens")
-    }
-
     /// A window holding no machine: every one in Settings is turned off.
     /// It lists nothing and starts nothing until one is held.
     pub fn empty() -> Self {
@@ -274,19 +221,9 @@ impl Cockpit {
             roster: Roster::default(),
             said: Said::default(),
             follows: Follows::default(),
-            factory_fixture: None,
             visible_subjects: BTreeMap::new(),
             window_active: true,
             composing: BTreeSet::new(),
-            forge: Default::default(),
-            forge_fixture: HashMap::new(),
-            forge_numbered: HashMap::new(),
-            forge_diffs: HashMap::new(),
-            forge_lists: HashMap::new(),
-            forge_held: Default::default(),
-            held_reads: Vec::new(),
-            free_disk_fixture: None,
-            browser_fixture: false,
         }
     }
 
@@ -309,7 +246,7 @@ impl Cockpit {
         let saved_as = attach.saved_as.clone();
         let mut remote = remote::Remote::new(attach);
         let arrived = if local { remote.attach_now() } else { None };
-        let mut machine = HeldMachine::new(Link::Server(Box::new(remote)), logs, saved_as);
+        let mut machine = HeldMachine::new(Box::new(remote), logs, saved_as);
         // A window streams only what it draws, from its first attach on: it
         // draws nothing yet (ADR 0032).
         machine.drawn = Some(Drawn::default());
@@ -318,14 +255,6 @@ impl Cockpit {
         self.roster.set_start(self.start_machine());
         self.arrive(id, arrived.into_iter().collect());
         Ok(id)
-    }
-
-    fn hold_machine(&mut self, machine: HeldMachine) -> MachineId {
-        let id = machine.id;
-        self.machines.insert(id, machine);
-        self.roster.set_start(self.start_machine());
-        self.receive_from(id);
-        id
     }
 
     /// Let `machine` go: turned off or removed in Settings. Its Panes leave
@@ -482,9 +411,6 @@ impl Cockpit {
         key: ThreadKey,
         op: impl FnOnce(ThreadId) -> Op,
     ) -> Ask<ferrite_core::browser::State> {
-        if self.browser_fixture {
-            return Ask::answered(Ok(ferrite_core::browser::State::default()));
-        }
         self.browser_ask(key, op, |done| match done {
             Some(Done::Browser { state }) => Ok(state),
             _ => Err(io::Error::other(
@@ -493,18 +419,15 @@ impl Cockpit {
         })
     }
 
-    /// One Browser ask of the Server; an Engine in this process has no
-    /// Browser, which its `Ask` answers at once.
+    /// One Browser ask of the Server, answered as `read` makes of its
+    /// reply.
     fn browser_ask<T: Send + 'static>(
         &mut self,
         key: ThreadKey,
         op: impl FnOnce(ThreadId) -> Op,
         read: fn(Option<Done>) -> io::Result<T>,
     ) -> Ask<T> {
-        match self.remote_of(key) {
-            Ok(remote) => remote.ask_in_time(op(key.thread()), read),
-            Err(error) => Ask::answered(Err(error)),
-        }
+        self.ask_on(key, op, move |reply| reply.map_err(io::Error::from).and_then(read))
     }
 
     /// One Browser act whose reply nobody reads: the Server's broadcasts
@@ -542,32 +465,7 @@ impl Cockpit {
         let Some((machine, thread)) = self.at_mut(thread) else {
             return Ask::answered(Err(gone().into()));
         };
-        match &mut machine.link {
-            Link::Server(server) => {
-                let Some(hash) = annotation.original_hash() else {
-                    return Ask::answered(Err(io::Error::other("This annotation has no screenshot")));
-                };
-                let image = match server.browser_capture_image(thread, hash.to_owned()) {
-                    Ok(image) => image,
-                    Err(error) => return Ask::answered(Err(error)),
-                };
-                Ask::of(read_here(move || {
-                    let png = image
-                        .recv_timeout(std::time::Duration::from_secs(30))
-                        .map_err(|error| error.to_string())?
-                        .map_err(|error| error.to_string())?;
-                    annotation
-                        .cache_wire_image(&png)
-                        .map_err(|error| error.to_string())
-                }))
-            }
-            Link::InProcess(_) => Ask::of(read_here(move || {
-                annotation
-                    .local_image()
-                    .and_then(|bytes| annotation.cache_image(&bytes))
-                    .map_err(|error| error.to_string())
-            })),
-        }
+        machine.link.annotation_image(thread, annotation)
     }
 
     pub fn browser_protect(
@@ -750,10 +648,7 @@ impl Cockpit {
     /// The Server `machine` is attached to, or why it is not; `None` for
     /// an Engine in this process, or a machine the window does not hold.
     pub fn server(&self, machine: MachineId) -> Option<ServerState> {
-        match &self.machines.get(&machine)?.link {
-            Link::InProcess(_) => None,
-            Link::Server(server) => Some(server.state()),
-        }
+        Some(self.machines.get(&machine)?.link.remote_ref()?.state())
     }
 
     /// Whether the window holds any machine: with every one turned off in
@@ -764,15 +659,12 @@ impl Cockpit {
 
     /// The bridge `machine` is reached through; `None` for this computer.
     pub fn bridge(&self, machine: MachineId) -> Option<&std::sync::Arc<ferrite_core::machine::Bridge>> {
-        match &self.machines.get(&machine)?.link {
-            Link::InProcess(_) => None,
-            Link::Server(server) => server.bridge(),
-        }
+        self.machines.get(&machine)?.link.bridge()
     }
 
     /// Attach `machine` again now, rather than at the next retry.
     pub fn retry_server(&mut self, machine: MachineId) {
-        if let Some(Link::Server(server)) = self.machines.get_mut(&machine).map(|held| &mut held.link) {
+        if let Some(server) = self.machines.get_mut(&machine).and_then(|held| held.link.remote()) {
             server.retry();
         }
     }
@@ -815,10 +707,7 @@ impl Cockpit {
     /// through: asked for or heard of, back on a new boot, or failed and
     /// why.
     pub fn server_restart(&self, machine: MachineId) -> Option<&ServerRestart> {
-        match &self.machines.get(&machine)?.link {
-            Link::Server(server) => server.restart(),
-            Link::InProcess(_) => None,
-        }
+        self.machines.get(&machine)?.link.remote_ref()?.restart()
     }
 
     fn server_command(&mut self, machine: MachineId, op: Op) -> io::Result<()> {
@@ -859,30 +748,33 @@ impl Cockpit {
 
     /// One act of `machine`'s whose reply nobody reads (ADR 0041): a
     /// Server is told and what it changed arrives as its messages do, so
-    /// the window never waits for it. An Engine in this process carries it
-    /// out now.
+    /// the window never waits for it.
     fn tell_at(&mut self, machine: MachineId, op: Op) {
         let Some(held) = self.machines.get_mut(&machine) else {
             return;
         };
-        match &mut held.link {
-            Link::InProcess(_) => said(self.act_at(machine, op)),
-            Link::Server(remote) => {
-                remote.tell(op);
-                ferrite_core::doorbell::ring();
-            }
+        held.link.tell(op);
+        self.settle(machine);
+        ferrite_core::doorbell::ring();
+    }
+
+    /// Take in what an act of `machine`'s changed now, where its Engine
+    /// carries one out as it is asked (`Link::answers_now`). A Server's
+    /// arrives as its messages do.
+    fn settle(&mut self, machine: MachineId) {
+        if self.machines.get(&machine).is_some_and(|held| held.link.answers_now()) {
+            self.receive_from(machine);
         }
     }
 
     /// One act on a Thread whose reply the window reads (ADR 0041): a
     /// Server is asked and answers through the `Ask`, so the window never
-    /// waits for it. An Engine in this process carries it out now, and the
-    /// `Ask` is answered already.
+    /// waits for it.
     fn ask_on<T: Send + 'static>(
         &mut self,
         key: ThreadKey,
         op: impl FnOnce(ThreadId) -> Op,
-        read: fn(Executed) -> io::Result<T>,
+        read: impl FnOnce(Executed) -> io::Result<T> + Send + 'static,
     ) -> Ask<T> {
         self.ask_at(key.machine(), op(key.thread()), read)
     }
@@ -894,14 +786,19 @@ impl Cockpit {
         op: Op,
         read: impl FnOnce(Executed) -> io::Result<T> + Send + 'static,
     ) -> Ask<T> {
-        match self.machines.get_mut(&machine).map(|held| &mut held.link) {
-            Some(Link::Server(remote)) => {
-                let ask = remote.ask_act(op, read);
-                ferrite_core::doorbell::ring();
-                ask
-            }
-            _ => Ask::answered(read(self.act_at(machine, op))),
-        }
+        let Some(held) = self.machines.get_mut(&machine) else {
+            return Ask::answered(read(Err(gone())));
+        };
+        let (answer, answered) = ferrite_core::doorbell::channel();
+        held.link.ask_act(
+            op,
+            Box::new(move |reply| {
+                let _ = answer.send(read(reply));
+            }),
+        );
+        self.settle(machine);
+        ferrite_core::doorbell::ring();
+        Ask::of(answered)
     }
 
     /// `ask_on`, and the model does `follow` itself when the act was done:
@@ -913,24 +810,12 @@ impl Cockpit {
         read: fn(Executed) -> io::Result<T>,
         follow: Follow,
     ) -> Ask<T> {
-        let (machine, op) = (key.machine(), op(key.thread()));
-        match self.machines.get_mut(&machine).map(|held| &mut held.link) {
-            Some(Link::Server(remote)) => {
-                let done = self.follows.done.clone();
-                let ask = remote.ask_act(op, move |reply| {
-                    let answer = read(reply);
-                    let _ = done.send((follow, answer.is_ok()));
-                    answer
-                });
-                ferrite_core::doorbell::ring();
-                ask
-            }
-            _ => {
-                let answer = read(self.act_at(machine, op));
-                self.follow(follow, answer.is_ok());
-                Ask::answered(answer)
-            }
-        }
+        let done = self.follows.done.clone();
+        self.ask_on(key, op, move |reply| {
+            let answer = read(reply);
+            let _ = done.send((follow, answer.is_ok()));
+            answer
+        })
     }
 
     /// Follow each act a Server has answered.
@@ -968,29 +853,6 @@ impl Cockpit {
         self.tell_at(key.machine(), op(key.thread()))
     }
 
-    /// The first machine the window holds: what a fixture world with one
-    /// machine names when it names none.
-    fn first(&self) -> MachineId {
-        *self.machines.keys().next().expect("the window holds a machine")
-    }
-
-    /// The Engine in this process of the first machine the window holds:
-    /// what only `--demo`, `--load` and the tests drive — fixtures,
-    /// injected inputs, the launch-time revival a Server does for itself.
-    /// It rings the bell, as an act does.
-    fn in_process(&mut self) -> &mut Engine {
-        let first = self.first();
-        self.machines.get_mut(&first).expect("held").in_process()
-    }
-
-    /// The Engine in this process that `key`'s Thread runs in.
-    fn in_process_of(&mut self, key: ThreadKey) -> &mut Engine {
-        self.machines
-            .get_mut(&key.machine())
-            .expect("the Thread's machine is held")
-            .in_process()
-    }
-
     /// Bring this window up to every machine's Engine.
     fn receive(&mut self) {
         let machines: Vec<MachineId> = self.machines.keys().copied().collect();
@@ -1014,14 +876,6 @@ impl Cockpit {
         self.arrive(machine, arrived);
         #[cfg(test)]
         self.machines[&machine].assert_mirrors_match();
-    }
-
-    /// A message a fixture world's Server (its first machine's) would have
-    /// sent.
-    fn receive_fixture(&mut self, message: ServerMessage) {
-        // It rings as a Server's message does (ADR 0041).
-        ferrite_core::doorbell::ring();
-        self.arrive(self.first(), vec![remote::Arrival::Message(message)]);
     }
 
     fn arrive(&mut self, machine: MachineId, arrived: Vec<remote::Arrival>) {
@@ -1070,9 +924,7 @@ impl Cockpit {
             // Fold highlighter answers from the previous frame first, as
             // the Engine does for its own.
             machine.mirrors.drain_highlights();
-            if let Link::InProcess(engine) = &mut machine.link {
-                engine.pump();
-            }
+            machine.link.pump();
         }
         self.receive();
         // What is on screen while the window has focus is seen. Here
@@ -1182,10 +1034,7 @@ impl Cockpit {
         roots: Vec<(Provider, PathBuf)>,
         cap: usize,
     ) -> Option<Receiver<io::Result<Vec<ferrite_core::session_file::Candidate>>>> {
-        match &mut self.machines.get_mut(&machine)?.link {
-            Link::InProcess(engine) => engine.discover_sessions(roots, cap),
-            Link::Server(server) => server.discovery().discover_sessions(roots, cap),
-        }
+        self.machines.get_mut(&machine)?.link.discover_sessions(roots, cap)
     }
 
     /// The operator opened a Notice of `machine`'s — from a toast or the
@@ -1285,26 +1134,22 @@ impl Cockpit {
             let Some((machine, thread)) = self.at_mut(key) else {
                 continue;
             };
-            let op = Op::Notice {
+            // A Server is told once for what is unread: its answer is the
+            // Notices it sends back read, a beat or more later. An Engine
+            // that answers as it is told has read them already.
+            let told = machine.seen_told.get(&thread);
+            if !machine.link.reaches_server()
+                || told.is_some_and(|told| unread.iter().all(|one| told.contains(one)))
+            {
+                continue;
+            }
+            machine.link.tell(Op::Notice {
                 action: NoticeAction::Seen { thread },
-            };
-            match &mut machine.link {
-                Link::InProcess(_) => {
-                    notice(machine.link.execute(op));
-                    read = true;
-                }
-                // A Server is told once for what is unread: its answer is
-                // the Notices it sends back read, a beat or more later.
-                Link::Server(remote) => {
-                    let told = machine.seen_told.get(&thread);
-                    if !remote.reaches_server()
-                        || told.is_some_and(|told| unread.iter().all(|one| told.contains(one)))
-                    {
-                        continue;
-                    }
-                    remote.tell(op);
-                    machine.seen_told.insert(thread, unread);
-                }
+            });
+            if machine.link.answers_now() {
+                read = true;
+            } else {
+                machine.seen_told.insert(thread, unread);
             }
         }
         if read {
@@ -1371,23 +1216,6 @@ fn read_here<T: Send + 'static>(
     answered
 }
 
-/// A whole-PR read a fixture world holds (`Cockpit::fixture_hold_pr_reads`):
-/// the window waits on it until a test answers.
-pub struct HeldRead {
-    pub path: PathBuf,
-    answer: ferrite_core::doorbell::Sender<io::Result<ferrite_core::protocol::ReviewPullRequest>>,
-}
-
-impl HeldRead {
-    pub fn answer(self, read: ferrite_core::protocol::ReviewPullRequest) {
-        let _ = self.answer.send(Ok(read));
-    }
-
-    pub fn fail(self, why: &str) {
-        let _ = self.answer.send(Err(io::Error::other(why.to_string())));
-    }
-}
-
 /// A command whose reply carries nothing the window needs.
 fn done(executed: Executed) -> io::Result<()> {
     executed.map(drop).map_err(io::Error::from)
@@ -1398,187 +1226,6 @@ fn changed(executed: Result<Option<Done>, WireError>) -> io::Result<bool> {
     match executed.map_err(io::Error::from)? {
         Some(Done::Changed { changed }) => Ok(changed),
         _ => Ok(false),
-    }
-}
-
-/// A Notice act. Its reply carries nothing: what it changed is the next
-/// `notices` message.
-fn notice(executed: Executed) {
-    if let Err(error) = executed {
-        ferrite_core::log!("a notice act did not reach the server: {}", error.message);
-    }
-}
-
-/// Mirror parity (ADR 0025): after every message, each open Thread's
-/// mirror reads exactly as the Engine's own Thread does. Every Cockpit
-/// test checks it as it runs.
-#[cfg(feature = "test-support")]
-impl Cockpit {
-    /// A UI test's park that fails: the Engine reports this Thread's park
-    /// as refused.
-    pub fn refuse_park(&mut self, thread: ThreadKey) {
-        self.in_process_of(thread).refuse_park(thread.thread());
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-impl Cockpit {
-    /// Thread `thread` of the first machine the window holds, for a test
-    /// that names one by its number, or made it in a Store before the
-    /// Cockpit held it.
-    pub fn key(&self, thread: ThreadId) -> ThreadKey {
-        ThreadKey::new(self.first(), thread)
-    }
-
-    /// The first machine the window holds: a fixture world's one machine.
-    pub fn first_machine(&self) -> MachineId {
-        self.first()
-    }
-
-    /// A window driving an Engine of its own that stands in for the
-    /// machine saved as `saved_as`: a view test's window on that machine.
-    pub fn new_saved_as(store: Store, spawner: Box<dyn Spawner>, saved_as: MachineKey) -> Self {
-        let machine = Self::in_process_machine(store, spawner, saved_as)
-            .expect("the workspace registry opens");
-        let mut cockpit = Self::empty();
-        cockpit.hold_machine(machine);
-        cockpit
-    }
-
-    /// Another machine beside the rest, with an Engine of its own in this
-    /// process saved as `saved_as`: a test's second machine.
-    pub fn hold_in_process(
-        &mut self,
-        store: Store,
-        spawner: Box<dyn Spawner>,
-        saved_as: MachineKey,
-    ) -> io::Result<MachineId> {
-        let machine = Self::in_process_machine(store, spawner, saved_as)?;
-        Ok(self.hold_machine(machine))
-    }
-}
-
-#[cfg(test)]
-impl Cockpit {
-    pub(crate) fn set_session_project_root(
-        &mut self,
-        thread: ThreadKey,
-        root: Option<PathBuf>,
-    ) -> Result<(), LoadError> {
-        let set = self
-            .in_process_of(thread)
-            .set_session_project_root(thread.thread(), root);
-        self.receive_from(thread.machine());
-        set
-    }
-
-    /// The first machine's Engine in this process, for a test to reach
-    /// into.
-    pub(crate) fn engine(&self) -> &Engine {
-        self.engine_of(self.first())
-    }
-
-    /// `machine`'s Engine in this process, for a test to reach into.
-    pub(crate) fn engine_of(&self, machine: MachineId) -> &Engine {
-        match &self.machines[&machine].link {
-            Link::InProcess(engine) => engine,
-            Link::Server(_) => panic!("this window's Engine runs in its Server"),
-        }
-    }
-
-    pub(crate) fn engine_mut(&mut self) -> &mut Engine {
-        self.in_process()
-    }
-}
-
-#[cfg(test)]
-mod parity {
-    use std::fmt::Write;
-
-    use ferrite_core::activity::ActivityView;
-
-    /// What a window could read of one Thread, as text.
-    macro_rules! seen {
-        ($view:expr) => {{
-            let view = $view;
-            format!(
-                "generation={} provider={:?} model={:?} effort={:?} title={:?} \
-                 suggestion={:?} pending={:?} queued={:?} starting={} busy={} working={} \
-                 background={} tuning={} needs_queue={} workspace={:?} root={:?} \
-                 first_prompt={} history={} commands={:?} models={:?} mode={:?} modes={:?} \
-                 store_error={:?}\n{}",
-                view.generation(),
-                view.provider(),
-                view.model(),
-                view.effort(),
-                view.title(),
-                view.suggestion(),
-                view.pending(),
-                view.queue(),
-                view.starting(),
-                view.busy(),
-                view.working(),
-                view.background_work(),
-                view.tuning(),
-                view.needs_queue(),
-                view.workspace(),
-                view.session_project_root(),
-                view.first_prompt_sent(),
-                view.has_prompt_history(),
-                view.commands(),
-                view.models(),
-                view.permission_mode(),
-                view.permission_modes(),
-                view.store_error(),
-                crate::cockpit::parity::activity(view.activity()),
-            )
-        }};
-    }
-    pub(super) use seen;
-
-    pub(super) fn activity(view: ActivityView<'_>) -> String {
-        let main = view.main();
-        let transcript = main.transcript();
-        let mut out = String::new();
-        let mut timings: Vec<String> = main
-            .tool_timings()
-            .iter()
-            .map(|(id, timing)| format!("{id}={timing:?}"))
-            .collect();
-        timings.sort();
-        writeln!(
-            out,
-            "main status={:?} transcript={:?} outcome={:?} model={:?} session={:?} \
-             usage={:?} limits={:?} timings={timings:?}",
-            main.status(),
-            transcript.status(),
-            transcript.turn_outcome(),
-            transcript.model(),
-            transcript.session_id(),
-            transcript.usage(),
-            transcript.rate_limits(),
-        )
-        .unwrap();
-        for block in transcript.blocks() {
-            writeln!(out, "  {:?} {:?}", block.id, block.body).unwrap();
-        }
-        writeln!(out, "decisions={:?}", view.decisions()).unwrap();
-        for child in view.children() {
-            writeln!(
-                out,
-                "child {} {:?} status={:?} coverage={:?} retained={}",
-                child.key().as_str(),
-                child.info(),
-                child.status(),
-                child.coverage(),
-                child.retained(),
-            )
-            .unwrap();
-            for block in child.transcript().blocks() {
-                writeln!(out, "    {:?} {:?}", block.id, block.body).unwrap();
-            }
-        }
-        out
     }
 }
 
@@ -1676,24 +1323,16 @@ impl Cockpit {
         })
     }
 
-    /// Watch Session memory in this process. A Server watches its own.
-    pub fn watch_memory(&mut self, sampler: Box<dyn RssSampler>, limit: u64) {
-        self.in_process().watch_memory(sampler, limit);
-        self.receive();
-    }
-
     /// Replace any Session grown past the memory limit. A Server sweeps on
     /// its own, so a window attached to one has nothing to do.
     pub fn sweep(&mut self) -> Vec<Restart> {
         let mut restarts = Vec::new();
         for held in self.machines.values_mut() {
-            if let Link::InProcess(engine) = &mut held.link {
-                let id = held.id;
-                restarts.extend(engine.sweep().into_iter().map(|restart| Restart {
-                    thread: ThreadKey::new(id, restart.thread),
-                    rss: restart.rss,
-                }));
-            }
+            let id = held.id;
+            restarts.extend(held.link.sweep().into_iter().map(|restart| Restart {
+                thread: ThreadKey::new(id, restart.thread),
+                rss: restart.rss,
+            }));
         }
         self.receive();
         restarts
@@ -1728,22 +1367,6 @@ impl Cockpit {
         };
         let thread = started(self.act_at(machine, op))?;
         Ok(ThreadKey::new(machine, thread))
-    }
-
-    /// A first send on the first machine that blocks until its Thread
-    /// opens: the tests' own. A window sends a Draft's first message with
-    /// `bootstrap_draft`.
-    #[cfg(test)]
-    pub fn bootstrap(
-        &mut self,
-        choice: ProviderChoice,
-        workspace: WorkspaceChoice,
-        prompt: &str,
-    ) -> io::Result<ThreadKey> {
-        let first = self.first();
-        let started = self.in_process().bootstrap(choice, workspace, prompt);
-        self.receive_from(first);
-        Ok(ThreadKey::new(first, started?))
     }
 
     pub fn set_provider(&mut self, thread: ThreadKey, choice: ProviderChoice) -> Ask<()> {
@@ -1891,13 +1514,6 @@ impl Cockpit {
         )
     }
 
-    /// Something only `--demo` and the tests put in a Pane directly.
-    pub fn apply_input(&mut self, thread: ThreadKey, input: Input) {
-        self.in_process_of(thread)
-            .apply_input(thread.thread(), input);
-        self.receive_from(thread.machine());
-    }
-
     /// Ferrite's own words in a Thread's Pane.
     pub fn say(&mut self, thread: ThreadKey, text: String) {
         self.tell_on(thread, |thread| Op::Say { thread, text });
@@ -1909,10 +1525,7 @@ impl Cockpit {
         query: &str,
     ) -> io::Result<Receiver<io::Result<Vec<ferrite_core::prompt_files::FileSuggestion>>>> {
         let (machine, thread) = self.at_mut(key).ok_or_else(|| io::Error::from(gone()))?;
-        let asked = match &mut machine.link {
-            Link::InProcess(engine) => engine.search_files(thread, query),
-            Link::Server(server) => server.search_files(thread, query),
-        };
+        let asked = machine.link.search_files(thread, query);
         self.receive_from(key.machine());
         asked
     }
@@ -1922,30 +1535,11 @@ impl Cockpit {
         machine: MachineId,
         path: PathBuf,
     ) -> io::Result<ferrite_core::attachment_transfer::Upload> {
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.upload_attachment(path),
-            Link::InProcess(engine) => {
-                let store = engine.browser_store().dir().to_path_buf();
-                Ok(ferrite_core::attachment_transfer::upload(path, move || {
-                    let mut session = ferrite_core::attachment_transfer::Session::new(store);
-                    Ok(Box::new(move |request| session.execute(request)))
-                }))
-            }
-        }
+        self.held_mut(machine)?.link.upload_attachment(path)
     }
 
     pub fn read_attachment(&mut self, machine: MachineId, path: &Path) -> io::Result<Receiver<io::Result<Vec<u8>>>> {
-        let path = path.to_path_buf();
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.read_attachment(path),
-            Link::InProcess(engine) => {
-                let store = engine.browser_store().dir().to_path_buf();
-                Ok(read_here(move || {
-                    let mut session = ferrite_core::attachment_transfer::Session::new(store);
-                    ferrite_core::attachment_transfer::read(path, |request| session.execute(request)).map_err(|error| error.to_string())
-                }))
-            }
-        }
+        self.held_mut(machine)?.link.read_attachment(path.to_path_buf())
     }
 
     pub fn changes(
@@ -1958,12 +1552,7 @@ impl Cockpit {
             root: root.to_path_buf(),
             scope,
         };
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.changes(request),
-            Link::InProcess(_) => Ok(read_here(move || {
-                ferrite_core::changes::execute(request)?.snapshot().ok_or_else(|| "Missing Changes snapshot".into())
-            })),
-        }
+        self.held_mut(machine)?.link.changes(request)
     }
 
     pub fn set_file_staged(
@@ -1978,10 +1567,7 @@ impl Cockpit {
             path,
             staged,
         };
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.set_file_staged(request),
-            Link::InProcess(_) => Ok(read_here(move || ferrite_core::changes::execute(request).map(|_| ()))),
-        }
+        self.held_mut(machine)?.link.set_file_staged(request)
     }
 
     /// Read or save Files content on the computer that owns the workspace.
@@ -1990,12 +1576,7 @@ impl Cockpit {
         machine: MachineId,
         request: ferrite_core::file_operations::Request,
     ) -> io::Result<Receiver<io::Result<ferrite_core::file_operations::Reply>>> {
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.file_operation(request),
-            Link::InProcess(_) => Ok(read_here(move || {
-                ferrite_core::file_operations::execute(request).map_err(|error| error.to_string())
-            })),
-        }
+        self.held_mut(machine)?.link.file_operation(request)
     }
 
     /// Opens, when run, a connection of its own to `machine`'s Server that
@@ -2042,15 +1623,7 @@ impl Cockpit {
         path: &Path,
         read: ferrite_reviewr::ferrite::Read,
     ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::ferrite::FileSides>>>> {
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.review_diff(path, &read),
-            Link::InProcess(_) => {
-                let path = path.to_path_buf();
-                Ok(read_here(move || {
-                    ferrite_reviewr::ferrite::review(&path, &read)
-                }))
-            }
-        }
+        self.held_mut(machine)?.link.review_diff(path, &read)
     }
 
     /// The branch's commits for a review's commits scope, read where
@@ -2060,13 +1633,7 @@ impl Cockpit {
         machine: MachineId,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::git::CommitRow>>>> {
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.review_commits(path),
-            Link::InProcess(_) => {
-                let path = path.to_path_buf();
-                Ok(read_here(move || ferrite_reviewr::ferrite::commits(&path)))
-            }
-        }
+        self.held_mut(machine)?.link.review_commits(path)
     }
 
     /// Files and lines matching `query` in the checkout at `path`, from
@@ -2077,15 +1644,7 @@ impl Cockpit {
         path: &Path,
         query: &str,
     ) -> io::Result<Receiver<io::Result<ferrite_reviewr::search::SearchResults>>> {
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.search_repo(path, query),
-            Link::InProcess(_) => {
-                let (path, query) = (path.to_path_buf(), query.to_string());
-                Ok(read_here(move || {
-                    ferrite_reviewr::ferrite::search(&path, &query)
-                }))
-            }
-        }
+        self.held_mut(machine)?.link.search_repo(path, query)
     }
 
     /// The worktree file `file` of the checkout at `path`, for a review's
@@ -2096,16 +1655,7 @@ impl Cockpit {
         path: &Path,
         file: &str,
     ) -> io::Result<Receiver<io::Result<String>>> {
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.read_review_file(path, file),
-            Link::InProcess(_) => {
-                let (path, file) = (path.to_path_buf(), file.to_string());
-                Ok(read_here(move || {
-                    ferrite_reviewr::ferrite::read_file(&path, &file)
-                        .map_err(|notice| notice.message().to_string())
-                }))
-            }
-        }
+        self.held_mut(machine)?.link.read_review_file(path, file)
     }
 
     pub fn review_pull_request_diff(
@@ -2114,25 +1664,7 @@ impl Cockpit {
         path: &Path,
         number: u64,
     ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::ferrite::FileSides>>>> {
-        if let Some(files) = self.forge_diffs.get(&(path.to_path_buf(), number)).cloned() {
-            return Ok(read_here(move || Ok(files)));
-        }
-        if self.has_forge_fixture(path) {
-            return Ok(read_here(|| Err("No published diff fixture for this pull request".to_string())));
-        }
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.review_pull_request_diff(path, number),
-            Link::InProcess(_) => {
-                let (path, forge) = (path.to_path_buf(), self.forge.clone());
-                Ok(read_here(move || {
-                    ferrite_reviewr::forge::diff_numbered(&path, &forge, number)
-                }))
-            }
-        }
-    }
-
-    pub fn fixture_forge_diff(&mut self, path: PathBuf, number: u64, files: Vec<ferrite_reviewr::ferrite::FileSides>) {
-        self.forge_diffs.insert((path, number), files);
+        self.held_mut(machine)?.link.review_pull_request_diff(path, number)
     }
 
     /// The pull request of the branch checked out at `path`, whole, read by
@@ -2143,45 +1675,7 @@ impl Cockpit {
         path: &Path,
         number: Option<u64>,
     ) -> io::Result<Receiver<io::Result<ferrite_core::protocol::ReviewPullRequest>>> {
-        if self.forge_held.contains(path) {
-            let (answer, answered) = ferrite_core::doorbell::channel();
-            self.held_reads.push(HeldRead {
-                path: path.to_path_buf(),
-                answer,
-            });
-            return Ok(answered);
-        }
-        if let Some(read) =
-            number.and_then(|number| self.forge_numbered.get(&(path.to_path_buf(), number)))
-        {
-            let read = read.clone();
-            return Ok(read_here(move || Ok(read)));
-        }
-        if let Some(view) = self.forge_fixture.get(path).cloned() {
-            let view = if number.is_none_or(|number| matches!(&view, ferrite_reviewr::forge::PrView::Pr(pr) if pr.number == number)) {
-                view
-            } else {
-                ferrite_reviewr::forge::PrView::NoPr
-            };
-            return Ok(read_here(move || {
-                Ok(ferrite_core::protocol::ReviewPullRequest::of(view, "PR"))
-            }));
-        }
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.review_pull_request(path, number),
-            Link::InProcess(_) => {
-                let (path, forge) = (path.to_path_buf(), self.forge.clone());
-                Ok(read_here(move || {
-                    let (view, noun) = match number {
-                        Some(number) => {
-                            ferrite_reviewr::ferrite::pull_request_numbered(&path, &forge, number)
-                        }
-                        None => ferrite_reviewr::ferrite::pull_request(&path, &forge),
-                    };
-                    Ok(ferrite_core::protocol::ReviewPullRequest::of(view, noun))
-                }))
-            }
-        }
+        self.held_mut(machine)?.link.review_pull_request(path, number)
     }
 
     /// The pull requests of the repository the checkout at `path` belongs
@@ -2192,19 +1686,7 @@ impl Cockpit {
         path: &Path,
         filter: ferrite_core::protocol::WirePrFilter,
     ) -> io::Result<Receiver<io::Result<ferrite_core::protocol::ReviewPullRequests>>> {
-        if let Some(list) = self.forge_lists.get(&(path.to_path_buf(), filter)).cloned() {
-            return Ok(read_here(move || Ok(list)));
-        }
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.list_pull_requests(path, filter),
-            Link::InProcess(_) => {
-                let (path, forge) = (path.to_path_buf(), self.forge.clone());
-                Ok(read_here(move || {
-                    let list = ferrite_reviewr::forge::list(&path, &forge, filter.into());
-                    Ok(ferrite_core::protocol::ReviewPullRequests::of(list, "PR"))
-                }))
-            }
-        }
+        self.held_mut(machine)?.link.list_pull_requests(path, filter)
     }
 
     /// Every file of the checkout at `path`, for a review's all-files
@@ -2214,15 +1696,7 @@ impl Cockpit {
         machine: MachineId,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::git::WorktreeEntry>>>> {
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.review_files(path),
-            Link::InProcess(_) => {
-                let path = path.to_path_buf();
-                Ok(read_here(move || {
-                    ferrite_reviewr::ferrite::all_files(&path)
-                }))
-            }
-        }
+        self.held_mut(machine)?.link.review_files(path)
     }
 
     /// The bases a review's branch scope can read against, read where
@@ -2232,13 +1706,7 @@ impl Cockpit {
         machine: MachineId,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<ferrite_reviewr::ferrite::Bases>>> {
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.review_bases(path),
-            Link::InProcess(_) => {
-                let path = path.to_path_buf();
-                Ok(read_here(move || ferrite_reviewr::ferrite::bases(&path)))
-            }
-        }
+        self.held_mut(machine)?.link.review_bases(path)
     }
 
     /// Make `base` the branch scope's base for the checkout at `path`,
@@ -2249,15 +1717,7 @@ impl Cockpit {
         path: &Path,
         base: &str,
     ) -> io::Result<Receiver<io::Result<()>>> {
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.pick_review_base(path, base),
-            Link::InProcess(_) => {
-                let (path, base) = (path.to_path_buf(), base.to_string());
-                Ok(read_here(move || {
-                    ferrite_reviewr::ferrite::pick_base(&path, &base)
-                }))
-            }
-        }
+        self.held_mut(machine)?.link.pick_review_base(path, base)
     }
 
     /// The PR of the branch checked out at `path`, read by `gh` where
@@ -2269,17 +1729,7 @@ impl Cockpit {
         machine: MachineId,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<Option<ferrite_core::pull_request::PullRequest>>>> {
-        if let Some(view) = self.forge_fixture.get(path) {
-            let reading = ferrite_core::pull_request::PullRequest::of_view(view);
-            return Ok(read_here(move || Ok(reading)));
-        }
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.pull_request(path),
-            Link::InProcess(_) => {
-                let path = path.to_path_buf();
-                Ok(read_here(move || Ok(ferrite_core::workspace::pull_request(&path))))
-            }
-        }
+        self.held_mut(machine)?.link.pull_request(path)
     }
 
     /// Whether a PR watch can start on `machine`: only a Server runs the
@@ -2287,7 +1737,7 @@ impl Cockpit {
     pub fn starts_pr_watches(&self, machine: MachineId) -> bool {
         self.machines
             .get(&machine)
-            .is_some_and(|held| matches!(held.link, Link::Server(_)))
+            .is_some_and(|held| held.link.remote_ref().is_some())
     }
 
     /// Watch the PR at `url` for `key`'s agent, or stop watching it
@@ -2307,17 +1757,9 @@ impl Cockpit {
             url: url.to_string(),
             watching,
         };
-        match &mut machine.link {
-            Link::Server(server) => server.watch_pr(op),
-            Link::InProcess(_) => {
-                let done = self.act_at(key.machine(), op);
-                Ok(read_here(move || match done {
-                    Ok(Some(Done::PrWatch { watching })) => Ok(watching),
-                    Ok(_) => Err("the server answered something else".to_string()),
-                    Err(error) => Err(error.message),
-                }))
-            }
-        }
+        let asked = machine.link.watch_pr(op);
+        self.settle(key.machine());
+        asked
     }
 
     /// Cancel `key`'s Delegate `delegate` (ADR 0047), as the press on its
@@ -2329,14 +1771,9 @@ impl Cockpit {
         delegate: ferrite_core::delegate::DelegateId,
     ) -> io::Result<Receiver<io::Result<()>>> {
         let (machine, thread) = self.at_mut(key).ok_or_else(|| io::Error::from(gone()))?;
-        let op = Op::CancelDelegate { thread, delegate };
-        match &mut machine.link {
-            Link::Server(server) => server.cancel_delegate(op),
-            Link::InProcess(_) => {
-                let done = self.act_at(key.machine(), op);
-                Ok(read_here(move || done.map(drop).map_err(|error| error.message)))
-            }
-        }
+        let asked = machine.link.cancel_delegate(Op::CancelDelegate { thread, delegate });
+        self.settle(key.machine());
+        asked
     }
 
     /// What a GitHub start's picker lists, read by `gh` where the Server
@@ -2346,26 +1783,7 @@ impl Cockpit {
         machine: MachineId,
         ask: ferrite_core::protocol::GitHubAsk,
     ) -> io::Result<Receiver<io::Result<Vec<String>>>> {
-        use ferrite_core::protocol::GitHubAsk;
-        if let Some(names) = self
-            .factory_fixture
-            .as_ref()
-            .and_then(|fixture| fixture.github_names(&ask))
-        {
-            return Ok(read_here(move || Ok(names)));
-        }
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.github_names(ask),
-            Link::InProcess(_) => Ok(read_here(move || {
-                use ferrite_core::github::GitHub;
-                let gh = ferrite_core::github::Gh;
-                match ask {
-                    GitHubAsk::Repositories => gh.repositories(),
-                    GitHubAsk::Labels { repository } => gh.labels(&repository),
-                    GitHubAsk::Unknown => Ok(Vec::new()),
-                }
-            })),
-        }
+        self.held_mut(machine)?.link.github_names(ask)
     }
 
     /// Ask `thread`'s Session to do `action`: an `Err` answer says why
@@ -2583,10 +2001,8 @@ impl Cockpit {
     pub fn halt_sessions(&mut self) {
         let machines: Vec<MachineId> = self.machines.keys().copied().collect();
         for machine in machines {
-            if let Link::InProcess(engine) = &mut self.machines.get_mut(&machine).unwrap().link {
-                engine.halt_sessions();
-                self.receive_from(machine);
-            }
+            self.machines.get_mut(&machine).unwrap().link.halt_sessions();
+            self.settle(machine);
         }
     }
 
@@ -2737,35 +2153,13 @@ impl Cockpit {
         )
     }
 
-    pub fn answer(&mut self, thread: ThreadKey, id: &str) -> bool {
-        let answered = self.in_process_of(thread).answer(thread.thread(), id);
-        self.receive_from(thread.machine());
-        answered
-    }
-
-    /// Whether completed turns predict a follow-up, in this process; a
-    /// window attached to a Server says `settings_changed`.
-    pub fn set_suggestions_enabled(&mut self, enabled: bool) {
-        self.in_process().set_suggestions_enabled(enabled);
-        self.receive();
-    }
-
-    pub fn deliver_suggestion(&mut self, thread: ThreadKey, text: String) {
-        self.in_process_of(thread)
-            .deliver_suggestion(thread.thread(), text)
-    }
-
     /// Settings changed on disk: whether completed turns predict a
     /// follow-up, where an allowance warns, and the self-hosted forges a
     /// review reads, among them.
     pub fn settings_changed(&mut self, settings: &ferrite_core::settings::Settings) {
-        self.forge = settings.forge_hosts.review_config();
         let machines: Vec<MachineId> = self.machines.keys().copied().collect();
         for machine in machines {
-            match &mut self.machines.get_mut(&machine).unwrap().link {
-                Link::InProcess(engine) => engine.apply_settings(settings),
-                Link::Server(server) => server.tell(Op::SettingsChanged),
-            }
+            self.machines.get_mut(&machine).unwrap().link.settings_changed(settings);
             self.receive_from(machine);
         }
     }
@@ -2789,13 +2183,7 @@ impl Cockpit {
         machine: MachineId,
         action: ferrite_core::protocol::CliAction,
     ) -> io::Result<Receiver<io::Result<Done>>> {
-        match &mut self.held_mut(machine)?.link {
-            Link::Server(server) => server.cli(action),
-            Link::InProcess(_) => Ok(read_here(move || {
-                ferrite_core::providers::clis::perform(&ferrite_core::providers::clis::Host, &action)
-                    .map_err(|error| error.message)
-            })),
-        }
+        self.held_mut(machine)?.link.cli(action)
     }
 
     pub fn live_sessions(&self, machine: MachineId, provider: Provider) -> usize {
@@ -2894,24 +2282,9 @@ impl Cockpit {
         self.factory_ask(machine, Op::Coordinator { action })
     }
 
-    /// One Factory ask, of `machine`'s Server (or a fixture world's own
-    /// Factory).
+    /// One Factory ask, of `machine`'s Server.
     fn factory_ask(&mut self, machine: MachineId, op: Op) -> io::Result<Option<Done>> {
-        if let Some((done, board)) = self
-            .factory_fixture
-            .as_mut()
-            .and_then(|fixture| fixture.execute(op.clone()))
-        {
-            if let Some(board) = board {
-                self.receive_fixture(ServerMessage::Factory { revision: 0, board });
-            }
-            return done;
-        }
-        let done = self
-            .held_mut(machine)?
-            .remote()?
-            .execute(op)
-            .map_err(io::Error::from);
+        let done = self.held_mut(machine)?.link.factory(op);
         self.receive_from(machine);
         done
     }
@@ -2937,7 +2310,7 @@ impl Cockpit {
         request: u64,
         answer: Result<ferrite_core::drive::Answer, String>,
     ) {
-        if let Some(Link::Server(server)) = self.machines.get_mut(&machine).map(|held| &mut held.link) {
+        if let Some(server) = self.machines.get_mut(&machine).and_then(|held| held.link.remote()) {
             let (ok, error) = match answer {
                 Ok(answer) => (Some(answer), None),
                 Err(error) => (None, Some(error)),
@@ -2953,10 +2326,7 @@ impl Cockpit {
         provider: Provider,
         cwd: &std::path::Path,
     ) -> Option<ferrite_core::Discovery> {
-        match &mut self.machines.get_mut(&machine)?.link {
-            Link::InProcess(engine) => engine.discover_commands(provider, cwd),
-            Link::Server(server) => server.discovery().discover_commands(provider, cwd),
-        }
+        self.machines.get_mut(&machine)?.link.discover_commands(provider, cwd)
     }
 
     /// `machine`'s provider's announced model rows, else the fallback
@@ -3034,11 +2404,6 @@ impl Cockpit {
         })
     }
 
-    pub fn set_notification_grace(&mut self, grace: Duration) {
-        self.in_process().set_notification_grace(grace);
-        self.receive();
-    }
-
     pub fn dismiss_notice(&mut self, machine: MachineId, id: NoticeId) -> bool {
         let known = self.shared(machine).notifications.get(id).is_some();
         self.tell_at(
@@ -3099,241 +2464,20 @@ impl Cockpit {
         });
     }
 
-    /// A fixture world's PR watches for `thread` (ADR 0046), as the
-    /// Server's watcher would have saved them.
-    pub fn fixture_pr_watch(&mut self, thread: ThreadKey, fact: ferrite_core::pull_request::WatchFact) {
-        if let Err(error) = self.in_process_of(thread).set_pr_watch(thread.thread(), fact) {
-            ferrite_core::log!("thread {}: a fixture watch was not saved: {error}", thread.thread());
-        }
-        // The digest it sends is left for the window's pump, which reads
-        // the watch from it as a window of the Server does.
-        self.receive_from(thread.machine());
-    }
-
-    /// A fixture world's Delegates for `thread` (ADR 0047), changed as its
-    /// Server's follower would have changed them.
-    pub fn fixture_delegates(
-        &mut self,
-        thread: ThreadKey,
-        change: impl FnOnce(&mut ferrite_core::delegate::Delegates) -> bool,
-    ) {
-        if let Err(error) = self.in_process_of(thread).amend_delegates(thread.thread(), change) {
-            ferrite_core::log!("thread {}: fixture Delegates were not saved: {error}", thread.thread());
-        }
-        self.receive_from(thread.machine());
-    }
-
-    /// A fixture world's `thread`, delegated from `from` (ADR 0047).
-    pub fn fixture_delegated_from(&mut self, thread: ThreadKey, from: ferrite_core::DelegatedFrom) {
-        self.in_process_of(thread)
-            .fixture_delegated_from(thread.thread(), from);
-        self.receive_from(thread.machine());
-    }
-
-    pub fn fixture_backdate_notices(&mut self, thread: ThreadKey, at: std::time::SystemTime) {
-        self.in_process_of(thread)
-            .fixture_backdate_notices(thread.thread(), at);
-        self.receive_from(thread.machine());
-    }
-
-    /// A fixture world's forge: from now on both pull request reads of the
-    /// checkout at `path` — the Review's whole snapshot
-    /// (`review_pull_request`) and the nav label's (`pull_request`) — answer
-    /// `view`, as its forge's CLI would, without running one.
-    pub fn fixture_forge(&mut self, path: PathBuf, view: ferrite_reviewr::forge::PrView) {
-        self.forge_fixture.insert(path, view);
-    }
-
-    /// A fixture world's pull request `number` of the repository the
-    /// checkout at `path` belongs to, as the read by number answers it.
-    pub fn fixture_forge_numbered(
-        &mut self,
-        path: PathBuf,
-        number: u64,
-        read: ferrite_core::protocol::ReviewPullRequest,
-    ) {
-        self.forge_numbered.insert((path, number), read);
-    }
-
-    /// A fixture world's list of the repository the checkout at `path`
-    /// belongs to, as `filter` shows it.
-    pub fn fixture_pr_list(
-        &mut self,
-        path: PathBuf,
-        filter: ferrite_core::protocol::WirePrFilter,
-        list: ferrite_core::protocol::ReviewPullRequests,
-    ) {
-        self.forge_lists.insert((path, filter), list);
-    }
-
-    /// From now on the whole-PR reads of the checkout at `path` (a
-    /// `fixture_forge` one) wait, each, for a test to answer it, in any
-    /// order (`take_held_reads`).
-    pub fn fixture_hold_pr_reads(&mut self, path: PathBuf) {
-        self.forge_held.insert(path);
-    }
-
-    /// The whole-PR reads held since the last call, oldest first.
-    pub fn take_held_reads(&mut self) -> Vec<HeldRead> {
-        std::mem::take(&mut self.held_reads)
-    }
-
-    /// A fixture world's GitHub login: the repositories it reaches and
-    /// each one's labels, answered in place of `gh` (#225).
-    pub fn fixture_github(&mut self, repositories: Vec<(String, Vec<String>)>) {
-        self.factory_fixture.get_or_insert_default().github = Some(repositories);
-    }
-
-    /// Whether a fixture world's forge answers for the checkout at `path`:
-    /// the one PR read tests and captures make, since they never run a CLI.
-    pub fn has_forge_fixture(&self, path: &Path) -> bool {
-        self.forge_fixture.contains_key(path)
-            || self
-                .forge_numbered
-                .keys()
-                .any(|(fixture, _)| fixture == path)
-            || self.forge_lists.keys().any(|(fixture, _)| fixture == path)
-            || self.forge_diffs.keys().any(|(fixture, _)| fixture == path)
-    }
-
-    /// The Server's message about a browser, as a window linked to it
-    /// would hear it; an in-process window hears none.
-    pub fn fixture_browser_message(&mut self, message: ServerMessage) {
-        let (ServerMessage::Browser { thread, .. } | ServerMessage::BrowserRequest { thread, .. }) =
-            &message
-        else {
-            panic!("a browser message names its Thread");
-        };
-        let key = ThreadKey::new(self.first(), *thread);
-        self.said.browser.push((key, message));
-    }
-
-    /// A fixture world's browser acts succeed, as a linked Server's would.
-    pub fn fixture_browser_accepts(&mut self) {
-        self.browser_fixture = true;
-    }
-
-    /// A fixture world's Server is one from before `Capability::ForkOf`:
-    /// its focus for a fork that opened names no `fork_of`.
-    pub fn fixture_server_before_fork_of(&mut self) {
-        let first = self.first();
-        self.machines.get_mut(&first).expect("held").before_fork_of = true;
-    }
-
     /// Whether `machine`'s Server names the Thread a fork that opened was
-    /// made from (`Capability::ForkOf`). An Engine in this process is this
-    /// build's, so it does.
+    /// made from (`Capability::ForkOf`).
     pub fn names_fork_owners(&self, machine: MachineId) -> bool {
-        let Some(machine) = self.machines.get(&machine) else {
-            return false;
-        };
-        match &machine.link {
-            Link::InProcess(_) => !machine.before_fork_of,
-            Link::Server(server) => server.names_fork_owners(),
-        }
-    }
-
-    /// A fixture world's free disk: from now on the bar's `N GB free`
-    /// reads `bytes` (`free_disk_fixture`) instead of the volume.
-    pub fn fixture_free_disk(&mut self, bytes: u64) {
-        self.free_disk_fixture = Some(bytes);
-    }
-
-    /// The free bytes a fixture world stands in for the volume, if any.
-    pub fn free_disk_fixture(&self) -> Option<u64> {
-        self.free_disk_fixture
-    }
-
-    /// A fixture world's owned Thread (ADR 0037): one a Task or a
-    /// Factory started, as the Server's API starts one for it.
-    pub fn fixture_open_owned(
-        &mut self,
-        provider: Provider,
-        workspace: WorkspaceChoice,
-        owner: ferrite_core::ThreadOwner,
-    ) -> io::Result<ThreadKey> {
-        let launch = ferrite_core::engine::Launch {
-            owner: Some(owner),
-            ..Default::default()
-        };
-        let first = self.first();
-        let opened = self.in_process().open_with(provider, workspace, launch);
-        self.receive_from(first);
-        Ok(ThreadKey::new(first, opened?))
-    }
-
-    /// A fixture world's Factory board, as a Server would say it.
-    pub fn fixture_factory(&mut self, board: ferrite_core::factory_board::Board) {
-        self.receive_fixture(ServerMessage::Factory { revision: 0, board });
-    }
-
-    /// A fixture world with a Factory of its own that answers Workflow
-    /// asks as a Server's does, starting empty.
-    pub fn fixture_live_factory(&mut self) {
-        let factory = ferrite_core::factory::Factory::in_memory();
-        let board = factory.board();
-        self.factory_fixture.get_or_insert_default().factory = Some(factory);
-        self.receive_fixture(ServerMessage::Factory { revision: 0, board });
-    }
-
-    /// A fixture world keeps its Task asks, each answered as changed, to
-    /// be read back with `fixture_task_asks`.
-    pub fn fixture_record_tasks(&mut self) {
-        self.factory_fixture.get_or_insert_default().asks = Some(Vec::new());
-    }
-
-    /// `fixture_record_tasks`, with each Start answered as a Task made.
-    pub fn fixture_start_tasks(&mut self) {
-        self.fixture_record_tasks();
-        self.factory_fixture.get_or_insert_default().starts = true;
-    }
-
-    pub fn fixture_task_asks(&self) -> &[ferrite_core::protocol::TaskAction] {
-        self.factory_fixture
-            .as_ref()
-            .and_then(|fixture| fixture.asks.as_deref())
-            .unwrap_or_default()
-    }
-
-    /// A fixture world's Factory hears `command` as a Server's would
-    /// (a GitHub read's answer, say), and the window is told the board.
-    pub fn fixture_factory_command(&mut self, command: ferrite_core::factory::Command) {
-        if let Some(board) = self
-            .factory_fixture
-            .as_mut()
-            .and_then(|fixture| fixture.hear(command))
-        {
-            self.receive_fixture(ServerMessage::Factory { revision: 0, board });
-        }
-    }
-
-    /// A fixture world's Task alert, as a Server would say it.
-    pub fn fixture_task_alert(&mut self, alert: ServerMessage) {
-        self.receive_fixture(alert);
-    }
-
-    pub fn fixture_notice(&mut self, thread: ThreadKey, outcome: ferrite_core::TurnOutcome) {
-        self.in_process_of(thread)
-            .fixture_notice(thread.thread(), outcome);
-        self.receive_from(thread.machine());
+        self.machines
+            .get(&machine)
+            .is_some_and(|held| held.link.names_fork_owners())
     }
 
     /// Whether `draft`'s first send is under way, on whichever machine it
     /// went to.
     pub fn draft_starting(&self, draft: DraftId) -> bool {
-        self.machines.values().any(|held| match &held.link {
-            Link::InProcess(engine) => engine.draft_starting(draft),
-            Link::Server(server) => server.draft_starting(draft),
-        })
-    }
-}
-
-/// A command that changes something the window will hear about. A refusal
-/// is logged: the act's own effect (or its absence) is what the window
-/// shows.
-fn said(executed: Executed) {
-    if let Err(error) = executed {
-        ferrite_core::log!("the server refused an act: {}", error.message);
+        self.machines
+            .values()
+            .any(|held| held.link.draft_starting(draft))
     }
 }
 
@@ -3342,14 +2486,6 @@ fn started(executed: Result<Option<Done>, WireError>) -> io::Result<ThreadId> {
     match executed.map_err(io::Error::from)? {
         Some(Done::Thread { thread }) => Ok(thread),
         _ => Err(io::Error::other("the server answered with no Thread")),
-    }
-}
-
-/// A first send's reply: the Thread it became, or `None` while it starts.
-fn started_now(executed: Executed) -> io::Result<Option<ThreadId>> {
-    match executed.map_err(io::Error::from)? {
-        Some(Done::Thread { thread }) => Ok(Some(thread)),
-        _ => Ok(None),
     }
 }
 
@@ -3543,17 +2679,9 @@ impl Cockpit {
             group: None,
             new_group_with: None,
         };
-        // A Server answers a first send that starts at once in its reply,
-        // and one still starting as it settles: both as `Done::Thread`.
-        let started = match &mut self.held_mut(machine)?.link {
-            Link::InProcess(engine) => {
-                let started = engine
-                    .bootstrap_command(draft, &commanded(op))
-                    .map(|thread| thread.map(|thread| Done::Thread { thread }));
-                started_now(replied(started))
-            }
-            Link::Server(server) => server.bootstrap(draft, prompt, op).map(|()| None),
-        };
+        // A first send that starts at once is answered in its reply, as
+        // `Done::Thread`; one still starting settles as the link polls.
+        let started = self.held_mut(machine)?.link.bootstrap(draft, prompt, op);
         self.receive_from(machine);
         let started = started?.map(|thread| ThreadKey::new(machine, thread));
         Ok(started.map(|thread| complete_draft(&mut self.roster, draft, thread)))
@@ -3567,10 +2695,7 @@ impl Cockpit {
         let machines: Vec<MachineId> = self.machines.keys().copied().collect();
         for machine in machines {
             let held = self.machines.get_mut(&machine).expect("held");
-            cancelled |= match &mut held.link {
-                Link::InProcess(engine) => engine.cancel_draft_start(draft),
-                Link::Server(server) => server.cancel_bootstrap(draft),
-            }?;
+            cancelled |= held.link.cancel_bootstrap(draft)?;
             self.receive_from(machine);
         }
         Ok(cancelled)

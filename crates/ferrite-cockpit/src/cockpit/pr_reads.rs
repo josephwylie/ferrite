@@ -86,7 +86,7 @@ impl CockpitView {
         // Tests and captures never run `gh`: only a fixture world's forge
         // answers them (`Cockpit::fixture_forge`); a test reads what was
         // asked.
-        if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.read(cx).has_forge_fixture(&path) {
+        if !super::reads_forge(self.cockpit.read(cx), &path) {
             return;
         }
         let answer = self

@@ -517,7 +517,9 @@ impl Mirrors {
             .map(|(&thread, _)| thread)
     }
 
-    /// Whether this window streams `thread` (`Mirrors::watch_only`).
+    /// Whether this window streams `thread` (`Mirrors::watch_only`): what
+    /// an Engine in this process streams a fresh watch from.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn watched(&self, thread: ThreadId) -> bool {
         self.threads
             .get(&thread)
