@@ -10,7 +10,7 @@ use super::*;
 use ferrite_core::folder::Listing;
 use gpui::App;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 gpui::actions!(folder_browser, [Up, Down, Open, Cancel]);
@@ -84,6 +84,13 @@ fn parent_of(dir: &str, listing: Option<&Listing>) -> Option<String> {
     }
     let at = trimmed.rfind(SEPARATORS)?;
     Some(format!("{}/", &trimmed[..at]))
+}
+
+/// `name` in the Machine's folder `parent`, joined with `/` as every path
+/// here is: `Path::join` would join with this computer's separator.
+fn child(parent: &Path, name: &str) -> PathBuf {
+    let parent = parent.display().to_string();
+    format!("{}/{name}", parent.trim_end_matches(SEPARATORS)).into()
 }
 
 impl FolderBrowser {
@@ -278,7 +285,7 @@ impl FolderBrowser {
             return path;
         }
         let (directory, leaf) = split_typed(trimmed);
-        listing(directory).map_or_else(|| path.into(), |parent| parent.join(leaf))
+        listing(directory).map_or_else(|| path.into(), |parent| child(&parent, leaf))
     }
 
     /// The rows under the line: `..`, then the folders whose names start as
@@ -533,5 +540,14 @@ mod tests {
             entries: Vec::new(),
         };
         assert_eq!(parent_of("~/", Some(&home)).as_deref(), Some("/home/"));
+    }
+
+    #[test]
+    fn a_folder_in_a_machines_folder_is_joined_with_a_slash() {
+        let joined =
+            |parent: &str, name: &str| child(Path::new(parent), name).display().to_string();
+        assert_eq!(joined("/home/me/src", "repo"), "/home/me/src/repo");
+        assert_eq!(joined("/", "srv"), "/srv");
+        assert_eq!(joined(r"D:\work\", "repo"), r"D:\work/repo");
     }
 }
