@@ -1,0 +1,31 @@
+== where
+/home/joseph/ferrite-wsl-machine/home/notes-only/repo
+== git status --short (empty = clean)
+== git status
+On branch main
+nothing to commit, working tree clean
+== top level
+.env
+.git
+.gitignore
+README.md
+data
+src
+== ticked .env
+-rw------- 1 joseph joseph 19 Nov 24 18:46 .env
+== unticked build/
+ls: cannot access 'build': No such file or directory
+== unticked node_modules/
+ls: cannot access 'node_modules': No such file or directory
+== big file
+-rw------- 1 joseph joseph 125829120 Nov 24 18:47 data/assets.bin
+== which claude
+/mnt/c/Users/josep/AppData/Roaming/npm/claude
+== ~/work/clash after the refused Copy
+/home/joseph/ferrite-wsl-machine/home/work/clash
+/home/joseph/ferrite-wsl-machine/home/work/clash/repo
+/home/joseph/ferrite-wsl-machine/home/work/clash/repo/keep.txt
+keep me
+== core.autocrlf / core.filemode in the copy
+true
+false

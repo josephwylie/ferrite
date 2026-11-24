@@ -1,0 +1,4 @@
+repo /home/joseph/ferrite-wsl-machine/home/work/demo/repo
+repo /home/joseph/ferrite-wsl-machine/home/src/repo
+repo /home/joseph/ferrite-wsl-machine/home/notes-only/repo
+clients /home/joseph/ferrite-wsl-machine/home/work/clients

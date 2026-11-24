@@ -1,0 +1,7 @@
+== ~/work/demo
+notes
+repo
+== ~/work/demo/notes
+.git
+README.md
+## main
