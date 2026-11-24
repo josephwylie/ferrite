@@ -2349,6 +2349,7 @@ name = "ferrite-cockpit"
 version = "0.4.0"
 dependencies = [
  "ctor",
+ "dunce",
  "ferrite-client",
  "ferrite-core",
  "ferrite-focus-notify",

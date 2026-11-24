@@ -9,6 +9,14 @@ use super::*;
 use crate::cockpit::placement_view::PlacementView;
 use std::path::{Path, PathBuf};
 
+/// `settings_dir(name)` spelled as the registry keeps what it registers
+/// there, its links resolved: macOS reaches `/tmp` through one.
+fn resolved_dir(name: &str) -> PathBuf {
+    let temp = std::env::temp_dir();
+    let dir = settings_dir(name);
+    dunce::canonicalize(&temp).unwrap().join(dir.strip_prefix(&temp).unwrap())
+}
+
 /// `root` registered as a Project of `machine`, once its Server says so.
 fn registered(core: &mut Cockpit, machine: MachineId, root: &Path) -> ProjectKey {
     let asked = core.register_project(machine, root);
@@ -212,7 +220,7 @@ fn roots_on(
 #[gpui::test]
 fn the_environment_chip_lists_each_environment_with_the_drafts_ticked(cx: &mut TestAppContext) {
     let (mut core, _fake, machines, _agents) = two_machines("env-rows", 0);
-    let folder = settings_dir("env-rows").join("mine");
+    let folder = resolved_dir("env-rows").join("mine");
     std::fs::create_dir_all(&folder).unwrap();
     let mine = registered_here(&mut core, &folder);
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
@@ -244,7 +252,7 @@ fn a_machine_the_window_cannot_reach_is_dimmed_and_opens_connections(cx: &mut Te
     let (mut core, _fake) = cockpit("machines-env-unreached", 0);
     let machines = beside_box("env-unreached", &mut core, needs_sign_in);
     let on_box = machines.held(1).unwrap();
-    let folder = settings_dir("env-unreached").join("mine");
+    let folder = resolved_dir("env-unreached").join("mine");
     std::fs::create_dir_all(&folder).unwrap();
     let mine = registered_here(&mut core, &folder);
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
@@ -288,7 +296,7 @@ fn picking_a_machine_moves_the_draft_to_its_projects_counterpart_with_all_it_hol
     let (mut core, _fake, machines, _agents) = two_machines("env-counterpart", 0);
     let here_machine = core.this_computer().unwrap();
     let on_box = machines.held(1).unwrap();
-    let base = settings_dir("env-counterpart");
+    let base = resolved_dir("env-counterpart");
     let remote = "https://github.com/acme/app.git";
     let ours = project_folder(&base.join("here/app"), Some(remote));
     let theirs = project_folder(&base.join("box/app"), Some(remote));
@@ -376,7 +384,7 @@ fn picking_a_machine_moves_the_draft_to_its_projects_counterpart_with_all_it_hol
 /// each environment's Project is the other's counterpart.
 #[gpui::test]
 fn a_project_with_none_there_is_copied_by_the_sheet_and_known_there_after(cx: &mut TestAppContext) {
-    let base = settings_dir("env-copy");
+    let base = resolved_dir("env-copy");
     let projects = base.join("projects");
     let (mut core, _fake, machines, _agents) =
         two_machines_keeping_projects_in("env-copy", &projects);
@@ -472,7 +480,7 @@ fn a_project_with_none_there_is_copied_by_the_sheet_and_known_there_after(cx: &m
 /// nothing and leaves the draft where it was; its retry finishes it.
 #[gpui::test]
 fn a_copy_cancelled_part_way_adds_nothing_and_its_retry_finishes_it(cx: &mut TestAppContext) {
-    let base = settings_dir("env-cancel");
+    let base = resolved_dir("env-cancel");
     let projects = base.join("projects");
     let (mut core, _fake, machines, _agents) =
         two_machines_keeping_projects_in("env-cancel", &projects);
@@ -522,7 +530,7 @@ fn a_copy_cancelled_part_way_adds_nothing_and_its_retry_finishes_it(cx: &mut Tes
 #[gpui::test]
 fn while_a_copy_runs_where_it_goes_is_held_and_the_card_keeps_its_size(cx: &mut TestAppContext) {
     bind_production_keys(cx);
-    let base = settings_dir("env-held");
+    let base = resolved_dir("env-held");
     let projects = base.join("projects");
     let (mut core, _fake, machines, _agents) =
         two_machines_keeping_projects_in("env-held", &projects);
@@ -584,7 +592,7 @@ fn while_a_copy_runs_where_it_goes_is_held_and_the_card_keeps_its_size(cx: &mut 
 /// registers it as it is.
 #[gpui::test]
 fn a_destination_that_holds_something_is_never_copied_over(cx: &mut TestAppContext) {
-    let base = settings_dir("env-occupied");
+    let base = resolved_dir("env-occupied");
     let projects = base.join("projects");
     let (mut core, _fake, machines, _agents) =
         two_machines_keeping_projects_in("env-occupied", &projects);
@@ -638,7 +646,7 @@ fn a_destination_that_holds_something_is_never_copied_over(cx: &mut TestAppConte
 /// the sheet stays up to list it once the rest is chosen on the draft.
 #[gpui::test]
 fn a_file_in_use_while_copying_is_left_behind_and_listed(cx: &mut TestAppContext) {
-    let base = settings_dir("env-busy");
+    let base = resolved_dir("env-busy");
     let projects = base.join("projects");
     let (mut core, _fake, machines, _agents) =
         two_machines_keeping_projects_in("env-busy", &projects);
@@ -697,7 +705,7 @@ fn a_file_in_use_while_copying_is_left_behind_and_listed(cx: &mut TestAppContext
 /// copies.
 #[gpui::test]
 fn a_copy_that_fails_says_why_and_its_retry_copies(cx: &mut TestAppContext) {
-    let base = settings_dir("env-failed");
+    let base = resolved_dir("env-failed");
     let projects = base.join("projects");
     let (mut core, _fake, machines, _agents) =
         two_machines_keeping_projects_in("env-failed", &projects);
@@ -745,7 +753,7 @@ fn add_project_on_a_draft_makes_it_on_the_drafts_machine(cx: &mut TestAppContext
     bind_production_keys(cx);
     let (mut core, _fake, machines, _agents) = two_machines("env-add-project", 0);
     let on_box = machines.held(1).unwrap();
-    let base = settings_dir("env-add-project");
+    let base = resolved_dir("env-add-project");
     let first = base.join("first");
     let second = base.join("second");
     std::fs::create_dir_all(&first).unwrap();
@@ -796,7 +804,7 @@ fn add_project_on_a_draft_makes_it_on_the_drafts_machine(cx: &mut TestAppContext
 /// row, and a copy there then starts in it.
 #[gpui::test]
 fn a_machines_projects_folder_is_changed_on_its_connections_row(cx: &mut TestAppContext) {
-    let base = settings_dir("env-projects-dir");
+    let base = resolved_dir("env-projects-dir");
     let (mut core, _fake, machines, _agents) = two_machines("env-projects-dir", 0);
     let source = project_folder(&base.join("here/app"), None);
     let mine = registered_here(&mut core, &source);
@@ -858,7 +866,7 @@ fn a_machines_projects_folder_is_changed_on_its_connections_row(cx: &mut TestApp
 #[gpui::test]
 fn the_sheet_aims_the_copy_by_browsing_the_machines_folders(cx: &mut TestAppContext) {
     bind_production_keys(cx);
-    let base = settings_dir("env-browse");
+    let base = resolved_dir("env-browse");
     let projects = base.join("projects");
     let (mut core, _fake, machines, _agents) =
         two_machines_keeping_projects_in("env-browse", &projects);
@@ -944,7 +952,7 @@ fn the_sheet_aims_the_copy_by_browsing_the_machines_folders(cx: &mut TestAppCont
 /// sheet goes on: `..` leads out of it.
 #[gpui::test]
 fn a_folder_that_cannot_be_read_says_so_in_place(cx: &mut TestAppContext) {
-    let base = settings_dir("env-unread");
+    let base = resolved_dir("env-unread");
     let projects = base.join("projects");
     let (mut core, _fake, machines, _agents) =
         two_machines_keeping_projects_in("env-unread", &projects);
@@ -975,7 +983,7 @@ fn a_folder_that_cannot_be_read_says_so_in_place(cx: &mut TestAppContext) {
 /// the copy named in it.
 #[gpui::test]
 fn a_projects_folder_the_machine_lacks_opens_the_browser_at_home(cx: &mut TestAppContext) {
-    let base = settings_dir("env-no-projects");
+    let base = resolved_dir("env-no-projects");
     let (mut core, _fake, machines, _agents) = two_machines_with(
         "env-no-projects",
         0,
@@ -1003,7 +1011,7 @@ fn a_projects_folder_the_machine_lacks_opens_the_browser_at_home(cx: &mut TestAp
 #[gpui::test]
 fn the_sheet_is_finished_with_the_arrows_and_enter(cx: &mut TestAppContext) {
     bind_production_keys(cx);
-    let base = settings_dir("env-keys");
+    let base = resolved_dir("env-keys");
     let projects = base.join("projects");
     let (mut core, _fake, machines, _agents) =
         two_machines_keeping_projects_in("env-keys", &projects);
