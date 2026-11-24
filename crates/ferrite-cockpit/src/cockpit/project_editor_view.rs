@@ -386,7 +386,13 @@ impl ProjectEditorView {
         }
 
         let band_top = self.band.as_ref().and_then(Band::top);
-        let card = project_editor::card_over(f32::from(window.viewport_size().height), band_top)
+        let viewport_h = f32::from(window.viewport_size().height);
+        let card = if self.remote.is_some() {
+            project_editor::steady_card_over(viewport_h, band_top)
+        } else {
+            project_editor::card_over(viewport_h, band_top)
+        };
+        let card = card
             .id("project-editor-card")
             .debug_selector(|| "project-editor-card".into())
             .track_focus(&self.focus)
@@ -401,6 +407,7 @@ impl ProjectEditorView {
                     .relative()
                     .flex()
                     .flex_col()
+                    .flex_grow(1.)
                     .flex_shrink(1.)
                     .min_h_0()
                     .child(body)

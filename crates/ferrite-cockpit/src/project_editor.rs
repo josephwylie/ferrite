@@ -33,13 +33,28 @@ const LEAST_ROOM: f32 = 320.;
 /// there, a bottom margin as tall as the window under the room lifting it
 /// in the veil.
 pub fn card_over(viewport_h: f32, band_top: Option<f32>) -> Div {
+    let (height, lift) = room(viewport_h, band_top);
+    sheet::sheet_fit(WIDTH, height).mb(px(lift))
+}
+
+/// `card_over` at its full height whatever it holds: a card whose
+/// content moves as the operator works in it, a Machine's folder browser,
+/// holds still.
+pub fn steady_card_over(viewport_h: f32, band_top: Option<f32>) -> Div {
+    let (height, lift) = room(viewport_h, band_top);
+    sheet::sheet(WIDTH, height).mb(px(lift))
+}
+
+/// How tall a card over a draft whose band starts `band_top` down a window
+/// `viewport_h` tall may be, and how far it is lifted to stay clear of the
+/// band: not at all with no band, or too little room above it.
+fn room(viewport_h: f32, band_top: Option<f32>) -> (f32, f32) {
     let room = band_top
         .map(|top| top - SPACE_2)
         .filter(|room| (LEAST_ROOM..viewport_h).contains(room));
     match room {
-        Some(room) => sheet::sheet_fit(WIDTH, MAX_HEIGHT.min(room * MODAL_VIEWPORT_FRACTION))
-            .mb(px(viewport_h - room)),
-        None => card(viewport_h),
+        Some(room) => (MAX_HEIGHT.min(room * MODAL_VIEWPORT_FRACTION), viewport_h - room),
+        None => (MAX_HEIGHT.min(viewport_h * MODAL_VIEWPORT_FRACTION), 0.),
     }
 }
 
@@ -276,15 +291,18 @@ pub fn folder_name_row(editor: impl IntoElement, focused: bool, empty: bool) -> 
 }
 
 /// A note in a folder browser's list, a row's height at least, on the
-/// edge its rows' names start from.
-pub fn folder_note(note: Div) -> Div {
+/// edge its rows' names start from: two lines at most, whole in its
+/// tooltip.
+pub fn folder_note(note: Div, text: SharedString) -> gpui::Stateful<Div> {
     div()
+        .id("folder-note")
         .flex()
         .items_center()
         .min_h(px(FILES_ROW_H))
         .pl(px(SPACE_1 + ICON_CHEVRON + SPACE_1 + SPACE_1_5))
         .pr(px(SPACE_2))
-        .child(note)
+        .tooltip(ferrite_ui::menu::tooltip(text))
+        .child(div().flex_1().min_w_0().line_clamp(2).child(note))
 }
 
 /// A folder row's line: its mark in a chevron-wide column, as the Files
