@@ -165,10 +165,11 @@ impl Walk<'_> {
     fn unlisted(&mut self, path: &str, error: io::Error) {
         let under = format!("{path}/");
         let end = format!("{path}0");
-        let range = || (Bound::Included(under.as_str()), Bound::Excluded(end.as_str()));
-        let entries: Vec<String> = self.manifest.entries.range::<str, _>(range()).map(|(path, _)| path.clone()).collect();
-        let problems: Vec<String> = self.manifest.problems.range::<str, _>(range()).map(|(path, _)| path.clone()).collect();
-        for gone in entries.iter().chain(&problems).map(String::as_str).chain([path]) {
+        let inside = (Bound::Included(under.as_str()), Bound::Excluded(end.as_str()));
+        let entries = self.manifest.entries.range::<str, _>(inside).map(|(path, _)| path);
+        let problems = self.manifest.problems.range::<str, _>(inside).map(|(path, _)| path);
+        let gone: Vec<String> = entries.chain(problems).cloned().chain([path.to_string()]).collect();
+        for gone in &gone {
             self.manifest.entries.remove(gone);
             self.manifest.problems.remove(gone);
         }
@@ -259,7 +260,7 @@ impl Cache {
         while hashes.len() > most {
             hashes.pop_last();
         }
-        let mut held: usize = self.0.iter().map(|(_, files)| files.len()).sum::<usize>() + hashes.len();
+        let mut held = hashes.len() + self.0.iter().map(|(_, files)| files.len()).sum::<usize>();
         while held > most {
             held -= self.0.remove(0).1.len();
         }

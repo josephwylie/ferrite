@@ -67,12 +67,10 @@ pub fn temporary(name: &OsStr) -> bool {
     let numbers = name
         .to_str()
         .and_then(|name| name.strip_prefix(".ferrite-")?.strip_suffix(".part"));
+    let number = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
     numbers.is_some_and(|numbers| {
-        let numbers: Vec<&str> = numbers.split('-').collect();
-        numbers.len() == 3
-            && numbers
-                .iter()
-                .all(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
+        let parts: Vec<&str> = numbers.split('-').collect();
+        parts.len() == 3 && parts.into_iter().all(number)
     })
 }
 
@@ -135,7 +133,14 @@ impl<T> Incoming<T> {
     /// Receive `size` bytes as file `id` into a new temporary file in `dir`,
     /// made with the permission bits `mode` where this side keeps them. An
     /// `id` already under way is refused, and that file dropped too.
-    pub fn begin(&mut self, id: u64, dir: &Path, size: u64, mode: Option<u32>, what: T) -> io::Result<()> {
+    pub fn begin(
+        &mut self,
+        id: u64,
+        dir: &Path,
+        size: u64,
+        mode: Option<u32>,
+        what: T,
+    ) -> io::Result<()> {
         self.expire();
         if self.parts.remove(&id).is_some() {
             return Err(invalid("That upload was already under way"));

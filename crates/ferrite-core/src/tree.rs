@@ -678,21 +678,22 @@ pub(crate) fn overlap(one: &Path, other: &Path) -> io::Result<bool> {
 /// resolved, links followed and, on Windows, in its true case with no
 /// `\\?\`, and the rest of it joined on.
 fn canonical(path: &Path) -> io::Result<PathBuf> {
-    let mut rest = Vec::new();
+    let mut missing = Vec::new();
     let mut at = path;
-    loop {
+    let found = loop {
         match dunce::canonicalize(at) {
-            Ok(found) => return Ok(rest.into_iter().rev().fold(found, |path, name| path.join(name))),
+            Ok(found) => break found,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let (Some(parent), Some(name)) = (at.parent(), at.file_name()) else {
                     return Err(error);
                 };
-                rest.push(name);
+                missing.push(name);
                 at = parent;
             }
             Err(error) => return Err(error),
         }
-    }
+    };
+    Ok(missing.into_iter().rev().fold(found, |path, name| path.join(name)))
 }
 
 /// Whether `outer` is `inner` or holds it, compared without case where the
