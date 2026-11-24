@@ -117,7 +117,7 @@ pub fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
 
 /// Windows has no directory sync; the move itself is written through.
 #[cfg(windows)]
-pub(crate) fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
+pub fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
     const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
@@ -163,7 +163,7 @@ pub fn sync_dir(dir: &Path) -> io::Result<()> {
 
 /// Windows renames write through (`rename_over`); there is nothing to sync.
 #[cfg(not(unix))]
-pub(crate) fn sync_dir(_: &Path) -> io::Result<()> {
+pub fn sync_dir(_: &Path) -> io::Result<()> {
     Ok(())
 }
 
