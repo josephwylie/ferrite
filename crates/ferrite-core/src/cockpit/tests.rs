@@ -5184,7 +5184,8 @@ fn a_thread_revived_with_a_new_launch_keeps_its_id() {
         .revive_with(thread.thread(), again)
         .unwrap();
     assert!(core.engine().thread(thread.thread()).is_some());
-    assert_eq!(fake.args.borrow().last().unwrap(), &["--model", "opus"]);
+    assert_eq!(fake.models.borrow().last().unwrap().as_deref(), Some("opus"));
+    assert!(fake.args.borrow().last().unwrap().is_empty(), "the model is the Thread's");
     assert_eq!(
         *fake.resumed.borrow().last().unwrap(),
         None,
@@ -5210,6 +5211,49 @@ fn a_thread_revived_with_a_new_launch_keeps_its_id() {
     core.park(thread).now().unwrap();
     core.revive(thread).now().unwrap();
     assert!(fake.args.borrow().last().unwrap().is_empty());
+}
+
+/// A Thread started pinned (`thread.start --args=--model --args=haiku`)
+/// names the model and effort it runs before its Session says one: they
+/// are its own choice, in its header, read the same by its window, its
+/// digest and every Session it starts, a revived one too.
+#[test]
+fn a_launchs_model_and_effort_are_the_threads_from_its_start() {
+    let (mut core, fake) = cockpit("launch-pinned");
+    let launch = crate::engine::Launch {
+        args: ["--model", "haiku", "--verbose", "--effort=high"].map(String::from).to_vec(),
+        ..Default::default()
+    };
+    let thread = core
+        .engine_mut()
+        .open_with(Provider::Claude, main_choice(), launch)
+        .unwrap();
+    let thread = core.key(thread);
+    let started = |core: &mut Cockpit| {
+        core.pump();
+        let open = core.thread(thread).unwrap();
+        assert_eq!(open.transcript().model(), None, "no Session has said");
+        (
+            open.running_model().map(str::to_string),
+            open.effort().map(str::to_string),
+            open.digest().model.clone(),
+            fake.models.borrow().last().cloned().flatten(),
+            fake.efforts.borrow().last().cloned().flatten(),
+            fake.args.borrow().last().cloned().unwrap(),
+        )
+    };
+    let pinned = (
+        Some("haiku".to_string()),
+        Some("high".to_string()),
+        Some("haiku".to_string()),
+        Some("haiku".to_string()),
+        Some("high".to_string()),
+        vec!["--verbose".to_string()],
+    );
+    assert_eq!(started(&mut core), pinned);
+    core.park(thread).now().unwrap();
+    core.revive(thread).now().unwrap();
+    assert_eq!(started(&mut core), pinned, "revived from its header");
 }
 
 /// `thread.start --resume` (ADR 0030): the first Session carries on the

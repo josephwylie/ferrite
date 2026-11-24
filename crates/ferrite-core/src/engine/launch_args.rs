@@ -63,10 +63,75 @@ impl LaunchArgs {
         Self { args, ..self }.adding()
     }
 
+    /// The model and effort these name, taken out of them: they are the
+    /// Thread's own choice from here on, in its header, so it names what it
+    /// runs before its Session says, and a later pick in the window is not
+    /// undone by what was saved. Claude's `--model`/`--effort`; Codex's
+    /// `-m`/`--model` and `-c model_reasoning_effort=…`, a TOML value.
+    pub fn take_choice(&mut self) -> Choice {
+        let codex = self.provider == Provider::Codex;
+        let mut choice = Choice::default();
+        let mut kept = Vec::with_capacity(self.args.len());
+        let mut words = std::mem::take(&mut self.args).into_iter().peekable();
+        while let Some(word) = words.next() {
+            let (flag, inline) = match word.split_once('=') {
+                Some((flag, value)) if flag.starts_with("--") => (flag, Some(value.to_string())),
+                _ => (word.as_str(), None),
+            };
+            let slot = match flag {
+                "--model" => &mut choice.model,
+                "-m" if codex => &mut choice.model,
+                "--effort" if !codex => &mut choice.effort,
+                "-c" | "--config"
+                    if codex && words.peek().is_some_and(|next| next.starts_with(EFFORT)) =>
+                {
+                    let setting = words.next().expect("peeked");
+                    choice.effort = Some(toml_string(&setting[EFFORT.len()..]));
+                    continue;
+                }
+                _ => {
+                    kept.push(word);
+                    continue;
+                }
+            };
+            match inline.or_else(|| words.next()) {
+                Some(value) => *slot = Some(value),
+                None => kept.push(word),
+            }
+        }
+        self.args = kept;
+        choice
+    }
+
     /// These, when they add anything to Ferrite's own.
     fn adding(self) -> Option<Self> {
         (!self.args.is_empty() || !self.env.is_empty() || !self.launcher.is_empty()).then_some(self)
     }
+}
+
+/// The model and effort a launch names (`LaunchArgs::take_choice`).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct Choice {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+impl Choice {
+    pub fn names_any(&self) -> bool {
+        self.model.is_some() || self.effort.is_some()
+    }
+}
+
+/// Codex's setting for the effort (`-c model_reasoning_effort="high"`).
+const EFFORT: &str = "model_reasoning_effort=";
+
+/// A `-c` value is TOML; a bare word is taken literally, as Codex does.
+fn toml_string(value: &str) -> String {
+    value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(value)
+        .to_string()
 }
 
 /// What a Session of `provider` starts with: the saved launch, for its
@@ -142,6 +207,39 @@ mod tests {
             launch(Provider::Claude, &["--session-id", "4a76"]).later(),
             None
         );
+    }
+
+    /// The model and effort leave the arguments for the Thread's header,
+    /// written either way each CLI takes them; the rest stays in order.
+    #[test]
+    fn a_launchs_model_and_effort_become_the_threads_choice() {
+        let haiku_high = Choice {
+            model: Some("haiku".into()),
+            effort: Some("high".into()),
+        };
+        for (provider, args) in [
+            (Provider::Claude, &["--model", "haiku", "--yes", "--effort", "high"][..]),
+            (Provider::Claude, &["--model=haiku", "--yes", "--effort=high"]),
+            (Provider::Codex, &["-m", "haiku", "--yes", "-c", "model_reasoning_effort=\"high\""]),
+            (Provider::Codex, &["--model=haiku", "--yes", "--config", "model_reasoning_effort=high"]),
+        ] {
+            let mut launch = launch(provider, args);
+            assert_eq!(launch.take_choice(), haiku_high, "{args:?}");
+            assert_eq!(launch.args, ["--yes"], "{args:?}");
+        }
+    }
+
+    /// What is not a model or an effort for that CLI stays: Codex's other
+    /// settings, Claude's `-m`, a flag left without its value.
+    #[test]
+    fn what_names_no_choice_stays_in_the_arguments() {
+        let kept = ["-c", "sandbox_workspace_write.network_access=true", "-m"];
+        let mut codex = launch(Provider::Codex, &kept);
+        assert_eq!(codex.take_choice(), Choice::default());
+        assert_eq!(codex.args, kept);
+        let mut claude = launch(Provider::Claude, &["-m", "x", "--effort"]);
+        assert_eq!(claude.take_choice(), Choice::default());
+        assert_eq!(claude.args, ["-m", "x", "--effort"]);
     }
 
     /// Codex takes no such flag: its arguments are kept as they are.

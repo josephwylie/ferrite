@@ -3806,7 +3806,7 @@ fn api_revival_scopes_launch_overrides_to_their_provider() {
         "thread.start",
         serde_json::json!({
             "cwd": harness.dir, "provider": "codex", "ready": true,
-            "args": ["-c", "model_reasoning_effort=high"],
+            "args": ["-c", "shell_environment_policy.inherit=all"],
         }),
     );
     let thread = started["result"]["thread"]["thread"].clone();
@@ -3856,7 +3856,7 @@ fn api_revival_scopes_launch_overrides_to_their_provider() {
     assert_eq!(args["provider"], "codex");
     assert_eq!(
         args["args"],
-        serde_json::json!(["-c", "model_reasoning_effort=high"])
+        serde_json::json!(["-c", "shell_environment_policy.inherit=all"])
     );
 }
 

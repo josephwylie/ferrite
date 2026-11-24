@@ -262,7 +262,7 @@ impl NavView {
         // A Thread not mirrored here has no transcript: its digest says.
         let digest = open.map(|open| open.digest());
         let known = open
-            .and_then(|open| open.model().or(open.transcript().model()))
+            .and_then(|open| open.running_model())
             .or_else(|| digest.as_deref().and_then(|digest| digest.model.as_deref()));
         match known {
             Some(known) => ferrite_core::providers::models::footer_name(

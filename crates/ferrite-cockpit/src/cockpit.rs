@@ -8225,12 +8225,11 @@ impl CockpitView {
         let open = self.cockpit.read(cx).thread(thread)?;
         let provider = open.provider();
         let hold = tuning_hold(&open);
-        // The standing choice names the chip; else what the Session's own
-        // Init said is serving; until either, the provider's default model —
-        // never the provider, and never the id on the wire.
+        // The model it runs; until one is known, the provider's default
+        // model — never the provider, and never the id on the wire.
         let label = SharedString::from(ferrite_core::providers::models::footer_name(
             provider,
-            open.model().or(open.transcript().model()),
+            open.running_model(),
             open.models(),
         ));
         let effort = self.thread_effort(&open);

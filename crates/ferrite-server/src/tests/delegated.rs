@@ -179,13 +179,7 @@ fn a_capped_thread_carries_its_cap_to_every_session() {
             "cwd": harness.dir, "args": ["--model", "haiku"], "mode": "auto",
         }),
     ));
-    assert_eq!(
-        last(),
-        (
-            vec!["--model".into(), "haiku".into()],
-            Some(RuntimeMode::Auto)
-        )
-    );
+    assert_eq!(last(), (Vec::new(), Some(RuntimeMode::Auto)));
     for (id, revive) in [
         ("2", serde_json::json!({ "thread": thread })),
         (

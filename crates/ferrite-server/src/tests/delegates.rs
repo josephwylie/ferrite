@@ -622,9 +622,9 @@ fn a_delegate_runs_the_model_effort_and_mode_asked() {
     );
     let _provider = world.peer.sessions.recv_timeout(PATIENCE).unwrap();
     {
+        let (_, model, effort) = world.peer.launches.lock().unwrap()[0].clone();
+        assert_eq!((model.as_deref(), effort.as_deref()), (Some("opus"), Some("high")));
         let told = world.peer.told.lock().unwrap();
-        let asked = ["--model", "opus", "--effort", "high"].map(String::from);
-        assert!(told.args[0].ends_with(&asked), "{:?}", told.args);
         assert_eq!(
             told.caps,
             vec![Some(ferrite_core::runtime_mode::RuntimeMode::ApprovalRequired)]
@@ -709,9 +709,8 @@ fn a_delegate_runs_the_model_its_parent_runs() {
         serde_json::json!({ "machine": "pc", "task": "x", "checkout": world.peer.dir }),
     );
     let _provider = world.peer.sessions.recv_timeout(PATIENCE).unwrap();
-    let told = world.peer.told.lock().unwrap();
-    let asked = ["--model", model].map(String::from);
-    assert!(told.args[0].ends_with(&asked), "{:?}", told.args);
+    let launched = world.peer.launches.lock().unwrap()[0].1.clone();
+    assert_eq!(launched.as_deref(), Some(model));
 }
 
 /// AC: the agent's own Delegate tools start one on `pc` in the Project
