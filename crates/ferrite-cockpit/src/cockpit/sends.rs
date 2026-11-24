@@ -10,7 +10,9 @@
 //! The window never waits for the admission (ADR 0041). A sent draft is
 //! on its way in the `Outbox` until the Server answers; a Thread's drafts
 //! go one at a time, in the order sent, so each is sent or queued by what
-//! the Thread is doing once the one before it is settled.
+//! the Thread is doing once the one before it is settled. A prompt sent
+//! again (`send_again`) goes the same way, with no draft to settle: what
+//! follows it hears where it went.
 
 use super::*;
 use ferrite_core::cockpit::Admission;
@@ -37,17 +39,27 @@ struct Held {
     lost: bool,
 }
 
-/// The drafts on their way to each Thread, oldest first: the first is
+/// The prompts on their way to each Thread, oldest first: the first is
 /// asked of the Server, the rest wait for its answer.
 #[derive(Default)]
 pub(crate) struct Outbox(HashMap<ThreadKey, VecDeque<Outgoing>>);
 
 struct Outgoing {
-    draft: SentDraft,
-    /// The prompt as sent: the draft's, trimmed.
+    /// The prompt as sent: a draft's, trimmed.
     text: String,
-    cited: Vec<Reply>,
+    from: Origin,
 }
+
+/// Where a prompt on its way came from, and so what its answer settles.
+enum Origin {
+    /// The Composer's ↵: the draft is kept until the Thread takes it.
+    Composer { draft: SentDraft, cited: Vec<Reply> },
+    /// A prompt sent again: what follows hears where it went.
+    Replay(Replayed),
+}
+
+/// What follows a prompt sent again: where it went, or why it did not.
+type Replayed = Box<dyn FnOnce(&mut CockpitView, Result<Handoff, String>, &mut Context<CockpitView>)>;
 
 impl Outbox {
     #[cfg(test)]
@@ -87,8 +99,41 @@ impl CockpitView {
         cited: Vec<Reply>,
         cx: &mut Context<Self>,
     ) {
+        self.send_in_turn(thread, text, Origin::Composer { draft, cited }, cx);
+    }
+
+    /// Send `prompt` to Pane `index`'s Thread again, queued behind a
+    /// running turn. Nothing follows it: a prompt the Thread refuses is
+    /// not said.
+    pub(super) fn send_again(
+        &mut self,
+        index: usize,
+        thread: ThreadKey,
+        prompt: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.send_again_then(index, thread, prompt, |_, _, _| {}, cx);
+    }
+
+    /// `send_again`, and `then` hears where the prompt went, or why it
+    /// did not, once the Server answers.
+    pub(super) fn send_again_then(
+        &mut self,
+        index: usize,
+        thread: ThreadKey,
+        prompt: String,
+        then: impl FnOnce(&mut Self, Result<Handoff, String>, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_pane(index, cx);
+        self.send_in_turn(thread, prompt, Origin::Replay(Box::new(then)), cx);
+    }
+
+    /// `text` goes to `thread`: now, or once the prompts sent before it
+    /// are settled.
+    fn send_in_turn(&mut self, thread: ThreadKey, text: String, from: Origin, cx: &mut Context<Self>) {
         let waiting = self.outbox.0.entry(thread).or_default();
-        waiting.push_back(Outgoing { draft, text, cited });
+        waiting.push_back(Outgoing { text, from });
         if waiting.len() == 1 {
             self.ask_next_send(thread, cx);
         }
@@ -131,10 +176,10 @@ impl CockpitView {
         }
     }
 
-    /// The Server answered for `thread`'s oldest draft on its way: settle
-    /// it, follow an admitted prompt, and ask for the next.
+    /// The Server answered for `thread`'s oldest prompt on its way: settle
+    /// it, and ask for the next.
     fn sent(&mut self, thread: ThreadKey, answered: Answered, cx: &mut Context<Self>) {
-        let Some(Outgoing { draft, text, cited }) = self
+        let Some(Outgoing { text, from }) = self
             .outbox
             .0
             .get_mut(&thread)
@@ -142,6 +187,27 @@ impl CockpitView {
         else {
             return;
         };
+        match from {
+            Origin::Composer { draft, cited } => self.sent_draft(thread, draft, text, cited, answered, cx),
+            Origin::Replay(then) => {
+                let handoff = self.replayed(thread, answered, cx);
+                then(self, handoff, cx);
+            }
+        }
+        self.ask_next_send(thread, cx);
+    }
+
+    /// Settle the Composer's `draft` against its answer, and follow an
+    /// admitted prompt.
+    fn sent_draft(
+        &mut self,
+        thread: ThreadKey,
+        draft: SentDraft,
+        text: String,
+        cited: Vec<Reply>,
+        answered: Answered,
+        cx: &mut Context<Self>,
+    ) {
         let admitted = match answered {
             Answered::Queued(true) => {
                 self.hold_queued(thread, draft);
@@ -170,7 +236,32 @@ impl CockpitView {
             self.start_titling(thread, text, cx);
         }
         cx.notify();
-        self.ask_next_send(thread, cx);
+    }
+
+    /// Where a prompt sent again went, by its answer, or why it did not.
+    fn replayed(
+        &mut self,
+        thread: ThreadKey,
+        answered: Answered,
+        cx: &mut Context<Self>,
+    ) -> Result<Handoff, String> {
+        let handoff = match answered {
+            Answered::Queued(true) | Answered::Sent(Admission::Held) => Ok(Handoff::Queued),
+            Answered::Queued(false) => Err("The agent's queue did not take it.".into()),
+            Answered::Sent(Admission::Delivered) => {
+                if let Some(index) = self.pane_sending(thread) {
+                    self.scroll_transcript_to_new_prompt(index, cx);
+                }
+                Ok(Handoff::Sent)
+            }
+            Answered::Sent(Admission::Refused(why)) => Err(why),
+            Answered::Sent(Admission::Unconfirmed(why)) => Err(format!(
+                "It may or may not have been sent ({why}). Check the transcript before retrying."
+            )),
+        };
+        self.facts.acted(self.cockpit.read(cx), thread);
+        cx.notify();
+        handoff
     }
 
     /// The Pane whose Composer sends to `thread`, while one shows it.

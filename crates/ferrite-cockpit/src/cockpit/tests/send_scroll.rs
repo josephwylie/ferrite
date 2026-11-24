@@ -807,14 +807,14 @@ fn expanding_completed_work_keeps_the_clicked_heading(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("fold-anchor", 1);
     let thread = core.threads()[0];
     let (view, cx) = {
-        assert_eq!(core.send_and_wait(thread, "turn 0".into()), ferrite_core::cockpit::Admission::Delivered);
+        assert_eq!(core.send(thread, "turn 0".into()).now().unwrap(), ferrite_core::cockpit::Admission::Delivered);
         add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx))
     };
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     for turn in 0..6 {
         if turn > 0 {
-            let admission = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.send_and_wait(thread, format!("turn {turn}"))));
+            let admission = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, format!("turn {turn}")).now().unwrap()));
             assert_eq!(admission, ferrite_core::cockpit::Admission::Delivered);
         }
         let stream = fake.streams.borrow().len() - 1;
@@ -888,14 +888,14 @@ fn expanding_work_at_the_followed_tail_keeps_the_clicked_heading(cx: &mut TestAp
     let (mut core, fake) = cockpit("fold-tail", 1);
     let thread = core.threads()[0];
     let (view, cx) = {
-        assert_eq!(core.send_and_wait(thread, "turn 0".into()), ferrite_core::cockpit::Admission::Delivered);
+        assert_eq!(core.send(thread, "turn 0".into()).now().unwrap(), ferrite_core::cockpit::Admission::Delivered);
         add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx))
     };
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     for turn in 0..3 {
         if turn > 0 {
-            let admission = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.send_and_wait(thread, format!("turn {turn}"))));
+            let admission = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, format!("turn {turn}")).now().unwrap()));
             assert_eq!(admission, ferrite_core::cockpit::Admission::Delivered);
         }
         let stream = fake.streams.borrow().len() - 1;

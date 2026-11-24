@@ -13,7 +13,6 @@
 use std::path::PathBuf;
 
 use ferrite_core::activity::{ActivityView, AgentStatus};
-use ferrite_core::cockpit::Admission;
 use ferrite_core::transcript::BlockId;
 use ferrite_core::ThreadKey;
 use ferrite_pane::pane::{AgentClock, AgentFace, AgentFaces, AgentRun};
@@ -240,10 +239,10 @@ impl CockpitView {
     }
 
     /// `Retry` on the failure strip: send the failed turn's prompt again,
-    /// attachments and all, through the one resend path. Whether it went.
-    pub(crate) fn retry_failed_turn(&mut self, thread: ThreadKey, cx: &mut Context<Self>) -> bool {
+    /// attachments and all, through the one resend path.
+    pub(crate) fn retry_failed_turn(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         let Some(index) = self.pane_for(thread) else {
-            return false;
+            return;
         };
         let prompt = self.cockpit.read(cx).thread(thread).and_then(|open| {
             let main = open
@@ -261,9 +260,8 @@ impl CockpitView {
                 // operator's.
                 .and_then(|(line, wake)| (!wake).then_some(line))
         });
-        match prompt {
-            Some(prompt) => self.send_again(index, thread, prompt, cx).is_ok(),
-            None => false,
+        if let Some(prompt) = prompt {
+            self.send_again(index, thread, prompt, cx);
         }
     }
 
@@ -321,7 +319,7 @@ impl CockpitView {
 
     /// Send the prompt being read in Pane `index` again, attachments and
     /// all — queued behind a running turn. Only a Thread's Main Subject
-    /// takes prompts. Whether it went.
+    /// takes prompts. Whether there was one to send.
     pub(crate) fn resend_reading_prompt(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
         if !self.panes.get(index).is_some_and(|pane| pane.is_main()) {
             return false;
@@ -332,7 +330,8 @@ impl CockpitView {
         let Some(prompt) = self.reading_prompt(index, cx) else {
             return false;
         };
-        self.send_again(index, thread, prompt, cx).is_ok()
+        self.send_again(index, thread, prompt, cx);
+        true
     }
 
     /// A press on a sent prompt's Edit, Rewind or Fork in Pane `index`:
@@ -455,44 +454,6 @@ impl CockpitView {
             .rev()
             .find(|shown| shown.prompt_id.is_some())
             .map(|shown| shown.id)
-    }
-
-    /// Send `prompt` to Pane `index`'s Thread again, queued behind a
-    /// running turn: where it went, or why it did not.
-    pub(super) fn send_again(
-        &mut self,
-        index: usize,
-        thread: ThreadKey,
-        prompt: String,
-        cx: &mut Context<Self>,
-    ) -> Result<Handoff, String> {
-        self.focus_pane(index, cx);
-        let handoff = if self
-            .cockpit
-            .read(cx)
-            .thread(thread)
-            .is_some_and(|open| open.needs_queue())
-        {
-            if !self.cockpit.update(cx, |cockpit, _| cockpit.queue_and_wait(thread, prompt)) {
-                return Err("The agent's queue did not take it.".into());
-            }
-            Ok(Handoff::Queued)
-        } else {
-            match self.cockpit.update(cx, |cockpit, _| cockpit.send_and_wait(thread, prompt)) {
-                Admission::Delivered => {
-                    self.scroll_transcript_to_new_prompt(index, cx);
-                    Ok(Handoff::Sent)
-                }
-                Admission::Held => Ok(Handoff::Queued),
-                Admission::Refused(why) => Err(why),
-                Admission::Unconfirmed(why) => Err(format!(
-                    "It may or may not have been sent ({why}). Check the transcript before retrying."
-                )),
-            }
-        };
-        self.facts.acted(self.cockpit.read(cx), thread);
-        cx.notify();
-        handoff
     }
 
     /// Scroll Pane `index`'s transcript to `target`: the top, the live

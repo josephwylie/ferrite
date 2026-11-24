@@ -100,6 +100,32 @@ fn the_composers_sends_go_in_order_and_none_waits(cx: &mut gpui::TestAppContext)
     assert_eq!(left, "two", "a draft the Server refused later is back in the Composer");
 }
 
+/// A prompt sent again over a Server does not wait: it goes behind the
+/// draft sent before it, and what follows it hears where it went once the
+/// Server answers.
+#[gpui::test]
+fn a_prompt_sent_again_does_not_wait_and_hears_where_it_went(cx: &mut gpui::TestAppContext) {
+    use std::{cell::RefCell, rc::Rc};
+    let (_engine, view, thread, cx) = super::browser_chrome::browser_window(cx, "send-again");
+    let heard = Rc::new(RefCell::new(None));
+    waits::start();
+    cx.simulate_input("one");
+    cx.simulate_keystrokes("enter");
+    view.update(cx, |view, cx| {
+        let heard = heard.clone();
+        view.send_again_then(0, thread, "again".into(), move |_, handoff, _| *heard.borrow_mut() = Some(handoff), cx);
+    });
+    let first: Vec<_> = waits::take().into_iter().filter(|wait| ["send", "queue"].contains(&wait.op.as_str())).collect();
+    assert_eq!(first.len(), 1, "the prompt sent again waits for the draft's answer: {first:?}");
+    assert!(!first[0].waited, "{first:?}");
+    assert_eq!(*heard.borrow(), None, "nothing is heard before the Server answers");
+
+    until(cx, |_| heard.borrow().is_some());
+    // The fixture Server's Thread has no agent to queue behind.
+    assert_eq!(*heard.borrow(), Some(Err("The agent's queue did not take it.".into())));
+    assert_eq!(view.read_with(cx, |view, _| view.outbox.count(thread)), 0);
+}
+
 /// The Turn and Session presses whose reply the window reads are asked,
 /// never waited for, and each is answered through its ask.
 #[test]

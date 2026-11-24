@@ -1080,6 +1080,7 @@ impl PullRequestView {
         let notice = match self.actions.get(target) {
             Some(ActionState::Pending { action, stage, .. }) => {
                 let what = match stage {
+                    Stage::Handing => "handing it to the agent",
                     Stage::Queued(_) => "queued behind the agent's running turn",
                     Stage::Running => "the agent is on it",
                     Stage::Checking => "checking the PR",

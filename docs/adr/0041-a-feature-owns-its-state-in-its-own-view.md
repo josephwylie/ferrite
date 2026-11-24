@@ -1248,10 +1248,12 @@ never waits. The rest still do.
      when the window waited. A refusal that comes after the press puts
      the draft back in the Thread's Composer, ahead of newer typing, or
      keeps it for when a Pane next shows the Thread. A side chat's
-     question goes the same way. A replayed prompt (`send_again`: edit
-     and resend, the PR card, the overview) still waits, through
-     `send_and_wait` and `queue_and_wait`, because its callers read
-     where it went at once. The others whose reply the window reads
+     question goes the same way. A replayed prompt (`send_again`:
+     Retry, resend, the PR card, Create PR) goes through the same
+     `Outbox`, behind the drafts sent before it. It has no draft to
+     settle: what follows it hears where it went, and the PR card says
+     it is handing the prompt over until then. The others whose reply
+     the window reads
      are asks too, each with what follows its answer in
      `when_answered`: answering a Decision (a refusal shows under the
      request), rewind and fork (a refusal is said in the Thread), model,
@@ -1259,8 +1261,7 @@ never waits. The rest still do.
      needs the window and so goes out a beat after the answer. A side
      chat's tab opens at once and says a refused fork when the refusal
      comes. A test or a scene on an Engine in this process reads an
-     answer with `Ask::now`. What is left of this family is the
-     replayed prompt.
+     answer with `Ask::now`. Nothing of this family waits.
   3. Thread lifecycle: 16 asks, 31 sites. What follows an open, a park or
      a revive is the root's (the Panes, focus, the Project filter). Each
      needs a continuation like the Browser's `Then`.
