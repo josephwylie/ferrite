@@ -921,6 +921,7 @@ mod tests {
                 track.finished(Ok(Outcome::Stopped(valve(item))), ask, now, &mut news);
                 let again = track.anyway().expect("a stop");
                 assert!(again.allow_removals && !again.only_if_changed_here, "{ask:?}");
+                assert!(again.reads(item), "{ask:?} stopped at {item}: Sync anyway reads it too");
                 track.status = Status::Syncing(Some(4));
                 track.finished(Ok(Outcome::Synced(Synced::default())), again, now, &mut news);
                 assert_eq!(track.status, Status::InSync(BTreeMap::new()), "{ask:?} stopped at {item}");

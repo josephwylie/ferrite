@@ -1062,7 +1062,7 @@ fn a_toast_stands_over_the_settings_sheet(cx: &mut TestAppContext) {
     }
     let card = bounds(cx, "notification-card".into());
     let close = bounds(cx, "settings-close".into());
-    assert!(!card.intersects(&close), "{card:?} covers Settings' close button at {close:?}");
+    assert!(card.top() >= close.bottom(), "{card:?} hangs beside Settings' close button at {close:?}");
     cx.simulate_click(card.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(pressed.get(), 1, "the press reached the toast");
