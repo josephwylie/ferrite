@@ -91,10 +91,7 @@ impl CockpitView {
         let Some(machine) = self.settings_machine(cx) else {
             return "No environment selected".into();
         };
-        match self.cockpit.read(cx).bridge(machine) {
-            Some(bridge) => bridge.name().to_string().into(),
-            None => "this computer".into(),
-        }
+        self.place_of(machine, cx)
     }
 
     /// What Settings' pages about a machine say atop them, as T3 Code's
@@ -113,15 +110,9 @@ impl CockpitView {
             .is_none_or(|machine| self.elsewhere(machine, cx))
     }
 
-    /// What a machine's failure reads as: a Server from before the command
-    /// is told to update, not shown its refusal.
+    /// What the machine's failure reads as (`machines::said`).
     fn said(&self, error: &std::io::Error, cx: &gpui::App) -> SharedString {
-        match error.kind() {
-            std::io::ErrorKind::Unsupported => {
-                format!("update ferrited on {}", self.machine_place(cx)).into()
-            }
-            _ => error.to_string().into(),
-        }
+        super::machines::said(error, &self.machine_place(cx)).into()
     }
 
     /// Read the machine's defaults, unless a read is out.
@@ -318,7 +309,7 @@ impl CockpitView {
     }
 
     /// Settings › Behaviour's group of what the machine does on its own
-    /// account: follow-up suggestions and its Factory's limit.
+    /// account: titles, follow-up suggestions and its Factory's limit.
     pub(super) fn machine_group(&self, cx: &Context<Self>) -> settings::Group {
         let applies = settings::fact("Applies to", self.machine_place(cx));
         let group = settings::Group::new(Some("Machine defaults"));
@@ -330,6 +321,13 @@ impl CockpitView {
             std::iter::once(applies)
                 .chain(self.defaults_unsaved(cx))
                 .chain([
+                    settings::toggle(
+                        "settings-auto-title",
+                        "Name threads automatically",
+                        "Titled from the first prompt until you rename it",
+                        defaults.auto_title,
+                        self.default_change(cx, |d, v| d.auto_title = v),
+                    ),
                     settings::toggle(
                         "settings-placeholder-suggestions",
                         "Suggest follow-up prompts",

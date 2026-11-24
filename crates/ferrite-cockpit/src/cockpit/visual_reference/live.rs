@@ -302,7 +302,6 @@ pub fn capture(output: String) {
         settings,
         dir: settings_dir,
         defaults,
-        titler: true,
         cli_updates: false,
         ferrite_updates: false,
         whats_new: None,

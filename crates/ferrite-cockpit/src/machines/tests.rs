@@ -15,7 +15,6 @@ fn reach(name: &str) -> Reach {
         },
         renderer: None,
         driven: false,
-        defaults: Arc::default(),
         bridge: Bridge::ssh,
     }
 }

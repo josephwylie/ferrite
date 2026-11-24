@@ -75,7 +75,6 @@ mod snooze;
 pub(crate) mod starts;
 mod surfaces;
 mod tab_scroll;
-mod titling;
 mod toasts;
 pub(crate) mod subagents;
 pub(crate) mod tools;
@@ -494,10 +493,6 @@ pub struct CockpitView {
     composer_menu: Entity<composer_menu::ComposerMenuView>,
     /// What a draft's `/` and `$` menus list before it has a Session.
     draft_commands: draft_commands::DraftCommands,
-    /// Where the vendors keep session files — discovery's roots, defaulted
-    /// to the real homes and aimed at scratch directories by tests. Read
-    /// once per picker open, never per frame.
-    session_file_roots: Vec<(Provider, std::path::PathBuf)>,
     /// The Project new drafts fall back to: the last one the operator was
     /// working in. The launch reads it from the store's most recently used
     /// Thread, and every explicit pick in the Composer's Project chip moves
@@ -531,8 +526,6 @@ pub struct CockpitView {
     usage_popover_held: bool,
     /// Why the last Session control was refused (`session_control`).
     session_control_error: session_control::SessionControlError,
-    /// The Threads the titler is naming right now (`titling`).
-    titling: titling::Titling,
     /// Frames each open card has waited for its trigger's or Pane's
     /// geometry, by trigger key (`card_corner`); none once it has some.
     card_waits: std::cell::RefCell<std::collections::HashMap<String, u8>>,
@@ -677,10 +670,6 @@ pub struct Preferences {
     pub settings: ferrite_core::settings::Settings,
     pub dir: std::path::PathBuf,
     pub defaults: std::sync::Arc<std::sync::Mutex<ferrite_core::settings::SessionDefaults>>,
-    /// Whether a model writes Thread titles (each Provider's own CLI, the
-    /// cheap model, one turn). False in the test and demo constructors,
-    /// so no suite ever spawns a real CLI for a name.
-    pub titler: bool,
     /// Whether the window checks for newer provider CLIs and installs
     /// them. False in the test and demo constructors, so no suite reaches
     /// the registry or runs an installer.
@@ -734,7 +723,6 @@ impl Preferences {
             defaults: std::sync::Arc::new(std::sync::Mutex::new(
                 ferrite_core::settings::SessionDefaults::default(),
             )),
-            titler: false,
             cli_updates: false,
             ferrite_updates: false,
             whats_new: None,
@@ -1355,7 +1343,6 @@ impl CockpitView {
             activation: None,
             composer_menu,
             draft_commands: Default::default(),
-            session_file_roots: ferrite_core::session_file::default_roots(),
             launch_project,
             environment_lookup: None,
             checkouts: Default::default(),
@@ -1368,7 +1355,6 @@ impl CockpitView {
             history: Default::default(),
             usage_popover_held: false,
             session_control_error: Default::default(),
-            titling: Default::default(),
             card_waits: Default::default(),
             nav_collapsed: prefs.settings.nav_collapsed,
             nav_auto_fold: std::cell::Cell::new(false),
@@ -5734,7 +5720,6 @@ impl CockpitView {
                 self.sync_panes(cx);
                 self.thread_opened(done.thread, cx);
                 self.refresh_names();
-                self.start_titling(done.thread, text.to_string(), cx);
                 self.scroll_transcript_to_bottom(index, cx);
             }
             Ok(None) => {
@@ -6224,7 +6209,7 @@ impl CockpitView {
                 .filter(|_| working)
                 .and_then(|open| open.turn().started),
             pinned: self.pins(cx).contains(&key),
-            retitling: self.titling.naming(key),
+            retitling: open.is_some_and(|open| open.titling()),
             // The nav wears its own picks (`NavView::card_picked`).
             picked: false,
             elsewhere: self.elsewhere_row(key, cx),
@@ -8052,19 +8037,6 @@ impl CockpitView {
             }
             _ => None,
         }
-    }
-
-    /// Whether `thread`'s transcript holds exactly one prompt — the moment
-    /// a title is asked for.
-    fn is_first_prompt(&self, thread: ThreadKey, cx: &gpui::App) -> bool {
-        self.cockpit.read(cx).thread(thread).is_some_and(|open| {
-            open.transcript()
-                .blocks()
-                .iter()
-                .filter(|block| matches!(block.body, ferrite_core::transcript::Body::Prompt(_)))
-                .count()
-                == 1
-        })
     }
 
 

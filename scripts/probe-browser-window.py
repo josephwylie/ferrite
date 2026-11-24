@@ -226,7 +226,7 @@ def main():
     url = f'http://127.0.0.1:{server.server_port}/'+('boundaries' if args.boundaries else '')
     with tempfile.TemporaryDirectory(prefix='ferrite-window-') as temporary:
         root = Path(temporary)
-        (root/'settings.json').write_text(json.dumps({'check_for_updates':False, 'start_at_login':False, 'auto_update_clis':False}), encoding='utf-8')
+        (root/'settings.json').write_text(json.dumps({'check_for_updates':False, 'start_at_login':False, 'auto_update_clis':False, 'auto_title':False}), encoding='utf-8')
         env = os.environ.copy()
         env.update(FERRITE_STORE=str(root/'threads'), FERRITE_BROWSER_PROFILE=str(root/'profile'),
                    FERRITE_BROWSER_SMOKE_MOCK_KEYCHAIN='1' if args.mock_keychain else '0',

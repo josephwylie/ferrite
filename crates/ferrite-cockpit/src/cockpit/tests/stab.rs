@@ -1004,7 +1004,6 @@ fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
             version: "0".into(),
         },
         renderer: None,
-        discovery: Box::new(Fake::default()),
     })
     .unwrap();
     assert!(matches!(
@@ -1043,7 +1042,6 @@ fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
             version: "0".into(),
         },
         renderer: None,
-        discovery: Box::new(Fake::default()),
     })
     .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));

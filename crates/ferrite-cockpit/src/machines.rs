@@ -7,13 +7,11 @@
 
 use std::io;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use ferrite_client::cockpit::{Attach, Cockpit, Endpoint, ServerState};
 use ferrite_core::machine::{self, Bridge, Machine};
 use ferrite_core::protocol::Peer;
-use ferrite_core::settings::SessionDefaults;
-use ferrite_core::spawner;
 use ferrite_core::visual::Renderer;
 use ferrite_core::{MachineId, MachineKey};
 
@@ -32,7 +30,6 @@ pub struct Reach {
     /// The window takes the API's `window.*` actions: a `ferrite
     /// --headless` one (ADR 0038).
     pub driven: bool,
-    pub defaults: Arc<Mutex<SessionDefaults>>,
     /// How a machine is reached: `Bridge::ssh`, or a test's fake.
     pub bridge: fn(&Machine, &std::path::Path) -> Bridge,
 }
@@ -328,7 +325,6 @@ impl Machines {
             client: self.reach.client.clone(),
             renderer: self.reach.renderer.clone(),
             driven: self.drives(index),
-            discovery: Box::new(spawner::Spawn::new(self.reach.defaults.clone(), None)),
         }
     }
 

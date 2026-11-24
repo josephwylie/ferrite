@@ -126,14 +126,14 @@ fn contract_native_session_picker_shows_titles_without_spawning(cx: &mut TestApp
     cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
-    tx.send(Ok(vec![ferrite_core::session_file::Candidate {
+    tx.send(Ok(found(vec![ferrite_core::session_file::Candidate {
         provider: Provider::Codex,
         path: "/sessions/native.jsonl".into(),
         title: Some("Fix startup latency".into()),
         cwd: Some("/workspace/ferrite".into()),
         session_id: Some("native-id".into()),
         modified: Some(std::time::SystemTime::now()),
-    }]))
+    }])))
     .unwrap();
     tick(cx);
     view.read_with(cx, |view, cx| {
@@ -159,7 +159,7 @@ fn contract_native_discovery_dismissal_does_not_reopen_picker(cx: &mut TestAppCo
     cx.run_until_parked();
     cx.simulate_keystrokes("enter escape");
     cx.run_until_parked();
-    let _ = tx.send(Ok(vec![]));
+    let _ = tx.send(Ok(found(vec![])));
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.popover(cx).is_none() && view.floats.palette.is_none())

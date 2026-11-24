@@ -315,13 +315,6 @@ impl SettingsView {
         }
         let behaviour = vec![
             settings::toggle(
-                "settings-auto-title",
-                "Name threads automatically",
-                "Titled from the first prompt until you rename it",
-                settings.auto_title,
-                Self::change(cx, |s, v| s.auto_title = v),
-            ),
-            settings::toggle(
                 "settings-confirm-delete",
                 "Confirm before deleting a thread",
                 "Ask before removing a thread and its transcript",

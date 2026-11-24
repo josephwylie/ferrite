@@ -260,7 +260,6 @@ fn reach(name: &str, bridge: fn(&Machine, &std::path::Path) -> Bridge) -> Reach 
         },
         renderer: None,
         driven: false,
-        defaults: Default::default(),
         bridge,
     }
 }
@@ -374,7 +373,6 @@ fn another_client(name: &str) -> Cockpit {
             version: "0".into(),
         },
         renderer: None,
-        discovery: Box::new(Fake::default()),
     })
     .unwrap();
     let machine = core.first_machine();
@@ -1336,7 +1334,6 @@ fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut Test
         ))),
         client: ferrite_core::protocol::Peer { name: "test".into(), version: "0".into() },
         renderer: None,
-        discovery: Box::new(Fake::default()),
     }).unwrap();
     ferrite_core::doorbell::until("remote server never attached", || {
         core.pump();
@@ -1389,7 +1386,6 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
                 version: "0".into(),
             },
             renderer: None,
-            discovery: Box::new(Fake::default()),
         })
         .unwrap();
         ferrite_core::doorbell::until("client did not attach", || {
@@ -1957,7 +1953,6 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
             version: "0".into(),
         },
         renderer: None,
-        discovery: Box::new(Fake::default()),
     })
     .unwrap();
     ferrite_core::doorbell::until("never attached", || {
@@ -2542,7 +2537,7 @@ pub(super) fn browser_core(name: &str) -> (Cockpit, ThreadKey, ferrite_core::bro
         saved_as: ferrite_core::MachineKey(Some("me@box".into())),
         store: dir.join("window"), server: Endpoint::Machine(bridge),
         client: ferrite_core::protocol::Peer { name: name.into(), version: "0".into() },
-        renderer: None, browser: true, driven: false, discovery: Box::new(Fake::default()),
+        renderer: None, browser: true, driven: false,
     }).unwrap();
     ferrite_core::doorbell::until("browser window did not attach", || {
         core.pump(); matches!(core.server(core.first_machine()), Some(ServerState::Attached { .. }))
@@ -2671,7 +2666,7 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
         saved_as: ferrite_core::MachineKey(Some("me@box".into())),
         store: dir.join("window"), server: Endpoint::Machine(bridge),
         client: ferrite_core::protocol::Peer { name: "browser-preview".into(), version: "0".into() },
-        renderer: None, browser: true, driven: false, discovery: Box::new(Fake::default()),
+        renderer: None, browser: true, driven: false,
     }).unwrap();
     ferrite_core::doorbell::until("browser window did not attach", || {
         core.pump(); matches!(core.server(core.first_machine()), Some(ServerState::Attached { .. }))
@@ -2820,7 +2815,6 @@ fn settings_on_a_machine<'a>(
             version: "0".into(),
         },
         renderer: None,
-        discovery: Box::new(Fake::default()),
     })
     .unwrap();
     ferrite_core::doorbell::until("client did not attach", || {
@@ -2888,12 +2882,28 @@ fn settings_on_a_machine_edit_its_defaults_not_this_computers(cx: &mut TestAppCo
         })
     });
 
+    let search = cx.debug_bounds("settings-search").unwrap();
+    cx.simulate_click(search.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes(&ferrite_ui::keymap::PLATFORM.chord("a"));
+    cx.simulate_input("name threads");
+    tick(cx);
+    let at = cx.debug_bounds("settings-auto-title").unwrap().center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    until(cx, |cx| {
+        view.read_with(cx, |view, cx| {
+            view.shown_defaults(cx)
+                .is_some_and(|shown| !shown.auto_title)
+        })
+    });
+
     until(cx, |_| {
-        Settings::load(&remote).is_ok_and(|written| written.placeholder_suggestions)
+        Settings::load(&remote)
+            .is_ok_and(|written| written.placeholder_suggestions && !written.auto_title)
     });
     let written = Settings::load(&remote).unwrap();
     assert_eq!(written.factory_tasks_at_once, 6, "written to its file");
     assert!(written.placeholder_suggestions);
+    assert!(!written.auto_title, "its titles are the machine's to turn off");
     assert_eq!(
         written.codex_approval_policy, "never",
         "what the edit did not name stays"

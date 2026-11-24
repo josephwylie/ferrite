@@ -103,10 +103,6 @@
   "cef"
  ],
  "crossings": {
-  "ferrite-client -> engine": 1,
-  "ferrite-client -> store": 2,
-  "ferrite-cockpit -> providers": 1,
-  "ferrite-cockpit -> spawner": 1,
-  "ferrite-cockpit -> titler": 3
+  "ferrite-client -> store": 2
  }
 }

@@ -5,14 +5,46 @@
 
 use super::environments::{focused_draft, registered, resolved_dir};
 use super::*;
-use ferrite_core::session_file::Candidate;
+use ferrite_core::session_file::{Candidate, Found};
 
 /// box's provider CLI, as box's Server runs it: a command, a session and
 /// a title of box's own, and how often each was asked for.
 #[derive(Clone, Default)]
 struct BoxCli {
     commands_asked: Arc<AtomicUsize>,
-    titles_asked: Arc<AtomicUsize>,
+    titles: Arc<Mutex<Titler>>,
+}
+
+/// box's titler: how often it was asked, and, while it holds its answers,
+/// the ones it owes.
+#[derive(Default)]
+struct Titler {
+    asked: usize,
+    holding: bool,
+    owed: Vec<(ThreadId, ferrite_core::doorbell::Sender<ferrite_core::titler::Titled>)>,
+}
+
+const BOX_TITLE: &str = "Titled on box";
+
+impl BoxCli {
+    fn titles_asked(&self) -> usize {
+        self.titles.lock().unwrap().asked
+    }
+
+    /// From now on its titles wait for `write_held`.
+    fn hold_titles(&self) {
+        self.titles.lock().unwrap().holding = true;
+    }
+
+    /// The titles it held, written.
+    fn write_held(&self) {
+        for (thread, replies) in self.titles.lock().unwrap().owed.drain(..) {
+            let _ = replies.send(ferrite_core::titler::Titled {
+                thread,
+                title: Some(BOX_TITLE.into()),
+            });
+        }
+    }
 }
 
 impl ferrite_core::engine::Spawner for BoxCli {
@@ -47,16 +79,19 @@ impl ferrite_core::engine::Spawner for BoxCli {
         &mut self,
         _: Vec<(Provider, std::path::PathBuf)>,
         _: usize,
-    ) -> Option<mpsc::Receiver<std::io::Result<Vec<Candidate>>>> {
+    ) -> Option<mpsc::Receiver<std::io::Result<Found>>> {
         let (answer, listed) = ferrite_core::doorbell::channel();
-        let _ = answer.send(Ok(vec![Candidate {
-            provider: Provider::Claude,
-            path: "/on-box/sessions/box-session.jsonl".into(),
-            modified: Some(std::time::SystemTime::now()),
-            title: Some("Box's session".into()),
-            cwd: Some("/on-box/src/app".into()),
-            session_id: Some("box-session".into()),
-        }]));
+        let _ = answer.send(Ok(Found {
+            sessions: vec![Candidate {
+                provider: Provider::Claude,
+                path: "/on-box/sessions/box-session.jsonl".into(),
+                modified: Some(std::time::SystemTime::now()),
+                title: Some("Box's session".into()),
+                cwd: Some("/on-box/src/app".into()),
+                session_id: Some("box-session".into()),
+            }],
+            roots: vec!["/on-box/sessions".into()],
+        }));
         Some(listed)
     }
 
@@ -65,10 +100,15 @@ impl ferrite_core::engine::Spawner for BoxCli {
         job: ferrite_core::titler::Job,
         replies: ferrite_core::doorbell::Sender<ferrite_core::titler::Titled>,
     ) {
-        self.titles_asked.fetch_add(1, Ordering::SeqCst);
+        let mut titler = self.titles.lock().unwrap();
+        titler.asked += 1;
+        if titler.holding {
+            titler.owed.push((job.thread, replies));
+            return;
+        }
         let _ = replies.send(ferrite_core::titler::Titled {
             thread: job.thread,
-            title: Some("Titled on box".into()),
+            title: Some(BOX_TITLE.into()),
         });
     }
 }
@@ -126,7 +166,9 @@ fn a_drafts_commands_on_a_machine_are_that_machines(cx: &mut TestAppContext) {
 /// picker.
 fn this_computers_sessions(view: &Entity<CockpitView>, root: &std::path::Path, cx: &mut gpui::VisualTestContext) {
     let roots = vec![(Provider::Claude, root.to_path_buf())];
-    view.update(cx, |view, _| view.session_file_roots = roots);
+    view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_session_roots(roots))
+    });
 }
 
 /// box's import picker lists the sessions box's Server found on box, not
@@ -164,6 +206,35 @@ fn a_machines_import_picker_lists_that_machines_sessions(cx: &mut TestAppContext
     assert_eq!(rows(cx).unwrap(), ["Box's session"], "box's session, and only box's");
 }
 
+/// `text` sent from the focused draft on box: the Thread it starts there.
+fn first_prompt(
+    view: &Entity<CockpitView>,
+    on_box: MachineId,
+    draft: PaneIdentity,
+    text: &str,
+    cx: &mut gpui::VisualTestContext,
+) -> ThreadKey {
+    cx.simulate_input(text);
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| view.read_with(cx, |view, _| view.index_of(draft).is_none()));
+    view.read_with(cx, |view, cx| {
+        let threads = view.cockpit.read(cx).threads();
+        threads.into_iter().find(|thread| thread.machine() == on_box).expect("box's Thread")
+    })
+}
+
+/// `thread`'s title, as the window holds it.
+fn title_of(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) -> Option<String> {
+    view.read_with(cx, |view, cx| {
+        view.cockpit.read(cx).thread(thread).and_then(|open| open.title().map(str::to_string))
+    })
+}
+
+/// Whether box's Server says it is writing `thread`'s title.
+fn titling(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) -> bool {
+    view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(thread).is_some_and(|open| open.titling()))
+}
+
 /// A Thread on box is titled by box's Server from its first prompt, once,
 /// and every window attached to box sees the title.
 #[gpui::test]
@@ -172,28 +243,69 @@ fn a_thread_on_a_machine_is_titled_by_its_server(cx: &mut TestAppContext) {
     let name = "box-titles";
     let (view, cx, on_box, draft) = box_draft(cx, name, &resolved_dir(name).join("on-box"), &cli);
     let mut other = another_client(name);
-    cx.simulate_input("Fix the login page");
-    cx.simulate_keystrokes("enter");
-    until(cx, |cx| view.read_with(cx, |view, _| view.index_of(draft).is_none()));
-    let thread = view.read_with(cx, |view, cx| {
-        let threads = view.cockpit.read(cx).threads();
-        threads.into_iter().find(|thread| thread.machine() == on_box).expect("box's Thread")
-    });
-    let title = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| {
-            view.cockpit.read(cx).thread(thread).and_then(|open| open.title().map(str::to_string))
-        })
-    };
-    until(cx, |cx| title(&view, cx).is_some());
-    assert_eq!(title(&view, cx).as_deref(), Some("Titled on box"));
-    until(cx, |cx| view.read_with(cx, |view, _| view.facts.name(thread).as_ref() == "Titled on box"));
+    let thread = first_prompt(&view, on_box, draft, "Fix the login page", cx);
+    until(cx, |cx| title_of(&view, thread, cx).is_some());
+    assert_eq!(title_of(&view, thread, cx).as_deref(), Some(BOX_TITLE));
+    until(cx, |cx| view.read_with(cx, |view, _| view.facts.name(thread).as_ref() == BOX_TITLE));
     ferrite_core::doorbell::until("the other window never saw the title", || {
         other.pump();
         let theirs = other.threads();
         theirs.iter().any(|thread| {
             other.thread(*thread).and_then(|open| open.title().map(str::to_string)).as_deref()
-                == Some("Titled on box")
+                == Some(BOX_TITLE)
         })
     });
-    assert_eq!(cli.titles_asked.load(Ordering::SeqCst), 1, "titled once, for both windows");
+    assert_eq!(cli.titles_asked(), 1, "titled once, for both windows");
+}
+
+/// The operator's name for a Thread stands: one typed while box's titler
+/// writes is the one it keeps.
+#[gpui::test]
+fn a_rename_while_a_machine_titles_its_thread_stands(cx: &mut TestAppContext) {
+    let cli = BoxCli::default();
+    cli.hold_titles();
+    let name = "box-title-renamed";
+    let (view, cx, on_box, draft) = box_draft(cx, name, &resolved_dir(name).join("on-box"), &cli);
+    let thread = first_prompt(&view, on_box, draft, "Fix the login page", cx);
+    until(cx, |cx| titling(&view, thread, cx));
+    let mut renamed = view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(thread, "Login, my way"))
+    });
+    let mut answer = None;
+    until(cx, |_| {
+        answer = answer.take().or_else(|| renamed.answer());
+        answer.is_some()
+    });
+    assert!(answer.unwrap().is_ok(), "renamed");
+    cli.write_held();
+    until(cx, |cx| !titling(&view, thread, cx));
+    assert_eq!(title_of(&view, thread, cx).as_deref(), Some("Login, my way"));
+    assert_eq!(cli.titles_asked(), 1);
+}
+
+/// With box's *Name threads automatically* off, box's Server asks its
+/// titler nothing.
+#[gpui::test]
+fn a_machine_with_titles_off_titles_nothing(cx: &mut TestAppContext) {
+    let cli = BoxCli::default();
+    let name = "box-titles-off";
+    let (view, cx, on_box, draft) = box_draft(cx, name, &resolved_dir(name).join("on-box"), &cli);
+    let off = ferrite_core::settings::ServerDefaults {
+        auto_title: false,
+        ..Default::default()
+    };
+    let written = view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.server_defaults(on_box, Some(off)))
+    });
+    let written = written.expect("asked");
+    until(cx, |_| written.try_recv().is_ok());
+    let thread = first_prompt(&view, on_box, draft, "Fix the login page", cx);
+    until(cx, |cx| {
+        view.read_with(cx, |view, cx| {
+            view.cockpit.read(cx).thread(thread).is_some_and(|open| open.first_prompt_sent())
+        })
+    });
+    assert_eq!(cli.titles_asked(), 0, "nothing asked");
+    assert!(!titling(&view, thread, cx));
+    assert_eq!(title_of(&view, thread, cx), None);
 }

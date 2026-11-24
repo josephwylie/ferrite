@@ -319,21 +319,24 @@ struct Shown {
     lit: Vec<Range<usize>>,
 }
 
-/// The import picker's session listing, under way off the UI thread. It
+/// The import picker's session listing, asked of a machine's Server. It
 /// lives on the picker that asked, so a picker closed or reopened since
 /// drops it.
 pub(crate) struct Listing {
     /// The blank Pane a pick replaces, if any.
     into: Option<PaneIdentity>,
+    /// The machine whose sessions they are.
+    machine: ferrite_core::MachineId,
     started: std::time::Instant,
-    reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::session_file::Candidate>>>,
+    reply: ferrite_client::cockpit::Ask<ferrite_core::session_file::Found>,
 }
 
-/// The listing's answer: the Pane a pick replaces, and the sessions found
-/// or why there are none.
+/// The listing's answer: the Pane a pick replaces, the machine asked, and
+/// the sessions found or why there are none.
 pub(crate) type Listed = (
     Option<PaneIdentity>,
-    Result<Vec<ferrite_core::session_file::Candidate>, String>,
+    ferrite_core::MachineId,
+    std::io::Result<ferrite_core::session_file::Found>,
 );
 
 /// The palette: its scope, its rows and the filter's survivors, the cursor
@@ -406,15 +409,17 @@ impl Palette {
         self.refilter(cx);
     }
 
-    /// Wait for the sessions listed off the UI thread, for a pick to take
+    /// Wait for the sessions `machine`'s Server lists, for a pick to take
     /// the place of `into`.
     pub(crate) fn listen(
         &mut self,
         into: Option<PaneIdentity>,
-        reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::session_file::Candidate>>>,
+        machine: ferrite_core::MachineId,
+        reply: ferrite_client::cockpit::Ask<ferrite_core::session_file::Found>,
     ) {
         self.listing = Some(Listing {
             into,
+            machine,
             started: std::time::Instant::now(),
             reply,
         });
@@ -423,20 +428,19 @@ impl Palette {
     /// The listing's answer once it lands, or once it has waited 15
     /// seconds; nothing while it is still out.
     pub(crate) fn listed(&mut self) -> Option<Listed> {
-        use std::sync::mpsc::TryRecvError;
-        let listing = self.listing.take()?;
-        let found = match listing.reply.try_recv() {
-            Ok(found) => found.map_err(|error| error.to_string()),
-            Err(TryRecvError::Empty)
-                if listing.started.elapsed() < std::time::Duration::from_secs(15) =>
-            {
+        let mut listing = self.listing.take()?;
+        let found = match listing.reply.answer() {
+            Some(found) => found,
+            None if listing.started.elapsed() < std::time::Duration::from_secs(15) => {
                 self.listing = Some(listing);
                 return None;
             }
-            Err(TryRecvError::Empty) => Err("the listing timed out".into()),
-            Err(error) => Err(error.to_string()),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "the listing timed out",
+            )),
         };
-        Some((listing.into, found))
+        Some((listing.into, listing.machine, found))
     }
 
     /// What the line holds now.
