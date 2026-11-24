@@ -268,8 +268,7 @@ sends.
 `settings.machines`: `{name, target, enabled}` in nav order. A machine
 turned off is never connected to: `--remote` naming one leaves it
 listed as off, and turning one off lets it go, its Panes with it (ADR
-0045). Settings ›
-About › Machines lists each with sign in (when it needs one), turn
+0045). Settings › Connections lists each with sign in (when it needs one), turn
 on/off, remove — or save, for the `--remote` machine of this run — and a
 field to add one by its ssh target. Settings › Server and "Start at
 login" are this computer's.
