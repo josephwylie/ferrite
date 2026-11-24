@@ -881,6 +881,27 @@ pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
                 .child(actions),
         )
         .children(row.sync.map(|sync| sync_line(sync, menu, cx)))
+        .children(row.projects.map(|projects| {
+            div()
+                .flex()
+                .items_end()
+                .gap(px(8.))
+                .child(field(
+                    "connection-projects-dir",
+                    "Projects folder",
+                    &projects.input,
+                    false,
+                    cx,
+                ))
+                .child(
+                    button("connection-projects-cancel", "Cancel", true, projects.cancel, cx)
+                        .child(text("Cancel", 14., ink(cx))),
+                )
+                .child(
+                    button("connection-projects-save", "Save", true, projects.save, cx)
+                        .child(text("Save", 14., ink(cx))),
+                )
+        }))
         .children(row.removal.map(|(confirm, cancel)| {
             div()
                 .flex()

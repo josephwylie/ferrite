@@ -661,3 +661,66 @@ fn add_project_on_a_draft_makes_it_on_the_drafts_machine(cx: &mut TestAppContext
     assert_eq!(root, second);
 }
 
+/// A saved environment's projects folder is changed on its Connections
+/// row, and a copy there then starts in it.
+#[gpui::test]
+fn a_machines_projects_folder_is_changed_on_its_connections_row(cx: &mut TestAppContext) {
+    let base = settings_dir("env-projects-dir");
+    let (mut core, _fake, machines, _agents) = two_machines("env-projects-dir", 0);
+    let source = project_folder(&base.join("here/app"), None);
+    let mine = registered_here(&mut core, &source);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    let edit = connection_act(&view, "connection-projects-1", cx);
+    cx.update(|window, cx| edit(window, cx));
+    let (input, save) = connection_groups(&view, cx)
+        .into_iter()
+        .flat_map(|group| group.rows)
+        .find_map(|row| match row.control {
+            settings::Control::ConnectionRow(row) => {
+                row.projects.map(|edit| (edit.input, edit.save))
+            }
+            _ => None,
+        })
+        .expect("the row's projects folder field");
+    assert_eq!(
+        input.read_with(cx, |input, _| input.value().to_string()),
+        "~/projects"
+    );
+    let work = base.join("work");
+    cx.update(|window, cx| {
+        input.update(cx, |input, cx| {
+            input.set_value(work.display().to_string(), window, cx)
+        })
+    });
+    cx.update(|window, cx| save(window, cx));
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.prefs.settings.machines[0].projects_dir,
+            work.display().to_string()
+        );
+    });
+    assert!(
+        ferrite_core::settings::Settings::load(
+            &view.read_with(cx, |view, _| view.prefs.dir.clone())
+        )
+        .is_ok_and(|saved| saved.machines[0].projects_dir == work.display().to_string()),
+        "and saved"
+    );
+
+    view.update(cx, |view, cx| {
+        view.hide_sheet(cx);
+        view.open_draft_in_project(mine, cx);
+    });
+    tick(cx);
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    until(cx, |cx| sheet(&view, cx).is_some());
+    let field = sheet(&view, cx)
+        .unwrap()
+        .read_with(cx, |sheet, _| sheet.dest.field.clone());
+    assert_eq!(
+        field.read_with(cx, |field, _| field.text().to_string()),
+        format!("{}/app", work.display())
+    );
+}

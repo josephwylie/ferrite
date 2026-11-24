@@ -8,7 +8,7 @@
 use super::menu_rows::Environment;
 use super::placement_view::{PlacementEvent, PlacementView, Placing};
 use super::*;
-use ferrite_core::cockpit::ServerState;
+use ferrite_client::cockpit::ServerState;
 use ferrite_core::machine::Failure;
 use ferrite_core::placement::{self, Across, Placement};
 use ferrite_core::workspace::Repositories;

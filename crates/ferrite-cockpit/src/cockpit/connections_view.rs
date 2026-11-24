@@ -26,6 +26,9 @@ pub(crate) struct ConnectionsView {
     // open shows once it closes.
     /// The saved environment whose Remove waits for its confirm.
     removing: Option<String>,
+    /// The saved environment whose projects folder is being changed, and
+    /// the field it is typed in.
+    projects: Option<(String, Entity<InputState>)>,
     warning: Option<String>,
     error: Option<String>,
     generation: u64,
@@ -51,6 +54,8 @@ pub(crate) enum ConnectionsEvent {
     UseSignIns(String, ferrite_core::tree::Side),
     /// Remove a saved environment, as confirmed.
     Remove { machine: Machine, unsaved: bool },
+    /// Copy Projects into this folder on the saved environment `target`.
+    ProjectsDir { target: String, dir: String },
     /// A setup or pairing finished: save `machine` in place of the
     /// environment it set up again, if it did.
     Ready {
@@ -179,6 +184,7 @@ impl ConnectionsView {
             cockpit,
             editor: None,
             removing: None,
+            projects: None,
             warning: None,
             error: None,
             generation: 0,
@@ -850,6 +856,35 @@ impl ConnectionsView {
 
     /// The Cockpit's answer to a change asked of it: the error it met,
     /// if any.
+    /// Change `machine`'s projects folder in its row, starting from the
+    /// one it has.
+    fn edit_projects_dir(&mut self, machine: &Machine, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(machine::PROJECTS_DIR));
+        input.update(cx, |input, cx| {
+            input.set_value(machine.projects_dir.clone(), window, cx);
+            input.focus(window, cx);
+        });
+        cx.subscribe_in(&input, window, |view, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                view.save_projects_dir(cx);
+            }
+        })
+        .detach();
+        self.projects = Some((machine.target.clone(), input));
+        cx.notify();
+    }
+
+    /// Keep the folder typed, or the default for none.
+    fn save_projects_dir(&mut self, cx: &mut Context<Self>) {
+        let Some((target, input)) = self.projects.take() else {
+            return;
+        };
+        let typed = input.read(cx).value().trim().to_string();
+        let dir = if typed.is_empty() { machine::PROJECTS_DIR.to_string() } else { typed };
+        cx.emit(ConnectionsEvent::ProjectsDir { target, dir });
+        cx.notify();
+    }
+
     pub(super) fn answered(&mut self, error: Option<String>, cx: &mut Context<Self>) {
         self.error = error;
         cx.notify();
@@ -1083,6 +1118,7 @@ impl ConnectionsView {
             }],
             removal: None,
             sync: None,
+            projects: None,
         });
         let form = self.form(&saved, window, cx);
         let mut remote = vec![settings::Row::new(
@@ -1175,6 +1211,13 @@ impl ConnectionsView {
                     }),
                 });
             }
+            let folder = machine.clone();
+            actions.push(settings::ConnectionAction {
+                id: format!("connection-projects-{index}").into(),
+                label: "Projects folder…".into(),
+                enabled: self.editor.is_none(),
+                act: action(cx, move |view, window, cx| view.edit_projects_dir(&folder, window, cx)),
+            });
             let removing = target.clone();
             actions.push(settings::ConnectionAction {
                 id: format!("connection-remove-{index}").into(),
@@ -1246,6 +1289,18 @@ impl ConnectionsView {
                     status: status.line(&machine.name).into(),
                 }
             });
+            let projects = self
+                .projects
+                .as_ref()
+                .filter(|(editing, _)| *editing == target)
+                .map(|(_, input)| settings::ProjectsFolder {
+                    input: input.clone(),
+                    save: action(cx, |view, _, cx| view.save_projects_dir(cx)),
+                    cancel: action(cx, |view, _, cx| {
+                        view.projects = None;
+                        cx.notify();
+                    }),
+                });
             let display_target = machine.display_target(&dir);
             remote.push(connection_row(settings::ConnectionRow {
                 name: machine.name.into(),
@@ -1257,6 +1312,7 @@ impl ConnectionsView {
                 actions,
                 removal,
                 sync,
+                projects,
             }));
         }
         let mut group = settings::Group::new(Some("Environments")).rows(remote);
@@ -1359,6 +1415,17 @@ impl CockpitView {
             ConnectionsEvent::UseSignIns(target, side) => self.sync_setup_sign_ins(&target, side, cx),
             ConnectionsEvent::Remove { machine, unsaved } => {
                 self.remove_connection(&view, machine, unsaved, cx)
+            }
+            ConnectionsEvent::ProjectsDir { target, dir } => {
+                let saved = self.save_connections(
+                    |saved| {
+                        for machine in saved.iter_mut().filter(|machine| machine.target == target) {
+                            machine.projects_dir = dir.clone();
+                        }
+                    },
+                    cx,
+                );
+                view.update(cx, |view, cx| view.answered(saved.err(), cx));
             }
             ConnectionsEvent::Ready { machine, replacing } => {
                 self.add_connection(&view, machine, replacing, cx)
