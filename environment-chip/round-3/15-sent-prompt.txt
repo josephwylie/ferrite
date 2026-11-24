@@ -1,0 +1,5 @@
+$ ferrite agent read 1 --lines 40
+--- stdout
+{"id":"1","result":{"thread":1,"text":"opened in C:\\Users\\josep\\AppData\\Local\\Temp\\envchip-live\\resume-app\n\n> Read the attached note.\n@\"C:\\\\Users\\\\josep\\\\AppData\\\\Local\\\\Temp\\\\fv-rebase496\\\\attachments\\\\e5dbfb177fb6607e08c15bd8\\\\attach-note.txt\"\n\nNot logged in · Please run /login\n\nfailed · 0.6s · api_error: Not logged in · Please run /login"}}
+--- stderr
+--- exit 0

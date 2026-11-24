@@ -1,0 +1,18 @@
+== main.rs
+their main
+== theirs.txt
+theirs
+== files
+total 921628
+drwxr-xr-x 4 joseph joseph      4096 Nov 25 02:31 .
+drwxr-xr-x 4 joseph joseph      4096 Nov 25 02:28 ..
+drwxr-xr-x 7 joseph joseph      4096 Nov 25 02:28 .git
+-rw-r--r-- 1 joseph joseph        13 Nov 25 02:28 README.md
+drwxr-xr-x 2 joseph joseph      4096 Nov 25 02:28 src
+-rw-r--r-- 1 joseph joseph         7 Nov 25 02:29 theirs.txt
+-rw-r--r-- 1 joseph joseph 943718400 Nov 25 02:31 zz-big.dat
+167c95bdd2afcc7f35c48437f0b8321ab9d7c6fb24a22773c33288dc421e31da  zz-big.dat
+== git status
+ M src/main.rs
+?? theirs.txt
+?? zz-big.dat

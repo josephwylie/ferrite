@@ -1,0 +1,25 @@
+== files
+./.gitattributes
+./.gitignore
+./auto.txt
+./build/deep/more.txt
+./build/out.txt
+./keep.txt
+== keep.txt bytes
+0000000   o   n   e  \r  \n   t   w   o  \r  \n
+0000012
+== auto.txt bytes
+0000000   a  \n   b  \n
+0000004
+== git status --short
+ M keep.txt
+== ls-files --eol
+i/lf    w/lf    attr/                 	auto.txt
+i/lf    w/crlf  attr/-text            	keep.txt
+== build
+built
+deeper
+== locked
+total 8
+dr-xr-xr-x 2 joseph joseph 4096 Nov 25 02:26 .
+drwxr-xr-x 6 joseph joseph 4096 Nov 25 02:26 ..
