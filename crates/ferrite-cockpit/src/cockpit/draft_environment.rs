@@ -325,7 +325,9 @@ impl CockpitView {
     }
 
     /// The sheet's folder is on its machine: register it there as a
-    /// Project, and the window carries on while its Server answers.
+    /// Project, and the window carries on while its Server answers. A
+    /// Project made now takes the name of the one it copies, so the two read
+    /// as one; one that was there keeps its own.
     fn place_copy(
         &mut self,
         sheet: &Entity<PlacementView>,
@@ -333,13 +335,49 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         let placing = sheet.read(cx).placing.clone();
+        let made = !self
+            .cockpit
+            .read(cx)
+            .registry(placing.machine)
+            .reading()
+            .projects()
+            .iter()
+            .any(|project| project.root == dest);
         let registered = self.cockpit.update(cx, |cockpit, _| {
             cockpit.register_project(placing.machine, dest)
         });
         let (sheet, dest) = (sheet.clone(), dest.to_path_buf());
         self.when_answered(
             registered,
-            move |view, registered, cx| view.copy_registered(sheet, placing, dest, registered, cx),
+            move |view, registered, cx| match registered {
+                Ok(project) if made => view.name_copy(sheet, placing, dest, project, cx),
+                registered => view.copy_registered(sheet, placing, dest, registered, cx),
+            },
+            cx,
+        );
+    }
+
+    /// Name the copy's new Project as the Project it copies. Refused, it
+    /// keeps its folder's name, and the copy goes on.
+    fn name_copy(
+        &mut self,
+        sheet: Entity<PlacementView>,
+        placing: Placing,
+        dest: PathBuf,
+        project: ProjectKey,
+        cx: &mut Context<Self>,
+    ) {
+        let named = self
+            .cockpit
+            .update(cx, |cockpit, _| cockpit.rename_project(project, &placing.title));
+        self.when_answered(
+            named,
+            move |view, named, cx| {
+                if let Err(error) = named {
+                    ferrite_core::log!("the copy of {} kept its folder's name: {error}", placing.title);
+                }
+                view.copy_registered(sheet, placing, dest, Ok(project), cx)
+            },
             cx,
         );
     }

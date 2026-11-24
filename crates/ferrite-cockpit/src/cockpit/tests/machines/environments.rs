@@ -433,6 +433,20 @@ fn a_project_with_none_there_is_copied_by_the_sheet_and_known_there_after(cx: &m
         "",
         "git there reads the copy as unchanged"
     );
+    let title = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.cockpit
+                .read(cx)
+                .project(copy)
+                .map(|project| project.title.clone())
+        })
+    };
+    until(cx, |cx| title(cx).as_deref() == Some("app"));
+    assert_eq!(
+        text_of(cx, "band-chip-0").as_deref(),
+        Some("app"),
+        "named as the Project it copies, not as its folder"
+    );
     assert_eq!(text_of(cx, ENVIRONMENT).as_deref(), Some("box"));
     view.read_with(cx, |view, cx| {
         assert_eq!(

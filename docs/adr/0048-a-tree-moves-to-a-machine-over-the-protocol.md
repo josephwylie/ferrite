@@ -232,11 +232,13 @@ Windows window.
      Where the copy goes is chosen by browsing E, never by typing a path
      (though one can be typed): see **The folder browser** below. The copy
      goes to `<folder browsed>/<name>`, its name P's folder name until
-     edited ("Copied to"). P's git-ignored entries are listed with their
+     edited ("Copies to"). P's git-ignored entries are listed with their
      sizes, unticked; Copy runs on a thread of its own over a connection
      of its own (`Cockpit::tree`), with its progress and Cancel. Then the
-     window registers the destination on E, keeps a Placement if P has no
-     repository key, and chooses the new Project on the Draft;
+     window registers the destination on E, names a Project made there as
+     P is named, so both read as one Project (a Project already there
+     keeps its name), keeps a Placement if P has no repository key, and
+     chooses the new Project on the Draft;
   3. none, and P is on another Machine: the Project card on E (a folder
      dialog when E is this computer), which chooses what it makes on the
      Draft.
