@@ -61,8 +61,8 @@ pub(super) struct Place {
     pub folded: bool,
     /// The nav's width.
     pub nav_w: f32,
-    /// From the window's right edge to the board's: the panel's left while
-    /// it shows.
+    /// From the window's right edge to where a toast may stand: the panel's
+    /// left while it shows, and left of a Details card in the way.
     pub board_right: f32,
 }
 
@@ -416,8 +416,9 @@ impl CockpitView {
     /// laid out, and keep the kit's toast stack (`theme.notification`) on
     /// the transcript's column with it: its right margin follows the
     /// panel, written only when it moves.
-    pub(super) fn place_toasts(&self, cx: &mut Context<Self>) {
-        let board_right = self.panel_column_w(cx) + self.task_panel_w(cx);
+    pub(super) fn place_toasts(&self, window: &Window, cx: &mut Context<Self>) {
+        let board_right =
+            self.panel_column_w(cx) + self.task_panel_w(cx) + self.details_toast_inset(window, cx);
         let place = Place {
             folded: self.nav_folded(),
             nav_w: self.nav_width(),

@@ -6809,7 +6809,7 @@ impl CockpitView {
         self.present_allowance_warnings(window, cx);
         self.present_asked(window, cx);
         self.retire_task_toasts(window, cx);
-        self.place_toasts(cx);
+        self.place_toasts(window, cx);
         self.maximized = window.is_maximized();
         self.leave_destination_if_moved(cx);
         let drawn = self.transcripts_drawn(cx);

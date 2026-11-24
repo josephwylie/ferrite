@@ -13,6 +13,20 @@ use ferrite_ui::theme::*;
 /// The corner the card hangs from, which it grows and shrinks about.
 const DETAILS_ORIGIN: motion::ScaleFrom = (1.0, 0.0);
 
+/// How far left of the board's right edge (`board`) a toast moves so it is
+/// on none of `cards` (each one's left and right), nearest the edge first.
+fn toast_inset(mut cards: Vec<(f32, f32)>, board: f32) -> f32 {
+    cards.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let home = board - TOAST_BOX_RIGHT;
+    let mut right = home;
+    for (left, card_right) in cards {
+        if card_right > right - TOAST_W && left < right {
+            right = left - TOAST_BOX_RIGHT;
+        }
+    }
+    home - right
+}
+
 impl CockpitView {
     pub(super) fn toggle_details(
         &mut self,
@@ -148,13 +162,33 @@ impl CockpitView {
     }
 
     pub(super) fn details_open(&self, cx: &gpui::App) -> bool {
-        self.focused_details(cx).is_some_and(|(_, index)| {
-            if self.details_inline(index) {
-                self.details_inline_open(index)
-            } else {
-                self.panes[index].details.is_open()
-            }
-        })
+        self.focused_details(cx)
+            .is_some_and(|(_, index)| self.details_standing(index))
+    }
+
+    fn details_standing(&self, index: usize) -> bool {
+        if self.details_inline(index) {
+            self.details_inline_open(index)
+        } else {
+            self.panes[index].details.is_open()
+        }
+    }
+
+    /// How much further in from the board's right edge a toast stands to
+    /// clear the Details cards open on the board.
+    pub(super) fn details_toast_inset(&self, window: &Window, cx: &gpui::App) -> f32 {
+        let cards = self
+            .pane_rects(window, cx)
+            .into_iter()
+            .filter(|(index, _)| self.details_standing(*index))
+            .map(|(_, pane)| {
+                let right = pane.x + pane.w - DETAILS_GAP;
+                let width = (pane.w - 2. * DETAILS_GAP).clamp(0., DETAILS_W);
+                (right - width, right)
+            })
+            .collect();
+        let board = self.board_bounds(window, cx);
+        toast_inset(cards, board.x + board.w)
     }
 
     fn details_inline_open(&self, index: usize) -> bool {
@@ -387,5 +421,23 @@ impl CockpitView {
             MenuVerb::DetailsReset,
         )));
         rows
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A toast stands left of the card in its way, and of the next one its
+    /// move puts it on; a card it does not reach leaves it where it was.
+    #[test]
+    fn a_toast_stands_clear_of_the_details_cards() {
+        let board = 1440.;
+        assert_eq!(toast_inset(vec![], board), 0.);
+        assert_eq!(toast_inset(vec![(100., 380.)], board), 0., "out of its way");
+        let card = (1148., 1428.);
+        assert_eq!(toast_inset(vec![card], board), 292.);
+        assert_eq!(toast_inset(vec![(100., 380.), card], board), 292.);
+        assert_eq!(toast_inset(vec![(700., 980.), card], board), 740.);
     }
 }
