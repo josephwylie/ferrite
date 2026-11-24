@@ -8,7 +8,7 @@ use super::*;
 fn the_project_chip_picks_a_project_or_adds_one(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("chip-matches-filter", 1);
     let repo = repo_in(&scratch("chip-matches-filter-repo"));
-    let other = core.register_project(core.first_machine(), &repo).unwrap();
+    let other = core.register_project(core.first_machine(), &repo).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let added = scratch("chip-matches-filter-added");
     std::fs::create_dir_all(&added).unwrap();
@@ -125,7 +125,7 @@ fn the_project_card_stages_directories_and_registers_on_confirm(cx: &mut TestApp
 fn the_project_card_edits_an_existing_project(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("project-card-edit", 1);
     let repo = repo_in(&scratch("project-card-edit-repo"));
-    let project = core.register_project(core.first_machine(), &repo).unwrap();
+    let project = core.register_project(core.first_machine(), &repo).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let extra = scratch("project-card-edit-extra");
     std::fs::create_dir_all(&extra).unwrap();
@@ -183,11 +183,11 @@ fn the_project_card_draws_its_body(cx: &mut TestAppContext) {
 fn a_draft_starts_on_the_filtered_project(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("draft-follows-filter", 0);
     let repo = repo_in(&scratch("draft-follows-filter-repo"));
-    let chosen = core.register_project(core.first_machine(), &repo).unwrap();
+    let chosen = core.register_project(core.first_machine(), &repo).now().unwrap();
     let extra = scratch("draft-follows-filter-extra");
     std::fs::create_dir_all(&extra).unwrap();
     core.add_project_directories(chosen, &[extra.clone()])
-        .unwrap();
+        .now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
 
     view.update(cx, |view, cx| {
@@ -231,7 +231,7 @@ fn a_draft_starts_on_the_filtered_project(cx: &mut TestAppContext) {
 fn choosing_a_project_moves_the_standing_draft(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("filter-moves-draft", 1);
     let repo = repo_in(&scratch("filter-moves-draft-repo"));
-    let chosen = core.register_project(core.first_machine(), &repo).unwrap();
+    let chosen = core.register_project(core.first_machine(), &repo).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
 
     view.update(cx, |view, cx| {

@@ -1290,8 +1290,15 @@ never waits. The rest still do.
      through prompt history. A Thread's history steps go one at a time,
      in the order pressed, since each starts from what the one before
      it put in the Composer.
-  5. Projects: 7 asks, 11 sites. These are rare presses in the settings
-     and the add flow.
+  5. Projects: done. Registering a Project, naming it, removing it and
+     adding or removing one of its directories are asks. The Project
+     card says a refusal when the answer comes, and closes only if it is
+     still the card that asked. Committing a new Project is two asks in
+     a row (register, then name), so the card holds `committing` until
+     the last answers and a second press commits nothing. A path
+     registered from a new Pane's band lands on that Pane if it still
+     stands. Telling a Server its CLI was replaced is an ask whose
+     answer is only logged.
   6. Factory: 3 asks, 5 sites, all on the Server only (`factory_ask`).
   7. Server lifecycle: 4 asks, 6 sites. `stop_server_and_wait` waits on
      purpose: an installer replaces the executable next. The other three

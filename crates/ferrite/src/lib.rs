@@ -597,7 +597,7 @@ mod tests {
         let checkout =
             ferrite_core::workspace::follow::canonical(&std::env::current_dir().unwrap());
         let here = core.this_computer().unwrap();
-        core.register_project(here, &checkout).unwrap();
+        core.register_project(here, &checkout).now().unwrap();
         assert_eq!(
             dock_launch_dir(&core),
             checkout,

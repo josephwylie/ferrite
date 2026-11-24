@@ -1202,7 +1202,7 @@ impl CockpitView {
         #[cfg(test)]
         let launch_project = launch_project.or_else(|| {
             let machine = cockpit.this_computer()?;
-            cockpit.register_project(machine, &here()).ok()
+            cockpit.register_project(machine, &here()).now().ok()
         });
         cx.bind_keys([
             gpui::KeyBinding::new("enter", browser::Go, Some("BrowserAddress")),
@@ -5501,32 +5501,50 @@ impl CockpitView {
                 // waiting for the relaunch.
                 self.launch_project = Some(*project);
             }
-            BandChoice::RegisterPath(path) => match self.pane_machine(self.focused(cx)).map(|machine| {
-                self.cockpit
-                    .update(cx, |cockpit, _| cockpit.register_project(machine, path))
-            }) {
-                None => {}
-                Some(Ok(project)) => {
-                    if let Some(draft) = self.focused_draft_mut(cx) {
-                        draft.binding.choose_checkout(project);
-                        draft.error = None;
-                    }
-                    // The typed path was the pick's input, not a prompt:
-                    // the line clears for one.
-                    composer.update(cx, |composer, cx| {
-                        let whole = 0..composer.text().len();
-                        composer.splice(whole, "", cx);
-                    });
+            BandChoice::RegisterPath(path) => {
+                let focused = self.focused(cx);
+                if let (Some(machine), Some(pane)) = (
+                    self.pane_machine(focused),
+                    self.panes.get(focused).map(|pane| pane.identity),
+                ) {
+                    let registered = self
+                        .cockpit
+                        .update(cx, |cockpit, _| cockpit.register_project(machine, path));
+                    let (path, composer) = (path.clone(), composer.clone());
+                    self.when_answered(
+                        registered,
+                        move |view, registered, cx| {
+                            // The new Pane that asked, if it still stands.
+                            let Some(draft) = view
+                                .index_of(pane)
+                                .and_then(|index| view.panes[index].draft_mut())
+                            else {
+                                return;
+                            };
+                            match registered {
+                                Ok(project) => {
+                                    draft.binding.choose_checkout(project);
+                                    draft.error = None;
+                                    // The typed path was the pick's input,
+                                    // not a prompt: the line clears for one.
+                                    composer.update(cx, |composer, cx| {
+                                        let whole = 0..composer.text().len();
+                                        composer.splice(whole, "", cx);
+                                    });
+                                }
+                                Err(e) => {
+                                    draft.error = Some(SharedString::from(format!(
+                                        "cannot register {}: {e}",
+                                        path.display()
+                                    )));
+                                }
+                            }
+                            cx.notify();
+                        },
+                        cx,
+                    );
                 }
-                Some(Err(e)) => {
-                    if let Some(draft) = self.focused_draft_mut(cx) {
-                        draft.error = Some(SharedString::from(format!(
-                            "cannot register {}: {e}",
-                            path.display()
-                        )));
-                    }
-                }
-            },
+            }
             BandChoice::Target(target) => {
                 if let Some(draft) = self.focused_draft_mut(cx) {
                     draft.binding.choose_target(target.clone());
@@ -5918,7 +5936,7 @@ impl CockpitView {
             self.cockpit
                 .update(cx, |cockpit, _| {
                     let machine = cockpit.this_computer().expect("this computer is held");
-                    cockpit.register_project(machine, root)
+                    cockpit.register_project(machine, root).now()
                 })
                 .expect("the scratch repo registers"),
         );

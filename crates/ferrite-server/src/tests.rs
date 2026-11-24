@@ -819,7 +819,8 @@ fn list_repo_answers_a_projects_worktrees_and_branches_read_by_the_server() {
     git(&["worktree", "add", "-q", "-b", "fix", tree.to_str().unwrap()]);
     git(&["branch", "spare"]);
     let mut window = cockpit(&harness);
-    let project = window.register_project(window.first_machine(), &repo).unwrap();
+    let asked = window.register_project(window.first_machine(), &repo);
+    let project = window.wait_for(asked).unwrap();
 
     let answer = window.list_repo(project).unwrap();
     let listed = std::cell::RefCell::new(None);
@@ -1532,7 +1533,8 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     let _ = window.send(thread, "go".into());
     provider.send(text("on it")).unwrap();
     pump_until(&mut window, |window| shows(window, thread, "on it"));
-    let project = window.register_project(window.first_machine(), &harness.dir).unwrap();
+    let asked = window.register_project(window.first_machine(), &harness.dir);
+    let project = window.wait_for(asked).unwrap();
     assert!(window.registry(window.first_machine()).project(project.project()).is_some());
 
     // The second window names the same Thread by its own key.

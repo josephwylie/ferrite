@@ -292,7 +292,7 @@ pub fn capture(output: String) {
     let here = core.this_computer().expect("this computer");
     let project = core
         .register_project(here, &repo)
-        .expect("register the throwaway repo");
+        .now().expect("register the throwaway repo");
 
     let cx = crate::headless::app(ferrite_ui::keymap::bindings(
         ferrite_ui::keymap::PLATFORM,

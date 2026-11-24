@@ -15,7 +15,7 @@ fn startup_does_not_make_the_app_directory_a_project() {
 #[test]
 fn startup_starts_on_the_last_project_worked_in() {
     let (mut core, _fake) = cockpit("startup-last-project", 0);
-    let first = core.register_project(core.first_machine(), &here()).unwrap();
+    let first = core.register_project(core.first_machine(), &here()).now().unwrap();
     let older = core
         .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
@@ -23,7 +23,7 @@ fn startup_starts_on_the_last_project_worked_in() {
     // "newest registered" answer would name this one.
     let second = core
         .register_project(core.first_machine(), &std::env::temp_dir().canonicalize().unwrap())
-        .unwrap();
+        .now().unwrap();
     assert_ne!(first, second);
 
     assert_eq!(core.project_of(older), Some(first));

@@ -266,3 +266,27 @@ fn taking_a_held_prompt_back_does_not_wait_and_is_answered() {
     assert!(!waits[0].waited, "{waits:?}");
     assert_eq!(core.wait_for(held).expect("the Server answers"), None, "the Thread held none");
 }
+
+/// A Project's acts are asked, never waited for, and each is answered.
+#[test]
+fn a_projects_acts_do_not_wait_and_are_answered() {
+    let (mut core, thread, _) = super::machines::browser_core("project-asks");
+    let root = std::env::temp_dir().join("ferrite-project-asks");
+    std::fs::create_dir_all(&root).unwrap();
+    waits::start();
+    let registered = core.register_project(thread.machine(), &root);
+    let waits = waits::take();
+    let ops: Vec<_> = waits.iter().map(|wait| wait.op.as_str()).collect();
+    assert_eq!(ops, ["project"]);
+    assert!(!waits[0].waited, "registering does not wait for its reply: {waits:?}");
+    let project = core.wait_for(registered).expect("the Server registers the Project");
+
+    waits::start();
+    let named = core.rename_project(project, "Asks");
+    let removed = core.remove_project(project);
+    let waits = waits::take();
+    assert_eq!(waits.len(), 2, "{waits:?}");
+    assert!(waits.iter().all(|wait| !wait.waited), "neither waits for its reply: {waits:?}");
+    core.wait_for(named).expect("the Server names it");
+    core.wait_for(removed).expect("the Server removes it");
+}

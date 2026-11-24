@@ -218,7 +218,7 @@ fn an_open_task_that_moves_column_stays_in_view(cx: &mut TestAppContext) {
 fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("fit-palette", 1);
     let repo = repo_in(&scratch("fit-palette-repo"));
-    let empty = core.register_project(core.first_machine(), &repo).unwrap();
+    let empty = core.register_project(core.first_machine(), &repo).now().unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);

@@ -140,7 +140,7 @@ fn world<'a>(
 ) -> (World, &'a mut gpui::VisualTestContext) {
     let (mut core, _fake) = cockpit(name, panes);
     let repo = repo_in(&scratch(&format!("{name}-repo")));
-    let project = core.register_project(core.first_machine(), &repo).unwrap();
+    let project = core.register_project(core.first_machine(), &repo).now().unwrap();
     let path = core.registry(core.first_machine()).project(project.project()).unwrap().root.clone();
     let roots: Vec<_> = core
         .registry(core.first_machine())
@@ -737,7 +737,7 @@ fn with_no_project_the_view_offers_to_add_one(cx: &mut TestAppContext) {
         for project in projects {
             view.cockpit.update(cx, |cockpit, _| {
                 let project = cockpit.registry(cockpit.first_machine()).project_key(project);
-                cockpit.remove_project(project).unwrap()
+                cockpit.remove_project(project).now().unwrap()
             });
         }
     });

@@ -436,7 +436,7 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
 fn an_empty_projects_factory_opens_from_the_nav(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("factory-empty-project", 1);
     let repo = repo_in(&scratch("factory-empty-project-repo"));
-    let empty = core.register_project(core.first_machine(), &repo).unwrap();
+    let empty = core.register_project(core.first_machine(), &repo).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);

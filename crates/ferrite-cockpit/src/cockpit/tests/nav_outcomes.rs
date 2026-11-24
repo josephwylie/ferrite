@@ -121,7 +121,7 @@ fn opening_a_thread_outside_the_scope_widens_it(cx: &mut TestAppContext) {
     core.park(threads[1]).now().unwrap();
     let elsewhere = core
         .register_project(core.first_machine(), &std::env::temp_dir().canonicalize().unwrap())
-        .unwrap();
+        .now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     view.update(cx, |view, cx| view.choose_nav_filter(Some(elsewhere), cx));

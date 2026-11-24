@@ -835,10 +835,10 @@ fn opening_a_project_exposes_its_additional_directories_without_changing_cwd() {
     std::fs::create_dir_all(&primary).unwrap();
     std::fs::create_dir_all(&extra).unwrap();
     let (mut cockpit, fake) = cockpit("project-extra-roots-store");
-    let project = cockpit.register_project(cockpit.first_machine(), &primary).unwrap();
+    let project = cockpit.register_project(cockpit.first_machine(), &primary).now().unwrap();
     cockpit
         .add_project_directories(project, std::slice::from_ref(&extra))
-        .unwrap();
+        .now().unwrap();
 
     cockpit
         .open(

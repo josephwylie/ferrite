@@ -925,8 +925,10 @@ fn the_same_repository_on_two_machines_is_two_projects(cx: &mut TestAppContext) 
     let (mut core, _fake, machines, _agents) = two_machines("same-repo", 1);
     let on_box = machines.held(1).unwrap();
     let here_machine = core.this_computer().unwrap();
-    let mine = core.register_project(here_machine, &here()).unwrap();
-    let theirs = core.register_project(on_box, &here()).unwrap();
+    let asked = core.register_project(here_machine, &here());
+    let mine = core.wait_for(asked).unwrap();
+    let asked = core.register_project(on_box, &here());
+    let theirs = core.wait_for(asked).unwrap();
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     let rows = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
@@ -1093,8 +1095,10 @@ fn a_draft_on_a_machine_names_it(cx: &mut TestAppContext) {
     let (mut core, _fake, machines, _agents) = two_machines("draft-machine", 1);
     let on_box = machines.held(1).unwrap();
     let here_machine = core.this_computer().unwrap();
-    let mine = core.register_project(here_machine, &here()).unwrap();
-    let theirs = core.register_project(on_box, &here()).unwrap();
+    let asked = core.register_project(here_machine, &here());
+    let mine = core.wait_for(asked).unwrap();
+    let asked = core.register_project(on_box, &here());
+    let theirs = core.wait_for(asked).unwrap();
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
     tick(cx);
@@ -1431,7 +1435,8 @@ fn a_new_thread_with_no_project_here_stays_on_this_computer(cx: &mut TestAppCont
     bind_production_keys(cx);
     let (mut core, _fake, machines, _agents) = two_machines("no-project-here", 0);
     let on_box = machines.held(1).unwrap();
-    let boxes = core.register_project(on_box, &here()).unwrap();
+    let asked = core.register_project(on_box, &here());
+    let boxes = core.wait_for(asked).unwrap();
     let theirs = open_on(&mut core, on_box);
     assert_eq!(core.project_of(theirs), Some(boxes));
     assert_eq!(startup_project(&core), None, "box's work is no default here");
@@ -1449,7 +1454,8 @@ fn a_new_thread_with_no_project_here_stays_on_this_computer(cx: &mut TestAppCont
                 .map(|project| registry.project_key(project.id))
                 .collect();
             for project in seeded {
-                cockpit.remove_project(project).unwrap();
+                let removed = cockpit.remove_project(project);
+                cockpit.wait_for(removed).unwrap();
             }
         });
         view.launch_project = None;
@@ -2194,6 +2200,8 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         assert_eq!(field.read(cx).text(), "", "the field empties");
     });
     cx.simulate_keystrokes("enter");
+    // The machine's Server answers the commit a beat after the press.
+    until(cx, |cx| view.read_with(cx, |view, cx| view.project_card(cx).is_none()));
     let project = view.update(cx, |view, cx| {
         assert!(
             view.project_card(cx).is_none(),

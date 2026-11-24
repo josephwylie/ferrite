@@ -609,7 +609,7 @@ fn palette_states<'a>(
     &'a mut gpui::VisualTestContext,
 ) {
     let (mut core, fake) = cockpit(name, 0);
-    let project = core.register_project(core.first_machine(), &here()).unwrap();
+    let project = core.register_project(core.first_machine(), &here()).now().unwrap();
     for _ in 0..3 {
         core.open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
             .unwrap();
