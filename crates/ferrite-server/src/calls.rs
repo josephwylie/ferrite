@@ -107,10 +107,7 @@ impl Server {
             Method::ThreadGet(params) => thread_result(&self.engine, params.thread)
                 .map_err(|_| self.not_open(params.thread)),
             Method::ThreadFocus(params) => self.open_thread(params.thread).and_then(|thread| {
-                self.say(ServerMessage::Focus {
-                    thread,
-                    fork_of: None,
-                });
+                self.engine.ask_focus(thread, None);
                 thread_result(&self.engine, thread)
             }),
             Method::ThreadRename(params) => self.open_thread(params.thread).and_then(|thread| {
@@ -600,10 +597,7 @@ impl Server {
             self.prompt(&prompt).map_err(|error| error.on(thread))?;
         }
         if params.focus {
-            self.say(ServerMessage::Focus {
-                thread,
-                fork_of: None,
-            });
+            self.engine.ask_focus(thread, None);
         }
         Ok(thread)
     }

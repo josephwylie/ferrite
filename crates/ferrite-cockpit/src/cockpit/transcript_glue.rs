@@ -67,13 +67,7 @@ pub(super) fn agent_faces(
 ) -> AgentFaces {
     let mut faces = AgentFaces::default();
     for (call, agent) in activity.invocations() {
-        let run = match agent.status() {
-            AgentStatus::Failed | AgentStatus::NotFound => AgentRun::Failed,
-            AgentStatus::Waiting if agent.running() => AgentRun::Waiting,
-            _ if agent.running() => AgentRun::Running,
-            AgentStatus::Interrupted => AgentRun::Stopped,
-            _ => AgentRun::Done,
-        };
+        let run = agent_run(agent);
         let live = matches!(run, AgentRun::Running | AgentRun::Waiting);
         let transcript = agent.transcript();
         let summary = live
@@ -83,11 +77,7 @@ pub(super) fn agent_faces(
             })
             .flatten();
         let result = (!live).then(|| last_words(transcript.blocks())).flatten();
-        let clock = match transcript.turn_started() {
-            Some(at) if live => Some(AgentClock::Since(at)),
-            _ => agent.ran().map(settled_clock),
-        }
-        .or_else(|| call_took(activity, agent, &call));
+        let clock = agent_clock(activity, agent, &call);
         faces.insert(
             call,
             AgentFace {
@@ -101,6 +91,32 @@ pub(super) fn agent_faces(
         );
     }
     faces
+}
+
+fn agent_run(agent: ferrite_core::activity::AgentView<'_>) -> AgentRun {
+    match agent.status() {
+        AgentStatus::Failed | AgentStatus::NotFound => AgentRun::Failed,
+        AgentStatus::Waiting if agent.running() => AgentRun::Waiting,
+        _ if agent.running() => AgentRun::Running,
+        AgentStatus::Interrupted => AgentRun::Stopped,
+        _ => AgentRun::Done,
+    }
+}
+
+/// How long an agent has run, as its card row and its Lineage row both read
+/// it: since its turn began while it runs, else its own stored run, else the
+/// time `call` (the one that started it) took.
+pub(super) fn agent_clock(
+    activity: ActivityView<'_>,
+    agent: ferrite_core::activity::AgentView<'_>,
+    call: &str,
+) -> Option<AgentClock> {
+    let live = matches!(agent_run(agent), AgentRun::Running | AgentRun::Waiting);
+    match agent.transcript().turn_started() {
+        Some(at) if live => Some(AgentClock::Since(at)),
+        _ => agent.ran().map(settled_clock),
+    }
+    .or_else(|| call_took(activity, agent, call))
 }
 
 /// A finished run's clock: placed on the wall clock when its end was

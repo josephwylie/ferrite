@@ -1031,16 +1031,14 @@ fn mark(row: &Row) -> Option<gpui::AnyElement> {
         (None, Act::Command(command)) => command.icon().map(|icon| {
             ferrite_ui::icons::icon(icon, PALETTE_MARK_ICON, INK_STRONG).into_any_element()
         }),
-        // T3's `EnvironmentMachineIcon`: this computer's laptop, another
-        // machine's server.
-        (None, Act::NewProjectOn { here, .. }) => {
-            let icon = if *here {
-                ferrite_ui::icons::LAPTOP
-            } else {
-                ferrite_ui::icons::SERVER
-            };
-            Some(ferrite_ui::icons::icon(icon, PALETTE_MARK_ICON, INK_STRONG).into_any_element())
-        }
+        (None, Act::NewProjectOn { here, .. }) => Some(
+            ferrite_ui::icons::icon(
+                ferrite_ui::icons::machine(*here),
+                PALETTE_MARK_ICON,
+                INK_STRONG,
+            )
+            .into_any_element(),
+        ),
         (None, Act::ConnectMachine) => Some(
             ferrite_ui::icons::icon(ferrite_ui::icons::GEAR, PALETTE_MARK_ICON, INK_STRONG)
                 .into_any_element(),

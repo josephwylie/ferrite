@@ -568,7 +568,9 @@ pub(crate) fn counting_clock(
         selector,
         format,
     };
-    ferrite_ui::loops_overlay::hosted(move || clock.into_any_element()).into_any_element()
+    ferrite_ui::loops_overlay::hosted(move || clock.into_any_element())
+        .sized_by(move || clock.reading().chars().count())
+        .into_any_element()
 }
 
 /// A background call's row while its work runs (HD64, Claude's
@@ -607,6 +609,12 @@ struct LiveClock {
     format: fn(Duration) -> String,
 }
 
+impl LiveClock {
+    fn reading(self) -> String {
+        (self.format)(ferrite_core::clock::instant().saturating_duration_since(self.started))
+    }
+}
+
 impl RenderOnce for LiveClock {
     fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
         // Woken when the next whole second comes round.
@@ -617,12 +625,11 @@ impl RenderOnce for LiveClock {
             window.current_view(),
             cx,
         );
-        let elapsed = ferrite_core::clock::instant().saturating_duration_since(self.started);
         let selector = self.selector;
         div()
             .debug_selector(move || selector.into())
             .whitespace_nowrap()
-            .child(SharedString::from((self.format)(elapsed)))
+            .child(SharedString::from(self.reading()))
     }
 }
 

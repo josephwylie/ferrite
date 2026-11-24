@@ -336,10 +336,7 @@ impl Engine {
             if let (Some(draft), Some(state)) = (draft, self.threads.get_mut(&fork)) {
                 state.native_queue.recovered.push((draft, false));
             }
-            self.outbox.push(ServerMessage::Focus {
-                thread: fork,
-                fork_of: Some(thread),
-            });
+            self.ask_focus(fork, Some(thread));
         }
         let state = self.threads.get_mut(&thread).expect("checked by caller");
         state.apply(Input::Notice(match (made, &pending.text) {

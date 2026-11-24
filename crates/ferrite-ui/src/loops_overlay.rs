@@ -45,6 +45,21 @@ struct Mark {
     /// The opacity it was painted under (the owner's paint fills it in).
     opacity: f32,
     build: Rc<dyn Fn() -> AnyElement>,
+    /// What its box was sized for, and how to read that now
+    /// (`Hosted::sized_by`).
+    extent: Option<(usize, Extent)>,
+}
+
+/// How many characters a loop's reading takes now.
+type Extent = Rc<dyn Fn() -> usize>;
+
+impl Mark {
+    /// The reading no longer fits the box its view laid out.
+    fn outgrown(&self) -> bool {
+        self.extent
+            .as_ref()
+            .is_some_and(|(laid_out, now)| now() != *laid_out)
+    }
 }
 
 /// One window's overlay and the loops its views laid out.
@@ -169,6 +184,7 @@ fn refinement(style: &TextStyle) -> TextStyleRefinement {
 pub fn hosted(build: impl Fn() -> AnyElement + 'static) -> Hosted {
     Hosted {
         build: Rc::new(build),
+        extent: None,
         child: None,
         slot: None,
     }
@@ -176,9 +192,20 @@ pub fn hosted(build: impl Fn() -> AnyElement + 'static) -> Hosted {
 
 pub struct Hosted {
     build: Rc<dyn Fn() -> AnyElement>,
+    extent: Option<Extent>,
     child: Option<AnyElement>,
     /// The overlay slot it was recorded in, when hosted.
     slot: Option<(EntityId, usize)>,
+}
+
+impl Hosted {
+    /// Its box fits a reading of `extent` characters: when that changes
+    /// (a clock's `59s` to `1m 00s`), the view that laid it out does so
+    /// again, or the longer reading would print over what stands beside it.
+    pub fn sized_by(mut self, extent: impl Fn() -> usize + 'static) -> Self {
+        self.extent = Some(Rc::new(extent));
+        self
+    }
 }
 
 impl IntoElement for Hosted {
@@ -241,6 +268,7 @@ impl Element for Hosted {
                 text_style: window.text_style(),
                 opacity: 1.0,
                 build: self.build.clone(),
+                extent: self.extent.clone().map(|now| (now(), now)),
             };
             self.slot = Some(push(window, mark));
         }
@@ -287,6 +315,7 @@ pub fn record(
             text_style: window.text_style(),
             opacity: 1.0,
             build: Rc::new(build),
+            extent: None,
         },
     )
 }
@@ -433,6 +462,20 @@ impl Element for Layer {
             TextStyle,
             Rc<dyn Fn() -> AnyElement>,
         );
+        let outgrown: Vec<EntityId> = with_marks(window.window_handle().window_id(), |marks| {
+            marks
+                .owners
+                .iter()
+                .filter(|(owner, loops)| {
+                    window.is_view_drawn(**owner)
+                        && loops.iter().any(|mark| mark.priority == priority && mark.outgrown())
+                })
+                .map(|(owner, _)| *owner)
+                .collect()
+        });
+        for owner in outgrown {
+            cx.notify(owner);
+        }
         let due: Vec<Due> = with_marks(window.window_handle().window_id(), |marks| {
             marks
                 .owners

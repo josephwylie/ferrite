@@ -681,7 +681,7 @@ pub(super) fn machine_glyph(id: RowTag, live: bool) -> Div {
         .flex()
         .flex_shrink_0()
         .opacity((NAV_MACHINE_INK & 0xff) as f32 / 255.0)
-        .child(icon(icons::SERVER, NAV_MACHINE_GLYPH, NAV_MACHINE_INK >> 8))
+        .child(icon(icons::machine(false), NAV_MACHINE_GLYPH, NAV_MACHINE_INK >> 8))
 }
 
 /// That glyph on a row with no hover detail (a slim row, a search result):

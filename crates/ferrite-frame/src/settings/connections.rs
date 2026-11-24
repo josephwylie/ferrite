@@ -796,7 +796,7 @@ pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
                 .items_center()
                 .gap(px(12.))
                 .when(!row.target.is_empty(), |row| {
-                    row.child(icon(icons::LAPTOP, 16., muted(cx)))
+                    row.child(icon(icons::machine(false), 16., muted(cx)))
                 })
                 .child(
                     div()

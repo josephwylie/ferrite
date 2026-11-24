@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use super::super::Server;
 use ferrite_core::api::schema::{ProjectOpenParams, WorktreeCreateParams};
 use ferrite_core::api::{self, ApiError, Code};
-use ferrite_core::protocol::{Done, Op, ProjectAction, ServerMessage};
+use ferrite_core::protocol::{Done, Op, ProjectAction};
 use ferrite_core::settings::Settings;
 use ferrite_core::workspace;
 use ferrite_core::workspace::registry::ProjectId;
@@ -111,10 +111,7 @@ impl Server {
     /// nothing for a window to show: nothing moves.
     pub(super) fn focus_project(&mut self, project: ProjectId) -> Option<ThreadId> {
         let thread = *self.threads_of(project).first()?;
-        self.say(ServerMessage::Focus {
-            thread,
-            fork_of: None,
-        });
+        self.engine.ask_focus(thread, None);
         Some(thread)
     }
 

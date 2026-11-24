@@ -48,8 +48,11 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
     let panel = view.read_with(cx, |view, cx| view.panel_column_w(cx));
     assert!(panel > 0., "the premise: the panel shows");
     // On the transcript's column, under the Pane heads, `TOAST_BOX_RIGHT`
-    // in from the panel's left: the panel is never covered.
-    let right = panel + TOAST_BOX_RIGHT;
+    // in from the panel's left, or from a Details card standing there:
+    // neither is ever covered.
+    let card = cx.debug_bounds("details-card");
+    let clear = card.map_or(panel, |card| f32::from(window.width - card.left()).max(panel));
+    let right = clear + TOAST_BOX_RIGHT;
     let top = WIN_CHROME_H + PANE_HEAD_H + TOAST_TOP;
     assert!(
         (toast.size.width - px(TOAST_W)).abs() <= px(1.),
@@ -57,11 +60,15 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
     );
     assert!(
         (toast.right() - (window.width - px(right))).abs() <= px(1.),
-        "{right} in from the window's edge: {toast:?}"
+        "{right} in from the window's edge: {toast:?}, Details card {card:?}"
     );
     assert!(
         (toast.top() - px(top)).abs() <= px(1.),
         "{top} from the window's top: {toast:?}"
+    );
+    assert!(
+        card.is_none_or(|card| !card.intersects(&toast)),
+        "{toast:?} covers the Details card {card:?}"
     );
     let shown = cx.debug_bounds("panel").expect("the panel");
     assert!(

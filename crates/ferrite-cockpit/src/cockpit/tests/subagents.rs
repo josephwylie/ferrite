@@ -724,6 +724,49 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("agent-elapsed-live").is_none(), "its time holds");
 }
 
+/// The overlay redraws a running clock where its view last laid it out:
+/// past `59s` the longer reading has that view lay it out again, or it
+/// would print over the chevron beside it.
+#[gpui::test]
+fn a_clock_that_outgrows_its_box_is_laid_out_again(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let clock = ferrite_core::clock::ThreadFixture::install(ferrite_core::clock::now());
+    let (core, fake) = cockpit("subagents-clock-grows", 1);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    cx.update(|window, _| window.activate_window());
+    agent_call(&fake, "Atlas");
+    child(&fake, "Atlas", AgentStatus::Working);
+    emit(
+        &fake,
+        ActivityEvent::Content {
+            key: key("Atlas"),
+            id: None,
+            event: ExecutionEvent::Progress {
+                event: ferrite_core::progress::ProgressEvent::Phase {
+                    phase: ferrite_core::progress::Phase::Working,
+                    detail: "Reading nav.rs".into(),
+                },
+            },
+        },
+    );
+    tick(cx);
+    let frames = |cx: &mut gpui::VisualTestContext| {
+        for _ in 0..80 {
+            cx.executor().advance_clock(Duration::from_millis(16));
+            cx.run_until_parked();
+            cx.update(|window, cx| window.simulate_next_frame(cx));
+            cx.run_until_parked();
+        }
+    };
+    frames(cx);
+    let short = cx.debug_bounds("agent-elapsed").expect("its clock").size.width;
+    clock.advance(Duration::from_secs(75));
+    frames(cx);
+    let long = cx.debug_bounds("agent-elapsed").expect("its clock").size.width;
+    assert!(long > short, "{short:?} grew to {long:?}");
+}
+
 /// A subagent's row stands as T3's does: one waiting on the operator says
 /// `Waiting`, one stopped says `Stopped`, one done shows its last words as
 /// its result and, where its parent waited on it, how long it ran.
