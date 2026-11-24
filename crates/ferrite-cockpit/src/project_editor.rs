@@ -13,14 +13,49 @@ use ferrite_ui::sheet;
 use ferrite_ui::theme::*;
 
 const WIDTH: f32 = 600.;
-/// The sheet sizes to its content up to here; past it the body scrolls.
-const MAX_HEIGHT: f32 = 520.;
+/// The sheet sizes to its content up to here; past it the body scrolls. A
+/// machine's folder browser and the rows around it fit under it.
+const MAX_HEIGHT: f32 = 640.;
 
 /// The sheet, as tall as its content up to `MAX_HEIGHT` (and the viewport
 /// share every sheet keeps, of a window `viewport_h` tall), past which the
 /// body scrolls between the fixed head and footer.
 pub fn card(viewport_h: f32) -> Div {
     sheet::sheet_fit(WIDTH, MAX_HEIGHT.min(viewport_h * MODAL_VIEWPORT_FRACTION))
+}
+
+/// The least room above a draft's band a card is fitted into; with less,
+/// it is centred on the window as any other.
+const LEAST_ROOM: f32 = 320.;
+
+/// `card`, over a draft whose band starts `band_top` down the window: no
+/// taller than the room above the band, `SPACE_2` short of it, and centred
+/// there, a bottom margin as tall as the window under the room lifting it
+/// in the veil.
+pub fn card_over(viewport_h: f32, band_top: Option<f32>) -> Div {
+    let (height, lift) = room(viewport_h, band_top);
+    sheet::sheet_fit(WIDTH, height).mb(px(lift))
+}
+
+/// `card_over` at its full height whatever it holds: a card whose
+/// content moves as the operator works in it, a Machine's folder browser,
+/// holds still.
+pub fn steady_card_over(viewport_h: f32, band_top: Option<f32>) -> Div {
+    let (height, lift) = room(viewport_h, band_top);
+    sheet::sheet(WIDTH, height).mb(px(lift))
+}
+
+/// How tall a card over a draft whose band starts `band_top` down a window
+/// `viewport_h` tall may be, and how far it is lifted to stay clear of the
+/// band: not at all with no band, or too little room above it.
+fn room(viewport_h: f32, band_top: Option<f32>) -> (f32, f32) {
+    let room = band_top
+        .map(|top| top - SPACE_2)
+        .filter(|room| (LEAST_ROOM..viewport_h).contains(room));
+    match room {
+        Some(room) => (MAX_HEIGHT.min(room * MODAL_VIEWPORT_FRACTION), viewport_h - room),
+        None => (MAX_HEIGHT.min(viewport_h * MODAL_VIEWPORT_FRACTION), 0.),
+    }
 }
 
 pub fn head(title: SharedString, close: impl IntoElement) -> Div {
@@ -77,18 +112,33 @@ pub fn name_field(editor: impl IntoElement, focused: bool) -> Div {
         focused,
         "project-name-focused",
         false,
+        None,
     )
 }
 
-/// On a machine (ADR 0026), where no folder dialog can browse: the row a
-/// directory on the machine is typed into, in the name row's field.
-pub fn path_field(machine: &str, editor: impl IntoElement, focused: bool) -> Div {
+/// On a machine (ADR 0026), where no folder dialog can browse: the line a
+/// folder browser shows its folder in, in the name row's field.
+pub fn path_field(label: SharedString, editor: impl IntoElement, focused: bool) -> Div {
+    field(label, editor, focused, "project-path-focused", false, None)
+}
+
+/// A one-line field whose value follows `prefix`, drawn in the box before
+/// it in `INK_SUBTLE` and cut from its start: a name in the folder the
+/// prefix names.
+pub fn prefixed_field(
+    label: SharedString,
+    prefix: SharedString,
+    editor: impl IntoElement,
+    focused: bool,
+    focused_selector: &'static str,
+) -> Div {
     field(
-        format!("Directory on {machine}").into(),
+        label,
         editor,
         focused,
-        "project-path-focused",
+        focused_selector,
         false,
+        Some(prefix),
     )
 }
 
@@ -99,7 +149,7 @@ pub fn text_field(
     focused: bool,
     focused_selector: &'static str,
 ) -> Div {
-    field(label, editor, focused, focused_selector, false)
+    field(label, editor, focused, focused_selector, false, None)
 }
 
 /// A field for prose: three lines tall at rest, growing with what is
@@ -110,7 +160,7 @@ pub fn text_area(
     focused: bool,
     focused_selector: &'static str,
 ) -> Div {
-    field(label, editor, focused, focused_selector, true)
+    field(label, editor, focused, focused_selector, true, None)
 }
 
 /// A text area's least height: three lines and its padding.
@@ -122,6 +172,7 @@ fn field(
     focused: bool,
     focused_selector: &'static str,
     area: bool,
+    prefix: Option<SharedString>,
 ) -> Div {
     div()
         .flex_shrink_0()
@@ -151,32 +202,127 @@ fn field(
                         field.border_color(paint::FIELD_RING)
                     }
                 })
-                .child(div().min_w_0().flex_1().child(editor)),
+                .children(prefix.map(|prefix| {
+                    components::text_ui()
+                        .flex_shrink_1()
+                        .min_w_0()
+                        .max_w(gpui::relative(0.7))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis_start()
+                        .text_color(rgb(INK_SUBTLE))
+                        .child(prefix)
+                }))
+                .child(div().min_w(px(8.0 * CH)).flex_1().child(editor)),
         )
 }
 
-/// One directory the machine's Server listed under what the path field
-/// holds: its name and a `/`, `INK_SUBTLE`, `paint::RAISED` under the
-/// pointer, hung a cell outside the text's edge like a directory row.
-pub fn path_completion(index: usize, name: &str) -> gpui::Stateful<Div> {
-    let selector: SharedString = format!("project-path-completion:{name}").into();
+/// One row of a folder browser, the Files tree's row (`FILES_ROW_H`, its
+/// mark in a chevron-wide column, `FS_LABEL` in `INK_STRONG`) as the shared
+/// press: a folder to go into, or `..` out of one. The row the arrows rest
+/// on is `paint::SELECTED`, as the tree's open file is. A `held` row takes
+/// no press and its name is `INK_SUBTLE`.
+pub fn folder_row(
+    id: impl Into<gpui::ElementId>,
+    mark: &'static str,
+    label: SharedString,
+    cursor: bool,
+    held: bool,
+    cx: &App,
+) -> Button {
+    let rest = if cursor {
+        paint::SELECTED
+    } else {
+        Paint(TRANSPARENT)
+    };
+    components::form_button_on(id, rest, cx)
+        .disabled(held)
+        .when(held, |row| row.cursor_default())
+        .w_full()
+        .h(px(FILES_ROW_H))
+        .p_0()
+        .rounded(px(R_CONTROL))
+        .child(
+            folder_line(mark).child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(FS_LABEL))
+                    .line_height(px(LH_UI))
+                    .text_color(rgb(if held { INK_SUBTLE } else { INK_STRONG }))
+                    .child(label),
+            ),
+        )
+}
+
+/// A new folder's name, typed in a row of the browser's: the field's ring
+/// a row's height inside it, `Folder name` while it is empty.
+pub fn folder_name_row(editor: impl IntoElement, focused: bool, empty: bool) -> Div {
+    folder_line(ferrite_ui::icons::FOLDER_PLUS)
+        .h(px(FILES_ROW_H))
+        .child(
+            div()
+                .relative()
+                .flex()
+                .items_center()
+                .flex_1()
+                .min_w_0()
+                .h(px(FILES_ROW_H - SPACE_1))
+                .px(px(FORM_FIELD_PAD_X))
+                .rounded(px(R_CONTROL))
+                .border_1()
+                .border_color(if focused {
+                    gpui::Hsla::from(rgb(CONTROL_FOCUS))
+                } else {
+                    paint::FIELD_RING.into()
+                })
+                .child(div().flex_1().min_w_0().child(editor))
+                .when(empty, |field| {
+                    field.child(
+                        components::text_ui()
+                            .absolute()
+                            .left(px(FORM_FIELD_PAD_X))
+                            .text_color(rgb(INK_SUBTLE))
+                            .child("Folder name"),
+                    )
+                }),
+        )
+}
+
+/// A note in a folder browser's list, a row's height at least, on the
+/// edge its rows' names start from: two lines at most, whole in its
+/// tooltip.
+pub fn folder_note(note: Div, text: SharedString) -> gpui::Stateful<Div> {
     div()
-        .id(("project-path-completion", index))
-        .debug_selector(move || selector.to_string())
+        .id("folder-note")
         .flex()
         .items_center()
-        .flex_shrink_0()
-        .h(px(ROW))
-        .ml(px(-CH))
-        .px(px(CH))
-        .hover_raised(format!("project-path-completion-{index}"))
-        .cursor_default()
+        .min_h(px(FILES_ROW_H))
+        .pl(px(SPACE_1 + ICON_CHEVRON + SPACE_1 + SPACE_1_5))
+        .pr(px(SPACE_2))
+        .tooltip(ferrite_ui::menu::tooltip(text))
+        .child(div().flex_1().min_w_0().line_clamp(2).child(note))
+}
+
+/// A folder row's line: its mark in a chevron-wide column, as the Files
+/// tree sets its rows.
+fn folder_line(mark: &'static str) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .w_full()
+        .min_w_0()
+        .gap(px(SPACE_1_5))
+        .pl(px(SPACE_1))
+        .pr(px(SPACE_2))
         .child(
-            components::text_ui()
-                .min_w_0()
-                .truncate()
-                .text_color(rgb(INK_SUBTLE))
-                .child(format!("{name}/")),
+            div()
+                .flex()
+                .flex_shrink_0()
+                .justify_center()
+                .w(px(ICON_CHEVRON + SPACE_1))
+                .child(ferrite_ui::icons::icon(mark, ICON_CHEVRON, INK_SUBTLE)),
         )
 }
 
@@ -190,7 +336,7 @@ pub fn error_line(message: SharedString) -> Div {
 }
 
 /// The directory list: no frame, the rows flush on the grid.
-pub fn directory_list(rows: Vec<gpui::Stateful<Div>>) -> Div {
+pub fn directory_list(rows: impl IntoIterator<Item = impl IntoElement>) -> Div {
     div().flex_shrink_0().flex().flex_col().children(rows)
 }
 

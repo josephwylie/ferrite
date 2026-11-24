@@ -32,13 +32,23 @@ static HASHED: Mutex<Cache> = Mutex::new(Cache(Vec::new()));
 /// file is read only when what its metadata says of it moved since this
 /// process last listed `root`.
 pub fn scan(root: &Path, skip: &[String]) -> io::Result<Manifest> {
-    list(root, skip, Listing::default())
+    list(root, skip, Listing::default(), &mut |_| Ok(()))
+}
+
+/// [`scan`], `watch` told how many entries are listed as each is, and the
+/// scan stopped by the error it returns.
+pub fn scan_watched(
+    root: &Path,
+    skip: &[String],
+    watch: &mut dyn FnMut(usize) -> io::Result<()>,
+) -> io::Result<Manifest> {
+    list(root, skip, Listing::default(), watch)
 }
 
 /// [`scan`], removing each temporary file a write that is over left behind:
 /// a Server's scan of a tree it writes to.
 pub(super) fn sweeping(root: &Path, skip: &[String]) -> io::Result<Manifest> {
-    list(root, skip, Listing { sweep: true, ..Listing::default() })
+    list(root, skip, Listing { sweep: true, ..Listing::default() }, &mut |_| Ok(()))
 }
 
 /// One tree of the operator's setup: [`sweeping`], but each symlink is
@@ -52,7 +62,7 @@ pub(crate) fn setup(root: &Path, skip: &[String], left_out: &[&str]) -> io::Resu
         follow: true,
         left_out,
     };
-    list(root, skip, listing)
+    list(root, skip, listing, &mut |_| Ok(()))
 }
 
 #[derive(Clone, Copy, Default)]
@@ -62,7 +72,12 @@ struct Listing<'a> {
     left_out: &'a [&'a str],
 }
 
-fn list(root: &Path, skip: &[String], listing: Listing) -> io::Result<Manifest> {
+fn list(
+    root: &Path,
+    skip: &[String],
+    listing: Listing,
+    watch: &mut dyn FnMut(usize) -> io::Result<()>,
+) -> io::Result<Manifest> {
     for path in skip {
         check_path(path)?;
     }
@@ -82,13 +97,25 @@ fn list(root: &Path, skip: &[String], listing: Listing) -> io::Result<Manifest> 
         manifest: Manifest::default(),
         dirs: Vec::new(),
         links_followed: BTreeSet::new(),
+        watch,
+        stopped: None,
     };
-    walk.list(root, "").map_err(|error| at(root, error))?;
-    while let Some((dir, path)) = walk.dirs.pop() {
+    let mut listed = walk.list(root, "").map_err(|error| at(root, error));
+    while listed.is_ok() {
+        let Some((dir, path)) = walk.dirs.pop() else {
+            break;
+        };
         if let Err(error) = walk.list(&dir, &path) {
-            walk.unlisted(&path, error);
+            match walk.stopped.take() {
+                Some(stopped) => listed = Err(stopped),
+                None => walk.unlisted(&path, error),
+            }
         }
     }
+    if let Some(stopped) = walk.stopped.take() {
+        return Err(stopped);
+    }
+    listed?;
     lock().keep(root.to_path_buf(), walk.kept, CACHED);
     Ok(walk.manifest)
 }
@@ -107,6 +134,9 @@ struct Walk<'a> {
     dirs: Vec<(PathBuf, String)>,
     /// Where each directory link it followed points.
     links_followed: BTreeSet<PathBuf>,
+    watch: &'a mut dyn FnMut(usize) -> io::Result<()>,
+    /// Why `watch` stopped the scan.
+    stopped: Option<io::Error>,
 }
 
 impl Walk<'_> {
@@ -124,6 +154,10 @@ impl Walk<'_> {
             let path = join(prefix, name);
             if self.skip.contains(&path) || self.listing.left_out.contains(&name) {
                 continue;
+            }
+            if let Err(stopped) = (self.watch)(self.manifest.entries.len()) {
+                self.stopped = Some(stopped);
+                return Err(io::ErrorKind::Interrupted.into());
             }
             match self.entry(dir, &entry, &path) {
                 Ok(Some(listed)) => {
@@ -165,7 +199,7 @@ impl Walk<'_> {
             return Ok(None);
         }
         if chunked::temporary(&entry.file_name()) {
-            if self.listing.sweep && chunked::stale(&meta) {
+            if self.listing.sweep && chunked::stale(&entry.file_name(), &meta) {
                 let _ = fs::remove_file(entry.path());
             }
             return Ok(None);

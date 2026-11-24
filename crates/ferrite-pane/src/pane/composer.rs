@@ -347,9 +347,10 @@ pub fn env_word(mark: &'static str, label: SharedString) -> Div {
         .child(env_face(mark, label))
 }
 
-/// The machine a draft will run on, when that is not this computer (T3's
-/// locked environment control, first in the strip): a word, since its
-/// Project's chip is what moves it, whole in its tooltip.
+/// The machine a draft will run on when it is the only environment on and
+/// not this computer, first in the strip: a word, since there is nothing
+/// else to choose, whole in its tooltip. With more than one, the
+/// environment chip stands there instead.
 pub fn env_machine(name: SharedString) -> Stateful<Div> {
     env_word(ferrite_ui::icons::SERVER, name.clone())
         .id("band-machine")

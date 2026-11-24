@@ -8,6 +8,7 @@
 use super::background_dialog_view::BackgroundDialogView;
 use super::direct_view::DirectView;
 use super::new_task_view::NewTaskView;
+use super::placement_view::PlacementView;
 use super::project_editor_view::ProjectEditorView;
 use super::settings_view::SettingsView;
 use super::*;
@@ -27,6 +28,8 @@ pub(crate) enum Sheet {
     NewTask(Entity<NewTaskView>),
     /// A Task's Rework or Direct this task sheet.
     Direct(Entity<DirectView>),
+    /// A draft's Project copied to the Machine it picked.
+    Placement(Entity<PlacementView>),
 }
 
 impl Sheet {
@@ -37,6 +40,16 @@ impl Sheet {
             Sheet::BackgroundDialog(view) => view.read(cx).focus.clone(),
             Sheet::NewTask(view) => view.read(cx).focus(cx),
             Sheet::Direct(view) => view.read(cx).focus(cx),
+            Sheet::Placement(view) => view.read(cx).focus(cx),
+        }
+    }
+
+    /// Whether the keyboard is the sheet's, so the focus rule leaves it be:
+    /// in what `focus` names, or in another of the sheet's fields.
+    pub(super) fn holds_focus(&self, window: &Window, cx: &App) -> bool {
+        match self {
+            Sheet::Placement(view) => view.read(cx).holds_focus(window, cx),
+            sheet => sheet.focus(cx).contains_focused(window, cx),
         }
     }
 
@@ -49,6 +62,7 @@ impl Sheet {
             Sheet::BackgroundDialog(_) => "background-dialog-in",
             Sheet::NewTask(_) => "new-task-card-in",
             Sheet::Direct(_) => "direct-card-in",
+            Sheet::Placement(_) => "placement-card-in",
         }
     }
 
@@ -59,6 +73,7 @@ impl Sheet {
             Sheet::BackgroundDialog(view) => view.update(cx, |view, cx| view.card(window, cx)),
             Sheet::NewTask(view) => view.update(cx, |view, cx| view.card(window, cx)),
             Sheet::Direct(view) => view.update(cx, |view, cx| view.card(window, cx)),
+            Sheet::Placement(view) => view.update(cx, |view, cx| view.card(window, cx)),
         }
     }
 }
@@ -127,6 +142,13 @@ impl Sheets {
     pub(super) fn direct(&self) -> Option<&Entity<DirectView>> {
         match self.up() {
             Some(Sheet::Direct(view)) => Some(view),
+            _ => None,
+        }
+    }
+
+    pub(super) fn placement(&self) -> Option<&Entity<PlacementView>> {
+        match self.up() {
+            Some(Sheet::Placement(view)) => Some(view),
             _ => None,
         }
     }
@@ -224,10 +246,14 @@ impl CockpitView {
         self.sheets.read(cx).up().is_some()
     }
 
-    /// Put `sheet` up in place of whatever was. The popup up goes too.
+    /// Put `sheet` up in place of whatever was. The popup up goes too, as
+    /// does the ring on a draft's band: the keyboard is the sheet's.
     pub(super) fn show_sheet(&mut self, sheet: Sheet, cx: &mut Context<Self>) {
         if let Some(replaced) = self.sheets.update(cx, |sheets, cx| sheets.show(sheet, cx)) {
             self.sheet_gone(replaced, cx);
+        }
+        for draft in self.panes.iter_mut().filter_map(|pane| pane.draft_mut()) {
+            draft.band_focus = None;
         }
         self.close_popup(cx);
         cx.notify();
@@ -283,6 +309,8 @@ impl CockpitView {
             }
             Sheet::NewTask(sheet) => self.new_task_gone(&sheet, cx),
             Sheet::Direct(sheet) => self.direct_gone(&sheet, cx),
+            // A copy goes with its sheet: nothing would register it.
+            Sheet::Placement(sheet) => sheet.update(cx, |sheet, _| sheet.stop()),
             Sheet::ProjectEditor(_) | Sheet::BackgroundDialog(_) => {}
         }
     }
@@ -307,13 +335,22 @@ impl CockpitView {
                 let sheet = sheet.read(cx);
                 self.direct_inputs(sheet.project, &sheet.task, cx).is_none()
             }
+            Some(Sheet::Placement(sheet)) => self
+                .index_of(sheet.read(cx).placing.draft)
+                .and_then(|index| self.panes[index].draft())
+                .is_none(),
         };
         if gone {
             self.hide_sheet(cx);
         }
     }
 
+    /// A press outside the card closes the sheet, unless it is copying:
+    /// only its own Cancel stops a copy.
     pub(super) fn on_sheets_event(&mut self, _: Entity<Sheets>, _: &Dismissed, cx: &mut Context<Self>) {
+        if self.placement_sheet(cx).is_some_and(|sheet| sheet.read(cx).busy()) {
+            return;
+        }
         self.hide_sheet(cx);
     }
 }

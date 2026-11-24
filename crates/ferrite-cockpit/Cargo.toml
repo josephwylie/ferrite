@@ -69,6 +69,8 @@ notify = "7"
 [dev-dependencies]
 # The test programs' own temporary folder (ferrite-core/src/test_temp.rs).
 ctor = "1"
+# A test's folder as the registry spells it (macOS reaches /tmp through a link).
+dunce = "1"
 libc = "0.2"
 # The smoke render needs a window; gpui's own test harness provides a headless
 # one, so the Cockpit's rendering is exercised without a display.

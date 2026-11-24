@@ -92,10 +92,9 @@ impl Session {
                 let dir = self.store.join("attachments").join(".uploads");
                 private_dir(&dir)?;
                 for entry in std::fs::read_dir(&dir)?.flatten() {
-                    if entry
-                        .metadata()
-                        .is_ok_and(|metadata| metadata.is_file() && chunked::stale(&metadata))
-                    {
+                    if entry.metadata().is_ok_and(|metadata| {
+                        metadata.is_file() && chunked::stale(&entry.file_name(), &metadata)
+                    }) {
                         let _ = std::fs::remove_file(entry.path());
                     }
                 }

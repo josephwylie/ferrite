@@ -1313,6 +1313,7 @@ mod tests {
                             press("connection-sync-there-0", "Use box's"),
                         ],
                     }),
+                    projects: None,
                 };
                 div().w(px(560.)).child(connections::row(row, cx))
             }
