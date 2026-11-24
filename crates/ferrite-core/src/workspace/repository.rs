@@ -16,12 +16,36 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::registry::Registry;
+use crate::project::ProjectId;
+
 /// The repository the checkout at `root` is, by its primary remote: `None`
 /// outside git, or with no remote that names a host.
 pub fn repository_key(root: &Path) -> Option<String> {
     let config = fs::read_to_string(common_dir(root)?.join("config")).ok()?;
     let remotes = remotes(&config);
     primary(&remotes).and_then(normalize)
+}
+
+/// Which repository each Project is, by its id: those whose root is a git
+/// checkout with a remote that names a host.
+pub type Repositories = BTreeMap<ProjectId, String>;
+
+/// Each Project's id and root, to read their repositories off the thread
+/// that holds the registry.
+pub fn project_roots(registry: &Registry) -> Vec<(ProjectId, PathBuf)> {
+    registry
+        .projects()
+        .iter()
+        .map(|project| (project.id, project.root.clone()))
+        .collect()
+}
+
+pub fn repositories(projects: &[(ProjectId, PathBuf)]) -> Repositories {
+    projects
+        .iter()
+        .filter_map(|(id, root)| Some((*id, repository_key(root)?)))
+        .collect()
 }
 
 /// The git directory every worktree of `root`'s repository shares, read

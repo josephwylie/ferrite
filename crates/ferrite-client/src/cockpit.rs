@@ -2036,6 +2036,22 @@ impl Cockpit {
             .list_repo(project.project())
     }
 
+    /// Which repository each of `machine`'s Projects is, read where its
+    /// Server runs, or here, off this thread, when this window runs its
+    /// agents itself. Answered later, as `list_dir`.
+    pub fn repositories(
+        &mut self,
+        machine: MachineId,
+    ) -> io::Result<Receiver<io::Result<ferrite_core::workspace::Repositories>>> {
+        match &mut self.held_mut(machine)?.link {
+            Link::Server(server) => server.repositories(),
+            Link::InProcess(engine) => {
+                let roots = ferrite_core::workspace::project_roots(engine.registry());
+                Ok(read_here(move || Ok(ferrite_core::workspace::repositories(&roots))))
+            }
+        }
+    }
+
     /// A review's `read` of the checkout at `path`: its changed files with
     /// both sides, read by the vendored review core where the Server runs —
     /// on a machine, the machine's checkout (ADR 0021) — or here, off this
