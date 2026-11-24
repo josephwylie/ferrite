@@ -232,9 +232,12 @@ mod tests {
         let dir = scratch("repair");
         let path = dir.join("shot.png");
         let local = |path: &Path| inspect(path, Source::Local, Destination::Local);
-        assert_eq!(local(&path), Readiness::Failed(Failure::Missing));
+        let workspace = |path: &Path| inspect(path, Source::Workspace, Destination::Local);
+        assert_eq!(local(&path), Readiness::Failed(Failure::Gone));
+        assert_eq!(workspace(&path), Readiness::Failed(Failure::Missing));
         std::fs::write(&path, b"png").unwrap();
         assert_eq!(local(&path), Readiness::Ready);
+        assert_eq!(workspace(&path), Readiness::Ready);
     }
 
     #[test]
