@@ -2,3 +2,7 @@
 //! machines' Servers, and how it asks them. No UI.
 
 pub mod cockpit;
+
+#[cfg(test)]
+#[path = "../../ferrite-core/src/test_temp.rs"]
+mod test_temp;

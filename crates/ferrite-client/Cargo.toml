@@ -18,6 +18,7 @@ serde_json = { workspace = true }
 [dev-dependencies]
 ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
 chrono = "0.4.45"
+# The test programs' own temporary folder (ferrite-core/src/test_temp.rs).
 ctor = "1"
 dunce = "1"
 libc = "0.2"
