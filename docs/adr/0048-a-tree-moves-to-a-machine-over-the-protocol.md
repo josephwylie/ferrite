@@ -11,12 +11,11 @@ of the Project folder, put where the operator says. Their agent setup
 (skills, commands, agents, instructions, rules, plugins, settings and
 sign-ins) follows them to every Machine and stays in sync both ways.
 
-Three pieces do this, in three PRs. The first and third are built. The
-second is planned and recorded here so it builds on them as designed:
+Three pieces do this, in three PRs, all built:
 
 1. **The tree primitive** (built): one way to make a directory on a
    Machine hold what one here holds, over the Ferrite protocol.
-2. **The environment chip and Placement** (planned): the Draft's choice of
+2. **The environment chip and Placement** (built): the Draft's choice of
    environment, and the Project copy it starts.
 3. **Setup sync** (built): the operator's agent setup kept the same on
    this computer and each Machine.
@@ -197,48 +196,73 @@ Windows window.
   sshd under a temporary HOME, and gives Windows an ssh shim with its own
   config, so the operator's keys, ssh config and Machines are never used.
 
-## 2. The environment chip and Placement (planned)
+## 2. The environment chip and Placement (built)
 
 - **A counterpart is computed, not stored.** The counterpart of Project P
   on Machine E is the Project there with the same `workspace::repository_key`
   (as delegation matches, ADR 0047; a copied folder carries its `.git`, so
-  it matches itself). Only a Project with no repository key needs a record:
-  a **Placement** `{ local_root, remote_root }` per Machine at
-  `machine::dir(..)/placements.json`. One lookup answers "counterpart of P
-  on E", for the chip, and nothing else asks.
+  it matches itself), else the one a **Placement** names. Only a Project
+  with no repository key needs that record: `{ local_root, remote_root }`
+  per Machine at `machine::dir(..)/placements.json`, read both ways (this
+  computer to E and back). `placement::counterpart` is the one lookup. The
+  window learns each machine's repositories by asking its Server
+  (`Op::Repositories`, additive under ADR 0025; an older Server answers
+  none), so a pick waits for both answers before it moves the Draft.
 - **Each Machine has a projects folder**, `projects_dir` on `Machine`
-  (default `~/projects`), edited on its Connections row.
-- **The chip** replaces the machine word at the front of the draft band
-  (`pane::env_machine`) whenever more than one environment is on. It names
-  the Draft's environment and lists this computer and each enabled Machine,
-  a check on the Draft's, then "Add environment…" (Settings › Connections).
-  It is the Project chip's band chip and popup, pressed through the shared
-  control (ADR 0044). The setup sheet and its state are a view of their own
-  (ADR 0041 to 0043).
-- **Picking environment E** on a Draft whose Project is P:
-  1. a counterpart exists: `choose_project(counterpart)`. The text,
-     attachments (re-aimed at E), provider and effort stay;
-  2. none, and P is on this computer: the setup sheet. A destination field
-     prefilled `<projects_dir>/<name>` completes against E's `list_dir`; P's
-     git-ignored entries are listed with their sizes, unchecked; Copy shows
-     progress and can be cancelled. On finish: `register_project(E,
-     destination)`, a Placement if P has no repository key, and
-     `choose_project(new)`;
-  3. none, and P is on another Machine: the Project card on E, since there
-     is no folder here to copy.
-- **What is there is never overwritten silently.** A destination that holds
-  something offers "Use what is there" (register, no copy) or another path.
+  (default `~/projects`, not written while it is the default), changed on
+  its Connections row: its ⋯ menu's "Projects folder…" opens a field in the
+  row, saved through Connections' own save.
+- **The chip** stands at the front of the draft band in place of the
+  machine word (`pane::env_machine`) whenever more than one environment is
+  on, the laptop or the server mark and the environment's name ("Local"
+  for this computer). Its menu lists this computer and each enabled
+  Machine, a check on the Draft's, then "Add environment…" (Settings ›
+  Connections). It is the Project chip's band chip and popup, pressed
+  through the shared control (ADR 0044), and Tab reaches it between the
+  model chip and the Project chip (`BandChip::Environment`). With one
+  environment on, the band keeps the machine word.
+- **Picking environment E** on a Draft whose Project is P
+  (`draft_environment.rs`):
+  1. a counterpart exists: the Draft's Project becomes it. Its text,
+     attachments, provider and effort stay; its attachments are aimed at E
+     and their upload there starts at once;
+  2. none, and P is on this computer: the setup sheet (`PlacementView`).
+     The destination field starts at `<projects_dir>/<folder name>` and
+     completes against E's `list_dir` (`RemotePath`, the Project card's
+     own field); P's git-ignored entries are listed with their sizes,
+     unticked; Copy runs on a thread of its own over a connection of its
+     own (`Cockpit::tree`), with its progress and Cancel. Then the window
+     registers the destination on E, keeps a Placement if P has no
+     repository key, and chooses the new Project on the Draft;
+  3. none, and P is on another Machine: the Project card on E (a folder
+     dialog when E is this computer), which chooses what it makes on the
+     Draft.
+- **What is there is never overwritten.** Before it writes, the copy reads
+  the destination as the mirror would (`placement::occupied`, through the
+  same exchange). One that holds anything stops at **Occupied**: the sheet
+  says so and offers "Use what is there" (register, no copy); editing the
+  path chooses afresh. Only a destination this sheet already copied into
+  (a retry, or a copy cancelled part way) is mirrored again.
+- **A destination is kept sane by the sheet**: `/` or `~/` first (or a
+  drive, for a Server on Windows), not the home or a root itself, nothing
+  through `..` (`placement::refuse_destination`).
+- **A file that changes or cannot be read** during the copy is left by its
+  name, sent once more, and if it still cannot be, listed when the copy is
+  in: the sheet stays up on Done to list it.
 - **Windows to Linux**: after the copy, the source repo's effective
-  `core.autocrlf` and `core.filemode=false` go into the copy's local config,
-  so git there does not see the whole tree as modified.
-- **A Machine not reached or not set up** is listed dimmed with its state
-  and opens the Connections flow.
-- **The Draft's "Add project…"** opens on the Draft's Machine, not always on
-  this computer.
-- **The sheet is one state machine**: `Choosing → Scanning →
-  Copying { progress } → Registering → Done | Failed { reason }`.
-- `CONTEXT.md`'s Draft entry and ADR 0045's "locked environment control"
-  line change with it: the environment is a choice until the first send.
+  `core.autocrlf` and `core.filemode=false` go into the copy's local config
+  (`placement::align_git`), so git there reads the tree as unchanged.
+- **A Machine not reached or not set up** is listed dimmed with why
+  ("connecting", "sign in", "not set up", "offline"). A press on it opens
+  Connections; the arrows pass over it, as over every dimmed row.
+- **The Draft's "Add project…"** opens the card on the Draft's Machine.
+- **The sheet is one state machine**: `Choosing → Scanning → Copying
+  { progress } → Registering → Done { skipped } | Failed { reason }`, with
+  `Occupied` after `Scanning` when the destination holds something.
+  Cancel is `Failed { "Cancelled" }`, and Retry from any failure copies
+  again. Closing the sheet cancels its copy.
+- `CONTEXT.md`'s Draft entry and ADR 0045's line on the strip over the
+  Composer say the environment is a choice until the first send.
 
 ## 3. Setup sync (built)
 

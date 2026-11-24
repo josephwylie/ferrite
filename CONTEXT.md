@@ -305,7 +305,10 @@ _Avoid_: Park (the separate action for finished handling), stopped agent.
 
 **Draft**
 A Pane's pending Provider, Effort, Project, and Workspace choices before its
-first prompt creates a Thread. It has no durable history or Session.
+first prompt creates a Thread. It has no durable history or Session. Its
+environment is its Project's Machine, a choice on its environment chip
+until that first prompt: picking another moves it to its Project's
+counterpart there, made by a copy when there is none (ADR 0048).
 
 **Current Thread**
 The Thread the operator is in: the focused one, else the open Thread focus
@@ -365,7 +368,7 @@ thread.
 Where a Project of this computer lives on a Machine: the folder its copy
 was sent to there. A Project with a repository finds its counterpart on a
 Machine by that repository, so only one without needs a Placement kept
-(ADR 0048, planned).
+(`placements.json` in the Machine's own directory, ADR 0048).
 _Avoid_: mirror, sync target, remote path.
 
 **Setup sync**
