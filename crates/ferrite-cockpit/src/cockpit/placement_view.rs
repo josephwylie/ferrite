@@ -501,53 +501,6 @@ impl PlacementView {
                     .debug_selector(|| "placement-refusal".into()),
             );
         }
-        match &self.entries {
-            None => {
-                body = body.child(
-                    note("Reading what git ignores").debug_selector(|| "placement-listing".into()),
-                )
-            }
-            Some(entries) if !entries.is_empty() => {
-                body = body.child(project_editor::section_label(
-                    "Ignored by git",
-                    "Copied only when ticked",
-                ));
-                body = body.child(project_editor::directory_list(
-                    entries.iter().enumerate().map(|(index, entry)| {
-                        let path = &entry.ignored.path;
-                        let shown = if entry.ignored.directory {
-                            format!("{path}/")
-                        } else {
-                            path.clone()
-                        };
-                        let selector = format!("placement-ignored:{path}");
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .h(px(ROW))
-                            .gap(px(2.0 * CH))
-                            .child(
-                                Checkbox::new(("placement-ignored", index))
-                                    .debug_selector(move || selector.clone())
-                                    .checked(entry.ticked)
-                                    .disabled(busy)
-                                    .accessibility_label(shown.clone())
-                                    // A label is drawn one line high, which
-                                    // clips an underscore.
-                                    .child(shown)
-                                    .on_click(cx.listener(
-                                        move |sheet: &mut Self, ticked: &bool, _, cx| {
-                                            sheet.tick(index, *ticked, cx)
-                                        },
-                                    )),
-                            )
-                            .child(note(entry.size.map(bytes).unwrap_or_default()))
-                    }),
-                ));
-            }
-            Some(_) => {}
-        }
         let copying_to = self
             .copy
             .as_ref()
@@ -592,6 +545,55 @@ impl PlacementView {
                     .debug_selector(|| "placement-failed".into()),
             ),
         };
+        match &self.entries {
+            None => {
+                body = body.child(
+                    note("Reading what git ignores").debug_selector(|| "placement-listing".into()),
+                )
+            }
+            Some(entries) if !entries.is_empty() => {
+                body = body.child(project_editor::section_label(
+                    "Ignored by git",
+                    "Copied only when ticked",
+                ));
+                body = body.child(project_editor::directory_list(
+                    entries.iter().enumerate().map(|(index, entry)| {
+                        let path = &entry.ignored.path;
+                        let shown = if entry.ignored.directory {
+                            format!("{path}/")
+                        } else {
+                            path.clone()
+                        };
+                        let selector = format!("placement-ignored:{path}");
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .h(px(ROW))
+                            .gap(px(2.0 * CH))
+                            .child(
+                                Checkbox::new(("placement-ignored", index))
+                                    .debug_selector(move || selector.clone())
+                                    .checked(entry.ticked)
+                                    .disabled(busy)
+                                    .accessibility_label(shown.clone())
+                                    // A label is drawn one line high, which
+                                    // clips an underscore; a child is taller
+                                    // than the box, so it is centred on it.
+                                    .items_center()
+                                    .child(shown)
+                                    .on_click(cx.listener(
+                                        move |sheet: &mut Self, ticked: &bool, _, cx| {
+                                            sheet.tick(index, *ticked, cx)
+                                        },
+                                    )),
+                            )
+                            .child(note(entry.size.map(bytes).unwrap_or_default()))
+                    }),
+                ));
+            }
+            Some(_) => {}
+        }
         let (verb, selector, disabled): (&'static str, &'static str, bool) = match self.stage {
             Stage::Occupied { .. } => ("Use what is there", "placement-use", false),
             Stage::Failed { .. } => ("Retry", "placement-retry", false),

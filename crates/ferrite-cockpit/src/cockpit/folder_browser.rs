@@ -18,7 +18,8 @@ gpui::actions!(folder_browser, [Up, Down, Open, Cancel]);
 /// The key context of the browser's lines (`ferrite_ui::keymap`).
 const KEY_CONTEXT: &str = "FolderBrowser";
 
-/// How many rows show before the list scrolls.
+/// How many rows the list shows, however many the folder has, so the
+/// sheet holds still as the browser moves: more scroll.
 const ROWS: f32 = 6.0;
 
 /// Where the browser goes when the folder it was put at cannot be read.
@@ -135,7 +136,7 @@ impl FolderBrowser {
         line
     }
 
-    pub(super) fn typed<'a>(&self, cx: &'a App) -> &'a str {
+    fn typed<'a>(&self, cx: &'a App) -> &'a str {
         self.field.read(cx).text()
     }
 
@@ -381,7 +382,8 @@ impl FolderBrowser {
         cx.notify();
     }
 
-    /// Name a folder in the one shown, made by what goes into it.
+    /// Name a folder in the one shown, made by what goes into it: a row
+    /// under its folders.
     pub(super) fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let naming = match &self.naming {
             Some(naming) => naming.clone(),
@@ -390,6 +392,7 @@ impl FolderBrowser {
         self.naming = Some(naming.clone());
         window.focus(&naming.read(cx).focus_handle(cx), cx);
         self.cursor = None;
+        self.scroll.scroll_to_item(self.rows(cx).len());
         cx.notify();
     }
 
@@ -412,8 +415,8 @@ impl FolderBrowser {
         self.go(folder, cx);
     }
 
-    /// Under the rows: the folder on its way, why it cannot be read, that
-    /// it is new, or that nothing is in it.
+    /// Under the rows, in the list: the folder on its way, why it cannot be
+    /// read, that it is new, or that nothing is in it.
     fn note(&self, rows: usize, cx: &App) -> Option<Div> {
         let (directory, start) = split_typed(self.typed(cx));
         if directory.is_empty() {
@@ -506,7 +509,6 @@ impl Render for FolderBrowser {
                 self.field.clone(),
                 self.focus_handle(cx).is_focused(window),
             ))
-            .children(naming)
             .child(
                 div()
                     .id("folder-browser-rows")
@@ -514,12 +516,13 @@ impl Render for FolderBrowser {
                     .flex_shrink_0()
                     .flex()
                     .flex_col()
-                    .max_h(px(ROWS * FILES_ROW_H))
+                    .h(px(ROWS * FILES_ROW_H))
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
-                    .children(drawn),
+                    .children(drawn)
+                    .children(naming)
+                    .children(note.map(project_editor::folder_note)),
             )
-            .children(note)
     }
 }
 

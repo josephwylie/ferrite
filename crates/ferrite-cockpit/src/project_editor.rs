@@ -13,8 +13,9 @@ use ferrite_ui::sheet;
 use ferrite_ui::theme::*;
 
 const WIDTH: f32 = 600.;
-/// The sheet sizes to its content up to here; past it the body scrolls.
-const MAX_HEIGHT: f32 = 520.;
+/// The sheet sizes to its content up to here; past it the body scrolls. A
+/// machine's folder browser and the rows around it fit under it.
+const MAX_HEIGHT: f32 = 640.;
 
 /// The sheet, as tall as its content up to `MAX_HEIGHT` (and the viewport
 /// share every sheet keeps, of a window `viewport_h` tall), past which the
@@ -201,6 +202,7 @@ pub fn folder_row(
     components::form_button_on(id, rest, cx)
         .w_full()
         .h(px(FILES_ROW_H))
+        .p_0()
         .rounded(px(R_CONTROL))
         .child(
             folder_line(mark).child(
@@ -209,6 +211,7 @@ pub fn folder_row(
                     .min_w_0()
                     .truncate()
                     .text_size(px(FS_LABEL))
+                    .line_height(px(LH_UI))
                     .text_color(rgb(INK_STRONG))
                     .child(label),
             ),
@@ -247,6 +250,18 @@ pub fn folder_name_row(editor: impl IntoElement, focused: bool, empty: bool) -> 
                     )
                 }),
         )
+}
+
+/// A note in a folder browser's list, a row's height at least, on the
+/// edge its rows' names start from.
+pub fn folder_note(note: Div) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .min_h(px(FILES_ROW_H))
+        .pl(px(SPACE_1 + ICON_CHEVRON + SPACE_1 + SPACE_1_5))
+        .pr(px(SPACE_2))
+        .child(note)
 }
 
 /// A folder row's line: its mark in a chevron-wide column, as the Files
