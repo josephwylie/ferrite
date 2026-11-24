@@ -97,6 +97,21 @@ pub struct ConnectionRow {
     pub detail: Option<SharedString>,
     pub actions: Vec<ConnectionAction>,
     pub removal: Option<(WindowAct, WindowAct)>,
+    /// Its "Sync my setup" line; `None` for none.
+    pub sync: Option<ConnectionSync>,
+}
+
+/// A remote environment's setup sync (ADR 0048): its switch, and where its
+/// last sync stands.
+#[derive(Clone)]
+pub struct ConnectionSync {
+    pub on: bool,
+    pub toggle: ConnectionAction,
+    pub status: SharedString,
+    /// The status is a failure, or a sync that stopped.
+    pub failed: bool,
+    /// Sync though it removes much, after one stopped.
+    pub anyway: Option<ConnectionAction>,
 }
 
 #[derive(Clone)]

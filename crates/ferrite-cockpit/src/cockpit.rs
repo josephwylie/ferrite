@@ -62,6 +62,7 @@ mod session_control;
 mod new_task_view;
 mod project_editor_view;
 mod settings_view;
+mod setup_sync;
 mod sheets;
 mod side_chat_view;
 mod rename;
@@ -588,6 +589,8 @@ pub struct CockpitView {
     ferrite_update: crate::ferrite_update::FerriteUpdate,
     /// What the window has said about its Server (ADR 0025).
     server_bands: server::ServerBands,
+    /// The operator's setup kept in sync with each Machine (ADR 0048).
+    setup_sync: Entity<setup_sync::SetupSync>,
     /// Whether the window has said `settings.json` could not be used.
     unreadable_told: bool,
     /// The operator's commands running, and what they and the keys have
@@ -689,6 +692,10 @@ pub struct Preferences {
     /// The keys in `settings.json` the launch refused, a sentence each
     /// (`keymap::with_user_keys`): the window says them once.
     pub keys_refused: Vec<String>,
+    /// This computer's agent setup, which the window keeps in sync with
+    /// each Machine's (ADR 0048). `None` in the test and demo
+    /// constructors, so no suite reads or writes the operator's setup.
+    pub setup_home: Option<ferrite_core::setup_sync::Home>,
 }
 
 impl Preferences {
@@ -726,6 +733,7 @@ impl Preferences {
             whats_new: None,
             unreadable: None,
             keys_refused: Vec::new(),
+            setup_home: None,
         }
     }
 }
@@ -1240,6 +1248,9 @@ impl CockpitView {
         ]);
         let cockpit_weak = cx.weak_entity();
         let cockpit = cx.new(|_| cockpit);
+        let setup_sync = cx.new(|_| {
+            setup_sync::SetupSync::new(prefs.setup_home.clone(), prefs.dir.clone(), cockpit.clone())
+        });
         let composer_menu = cx.new(|_| composer_menu::ComposerMenuView::default());
         // Whether a Composer's key context is the menu's follows the menu.
         cx.observe(&composer_menu, |view, _, cx| view.sync_composer_floats(cx))
@@ -1378,6 +1389,7 @@ impl CockpitView {
             environment: Default::default(),
             ferrite_update: Default::default(),
             server_bands: Default::default(),
+            setup_sync,
             unreadable_told: false,
             user_commands: Default::default(),
             leave_asked: false,
@@ -2226,6 +2238,7 @@ impl CockpitView {
             card.update(cx, |card, cx| card.poll_remote_path(cx));
         }
         self.poll_machine_repo(cx);
+        self.tick_setup_sync(cx);
         let server_moved = self.server_moved(cx);
         if server_moved {
             for pane in &self.panes {
@@ -5642,6 +5655,7 @@ impl CockpitView {
         let provider = binding.provider().clone();
         let effort = binding.effort().map(str::to_owned);
         let machine = binding.project().machine();
+        self.sync_setup_before_start(machine, cx);
         let resolved = binding
             .resolve(
                 self.cockpit.read(cx).registry(machine).reading(),
@@ -6926,6 +6940,7 @@ impl CockpitView {
         self.present_cli_updates(window, cx);
         self.present_ferrite_update(window, cx);
         self.present_server(window, cx);
+        self.present_setup_sync(window, cx);
         self.present_restart(window, cx);
         self.present_unreadable_settings(window, cx);
         self.present_user_commands(window, cx);

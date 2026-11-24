@@ -27,6 +27,7 @@ fn saved() -> Vec<Machine> {
             name: "gpu".into(),
             target: "me@gpu".into(),
             enabled: false,
+            sync_setup: true,
         },
     ]
 }

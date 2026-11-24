@@ -1,6 +1,7 @@
 use super::*;
 use ferrite_ui::frame::settings::{
-    ConnectionForm, ConnectionMode, ConnectionRow, ConnectionSuggestions, WindowAct,
+    ConnectionAction, ConnectionForm, ConnectionMode, ConnectionRow, ConnectionSuggestions,
+    ConnectionSync, WindowAct,
 };
 use gpui::component::{ActiveTheme, ElementExt};
 
@@ -717,6 +718,56 @@ pub(super) fn group(label: Option<SharedString>, group: &Group, cx: &App) -> Div
         )
 }
 
+/// Every Settings toggle's face (`Control::Toggle`): a stop that flips on
+/// a press, Enter or Space.
+fn switch(toggle: ConnectionAction, on: bool, label: String, cx: &App) -> Div {
+    let id = toggle.id.clone();
+    let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
+    div().debug_selector(move || id.to_string()).child(
+        components::faded_button(toggle.id.clone(), none, none, none, rgb(INK_STRONG).into(), cx)
+            .tab_stop(true)
+            .selected(on)
+            .disabled(!toggle.enabled)
+            .accessibility_label(label)
+            .h(px(SETTINGS_CONTROL_H))
+            .px(px(SPACE_1))
+            .child(components::switch(
+                SharedString::from(format!("{}-switch", toggle.id)),
+                on,
+            ))
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                (toggle.act)(window, cx)
+            }),
+    )
+}
+
+/// A remote environment's "Sync my setup": its switch, and where its last
+/// sync stands, under the environment's name.
+fn sync_line(sync: ConnectionSync, cx: &App) -> Div {
+    let selector = format!("{}-status", sync.toggle.id);
+    div()
+        .flex()
+        .items_center()
+        .min_w_0()
+        .gap(px(8.))
+        .pl(px(28.))
+        .child(text("Sync my setup", 12., ink(cx)).flex_shrink_0())
+        .child(
+            text(sync.status, 12., if sync.failed { RED } else { muted(cx) })
+                .flex_1()
+                .truncate()
+                .debug_selector(move || selector.clone()),
+        )
+        .children(sync.anyway.map(|anyway| {
+            button(anyway.id.clone(), anyway.label.clone(), anyway.enabled, anyway.act.clone(), cx)
+                .h(px(24.))
+                .px(px(8.))
+                .child(text(anyway.label, 12., ink(cx)))
+        }))
+        .child(switch(sync.toggle, sync.on, "Sync my setup".into(), cx))
+}
+
 pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
     let enabled = row.enabled;
     // Only the Local environment has no target: it is this computer.
@@ -741,29 +792,7 @@ pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
         .into();
     let mut actions = div().flex().items_center().flex_shrink_0().gap(px(8.));
     if let Some(toggle) = toggle {
-        // Every Settings toggle's face (`Control::Toggle`): a stop that
-        // flips on a press, Enter or Space.
-        let id = toggle.id.clone();
-        let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
-        actions = actions.child(
-            div().debug_selector(move || id.to_string()).child(
-                components::faded_button(toggle.id.clone(), none, none, none, rgb(INK_STRONG).into(), cx)
-                    .tab_stop(true)
-                    .selected(enabled)
-                    .disabled(!toggle.enabled)
-                    .accessibility_label(format!("Enable {}", row.name))
-                    .h(px(SETTINGS_CONTROL_H))
-                    .px(px(SPACE_1))
-                    .child(components::switch(
-                        SharedString::from(format!("{}-switch", toggle.id)),
-                        enabled,
-                    ))
-                    .on_click(move |_, window, cx| {
-                        cx.stop_propagation();
-                        (toggle.act)(window, cx)
-                    }),
-            ),
-        );
+        actions = actions.child(switch(toggle, enabled, format!("Enable {}", row.name), cx));
     }
     if !menu_actions.is_empty() {
         let selector = menu_id.clone();
@@ -834,6 +863,7 @@ pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
                 )
                 .child(actions),
         )
+        .children(row.sync.map(|sync| sync_line(sync, cx)))
         .children(row.removal.map(|(confirm, cancel)| {
             div()
                 .flex()

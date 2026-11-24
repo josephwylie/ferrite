@@ -34,6 +34,10 @@ pub struct Machine {
     /// A disabled machine stays listed and is never connected to.
     #[serde(default = "enabled")]
     pub enabled: bool,
+    /// This computer's agent setup is kept the same as the machine's, both
+    /// ways (ADR 0048).
+    #[serde(default = "enabled")]
+    pub sync_setup: bool,
 }
 
 fn enabled() -> bool {
@@ -47,6 +51,7 @@ impl Machine {
             name: target.to_string(),
             target: target.to_string(),
             enabled: true,
+            sync_setup: true,
         }
     }
 

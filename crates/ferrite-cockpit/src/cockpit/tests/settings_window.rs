@@ -253,6 +253,7 @@ fn a_ready_setup_replaces_the_environment_it_edits_and_keeps_its_warning(
         name: "box".into(),
         target: "me@box".into(),
         enabled: false,
+        sync_setup: true,
     };
     let other = Machine::new("other.example");
     view.update(cx, |view, _| {
