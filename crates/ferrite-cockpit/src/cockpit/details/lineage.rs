@@ -8,11 +8,13 @@
 
 use super::super::delegates::{Delegator, Serving};
 use super::super::subagents::{agent_name, parent_of, state_word};
+use super::super::transcript_glue::agent_clock;
 use super::*;
 use ferrite_core::activity::{ActivityView, AgentStatus, Subject, SubjectView};
 use ferrite_core::delegate::{DelegateId, Delegated, Delegating, Status};
 use ferrite_core::server::ServerId;
 use ferrite_core::TurnOutcome;
+use ferrite_pane::pane::AgentClock;
 use ferrite_ui::icons::{self, icon};
 use std::collections::HashMap;
 
@@ -155,15 +157,15 @@ pub(super) fn lineage<F: Fn(&ServerId) -> Option<Serving>>(
             tooltip: None,
         })
     });
-    // An agent's clock is its spawning call's, in its parent's timings.
-    let elapsed: HashMap<Subject, std::time::Duration> = activity
-        .invocations()
-        .filter_map(|(call, agent)| {
-            let parent = parent_of(activity, &agent.subject())?;
-            let timing = *activity.subject(&parent)?.timings().get(&call)?;
-            Some((agent.subject(), timing.elapsed()))
-        })
-        .collect();
+    // An agent's clock is the one its card row reads. Its spawning call comes
+    // first: a later `SendMessage` to it is named by the agent too, and that
+    // call's own time is not the agent's.
+    let mut clocks: HashMap<Subject, Option<AgentClock>> = HashMap::new();
+    for (call, agent) in activity.invocations() {
+        clocks
+            .entry(agent.subject())
+            .or_insert_with(|| agent_clock(activity, agent, &call));
+    }
     let mut own: Vec<_> = agents
         .into_iter()
         .filter(|agent| parent_of(activity, &agent.subject()).as_ref() == Some(subject))
@@ -175,10 +177,12 @@ pub(super) fn lineage<F: Fn(&ServerId) -> Option<Serving>>(
     };
     for agent in own {
         let state = Dot::of(agent.status(), agent.fresh());
-        let clock = elapsed
+        let clock = clocks
             .get(&agent.subject())
+            .copied()
+            .flatten()
             .filter(|_| state != Dot::Failed)
-            .map(|elapsed| crate::nav::working_for(*elapsed));
+            .map(|clock| crate::nav::working_for(clock.elapsed()));
         let row = Relative {
             leads: Leads::Subject(agent.subject()),
             title: agent_name(agent.info()),
@@ -396,7 +400,16 @@ impl Lineage {
             .count();
         let previous = div()
             .child(icon(icons::BOT, 16., INK_SUBTLE))
-                .child(div().flex_1().min_w_0().truncate().child("Previous agents"))
+                .child(
+                    // By width alone, as a row's title: `truncate`'s clip
+                    // would take the descenders.
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child("Previous agents"),
+                )
                 .when(failed > 0, |row| {
                     row.child(
                         div()
@@ -733,6 +746,64 @@ mod tests {
         assert_eq!(read(AgentStatus::Failed), ("Failed", Dot::Failed));
         assert_eq!(read(AgentStatus::Idle), ("Done", Dot::Done));
         assert_eq!(read(AgentStatus::Working), ("Unavailable", Dot::Idle));
+    }
+
+    /// A `SendMessage` is named by the agent it reached, and takes no time
+    /// of the agent's: the row keeps the run its card row reads.
+    #[test]
+    fn a_message_to_an_agent_leaves_its_clock() {
+        use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, TranscriptCoverage};
+        use ferrite_core::transcript::Input;
+        use ferrite_core::{SessionEvent, ToolResult};
+        let key = |native| AgentKey::new(Provider::Claude, "root", native);
+        let at = std::time::Instant::now();
+        let mut activity = Activity::default();
+        activity.apply(ActivityInput::Connect { generation: 1 });
+        let mut info = AgentInfo::new(key("Atlas"));
+        info.name = Some("Atlas".into());
+        info.parent = Some(Subject::Main);
+        info.coverage = TranscriptCoverage::Live;
+        for event in [
+            ActivityEvent::Discovered(info),
+            ActivityEvent::Status { key: key("Atlas"), state: AgentStatus::Interrupted },
+            ActivityEvent::CompletionObservation {
+                subject: Subject::Subagent(key("Atlas")),
+                elapsed_ms: 57_000,
+                completed_at: "2026-11-24T10:00:57Z".into(),
+                input_tokens: None,
+                output_tokens: None,
+            },
+            ActivityEvent::Alias { from: key("Send"), to: key("Atlas") },
+        ] {
+            activity.apply(ActivityInput::Observe { generation: 1, event, at });
+        }
+        for event in [
+            SessionEvent::ToolStarted {
+                id: "Send".into(),
+                name: "SendMessage".into(),
+                input: serde_json::json!({}),
+            },
+            SessionEvent::ToolCompleted {
+                id: "Send".into(),
+                output: "refused".into(),
+                is_error: true,
+                result: ToolResult::Opaque,
+            },
+        ] {
+            activity.apply(ActivityInput::Main { input: Input::Event(event), at });
+        }
+        let delegating = Delegating { delegates: Vec::new(), holds: true };
+        let read = lineage(
+            activity.view(),
+            &Subject::Main,
+            "Main",
+            Elsewhere {
+                delegating: &delegating,
+                delegated_from: None,
+                serving: |_: &ServerId| None,
+            },
+        );
+        assert_eq!(read.previous[0].meta, "57s");
     }
 
     /// A parent at rest reads as its last turn ended: stopped, not Done.
