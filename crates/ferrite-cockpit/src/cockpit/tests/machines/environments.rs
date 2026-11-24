@@ -853,6 +853,7 @@ fn the_sheet_aims_the_copy_by_browsing_the_machines_folders(cx: &mut TestAppCont
         "the name keeps the keys"
     );
 
+    drawn(cx, "placement-ignored:.env");
     press(cx, "placement-copy");
     until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
     let dest = projects.join("play/fresh/mirror");
