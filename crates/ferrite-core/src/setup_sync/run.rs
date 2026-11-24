@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 
 use super::reconcile::{agreed, reconcile, seeded, Action, Hold};
 use super::store::{self, local, Home};
-use super::{sign_in, Item, Source, CLAUDE_SIGN_IN, ITEMS};
+use super::{sign_in, Item, Source, ITEMS, UNREAD_WITHOUT_SIGN_INS};
 use crate::chunked::{Cancellation, CHUNK_SIZE};
 use crate::tree::{self, Asked, Entry, Exchange, Manifest, Problem, Reply, Request, Root, Session, Side, Step};
 
@@ -87,7 +87,7 @@ impl Job {
     fn unread(&self) -> Vec<String> {
         match self.read_sign_ins {
             true => Vec::new(),
-            false => vec![CLAUDE_SIGN_IN.to_string()],
+            false => UNREAD_WITHOUT_SIGN_INS.iter().map(|path| path.to_string()).collect(),
         }
     }
 }
@@ -280,7 +280,8 @@ pub fn run(
         store::write_over(&job.dir.join(BASE), &serde_json::to_vec(&agreed)?)?;
     }
     for (side, manifest) in [(Side::Here, here), (Side::There, far)] {
-        synced.problems.extend(manifest.problems.into_iter().map(|(path, error)| Problem { path, side, error }));
+        let said = manifest.problems.into_iter().filter(|(path, error)| !(sign_in(path) && error == store::MID_WRITE));
+        synced.problems.extend(said.map(|(path, error)| Problem { path, side, error }));
     }
     synced.problems.extend(sent.problems.into_iter().chain(pulled));
     Ok(Outcome::Synced(synced))

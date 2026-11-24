@@ -100,6 +100,10 @@ pub const CLAUDE_KEYCHAIN: &str = "Claude Code-credentials";
 /// Claude's sign-in, the one sign-in a Keychain may keep.
 pub(crate) const CLAUDE_SIGN_IN: &str = ".claude/.credentials.json";
 
+/// The table's paths a sync that reads no sign-ins leaves unread: Claude's,
+/// which macOS keeps in a Keychain whose every read may ask the operator.
+pub const UNREAD_WITHOUT_SIGN_INS: &[&str] = &[CLAUDE_SIGN_IN];
+
 /// The table's item at `path`, when `path` is one, not a path in one.
 pub(crate) fn item_at(path: &str) -> Option<&'static Item> {
     ITEMS.iter().find(|item| item.path == path)

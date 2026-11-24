@@ -742,6 +742,11 @@ pub(crate) fn overlap(one: &Path, other: &Path) -> io::Result<bool> {
     Ok(holds(&one, &other) || holds(&other, &one))
 }
 
+/// Whether `inner` is `outer` or lies in it, however each is spelled.
+pub(crate) fn within(inner: &Path, outer: &Path) -> io::Result<bool> {
+    Ok(holds(&canonical(outer)?, &canonical(inner)?))
+}
+
 /// `path` as this computer names it: its deepest ancestor that is there
 /// resolved, links followed and, on Windows, in its true case with no
 /// `\\?\`, and the rest of it joined on.

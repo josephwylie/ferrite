@@ -309,7 +309,8 @@ fn a_sync_that_would_remove_most_of_a_side_stops_until_told_to_go_on() {
     job.allow_removals = true;
     sync(&job, &far);
     assert_eq!(read(&far, ".claude/CLAUDE.md"), None);
-    assert_eq!(read(&far, ".codex/auth.json"), None);
+    assert!(read(&far, ".codex/auth.json").is_some(), "a sign-in is never removed");
+    assert_eq!(read(&mine, ".codex/auth.json"), read(&far, ".codex/auth.json"), "and comes back here");
     assert_eq!(read(&far, ".claude/projects/y/session.jsonl").as_deref(), Some("the Machine's own\n"), "not the setup");
     assert!(read(&far, ".claude.json").is_some_and(|json| !json.contains("mcpServers")), "the key goes, the file stays");
 }
@@ -404,10 +405,6 @@ impl Keychain for Fake {
     fn set(&self, service: &str, secret: &str) -> io::Result<()> {
         self.0.lock().unwrap().insert(service.into(), secret.into());
         Ok(())
-    }
-
-    fn delete(&self, service: &str) -> io::Result<bool> {
-        Ok(self.0.lock().unwrap().remove(service).is_some())
     }
 }
 
@@ -719,8 +716,117 @@ fn a_sign_in_read_mid_write_waits_for_the_next_sync_unsaid() {
     put(&mine, ".claude/.credentials.json", &format!(r#"{{"claudeAiOauth": {{"accessToken": "{SECRET}-torn"#));
     let synced = sync(&job, &far);
     assert_eq!(read(&far, ".claude/.credentials.json"), before);
-    assert_eq!(synced.problems.iter().map(|problem| problem.path.as_str()).collect::<Vec<_>>(), [".claude/.credentials.json"]);
-    assert!(!format!("{synced:?}").contains("NEVER-SHOWN"));
+    assert_eq!(synced, Synced::default(), "held, and not named");
+}
+
+/// Each file under `dir` that holds a sign-in's secret.
+fn secrets(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(secrets(&path));
+        } else if fs::read_to_string(&path).is_ok_and(|text| text.contains("NEVER-SHOWN")) {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// Signing out on one side while the other is signed in signs it back in
+/// at the next sync: no stop, no trash, either side, either agent.
+#[test]
+fn signing_out_on_either_side_signs_it_back_in_and_nothing_stops() {
+    let world = World::new("sign-out");
+    let keychain = Arc::new(Fake::default());
+    let (mine, far) = (world.home("here").with_keychain(keychain.clone()), world.home("machine"));
+    seed(&mine);
+    gone(&mine, ".claude/.credentials.json");
+    let claude = format!(r#"{{"claudeAiOauth": {{"accessToken": "{SECRET}"}}}}"#);
+    keychain.set(CLAUDE_KEYCHAIN, &claude).unwrap();
+    let job = world.job(&mine, "far");
+    sync(&job, &far);
+    let codex = read(&mine, ".codex/auth.json");
+
+    gone(&far, ".claude/.credentials.json");
+    gone(&far, ".codex/auth.json");
+    let synced = sync(&job, &far);
+    assert_eq!((synced.pushed, synced.removed_here), (2, 0), "{synced:?}");
+    assert_eq!(read(&far, ".claude/.credentials.json"), Some(claude.clone()), "signed back in there");
+    assert_eq!(read(&far, ".codex/auth.json"), codex);
+
+    keychain.0.lock().unwrap().clear();
+    gone(&mine, ".codex/auth.json");
+    let synced = sync(&job, &far);
+    assert_eq!((synced.pulled, synced.removed_there), (2, 0), "{synced:?}");
+    assert_eq!(keychain.get(CLAUDE_KEYCHAIN).unwrap(), Some(claude), "signed back in here");
+    assert_eq!(read(&mine, ".codex/auth.json"), codex);
+    assert_eq!(sync(&job, &far), Synced::default());
+
+    keychain.0.lock().unwrap().clear();
+    for path in [".claude/.credentials.json", ".codex/auth.json"] {
+        gone(&far, path);
+    }
+    gone(&mine, ".codex/auth.json");
+    assert_eq!(sync(&job, &far), Synced::default(), "signed out on both sides is nothing");
+    assert_eq!(sync(&job, &far), Synced::default());
+    assert!(!job.trash.exists() && !job.conflicts.exists());
+}
+
+/// No code path writes a sign-in to the trash or to a conflict copy: the
+/// store refuses to trash or remove one, here or asked by the hub, and the
+/// syncs that remove most and keep losers aside leave none there.
+#[test]
+fn no_sign_in_is_ever_put_in_the_trash_or_kept_as_a_conflict() {
+    let world = World::new("sign-in-kept-nowhere");
+    let keychain = Arc::new(Fake::default());
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    let keyed = world.home("keyed").with_keychain(keychain.clone());
+    keychain.set(CLAUDE_KEYCHAIN, &format!(r#"{{"accessToken": "{SECRET}"}}"#)).unwrap();
+    seed(&mine);
+    put(&keyed, ".codex/auth.json", &format!(r#"{{"tokens": "{SECRET}"}}"#));
+    let by_hand = world.root.join("trash-by-hand");
+    for home in [&mine, &keyed] {
+        for path in [".claude/.credentials.json", ".codex/auth.json"] {
+            assert!(home.trash(path, &by_hand).is_err(), "{path}");
+            assert!(home.remove(path).is_err(), "{path}");
+        }
+    }
+    assert!(keychain.get(CLAUDE_KEYCHAIN).unwrap().is_some() && read(&mine, ".claude/.credentials.json").is_some());
+    assert!(!by_hand.exists());
+
+    let job = Job {
+        allow_removals: true,
+        ..world.job(&mine, "far")
+    };
+    sync(&job, &far);
+    for path in [".claude/.credentials.json", ".codex/auth.json"] {
+        let removed = Machine::new(&far).call(Request::Remove { root: tree::Root::Setup, path: path.into() });
+        assert!(removed.is_err(), "the Machine refuses too: {path}");
+    }
+
+    gone(&far, ".claude");
+    gone(&far, ".codex");
+    let synced = sync(&job, &far);
+    assert!(synced.trashed.is_some(), "the rest of this side went to the trash: {synced:?}");
+    gone(&mine, ".claude");
+    gone(&mine, ".codex");
+    sync(&job, &far);
+    for path in [".claude/.credentials.json", ".codex/auth.json"] {
+        assert!(read(&mine, path).is_some_and(|text| text.contains("NEVER-SHOWN")), "{path} came back here");
+    }
+
+    put(&mine, ".claude/.credentials.json", &format!(r#"{{"accessToken": "{SECRET}-here"}}"#));
+    aged(&mine, ".claude/.credentials.json", 60);
+    put(&far, ".claude/.credentials.json", &format!(r#"{{"accessToken": "{SECRET}-there"}}"#));
+    let synced = sync(&job, &far);
+    assert_eq!(synced.conflicts, [], "{synced:?}");
+    assert_eq!(read(&mine, ".claude/.credentials.json"), read(&far, ".claude/.credentials.json"));
+    assert_eq!(secrets(&job.trash), Vec::<PathBuf>::new());
+    assert_eq!(secrets(&job.conflicts), Vec::<PathBuf>::new());
 }
 
 #[test]

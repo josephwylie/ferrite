@@ -20,6 +20,10 @@ use crate::chunked::{self, CHUNK_SIZE};
 use crate::store::Provider;
 use crate::tree::{self, Entry, Manifest};
 
+/// Why a side holds a sign-in that does not read whole: its agent is
+/// writing it, and the next sync carries it, unsaid.
+pub(super) const MID_WRITE: &str = "the sign-in is being written; it syncs once it reads whole";
+
 /// One side's home directory, and where its agents keep what the table
 /// names.
 #[derive(Clone)]
@@ -40,39 +44,38 @@ pub struct Home {
 pub trait Keychain: Send + Sync {
     fn get(&self, service: &str) -> io::Result<Option<String>>;
     fn set(&self, service: &str, secret: &str) -> io::Result<()>;
-    /// Whether there was one to remove.
-    fn delete(&self, service: &str) -> io::Result<bool>;
 }
 
 impl Home {
     /// This process's: the home directory Claude Code and Codex read, with
     /// `.claude` and `.codex` where `CLAUDE_CONFIG_DIR` and `CODEX_HOME`
     /// put them. A Ferrite on a Store of its own (`FERRITE_STORE`, a test
-    /// or an isolated run) in the account's real home is refused, so it
-    /// never syncs the operator's setup. macOS's Keychain is the
-    /// account's, not the home directory's, so Claude's sign-in is the
-    /// Keychain's only when this is the account's own home.
+    /// or an isolated run) is refused unless every folder it would sync is
+    /// in a home of its own, not the account's real one, so it never syncs
+    /// the operator's setup. macOS's Keychain is the account's, not the
+    /// home directory's, so Claude's sign-in is the Keychain's only when
+    /// this is the account's own home.
     pub fn from_env() -> io::Result<Self> {
         let var = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
         let root = home_dir(var, cfg!(windows))
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home directory: HOME is not set"))?;
         let account = account_home();
-        if var("FERRITE_STORE").is_some() && account.as_deref().is_some_and(|account| same_dir(account, &root)) {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "Off: this Ferrite runs on a Store of its own in the account's real home",
-            ));
-        }
         let under = |dir: OsString| match Path::new(&dir).strip_prefix("~") {
             Ok(rest) => root.join(rest),
             Err(_) => PathBuf::from(dir),
         };
         let codex = var("CODEX_HOME").map(under);
         let claude = var("CLAUDE_CONFIG_DIR").map(under);
-        let keychain = cfg!(target_os = "macos") && account.is_some_and(|account| account == root);
+        let keychain = cfg!(target_os = "macos") && account.as_ref().is_some_and(|account| *account == root);
         let mut home = Self::at(root, codex);
         if let Some(claude) = claude {
             home = home.with_claude(claude);
+        }
+        if var("FERRITE_STORE").is_some() && !home.of_its_own(account.as_deref()) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Off: this Ferrite runs on a Store of its own, and its setup is not in a home of its own",
+            ));
         }
         Ok(if keychain {
             let service = claude_service(var("CLAUDE_CONFIG_DIR").as_deref());
@@ -117,6 +120,14 @@ impl Home {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Whether every folder this side syncs lies in its home, and that
+    /// home is not `account`, the account's real one.
+    fn of_its_own(&self, account: Option<&Path>) -> bool {
+        let real = account.is_none_or(|account| same_dir(account, &self.root));
+        let inside = |at: &PathBuf| tree::within(at, &self.root).unwrap_or(false);
+        !real && [&self.claude, &self.claude_json, &self.codex].into_iter().all(inside)
     }
 
     /// The folders a change to this side's setup is seen in, each with
@@ -298,10 +309,7 @@ impl Home {
                     Secret::Keychain(keychain, service) => keychain.get(service)?.map(|secret| (secret.into_bytes(), None)),
                 };
                 if read.as_ref().is_some_and(|(bytes, _)| serde_json::from_slice::<serde::de::IgnoredAny>(bytes).is_err()) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "the sign-in is being written; it syncs once it reads whole",
-                    ));
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, MID_WRITE));
                 }
                 read
             }
@@ -490,22 +498,22 @@ impl Home {
                 write_over(&at, &serde_json::to_vec_pretty(&document).map_err(not_json)?)?;
                 Ok(true)
             }
-            (Source::Credential(provider), None) => match self.secret(provider, path) {
-                Secret::File(at) => remove_file(&at),
-                Secret::Keychain(keychain, service) => keychain.delete(service),
-            },
+            (Source::Credential(_), None) => Err(kept_sign_in(path)),
             _ => Err(not_setup(path)),
         }
     }
 
     /// Move `path`, and all under it, to `into`, a trash folder of this
-    /// computer, at the same path: whether it was there. What is not a
-    /// file of its own (a key of a JSON file, a Keychain's sign-in) is
-    /// kept there as a file, owner-only.
+    /// computer, at the same path: whether it was there. A key of a JSON
+    /// file is kept there as a file, owner-only. A sign-in is refused: no
+    /// sync removes one, so none is ever in the trash.
     pub(crate) fn trash(&self, path: &str, into: &Path) -> io::Result<bool> {
         let (item, rest) = item(path)?;
+        if matches!(item.source, Source::Credential(_)) {
+            return Err(kept_sign_in(path));
+        }
         let kept = local(into, path);
-        if matches!(item.source, Source::JsonKey(_)) || self.in_keychain(item) {
+        if matches!(item.source, Source::JsonKey(_)) {
             let Some((carried, _)) = self.bytes(item)? else {
                 return Ok(false);
             };
@@ -775,6 +783,10 @@ fn not_json(error: serde_json::Error) -> io::Error {
     invalid(format!("it is not JSON ({error})"))
 }
 
+fn kept_sign_in(path: &str) -> io::Error {
+    invalid(format!("{path} is a sign-in, and Setup sync never removes one"))
+}
+
 fn not_setup(path: &str) -> io::Error {
     invalid(format!("{path} is not part of the setup Ferrite syncs"))
 }
@@ -895,14 +907,6 @@ impl Keychain for SystemKeychain {
     fn set(&self, service: &str, secret: &str) -> io::Result<()> {
         Self::entry(service)?.set_password(secret).map_err(refused)
     }
-
-    fn delete(&self, service: &str) -> io::Result<bool> {
-        match Self::entry(service)?.delete_credential() {
-            Ok(()) => Ok(true),
-            Err(keyring::Error::NoEntry) => Ok(false),
-            Err(error) => Err(refused(error)),
-        }
-    }
 }
 
 /// What the Keychain said, in words of Ferrite's own: none of its errors
@@ -946,13 +950,23 @@ mod tests {
             std::env::set_var("HOME", home);
             std::env::set_var("USERPROFILE", home);
         };
+        let refused = || {
+            let refused = Home::from_env().err().expect("refused");
+            assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
+            assert!(refused.to_string().starts_with("Off: "), "{refused}");
+        };
         std::env::set_var("FERRITE_STORE", own.join("store"));
         at(&real);
-        let refused = Home::from_env().err().expect("refused");
-        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
-        assert!(refused.to_string().contains("real home"), "{refused}");
+        refused();
         at(&own);
         assert_eq!(Home::from_env().unwrap().root(), own);
+        for (name, folder) in [("CODEX_HOME", ".codex"), ("CLAUDE_CONFIG_DIR", ".claude")] {
+            std::env::set_var(name, real.join(folder));
+            refused();
+            std::env::set_var(name, format!("~/{folder}-elsewhere"));
+            assert!(Home::from_env().is_ok(), "{name} in its own home");
+            std::env::remove_var(name);
+        }
         std::env::remove_var("FERRITE_STORE");
         at(&real);
         assert!(Home::from_env().is_ok(), "the operator's own Ferrite syncs the operator's home");
