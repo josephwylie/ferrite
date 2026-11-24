@@ -436,6 +436,21 @@ pub struct Stopped {
     pub sent: Sent,
 }
 
+impl Stopped {
+    /// Whether nothing reached the far side: every reply was heard, and
+    /// none took a step.
+    pub fn took_nothing(&self) -> bool {
+        let Sent {
+            removed,
+            made,
+            written,
+            linked,
+            ..
+        } = self.sent;
+        !line_down(&self.error) && removed + made + written + linked == 0
+    }
+}
+
 impl From<io::Error> for Stopped {
     fn from(error: io::Error) -> Self {
         Self {

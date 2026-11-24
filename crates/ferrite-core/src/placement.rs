@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
+use base64::Engine as _;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -41,16 +42,14 @@ pub fn place(dir: &Path, placement: Placement) -> io::Result<()> {
 
 /// A copy begun on a Machine and not finished: cancelled, cut off, or
 /// stopped with the app. Its destination holds part of the Project, which
-/// only a resume of this copy may change.
+/// only a resume of this copy adds to. What it sent is not listed: a file
+/// the copy put there holds just what the copy sends, so a resume reads
+/// that off the destination (`left_there`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Unfinished {
     pub local_root: PathBuf,
     /// Where it goes, as the copy gave it to the Machine's Server.
     pub remote_root: PathBuf,
-    /// Every path the copy has sent there or may have: all a resume may
-    /// remove, when the Project no longer holds it.
-    #[serde(default)]
-    pub paths: BTreeSet<String>,
 }
 
 const UNFINISHED: &str = "unfinished.json";
@@ -65,10 +64,13 @@ pub fn unfinished(dir: &Path, local_root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn unfinished_at(dir: &Path, local_root: &Path, remote_root: &Path) -> Option<Unfinished> {
+/// The Project of this computer whose copy to `remote_root` is unfinished,
+/// on the Machine whose files are in `dir`, other than `local_root`'s.
+fn unfinished_of_another(dir: &Path, local_root: &Path, remote_root: &Path) -> Option<PathBuf> {
     read_list::<Unfinished>(&dir.join(UNFINISHED))
         .into_iter()
-        .find(|copy| copy.local_root == local_root && copy.remote_root == remote_root)
+        .find(|copy| copy.remote_root == remote_root && copy.local_root != local_root)
+        .map(|copy| copy.local_root)
 }
 
 /// Keep `copy`, in place of any to the same destination of the same
@@ -102,8 +104,14 @@ pub fn follow(from: &Path, to: &Path) -> io::Result<()> {
     for copy in read_list::<Unfinished>(&from.join(UNFINISHED)) {
         begun(to, copy)?;
     }
+    forget(from)
+}
+
+/// What this computer keeps of a Machine whose files are in `dir` goes
+/// with it: it was removed.
+pub fn forget(dir: &Path) -> io::Result<()> {
     for name in [PLACEMENTS, UNFINISHED] {
-        match fs::remove_file(from.join(name)) {
+        match fs::remove_file(dir.join(name)) {
             Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
             _ => {}
         }
@@ -198,11 +206,26 @@ pub fn refuse_destination(dest: &str) -> Option<&'static str> {
 
 /// Why the Project folder at `root` cannot be copied as it is: a linked
 /// worktree's `.git` is a file naming its repository by a path of this
-/// computer, which the copy would carry to where nothing is.
-pub fn refuse_source(root: &Path) -> Option<&'static str> {
-    root.join(".git")
-        .is_file()
-        .then_some("This folder is a git worktree. Copy its main checkout instead.")
+/// computer, which the copy would carry to where nothing is. It names the
+/// main checkout where that file says which.
+pub fn refuse_source(root: &Path) -> Option<String> {
+    let pointer = fs::read_to_string(root.join(".git")).ok()?;
+    Some(match main_checkout(root, &pointer) {
+        Some(main) => format!("This folder is a git worktree. Copy its main checkout, {}, instead.", main.display()),
+        None => "This folder is a git worktree. Copy its main checkout instead.".into(),
+    })
+}
+
+/// The main checkout of the linked worktree at `root`, whose `.git` file
+/// says `pointer`: the folder that holds the repository's git directory.
+fn main_checkout(root: &Path, pointer: &str) -> Option<PathBuf> {
+    let admin = root.join(pointer.trim().strip_prefix("gitdir:")?.trim());
+    let common = admin.join(fs::read_to_string(admin.join("commondir")).ok()?.trim());
+    let common = dunce::canonicalize(common).ok()?;
+    if common.file_name()? != ".git" {
+        return None;
+    }
+    common.parent().map(Path::to_path_buf)
 }
 
 /// An entry git ignores at the top of a Project folder's tree, which a
@@ -622,7 +645,12 @@ pub enum Copied {
     /// The destination holds what this copy did not put there: nothing was
     /// sent.
     Occupied,
-    Sent(Sent),
+    /// The destination holds the unfinished copy of another Project of this
+    /// computer, the one at `of`: nothing was sent.
+    AnotherCopy { of: PathBuf },
+    /// What was sent, and the files there that are not as this copy sends
+    /// them, left as they are: someone else's.
+    Sent { sent: Sent, changed: Vec<String> },
 }
 
 /// How many entries a copy lists between two counts it reports.
@@ -631,12 +659,14 @@ const COUNTED: usize = 250;
 /// Make `copy.dest` hold the Project folder `copy.source`, as git would
 /// check it out there ([`Checkout`]). A destination that holds anything
 /// takes a first copy of nothing. Before the first byte, the copy is kept
-/// as unfinished, with every path it may send; a later copy there resumes
-/// it, sending only what differs and removing only what this copy sent
-/// that the Project no longer holds: what anyone else put there stays.
-/// What could not be read as it was listed is sent once more, and what
-/// still could not is in the answer's problems. Once done the copy is no
-/// longer kept as unfinished.
+/// as unfinished; a later copy there resumes it, unless the destination
+/// holds another repository by then. A resume sends only what is not
+/// there: a file there as the copy sends it is done, and one that is not
+/// is someone else's, left and listed as changed. Neither removes
+/// anything. What could not be read as it was listed is sent once more,
+/// and what still could not is in the answer's problems. Once done, or
+/// stopped before anything landed, the copy is no longer kept as
+/// unfinished.
 pub fn copy(
     copy: &CopyJob,
     exchange: &mut dyn Exchange,
@@ -647,31 +677,39 @@ pub fn copy(
         return Err(io::Error::new(io::ErrorKind::InvalidInput, refusal).into());
     }
     let checkout = Checkout::of(copy.source);
-    let Some(mut sent) = pass(copy, &checkout, exchange, progress, cancel)? else {
-        return Ok(Copied::Occupied);
+    let resumed = unfinished(copy.kept, copy.source).contains(&copy.dest.to_path_buf());
+    let first = pass(copy, &checkout, exchange, progress, cancel).map_err(|stopped| {
+        if !resumed && stopped.took_nothing() {
+            let _ = finished(copy.kept, copy.source, copy.dest);
+        }
+        stopped
+    })?;
+    let Copied::Sent { mut sent, mut changed } = first else {
+        return Ok(first);
     };
     if sent.problems.iter().any(|problem| problem.side == Side::Here) {
         let again = pass(copy, &checkout, exchange, progress, cancel).map_err(|stopped| Stopped {
             sent: added(sent.clone(), stopped.sent),
             error: stopped.error,
         })?;
-        sent = added(sent, again.unwrap_or_default());
+        if let Copied::Sent { sent: then, changed: now } = again {
+            (sent, changed) = (added(sent, then), now);
+        }
     }
     if let Err(error) = finished(copy.kept, copy.source, copy.dest) {
         return Err(Stopped { error, sent });
     }
-    Ok(Copied::Sent(sent))
+    Ok(Copied::Sent { sent, changed })
 }
 
-/// One pass of a copy: `None` when it is a first copy into a destination
-/// that holds anything.
+/// One pass of a copy.
 fn pass(
     copy: &CopyJob,
     checkout: &Checkout,
     exchange: &mut dyn Exchange,
     progress: &mut dyn FnMut(Copying),
     cancel: &Cancellation,
-) -> Result<Option<Sent>, Stopped> {
+) -> Result<Copied, Stopped> {
     let root = Root::Path {
         path: copy.dest.to_path_buf(),
     };
@@ -687,24 +725,96 @@ fn pass(
     })?;
     checkout.list(&mut here);
     let there = tree::pages(exchange, &root, &[], asked)?;
-    let ours = match unfinished_at(copy.kept, copy.source, copy.dest) {
-        Some(unfinished) => unfinished.paths,
-        None if there.entries.is_empty() && there.problems.is_empty() => BTreeSet::new(),
-        None => return Ok(None),
-    };
-    let theirs = there.entries.keys().filter(|path| !ours.contains(*path));
-    let held: Vec<String> = copy.skip.iter().chain(theirs).cloned().collect();
-    let paths = ours.into_iter().chain(here.entries.keys().cloned()).collect();
-    let unfinished = Unfinished {
-        local_root: copy.source.to_path_buf(),
-        remote_root: copy.dest.to_path_buf(),
-        paths,
-    };
-    begun(copy.kept, unfinished)?;
+    let empty = there.entries.is_empty() && there.problems.is_empty();
+    if !empty {
+        let resumes = unfinished(copy.kept, copy.source).contains(&copy.dest.to_path_buf());
+        if !resumes || !same_repository(copy.source, &here, &there, &root, exchange) {
+            if resumes {
+                finished(copy.kept, copy.source, copy.dest)?;
+            }
+            return Ok(match unfinished_of_another(copy.kept, copy.source, copy.dest) {
+                Some(of) => Copied::AnotherCopy { of },
+                None => Copied::Occupied,
+            });
+        }
+    }
+    begun(
+        copy.kept,
+        Unfinished {
+            local_root: copy.source.to_path_buf(),
+            remote_root: copy.dest.to_path_buf(),
+        },
+    )?;
+    let (left, changed) = left_there(&here, &there);
+    let held: Vec<String> = copy.skip.iter().cloned().chain(left).collect();
     let steps = tree::plan(&here, &there, &held);
     let mut sending = |sent| progress(Copying::Sending(sent));
     let sent = tree::send(checkout, &steps, &root, exchange, &mut sending, cancel)?;
-    Ok(Some(sent.with_problems(here, there)))
+    Ok(Copied::Sent {
+        sent: sent.with_problems(here, there),
+        changed,
+    })
+}
+
+/// What a resume leaves as the destination has it: everything there but a
+/// folder the Project has too, whose entries are each looked at. Of those,
+/// the files the Project holds and sends otherwise are someone else's,
+/// changed there.
+fn left_there(here: &Manifest, there: &Manifest) -> (Vec<String>, Vec<String>) {
+    let mut left = Vec::new();
+    let mut changed = Vec::new();
+    for (path, theirs) in &there.entries {
+        let same = match (here.entries.get(path), theirs) {
+            (Some(Entry::Dir), Entry::Dir) => continue,
+            (None, _) => true,
+            (Some(Entry::File { size, sha256, .. }), Entry::File { size: s, sha256: h, .. }) => size == s && sha256 == h,
+            (Some(ours), theirs) => ours == theirs,
+        };
+        if !same {
+            changed.push(path.clone());
+        }
+        left.push(path.clone());
+    }
+    (left, changed)
+}
+
+/// Whether the git repository the destination holds, as far as a copy
+/// got, is the one at `source`: its `.git` a folder as here, and its
+/// config as this copy sends it or naming the same repository. One with
+/// no config yet has none to tell.
+fn same_repository(
+    source: &Path,
+    here: &Manifest,
+    there: &Manifest,
+    root: &Root,
+    exchange: &mut dyn Exchange,
+) -> bool {
+    match (here.entries.get(".git"), there.entries.get(".git")) {
+        (_, None) => return true,
+        (Some(Entry::Dir), Some(Entry::Dir)) => {}
+        _ => return false,
+    }
+    let (ours, theirs) = (here.entries.get(GIT_CONFIG), there.entries.get(GIT_CONFIG));
+    match (ours, theirs) {
+        (_, None) => return true,
+        (Some(Entry::File { sha256: ours, .. }), Some(Entry::File { sha256: theirs, .. })) if ours == theirs => {
+            return true
+        }
+        _ => {}
+    }
+    let read = exchange.call(tree::Request::Read {
+        root: root.clone(),
+        path: GIT_CONFIG.into(),
+        offset: 0,
+    });
+    let Ok(tree::Reply::Bytes { data, .. }) = read else {
+        return false;
+    };
+    let Ok(config) = base64::engine::general_purpose::STANDARD.decode(data) else {
+        return false;
+    };
+    let theirs = crate::workspace::repository_key_of(&String::from_utf8_lossy(&config));
+    matches!((crate::workspace::repository_key(source), theirs), (Some(ours), Some(theirs)) if ours == theirs)
 }
 
 /// `first` and then `then`, whose problems are the ones left.

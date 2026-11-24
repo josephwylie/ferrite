@@ -127,13 +127,12 @@ fn what_is_kept_of_a_machine_follows_it_to_its_new_target() {
     let copy = Unfinished {
         local_root: "C:/src/app".into(),
         remote_root: "/home/me/projects/app".into(),
-        paths: BTreeSet::from(["main.rs".to_string()]),
     };
     begun(&old, copy.clone()).unwrap();
 
     follow(&old, &new).unwrap();
     assert_eq!(placements(&new), [placed]);
-    assert_eq!(unfinished_at(&new, &copy.local_root, &copy.remote_root), Some(copy));
+    assert_eq!(unfinished(&new, &copy.local_root), [copy.remote_root]);
     assert_eq!(placements(&old), []);
     assert_eq!(unfinished(&old, Path::new("C:/src/app")), Vec::<PathBuf>::new());
 }
@@ -229,7 +228,14 @@ fn a_linked_worktree_is_never_copied() {
     git(&root, &["worktree", "add", "-q", "-b", "beside", &outside.display().to_string()]);
 
     assert_eq!(refuse_source(&root), None);
-    assert!(refuse_source(&root.join(".worktrees/feature")).is_some(), "a worktree is refused");
+    assert_eq!(
+        refuse_source(&root.join(".worktrees/feature")),
+        Some(format!(
+            "This folder is a git worktree. Copy its main checkout, {}, instead.",
+            root.display()
+        )),
+        "a worktree is refused, naming its main checkout"
+    );
     assert_eq!(worktrees(&root), [".worktrees/feature"], "only those inside it");
     let (shown, left_out) = without_worktrees(ignored(&root), &worktrees(&root));
     assert_eq!(shown.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(), [".env"]);
@@ -440,6 +446,7 @@ struct Local {
     next: u64,
     begun: usize,
     cancel: Option<(Cancellation, usize)>,
+    refuse: bool,
 }
 
 impl Local {
@@ -450,12 +457,21 @@ impl Local {
             next: 0,
             begun: 0,
             cancel: None,
+            refuse: false,
         }
     }
 
     fn cancelling(cancel: &Cancellation, after: usize) -> Self {
         Self {
             cancel: Some((cancel.clone(), after)),
+            ..Self::new()
+        }
+    }
+
+    /// One that refuses every write, as a folder no one may write to does.
+    fn refusing() -> Self {
+        Self {
+            refuse: true,
             ..Self::new()
         }
     }
@@ -472,7 +488,12 @@ impl Exchange for Local {
             }
         }
         self.next += 1;
-        self.replies.push_back((self.next, self.session.execute(request)));
+        let reply = if self.refuse && !matches!(request, Request::Scan { .. }) {
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "Permission denied"))
+        } else {
+            self.session.execute(request)
+        };
+        self.replies.push_back((self.next, reply));
         Ok(Asked::numbered(self.next))
     }
 
@@ -491,26 +512,28 @@ fn holds(dir: &Path) -> BTreeSet<String> {
     tree::scan(dir, &[]).unwrap().entries.into_keys().collect()
 }
 
-/// A copy stopped part way is kept as unfinished, on this computer, from
-/// before its first byte. Picked up again, it sends only what differs and
-/// removes only what it sent that the Project no longer holds: a file
-/// someone added there since stays.
-#[test]
-fn an_unfinished_copy_is_kept_and_its_resume_keeps_what_others_put_there() {
-    let dir = scratch("resume");
+/// What a copy that ended sent there, and what it found changed there.
+fn sent(copied: Copied) -> (Sent, Vec<String>) {
+    match copied {
+        Copied::Sent { sent, changed } => (sent, changed),
+        copied => panic!("nothing was sent: {copied:?}"),
+    }
+}
+
+/// `dir/app`, `files` files, copied to `dir/there/app` and stopped part
+/// way: what landed there.
+fn half_copied(dir: &Path, files: usize) -> BTreeSet<String> {
     let (source, dest, kept) = (dir.join("app"), dir.join("there/app"), dir.join("machine"));
     fs::create_dir_all(&source).unwrap();
-    for at in 0..8 {
+    for at in 0..files {
         fs::write(source.join(format!("file-{at}.txt")), format!("{at}")).unwrap();
     }
-    fs::write(source.join("gone-later.txt"), "sent, then removed here").unwrap();
     let job = CopyJob {
         source: &source,
         dest: &dest,
         skip: &[],
         kept: &kept,
     };
-
     let cancel = Cancellation::default();
     let mut heard = Vec::new();
     let stopped = copy(&job, &mut Local::cancelling(&cancel, 3), &mut |copying| heard.push(copying), &cancel)
@@ -519,21 +542,154 @@ fn an_unfinished_copy_is_kept_and_its_resume_keeps_what_others_put_there() {
     assert!(heard.iter().any(|copying| matches!(copying, Copying::Sending(_))));
     assert_eq!(unfinished(&kept, &source), [dest.clone()], "kept as unfinished");
     let landed = holds(&dest);
-    assert!(!landed.is_empty() && landed.len() < 9, "part of it landed: {landed:?}");
+    assert!(!landed.is_empty() && landed.len() < files, "part of it landed: {landed:?}");
+    landed
+}
 
-    fs::write(dest.join("added-there.txt"), "theirs").unwrap();
-    fs::remove_file(source.join("gone-later.txt")).unwrap();
-    fs::write(dest.join("gone-later.txt"), "sent by the copy").unwrap();
-    let resumed = copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap();
-    let Copied::Sent(sent) = resumed else {
-        panic!("a resume is never refused as occupied");
+/// A copy stopped part way is kept as unfinished, on this computer, from
+/// before its first byte, with no list of what it sent. Picked up again, it
+/// sends what is not there: a file there as the copy sends it is done, and
+/// one that is not is someone else's, left as it is and listed as changed.
+/// It removes nothing, a file the Project no longer holds included.
+#[test]
+fn a_resume_sends_only_what_is_not_there_and_leaves_what_someone_put_there() {
+    let dir = scratch("resume");
+    let landed = half_copied(&dir, 8);
+    let (source, dest, kept) = (dir.join("app"), dir.join("there/app"), dir.join("machine"));
+    let unreached = (0..8)
+        .map(|at| format!("file-{at}.txt"))
+        .find(|path| !landed.contains(path))
+        .expect("a file the copy had not reached");
+    fs::write(dest.join(&unreached), "theirs").unwrap();
+    fs::write(dest.join("added-there.txt"), "theirs too").unwrap();
+    fs::remove_file(source.join("file-0.txt")).unwrap();
+
+    let job = CopyJob {
+        source: &source,
+        dest: &dest,
+        skip: &[],
+        kept: &kept,
     };
-    assert_eq!(sent.removed, 1, "what the copy sent and the Project no longer holds");
+    let (sent, changed) = sent(copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap());
+    assert_eq!(fs::read_to_string(dest.join(&unreached)).unwrap(), "theirs", "their file stays");
+    assert_eq!(changed, [unreached.clone()], "and is listed as changed there");
+    assert_eq!(fs::read_to_string(dest.join("added-there.txt")).unwrap(), "theirs too");
+    assert_eq!(sent.removed, 0, "a resume removes nothing");
     let mut expected = holds(&source);
-    expected.insert("added-there.txt".into());
+    expected.extend(["added-there.txt".to_string(), "file-0.txt".to_string()]);
     assert_eq!(holds(&dest), expected);
-    assert_eq!(fs::read_to_string(dest.join("added-there.txt")).unwrap(), "theirs");
+    for at in 1..8 {
+        let path = format!("file-{at}.txt");
+        if path != unreached {
+            assert_eq!(fs::read_to_string(dest.join(&path)).unwrap(), at.to_string(), "{path}");
+        }
+    }
     assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "finished");
+}
+
+/// A copy that stops before anything lands is not kept as unfinished:
+/// there is nothing there to resume.
+#[test]
+fn a_copy_that_lands_nothing_is_not_kept_as_unfinished() {
+    let dir = scratch("refused");
+    let (source, dest, kept) = (dir.join("app"), dir.join("there/app"), dir.join("machine"));
+    fs::create_dir_all(source.join("src")).unwrap();
+    fs::write(source.join("src/main.rs"), "fn main() {}").unwrap();
+    let job = CopyJob {
+        source: &source,
+        dest: &dest,
+        skip: &[],
+        kept: &kept,
+    };
+    let stopped = copy(&job, &mut Local::refusing(), &mut |_| {}, &Cancellation::default())
+        .expect_err("every write refused");
+    assert_eq!(stopped.error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new());
+}
+
+/// An unfinished copy whose destination holds another repository by now
+/// is not this copy's: the copy takes none there, and it is no longer
+/// kept. The same repository, its config changed here since, is resumed.
+#[test]
+fn a_resume_into_another_repository_takes_none() {
+    let dir = scratch("another-repository");
+    let (source, dest, kept) = (dir.join("app"), dir.join("there/app"), dir.join("machine"));
+    fs::create_dir_all(&source).unwrap();
+    checkout(&source, &[("main.rs", b"fn main() {}\n")], "");
+    git(&source, &["remote", "add", "origin", "https://github.com/acme/app.git"]);
+    let job = CopyJob {
+        source: &source,
+        dest: &dest,
+        skip: &[],
+        kept: &kept,
+    };
+    let cancel = Cancellation::default();
+    copy(&job, &mut Local::cancelling(&cancel, 12), &mut |_| {}, &cancel).expect_err("cancelled part way");
+    assert!(dest.join(".git/config").is_file(), "the copy got as far as the config");
+    git(&source, &["config", "branch.main.remote", "origin"]);
+    let resumed = copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap();
+    assert!(matches!(resumed, Copied::Sent { .. }), "the same repository: {resumed:?}");
+
+    fs::remove_dir_all(&dest).unwrap();
+    fs::create_dir_all(&dest).unwrap();
+    git(&dest, &["init", "-q"]);
+    git(&dest, &["remote", "add", "origin", "https://github.com/acme/other.git"]);
+    begun(
+        &kept,
+        Unfinished {
+            local_root: source.clone(),
+            remote_root: dest.clone(),
+        },
+    )
+    .unwrap();
+    let before = holds(&dest);
+    let copied = copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap();
+    assert!(matches!(copied, Copied::Occupied), "{copied:?}");
+    assert_eq!(holds(&dest), before, "nothing there changed");
+    assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "and it is not this copy's");
+}
+
+/// Aimed where another Project's copy is unfinished, a copy takes none,
+/// and says whose it is.
+#[test]
+fn a_destination_with_another_projects_unfinished_copy_is_that_ones() {
+    let dir = scratch("two-projects");
+    half_copied(&dir, 8);
+    let (first, dest, kept) = (dir.join("app"), dir.join("there/app"), dir.join("machine"));
+    let second = dir.join("other/app");
+    fs::create_dir_all(&second).unwrap();
+    fs::write(second.join("main.rs"), "fn main() {}").unwrap();
+    let before = holds(&dest);
+    let job = CopyJob {
+        source: &second,
+        dest: &dest,
+        skip: &[],
+        kept: &kept,
+    };
+    let copied = copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap();
+    assert!(matches!(&copied, Copied::AnotherCopy { of } if *of == first), "{copied:?}");
+    assert_eq!(holds(&dest), before);
+    assert_eq!(unfinished(&kept, &first), [dest.clone()], "the first Project's copy is still unfinished");
+}
+
+/// Removed, a Machine takes along what this computer kept of it.
+#[test]
+fn a_machine_removed_is_forgotten() {
+    let dir = scratch("forget");
+    let placed = Placement {
+        local_root: "C:/src/notes".into(),
+        remote_root: "/home/me/projects/notes".into(),
+    };
+    place(&dir, placed).unwrap();
+    let copy = Unfinished {
+        local_root: "C:/src/app".into(),
+        remote_root: "/home/me/projects/app".into(),
+    };
+    begun(&dir, copy.clone()).unwrap();
+    forget(&dir).unwrap();
+    assert_eq!(placements(&dir), []);
+    assert_eq!(unfinished(&dir, &copy.local_root), Vec::<PathBuf>::new());
+    forget(&dir).unwrap();
 }
 
 /// A first copy never changes what is there: a destination that holds

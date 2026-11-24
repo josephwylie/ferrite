@@ -23,9 +23,12 @@ use crate::protocol::Repositories;
 /// The repository the checkout at `root` is, by its primary remote: `None`
 /// outside git, or with no remote that names a host.
 pub fn repository_key(root: &Path) -> Option<String> {
-    let config = fs::read_to_string(common_dir(root)?.join("config")).ok()?;
-    let remotes = remotes(&config);
-    primary(&remotes).and_then(normalize)
+    repository_key_of(&fs::read_to_string(common_dir(root)?.join("config")).ok()?)
+}
+
+/// `repository_key` of a repository whose git config is `config`.
+pub fn repository_key_of(config: &str) -> Option<String> {
+    primary(&remotes(config)).and_then(normalize)
 }
 
 /// Each Project's id and root, to read their repositories off the thread

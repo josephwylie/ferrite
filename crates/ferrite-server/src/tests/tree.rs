@@ -717,10 +717,11 @@ fn a_project_copy_reads_as_unchanged_to_git_there() {
         &Cancellation::default(),
     )
     .unwrap();
-    let ferrite_core::placement::Copied::Sent(copied) = copied else {
+    let ferrite_core::placement::Copied::Sent { sent: copied, changed } = copied else {
         panic!("an empty destination takes the copy");
     };
     assert_eq!(copied.problems, []);
+    assert_eq!(changed, Vec::<String>::new());
     assert!(!dest.join("target").exists());
     let config = std::fs::read_to_string(dest.join(".git/config")).unwrap();
     if cfg!(windows) {

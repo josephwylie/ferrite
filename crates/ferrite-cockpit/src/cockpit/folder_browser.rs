@@ -333,6 +333,34 @@ impl FolderBrowser {
         }
     }
 
+    /// Ask the Machine where its home is, for `tilde`.
+    pub(super) fn ask_home(&mut self, cx: &mut Context<Self>) {
+        self.list(HOME.into(), cx);
+    }
+
+    /// `path`, as the Machine spells it, under `~/` where it is in the
+    /// Machine's home, as the browser shows paths; as it is where the home
+    /// cannot be read. None until the home is asked (`ask_home`) and read.
+    pub(super) fn tilde(&self, path: &Path) -> Option<String> {
+        let home = match self.listed.get(HOME)? {
+            Ok(home) => &home.path,
+            Err(_) => return Some(path.display().to_string()),
+        };
+        Some(match path.strip_prefix(home) {
+            Ok(rest) => {
+                let parts: Vec<_> = rest.iter().map(|part| part.to_string_lossy()).collect();
+                format!("~/{}", parts.join("/"))
+            }
+            Err(_) => path.display().to_string(),
+        })
+    }
+
+    /// Read the folder shown again: a copy may have made a folder in it.
+    pub(super) fn relist(&mut self, cx: &mut Context<Self>) {
+        self.listed.remove(&self.shown);
+        self.list(self.shown.clone(), cx);
+    }
+
     /// `path` as the Machine's Server spelled it out, its `~` the Machine's
     /// home: by the listing of the nearest folder on its way that was read.
     /// As typed otherwise: the Server spells `~` out when it registers.
