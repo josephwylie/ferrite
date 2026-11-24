@@ -199,7 +199,7 @@ impl Walk<'_> {
             return Ok(None);
         }
         if chunked::temporary(&entry.file_name()) {
-            if self.listing.sweep && chunked::stale(&meta) {
+            if self.listing.sweep && chunked::stale(&entry.file_name(), &meta) {
                 let _ = fs::remove_file(entry.path());
             }
             return Ok(None);

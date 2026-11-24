@@ -155,9 +155,10 @@ Windows window.
 - **A write's temporary file** is `.ferrite-<process>-<micros>-<nonce>.part`,
   each a number, so a user's `.ferrite-notes.part` is an ordinary file and
   is sent. A scan leaves temporary files out, so a write under way there is
-  neither copied nor removed. One nothing wrote to for 10 minutes belongs
-  to no write, in this process or one that stopped mid-write, since none
-  takes a chunk after that: the Server's scan of a tree removes it.
+  neither copied nor removed. One whose process is gone, or that nothing
+  wrote to for 10 minutes, belongs to no write, since none takes a chunk
+  after that: the Server's scan of a tree removes it, so the Resume after
+  a lost connection leaves none of the old Server's behind.
 - **Only a Server answers**, as `list_dir`. Each connection's tree ops run
   in the order asked on a thread of their own (a `Lane`), at most 16
   connections at once: a read off the pump takes a thread per request, and
