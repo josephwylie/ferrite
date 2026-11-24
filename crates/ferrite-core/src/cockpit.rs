@@ -810,7 +810,6 @@ impl Cockpit {
         executed
     }
 
-
     /// An act on one Thread, where its machine's Engine runs.
     fn act_on(&mut self, key: ThreadKey, op: impl FnOnce(ThreadId) -> Op) -> Executed {
         self.act_at(key.machine(), op(key.thread()))
@@ -832,7 +831,6 @@ impl Cockpit {
             }
         }
     }
-
 
     /// One act on a Thread whose reply the window reads (ADR 0041): a
     /// Server is asked and answers through the `Ask`, so the window never
@@ -1696,12 +1694,6 @@ impl Cockpit {
         self.ask_on(thread, |thread| Op::Send { thread, text }, |sent| Ok(admission(sent)))
     }
 
-    /// `send`, waited for: only a replayed prompt's, whose callers still
-    /// read where it went at once (ADR 0041's Turn and Session family).
-    pub fn send_and_wait(&mut self, thread: ThreadKey, text: String) -> Admission {
-        admission(self.act_on(thread, |thread| Op::Send { thread, text }))
-    }
-
     /// Go back to before the prompt `prompt` names (`Engine::rewind`):
     /// an `Err` answer says why not, in words.
     pub fn rewind(&mut self, thread: ThreadKey, prompt: &str, files: bool, edit: bool) -> Ask<()> {
@@ -2526,12 +2518,6 @@ impl Cockpit {
         self.ask_on(thread, |thread| Op::Queue { thread, text }, |queued| Ok(queued.is_ok()))
     }
 
-    /// `queue`, waited for: a replayed prompt's, as `send_and_wait` is.
-    pub fn queue_and_wait(&mut self, thread: ThreadKey, text: String) -> bool {
-        self.act_on(thread, |thread| Op::Queue { thread, text })
-            .is_ok()
-    }
-
     pub fn unqueue(&mut self, thread: ThreadKey) -> Option<String> {
         match self.act_on(thread, |thread| Op::Unqueue { thread }) {
             Ok(Some(Done::Text { text })) => Some(text),
@@ -3224,7 +3210,6 @@ fn registered(executed: Result<Option<Done>, WireError>) -> io::Result<ProjectId
         _ => Err(io::Error::other("the server answered with no Project")),
     }
 }
-
 
 /// What an API caller asked the windows to do (ADR 0027).
 #[derive(Debug, Clone, PartialEq, Eq)]

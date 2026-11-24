@@ -42,6 +42,8 @@ pub(crate) struct Queued {
 /// Where a pending action stands.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Stage {
+    /// Sent to the Thread, whose Server has not yet said where it went.
+    Handing,
     /// Behind a running turn, or held for a Session still starting.
     Queued(Queued),
     /// The agent has the prompt; its turn has not ended.
@@ -301,25 +303,34 @@ impl CockpitView {
                 {
                     return;
                 }
-                let handed = match (action.prompt(&pr), self.pane_for(thread)) {
-                    (Some(prompt), Some(index)) => {
-                        match self.send_again(index, thread, prompt.clone(), cx) {
-                            Ok(Handoff::Sent) => Ok((prompt, Stage::Running)),
-                            Ok(Handoff::Queued) => {
-                                let open = self.cockpit.read(cx).thread(thread);
-                                let queued = Queued {
-                                    item: queued_as(open.as_ref(), &prompt).unwrap_or_default(),
-                                    prompts_before: prompts_of(open.as_ref(), &prompt),
-                                };
-                                Ok((prompt, Stage::Queued(queued)))
-                            }
-                            Err(error) => Err(error),
-                        }
-                    }
-                    _ => Err("Its Thread is not open.".into()),
+                let (Some(prompt), Some(index)) = (action.prompt(&pr), self.pane_for(thread)) else {
+                    let closed = Err("Its Thread is not open.".into());
+                    self.pull_request
+                        .update(cx, |reader, cx| reader.handed(target, action, closed, cx));
+                    return;
                 };
                 self.pull_request
-                    .update(cx, |reader, cx| reader.handed(target, action, handed, cx));
+                    .update(cx, |reader, cx| reader.handing(target, action, prompt.clone(), cx));
+                self.send_again_then(
+                    index,
+                    thread,
+                    prompt.clone(),
+                    move |view, handoff, cx| {
+                        let handed = handoff.map(|handoff| match handoff {
+                            Handoff::Sent => Stage::Running,
+                            Handoff::Queued => {
+                                let open = view.cockpit.read(cx).thread(thread);
+                                Stage::Queued(Queued {
+                                    item: queued_as(open.as_ref(), &prompt).unwrap_or_default(),
+                                    prompts_before: prompts_of(open.as_ref(), &prompt),
+                                })
+                            }
+                        });
+                        view.pull_request
+                            .update(cx, |reader, cx| reader.handed(target, action, handed, cx));
+                    },
+                    cx,
+                );
             }
         }
         cx.notify();
@@ -421,19 +432,24 @@ impl PullRequestView {
         true
     }
 
-    /// What became of handing `action` over: the prompt the agent was
-    /// given and where it stands, or why it could not be.
+    /// `action` is on its way to the Thread's agent as `prompt`.
+    fn handing(&mut self, target: PrTarget, action: PrAction, prompt: String, cx: &mut Context<Self>) {
+        self.actions.begin(target, action, prompt, Stage::Handing);
+        cx.notify();
+    }
+
+    /// What became of handing `action` over: where its prompt stands, or
+    /// why the agent was not given it. A hand-off the operator stopped
+    /// waiting on stays stopped.
     fn handed(
         &mut self,
         target: PrTarget,
         action: PrAction,
-        handed: Result<(String, Stage), String>,
+        handed: Result<Stage, String>,
         cx: &mut Context<Self>,
     ) {
         match handed {
-            Ok((prompt, stage)) => {
-                self.actions.begin(target, action, prompt, stage);
-            }
+            Ok(stage) => self.actions.set_stage(target, stage),
             Err(error) => self.actions.fail(target, action, error),
         }
         cx.notify();

@@ -213,7 +213,7 @@ impl CockpitView {
             .get(thread)
             .and_then(|facts| facts.default_branch.clone());
         let prompt = super::changes::create_pr_prompt(branch.as_deref(), base.as_deref());
-        self.send_again(index, thread, prompt, cx).ok();
+        self.send_again(index, thread, prompt, cx);
     }
 
     /// The branch `thread`'s checkout is on: as git last said, else as the

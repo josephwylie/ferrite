@@ -442,8 +442,8 @@ fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppConte
     let (mut core, fake) = cockpit("toolbar-send", 1);
     let thread = core.threads()[0];
     let _ = core.send(thread, "Working".into());
-    assert!(core.queue_and_wait(thread, "First follow-up".into()));
-    assert!(core.queue_and_wait(thread, "Second follow-up".into()));
+    assert!(core.queue(thread, "First follow-up".into()).now().unwrap());
+    assert!(core.queue(thread, "Second follow-up".into()).now().unwrap());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
@@ -513,7 +513,7 @@ fn the_queue_strip_edits_and_sends_now(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("queue-strip-acts", 1);
     let thread = core.threads()[0];
     let _ = core.send(thread, "Working".into());
-    assert!(core.queue_and_wait(thread, "Held follow-up".into()));
+    assert!(core.queue(thread, "Held follow-up".into()).now().unwrap());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
