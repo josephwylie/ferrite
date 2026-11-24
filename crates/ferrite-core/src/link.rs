@@ -563,6 +563,9 @@ pub enum Heard {
     Gone(ClientId),
     /// An automation API connection's (ADR 0027), on its own socket.
     Api(crate::api::Heard),
+    /// A client's command answered off the pump: the reply to its command
+    /// of that id, to send as soon as it is heard.
+    Answered(ClientId, u64, Result<Option<Done>, protocol::WireError>),
 }
 
 /// One client's end on the Server: its outbox, drained by a writer

@@ -336,7 +336,7 @@ fn serve_configured(
         };
         let (_, renders) = render::remote();
         let defaults = Arc::new(Mutex::new(SessionDefaults::default()));
-        let mut server = Server::new(engine, info, id, renders, defaults, settings_dir);
+        let mut server = Server::new(engine, info, id, renders, defaults, settings_dir, heard.clone());
         server.browser_requests = browser_requests;
         disk_ready.send(server.browser_disk.control()).unwrap();
         server.relaunch = Box::new(move |executable: &Path| {

@@ -50,6 +50,7 @@ mod render;
 pub mod remote;
 mod server_id;
 mod signals;
+mod tree;
 mod wake;
 
 /// How long the pump waits for a client while any Thread is open: a frame.
@@ -58,11 +59,6 @@ const PUMP: Duration = Duration::from_millis(16);
 const INTAKE_BATCH: usize = 64;
 /// How long it waits with none: only to notice a signal.
 const IDLE: Duration = Duration::from_millis(250);
-/// How long it waits while a read off the pump is out that started within
-/// [`READING_FOR`]: its reply goes on the next pass, and a transfer asks
-/// one after another. A read out for longer is slow, and waits as the rest.
-const READING: Duration = Duration::from_millis(1);
-const READING_FOR: Duration = Duration::from_secs(1);
 /// How often the memory watchdog samples the Sessions.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(2);
 /// How long a going Server waits for its clients to hear it go.
@@ -198,7 +194,7 @@ pub fn run(options: Options) -> i32 {
             ferrite_core::log!("server: cannot accept API connections: {error}");
         }
     }
-    if let Err(error) = link::accept_all(listener, heard, link::LAGGED_BYTES) {
+    if let Err(error) = link::accept_all(listener, heard.clone(), link::LAGGED_BYTES) {
         ferrite_core::log!("server: cannot accept connections: {error}");
         return 1;
     }
@@ -207,7 +203,7 @@ pub fn run(options: Options) -> i32 {
         version: options.version,
         executable: std::env::current_exe().unwrap_or_default(),
     };
-    let mut server = Server::new(engine, info, id, renders, defaults, options.settings_dir);
+    let mut server = Server::new(engine, info, id, renders, defaults, options.settings_dir, heard);
     server.browser_requests = browser_requests;
     server.apply_settings(&settings);
     revive_launch(&mut server.engine, reopen);
@@ -258,7 +254,7 @@ pub fn fixture_browser_machine(
     }
     let address = link::address(&store);
     let (heard, hear) = mpsc::channel();
-    link::accept_all(link::listen(&address)?, heard, link::LAGGED_BYTES)?;
+    link::accept_all(link::listen(&address)?, heard.clone(), link::LAGGED_BYTES)?;
     std::thread::spawn(move || {
         let id = server_id::open(&store).expect("the Store keeps an id");
         let engine = Engine::try_new(Store::open(&store).expect("the Store opens"), spawner)
@@ -269,7 +265,7 @@ pub fn fixture_browser_machine(
         };
         let (_, renders) = render::remote();
         let settings_dir = store.parent().unwrap_or(&store).to_path_buf();
-        let mut server = Server::new(engine, info, id, renders, Arc::default(), settings_dir);
+        let mut server = Server::new(engine, info, id, renders, Arc::default(), settings_dir, heard);
         server.browser_requests = browser_requests;
         server.serve(hear)
     });
@@ -353,10 +349,8 @@ type Search = (
     Receiver<io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
 );
 
-/// A read off the pump — git's for a `list_repo` or a review's commands
-/// (`review_read`, `review_diff`, `list_commits`, `search_repo`, `read_file`,
-/// `review_pull_request`, `list_files`, `list_bases`, `pick_base`), `gh`'s for a `pull_request`, a folder's for a
-/// `list_dir`: who asked, in which command, and the reply it makes.
+/// A browser capture's image read off the pump: who asked, in which
+/// command, and the reply it makes.
 type Read = (ClientId, u64, Receiver<Result<Option<Done>, WireError>>);
 
 /// An API request answered off the pump: who asked, under which id, and
@@ -400,10 +394,11 @@ struct Server {
         BTreeMap<ThreadId, (ferrite_core::browser::Document, u64, ferrite_core::browser::Observation)>,
     searches: Vec<Search>,
     reads: Vec<Read>,
-    /// When the latest read off the pump was asked.
-    read_asked: Instant,
+    /// The pump's own channel: what is answered off the pump is heard on
+    /// it, and replied to at once.
+    heard: mpsc::Sender<Heard>,
     attachments: HashMap<ClientId, Arc<Mutex<ferrite_core::attachment_transfer::Session>>>,
-    trees: HashMap<ClientId, Arc<Mutex<ferrite_core::tree::Writes>>>,
+    trees: HashMap<ClientId, tree::Lane>,
     api_reads: Vec<ApiRead>,
     /// First sends still starting, by the tag the Engine knows them by:
     /// who asked, in which command.
@@ -473,6 +468,7 @@ impl Server {
         renders: render::Renders,
         defaults: Arc<Mutex<SessionDefaults>>,
         settings_dir: PathBuf,
+        heard: mpsc::Sender<Heard>,
     ) -> Self {
         let browser = browser::load(engine.browser_store());
         let browser_disk = browser::Disk::new(engine.browser_store().clone());
@@ -500,7 +496,7 @@ impl Server {
             browser_observed: BTreeMap::new(),
             searches: Vec::new(),
             reads: Vec::new(),
-            read_asked: Instant::now(),
+            heard,
             attachments: HashMap::new(),
             trees: HashMap::new(),
             api_reads: Vec::new(),
@@ -537,9 +533,7 @@ impl Server {
     fn serve(mut self, hear: Receiver<Heard>) -> i32 {
         ferrite_core::spawn::serve_the_operator();
         loop {
-            let wait = if !self.reads.is_empty() && self.read_asked.elapsed() < READING_FOR {
-                READING
-            } else if self.engine.threads().is_empty() {
+            let wait = if self.engine.threads().is_empty() {
                 IDLE
             } else {
                 PUMP
@@ -576,9 +570,6 @@ impl Server {
                 }
                 for uploads in self.attachments.values() {
                     if let Ok(mut uploads) = uploads.try_lock() { uploads.expire(); }
-                }
-                for writes in self.trees.values() {
-                    if let Ok(mut writes) = writes.try_lock() { writes.expire(); }
                 }
             }
             self.answer_bootstraps();
@@ -631,6 +622,7 @@ impl Server {
             Heard::Gone(id) => self.gone(id),
             Heard::Message(id, message) => self.message(id, message),
             Heard::Api(heard) => self.api_heard(heard),
+            Heard::Answered(id, request, answer) => self.reply(id, request, answer),
         }
     }
 
@@ -938,16 +930,12 @@ impl Server {
                 return;
             }
             Op::Tree { request: operation } => {
-                if !self.trees.contains_key(&id) && self.trees.len() >= 16 {
+                if !self.trees.contains_key(&id) && self.trees.len() >= tree::MOST {
                     self.reply(id, request, Err(failed("Too many tree transfers are active. Retry shortly.")));
                     return;
                 }
-                let writes = self.trees.entry(id).or_default().clone();
-                let operation = operation.clone();
-                self.read_off_pump(id, request, move || {
-                    let mut writes = writes.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                    writes.execute(operation).map(|reply| Some(Done::Tree { reply })).map_err(refused)
-                });
+                let heard = self.heard.clone();
+                self.trees.entry(id).or_insert_with(|| tree::Lane::open(id, heard)).ask(request, operation.clone());
                 return;
             }
             Op::Changes { request: operation } => {
@@ -1346,16 +1334,16 @@ impl Server {
         request: u64,
         read: impl FnOnce() -> Result<Option<Done>, WireError> + Send + 'static,
     ) {
-        let (answer, answered) = mpsc::channel();
+        let heard = self.heard.clone();
         std::thread::spawn(move || {
             ferrite_core::spawn::serve_the_operator();
-            let _ = answer.send(read());
+            let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read))
+                .unwrap_or_else(|_| Err(failed("the read ended")));
+            let _ = heard.send(Heard::Answered(client, request, answer));
         });
-        self.reads.push((client, request, answered));
-        self.read_asked = Instant::now();
     }
 
-    /// Reply to each read off the pump that finished.
+    /// Reply to each browser capture's image read that finished.
     fn answer_reads(&mut self) {
         let mut answered = Vec::new();
         self.reads
@@ -1675,17 +1663,6 @@ fn failed(error: impl ToString) -> WireError {
     WireError {
         code: ErrorCode::Failed,
         message: error.to_string(),
-    }
-}
-
-/// `failed`, but what this Server does not do says so: `unsupported`.
-fn refused(error: io::Error) -> WireError {
-    match error.kind() {
-        io::ErrorKind::Unsupported => WireError {
-            code: ErrorCode::Unsupported,
-            message: error.to_string(),
-        },
-        _ => failed(error),
     }
 }
 
