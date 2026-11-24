@@ -1026,15 +1026,13 @@ impl Cockpit {
     }
 
     /// CLI session files to adopt into `machine`, found off the UI thread.
-    /// Discovery reads the operator's own files: a window does it, wherever
-    /// its Engine runs.
-    pub fn discover_sessions(
-        &mut self,
-        machine: MachineId,
-        roots: Vec<(Provider, PathBuf)>,
-        cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<ferrite_core::session_file::Candidate>>>> {
-        self.machines.get_mut(&machine)?.link.discover_sessions(roots, cap)
+    /// The provider sessions `machine` has to import, at most `cap`, as
+    /// its Server finds them on its own disk (ADR 0049).
+    pub fn list_sessions(&mut self, machine: MachineId, cap: usize) -> Ask<ferrite_core::session_file::Found> {
+        match self.held_mut(machine) {
+            Ok(held) => held.link.list_sessions(cap),
+            Err(error) => Ask::answered(Err(error)),
+        }
     }
 
     /// The operator opened a Notice of `machine`'s — from a toast or the
@@ -2329,14 +2327,18 @@ impl Cockpit {
         }
     }
 
-    /// Request workspace commands without creating a Thread or Session.
-    pub fn discover_commands(
+    /// The commands `provider`'s CLI on `machine` finds in `cwd` there,
+    /// asked of its Server without a Thread or Session.
+    pub fn list_commands(
         &mut self,
         machine: MachineId,
         provider: Provider,
         cwd: &std::path::Path,
-    ) -> Option<ferrite_core::Discovery> {
-        self.machines.get_mut(&machine)?.link.discover_commands(provider, cwd)
+    ) -> Ask<Vec<ferrite_core::SessionCommand>> {
+        match self.held_mut(machine) {
+            Ok(held) => held.link.list_commands(provider, cwd),
+            Err(error) => Ask::answered(Err(error)),
+        }
     }
 
     /// `machine`'s provider's announced model rows, else the fallback
