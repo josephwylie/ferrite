@@ -111,10 +111,10 @@ fn a_placement_is_kept_once_per_project_of_this_computer() {
 
 #[test]
 fn a_destination_is_a_folder_under_the_home_or_the_root_never_either_itself() {
-    for fine in ["~/projects/app", "/srv/app", "~/a b/c/"] {
+    for fine in ["~/projects/app", "/srv/app", "~/a b/c/", r"D:\work\app", "c:/work/app"] {
         assert_eq!(refuse_destination(fine), None, "{fine}");
     }
-    for refused in ["", "~", "~/", "/", "projects/app", "~/../x", "/srv/../etc"] {
+    for refused in ["", "~", "~/", "/", "projects/app", "~/../x", "/srv/../etc", r"D:\", "D:", r"D:\work\..\x"] {
         assert!(refuse_destination(refused).is_some(), "{refused:?}");
     }
 }

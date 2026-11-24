@@ -90,15 +90,23 @@ pub fn counterpart(
 }
 
 /// Why `dest`, a directory on a Machine as the operator gave it, cannot
-/// take a copy: it must be absolute or under `~`, and not the home or the
-/// filesystem's root itself.
+/// take a copy: it must be absolute (`/`, or a drive's on a Windows
+/// Machine) or under `~`, and not the home or a filesystem's root itself.
 pub fn refuse_destination(dest: &str) -> Option<&'static str> {
-    let dest = dest.trim().trim_end_matches('/');
-    let under = dest.strip_prefix("~/").or_else(|| dest.strip_prefix('/'));
+    fn under_drive(dest: &str) -> Option<&str> {
+        let mut chars = dest.chars();
+        let lettered = chars.next().is_some_and(|letter| letter.is_ascii_alphabetic()) && chars.next() == Some(':');
+        lettered.then(|| &dest[2..])?.strip_prefix(['/', '\\'])
+    }
+    let dest = dest.trim().trim_end_matches(['/', '\\']);
+    let under = dest
+        .strip_prefix("~/")
+        .or_else(|| dest.strip_prefix('/'))
+        .or_else(|| under_drive(dest));
     match under {
         _ if dest.is_empty() || dest == "~" => Some("Choose a folder, not the home folder"),
         None => Some("Start the path with / or ~/"),
-        Some(rest) if rest.split('/').any(|part| part == "..") => Some("A path through .. is not allowed"),
+        Some(rest) if rest.split(['/', '\\']).any(|part| part == "..") => Some("A path through .. is not allowed"),
         Some(_) => None,
     }
 }
@@ -146,6 +154,20 @@ pub fn size(root: &Path, path: &str) -> u64 {
             .unwrap_or(0)
     }
     walk(&root.join(path))
+}
+
+/// Whether `dest` on a Machine holds anything, read as a mirror there
+/// reads it: one that does takes no copy, which would remove what is there.
+pub fn occupied(dest: &Path, exchange: &mut dyn Exchange) -> io::Result<bool> {
+    let scan = tree::Request::Scan {
+        root: Root::Path { path: dest.to_path_buf() },
+        skip: Vec::new(),
+        after: None,
+    };
+    match exchange.call(scan)? {
+        tree::Reply::Scanned { manifest, .. } => Ok(!manifest.entries.is_empty() || !manifest.problems.is_empty()),
+        _ => Err(io::Error::other("the Machine did not answer the scan")),
+    }
 }
 
 /// Make `dest` on a Machine hold the Project folder `source`, `skip` left
