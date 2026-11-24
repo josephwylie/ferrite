@@ -20,19 +20,18 @@ use ferrite_core::clock::ServerClock;
 // A Remote's answers ring as the pump routes them (ADR 0041).
 use ferrite_core::checkout::{ListedWorktree, RepoListing};
 use ferrite_core::doorbell::Sender;
-use ferrite_core::engine::{BootstrapResult, Bootstrapped};
 use ferrite_core::folder::{DirEntry, Listing};
 use ferrite_core::link;
 use ferrite_core::machine::{self, Bridge, Failure};
 use ferrite_core::project::ProjectId;
+use ferrite_core::prompt_files::FileSuggestion;
 use ferrite_core::protocol::{
     self, Capability, ClientMessage, Command, Done, ErrorCode, Op, Peer, Resume, ServerInfo,
     ServerMessage, Snapshot, WireError, WirePng,
 };
 use ferrite_core::protocol::{ReviewPullRequest, ReviewPullRequests, WirePrFilter, WirePrList};
-use ferrite_core::providers::FileSuggestion;
 use ferrite_core::pull_request::{parse_pr_json, PullRequest};
-use ferrite_core::roster::DraftId;
+use ferrite_core::roster::{BootstrapResult, Bootstrapped, DraftId};
 use ferrite_core::server::ServerId;
 use ferrite_core::visual::{RenderRequest, Renderer};
 use ferrite_reviewr::ferrite::{Bases, FileSides, Read};

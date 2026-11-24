@@ -5,7 +5,7 @@
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 
 use super::*;
-use ferrite_core::factory::{GitHubQuery, GitHubRead};
+use ferrite_core::factory_board::{GitHubQuery, GitHubRead};
 use ferrite_core::pr_watch::{
     Check, CheckStatus, Fingerprint, Mergeable, ReadError, Reading, Remark,
 };

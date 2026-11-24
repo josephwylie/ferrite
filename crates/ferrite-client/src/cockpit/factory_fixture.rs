@@ -5,7 +5,8 @@
 
 use std::io;
 
-use ferrite_core::factory::{Board, Factory};
+use ferrite_core::factory::Factory;
+use ferrite_core::factory_board::Board;
 use ferrite_core::protocol::{Done, GitHubAsk, Op, TaskAction};
 use ferrite_core::provider::Provider;
 
@@ -28,7 +29,7 @@ impl FactoryFixture {
     /// `op` answered here, with the board the window is to be told, or
     /// `None` when this fixture does not answer it.
     pub(crate) fn execute(&mut self, op: Op) -> Option<(io::Result<Option<Done>>, Option<Board>)> {
-        let agent = ferrite_core::factory::Agent {
+        let agent = ferrite_core::factory_board::Agent {
             provider: Provider::Claude,
             model: None,
             effort: None,

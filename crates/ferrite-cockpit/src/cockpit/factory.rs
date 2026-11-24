@@ -14,7 +14,7 @@
 
 use super::*;
 use super::destination::{Destination, Shows};
-use ferrite_core::factory::{self as core_factory, Status, Task, TaskId};
+use ferrite_core::factory_board::{self, Status, Task, TaskId};
 use ferrite_core::protocol::{Done, TaskAction};
 use ferrite_core::ProjectKey;
 
@@ -219,9 +219,9 @@ impl TaskCard {
                     } else {
                         ""
                     },
-                    core_factory::agent_label(&task.agent)
+                    factory_board::agent_label(&task.agent)
                 ),
-                None => core_factory::agent_label(&task.agent),
+                None => factory_board::agent_label(&task.agent),
             },
             outcome: task.outcome().map(str::to_string),
             pr: super::delivery::card_line(task),
@@ -666,7 +666,7 @@ impl FactoryView {
                     .text_size(px(FS_META))
                     .text_color(rgb(INK_SUBTLE))
                     .child(SharedString::from(match task.keeping.archived_ms {
-                        Some(at) => format!("Archived {}", core_factory::when_label(at)),
+                        Some(at) => format!("Archived {}", factory_board::when_label(at)),
                         None => "Archived".to_string(),
                     })),
             );
@@ -738,7 +738,7 @@ impl FactoryView {
                     .child(ferrite_ui::components::status_dot(status_ink(task.status)))
                     .child(task.status.word())
                     .child("\u{b7}")
-                    .child(SharedString::from(core_factory::agent_label(&task.agent)))
+                    .child(SharedString::from(factory_board::agent_label(&task.agent)))
                     .when(task.oversight.deciding, |line| {
                         line.child("\u{b7} approval decision")
                     }),
@@ -886,7 +886,7 @@ impl FactoryView {
                             fact("Worktree", ferrite_ui::components::home_relative(path))
                         }),
                     )
-                    .child(fact("Agent", core_factory::agent_label(&task.agent)))
+                    .child(fact("Agent", factory_board::agent_label(&task.agent)))
                     .children(task.delivery.pr.as_ref().map(|pr| fact("PR", pr.url())))
                     .children(task.workflow.as_ref().map(|run| {
                         fact(
@@ -1530,7 +1530,7 @@ impl CockpitView {
             archived: board.archive(project, "").count(),
             proposals: board
                 .proposals_of(project)
-                .filter(|proposal| proposal.status == ferrite_core::factory::ProposalStatus::Pending)
+                .filter(|proposal| proposal.status == ferrite_core::factory_board::ProposalStatus::Pending)
                 .count(),
             workflows: board.workflows_of(project).count(),
             trouble: board.trouble_of(project).map(str::to_string),

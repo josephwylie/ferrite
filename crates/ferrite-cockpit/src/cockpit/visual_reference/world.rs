@@ -689,7 +689,7 @@ pub(crate) fn apply(before: &[String], hunks: &[Hunk]) -> Vec<String> {
 /// A Claude Session's model menu: the catalog's rows, on the four-step
 /// effort ladder the picker draws.
 pub(crate) fn claude_menu() -> Vec<ModelInfo> {
-    ferrite_core::providers::models::fallback(Provider::Claude)
+    ferrite_core::models::fallback(Provider::Claude)
         .into_iter()
         .map(|mut row| {
             if !row.efforts.is_empty() {

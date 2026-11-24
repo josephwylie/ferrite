@@ -275,7 +275,7 @@ fn a_squatted_worktree_path_rolls_the_first_send_back() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-fn settle_first_send(engine: &mut Engine) -> io::Result<ferrite_core::engine::Bootstrapped> {
+fn settle_first_send(engine: &mut Engine) -> io::Result<ferrite_core::roster::Bootstrapped> {
     let deadline = Instant::now() + PATIENCE;
     loop {
         assert!(Instant::now() < deadline, "the first send never settled");

@@ -46,7 +46,7 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
     };
     let (keys, keys_refused) = keymap::with_user_keys(keymap::PLATFORM, &settings.keys);
     let defaults = Arc::new(Mutex::new(
-        ferrite_core::spawner::SessionDefaults::from_settings(&settings),
+        ferrite_core::settings::SessionDefaults::from_settings(&settings),
     ));
     let mut cx = app(keys);
     cx.update(|cx| cx.set_http_client(http));

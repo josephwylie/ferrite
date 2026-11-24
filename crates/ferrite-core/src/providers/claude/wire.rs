@@ -121,9 +121,9 @@ pub(in crate::providers) fn parse_capabilities(
                         let resolved = text("resolvedModel").filter(|id| !id.is_empty());
                         let name = resolved
                             .as_deref()
-                            .map(super::super::models::display_name)
+                            .map(crate::models::display_name)
                             .or_else(|| text("displayName").filter(|name| !name.is_empty()))
-                            .unwrap_or_else(|| super::super::models::display_name(&value));
+                            .unwrap_or_else(|| crate::models::display_name(&value));
                         let display = if value == "default" && resolved.is_some() {
                             format!("Default · {name}")
                         } else {
@@ -142,7 +142,7 @@ pub(in crate::providers) fn parse_capabilities(
                             .unwrap_or_default();
                         Some(crate::ModelInfo {
                             display,
-                            detail: super::super::models::detail_without_name(
+                            detail: crate::models::detail_without_name(
                                 &text("description").unwrap_or_default(),
                                 &name,
                             ),

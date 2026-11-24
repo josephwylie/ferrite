@@ -25,8 +25,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    starts, Answer, Board, Command, Coordinator, Effect, Refusal, RefusalCode, Seen, State, Status,
-    Task, TaskId, Workflow, WorkflowId, DEFAULT_LIMIT, FILE_NAME, SCHEMA_VERSION,
+    starts, Answer, Command, Effect, Refusal, RefusalCode, Seen, State, FILE_NAME, SCHEMA_VERSION,
+};
+use crate::factory_board::{
+    Board, Coordinator, Status, Task, TaskId, Workflow, WorkflowId, DEFAULT_LIMIT,
 };
 use crate::project::ProjectId;
 use crate::ThreadId;
@@ -893,7 +895,7 @@ impl Factory {
             .flat_map(|state| state.workflows.iter().cloned())
             .collect();
         workflows.sort_by_key(|workflow| number(&workflow.id));
-        let mut proposals: Vec<super::Proposal> = self
+        let mut proposals: Vec<crate::factory_board::Proposal> = self
             .boards()
             .flat_map(|state| state.proposals.iter().cloned())
             .collect();
@@ -919,7 +921,7 @@ impl Factory {
             .find(|workflow| workflow.id == id)
     }
 
-    pub fn proposal(&self, id: &str) -> Option<&super::Proposal> {
+    pub fn proposal(&self, id: &str) -> Option<&crate::factory_board::Proposal> {
         self.boards()
             .flat_map(|state| &state.proposals)
             .find(|proposal| proposal.id == id)
@@ -961,9 +963,9 @@ impl Factory {
         self.limit
     }
 
-    /// Set from Settings, within [`super::LIMIT_RANGE`].
+    /// Set from Settings, within [`crate::factory_board::LIMIT_RANGE`].
     pub fn set_limit(&mut self, limit: usize) {
-        self.limit = super::clamp_limit(limit);
+        self.limit = crate::factory_board::clamp_limit(limit);
     }
 
     /// A Task on the board or in the Archive.

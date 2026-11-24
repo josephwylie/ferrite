@@ -458,7 +458,7 @@ fn samples() -> Vec<Request> {
             summary: "Fixed the race in the login fixture".into(),
         })),
         request(Method::WorkflowCreate(WorkflowCreateParams {
-            template: Some(crate::factory::Template::IssueToReviewedPr),
+            template: Some(crate::factory_board::Template::IssueToReviewedPr),
             name: Some("Docs fixes".into()),
             project: Some("3".into()),
             cwd: Some(PathBuf::from("/work/app")),
@@ -483,15 +483,15 @@ fn samples() -> Vec<Request> {
         request(Method::StepEdit(StepEditParams {
             workflow: "w-1".into(),
             step: "s-2".into(),
-            change: crate::factory::StepChange {
+            change: crate::factory_board::StepChange {
                 name: Some("Reviewer".into()),
                 instructions: Some("Review the PR".into()),
                 skills: Some(vec!["code-review".into()]),
                 provider: Some(Provider::Claude),
                 model: Some("claude-opus-4".into()),
                 effort: Some("high".into()),
-                on_finished: Some(crate::factory::Destination::Complete),
-                on_unable: Some(crate::factory::Destination::Step("s-1".into())),
+                on_finished: Some(crate::factory_board::Destination::Complete),
+                on_unable: Some(crate::factory_board::Destination::Step("s-1".into())),
                 fresh: Some(true),
                 ..Default::default()
             },
@@ -523,27 +523,27 @@ fn samples() -> Vec<Request> {
             task: "t-1".into(),
             to: "s-3".into(),
             skip: vec!["s-2".into()],
-            then: Some(crate::factory::ThenReturn::Me),
+            then: Some(crate::factory_board::ThenReturn::Me),
             note: Some("Only the docs changed".into()),
         })),
         request(Method::WorkflowApproval(WorkflowApprovalParams {
             workflow: "w-1".into(),
-            change: crate::factory::ApprovalChange {
-                by: Some(crate::factory::Approver::Agent),
+            change: crate::factory_board::ApprovalChange {
+                by: Some(crate::factory_board::Approver::Agent),
                 step: Some("s-4".into()),
                 instructions: Some("Approve when the checks pass".into()),
-                after: Some(crate::factory::Destination::Complete),
-                rework_to: Some(crate::factory::Destination::Step("s-3".into())),
+                after: Some(crate::factory_board::Destination::Complete),
+                rework_to: Some(crate::factory_board::Destination::Step("s-3".into())),
             },
         })),
         request(Method::WorkflowStart(WorkflowStartParams {
             workflow: "w-1".into(),
-            start: crate::factory::Start {
-                kind: crate::factory::StartKind::GithubIssue,
+            start: crate::factory_board::Start {
+                kind: crate::factory_board::StartKind::GithubIssue,
                 schedule: Default::default(),
-                github: crate::factory::GitHubSource {
+                github: crate::factory_board::GitHubSource {
                     repository: Some("acme/app".into()),
-                    trigger: crate::factory::Trigger::Labelled,
+                    trigger: crate::factory_board::Trigger::Labelled,
                     label: Some("ready-for-agent".into()),
                     extra_instructions: "Open a PR that closes the issue".into(),
                 },
@@ -551,7 +551,7 @@ fn samples() -> Vec<Request> {
         })),
         request(Method::WorkflowAutomation(WorkflowAutomationParams {
             workflow: "w-1".into(),
-            turn: crate::factory::Turn::On,
+            turn: crate::factory_board::Turn::On,
         })),
         request(Method::WorkflowBacklog(WorkflowBacklogParams {
             workflow: "w-1".into(),
@@ -576,7 +576,7 @@ fn samples() -> Vec<Request> {
             task: Some("t-1".into()),
             to: Some("s-3".into()),
             skip: vec!["s-2".into()],
-            then: Some(crate::factory::ThenReturn::Me),
+            then: Some(crate::factory_board::ThenReturn::Me),
             note: Some("Only the docs changed".into()),
         })),
         request(Method::ProposalList(TaskListParams {
@@ -769,10 +769,10 @@ fn later_samples() -> Vec<(&'static str, Request)> {
             request(Method::StepEdit(StepEditParams {
                 workflow: "w-1".into(),
                 step: "s-5".into(),
-                change: crate::factory::StepChange {
+                change: crate::factory_board::StepChange {
                     by_merge_result: Some(true),
-                    on_conflict: Some(crate::factory::Destination::Step("s-6".into())),
-                    on_pending: Some(crate::factory::Destination::Wait),
+                    on_conflict: Some(crate::factory_board::Destination::Step("s-6".into())),
+                    on_pending: Some(crate::factory_board::Destination::Wait),
                     ..Default::default()
                 },
             })),
@@ -1290,9 +1290,9 @@ fn automatic_starts_parse_from_the_cli() {
         ),
         Ok(Method::WorkflowStart(WorkflowStartParams {
             workflow: "w-1".into(),
-            start: crate::factory::Start {
-                kind: crate::factory::StartKind::Schedule,
-                schedule: crate::factory::Schedule {
+            start: crate::factory_board::Start {
+                kind: crate::factory_board::StartKind::Schedule,
+                schedule: crate::factory_board::Schedule {
                     time: Some("09:00".into()),
                     ..Default::default()
                 },
@@ -1304,7 +1304,7 @@ fn automatic_starts_parse_from_the_cli() {
         parse("workflow.automation", &["w-1", "pause"]),
         Ok(Method::WorkflowAutomation(WorkflowAutomationParams {
             workflow: "w-1".into(),
-            turn: crate::factory::Turn::Pause,
+            turn: crate::factory_board::Turn::Pause,
         }))
     );
     assert_eq!(
@@ -1388,10 +1388,10 @@ fn workflow_authoring_parses_from_the_cli() {
         Ok(Method::StepEdit(StepEditParams {
             workflow: "w-1".into(),
             step: "s-2".into(),
-            change: crate::factory::StepChange {
+            change: crate::factory_board::StepChange {
                 name: Some("Reviewer".into()),
                 skills: Some(vec!["code-review".into()]),
-                on_unable: Some(crate::factory::Destination::Step("s-1".into())),
+                on_unable: Some(crate::factory_board::Destination::Step("s-1".into())),
                 fresh: Some(true),
                 ..Default::default()
             },
@@ -1408,7 +1408,7 @@ fn workflow_authoring_parses_from_the_cli() {
     assert_eq!(
         parse("workflow.create", &["--template", "issue_to_reviewed_pr"]),
         Ok(Method::WorkflowCreate(WorkflowCreateParams {
-            template: Some(crate::factory::Template::IssueToReviewedPr),
+            template: Some(crate::factory_board::Template::IssueToReviewedPr),
             name: None,
             project: None,
             cwd: Some(PathBuf::from("/work/app")),
@@ -1451,7 +1451,7 @@ fn questions_approval_and_direction_parse_from_the_cli() {
             task: "t-1".into(),
             to: "s-3".into(),
             skip: vec!["s-2".into()],
-            then: Some(crate::factory::ThenReturn::Me),
+            then: Some(crate::factory_board::ThenReturn::Me),
             note: Some("Docs only".into()),
         }))
     );
@@ -1470,10 +1470,10 @@ fn questions_approval_and_direction_parse_from_the_cli() {
         ),
         Ok(Method::WorkflowApproval(WorkflowApprovalParams {
             workflow: "w-1".into(),
-            change: crate::factory::ApprovalChange {
-                by: Some(crate::factory::Approver::Agent),
+            change: crate::factory_board::ApprovalChange {
+                by: Some(crate::factory_board::Approver::Agent),
                 step: Some("s-4".into()),
-                rework_to: Some(crate::factory::Destination::Step("s-3".into())),
+                rework_to: Some(crate::factory_board::Destination::Step("s-3".into())),
                 ..Default::default()
             },
         }))
@@ -2061,10 +2061,10 @@ fn pull_requests_and_merging_parse_from_the_cli() {
         Ok(Method::StepEdit(StepEditParams {
             workflow: "w-1".into(),
             step: "s-5".into(),
-            change: crate::factory::StepChange {
+            change: crate::factory_board::StepChange {
                 by_merge_result: Some(true),
-                on_conflict: Some(crate::factory::Destination::Step("s-6".into())),
-                on_pending: Some(crate::factory::Destination::Wait),
+                on_conflict: Some(crate::factory_board::Destination::Step("s-6".into())),
+                on_pending: Some(crate::factory_board::Destination::Wait),
                 ..Default::default()
             },
         }))

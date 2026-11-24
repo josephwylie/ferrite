@@ -30,7 +30,7 @@ struct PendingFileSearch {
     token_start: usize,
     root: std::path::PathBuf,
     started: std::time::Instant,
-    reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
+    reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::prompt_files::FileSuggestion>>>,
     fallback: Option<std::sync::mpsc::Receiver<Vec<pane::MenuRow>>>,
 }
 
@@ -95,7 +95,7 @@ pub(super) enum Listed {
 pub(super) struct FileSearch {
     pub(super) thread: ThreadKey,
     pub(super) generation: u64,
-    pub(super) reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
+    pub(super) reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::prompt_files::FileSuggestion>>>,
 }
 
 /// What the menu is to list, with what the root read for it.

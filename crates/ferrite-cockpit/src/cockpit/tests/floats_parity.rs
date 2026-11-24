@@ -578,7 +578,7 @@ fn the_effort_ladder_always_has_a_chosen_step(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    for model in ferrite_core::providers::models::fallback(Provider::Claude) {
+    for model in ferrite_core::models::fallback(Provider::Claude) {
         view.update(cx, |view, cx| {
             let _ = view.cockpit.update(cx, |cockpit, _| cockpit.set_model(
                 thread,

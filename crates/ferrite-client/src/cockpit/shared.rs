@@ -24,7 +24,7 @@ pub(crate) struct Shared {
     models_changed: bool,
     /// Every Factory's Tasks (ADR 0037), and whether they changed since
     /// the window last asked.
-    pub(crate) factory: ferrite_core::factory::Board,
+    pub(crate) factory: ferrite_core::factory_board::Board,
     factory_changed: bool,
 }
 

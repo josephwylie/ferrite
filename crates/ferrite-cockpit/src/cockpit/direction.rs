@@ -22,8 +22,8 @@ use gpui::WeakEntity;
 
 use super::direct_view::{Choice, KeptDirection};
 use super::*;
-use ferrite_core::factory::{
-    self as core_factory, Approver, Destination, Override, Status, StepId, Task, TaskId, ThenReturn,
+use ferrite_core::factory_board::{
+    self, Approver, Destination, Override, Status, StepId, Task, TaskId, ThenReturn,
 };
 use ferrite_core::protocol::TaskAction;
 use ferrite_pane::composer::{Composer, Role};
@@ -259,11 +259,11 @@ impl DirectionView {
                     .gap(px(SPACE_1));
                 for (at, result) in task.results.iter().enumerate() {
                     let (word, text) = match &result.outcome {
-                        core_factory::Outcome::Finished { summary } => ("finished", summary),
-                        core_factory::Outcome::Unable { tried } => ("could not finish", tried),
-                        core_factory::Outcome::Approved { summary } => ("approved", summary),
-                        core_factory::Outcome::Rejected { reasons } => ("did not approve", reasons),
-                        core_factory::Outcome::Merge { summary, .. } => ("merge result", summary),
+                        factory_board::Outcome::Finished { summary } => ("finished", summary),
+                        factory_board::Outcome::Unable { tried } => ("could not finish", tried),
+                        factory_board::Outcome::Approved { summary } => ("approved", summary),
+                        factory_board::Outcome::Rejected { reasons } => ("did not approve", reasons),
+                        factory_board::Outcome::Merge { summary, .. } => ("merge result", summary),
                     };
                     evidence = evidence.child(
                         div()

@@ -9,16 +9,17 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::{Duration, Instant, SystemTime};
 
 use super::{mirror, parked, remote, shared, Asked, Said, Unread};
-use ferrite_core::engine::{BootstrapResult, Bootstrapped, Engine, PaneUpdate};
+use ferrite_core::engine::Engine;
+use ferrite_core::pane_update::PaneUpdate;
 use ferrite_core::protocol::{ClientMessage, Command, Done, Op, ServerMessage, WireError};
-use ferrite_core::roster::Roster;
+use ferrite_core::roster::{BootstrapResult, Bootstrapped, Roster};
 use ferrite_core::store::Store;
 use ferrite_core::{MachineId, MachineKey, ProjectKey, ThreadId, ThreadKey};
 
 /// How long a Thread off screen and at rest stays streamed whole: as long
 /// as the Server keeps its Session (ADR 0032). One at work stays however
 /// long it works, drawn here or not.
-const UNWATCH_AFTER: Duration = ferrite_core::engine::HELD_AT_REST;
+const UNWATCH_AFTER: Duration = ferrite_core::digest::HELD_AT_REST;
 
 /// The window number an Engine in this process knows its one window by.
 const IN_PROCESS_WINDOW: u64 = 0;
@@ -237,7 +238,7 @@ impl HeldMachine {
         {
             if let Ok(window) = (*window).try_into() {
                 said.allowance_warnings
-                    .push(ferrite_core::providers::limits::AllowanceWarning {
+                    .push(ferrite_core::allowance::AllowanceWarning {
                         provider: *provider,
                         window,
                         threshold: *threshold,

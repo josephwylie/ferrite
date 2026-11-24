@@ -264,7 +264,7 @@ impl SettingsView {
                 "Model",
                 "",
                 settings::model_options(
-                    ferrite_core::providers::models::menu(catalog.clone(), chosen.as_deref()),
+                    ferrite_core::models::menu(catalog.clone(), chosen.as_deref()),
                     chosen.as_deref(),
                 ),
                 Self::change(cx, move |settings, value| {
@@ -272,7 +272,7 @@ impl SettingsView {
                 }),
             );
             let effort = settings.effort_for(provider).map(str::to_string);
-            let mut ladder = ferrite_core::providers::models::efforts_for(
+            let mut ladder = ferrite_core::models::efforts_for(
                 provider,
                 chosen.as_deref(),
                 announced,

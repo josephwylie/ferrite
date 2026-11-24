@@ -70,7 +70,7 @@ fn context_words(scope: Option<SharedString>, word: SharedString) -> SharedStrin
 /// One importable session as the picker lists it: its title (or first
 /// prompt) as a Title would read it, then its project, provider and age.
 fn session_row(
-    candidate: ferrite_core::import::Candidate,
+    candidate: ferrite_core::session_file::Candidate,
     into: Option<PaneIdentity>,
     now: std::time::SystemTime,
 ) -> PaletteRow {
@@ -412,7 +412,7 @@ impl CockpitView {
     fn list_sessions(
         &mut self,
         into: Option<PaneIdentity>,
-        found: Result<Vec<ferrite_core::import::Candidate>, String>,
+        found: Result<Vec<ferrite_core::session_file::Candidate>, String>,
         cx: &mut Context<Self>,
     ) {
         let now = ferrite_core::clock::system_time();
@@ -672,7 +672,7 @@ impl CockpitView {
         let rewindable =
             cuttable && focused.is_some_and(|thread| self.last_prompt(thread, cx).is_some());
         let ladder = open.is_some_and(|open| {
-            !ferrite_core::providers::models::efforts_for(
+            !ferrite_core::models::efforts_for(
                 open.provider(),
                 open.model(),
                 open.models(),

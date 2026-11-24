@@ -223,7 +223,7 @@ pub enum SessionEvent {
     /// own menu shows — the model picker's rows (#25). Claude lifts the
     /// list from the same initialize handshake; Codex asks `model/list`
     /// once its thread is up. Until either speaks the picker falls back
-    /// to the catalog in `providers::models`. Kept exactly like the command
+    /// to the catalog in `models`. Kept exactly like the command
     /// menu.
     Models {
         models: Vec<ModelInfo>,
@@ -396,7 +396,7 @@ impl ModelInfo {
     pub fn bare(value: impl Into<String>) -> Self {
         let value = value.into();
         Self {
-            display: crate::providers::models::display_name(&value),
+            display: crate::models::display_name(&value),
             detail: String::new(),
             resolved: None,
             efforts: Vec::new(),

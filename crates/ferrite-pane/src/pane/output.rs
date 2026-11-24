@@ -154,7 +154,7 @@ pub(crate) fn shell(tool: &ToolBlock) -> Shell<'_> {
         None => (None, None),
     };
     Shell {
-        command: ferrite_core::providers::shell::unwrap_shell(&tool.summary),
+        command: ferrite_core::shell::unwrap_shell(&tool.summary),
         output,
         omitted: retained.map_or(0, |output| output.omitted_bytes),
         exit: code.filter(|_| text::call_failed(tool)),

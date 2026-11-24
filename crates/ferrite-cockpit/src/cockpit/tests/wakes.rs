@@ -416,7 +416,7 @@ fn the_toast_float_redraws_only_as_its_toast_comes_and_goes(cx: &mut TestAppCont
 /// door's menu counts the Task beside its Project.
 #[gpui::test]
 fn the_factory_door_counts_what_needs_you_as_the_board_arrives(cx: &mut TestAppContext) {
-    use ferrite_core::factory::{Board, Status, Task};
+    use ferrite_core::factory_board::{Board, Status, Task};
     let _clock = hold_wall_clock();
     let (view, _fake, _panes, cx) = window("wakes-factory-door", 1, cx);
     let project = view.read_with(cx, |view, cx| {

@@ -1,8 +1,8 @@
 //! Schedule arithmetic and what a start says, then the Factory's automatic
 //! starts through its interface, the clock passed in.
 
-use super::*;
-use chrono::FixedOffset;
+use crate::factory_board::*;
+use chrono::{DateTime, FixedOffset};
 
 fn at(text: &str) -> DateTime<FixedOffset> {
     DateTime::parse_from_rfc3339(text).unwrap()
@@ -126,8 +126,9 @@ mod factory {
     use std::collections::BTreeMap;
 
     use super::super::*;
-    use crate::factory::{
-        Answer, Catalog, Command, Effect, Factory, Refusal, RefusalCode, Source, Status, Template,
+    use crate::factory::{Answer, Command, Effect, Factory, Refusal, RefusalCode};
+    use crate::factory_board::{
+        Automation, Catalog, Recurrence, Source, Status, Template, Trigger,
     };
     use crate::provider::Provider;
 
@@ -135,8 +136,8 @@ mod factory {
         serde_json::from_value(1.into()).unwrap()
     }
 
-    fn agent() -> crate::factory::Agent {
-        crate::factory::Agent {
+    fn agent() -> crate::factory_board::Agent {
+        crate::factory_board::Agent {
             provider: Provider::Claude,
             model: None,
             effort: None,
@@ -166,7 +167,7 @@ mod factory {
                 Command::EditStep {
                     workflow: workflow.clone(),
                     step,
-                    change: crate::factory::StepChange {
+                    change: crate::factory_board::StepChange {
                         instructions: Some("Do the work".into()),
                         ..Default::default()
                     },
@@ -217,7 +218,7 @@ mod factory {
         factory.workflow(workflow).unwrap().automation.clone()
     }
 
-    fn tasks(factory: &Factory) -> Vec<crate::factory::Task> {
+    fn tasks(factory: &Factory) -> Vec<crate::factory_board::Task> {
         factory.board().tasks
     }
 

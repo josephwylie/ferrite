@@ -326,14 +326,14 @@ pub(crate) struct Listing {
     /// The blank Pane a pick replaces, if any.
     into: Option<PaneIdentity>,
     started: std::time::Instant,
-    reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>,
+    reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::session_file::Candidate>>>,
 }
 
 /// The listing's answer: the Pane a pick replaces, and the sessions found
 /// or why there are none.
 pub(crate) type Listed = (
     Option<PaneIdentity>,
-    Result<Vec<ferrite_core::import::Candidate>, String>,
+    Result<Vec<ferrite_core::session_file::Candidate>, String>,
 );
 
 /// The palette: its scope, its rows and the filter's survivors, the cursor
@@ -411,7 +411,7 @@ impl Palette {
     pub(crate) fn listen(
         &mut self,
         into: Option<PaneIdentity>,
-        reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>,
+        reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::session_file::Candidate>>>,
     ) {
         self.listing = Some(Listing {
             into,

@@ -12,7 +12,7 @@ fn contract_native_file_menu_excludes_git_metadata_and_duplicate_paths(cx: &mut 
     cx.run_until_parked();
     tick(cx);
     let reply = fake.file_searches.borrow().last().unwrap().1.clone();
-    let file = |path: &str| ferrite_core::providers::FileSuggestion {
+    let file = |path: &str| ferrite_core::prompt_files::FileSuggestion {
         path: path.into(),
         is_directory: false,
         matched: vec![],
@@ -76,12 +76,12 @@ fn contract_native_files_keep_provider_order_and_ignore_old_queries(cx: &mut Tes
     assert_eq!(query, "sr");
     reply
         .send(Ok(vec![
-            ferrite_core::providers::FileSuggestion {
+            ferrite_core::prompt_files::FileSuggestion {
                 path: "src/zé.rs".into(),
                 is_directory: false,
                 matched: vec![5],
             },
-            ferrite_core::providers::FileSuggestion {
+            ferrite_core::prompt_files::FileSuggestion {
                 path: "src/a.rs".into(),
                 is_directory: false,
                 matched: vec![0, 1],
@@ -89,7 +89,7 @@ fn contract_native_files_keep_provider_order_and_ignore_old_queries(cx: &mut Tes
         ]))
         .unwrap();
     tick(cx);
-    let _ = old.send(Ok(vec![ferrite_core::providers::FileSuggestion {
+    let _ = old.send(Ok(vec![ferrite_core::prompt_files::FileSuggestion {
         path: "stale.rs".into(),
         is_directory: false,
         matched: vec![],
@@ -126,7 +126,7 @@ fn contract_native_session_picker_shows_titles_without_spawning(cx: &mut TestApp
     cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
-    tx.send(Ok(vec![ferrite_core::import::Candidate {
+    tx.send(Ok(vec![ferrite_core::session_file::Candidate {
         provider: Provider::Codex,
         path: "/sessions/native.jsonl".into(),
         title: Some("Fix startup latency".into()),

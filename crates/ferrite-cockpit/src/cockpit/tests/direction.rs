@@ -6,7 +6,7 @@
 use super::*;
 use crate::cockpit::direction::{DirectSheet, TaskPick};
 use crate::cockpit::workflows::{Field, Pick};
-use ferrite_core::factory::{Board, Destination, Override, Status, Task, ThenReturn};
+use ferrite_core::factory_board::{Board, Destination, Override, Status, Task, ThenReturn};
 use ferrite_core::protocol::TaskAction;
 
 fn shows(cx: &mut gpui::VisualTestContext, selector: &str) -> bool {

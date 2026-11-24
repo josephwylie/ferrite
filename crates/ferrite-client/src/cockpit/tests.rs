@@ -2382,13 +2382,13 @@ fn native_queue_history_records_consumption_once() {
     };
     assert_eq!(
         delivery(&cockpit),
-        [("held".into(), ferrite_core::engine::Delivery::Sending)],
+        [("held".into(), ferrite_core::prompt_queue::Delivery::Sending)],
         "pipe write is not admission"
     );
     cockpit.pump();
     assert_eq!(
         delivery(&cockpit),
-        [("held".into(), ferrite_core::engine::Delivery::Queued)]
+        [("held".into(), ferrite_core::prompt_queue::Delivery::Queued)]
     );
     fake.streams.borrow()[0].send(ended()).unwrap();
     cockpit.pump();
@@ -3308,7 +3308,7 @@ fn a_queued_prompt_is_removed_by_its_own_id() {
     assert_eq!(texts, ["third", "second", "first"], "newest first");
     assert!(queue
         .iter()
-        .all(|item| item.delivery == ferrite_core::engine::Delivery::Queued));
+        .all(|item| item.delivery == ferrite_core::prompt_queue::Delivery::Queued));
 
     cockpit.remove_queued_item(thread, &queue[1].id, true);
     cockpit.pump();
@@ -3385,7 +3385,7 @@ fn a_queue_that_folds_says_steering_and_send_now_never_interrupts() {
     assert!(cockpit.queue(thread, "also this".into()).now().unwrap());
     cockpit.pump();
     let item = cockpit.thread(thread).unwrap().queue()[0].clone();
-    assert_eq!(item.delivery, ferrite_core::engine::Delivery::Folding);
+    assert_eq!(item.delivery, ferrite_core::prompt_queue::Delivery::Folding);
 
     cockpit.send_queued_now(thread, &item.id);
     cockpit.pump();

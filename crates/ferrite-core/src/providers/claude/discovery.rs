@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use serde_json::Value;
 
-use crate::{import::Candidate, provider::Provider};
+use crate::{provider::Provider, session_file::Candidate};
 
 const MAX_SCAN_BYTES: u64 = 256 * 1024;
 

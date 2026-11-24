@@ -17,7 +17,7 @@
 
 use super::workflows::Pick;
 use super::*;
-use ferrite_core::factory::{Act, Agent, Proposal, ProposalId, ProposalStatus, TaskId};
+use ferrite_core::factory_board::{Act, Agent, Proposal, ProposalId, ProposalStatus, TaskId};
 use ferrite_core::protocol::{CoordinatorAction, Done};
 use ferrite_pane::composer::{Composer, Role};
 

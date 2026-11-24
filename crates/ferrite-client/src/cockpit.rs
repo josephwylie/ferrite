@@ -17,10 +17,14 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use ferrite_core::activity::{AgentKey, DecisionHandle, Subject};
+pub use ferrite_core::activity::ToolTiming;
+pub use ferrite_core::digest::title_from_prompt;
 pub use ferrite_core::engine::{
-    title_from_prompt, Admission, AgentLaunch, Engine, HistoryDirection, Preparation,
-    ProviderChoice, RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
+    Admission, AgentLaunch, Engine, Preparation, RssSampler, SpawnRequest, Spawner,
 };
+pub use ferrite_core::pane_update::SubjectUpdate;
+pub use ferrite_core::prompt_history::HistoryDirection;
+pub use ferrite_core::provider::ProviderChoice;
 use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::notifications::{DecisionNoticeId, NoticeId, Notifications};
 use ferrite_core::project::ProjectId;
@@ -53,11 +57,11 @@ mod shared;
 
 /// What changed for one of the window's Panes in a frame, its Thread named
 /// by its key.
-pub type PaneUpdate = ferrite_core::engine::PaneUpdate<ThreadKey>;
+pub type PaneUpdate = ferrite_core::pane_update::PaneUpdate<ThreadKey>;
 /// A draft's first send, done: the Thread it became, by its key.
-pub type Bootstrapped = ferrite_core::engine::Bootstrapped<ThreadKey>;
+pub type Bootstrapped = ferrite_core::roster::Bootstrapped<ThreadKey>;
 /// A first send settled by `pump`, its Thread named by its key.
-pub type BootstrapResult = ferrite_core::engine::BootstrapResult<ThreadKey>;
+pub type BootstrapResult = ferrite_core::roster::BootstrapResult<ThreadKey>;
 /// A Session the watchdog replaced, its Thread named by its key.
 pub type Restart = ferrite_core::engine::Restart<ThreadKey>;
 
@@ -152,7 +156,7 @@ struct Said {
     bootstrap_results: Vec<BootstrapResult>,
     /// The browser messages, each with the Thread its page is of.
     browser: Vec<(ThreadKey, ServerMessage)>,
-    allowance_warnings: Vec<ferrite_core::providers::limits::AllowanceWarning>,
+    allowance_warnings: Vec<ferrite_core::allowance::AllowanceWarning>,
     /// What API callers asked of the windows, oldest first.
     asked: Vec<Asked>,
 }
@@ -1181,7 +1185,7 @@ impl Cockpit {
         machine: MachineId,
         roots: Vec<(Provider, PathBuf)>,
         cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<ferrite_core::import::Candidate>>>> {
+    ) -> Option<Receiver<io::Result<Vec<ferrite_core::session_file::Candidate>>>> {
         match &mut self.machines.get_mut(&machine)?.link {
             Link::InProcess(engine) => engine.discover_sessions(roots, cap),
             Link::Server(server) => server.discovery().discover_sessions(roots, cap),
@@ -1907,7 +1911,7 @@ impl Cockpit {
         &mut self,
         key: ThreadKey,
         query: &str,
-    ) -> io::Result<Receiver<io::Result<Vec<ferrite_core::providers::FileSuggestion>>>> {
+    ) -> io::Result<Receiver<io::Result<Vec<ferrite_core::prompt_files::FileSuggestion>>>> {
         let (machine, thread) = self.at_mut(key).ok_or_else(|| io::Error::from(gone()))?;
         let asked = match &mut machine.link {
             Link::InProcess(engine) => engine.search_files(thread, query),
@@ -2838,7 +2842,7 @@ impl Cockpit {
     }
 
     /// The allowance warnings due since the last take, oldest first.
-    pub fn take_allowance_warnings(&mut self) -> Vec<ferrite_core::providers::limits::AllowanceWarning> {
+    pub fn take_allowance_warnings(&mut self) -> Vec<ferrite_core::allowance::AllowanceWarning> {
         std::mem::take(&mut self.said.allowance_warnings)
     }
 
@@ -2854,7 +2858,7 @@ impl Cockpit {
 
     /// Every Factory's Tasks on `machine`, as its Server last said them
     /// (ADR 0037).
-    pub fn factory(&self, machine: MachineId) -> OnMachine<'_, ferrite_core::factory::Board> {
+    pub fn factory(&self, machine: MachineId) -> OnMachine<'_, ferrite_core::factory_board::Board> {
         self.reading(machine, |shared| &shared.factory)
     }
 
@@ -2962,7 +2966,7 @@ impl Cockpit {
     /// `machine`'s provider's announced model rows, else the fallback
     /// catalog.
     pub fn model_catalog(&self, machine: MachineId, provider: Provider) -> Vec<ModelInfo> {
-        ferrite_core::providers::models::catalog(provider, &self.announced_models(machine, provider))
+        ferrite_core::models::catalog(provider, &self.announced_models(machine, provider))
     }
 
     pub fn set_model(&mut self, thread: ThreadKey, model: Option<String>) -> Ask<()> {
@@ -3263,7 +3267,7 @@ impl Cockpit {
     }
 
     /// A fixture world's Factory board, as a Server would say it.
-    pub fn fixture_factory(&mut self, board: ferrite_core::factory::Board) {
+    pub fn fixture_factory(&mut self, board: ferrite_core::factory_board::Board) {
         self.receive_fixture(ServerMessage::Factory { revision: 0, board });
     }
 
@@ -3383,7 +3387,7 @@ pub enum Asked {
     TaskAlert {
         project: ProjectKey,
         task: String,
-        status: ferrite_core::factory::Status,
+        status: ferrite_core::factory_board::Status,
         title: String,
         detail: Option<String>,
     },

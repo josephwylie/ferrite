@@ -6,7 +6,7 @@
 #[allow(unused_imports)]
 use super::*;
 use crate::cockpit::workflows::{Field, Pick, StepDrag, Surface};
-use ferrite_core::factory::{Destination, RouteKind, Template};
+use ferrite_core::factory_board::{Destination, RouteKind, Template};
 
 fn shows(cx: &mut gpui::VisualTestContext, selector: &str) -> bool {
     debug_bounds(cx, selector.to_string()).is_some()
@@ -357,7 +357,7 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
         view.apply_pick(
             Pick::Route {
                 step: "s-5".into(),
-                kind: RouteKind::Merge(ferrite_core::factory::MergeOutcome::Merged),
+                kind: RouteKind::Merge(ferrite_core::factory_board::MergeOutcome::Merged),
                 to: Destination::Human,
             },
             cx,
@@ -409,7 +409,7 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
             ("s-4", RouteKind::Finished, Destination::Coordinator),
             (
                 "s-5",
-                RouteKind::Merge(ferrite_core::factory::MergeOutcome::Merged),
+                RouteKind::Merge(ferrite_core::factory_board::MergeOutcome::Merged),
                 Destination::Complete,
             ),
         ] {
@@ -661,7 +661,7 @@ fn the_process_menus_arrows_walk_from_the_chosen_process(cx: &mut TestAppContext
     view.update(cx, |view, cx| {
         let step = view.shown_step(cx).unwrap().id.clone();
         let instructions = Some("Reply OK.".to_string());
-        let change = ferrite_core::factory::StepChange { instructions, ..Default::default() };
+        let change = ferrite_core::factory_board::StepChange { instructions, ..Default::default() };
         view.edit_step(step, change, cx);
     });
     tick(cx);

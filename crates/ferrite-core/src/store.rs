@@ -755,7 +755,7 @@ impl LogRecord {
 /// The Notice a provider switch leaves in the transcript, live and on
 /// replay alike.
 pub(crate) fn handover_notice(to: Provider, model: Option<&str>) -> String {
-    let label = crate::providers::models::label(model.unwrap_or("default"), &[]);
+    let label = crate::models::label(model.unwrap_or("default"), &[]);
     format!("continued on {to} · {label} — the earlier conversation is handed over as context")
 }
 

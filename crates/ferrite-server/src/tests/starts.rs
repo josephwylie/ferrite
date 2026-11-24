@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::*;
-use ferrite_core::factory::{GitHubItem, GitHubQuery, GitHubRead};
+use ferrite_core::factory_board::{GitHubItem, GitHubQuery, GitHubRead};
 use ferrite_core::server::github::GitHub;
 
 /// GitHub as the test scripts it: each read takes the next answer (an

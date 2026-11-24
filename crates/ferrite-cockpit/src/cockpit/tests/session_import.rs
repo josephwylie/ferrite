@@ -269,7 +269,7 @@ fn the_import_picker_fills_when_the_listing_answers(cx: &mut TestAppContext) {
     tick(cx);
     assert!(session_rows(&view, cx).is_empty(), "still listing");
 
-    tx.send(Ok(vec![ferrite_core::import::Candidate {
+    tx.send(Ok(vec![ferrite_core::session_file::Candidate {
         provider: Provider::Claude,
         path: "/sessions/one.jsonl".into(),
         title: Some("Fix the startup latency\nand more".into()),
@@ -535,7 +535,7 @@ fn a_late_listing_is_dropped_by_a_palette_reopened_elsewhere(cx: &mut TestAppCon
         assert_ne!(palette.scope, crate::palette::PaletteScope::Sessions);
         assert!(palette.listing.is_none(), "the listing was let go");
     });
-    let late = tx.send(Ok(vec![ferrite_core::import::Candidate {
+    let late = tx.send(Ok(vec![ferrite_core::session_file::Candidate {
         provider: Provider::Claude,
         path: "/sessions/late.jsonl".into(),
         title: Some("Too late".into()),

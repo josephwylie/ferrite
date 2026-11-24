@@ -385,7 +385,7 @@ impl ToolBlock {
         // (Claude's Bash `description`: "Run cargo test to identify failing
         // tests").
         let summary = if tools::is_command_run(&self.name) && !self.summary.is_empty() {
-            crate::providers::shell::unwrap_shell(&self.summary)
+            crate::shell::unwrap_shell(&self.summary)
         } else {
             std::borrow::Cow::Borrowed(self.title.as_deref().unwrap_or(&self.summary))
         };
@@ -2735,7 +2735,7 @@ impl Transcript {
                 // Codex's patch item names its edit up front: its row (and
                 // an approval it waits on) shows the diff it would make.
                 let diffs = if name == "fileChange" {
-                    crate::providers::file_change_diffs(&input)
+                    crate::file_change::file_change_diffs(&input)
                         .into_iter()
                         .map(|(path, hunks)| Diff::new(path, hunks))
                         .collect()

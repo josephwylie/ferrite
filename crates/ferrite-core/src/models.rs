@@ -14,9 +14,6 @@
 use crate::provider::Provider;
 use crate::ModelInfo;
 
-mod cache;
-pub(crate) use cache::ModelCache;
-
 /// The effort ladder every Claude model takes, as the CLI announces it.
 const CLAUDE_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 /// The Codex ladders, as `model/list` announced them (0.156.0).
