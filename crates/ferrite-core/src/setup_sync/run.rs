@@ -1,8 +1,8 @@
 //! One sync of this computer's setup with one Machine's (ADR 0048): both
 //! sides scanned, [`reconcile`]d with the state they last agreed on, and
 //! what changed moved each way. Each side is rescanned once all of it is
-//! done, and only then is the base written, from what the two now hold
-//! alike: a sync cut short anywhere leaves the base it began from, and the
+//! done, when anything was, and only then is the base written, from what
+//! the two now hold alike: a sync cut short anywhere leaves the base it began from, and the
 //! next one finishes it. What it removes on this computer goes to a trash
 //! folder, not away.
 
@@ -270,10 +270,15 @@ pub fn run(
     let pulled = take_here(job, &actions, &here, &far, there, &trash, cancel)?;
     synced.trashed = trash.exists().then_some(trash);
 
-    let mut here = job.home.scan(&unread);
-    let mut far = tree::scan_far(there, &Root::Setup, &unread)?;
-    settle(job, &base, &mut here, &mut far, &unread);
-    store::write_over(&job.dir.join(BASE), &serde_json::to_vec(&agreed(&base, &here, &far))?)?;
+    if !actions.is_empty() {
+        here = job.home.scan(&unread);
+        far = tree::scan_far(there, &Root::Setup, &unread)?;
+        settle(job, &base, &mut here, &mut far, &unread);
+    }
+    let agreed = agreed(&base, &here, &far);
+    if agreed != base {
+        store::write_over(&job.dir.join(BASE), &serde_json::to_vec(&agreed)?)?;
+    }
     for (side, manifest) in [(Side::Here, here), (Side::There, far)] {
         synced.problems.extend(manifest.problems.into_iter().map(|(path, error)| Problem { path, side, error }));
     }
