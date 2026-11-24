@@ -54,12 +54,13 @@ pub enum Entry {
     Unknown,
 }
 
-/// What a tree op works on. Each side resolves it itself.
+/// What a tree op works on. Each side resolves it itself. A kind this side
+/// does not know, whatever it carries, reads as `Unknown`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "path", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Root {
     /// A directory of the Server's computer, `~` its home.
-    Path(PathBuf),
+    Path { path: PathBuf },
     #[serde(other)]
     Unknown,
 }

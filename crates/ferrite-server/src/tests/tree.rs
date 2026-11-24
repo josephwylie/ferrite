@@ -15,7 +15,7 @@ fn connect(cockpit: &mut ferrite_core::cockpit::Cockpit) -> Box<dyn Exchange> {
 fn mirror(source: &Path, dest: &Path, skip: &[String], exchange: &mut dyn Exchange) -> io::Result<Sent> {
     tree::mirror(
         source,
-        &Root::Path(dest.to_path_buf()),
+        &Root::Path { path: dest.to_path_buf() },
         skip,
         exchange,
         &mut |_| {},
@@ -98,7 +98,7 @@ fn a_tree_reaches_a_machine_whole_and_sending_it_again_moves_nothing() {
     }
 
     let Reply::Bytes { data, size } = exchange.call(Request::Read {
-        root: Root::Path(dest.clone()),
+        root: Root::Path { path: dest.clone() },
         path: "big.bin".into(),
         offset: CHUNK_SIZE as u64,
     })
@@ -229,7 +229,7 @@ fn a_refused_entry_fails_the_send_by_its_name_and_its_later_requests_do_no_harm(
     let refused = tree::send(
         &source,
         &steps,
-        &Root::Path(dest.clone()),
+        &Root::Path { path: dest.clone() },
         &mut *exchange,
         &mut |_| {},
         &Cancellation::default(),
@@ -239,7 +239,7 @@ fn a_refused_entry_fails_the_send_by_its_name_and_its_later_requests_do_no_harm(
 
     let Reply::Scanned { manifest } = exchange
         .call(Request::Scan {
-            root: Root::Path(dest.clone()),
+            root: Root::Path { path: dest.clone() },
             skip: Vec::new(),
         })
         .unwrap()
@@ -276,7 +276,7 @@ fn a_file_that_shrinks_as_it_is_sent_fails_by_its_name_and_the_connection_sends_
     let changed = tree::send(
         &source,
         &[shrunk],
-        &Root::Path(dest.clone()),
+        &Root::Path { path: dest.clone() },
         &mut *exchange,
         &mut |_| {},
         &Cancellation::default(),
@@ -304,7 +304,7 @@ fn a_tree_op_outside_its_root_is_refused() {
     let dest = harness.dir.join("box-tree");
     let victim = harness.dir.join("victim.txt");
     write(&victim, "keep me");
-    let root = Root::Path(dest.clone());
+    let root = Root::Path { path: dest.clone() };
     let mut exchange = connect(&mut cockpit);
 
     for path in ["../victim.txt", "a/../../victim.txt", "", "./x"] {
@@ -337,7 +337,7 @@ fn a_tree_op_outside_its_root_is_refused() {
 
     for named in ["relative/dir", "~", "/"] {
         let refused = exchange.call(Request::Read {
-            root: Root::Path(named.into()),
+            root: Root::Path { path: named.into() },
             path: "nothing-here".into(),
             offset: 0,
         })

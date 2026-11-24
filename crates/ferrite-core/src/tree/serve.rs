@@ -122,7 +122,7 @@ impl Writes {
 }
 
 fn resolve(root: &Root) -> io::Result<PathBuf> {
-    let Root::Path(path) = root else {
+    let Root::Path { path } = root else {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "This server does not know that kind of root",

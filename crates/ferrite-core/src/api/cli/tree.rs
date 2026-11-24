@@ -103,7 +103,7 @@ fn send(
     })?;
     tree::mirror(
         source,
-        &Root::Path(dest),
+        &Root::Path { path: dest },
         skip,
         &mut tree::Remote::new(attached.client),
         &mut |_| {},
