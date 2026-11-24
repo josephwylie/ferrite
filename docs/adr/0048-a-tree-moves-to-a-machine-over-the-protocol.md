@@ -266,9 +266,14 @@ Windows window.
 - **A file that changes or cannot be read** during the copy is left by its
   name, sent once more, and if it still cannot be, listed when the copy is
   in: the sheet stays up on Done to list it.
-- **Windows to Linux**: after the copy, the source repo's effective
+- **Windows to Linux**: Windows keeps no permission bits, so the copy
+  gives each file its own (`placement::give_modes`): 0755 for one the git
+  index has as executable (100755), 0600 for one git ignores, this
+  computer's own as a `.env` is, 0644 for the rest. From a side that keeps
+  bits they go as they are. After the copy, the source repo's effective
   `core.autocrlf` and `core.filemode=false` go into the copy's local config
-  (`placement::align_git`), so git there reads the tree as unchanged.
+  (`placement::align_git`), as a Windows checkout has them, so git there
+  reads the tree as unchanged.
 - **A Machine not reached or not set up** is listed dimmed with why
   ("connecting", "sign in", "not set up", "offline"). A press on it opens
   Connections; the arrows pass over it, as over every dimmed row.

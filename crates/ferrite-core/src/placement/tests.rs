@@ -141,3 +141,49 @@ fn what_git_ignores_is_listed_each_directory_whole_with_its_size() {
     assert_eq!(size(&root, "target"), 305);
     assert_eq!(ignored(&scratch("not-git")), []);
 }
+
+/// Listed where no permission bits are kept (Windows), a copy's files take
+/// theirs from git: executable as the index has it, private where git
+/// ignores them, readable by all otherwise. Bits kept stay as they are.
+#[test]
+fn a_copy_from_a_side_that_keeps_no_bits_takes_them_from_git() {
+    let root = scratch("modes");
+    let git = |args: &[&str]| crate::workspace::git_for_tests(&root, args);
+    git(&["init", "-q"]);
+    fs::write(root.join(".gitignore"), ".env\ntarget/\n").unwrap();
+    fs::write(root.join("run.sh"), "#!/bin/sh\n").unwrap();
+    fs::write(root.join("main.rs"), "fn main() {}\n").unwrap();
+    fs::write(root.join("notes.txt"), "not added yet").unwrap();
+    fs::write(root.join(".env"), "KEY=1\n").unwrap();
+    fs::create_dir_all(root.join("target")).unwrap();
+    fs::write(root.join("target/app"), "built").unwrap();
+    git(&["add", ".gitignore", "run.sh", "main.rs"]);
+    git(&["update-index", "--chmod=+x", "run.sh"]);
+
+    let mut listed = tree::scan(&root, &[]).unwrap();
+    for entry in listed.entries.values_mut() {
+        if let Entry::File { mode, .. } = entry {
+            *mode = None;
+        }
+    }
+    listed.entries.insert(
+        "kept".into(),
+        Entry::File {
+            size: 0,
+            sha256: String::new(),
+            mode: Some(0o700),
+        },
+    );
+    give_modes(&root, &mut listed);
+    let mode = |path: &str| match &listed.entries[path] {
+        Entry::File { mode, .. } => *mode,
+        entry => panic!("{path} is {entry:?}"),
+    };
+    assert_eq!(mode("run.sh"), Some(0o755));
+    for readable in ["main.rs", "notes.txt", ".gitignore", ".git/HEAD"] {
+        assert_eq!(mode(readable), Some(0o644), "{readable}");
+    }
+    assert_eq!(mode(".env"), Some(0o600));
+    assert_eq!(mode("target/app"), Some(0o600));
+    assert_eq!(mode("kept"), Some(0o700));
+}

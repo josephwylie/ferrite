@@ -745,8 +745,23 @@ pub fn mirror(
     progress: &mut dyn FnMut(Progress),
     cancel: &Cancellation,
 ) -> Result<Sent, Stopped> {
+    mirror_listed(source, dest, skip, &mut |_| {}, exchange, progress, cancel)
+}
+
+/// [`mirror`], what this side lists put as `listed` puts it before the
+/// plan: the bits each file lands with, where this computer keeps none.
+pub fn mirror_listed(
+    source: &Path,
+    dest: &Root,
+    skip: &[String],
+    listed: &mut dyn FnMut(&mut Manifest),
+    exchange: &mut dyn Exchange,
+    progress: &mut dyn FnMut(Progress),
+    cancel: &Cancellation,
+) -> Result<Sent, Stopped> {
     let asked = exchange.ask(scan_request(dest, skip, None))?;
-    let here = scan(source, skip)?;
+    let mut here = scan(source, skip)?;
+    listed(&mut here);
     let there = pages(exchange, dest, skip, asked)?;
     let mut sent = send(source, &plan(&here, &there, skip), dest, exchange, progress, cancel)?;
     for (side, manifest) in [(Side::Here, here), (Side::There, there)] {

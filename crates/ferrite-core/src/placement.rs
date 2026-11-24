@@ -2,6 +2,7 @@
 //! copied there through the tree ops, and which Project there is its
 //! counterpart, the one a Draft's environment chip swaps to.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -10,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::chunked::{Cancellation, Progress};
-use crate::tree::{self, Exchange, Manifest, Root, Sent, Stopped};
+use crate::tree::{self, Entry, Exchange, Manifest, Root, Sent, Stopped};
 use crate::project::ProjectId;
 use crate::workspace::registry::Registry;
 use crate::workspace::Repositories;
@@ -173,8 +174,9 @@ pub fn occupied(dest: &Path, exchange: &mut dyn Exchange) -> io::Result<bool> {
 /// Make `dest` on a Machine hold the Project folder `source`, `skip` left
 /// out: a mirror, so `dest` must be new or this copy's own. What could not
 /// be read as it was listed is sent once more, and what still could not is
-/// in the answer's problems. From Windows, the copy's git config then
-/// agrees with its files (see [`align_git`]).
+/// in the answer's problems. From Windows, which keeps no permission bits,
+/// each file lands with the bits [`give_modes`] gives it, and the copy's
+/// git config then agrees with its files (see [`align_git`]).
 pub fn copy(
     source: &Path,
     dest: &Path,
@@ -184,12 +186,14 @@ pub fn copy(
     cancel: &Cancellation,
 ) -> Result<Sent, Stopped> {
     let root = Root::Path { path: dest.to_path_buf() };
-    let mut sent = tree::mirror(source, &root, skip, exchange, progress, cancel)?;
+    let mut listed = |here: &mut Manifest| give_modes(source, here);
+    let mut sent = tree::mirror_listed(source, &root, skip, &mut listed, exchange, progress, cancel)?;
     if sent.problems.iter().any(|problem| problem.side == tree::Side::Here) {
-        let again = tree::mirror(source, &root, skip, exchange, progress, cancel).map_err(|stopped| Stopped {
-            sent: added(sent.clone(), stopped.sent),
-            error: stopped.error,
-        })?;
+        let again = tree::mirror_listed(source, &root, skip, &mut listed, exchange, progress, cancel)
+            .map_err(|stopped| Stopped {
+                sent: added(sent.clone(), stopped.sent),
+                error: stopped.error,
+            })?;
         sent = added(sent, again);
     }
     if cfg!(windows) {
@@ -212,11 +216,54 @@ fn added(first: Sent, then: Sent) -> Sent {
     }
 }
 
+/// Give each file of `listed`, a scan of the Project folder `source` on a
+/// computer that keeps no permission bits, the bits it lands with: 0755
+/// for one git tracks as executable, 0600 for one git ignores, this
+/// computer's own as a `.env` is, and 0644 for the rest. What kept its own
+/// bits keeps them.
+fn give_modes(source: &Path, listed: &mut Manifest) {
+    if !listed.entries.values().any(|entry| matches!(entry, Entry::File { mode: None, .. })) {
+        return;
+    }
+    let executable = executables(source);
+    let private: Vec<String> = ignored(source).into_iter().map(|ignored| ignored.path).collect();
+    let is_private = |path: &str| {
+        private.iter().any(|ignored| {
+            path.strip_prefix(ignored.as_str())
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        })
+    };
+    for (path, entry) in &mut listed.entries {
+        if let Entry::File { mode: mode @ None, .. } = entry {
+            *mode = Some(if executable.contains(path) {
+                0o755
+            } else if is_private(path) {
+                0o600
+            } else {
+                0o644
+            });
+        }
+    }
+}
+
+/// The files git tracks as executable (100755) in the checkout at `root`,
+/// by their paths under it: none outside git.
+fn executables(root: &Path) -> BTreeSet<String> {
+    let Ok(listed) = crate::workspace::git(root, &["ls-files", "--stage", "-z"]) else {
+        return BTreeSet::new();
+    };
+    listed
+        .split('\0')
+        .filter_map(|line| line.strip_prefix("100755 ")?.split_once('\t'))
+        .map(|(_, path)| path.to_string())
+        .collect()
+}
+
 /// Give the copy at `dest` of the repository at `source` this side's
-/// `core.autocrlf` and `core.filemode` false, so git there reads files
-/// written as this computer's checkout has them, with its line ends and no
-/// executable bits, as unchanged. Nothing for a folder whose `.git` is not
-/// a directory.
+/// `core.autocrlf` and `core.filemode` false, as a checkout on a computer
+/// that keeps no executable bits has it, so git there reads files written
+/// as this computer's checkout has them, with its line ends, as unchanged.
+/// Nothing for a folder whose `.git` is not a directory.
 pub fn align_git(source: &Path, dest: &Root, exchange: &mut dyn Exchange, cancel: &Cancellation) -> io::Result<()> {
     if !source.join(".git").is_dir() {
         return Ok(());
