@@ -683,10 +683,11 @@ fn a_rewrite_keeps_the_far_side_permission_bits_and_a_new_file_takes_the_senders
     assert_eq!(mode(&dest.join("fresh")), 0o640);
 }
 
-/// A Project copied from this computer reads as unchanged to git there:
-/// its config takes this side's line-end rule and ignores file modes.
+/// A Project copied from this computer reads as unchanged to git there,
+/// its config holding none of this computer's line-end or file-mode
+/// settings.
 #[test]
-fn a_project_copy_takes_a_git_config_that_reads_its_files_as_unchanged() {
+fn a_project_copy_reads_as_unchanged_to_git_there() {
     let harness = start("tree-project-copy");
     let sent = Arc::default();
     let mut cockpit = machine(&harness, &sent);
@@ -695,41 +696,35 @@ fn a_project_copy_takes_a_git_config_that_reads_its_files_as_unchanged() {
     let git = |repo: &Path, args: &[&str]| ferrite_core::workspace::git_for_tests(repo, args);
     std::fs::create_dir_all(&source).unwrap();
     git(&source, &["init", "-q", "-b", "main"]);
-    write(&source.join("src/main.rs"), "fn main() {}\n");
-    write(&source.join(".gitignore"), "target/\n");
+    write(&source.join("src/main.rs"), "fn main() {}
+");
+    write(&source.join(".gitignore"), "target/
+");
     write(&source.join("target/app"), "built");
     git(&source, &["add", "."]);
     git(&source, &["-c", "user.email=test@example.invalid", "-c", "user.name=test", "commit", "-qm", "base"]);
 
     let mut exchange = connect(&mut cockpit);
     let copied = ferrite_core::placement::copy(
-        &source,
-        &dest,
-        &["target".into()],
+        &ferrite_core::placement::CopyJob {
+            source: &source,
+            dest: &dest,
+            skip: &["target".into()],
+            kept: &harness.dir.join("kept"),
+        },
         &mut *exchange,
         &mut |_| {},
         &Cancellation::default(),
     )
     .unwrap();
+    let ferrite_core::placement::Copied::Sent(copied) = copied else {
+        panic!("an empty destination takes the copy");
+    };
     assert_eq!(copied.problems, []);
     assert!(!dest.join("target").exists());
-    ferrite_core::placement::align_git(
-        &source,
-        &Root::Path { path: dest.clone() },
-        &mut *exchange,
-        &Cancellation::default(),
-    )
-    .unwrap();
-
-    let here = std::process::Command::new("git")
-        .arg("-C")
-        .arg(&source)
-        .args(["config", "--get", "core.autocrlf"])
-        .output()
-        .unwrap();
-    let autocrlf = String::from_utf8_lossy(&here.stdout).trim().to_string();
-    let expected = if autocrlf.is_empty() { "false" } else { &autocrlf };
-    assert_eq!(git(&dest, &["config", "--local", "--get", "core.autocrlf"]).trim(), expected);
-    assert_eq!(git(&dest, &["config", "--local", "--get", "core.filemode"]).trim(), "false");
+    let config = std::fs::read_to_string(dest.join(".git/config")).unwrap();
+    if cfg!(windows) {
+        assert!(!config.contains("autocrlf") && !config.contains("filemode"), "{config}");
+    }
     assert_eq!(git(&dest, &["status", "--porcelain"]), "");
 }

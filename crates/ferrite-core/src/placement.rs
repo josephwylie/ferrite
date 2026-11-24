@@ -2,23 +2,23 @@
 //! copied there through the tree ops, and which Project there is its
 //! counterpart, the one a Draft's environment chip swaps to.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
 
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-use crate::chunked::{Cancellation, Progress};
-use crate::tree::{self, Entry, Exchange, Manifest, Root, Sent, Stopped};
+use crate::chunked::{self, Cancellation, Progress};
 use crate::project::ProjectId;
+use crate::tree::{self, Entry, Exchange, Manifest, Root, Sent, Side, Stopped};
 use crate::workspace::registry::Registry;
 use crate::workspace::Repositories;
 
-/// Where a Project of this computer that was no repository was copied to
-/// on a Machine: the one record of which Project there is its counterpart.
-/// A repository needs none, since a copy carries its `.git`.
+/// Where a Project of this computer was copied to on a Machine: which
+/// Project there is its counterpart, whatever git says of either.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Placement {
     pub local_root: PathBuf,
@@ -29,10 +29,7 @@ const PLACEMENTS: &str = "placements.json";
 
 /// The Placements on the Machine whose files are in `dir` (`machine::dir`).
 pub fn placements(dir: &Path) -> Vec<Placement> {
-    fs::read(dir.join(PLACEMENTS))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+    read_list(&dir.join(PLACEMENTS))
 }
 
 /// Keep `placement`, in place of any for the same Project of this computer.
@@ -40,8 +37,93 @@ pub fn place(dir: &Path, placement: Placement) -> io::Result<()> {
     let mut known = placements(dir);
     known.retain(|old| old.local_root != placement.local_root);
     known.push(placement);
-    fs::create_dir_all(dir)?;
-    crate::file_operations::replace_file(&dir.join(PLACEMENTS), &serde_json::to_vec_pretty(&known)?)
+    write_list(&dir.join(PLACEMENTS), &known)
+}
+
+/// A copy begun on a Machine and not finished: cancelled, cut off, or
+/// stopped with the app. Its destination holds part of the Project, which
+/// only a resume of this copy may change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Unfinished {
+    pub local_root: PathBuf,
+    /// Where it goes, as the copy gave it to the Machine's Server.
+    pub remote_root: PathBuf,
+    /// Every path the copy has sent there or may have: all a resume may
+    /// remove, when the Project no longer holds it.
+    #[serde(default)]
+    pub paths: BTreeSet<String>,
+}
+
+const UNFINISHED: &str = "unfinished.json";
+
+/// Where the unfinished copies of the Project at `local_root` go, on the
+/// Machine whose files are in `dir`, the one begun last at the end.
+pub fn unfinished(dir: &Path, local_root: &Path) -> Vec<PathBuf> {
+    read_list::<Unfinished>(&dir.join(UNFINISHED))
+        .into_iter()
+        .filter(|copy| copy.local_root == local_root)
+        .map(|copy| copy.remote_root)
+        .collect()
+}
+
+fn unfinished_at(dir: &Path, local_root: &Path, remote_root: &Path) -> Option<Unfinished> {
+    read_list::<Unfinished>(&dir.join(UNFINISHED))
+        .into_iter()
+        .find(|copy| copy.local_root == local_root && copy.remote_root == remote_root)
+}
+
+/// Keep `copy`, in place of any to the same destination of the same
+/// Project, last.
+fn begun(dir: &Path, copy: Unfinished) -> io::Result<()> {
+    let mut known: Vec<Unfinished> = read_list(&dir.join(UNFINISHED));
+    known.retain(|old| !(old.local_root == copy.local_root && old.remote_root == copy.remote_root));
+    known.push(copy);
+    write_list(&dir.join(UNFINISHED), &known)
+}
+
+fn finished(dir: &Path, local_root: &Path, remote_root: &Path) -> io::Result<()> {
+    let mut known: Vec<Unfinished> = read_list(&dir.join(UNFINISHED));
+    let before = known.len();
+    known.retain(|old| !(old.local_root == local_root && old.remote_root == remote_root));
+    if known.len() == before {
+        return Ok(());
+    }
+    write_list(&dir.join(UNFINISHED), &known)
+}
+
+/// What this computer keeps of a Machine whose files were in `from` goes
+/// with it to `to`: its target changed, and it is the same Machine.
+pub fn follow(from: &Path, to: &Path) -> io::Result<()> {
+    if from == to {
+        return Ok(());
+    }
+    for placement in placements(from) {
+        place(to, placement)?;
+    }
+    for copy in read_list::<Unfinished>(&from.join(UNFINISHED)) {
+        begun(to, copy)?;
+    }
+    for name in [PLACEMENTS, UNFINISHED] {
+        match fs::remove_file(from.join(name)) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn read_list<T: DeserializeOwned>(path: &Path) -> Vec<T> {
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn write_list<T: Serialize>(path: &Path, list: &[T]) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    crate::file_operations::replace_file(path, &serde_json::to_vec_pretty(list)?)
 }
 
 /// Which way a Project's counterpart is looked for, and the Placements of
@@ -92,7 +174,8 @@ pub fn counterpart(
 
 /// Why `dest`, a directory on a Machine as the operator gave it, cannot
 /// take a copy: it must be absolute (`/`, or a drive's on a Windows
-/// Machine) or under `~`, and not the home or a filesystem's root itself.
+/// Machine) or under `~`, and not the home or a filesystem's root itself,
+/// nor reached through `.` or `..`.
 pub fn refuse_destination(dest: &str) -> Option<&'static str> {
     fn under_drive(dest: &str) -> Option<&str> {
         let mut chars = dest.chars();
@@ -104,12 +187,23 @@ pub fn refuse_destination(dest: &str) -> Option<&'static str> {
         .strip_prefix("~/")
         .or_else(|| dest.strip_prefix('/'))
         .or_else(|| under_drive(dest));
+    let named = |rest: &str, name: &str| rest.split(['/', '\\']).any(|part| part == name);
     match under {
         _ if dest.is_empty() || dest == "~" => Some("Choose a folder, not the home folder"),
         None => Some("Start the path with / or ~/"),
-        Some(rest) if rest.split(['/', '\\']).any(|part| part == "..") => Some("A path through .. is not allowed"),
+        Some(rest) if named(rest, "..") => Some("A path through .. is not allowed"),
+        Some(rest) if named(rest, ".") => Some("A folder cannot be named ."),
         Some(_) => None,
     }
+}
+
+/// Why the Project folder at `root` cannot be copied as it is: a linked
+/// worktree's `.git` is a file naming its repository by a path of this
+/// computer, which the copy would carry to where nothing is.
+pub fn refuse_source(root: &Path) -> Option<&'static str> {
+    root.join(".git")
+        .is_file()
+        .then_some("This folder is a git worktree. Copy its main checkout instead.")
 }
 
 /// An entry git ignores at the top of a Project folder's tree, which a
@@ -141,6 +235,53 @@ pub fn ignored(root: &Path) -> Vec<Ignored> {
         .collect()
 }
 
+/// The linked worktrees of the checkout at `root` that lie inside it
+/// (`.worktrees/feature`), by their paths under it: each one's `.git` names
+/// its repository by a path of this computer, so none is copied.
+pub fn worktrees(root: &Path) -> Vec<String> {
+    let Ok(listed) = crate::workspace::git(root, &["worktree", "list", "--porcelain", "-z"]) else {
+        return Vec::new();
+    };
+    let Ok(root) = dunce::canonicalize(root) else {
+        return Vec::new();
+    };
+    listed
+        .split('\0')
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .filter_map(|worktree| dunce::canonicalize(worktree).ok())
+        .filter_map(|worktree| {
+            let inside = worktree.strip_prefix(&root).ok()?;
+            let parts: Vec<String> = inside
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            (!parts.is_empty()).then(|| parts.join("/"))
+        })
+        .collect()
+}
+
+/// `ignored` without each entry that holds one of `worktrees`, and what a
+/// copy leaves out for them: those entries whole, and each worktree no
+/// ignored entry holds.
+pub fn without_worktrees(ignored: Vec<Ignored>, worktrees: &[String]) -> (Vec<Ignored>, Vec<String>) {
+    let holds = |entry: &str, worktree: &str| {
+        worktree
+            .strip_prefix(entry)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    };
+    let (holding, kept): (Vec<Ignored>, Vec<Ignored>) = ignored
+        .into_iter()
+        .partition(|entry| worktrees.iter().any(|worktree| holds(&entry.path, worktree)));
+    let mut left_out: Vec<String> = holding.iter().map(|entry| entry.path.clone()).collect();
+    left_out.extend(
+        worktrees
+            .iter()
+            .filter(|worktree| !holding.iter().any(|entry| holds(&entry.path, worktree)))
+            .cloned(),
+    );
+    (kept, left_out)
+}
+
 /// The bytes of the files at `path` under `root`, links not followed.
 pub fn size(root: &Path, path: &str) -> u64 {
     fn walk(path: &Path) -> u64 {
@@ -157,51 +298,301 @@ pub fn size(root: &Path, path: &str) -> u64 {
     walk(&root.join(path))
 }
 
-/// Whether `dest` on a Machine holds anything, read as a mirror there
-/// reads it: one that does takes no copy, which would remove what is there.
-pub fn occupied(dest: &Path, exchange: &mut dyn Exchange) -> io::Result<bool> {
-    let scan = tree::Request::Scan {
-        root: Root::Path { path: dest.to_path_buf() },
-        skip: Vec::new(),
-        after: None,
-    };
-    match exchange.call(scan)? {
-        tree::Reply::Scanned { manifest, .. } => Ok(!manifest.entries.is_empty() || !manifest.problems.is_empty()),
-        _ => Err(io::Error::other("the Machine did not answer the scan")),
+/// A Project folder of this computer as a copy sends it: what git would
+/// check out on a Machine. From a computer that keeps no permission bits
+/// (Windows), each file gets its own ([`Checkout::list`]); a file git has
+/// as LF in its index and this checkout as CRLF goes as LF, edits and all;
+/// and the copy's `.git/config` goes without this computer's line-end and
+/// file-mode settings, so git there reads the files as unchanged and keeps
+/// the bits an agent gives them. Everything else goes byte for byte.
+pub struct Checkout {
+    root: PathBuf,
+    /// Files git has as LF in its index and CRLF here.
+    crlf: BTreeSet<String>,
+    /// Files git has as executable (100755).
+    executable: BTreeSet<String>,
+    /// What git ignores, each directory whole.
+    ignored: Vec<String>,
+    from_windows: bool,
+}
+
+const GIT_CONFIG: &str = ".git/config";
+
+impl Checkout {
+    /// The checkout at `root`, as this computer's copies send it.
+    pub fn of(root: &Path) -> Self {
+        if cfg!(windows) {
+            Self::from_windows(root)
+        } else {
+            Self::as_it_is(root)
+        }
+    }
+
+    /// The checkout at `root`, sent byte for byte with its own bits.
+    pub fn as_it_is(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            crlf: BTreeSet::new(),
+            executable: BTreeSet::new(),
+            ignored: Vec::new(),
+            from_windows: false,
+        }
+    }
+
+    /// The checkout at `root` on a computer that keeps no permission bits
+    /// and checks text out with CRLF.
+    pub fn from_windows(root: &Path) -> Self {
+        let lines = |args: &[&str]| crate::workspace::git(root, args).unwrap_or_default();
+        let crlf = lines(&["ls-files", "--eol", "-z"])
+            .split('\0')
+            .filter_map(|record| {
+                let (info, path) = record.split_once('\t')?;
+                let mut info = info.split_whitespace();
+                let checked_out_as_lf = !info.clone().any(|field| field.contains("eol=crlf"));
+                (info.next() == Some("i/lf") && info.next() == Some("w/crlf") && checked_out_as_lf)
+                    .then(|| path.to_string())
+            })
+            .collect();
+        let executable = lines(&["ls-files", "--stage", "-z"])
+            .split('\0')
+            .filter_map(|line| line.strip_prefix("100755 ")?.split_once('\t'))
+            .map(|(_, path)| path.to_string())
+            .collect();
+        Self {
+            root: root.to_path_buf(),
+            crlf,
+            executable,
+            ignored: ignored(root).into_iter().map(|ignored| ignored.path).collect(),
+            from_windows: true,
+        }
+    }
+
+    /// `listed`, this checkout's scan, as it lands: each file's size and
+    /// hash those of what is sent, and each file without bits of its own
+    /// given 0755 when git has it as executable, 0600 when git ignores it
+    /// (this computer's own, as a `.env` is), else 0644.
+    pub fn list(&self, listed: &mut Manifest) {
+        for (path, entry) in &mut listed.entries {
+            let Entry::File { size, sha256, mode, .. } = entry else {
+                continue;
+            };
+            if self.converts(path) {
+                if let Some((sent_size, sent_sha256)) = self.as_sent(path, sha256) {
+                    (*size, *sha256) = (sent_size, sent_sha256);
+                }
+            }
+            if mode.is_none() && self.from_windows {
+                *mode = Some(if self.executable.contains(path) {
+                    0o755
+                } else if self.is_ignored(path) {
+                    0o600
+                } else {
+                    0o644
+                });
+            }
+        }
+    }
+
+    fn converts(&self, path: &str) -> bool {
+        self.crlf.contains(path) || (self.from_windows && path == GIT_CONFIG)
+    }
+
+    fn is_ignored(&self, path: &str) -> bool {
+        self.ignored.iter().any(|ignored| {
+            path.strip_prefix(ignored.as_str())
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        })
+    }
+
+    /// The size and hash of `path` as it is sent, when what is here now
+    /// still hashes to `listed`, its scan's hash.
+    fn as_sent(&self, path: &str, listed: &str) -> Option<(u64, String)> {
+        static SENT: Mutex<BTreeMap<String, (u64, String)>> = Mutex::new(BTreeMap::new());
+        let key = format!("{path}\0{listed}");
+        let cache = || SENT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(known) = cache().get(&key) {
+            return Some(known.clone());
+        }
+        let bytes = self.read(path).ok()?;
+        if chunked::hex(&Sha256::digest(&bytes)) != listed {
+            return None;
+        }
+        let sent = self.converted(path, bytes);
+        let known = (sent.len() as u64, chunked::hex(&Sha256::digest(&sent)));
+        let mut cache = cache();
+        if cache.len() >= 200_000 {
+            cache.clear();
+        }
+        cache.insert(key, known.clone());
+        Some(known)
+    }
+
+    fn read(&self, path: &str) -> io::Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        tree::Source::open(&self.root, path)?.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    fn converted(&self, path: &str, bytes: Vec<u8>) -> Vec<u8> {
+        if path == GIT_CONFIG {
+            let config = String::from_utf8_lossy(&bytes);
+            without_checkout_settings(&config).into_bytes()
+        } else {
+            lf(bytes)
+        }
     }
 }
 
-/// Make `dest` on a Machine hold the Project folder `source`, `skip` left
-/// out: a mirror, so `dest` must be new or this copy's own. What could not
-/// be read as it was listed is sent once more, and what still could not is
-/// in the answer's problems. From Windows, which keeps no permission bits,
-/// each file lands with the bits [`give_modes`] gives it, and the copy's
-/// git config then agrees with its files (see [`align_git`]).
-pub fn copy(
-    source: &Path,
-    dest: &Path,
-    skip: &[String],
-    exchange: &mut dyn Exchange,
-    progress: &mut dyn FnMut(Progress),
-    cancel: &Cancellation,
-) -> Result<Sent, Stopped> {
-    let root = Root::Path { path: dest.to_path_buf() };
-    let mut listed = |here: &mut Manifest| give_modes(source, here);
-    let mut sent = tree::mirror_listed(source, &root, skip, &mut listed, exchange, progress, cancel)?;
-    if sent.problems.iter().any(|problem| problem.side == tree::Side::Here) {
-        let again = tree::mirror_listed(source, &root, skip, &mut listed, exchange, progress, cancel)
-            .map_err(|stopped| Stopped {
-                sent: added(sent.clone(), stopped.sent),
-                error: stopped.error,
-            })?;
-        sent = added(sent, again);
+impl tree::Source for Checkout {
+    fn open(&self, path: &str) -> io::Result<Box<dyn Read + '_>> {
+        if self.converts(path) {
+            let bytes = self.read(path)?;
+            return Ok(Box::new(io::Cursor::new(self.converted(path, bytes))));
+        }
+        tree::Source::open(&self.root, path)
     }
-    if cfg!(windows) {
-        if let Err(error) = align_git(source, &root, exchange, cancel) {
-            return Err(Stopped { error, sent });
+}
+
+/// `bytes` with each CRLF made LF; a lone CR stays.
+fn lf(bytes: Vec<u8>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut bytes = bytes.into_iter().peekable();
+    while let Some(byte) = bytes.next() {
+        if byte != b'\r' || bytes.peek() != Some(&b'\n') {
+            out.push(byte);
         }
     }
-    Ok(sent)
+    out
+}
+
+/// A git config without its `core.autocrlf` and `core.filemode`: how this
+/// computer checks files out, which is not how a Machine does.
+fn without_checkout_settings(config: &str) -> String {
+    let mut core = false;
+    config
+        .split_inclusive('\n')
+        .filter(|line| {
+            let line = line.trim();
+            if let Some(header) = line.strip_prefix('[') {
+                let section = header.split([']', ' ', '"']).next().unwrap_or_default();
+                core = section.eq_ignore_ascii_case("core");
+                return true;
+            }
+            let key = line.split('=').next().unwrap_or_default().trim();
+            !(core && ["autocrlf", "filemode"].iter().any(|setting| key.eq_ignore_ascii_case(setting)))
+        })
+        .collect()
+}
+
+/// A copy of the Project folder at `source` to `dest` on a Machine.
+pub struct CopyJob<'a> {
+    pub source: &'a Path,
+    /// Where it goes, as the Machine's Server spells it.
+    pub dest: &'a Path,
+    /// What stays here: git-ignored entries left unticked, worktrees.
+    pub skip: &'a [String],
+    /// The Machine's own folder on this computer (`machine::dir`), which
+    /// keeps its unfinished copies.
+    pub kept: &'a Path,
+}
+
+/// How a copy stands as it goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Copying {
+    /// The Project's files being listed: this many so far.
+    Listing(usize),
+    /// Sent, the copy kept as unfinished until it ends.
+    Sending(Progress),
+}
+
+#[derive(Debug)]
+pub enum Copied {
+    /// The destination holds what this copy did not put there: nothing was
+    /// sent.
+    Occupied,
+    Sent(Sent),
+}
+
+/// How many entries a copy lists between two counts it reports.
+const COUNTED: usize = 250;
+
+/// Make `copy.dest` hold the Project folder `copy.source`, as git would
+/// check it out there ([`Checkout`]). A destination that holds anything
+/// takes a first copy of nothing. Before the first byte, the copy is kept
+/// as unfinished, with every path it may send; a later copy there resumes
+/// it, sending only what differs and removing only what this copy sent
+/// that the Project no longer holds: what anyone else put there stays.
+/// What could not be read as it was listed is sent once more, and what
+/// still could not is in the answer's problems. Once done the copy is no
+/// longer kept as unfinished.
+pub fn copy(
+    copy: &CopyJob,
+    exchange: &mut dyn Exchange,
+    progress: &mut dyn FnMut(Copying),
+    cancel: &Cancellation,
+) -> Result<Copied, Stopped> {
+    if let Some(refusal) = refuse_source(copy.source) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, refusal).into());
+    }
+    let checkout = Checkout::of(copy.source);
+    let Some(mut sent) = pass(copy, &checkout, exchange, progress, cancel)? else {
+        return Ok(Copied::Occupied);
+    };
+    if sent.problems.iter().any(|problem| problem.side == Side::Here) {
+        let again = pass(copy, &checkout, exchange, progress, cancel).map_err(|stopped| Stopped {
+            sent: added(sent.clone(), stopped.sent),
+            error: stopped.error,
+        })?;
+        sent = added(sent, again.unwrap_or_default());
+    }
+    if let Err(error) = finished(copy.kept, copy.source, copy.dest) {
+        return Err(Stopped { error, sent });
+    }
+    Ok(Copied::Sent(sent))
+}
+
+/// One pass of a copy: `None` when it is a first copy into a destination
+/// that holds anything.
+fn pass(
+    copy: &CopyJob,
+    checkout: &Checkout,
+    exchange: &mut dyn Exchange,
+    progress: &mut dyn FnMut(Copying),
+    cancel: &Cancellation,
+) -> Result<Option<Sent>, Stopped> {
+    let root = Root::Path {
+        path: copy.dest.to_path_buf(),
+    };
+    let asked = exchange.ask(tree::scan_request(&root, &[], None))?;
+    let mut counted = 0;
+    let mut here = tree::scan_watched(copy.source, copy.skip, &mut |listed| {
+        cancel.check()?;
+        if listed >= counted + COUNTED {
+            counted = listed;
+            progress(Copying::Listing(listed));
+        }
+        Ok(())
+    })?;
+    checkout.list(&mut here);
+    let there = tree::pages(exchange, &root, &[], asked)?;
+    let ours = match unfinished_at(copy.kept, copy.source, copy.dest) {
+        Some(unfinished) => unfinished.paths,
+        None if there.entries.is_empty() && there.problems.is_empty() => BTreeSet::new(),
+        None => return Ok(None),
+    };
+    let theirs = there.entries.keys().filter(|path| !ours.contains(*path));
+    let held: Vec<String> = copy.skip.iter().chain(theirs).cloned().collect();
+    let paths = ours.into_iter().chain(here.entries.keys().cloned()).collect();
+    let unfinished = Unfinished {
+        local_root: copy.source.to_path_buf(),
+        remote_root: copy.dest.to_path_buf(),
+        paths,
+    };
+    begun(copy.kept, unfinished)?;
+    let steps = tree::plan(&here, &there, &held);
+    let mut sending = |sent| progress(Copying::Sending(sent));
+    let sent = tree::send(checkout, &steps, &root, exchange, &mut sending, cancel)?;
+    Ok(Some(sent.with_problems(here, there)))
 }
 
 /// `first` and then `then`, whose problems are the ones left.
@@ -214,82 +605,6 @@ fn added(first: Sent, then: Sent) -> Sent {
         bytes: first.bytes + then.bytes,
         problems: then.problems,
     }
-}
-
-/// Give each file of `listed`, a scan of the Project folder `source` on a
-/// computer that keeps no permission bits, the bits it lands with: 0755
-/// for one git tracks as executable, 0600 for one git ignores, this
-/// computer's own as a `.env` is, and 0644 for the rest. What kept its own
-/// bits keeps them.
-fn give_modes(source: &Path, listed: &mut Manifest) {
-    if !listed.entries.values().any(|entry| matches!(entry, Entry::File { mode: None, .. })) {
-        return;
-    }
-    let executable = executables(source);
-    let private: Vec<String> = ignored(source).into_iter().map(|ignored| ignored.path).collect();
-    let is_private = |path: &str| {
-        private.iter().any(|ignored| {
-            path.strip_prefix(ignored.as_str())
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-        })
-    };
-    for (path, entry) in &mut listed.entries {
-        if let Entry::File { mode: mode @ None, .. } = entry {
-            *mode = Some(if executable.contains(path) {
-                0o755
-            } else if is_private(path) {
-                0o600
-            } else {
-                0o644
-            });
-        }
-    }
-}
-
-/// The files git tracks as executable (100755) in the checkout at `root`,
-/// by their paths under it: none outside git.
-fn executables(root: &Path) -> BTreeSet<String> {
-    let Ok(listed) = crate::workspace::git(root, &["ls-files", "--stage", "-z"]) else {
-        return BTreeSet::new();
-    };
-    listed
-        .split('\0')
-        .filter_map(|line| line.strip_prefix("100755 ")?.split_once('\t'))
-        .map(|(_, path)| path.to_string())
-        .collect()
-}
-
-/// Give the copy at `dest` of the repository at `source` this side's
-/// `core.autocrlf` and `core.filemode` false, as a checkout on a computer
-/// that keeps no executable bits has it, so git there reads files written
-/// as this computer's checkout has them, with its line ends, as unchanged.
-/// Nothing for a folder whose `.git` is not a directory.
-pub fn align_git(source: &Path, dest: &Root, exchange: &mut dyn Exchange, cancel: &Cancellation) -> io::Result<()> {
-    if !source.join(".git").is_dir() {
-        return Ok(());
-    }
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-    let staged = std::env::temp_dir().join(format!("ferrite-git-config-{}-{nonce}", std::process::id()));
-    let aligned = (|| {
-        fs::create_dir_all(staged.join(".git"))?;
-        let config = staged.join(".git/config");
-        fs::copy(source.join(".git/config"), &config)?;
-        let autocrlf = crate::workspace::git(source, &["config", "--get", "core.autocrlf"])
-            .map(|value| value.trim().to_string())
-            .unwrap_or_else(|_| "false".into());
-        let file = config.to_string_lossy().into_owned();
-        for (key, value) in [("core.autocrlf", autocrlf.as_str()), ("core.filemode", "false")] {
-            crate::workspace::git(&staged, &["config", "--file", &file, key, value]).map_err(io::Error::other)?;
-        }
-        let steps = tree::plan(&tree::scan(&staged, &[])?, &Manifest::default(), &[]);
-        let sent = tree::send(&staged, &steps, dest, exchange, &mut |_| {}, cancel)?;
-        match sent.problems.first() {
-            Some(problem) => Err(io::Error::other(format!("{}: {}", problem.path, problem.error))),
-            None => Ok(()),
-        }
-    })();
-    let _ = fs::remove_dir_all(&staged);
-    aligned
 }
 
 #[cfg(test)]
