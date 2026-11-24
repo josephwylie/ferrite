@@ -66,44 +66,64 @@ Windows window.
   | Request | Reply | Does |
   | --- | --- | --- |
   | `scan { root, skip }` | `scanned { manifest }` | A root not there yet holds nothing. |
-  | `begin { root, path, size, executable }` | `begun { write }` | A temporary file beside `path`. |
+  | `begin { write, root, path, size, executable }` | `done` | A temporary file beside `path`, numbered `write` by the sender. |
   | `chunk { write, offset, data }` | `written { offset }` | Base64, at most 256 KiB, in order. |
-  | `finish { write, sha256 }` | `done` | Verified, synced, renamed into place. |
+  | `finish { write, sha256 }` | `done` | Verified and renamed into place. |
   | `read { root, path, offset }` | `bytes { data, size }` | Up to a chunk of a file. |
   | `make_dir`, `link`, `remove { root, path, … }` | `done` | Each a no-op when already so. |
 
+  The sender numbers each write, never the same number twice in its
+  process, so a file's `begin`, chunks and `finish` go out together, with
+  no wait for the Server to name it. A `chunk` or
+  `finish` of a write that failed, expired or never began is refused, so
+  what was asked after a failure never puts part of a file in place; a
+  `begin` of a number already under way is refused and drops that write.
+
 - **One chunked core.** `ferrite_core::chunked` is attachment upload's
   chunked, hashed write, taken out of `attachment_transfer`, which now uses
-  it too: a temporary file of its own per write, each chunk at the offset
-  the receiver reached, the SHA-256 checked before it is handed over, at
-  most a few writes per connection, and a write nothing was heard of for 10
-  minutes dropped with its file. Attachments link the result into their
-  store; a tree renames it into place.
+  it too: the sender reads a file as `Pieces`, and the receiver keeps a
+  temporary file per write number, each chunk at the offset it reached,
+  the SHA-256 checked before it is handed over, at most a few writes per
+  connection, and a write nothing was heard of for 10 minutes dropped with
+  its file. Attachments number their uploads on the Server, as their wire
+  always has, and sync the result to disk before they link it into their
+  store; a tree renames it into place unsynced (see Tradeoffs).
 - **`plan(source, dest) -> Vec<Step>` is pure.** First what must go, the
   outermost entry of each removal only: what only `dest` holds, and an entry
   whose kind or link target differs. Then what is made, in path order, so a
   directory is made before what it holds. A file that differs is rewritten
   in place.
-- **`send` takes the steps through an `Exchange`**, one request at a time,
-  reading each file from the source tree, and reports `Progress` and stops
-  on its `Cancellation`. An error names the path it was on. `mirror` is
-  `scan` here, `scan` there, `plan`, `send`.
+- **`send` takes the steps through an `Exchange`, asking ahead of the
+  replies**: a request is written at once (`ask`) and its reply read later
+  (`answer`), in the order asked, with at most 64 requests or 4 MiB of
+  files out at once. It reads each file from the source tree, reports
+  `Progress` as the far side acknowledges bytes, and stops on its
+  `Cancellation`. An error names the entry whose request it answered;
+  what was asked after it may still be taken there, since every step is
+  whole on its own, and an `answer` passes over replies nobody waited for,
+  so the connection carries on. `mirror` asks for the scan there, scans
+  here while it runs, then `plan`, `send`.
 - **A rerun sends only what still differs.** The steps come from the two
   manifests alone, never from a record of an earlier run, so a send cut off
-  anywhere is finished by the next one. A file is only ever whole: a
-  half-sent one is a temporary file the Server drops when its connection
-  closes or the write expires.
+  anywhere is finished by the next one, however much it had asked ahead. A
+  file is only ever whole: a half-sent one is a temporary file the Server
+  drops when its connection closes or the write expires.
 - **A scan reads only what moved.** It hashes a file only when its size or
   modification time changed since this process last listed that root. A
   file modified within 2 seconds of the scan is hashed every time, since
   it may change again within one tick of the clock unseen. Symlinks are
   listed, never followed. What is none of a file, a directory or a symlink
-  is left out.
-- **Only a Server answers**, as `list_dir`. It runs each op off the pump
-  (`read_off_pump`) with that connection's writes, at most 16 connections at
-  once, and drops them when the connection ends. While a read is out it
-  waits 1 ms for the next message instead of a frame (16 ms) or 250 ms idle,
-  since a transfer asks one request after another.
+  is left out, and so is a write's temporary file, so a write still under
+  way there is neither copied nor removed.
+- **Only a Server answers**, as `list_dir`. Each connection's tree ops run
+  in the order asked on a thread of their own (a `Lane`), at most 16
+  connections at once: a read off the pump takes a thread per request, and
+  those race, so they could not keep a write's chunks in order. Each
+  answer, the lane's and every read off the pump's, is heard on the pump's
+  own channel (`Heard::Answered`) and replied to at once, so a reply never
+  waits for the pump's next tick (a frame, 16 ms, or 250 ms idle). A
+  connection that ends takes with it what it asked and its lane had not
+  begun, and the files it was writing.
 - **The Server keeps a tree inside its root.** A path through a symlink or
   a non-directory is refused, as are `..`, an absolute path, and a root that
   is not absolute. No root may be the filesystem's root, the home directory
@@ -209,19 +229,38 @@ Windows window.
 
 ## Tradeoffs
 
-- **One request at a time.** A chunk waits for the one before it to be
-  answered, so a transfer is bound by the round trip. From Windows to the
-  local WSL distro over ssh, a 128 MiB file moved at 2.7 to 2.9 MiB/s (3
-  runs): 90 ms a chunk, 64 ms of it the round trip of a 350 KB line and
-  its reply through Windows' `ssh -C` alone. A Project's 693 files (7 MB)
-  took 18.7 s, three requests a file at 8.8 ms each. To this computer's
-  own Windows Server, with no ssh, the file moved at 15.3 MiB/s: a
-  Windows wait of 1 ms sleeps a timer tick (about 16 ms). That is simple,
-  resumable and enough for a Project; overlapping chunks or files is the
-  lever if it is not.
-- **Every file is synced to disk before it is renamed into place.** A
-  power cut never leaves a torn file under a real name, at a cost per file
-  on trees of many small ones.
+- **Asking ahead, bound by ssh.** With up to 64 requests or 4 MiB out at
+  once, the round trip no longer sets the pace. Measured from Windows to
+  the local WSL distro over ssh, 3 runs each, one request at a time before
+  and asking ahead after:
+
+  | Tree | Before | After |
+  | --- | --- | --- |
+  | `crates/ferrite-core`: 706 files, 46 directories, 7.1 MB | 25.5 to 31.6 s | 1.11 to 1.12 s |
+  | One 128 MiB file | 2.41 to 2.45 MiB/s | 5.56 to 5.62 MiB/s |
+  | A clone of this repo with its `.git`: 2,849 files, 326 directories, 449 MiB | not run | 85 to 103 s |
+
+  To this computer's own Windows Server, with no ssh, the crate took 34.2
+  to 34.9 s before and 0.66 to 0.89 s after, and the file moved at 15 MiB/s
+  before and 57 to 58 MiB/s after. Before, each reply waited for a Windows
+  timer tick (about 16 ms); the pump now hears each answer as it is made.
+  Over ssh the limit is Windows' `ssh -C`, a whole core during each run.
+  Fed the same base64 chunk lines with nothing else, it carries 5.5 MiB/s
+  of file data, and 15.3 MiB/s without `-C`. Every Ferrite ssh is `-C`, and
+  on Unix one master carries all of a Machine's connections, so a tree
+  cannot drop it alone. Raw bytes on the wire, or no `-C`, are the levers
+  if this is not enough.
+- **What was asked after an error may still be taken.** The Server runs
+  each request in order and the sender stops at the first error, so steps
+  after it may land there too. Each is whole on its own: the tree is only
+  further along, and a rerun finishes it.
+- **A tree's files are not synced to disk before they are renamed into
+  place.** A sync per file took 0.66 to 4.1 s per 706 small files on WSL's
+  ext4 (median 0.94 ms, up to 158 ms each), most of a crate's send. A
+  power cut may leave a file there short or empty under its name; its hash
+  then differs, and the next send rewrites it. Neither rsync nor cp syncs
+  by default. An attachment is still synced: its store is named by hash,
+  and nothing would rewrite a torn one.
 - **No cancel request.** A cancelled send stops between requests and closes
   its connection, which drops the half-sent file there.
 - **The hash cache is per process** and kept only for files settled 2
