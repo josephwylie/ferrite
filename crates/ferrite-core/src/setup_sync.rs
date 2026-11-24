@@ -7,7 +7,7 @@
 //! [`reconcile`]s them with the state they last agreed on, and moves what
 //! changed.
 
-use crate::store::Provider;
+use crate::provider::Provider;
 
 mod portable;
 mod reconcile;

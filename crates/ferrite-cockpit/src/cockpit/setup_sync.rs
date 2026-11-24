@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use super::*;
 use ferrite_core::chunked::Cancellation;
-use ferrite_core::cockpit::ServerState;
+use ferrite_client::cockpit::ServerState;
 use ferrite_core::setup_sync::{self, Hold, Home, Job, Kept, Outcome, Synced, Valve};
 use ferrite_core::tree::{Side, Stuck};
 use gpui::App;

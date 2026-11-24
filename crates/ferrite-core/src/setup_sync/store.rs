@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use super::portable::{self, Spelling};
 use super::{Item, Source, CLAUDE_KEYCHAIN, ITEMS, LEFT_OUT};
 use crate::chunked::{self, CHUNK_SIZE};
-use crate::store::Provider;
+use crate::provider::Provider;
 use crate::tree::{self, Entry, Manifest};
 
 /// Why a side holds a sign-in that does not read whole: its agent is
