@@ -2379,22 +2379,22 @@ fn prompt_history_is_per_thread_and_rebuilt_from_the_log() {
     let _ = cockpit.send(second, "other".into());
 
     assert_eq!(
-        cockpit.recall_prompt(first, HistoryDirection::Older, "draft"),
+        cockpit.recall_prompt(first, HistoryDirection::Older, "draft").now().unwrap(),
         Some("two".into())
     );
     assert_eq!(
-        cockpit.recall_prompt(second, HistoryDirection::Older, "second draft"),
+        cockpit.recall_prompt(second, HistoryDirection::Older, "second draft").now().unwrap(),
         Some("other".into())
     );
 
     cockpit.park(first).now().unwrap();
     cockpit.revive(first).now().unwrap();
     assert_eq!(
-        cockpit.recall_prompt(first, HistoryDirection::Older, "revived draft"),
+        cockpit.recall_prompt(first, HistoryDirection::Older, "revived draft").now().unwrap(),
         Some("two".into())
     );
     assert_eq!(
-        cockpit.recall_prompt(first, HistoryDirection::Older, "ignored edit"),
+        cockpit.recall_prompt(first, HistoryDirection::Older, "ignored edit").now().unwrap(),
         Some("one".into())
     );
 }
@@ -2432,7 +2432,7 @@ fn native_queue_history_records_consumption_once() {
         "turn end never dispatches"
     );
     assert_eq!(
-        cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
+        cockpit.recall_prompt(thread, HistoryDirection::Older, "draft").now().unwrap(),
         Some("sent".into())
     );
     let id = fake.native.borrow()[0].0.clone();
@@ -2456,7 +2456,7 @@ fn native_queue_history_records_consumption_once() {
         None
     );
     assert_eq!(
-        cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
+        cockpit.recall_prompt(thread, HistoryDirection::Older, "draft").now().unwrap(),
         Some("held".into())
     );
     let prompts = cockpit
@@ -2555,7 +2555,7 @@ fn a_new_cockpit_recovers_prompt_history_from_the_store() {
     let thread = relaunched.key(thread.thread());
     relaunched.revive(thread).now().unwrap();
     assert_eq!(
-        relaunched.recall_prompt(thread, HistoryDirection::Older, "draft"),
+        relaunched.recall_prompt(thread, HistoryDirection::Older, "draft").now().unwrap(),
         Some("before relaunch".into())
     );
 }
@@ -2575,7 +2575,7 @@ fn bootstrap_delivery_is_immediately_recallable() {
         .unwrap();
 
     assert_eq!(
-        cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
+        cockpit.recall_prompt(thread, HistoryDirection::Older, "draft").now().unwrap(),
         Some("first prompt".into())
     );
 }
@@ -3202,7 +3202,7 @@ fn a_session_file_imports_through_the_cockpits_own_door() {
     );
     revive_awake(&mut cockpit, thread);
     assert_eq!(
-        cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
+        cockpit.recall_prompt(thread, HistoryDirection::Older, "draft").now().unwrap(),
         Some("first question".into()),
         "imported prompt records participate in recall"
     );
@@ -3355,7 +3355,7 @@ fn a_queued_prompt_is_removed_by_its_own_id() {
         .collect();
     assert_eq!(left, [queue[0].id.clone(), queue[2].id.clone()]);
     assert_eq!(
-        cockpit.take_retrieved_prompt(thread),
+        cockpit.take_retrieved_prompt(thread).and_then(|ask| ask.now().unwrap()),
         Some(("second".into(), false))
     );
 }
@@ -3524,7 +3524,7 @@ fn escape_on_codex_resends_the_whole_pile_as_one_prompt() {
             .any(|block| matches!(&block.body, Body::Notice(_))),
         "Ferrite's own cancellations are not the operator's news"
     );
-    assert_eq!(cockpit.take_retrieved_prompt(thread), None);
+    assert_eq!(cockpit.take_retrieved_prompt(thread).and_then(|ask| ask.now().unwrap()), None);
 }
 
 /// Claude's CLI keeps and runs its own queue across an interrupt, so
@@ -3564,8 +3564,8 @@ fn a_native_prompt_is_retrieved_only_after_cancel_receipt() {
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     assert!(cockpit.queue(thread, "run the tets".into()).now().unwrap());
     cockpit.pump();
-    assert_eq!(cockpit.unqueue(thread), None);
-    assert_eq!(cockpit.take_retrieved_prompt(thread), None);
+    assert_eq!(cockpit.unqueue(thread).now().unwrap(), None);
+    assert_eq!(cockpit.take_retrieved_prompt(thread).and_then(|ask| ask.now().unwrap()), None);
     assert_eq!(
         cockpit
             .thread(thread)
@@ -3578,7 +3578,7 @@ fn a_native_prompt_is_retrieved_only_after_cancel_receipt() {
     cockpit.pump();
     assert_eq!(
         cockpit
-            .take_retrieved_prompt(thread)
+            .take_retrieved_prompt(thread).and_then(|ask| ask.now().unwrap())
             .map(|(text, _)| text)
             .as_deref(),
         Some("run the tets")
