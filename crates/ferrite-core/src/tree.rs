@@ -1,13 +1,14 @@
 //! A directory tree moved to another computer over the Ferrite protocol
 //! (ADR 0048). Each side lists what it holds as a [`Manifest`]; [`plan`]
 //! says what makes the far side's equal this side's, and [`send`] does it
-//! through the far side's Server, one [`Request`] at a time. What is sent
+//! through the far side's Server, asking ahead of the replies. What is sent
 //! is worked out from the two manifests alone, never from a record of an
 //! earlier run, so a rerun after any interruption sends only what still
 //! differs.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
+use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -15,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::chunked::{self, Cancellation, Progress};
 use crate::link;
-use crate::protocol::{Done, Op};
+use crate::protocol::{ClientMessage, Command, Done, Op};
 
 mod scan;
 mod serve;
@@ -71,15 +72,18 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         skip: Vec<String>,
     },
-    /// Start writing a file, replied `begun`: its bytes go to a temporary
-    /// file beside it until `finish` renames it into place.
+    /// Start writing a file as `write`, a number the sender gives it, so
+    /// its chunks can follow without waiting for the reply: its bytes go to
+    /// a temporary file beside it until `finish` renames it into place.
     Begin {
+        write: u64,
         root: Root,
         path: String,
         size: u64,
         executable: bool,
     },
-    /// Base64, at most [`chunked::CHUNK_SIZE`] bytes. Replied `written`.
+    /// Base64, at most [`chunked::CHUNK_SIZE`] bytes, in order. Replied
+    /// `written`.
     Chunk {
         write: u64,
         offset: u64,
@@ -117,7 +121,6 @@ pub enum Request {
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum Reply {
     Scanned { manifest: Manifest },
-    Begun { write: u64 },
     Written { offset: u64 },
     Bytes { data: String, size: u64 },
     Done,
@@ -125,31 +128,76 @@ pub enum Reply {
     Unknown,
 }
 
-/// How long a Server is given to answer a chunk or any one entry's op.
+/// How long a Server is given to answer a chunk or any one entry's op,
+/// once what was asked before it is answered.
 const PATIENCE: Duration = Duration::from_secs(30);
 /// A scan hashes every file it has not seen before.
 const SCAN_PATIENCE: Duration = Duration::from_secs(600);
+/// How far a send asks ahead of the replies: at most this many requests,
+/// holding at most this many bytes of files.
+const AHEAD: usize = 64;
+const AHEAD_BYTES: u64 = 4 << 20;
 
-/// One request, answered: what a tree op is asked through.
-pub type Exchange = Box<dyn FnMut(Request) -> io::Result<Reply>>;
+/// What tree ops are asked through: a request goes out at once and its
+/// reply is waited for later, the replies coming in the order asked.
+pub trait Exchange {
+    fn ask(&mut self, request: Request) -> io::Result<Asked>;
+
+    /// The reply to `asked`. Replies to what was asked before it and never
+    /// waited for are passed over.
+    fn answer(&mut self, asked: Asked) -> io::Result<Reply>;
+
+    fn call(&mut self, request: Request) -> io::Result<Reply> {
+        let asked = self.ask(request)?;
+        self.answer(asked)
+    }
+}
+
+/// A request asked and not yet answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Asked {
+    id: u64,
+    patience: Duration,
+}
 
 /// Opens an [`Exchange`], off the window's thread: it may run ssh.
-pub type Connect = Box<dyn FnOnce() -> io::Result<Exchange> + Send>;
+pub type Connect = Box<dyn FnOnce() -> io::Result<Box<dyn Exchange>> + Send>;
 
-/// The Exchange over `client`, a connection of its own to a Server.
-pub fn exchange(mut client: link::Client) -> Exchange {
-    let mut next = 0;
-    Box::new(move |request| {
-        next += 1;
+/// The Exchange over a connection of its own to a Server.
+pub struct Remote {
+    client: link::Client,
+    last: u64,
+}
+
+impl Remote {
+    pub fn new(client: link::Client) -> Self {
+        Self { client, last: 0 }
+    }
+}
+
+impl Exchange for Remote {
+    fn ask(&mut self, request: Request) -> io::Result<Asked> {
         let patience = match request {
             Request::Scan { .. } => SCAN_PATIENCE,
             _ => PATIENCE,
         };
-        match client.ask(next, Op::Tree { request }, patience)? {
+        self.last += 1;
+        self.client.send(&ClientMessage::Command(Command {
+            id: self.last,
+            op: Op::Tree { request },
+        }))?;
+        Ok(Asked {
+            id: self.last,
+            patience,
+        })
+    }
+
+    fn answer(&mut self, asked: Asked) -> io::Result<Reply> {
+        match self.client.answer(asked.id, asked.patience)? {
             Some(Done::Tree { reply }) => Ok(reply),
             _ => Err(unanswered()),
         }
-    })
+    }
 }
 
 /// One thing that makes the far side's tree more like this side's.
@@ -166,6 +214,15 @@ pub enum Step {
         path: String,
         target: String,
     },
+}
+
+impl Step {
+    fn path(&self) -> &str {
+        match self {
+            Step::Remove(path) | Step::MakeDir(path) => path,
+            Step::Link { path, .. } | Step::Write { path, .. } => path,
+        }
+    }
 }
 
 /// What makes `dest` equal `source`: first what must go, the outermost
@@ -238,13 +295,30 @@ pub struct Sent {
     pub bytes: u64,
 }
 
+impl Sent {
+    fn took(&mut self, step: &Step) {
+        match step {
+            Step::Remove(_) => self.removed += 1,
+            Step::MakeDir(_) => self.made += 1,
+            Step::Link { .. } => self.linked += 1,
+            Step::Write { size, .. } => {
+                self.written += 1;
+                self.bytes += size;
+            }
+        }
+    }
+}
+
 /// Take each of `steps` to `dest` through `exchange`, the files read from
-/// under `source`. `progress` hears the bytes written of all the steps'.
+/// under `source`, asking ahead of the replies. `progress` hears how many
+/// bytes of all the steps' files the far side has. An error names the
+/// entry it was for; what was asked after it may still be taken there,
+/// since each step is whole on its own.
 pub fn send(
     source: &Path,
     steps: &[Step],
     dest: &Root,
-    exchange: &mut dyn FnMut(Request) -> io::Result<Reply>,
+    exchange: &mut dyn Exchange,
     progress: &mut dyn FnMut(Progress),
     cancel: &Cancellation,
 ) -> io::Result<Sent> {
@@ -255,85 +329,161 @@ pub fn send(
             _ => 0,
         })
         .sum();
-    let mut sent = Sent::default();
     progress(Progress { sent: 0, total });
+    let mut flight = Flight {
+        exchange,
+        progress,
+        waiting: VecDeque::new(),
+        ahead: 0,
+        received: 0,
+        total,
+        sent: Sent::default(),
+    };
+    let mut writes = 0;
     for step in steps {
         cancel.check()?;
         let root = dest.clone();
-        let (path, taken) = match step {
-            Step::Remove(path) => (path, done(exchange(Request::Remove { root, path: path.clone() }))),
-            Step::MakeDir(path) => (path, done(exchange(Request::MakeDir { root, path: path.clone() }))),
-            Step::Link { path, target } => (
-                path,
-                done(exchange(Request::Link {
-                    root,
-                    path: path.clone(),
-                    target: target.clone(),
-                })),
-            ),
+        let request = match step {
+            Step::Remove(path) => Request::Remove {
+                root,
+                path: path.clone(),
+            },
+            Step::MakeDir(path) => Request::MakeDir {
+                root,
+                path: path.clone(),
+            },
+            Step::Link { path, target } => Request::Link {
+                root,
+                path: path.clone(),
+                target: target.clone(),
+            },
             Step::Write {
                 path,
                 size,
                 executable,
             } => {
-                let before = sent.bytes;
-                let written = (|| {
-                    let file = std::fs::File::open(local(source, path))?;
-                    let Reply::Begun { write } = exchange(Request::Begin {
-                        root,
-                        path: path.clone(),
-                        size: *size,
-                        executable: *executable,
-                    })?
-                    else {
-                        return Err(unanswered());
+                writes += 1;
+                let write = writes;
+                let file =
+                    std::fs::File::open(local(source, path)).map_err(|error| named(step, error))?;
+                let begin = Request::Begin {
+                    write,
+                    root,
+                    path: path.clone(),
+                    size: *size,
+                    executable: *executable,
+                };
+                flight.ask(step, begin, Expect::Begun)?;
+                let mut pieces = chunked::Pieces::new(file, *size);
+                for piece in &mut pieces {
+                    cancel.check()?;
+                    let (piece, data) = piece.map_err(|error| named(step, error))?;
+                    let chunk = Request::Chunk {
+                        write,
+                        offset: piece.start,
+                        data,
                     };
-                    let sha256 = chunked::send(
-                        file,
-                        *size,
-                        |offset, data| match exchange(Request::Chunk { write, offset, data })? {
-                            Reply::Written { offset } => Ok(offset),
-                            _ => Err(unanswered()),
-                        },
-                        |at| progress(Progress { sent: before + at, total }),
-                        cancel,
-                    )?;
-                    done(exchange(Request::Finish { write, sha256 }))
-                })();
-                (path, written)
+                    flight.ask(step, chunk, Expect::Written(piece))?;
+                }
+                let sha256 = pieces.sha256().map_err(|error| named(step, error))?;
+                Request::Finish { write, sha256 }
             }
         };
-        taken.map_err(|error| io::Error::new(error.kind(), format!("{path}: {error}")))?;
-        match step {
-            Step::Remove(_) => sent.removed += 1,
-            Step::MakeDir(_) => sent.made += 1,
-            Step::Link { .. } => sent.linked += 1,
-            Step::Write { size, .. } => {
-                sent.written += 1;
-                sent.bytes += size;
-            }
-        }
+        flight.ask(step, request, Expect::Taken)?;
     }
-    Ok(sent)
+    flight.land()
+}
+
+/// What a send has asked and not yet heard the replies to, oldest first.
+struct Flight<'a> {
+    exchange: &'a mut dyn Exchange,
+    progress: &'a mut dyn FnMut(Progress),
+    waiting: VecDeque<(Asked, &'a Step, Expect)>,
+    /// Bytes of files in what `waiting` asked.
+    ahead: u64,
+    /// Bytes of files the far side has.
+    received: u64,
+    total: u64,
+    sent: Sent,
+}
+
+/// What a reply says when all went well.
+enum Expect {
+    /// `done`: the step taken.
+    Taken,
+    /// `done`: the write under way.
+    Begun,
+    /// `written`: the file received to the end of this piece.
+    Written(Range<u64>),
+}
+
+impl<'a> Flight<'a> {
+    /// Ask `request` for `step`, first hearing the oldest replies while
+    /// as much as may be is ahead.
+    fn ask(&mut self, step: &'a Step, request: Request, expect: Expect) -> io::Result<()> {
+        let bytes = match &expect {
+            Expect::Written(piece) => piece.end - piece.start,
+            _ => 0,
+        };
+        while self.waiting.len() >= AHEAD
+            || (!self.waiting.is_empty() && self.ahead + bytes > AHEAD_BYTES)
+        {
+            self.hear()?;
+        }
+        let asked = self.exchange.ask(request).map_err(|error| named(step, error))?;
+        self.ahead += bytes;
+        self.waiting.push_back((asked, step, expect));
+        Ok(())
+    }
+
+    fn hear(&mut self) -> io::Result<()> {
+        let Some((asked, step, expect)) = self.waiting.pop_front() else {
+            return Ok(());
+        };
+        let reply = self.exchange.answer(asked).map_err(|error| named(step, error))?;
+        match (expect, reply) {
+            (Expect::Taken, Reply::Done) => self.sent.took(step),
+            (Expect::Begun, Reply::Done) => {}
+            (Expect::Written(piece), Reply::Written { offset }) if offset == piece.end => {
+                let bytes = piece.end - piece.start;
+                self.ahead -= bytes;
+                self.received += bytes;
+                (self.progress)(Progress {
+                    sent: self.received,
+                    total: self.total,
+                });
+            }
+            _ => return Err(named(step, unanswered())),
+        }
+        Ok(())
+    }
+
+    /// What the send did, once every reply is heard.
+    fn land(mut self) -> io::Result<Sent> {
+        while !self.waiting.is_empty() {
+            self.hear()?;
+        }
+        Ok(self.sent)
+    }
 }
 
 /// Make `dest`, through `exchange`, hold what `source` holds, `skip` (paths
-/// in both) left as each side has it: [`plan`] from both sides' manifests,
-/// then [`send`].
+/// in both) left as each side has it: both sides scanned at once, then
+/// [`plan`] and [`send`].
 pub fn mirror(
     source: &Path,
     dest: &Root,
     skip: &[String],
-    exchange: &mut dyn FnMut(Request) -> io::Result<Reply>,
+    exchange: &mut dyn Exchange,
     progress: &mut dyn FnMut(Progress),
     cancel: &Cancellation,
 ) -> io::Result<Sent> {
-    let here = scan(source, skip)?;
-    let Reply::Scanned { manifest: there } = exchange(Request::Scan {
+    let there = exchange.ask(Request::Scan {
         root: dest.clone(),
         skip: skip.to_vec(),
-    })?
-    else {
+    })?;
+    let here = scan(source, skip)?;
+    let Reply::Scanned { manifest: there } = exchange.answer(there)? else {
         return Err(unanswered());
     };
     send(source, &plan(&here, &there), dest, exchange, progress, cancel)
@@ -367,11 +517,8 @@ fn local(root: &Path, path: &str) -> PathBuf {
     path.split('/').fold(root.to_path_buf(), |at, part| at.join(part))
 }
 
-fn done(reply: io::Result<Reply>) -> io::Result<()> {
-    match reply? {
-        Reply::Done => Ok(()),
-        _ => Err(unanswered()),
-    }
+fn named(step: &Step, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("{}: {error}", step.path()))
 }
 
 fn unanswered() -> io::Error {

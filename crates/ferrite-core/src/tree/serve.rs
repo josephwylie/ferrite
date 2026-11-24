@@ -1,7 +1,9 @@
-//! The Server's half of a tree's ops, for one connection (ADR 0048).
-//! Nothing is read or written through a symlink inside a root, and no root
-//! is the home directory, an ancestor of it, or the filesystem's root,
-//! which a mirror would empty.
+//! The Server's half of a tree's ops, for one connection, run in the order
+//! they were asked (ADR 0048). A chunk or finish of a write that failed,
+//! expired or never began is refused, so what a sender asked after a
+//! failure never puts part of a file in place. Nothing is read or written
+//! through a symlink inside a root, and no root is the home directory, an
+//! ancestor of it, or the filesystem's root, which a mirror would empty.
 
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -48,6 +50,7 @@ impl Writes {
                 Ok(Reply::Scanned { manifest })
             }
             Request::Begin {
+                write,
                 root,
                 path,
                 size,
@@ -58,8 +61,8 @@ impl Writes {
                     return Err(invalid(format!("{} is a directory", path.display())));
                 }
                 let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-                let write = self.0.begin(&dir, size, Target { path, executable })?;
-                Ok(Reply::Begun { write })
+                self.0.begin(write, &dir, size, Target { path, executable })?;
+                Ok(Reply::Done)
             }
             Request::Chunk {
                 write,

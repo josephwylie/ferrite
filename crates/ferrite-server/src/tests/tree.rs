@@ -3,16 +3,16 @@
 
 use base64::Engine as _;
 use ferrite_core::chunked::{Cancellation, CHUNK_SIZE};
-use ferrite_core::tree::{self, Reply, Request, Root, Sent};
+use ferrite_core::tree::{self, Asked, Exchange, Reply, Request, Root, Sent, Step};
 
 use super::remote_operations::machine;
 use super::*;
 
-fn connect(cockpit: &mut ferrite_core::cockpit::Cockpit) -> tree::Exchange {
+fn connect(cockpit: &mut ferrite_core::cockpit::Cockpit) -> Box<dyn Exchange> {
     cockpit.tree(cockpit.first_machine()).unwrap()().unwrap()
 }
 
-fn mirror(source: &Path, dest: &Path, skip: &[String], exchange: &mut tree::Exchange) -> io::Result<Sent> {
+fn mirror(source: &Path, dest: &Path, skip: &[String], exchange: &mut dyn Exchange) -> io::Result<Sent> {
     tree::mirror(
         source,
         &Root::Path(dest.to_path_buf()),
@@ -72,7 +72,7 @@ fn a_tree_reaches_a_machine_whole_and_sending_it_again_moves_nothing() {
     write(&dest.join("old/inner.txt"), "gone soon");
 
     let mut exchange = connect(&mut cockpit);
-    let first = mirror(&source, &dest, &[], &mut exchange).unwrap();
+    let first = mirror(&source, &dest, &[], &mut *exchange).unwrap();
     same(&source, &dest);
     assert_eq!(
         first,
@@ -97,7 +97,7 @@ fn a_tree_reaches_a_machine_whole_and_sending_it_again_moves_nothing() {
         assert_eq!(std::fs::read_link(dest.join("lib")).unwrap(), Path::new("src/lib.rs"));
     }
 
-    let Reply::Bytes { data, size } = exchange(Request::Read {
+    let Reply::Bytes { data, size } = exchange.call(Request::Read {
         root: Root::Path(dest.clone()),
         path: "big.bin".into(),
         offset: CHUNK_SIZE as u64,
@@ -112,8 +112,53 @@ fn a_tree_reaches_a_machine_whole_and_sending_it_again_moves_nothing() {
     );
 
     let mark = sent.lock().unwrap().len();
-    assert_eq!(mirror(&source, &dest, &[], &mut exchange).unwrap(), Sent::default());
+    assert_eq!(mirror(&source, &dest, &[], &mut *exchange).unwrap(), Sent::default());
     assert_eq!(actions(&sent, mark), ["scan"]);
+}
+
+/// An exchange whose line drops at the ask after its first `left`, once
+/// all asked before it has run on the Server.
+struct Cut {
+    exchange: Option<Box<dyn Exchange>>,
+    left: usize,
+    last: Option<Asked>,
+    asked: usize,
+    answered: usize,
+    /// How many asks the sender had not heard the reply to as it dropped.
+    unheard: usize,
+}
+
+impl Exchange for Cut {
+    fn ask(&mut self, request: Request) -> io::Result<Asked> {
+        let exchange = self.exchange.as_mut().ok_or_else(dropped)?;
+        if self.left == 0 {
+            exchange.answer(self.last.unwrap()).unwrap();
+            self.unheard = self.asked - self.answered;
+            self.exchange = None;
+            return Err(dropped());
+        }
+        self.left -= 1;
+        self.asked += 1;
+        let asked = exchange.ask(request)?;
+        self.last = Some(asked);
+        Ok(asked)
+    }
+
+    fn answer(&mut self, asked: Asked) -> io::Result<Reply> {
+        self.answered += 1;
+        self.exchange.as_mut().ok_or_else(dropped)?.answer(asked)
+    }
+}
+
+fn dropped() -> io::Error {
+    io::Error::new(io::ErrorKind::BrokenPipe, "the line dropped")
+}
+
+fn parts(dir: &Path) -> usize {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().ends_with(".part"))
+        .count()
 }
 
 #[test]
@@ -129,41 +174,29 @@ fn a_send_cut_off_part_way_is_finished_by_the_next_without_resending_what_arrive
     write(&source.join("d.txt"), "fourth");
 
     let (scan, whole_file, begin_and_first_chunk) = (1, 3, 2);
-    let answered = scan + 2 * whole_file + begin_and_first_chunk;
-    let mut exchange = connect(&mut cockpit);
-    let mut asked = 0;
-    let mut cut = |request| {
-        asked += 1;
-        if asked > answered {
-            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "the line dropped"));
-        }
-        exchange(request)
+    let mut cut = Cut {
+        exchange: Some(connect(&mut cockpit)),
+        left: scan + 2 * whole_file + begin_and_first_chunk,
+        last: None,
+        asked: 0,
+        answered: 0,
+        unheard: 0,
     };
-    let refused = tree::mirror(
-        &source,
-        &Root::Path(dest.clone()),
-        &[],
-        &mut cut,
-        &mut |_| {},
-        &Cancellation::default(),
-    )
-    .unwrap_err();
+    let refused = mirror(&source, &dest, &[], &mut cut).unwrap_err();
     assert!(refused.to_string().starts_with("c.bin: "), "{refused}");
-    drop(exchange);
+    assert!(cut.unheard > 1, "the send asked ahead of the replies: {}", cut.unheard);
     assert_eq!(std::fs::read(dest.join("b.txt")).unwrap(), b"second");
     assert!(!dest.join("c.bin").exists());
 
     let deadline = Instant::now() + PATIENCE;
-    while std::fs::read_dir(&dest).unwrap().any(|entry| {
-        entry.unwrap().file_name().to_string_lossy().ends_with(".part")
-    }) {
+    while parts(&dest) > 0 {
         assert!(Instant::now() < deadline, "the half-sent file stayed");
         std::thread::sleep(Duration::from_millis(5));
     }
 
     let mut exchange = connect(&mut cockpit);
     assert_eq!(
-        mirror(&source, &dest, &[], &mut exchange).unwrap(),
+        mirror(&source, &dest, &[], &mut *exchange).unwrap(),
         Sent {
             written: 2,
             bytes: big().len() as u64 + 6,
@@ -171,6 +204,55 @@ fn a_send_cut_off_part_way_is_finished_by_the_next_without_resending_what_arrive
         }
     );
     same(&source, &dest);
+}
+
+#[test]
+fn a_refused_entry_fails_the_send_by_its_name_and_its_later_requests_do_no_harm() {
+    let harness = start("tree-refused-entry");
+    let sent = Arc::default();
+    let mut cockpit = machine(&harness, &sent);
+    let source = harness.dir.join("desktop-tree");
+    let dest = harness.dir.join("box-tree");
+    write(&source.join("a.txt"), "first");
+    write(&source.join("never-made/b.bin"), big());
+    write(&source.join("c.txt"), "third");
+    let file = |path: &str, size: usize| Step::Write {
+        path: path.into(),
+        size: size as u64,
+        executable: false,
+    };
+    // `never-made` is not made there first, so the Server refuses b.bin's
+    // begin while its chunks and finish are already on their way.
+    let steps = [file("a.txt", 5), file("never-made/b.bin", big().len()), file("c.txt", 5)];
+
+    let mut exchange = connect(&mut cockpit);
+    let refused = tree::send(
+        &source,
+        &steps,
+        &Root::Path(dest.clone()),
+        &mut *exchange,
+        &mut |_| {},
+        &Cancellation::default(),
+    )
+    .unwrap_err();
+    assert!(refused.to_string().starts_with("never-made/b.bin: "), "{refused}");
+
+    let Reply::Scanned { manifest } = exchange
+        .call(Request::Scan {
+            root: Root::Path(dest.clone()),
+            skip: Vec::new(),
+        })
+        .unwrap()
+    else {
+        panic!("not scanned");
+    };
+    let here = tree::scan(&source, &[]).unwrap();
+    assert!(manifest.entries.contains_key("a.txt"));
+    for (path, there) in &manifest.entries {
+        assert_eq!(here.entries.get(path), Some(there), "{path} is whole or not there");
+    }
+    assert!(!dest.join("never-made").exists());
+    assert_eq!(parts(&dest), 0);
 }
 
 #[test]
@@ -185,12 +267,13 @@ fn a_tree_op_outside_its_root_is_refused() {
     let mut exchange = connect(&mut cockpit);
 
     for path in ["../victim.txt", "a/../../victim.txt", "", "./x"] {
-        let removed = exchange(Request::Remove {
+        let removed = exchange.call(Request::Remove {
             root: root.clone(),
             path: path.into(),
         });
         assert!(removed.is_err(), "{path:?}");
-        let begun = exchange(Request::Begin {
+        let begun = exchange.call(Request::Begin {
+            write: 1,
             root: root.clone(),
             path: path.into(),
             size: 1,
@@ -199,12 +282,12 @@ fn a_tree_op_outside_its_root_is_refused() {
         assert!(begun.is_err(), "{path:?}");
     }
     let absolute = victim.to_string_lossy().replace('\\', "/");
-    assert!(exchange(Request::Remove {
+    assert!(exchange.call(Request::Remove {
         root: root.clone(),
         path: absolute.clone()
     })
     .is_err());
-    assert!(exchange(Request::MakeDir {
+    assert!(exchange.call(Request::MakeDir {
         root: root.clone(),
         path: absolute
     })
@@ -212,7 +295,7 @@ fn a_tree_op_outside_its_root_is_refused() {
     assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
 
     for named in ["relative/dir", "~", "/"] {
-        let refused = exchange(Request::Read {
+        let refused = exchange.call(Request::Read {
             root: Root::Path(named.into()),
             path: "nothing-here".into(),
             offset: 0,
@@ -223,7 +306,7 @@ fn a_tree_op_outside_its_root_is_refused() {
             "{named}: {refused}"
         );
     }
-    let unknown = exchange(Request::Scan {
+    let unknown = exchange.call(Request::Scan {
         root: Root::Unknown,
         skip: Vec::new(),
     })
@@ -236,14 +319,15 @@ fn a_tree_op_outside_its_root_is_refused() {
         std::fs::create_dir_all(&outside).unwrap();
         std::fs::create_dir_all(&dest).unwrap();
         std::os::unix::fs::symlink(&outside, dest.join("through")).unwrap();
-        assert!(exchange(Request::Begin {
+        assert!(exchange.call(Request::Begin {
+            write: 1,
             root: root.clone(),
             path: "through/x.txt".into(),
             size: 1,
             executable: false,
         })
         .is_err());
-        assert!(exchange(Request::Remove {
+        assert!(exchange.call(Request::Remove {
             root,
             path: "through/x.txt".into()
         })

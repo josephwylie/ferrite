@@ -631,11 +631,10 @@ impl Remote {
         let connect = self.side_connection()?;
         Ok(Box::new(move || {
             let (attached, endpoint) = connect()?;
-            let mut exchange = crate::tree::exchange(attached.client);
-            Ok(Box::new(move |request| {
-                let _route = &endpoint;
-                exchange(request)
-            }) as crate::tree::Exchange)
+            Ok(Box::new(Routed {
+                exchange: crate::tree::Remote::new(attached.client),
+                _route: endpoint,
+            }) as Box<dyn crate::tree::Exchange>)
         }))
     }
 
@@ -1420,6 +1419,22 @@ impl Remote {
         if let Err(error) = waiter {
             crate::log!("a visual could not be answered: {error}");
         }
+    }
+}
+
+/// A tree's side connection, and the endpoint that carries it.
+struct Routed {
+    exchange: crate::tree::Remote,
+    _route: Endpoint,
+}
+
+impl crate::tree::Exchange for Routed {
+    fn ask(&mut self, request: crate::tree::Request) -> io::Result<crate::tree::Asked> {
+        self.exchange.ask(request)
+    }
+
+    fn answer(&mut self, asked: crate::tree::Asked) -> io::Result<crate::tree::Reply> {
+        self.exchange.answer(asked)
     }
 }
 

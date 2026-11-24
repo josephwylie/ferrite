@@ -105,7 +105,7 @@ fn send(
         source,
         &Root::Path(dest),
         skip,
-        &mut tree::exchange(attached.client),
+        &mut tree::Remote::new(attached.client),
         &mut |_| {},
         &Cancellation::default(),
     )

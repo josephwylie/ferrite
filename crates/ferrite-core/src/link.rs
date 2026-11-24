@@ -855,11 +855,17 @@ impl Client {
         send(&mut self.writer, message)
     }
 
-    /// Send `op` as command `id` and wait up to `patience` for its reply,
-    /// passing over whatever else the Server says: for a connection of its
-    /// own that carries one kind of act, such as a transfer's.
+    /// Send `op` as command `id` and wait up to `patience` for its reply:
+    /// for a connection of its own that carries one kind of act, such as a
+    /// transfer's.
     pub fn ask(&mut self, id: u64, op: Op, patience: Duration) -> io::Result<Option<Done>> {
         self.send(&ClientMessage::Command(Command { id, op }))?;
+        self.answer(id, patience)
+    }
+
+    /// Wait up to `patience` for the reply to command `id`, passing over
+    /// whatever else the Server says.
+    pub fn answer(&mut self, id: u64, patience: Duration) -> io::Result<Option<Done>> {
         let deadline = Instant::now() + patience;
         loop {
             match self

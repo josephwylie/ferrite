@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Write};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -59,10 +60,9 @@ impl<T> Drop for Part<T> {
     }
 }
 
-/// The files one sender has under way, each by the number `begin` gave it,
-/// and what the receiver keeps about each (`T`).
+/// The files one sender has under way, each by its number, and what the
+/// receiver keeps about each (`T`).
 pub struct Incoming<T> {
-    next: u64,
     parts: HashMap<u64, Part<T>>,
     most: usize,
 }
@@ -92,7 +92,6 @@ impl<T> Incoming<T> {
     /// At most `most` files under way at once.
     pub fn new(most: usize) -> Self {
         Self {
-            next: 0,
             parts: HashMap::new(),
             most,
         }
@@ -102,9 +101,13 @@ impl<T> Incoming<T> {
         self.parts.retain(|_, part| part.touched.elapsed() < EXPIRY);
     }
 
-    /// Receive `size` bytes into a new temporary file in `dir`.
-    pub fn begin(&mut self, dir: &Path, size: u64, what: T) -> io::Result<u64> {
+    /// Receive `size` bytes as file `id` into a new temporary file in `dir`.
+    /// An `id` already under way is refused, and that file dropped too.
+    pub fn begin(&mut self, id: u64, dir: &Path, size: u64, what: T) -> io::Result<()> {
         self.expire();
+        if self.parts.remove(&id).is_some() {
+            return Err(invalid("That upload was already under way"));
+        }
         if self.parts.len() >= self.most {
             return Err(invalid("Too many uploads are under way"));
         }
@@ -126,9 +129,8 @@ impl<T> Incoming<T> {
                 Err(error) => return Err(error),
             }
         };
-        self.next += 1;
         self.parts.insert(
-            self.next,
+            id,
             Part {
                 path,
                 file,
@@ -139,7 +141,7 @@ impl<T> Incoming<T> {
                 what,
             },
         );
-        Ok(self.next)
+        Ok(())
     }
 
     /// Write the base64 `data` at `offset`, which must be where the file
@@ -154,10 +156,7 @@ impl<T> Incoming<T> {
             self.parts.remove(&id);
             return Err(invalid("A chunk is not base64"));
         };
-        let part = self
-            .parts
-            .get_mut(&id)
-            .ok_or_else(|| invalid("The upload expired"))?;
+        let part = self.parts.get_mut(&id).ok_or_else(unknown)?;
         if bytes.is_empty()
             || bytes.len() > CHUNK_SIZE
             || offset != part.received
@@ -179,10 +178,7 @@ impl<T> Incoming<T> {
     /// The file, once all of it arrived and it hashes to `sha256`, flushed
     /// to disk.
     pub fn finish(&mut self, id: u64, sha256: &str) -> io::Result<Received<T>> {
-        let mut part = self
-            .parts
-            .remove(&id)
-            .ok_or_else(|| invalid("The upload expired"))?;
+        let mut part = self.parts.remove(&id).ok_or_else(unknown)?;
         let actual = hex(&part.hash.clone().finalize());
         if part.received != part.size || sha256 != actual {
             return Err(invalid("The length or SHA-256 did not match"));
@@ -200,40 +196,52 @@ impl<T> Incoming<T> {
     }
 }
 
-/// Send the first `size` bytes of `from` through `chunk`, which takes each
-/// piece's offset and base64 and answers the offset the receiver reached;
-/// `sent` hears each offset reached. The SHA-256 of what was sent, for the
-/// receiver's finish.
-pub fn send(
-    from: impl Read,
+/// The first `size` bytes of a file to send, in pieces of at most
+/// [`CHUNK_SIZE`]: each its place in the file and its base64.
+pub struct Pieces<R> {
+    from: io::Take<R>,
     size: u64,
-    mut chunk: impl FnMut(u64, String) -> io::Result<u64>,
-    mut sent: impl FnMut(u64),
-    cancel: &Cancellation,
-) -> io::Result<String> {
-    let mut from = from.take(size);
-    let mut hash = Sha256::new();
-    let mut buffer = vec![0; CHUNK_SIZE];
-    let mut offset = 0;
-    loop {
-        cancel.check()?;
-        let count = fill(&mut from, &mut buffer)?;
-        if count == 0 {
-            break;
+    offset: u64,
+    hash: Sha256,
+    buffer: Vec<u8>,
+}
+
+impl<R: Read> Pieces<R> {
+    pub fn new(from: R, size: u64) -> Self {
+        Self {
+            from: from.take(size),
+            size,
+            offset: 0,
+            hash: Sha256::new(),
+            buffer: vec![0; CHUNK_SIZE],
         }
-        let bytes = &buffer[..count];
-        let reached = chunk(offset, base64::engine::general_purpose::STANDARD.encode(bytes))?;
-        offset += count as u64;
-        if reached != offset {
-            return Err(invalid("The receiver reached another offset"));
+    }
+
+    /// The SHA-256 of the pieces, for the receiver's finish, once they
+    /// came to all `size` bytes.
+    pub fn sha256(self) -> io::Result<String> {
+        if self.offset != self.size {
+            return Err(invalid("The file changed while it was sent"));
         }
-        hash.update(bytes);
-        sent(offset);
+        Ok(hex(&self.hash.finalize()))
     }
-    if offset != size {
-        return Err(invalid("The file changed while it was sent"));
+}
+
+impl<R: Read> Iterator for Pieces<R> {
+    type Item = io::Result<(Range<u64>, String)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let count = match fill(&mut self.from, &mut self.buffer) {
+            Ok(0) => return None,
+            Ok(count) => count,
+            Err(error) => return Some(Err(error)),
+        };
+        let bytes = &self.buffer[..count];
+        self.hash.update(bytes);
+        let piece = self.offset..self.offset + count as u64;
+        self.offset = piece.end;
+        Some(Ok((piece, base64::engine::general_purpose::STANDARD.encode(bytes))))
     }
-    Ok(hex(&hash.finalize()))
 }
 
 fn fill(from: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
@@ -257,6 +265,10 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }
 
+fn unknown() -> io::Error {
+    invalid("That upload failed or expired")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,15 +288,18 @@ mod tests {
     fn cancellation_expiry_and_dropping_remove_the_temporary_files() {
         let dir = dir("cleanup");
         let mut incoming = Incoming::new(4);
-        let first = incoming.begin(&dir, 4, ()).unwrap();
-        let second = incoming.begin(&dir, 4, ()).unwrap();
+        incoming.begin(1, &dir, 4, ()).unwrap();
+        incoming.begin(2, &dir, 4, ()).unwrap();
         assert_eq!(files(&dir), 2);
-        incoming.cancel(first);
+        incoming.cancel(1);
         assert_eq!(files(&dir), 1);
-        incoming.parts.get_mut(&second).unwrap().touched = Instant::now() - EXPIRY;
+        incoming.parts.get_mut(&2).unwrap().touched = Instant::now() - EXPIRY;
         incoming.expire();
         assert_eq!(files(&dir), 0);
-        incoming.begin(&dir, 4, ()).unwrap();
+        incoming.begin(3, &dir, 4, ()).unwrap();
+        assert!(incoming.begin(3, &dir, 4, ()).is_err(), "a number already under way");
+        assert_eq!(files(&dir), 0, "and the file under it dropped");
+        incoming.begin(4, &dir, 4, ()).unwrap();
         drop(incoming);
         assert_eq!(files(&dir), 0);
     }
@@ -294,21 +309,16 @@ mod tests {
         let dir = dir("whole");
         let bytes: Vec<u8> = (0..CHUNK_SIZE * 2 + 5).map(|at| at as u8).collect();
         let mut incoming = Incoming::new(1);
-        let id = incoming.begin(&dir, bytes.len() as u64, "kept").unwrap();
+        incoming.begin(7, &dir, bytes.len() as u64, "kept").unwrap();
+        let mut pieces = Pieces::new(&bytes[..], bytes.len() as u64);
         let mut chunks = 0;
-        let sha256 = send(
-            &bytes[..],
-            bytes.len() as u64,
-            |offset, data| {
-                chunks += 1;
-                incoming.chunk(id, offset, &data)
-            },
-            |_| {},
-            &Cancellation::default(),
-        )
-        .unwrap();
+        for piece in &mut pieces {
+            let (piece, data) = piece.unwrap();
+            chunks += 1;
+            assert_eq!(incoming.chunk(7, piece.start, &data).unwrap(), piece.end);
+        }
         assert_eq!(chunks, 3);
-        let received = incoming.finish(id, &sha256).unwrap();
+        let received = incoming.finish(7, &pieces.sha256().unwrap()).unwrap();
         assert_eq!(*received.what(), "kept");
         assert_eq!(std::fs::read(received.path()).unwrap(), bytes);
         assert_eq!(received.sha256, hex(&Sha256::digest(&bytes)));

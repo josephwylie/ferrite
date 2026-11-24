@@ -65,6 +65,7 @@ pub struct Session {
     store: PathBuf,
     /// Each upload's file name.
     incoming: chunked::Incoming<String>,
+    last: u64,
 }
 
 impl Session {
@@ -72,6 +73,7 @@ impl Session {
         Self {
             store,
             incoming: chunked::Incoming::new(MAX_PENDING),
+            last: 0,
         }
     }
 
@@ -99,8 +101,9 @@ impl Session {
                         let _ = std::fs::remove_file(entry.path());
                     }
                 }
-                let upload = self.incoming.begin(&dir, size, name)?;
-                Ok(Reply::Begun { upload })
+                self.last += 1;
+                self.incoming.begin(self.last, &dir, size, name)?;
+                Ok(Reply::Begun { upload: self.last })
             }
             Request::Chunk {
                 upload,
@@ -266,18 +269,22 @@ pub fn upload(
             let result = (|| {
                 let total = meta.len();
                 let _ = progress_send.send(Progress { sent: 0, total });
-                let sha256 = chunked::send(
-                    file,
-                    total,
-                    |offset, data| match request(Request::Chunk { upload, offset, data })? {
-                        Reply::Written { offset } => Ok(offset),
-                        _ => Err(invalid("The server did not accept the attachment chunk")),
-                    },
-                    |sent| {
-                        let _ = progress_send.send(Progress { sent, total });
-                    },
-                    &cancelled,
-                )?;
+                let mut pieces = chunked::Pieces::new(file, total);
+                for piece in &mut pieces {
+                    cancelled.check()?;
+                    let (piece, data) = piece?;
+                    match request(Request::Chunk {
+                        upload,
+                        offset: piece.start,
+                        data,
+                    })? {
+                        Reply::Written { offset } if offset == piece.end => {
+                            let _ = progress_send.send(Progress { sent: offset, total });
+                        }
+                        _ => return Err(invalid("The server did not accept the attachment chunk")),
+                    }
+                }
+                let sha256 = pieces.sha256()?;
                 cancelled.check()?;
                 let Reply::Retained(retained) = request(Request::Finish {
                     upload,
