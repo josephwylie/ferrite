@@ -72,9 +72,6 @@ const CLAIM: &str = ".lock";
 const READ_ONLY: &str = "another Ferrite has this store open, so this window can read \
      its Threads but not open, create or change them";
 
-/// Why a window's handle may not write: its Server does (ADR 0025).
-const READER: &str = "this window reads its Threads; the Ferrite server writes them";
-
 /// The ids a log's prompts were sent under, in order, as a replay meets
 /// them: where a rewind cuts. It cuts at the *first* prompt sent under its
 /// id — an older log can hold one prompt twice under the same id (its echo
@@ -647,16 +644,6 @@ impl Store {
         fs::create_dir_all(&dir)?;
         let shared = Shared::of(&dir)?;
         Ok(Self::with_shared(dir, flush_interval, shared))
-    }
-
-    /// A window's handle on the Store its Server writes (ADR 0025): it
-    /// reads the Threads, and never takes the claim — a Server that starts
-    /// after the window must find it free.
-    pub fn reader(dir: impl AsRef<Path>) -> io::Result<Self> {
-        let dir = dir.as_ref().to_path_buf();
-        fs::create_dir_all(&dir)?;
-        let shared = std::sync::Arc::new(Shared::new(Some(READER.to_string())));
-        Ok(Self::with_shared(dir, DEFAULT_FLUSH_INTERVAL, shared))
     }
 
     fn with_shared(

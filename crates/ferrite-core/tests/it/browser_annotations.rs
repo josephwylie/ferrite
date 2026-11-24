@@ -100,7 +100,7 @@ fn sent_annotation_reopens_through_the_thread_store() {
     writer.record_prompt(&prompt).unwrap();
     writer.flush_fully().unwrap();
     writer.close();
-    let replay = Store::reader(&root).unwrap().load(thread).unwrap().inputs();
+    let replay = store.load(thread).unwrap().inputs();
     let restored = replay
         .into_iter()
         .find_map(|input| match input {
