@@ -59,7 +59,7 @@ fn silenceable_browser(name: &str) -> (Cockpit, ThreadKey, Arc<AtomicBool>) {
     let mut core = Cockpit::attach(Attach {
         store: dir.join("window"), server: Endpoint::Machine(bridge),
         client: ferrite_core::protocol::Peer { name: name.into(), version: "0".into() },
-        renderer: None, browser: true, driven: false, discovery: Box::new(Fake::default()),
+        renderer: None, browser: true, driven: false,
         saved_as: ferrite_core::MachineKey(Some("box".into())),
     }).unwrap();
     ferrite_core::doorbell::until("browser window did not attach", || {

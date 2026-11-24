@@ -86,9 +86,6 @@ pub struct Attach {
     /// This window takes the API's `window.*` actions: a `ferrite
     /// --headless` one (ADR 0038).
     pub driven: bool,
-    /// What the window finds on its own: CLI session files to adopt, a
-    /// workspace's commands. It spawns no Session.
-    pub discovery: Box<dyn ferrite_core::engine::Spawner>,
 }
 
 /// Where the Server is.
@@ -1152,22 +1149,39 @@ impl Link for Remote {
         self.execute(op).map_err(io::Error::from)
     }
 
-    /// Discovery reads the operator's own files: a window does it,
-    /// wherever its Engine runs.
-    fn discover_sessions(
-        &mut self,
-        roots: Vec<(ferrite_core::provider::Provider, PathBuf)>,
-        cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<ferrite_core::session_file::Candidate>>>> {
-        self.attach.discovery.discover_sessions(roots, cap)
+    /// Untimed, as `list_dir`: the Server's listing keeps deadlines of its
+    /// own, as long as `REPLY_WAIT`.
+    fn list_sessions(&mut self, cap: usize) -> super::Ask<ferrite_core::session_file::Found> {
+        let asked = self.ask(Op::ListSessions { cap }, |done| match done {
+            Done::Sessions { sessions, roots } => Some(ferrite_core::session_file::Found {
+                sessions: sessions.into_iter().map(Into::into).collect(),
+                roots,
+            }),
+            _ => None,
+        });
+        match asked {
+            Ok(answer) => super::Ask::of(answer),
+            Err(error) => super::Ask::answered(Err(error)),
+        }
     }
 
-    fn discover_commands(
+    fn list_commands(
         &mut self,
         provider: ferrite_core::provider::Provider,
         cwd: &Path,
-    ) -> Option<ferrite_core::Discovery> {
-        self.attach.discovery.discover_commands(provider, cwd)
+    ) -> super::Ask<Vec<ferrite_core::SessionCommand>> {
+        let op = Op::ListCommands {
+            provider,
+            cwd: cwd.to_path_buf(),
+        };
+        let asked = self.ask(op, |done| match done {
+            Done::Commands { commands } => Some(commands.iter().map(Into::into).collect()),
+            _ => None,
+        });
+        match asked {
+            Ok(answer) => super::Ask::of(answer),
+            Err(error) => super::Ask::answered(Err(error)),
+        }
     }
 
     fn search_files(

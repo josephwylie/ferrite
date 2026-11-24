@@ -289,8 +289,7 @@ struct Fake {
     /// its session.
     fail_fork: Rc<RefCell<bool>>,
     model_discovery: Rc<RefCell<Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>>>>,
-    session_discovery:
-        Rc<RefCell<Option<Receiver<std::io::Result<Vec<ferrite_core::session_file::Candidate>>>>>>,
+    session_discovery: Rc<RefCell<Option<Receiver<std::io::Result<ferrite_core::session_file::Found>>>>>,
     command_discovery: Rc<RefCell<Option<ferrite_core::Discovery>>>,
     command_requests: Rc<RefCell<Vec<(Provider, std::path::PathBuf)>>>,
     streams: Rc<RefCell<Vec<Sender<SessionEvent>>>>,
@@ -330,7 +329,7 @@ impl Spawner for Fake {
         &mut self,
         _: Vec<(Provider, std::path::PathBuf)>,
         _: usize,
-    ) -> Option<Receiver<std::io::Result<Vec<ferrite_core::session_file::Candidate>>>> {
+    ) -> Option<Receiver<std::io::Result<ferrite_core::session_file::Found>>> {
         self.session_discovery.borrow_mut().take()
     }
     fn discover_commands(
@@ -422,6 +421,14 @@ fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("ferrite-view-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir
+}
+
+/// A Spawner's session listing of `sessions`, found under no root.
+fn found(sessions: Vec<ferrite_core::session_file::Candidate>) -> ferrite_core::session_file::Found {
+    ferrite_core::session_file::Found {
+        sessions,
+        roots: Vec::new(),
+    }
 }
 
 /// Hold this test's wall clock still, for a test that counts renders. The

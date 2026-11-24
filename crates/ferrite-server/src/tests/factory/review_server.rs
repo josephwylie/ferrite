@@ -429,7 +429,6 @@ fn interrogate_one_unreadable_part_keeps_every_window_from_attaching() {
         renderer: None,
         browser: false,
         driven: false,
-        discovery: Box::new(NoDiscovery),
     });
     eprintln!("the Cockpit's attach: {:?}", cockpit.as_ref().err());
     assert!(attached.is_ok(), "a window attaches");

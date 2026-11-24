@@ -180,6 +180,36 @@ fn draft_command_discovery_discards_old_workspace_replies_and_shows_failures(
     assert!(fake.spawned.borrow().is_empty());
 }
 
+/// A Server from before `list_commands` refuses it as unsupported: the
+/// menu says to update it, and nothing lists in its place.
+#[gpui::test]
+fn a_server_that_cannot_list_commands_says_to_update_it(cx: &mut TestAppContext) {
+    let fake = Fake::default();
+    let (tx, rx) = ferrite_core::doorbell::channel();
+    *fake.command_discovery.borrow_mut() = Some(rx);
+    let core = Cockpit::new(
+        Store::open(scratch("draft-commands-older")).unwrap(),
+        Box::new(fake.clone()),
+    );
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    cx.simulate_input("/code");
+    cx.run_until_parked();
+    tx.send(Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "this server does not know that",
+    )))
+    .unwrap();
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let row = &view.popover(cx).unwrap().rows[0];
+        assert_eq!(row.name.as_ref(), "Could not load commands");
+        assert_eq!(row.detail.as_ref(), "update ferrited on this computer");
+    });
+}
+
 #[gpui::test]
 fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut TestAppContext) {
     let fake = Fake::default();

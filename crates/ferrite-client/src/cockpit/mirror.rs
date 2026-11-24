@@ -76,6 +76,7 @@ struct Facts {
     recovered: usize,
     wants_listing: bool,
     history_errors: HashMap<String, String>,
+    titling: bool,
 }
 
 /// The queue a Server sent; one older than `ThreadState::queue` sends only
@@ -139,6 +140,7 @@ impl From<ThreadState> for Facts {
             resume_lost: state.resume_lost,
             recovered: state.recovered.len(),
             wants_listing: state.wants_listing,
+            titling: state.titling,
             history_errors: state
                 .history_errors
                 .into_iter()
@@ -889,6 +891,11 @@ impl<'a> ThreadView<'a> {
     /// is on offer (`Cockpit::start_fresh_conversation`).
     pub fn resume_lost(&self) -> bool {
         self.facts.resume_lost
+    }
+
+    /// Its Server's titler is writing its title from its first prompt.
+    pub fn titling(&self) -> bool {
+        self.facts.titling
     }
 
     /// How many prompts the provider handed back wait for the Composer.

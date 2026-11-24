@@ -358,10 +358,11 @@ impl CockpitView {
     // ------------------------------------------------------ session import
 
     /// The import picker (`import a session`, `/import`): the palette over
-    /// the CLI sessions there are to resume, newest first and searched like
-    /// any palette row — title, project, provider. The listing runs off the
-    /// UI thread, so the picker opens at once and fills when it answers.
-    /// `into` is the blank Pane a pick takes the place of, if any.
+    /// the CLI sessions there are to resume on the machine of `into`, the
+    /// blank Pane a pick takes the place of, if any, else of a new Thread.
+    /// Newest first and searched like any palette row — title, project,
+    /// provider. That machine's Server lists them from its own disk, so the
+    /// picker opens at once and fills when it answers.
     pub(super) fn open_import_palette(
         &mut self,
         into: Option<PaneIdentity>,
@@ -369,25 +370,19 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.open_palette(PaletteScope::Sessions, "", window, cx);
-        let roots = self.session_file_roots.clone();
-        let asked = self.import_machine(into, cx).and_then(|machine| {
-            self.cockpit
-                .update(cx, |cockpit, _| cockpit.discover_sessions(machine, roots, IMPORT_ROWS_MAX))
-        });
-        match asked {
-            Some(reply) => {
-                if let Some(palette) = self.floats.palette.clone() {
-                    palette.update(cx, |palette, _| palette.listen(into, reply));
-                }
-                self.show_sessions(Vec::new(), "searching sessions\u{2026}".into(), cx);
-            }
-            // No listing thread to be had: the plain walk, here.
-            None => {
-                let found =
-                    ferrite_core::session_file::candidates(&self.session_file_roots, IMPORT_ROWS_MAX);
-                self.list_sessions(into, Ok(found), cx);
-            }
+        let Some(machine) = self.import_machine(into, cx) else {
+            self.show_sessions(Vec::new(), "No environment selected".into(), cx);
+            return;
+        };
+        let reply = self
+            .cockpit
+            .update(cx, |cockpit, _| cockpit.list_sessions(machine, IMPORT_ROWS_MAX));
+        if let Some(palette) = self.floats.palette.clone() {
+            palette.update(cx, |palette, _| palette.listen(into, machine, reply));
         }
+        self.show_sessions(Vec::new(), "searching sessions\u{2026}".into(), cx);
+        // An answer already in hand fills the picker now.
+        self.poll_session_discovery(cx);
     }
 
     /// The listing's answer, once it lands, into the picker that asked for
@@ -402,7 +397,9 @@ impl CockpitView {
         else {
             return;
         };
-        if let Some((into, found)) = palette.update(cx, |palette, _| palette.listed()) {
+        if let Some((into, machine, found)) = palette.update(cx, |palette, _| palette.listed()) {
+            let place = self.place_of(machine, cx);
+            let found = found.map_err(|error| super::machines::said(&error, &place));
             self.list_sessions(into, found, cx);
         }
     }
@@ -412,19 +409,20 @@ impl CockpitView {
     fn list_sessions(
         &mut self,
         into: Option<PaneIdentity>,
-        found: Result<Vec<ferrite_core::session_file::Candidate>, String>,
+        found: Result<ferrite_core::session_file::Found, String>,
         cx: &mut Context<Self>,
     ) {
         let now = ferrite_core::clock::system_time();
         match found {
             Ok(found) => {
-                let roots = self
-                    .session_file_roots
+                let roots = found
+                    .roots
                     .iter()
-                    .map(|(_, root)| root.display().to_string())
+                    .map(|root| root.display().to_string())
                     .collect::<Vec<_>>()
                     .join(" or ");
                 let rows = found
+                    .sessions
                     .into_iter()
                     .map(|candidate| session_row(candidate, into, now))
                     .collect();

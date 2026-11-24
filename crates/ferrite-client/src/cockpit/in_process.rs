@@ -68,6 +68,9 @@ pub(super) struct InProcess {
     /// What its disk says is free (`fixture_free_disk`), in place of the
     /// volume.
     free_disk: Option<u64>,
+    /// Where its sessions to import are (`fixture_session_roots`): none
+    /// until a test gives it some.
+    session_roots: Vec<(Provider, PathBuf)>,
     /// Its Server accepts every browser act (`fixture_browser_accepts`),
     /// answering an empty browser.
     browser_accepts: bool,
@@ -90,6 +93,7 @@ impl InProcess {
             forge_held: HashSet::new(),
             held_reads: Vec::new(),
             free_disk: None,
+            session_roots: Vec::new(),
             browser_accepts: false,
             factory: Default::default(),
             heard: Vec::new(),
@@ -265,16 +269,25 @@ impl Link for InProcess {
         done
     }
 
-    fn discover_sessions(
-        &mut self,
-        roots: Vec<(Provider, PathBuf)>,
-        cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<ferrite_core::session_file::Candidate>>>> {
-        self.engine.discover_sessions(roots, cap)
+    /// What its Spawner lists, else the files under its roots, at once.
+    fn list_sessions(&mut self, cap: usize) -> Ask<ferrite_core::session_file::Found> {
+        let roots = self.session_roots.clone();
+        match self.engine.discover_sessions(roots.clone(), cap) {
+            Some(listing) => Ask::of(listing),
+            None => Ask::answered(Ok(ferrite_core::session_file::Found {
+                sessions: ferrite_core::session_file::candidates(&roots, cap),
+                roots: roots.into_iter().map(|(_, root)| root).collect(),
+            })),
+        }
     }
 
-    fn discover_commands(&mut self, provider: Provider, cwd: &Path) -> Option<ferrite_core::Discovery> {
-        self.engine.discover_commands(provider, cwd)
+    /// What its Spawner lists; one that lists none says so, as a Server's
+    /// does, rather than claim nothing is installed.
+    fn list_commands(&mut self, provider: Provider, cwd: &Path) -> Ask<Vec<ferrite_core::SessionCommand>> {
+        match self.engine.discover_commands(provider, cwd) {
+            Some(listing) => Ask::of(listing),
+            None => Ask::answered(Err(io::Error::other("this machine lists no commands"))),
+        }
     }
 
     fn search_files(
@@ -875,6 +888,12 @@ impl Cockpit {
     /// reads `bytes` (`free_disk_fixture`) instead of the volume.
     pub fn fixture_free_disk(&mut self, bytes: u64) {
         self.fixture().free_disk = Some(bytes);
+    }
+
+    /// A fixture world's sessions to import: the files under `roots`,
+    /// unless its Spawner lists its own.
+    pub fn fixture_session_roots(&mut self, roots: Vec<(Provider, PathBuf)>) {
+        self.fixture().session_roots = roots;
     }
 
     /// The free bytes a fixture world stands in for the volume, if any.

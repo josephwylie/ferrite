@@ -1,7 +1,7 @@
 //! A CLI session file a window offers to import (ADR 0022): which
 //! vendor's root it was found under, and what it says of itself, and
-//! where the vendors keep them, walked on this computer for its window.
-//! Adopting one is `import`'s.
+//! where the vendors keep them, walked by the Server of the machine that
+//! has them (`list_sessions`, ADR 0049). Adopting one is `import`'s.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -18,6 +18,14 @@ pub struct Candidate {
     pub title: Option<String>,
     pub cwd: Option<PathBuf>,
     pub session_id: Option<String>,
+}
+
+/// What a machine's listing found: its sessions, newest first, and the
+/// folders it looked in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub sessions: Vec<Candidate>,
+    pub roots: Vec<PathBuf>,
 }
 
 /// Where the vendors write session files, per the layouts the import

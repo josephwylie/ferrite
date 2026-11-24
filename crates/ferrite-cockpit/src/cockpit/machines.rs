@@ -28,6 +28,15 @@ pub(crate) struct MachineNotice {
 /// (T3 Code's `ENVIRONMENT_RECONNECT_WARNING_GRACE_MS`).
 pub(crate) const RECONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// What a machine's failure reads as, `place` naming the machine: a Server
+/// from before the ask is told to update, not shown its refusal.
+pub(super) fn said(error: &std::io::Error, place: &str) -> String {
+    match error.kind() {
+        std::io::ErrorKind::Unsupported => format!("update ferrited on {place}"),
+        _ => error.to_string(),
+    }
+}
+
 /// What a lost machine still shows (ADR 0026): `element` dimmed under a
 /// cover, `id`, that takes every press until the machine is back.
 pub(super) fn held(element: Div, id: impl Into<SharedString>) -> Div {
@@ -77,6 +86,15 @@ impl CockpitView {
                 })
             })
             .collect()
+    }
+
+    /// Where `machine`'s Sessions run, in a word: its name, or this
+    /// computer.
+    pub(super) fn place_of(&self, machine: ferrite_core::MachineId, cx: &App) -> SharedString {
+        match self.cockpit.read(cx).bridge(machine) {
+            Some(bridge) => bridge.name().to_string().into(),
+            None => "this computer".into(),
+        }
     }
 
     /// `machine`'s name, when it is not this computer: what a row of it

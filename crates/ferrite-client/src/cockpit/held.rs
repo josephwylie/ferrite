@@ -472,13 +472,16 @@ pub(super) trait Link {
     /// One Factory ask (ADR 0037).
     fn factory(&mut self, op: Op) -> io::Result<Option<Done>>;
 
-    fn discover_sessions(
-        &mut self,
-        roots: Vec<(Provider, PathBuf)>,
-        cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<ferrite_core::session_file::Candidate>>>>;
+    /// The provider sessions its machine has to import, at most `cap`,
+    /// found by its machine's Server (ADR 0049).
+    fn list_sessions(&mut self, cap: usize) -> Ask<ferrite_core::session_file::Found>;
 
-    fn discover_commands(&mut self, provider: Provider, cwd: &Path) -> Option<ferrite_core::Discovery>;
+    /// The commands `provider`'s CLI on its machine finds in `cwd` there.
+    fn list_commands(
+        &mut self,
+        provider: Provider,
+        cwd: &Path,
+    ) -> Ask<Vec<ferrite_core::SessionCommand>>;
 
     fn search_files(
         &mut self,

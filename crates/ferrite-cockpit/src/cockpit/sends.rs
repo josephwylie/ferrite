@@ -179,7 +179,7 @@ impl CockpitView {
     /// The Server answered for `thread`'s oldest prompt on its way: settle
     /// it, and ask for the next.
     fn sent(&mut self, thread: ThreadKey, answered: Answered, cx: &mut Context<Self>) {
-        let Some(Outgoing { text, from }) = self
+        let Some(Outgoing { from, .. }) = self
             .outbox
             .0
             .get_mut(&thread)
@@ -188,7 +188,7 @@ impl CockpitView {
             return;
         };
         match from {
-            Origin::Composer { draft, cited } => self.sent_draft(thread, draft, text, cited, answered, cx),
+            Origin::Composer { draft, cited } => self.sent_draft(thread, draft, cited, answered, cx),
             Origin::Replay(then) => {
                 let handoff = self.replayed(thread, answered, cx);
                 then(self, handoff, cx);
@@ -203,7 +203,6 @@ impl CockpitView {
         &mut self,
         thread: ThreadKey,
         draft: SentDraft,
-        text: String,
         cited: Vec<Reply>,
         answered: Answered,
         cx: &mut Context<Self>,
@@ -232,9 +231,6 @@ impl CockpitView {
         // A first prompt names an untitled Thread.
         self.facts.renamed(self.cockpit.read(cx), thread);
         self.refresh_names();
-        if admitted && self.is_first_prompt(thread, cx) {
-            self.start_titling(thread, text, cx);
-        }
         cx.notify();
     }
 

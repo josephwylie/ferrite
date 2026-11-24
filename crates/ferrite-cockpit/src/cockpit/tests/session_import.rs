@@ -11,6 +11,17 @@ fn session_roots(base: &std::path::Path) -> Vec<(Provider, std::path::PathBuf)> 
     ]
 }
 
+/// This computer's sessions to import: the files under `roots`.
+fn sessions_under(
+    view: &Entity<CockpitView>,
+    roots: Vec<(Provider, std::path::PathBuf)>,
+    cx: &mut gpui::VisualTestContext,
+) {
+    view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_session_roots(roots))
+    });
+}
+
 /// A session file `age_secs` old: written, then stamped with the mtime
 /// discovery orders by.
 fn write_session_file(path: &std::path::Path, contents: &str, age_secs: u64) {
@@ -181,7 +192,7 @@ fn picking_import_opens_the_session_picker_and_sends_the_provider_nothing(cx: &m
     );
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.session_file_roots = roots);
+    sessions_under(&view, roots, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -269,14 +280,14 @@ fn the_import_picker_fills_when_the_listing_answers(cx: &mut TestAppContext) {
     tick(cx);
     assert!(session_rows(&view, cx).is_empty(), "still listing");
 
-    tx.send(Ok(vec![ferrite_core::session_file::Candidate {
+    tx.send(Ok(found(vec![ferrite_core::session_file::Candidate {
         provider: Provider::Claude,
         path: "/sessions/one.jsonl".into(),
         title: Some("Fix the startup latency\nand more".into()),
         cwd: Some("/workspace/ferrite".into()),
         session_id: Some("one".into()),
         modified: Some(std::time::SystemTime::now() - Duration::from_secs(2 * 86400)),
-    }]))
+    }])))
     .unwrap();
     tick(cx);
     assert_eq!(
@@ -304,7 +315,7 @@ fn enter_adopts_the_picked_session_and_the_blank_thread_goes(cx: &mut TestAppCon
     );
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.session_file_roots = roots);
+    sessions_under(&view, roots, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     let blank = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -360,7 +371,7 @@ fn palette_import_over_a_conversation_opens_alongside(cx: &mut TestAppContext) {
     );
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.session_file_roots = roots);
+    sessions_under(&view, roots, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     let busy = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -410,9 +421,7 @@ fn slash_import_over_a_conversation_opens_alongside(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("import-slash-alongside", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| {
-        view.session_file_roots = session_roots(&scratch("import-slash-alongside-roots"))
-    });
+    sessions_under(&view, session_roots(&scratch("import-slash-alongside-roots")), cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     cx.simulate_input("hello");
@@ -441,9 +450,7 @@ fn typed_import_with_the_menu_muted_opens_the_picker(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("import-typed", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| {
-        view.session_file_roots = session_roots(&scratch("import-typed-roots"))
-    });
+    sessions_under(&view, session_roots(&scratch("import-typed-roots")), cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -488,7 +495,7 @@ fn tab_on_a_session_row_does_nothing(cx: &mut TestAppContext) {
     );
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.session_file_roots = roots);
+    sessions_under(&view, roots, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
 
@@ -535,14 +542,14 @@ fn a_late_listing_is_dropped_by_a_palette_reopened_elsewhere(cx: &mut TestAppCon
         assert_ne!(palette.scope, crate::palette::PaletteScope::Sessions);
         assert!(palette.listing.is_none(), "the listing was let go");
     });
-    let late = tx.send(Ok(vec![ferrite_core::session_file::Candidate {
+    let late = tx.send(Ok(found(vec![ferrite_core::session_file::Candidate {
         provider: Provider::Claude,
         path: "/sessions/late.jsonl".into(),
         title: Some("Too late".into()),
         cwd: None,
         session_id: Some("late".into()),
         modified: None,
-    }]));
+    }])));
     assert!(late.is_err(), "its answer has nowhere to land");
 }
 
@@ -560,7 +567,7 @@ fn palette_import_from_the_empty_board_shows_the_import(cx: &mut TestAppContext)
     );
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.session_file_roots = roots);
+    sessions_under(&view, roots, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     cx.simulate_keystrokes("cmd-w");
@@ -608,7 +615,7 @@ fn a_refused_import_with_no_pane_toasts(cx: &mut TestAppContext) {
     );
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.session_file_roots = roots);
+    sessions_under(&view, roots, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     cx.simulate_input("hello");
@@ -656,7 +663,7 @@ fn a_foreign_file_pick_surfaces_the_refusal_in_the_transcript(cx: &mut TestAppCo
     );
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.session_file_roots = roots);
+    sessions_under(&view, roots, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -710,7 +717,7 @@ fn with_no_session_files_found_the_picker_says_so(cx: &mut TestAppContext) {
     let base = scratch("import-none-roots");
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.session_file_roots = session_roots(&base));
+    sessions_under(&view, session_roots(&base), cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
 
@@ -737,6 +744,10 @@ fn with_no_session_files_found_the_picker_says_so(cx: &mut TestAppContext) {
 #[gpui::test]
 fn draft_import_replaces_the_draft_and_focuses_the_imported_thread(cx: &mut TestAppContext) {
     let fake = Fake::default();
+    // Its CLI lists no commands of its own: `/im` finds the import door alone.
+    let (listing, listed) = ferrite_core::doorbell::channel();
+    let _ = listing.send(Ok(Vec::new()));
+    *fake.command_discovery.borrow_mut() = Some(listed);
     let store = Store::open(scratch("draft-import-store")).unwrap();
     let core = Cockpit::new(store, Box::new(fake));
     let base = scratch("draft-import-roots");
@@ -748,7 +759,7 @@ fn draft_import_replaces_the_draft_and_focuses_the_imported_thread(cx: &mut Test
     );
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.session_file_roots = roots);
+    sessions_under(&view, roots, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
 
@@ -793,7 +804,7 @@ fn refused_draft_import_preserves_the_draft_and_command(cx: &mut TestAppContext)
     );
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.session_file_roots = roots);
+    sessions_under(&view, roots, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
 

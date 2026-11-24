@@ -15,14 +15,14 @@ mod setup_sheet;
 
 /// `settings_dir(name)` spelled as the registry keeps what it registers
 /// there, its links resolved: macOS reaches `/tmp` through one.
-fn resolved_dir(name: &str) -> PathBuf {
+pub(super) fn resolved_dir(name: &str) -> PathBuf {
     let temp = std::env::temp_dir();
     let dir = settings_dir(name);
     dunce::canonicalize(&temp).unwrap().join(dir.strip_prefix(&temp).unwrap())
 }
 
 /// `root` registered as a Project of `machine`, once its Server says so.
-fn registered(core: &mut Cockpit, machine: MachineId, root: &Path) -> ProjectKey {
+pub(super) fn registered(core: &mut Cockpit, machine: MachineId, root: &Path) -> ProjectKey {
     let asked = core.register_project(machine, root);
     core.wait_for(asked).expect("the Server registers the Project")
 }
@@ -81,7 +81,7 @@ fn two_machines_keeping_projects_in(
     machines
 }
 
-fn focused_draft(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> PaneIdentity {
+pub(super) fn focused_draft(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> PaneIdentity {
     view.read_with(cx, |view, cx| {
         let pane = &view.panes[view.focused(cx)];
         assert!(pane.draft().is_some(), "a draft is focused");

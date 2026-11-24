@@ -292,6 +292,7 @@ fn state() -> ThreadState {
         recovered: vec![],
         wants_listing: false,
         history_errors: vec![],
+        titling: false,
     }
 }
 
@@ -314,6 +315,7 @@ fn server_defaults() -> crate::settings::ServerDefaults {
         codex_approval_policy: "on-request".into(),
         codex_sandbox: Some("workspace-write".into()),
         placeholder_suggestions: true,
+        auto_title: true,
         factory_tasks_at_once: 3,
         linked_machines: false,
     }
@@ -1372,6 +1374,76 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
+            "reply_server_defaults_titles_off",
+            Sample::Server(ServerMessage::Reply {
+                id: 235,
+                ok: Some(Done::ServerDefaults {
+                    defaults: crate::settings::ServerDefaults {
+                        auto_title: false,
+                        ..server_defaults()
+                    },
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "command_list_commands",
+            command(
+                236,
+                Op::ListCommands {
+                    provider: Provider::Codex,
+                    cwd: "/src/ferrite".into(),
+                },
+            ),
+        ),
+        (
+            "reply_commands",
+            Sample::Server(ServerMessage::Reply {
+                id: 236,
+                ok: Some(Done::Commands {
+                    commands: vec![WireCommand {
+                        name: "review".into(),
+                        description: "Review the diff".into(),
+                        path: Some("/src/ferrite/.codex/skills/review/SKILL.md".into()),
+                        source: Some(crate::CommandSource::Skill),
+                    }],
+                }),
+                error: None,
+            }),
+        ),
+        ("command_list_sessions", command(237, Op::ListSessions { cap: 200 })),
+        (
+            "reply_sessions",
+            Sample::Server(ServerMessage::Reply {
+                id: 237,
+                ok: Some(Done::Sessions {
+                    sessions: vec![
+                        WireSession {
+                            provider: Provider::Claude,
+                            path: "/srv/me/.claude/projects/-src-ferrite/aaaa.jsonl".into(),
+                            modified_ms: Some(1_764_000_000_000),
+                            title: Some("Fix the parser".into()),
+                            cwd: Some("/src/ferrite".into()),
+                            session_id: Some("aaaa".into()),
+                        },
+                        WireSession {
+                            provider: Provider::Codex,
+                            path: "/srv/me/.codex/sessions/2026/11/24/rollout-bbbb.jsonl".into(),
+                            modified_ms: None,
+                            title: None,
+                            cwd: None,
+                            session_id: None,
+                        },
+                    ],
+                    roots: vec![
+                        "/srv/me/.claude/projects".into(),
+                        "/srv/me/.codex/sessions".into(),
+                    ],
+                }),
+                error: None,
+            }),
+        ),
+        (
             "reply_clis",
             Sample::Server(ServerMessage::Reply {
                 id: 232,
@@ -2254,6 +2326,17 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         agent: "claude:root:agent-1".into(),
                         error: "the log is gone".into(),
                     }],
+                    ..state()
+                },
+            }),
+        ),
+        (
+            "thread_titling",
+            Sample::Server(ServerMessage::Thread {
+                revision: 17,
+                state: ThreadState {
+                    title: None,
+                    titling: true,
                     ..state()
                 },
             }),

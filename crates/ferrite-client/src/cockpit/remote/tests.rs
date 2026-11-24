@@ -3,18 +3,9 @@
 use super::*;
 use std::sync::mpsc;
 
-use ferrite_core::engine::{SpawnRequest, Spawner};
 use ferrite_core::connection::{Connection, Heard};
 use ferrite_core::protocol::{SharedRoster, WireChoice};
 use ferrite_core::provider::Provider;
-
-struct NoDiscovery;
-
-impl Spawner for NoDiscovery {
-    fn spawn(&mut self, _: SpawnRequest) -> io::Result<Box<dyn ferrite_core::providers::Session>> {
-        Err(io::Error::other("a window spawns no Session"))
-    }
-}
 
 /// A Server that welcomes every window and answers no command: it hands
 /// each one to the test, and lets the window go at the `drop_at`th.
@@ -147,7 +138,6 @@ fn remote(store: &std::path::Path) -> Remote {
         renderer: None,
         browser: false,
         driven: false,
-        discovery: Box::new(NoDiscovery),
     });
     remote.attach_now();
     remote
@@ -355,7 +345,6 @@ fn a_machine_waiting_for_a_sign_in_is_not_asked_again_until_then() {
         renderer: None,
         browser: false,
         driven: false,
-        discovery: Box::new(NoDiscovery),
     });
     let attention = |remote: &Remote| {
         matches!(

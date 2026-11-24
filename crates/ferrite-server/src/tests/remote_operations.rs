@@ -9,7 +9,6 @@ pub(super) fn machine(harness: &Harness, sent: &Arc<Mutex<Vec<u8>>>) -> ferrite_
         renderer: None,
         browser: false,
         driven: false,
-        discovery: Box::new(NoDiscovery),
     })
     .unwrap();
     pump_until(&mut cockpit, |cockpit| {

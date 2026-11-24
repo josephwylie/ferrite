@@ -124,9 +124,10 @@ _Avoid_: grid, mosaic, board of Panes (one Thread shows at a time).
 
 **Title**
 What a Thread is called: the operator's own name for it, else a short
-title a small model wrote from the first prompt (the titler, off by
-turning *Titles* off), else the first line of its first prompt, else its
-number. Told to the Session where the Provider takes one.
+title a small model wrote from the first prompt (the titler, run once by
+the Thread's Server, off by turning *Name threads automatically* off for
+that machine), else the first line of its first prompt, else its number.
+Told to the Session where the Provider takes one.
 
 **Effort**
 A Thread's reasoning depth, one rung of the ladder its model announces

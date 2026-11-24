@@ -1,25 +1,26 @@
 //! What a draft's `/` and `$` menus list before it has a Session: the
-//! commands its Provider finds in its folder, asked once per machine,
-//! Provider and folder.
+//! commands its Provider finds in its folder, asked of its machine's Server
+//! once per machine, Provider and folder.
 //!
 //! Only the root asks and only the root takes the answer, in its pump and
 //! as a menu is derived, so it is a plain struct on the root (ADR 0041),
 //! shaped like the import picker's listing: the root asks (`listen`) and
 //! takes each answer (`listed`).
 
-use ferrite_core::Discovery;
+use ferrite_client::cockpit::Ask;
 use ferrite_core::SessionCommand;
 
 use super::*;
 
 /// One Provider's commands in one folder of one machine. Its machine,
 /// Provider and folder keep a late answer from listing one draft's
-/// commands in another's menu.
+/// commands in another's menu; `place` names the machine in a failure.
 pub(super) struct Listing {
     machine: ferrite_core::MachineId,
+    place: SharedString,
     provider: Provider,
     cwd: std::path::PathBuf,
-    pending: Option<Discovery>,
+    pending: Option<Ask<Vec<SessionCommand>>>,
     pub(super) commands: Vec<SessionCommand>,
     error: Option<String>,
 }
@@ -53,15 +54,17 @@ impl DraftCommands {
     fn listen(
         &mut self,
         machine: ferrite_core::MachineId,
+        place: SharedString,
         provider: Provider,
         cwd: std::path::PathBuf,
-        reply: Option<Discovery>,
+        reply: Ask<Vec<SessionCommand>>,
     ) {
         self.0 = Some(Listing {
             machine,
+            place,
             provider,
             cwd,
-            pending: reply,
+            pending: Some(reply),
             commands: Vec::new(),
             error: None,
         });
@@ -72,13 +75,8 @@ impl DraftCommands {
         let Some(listing) = &mut self.0 else {
             return false;
         };
-        let Some(rx) = &listing.pending else {
+        let Some(result) = listing.pending.as_mut().and_then(Ask::answer) else {
             return false;
-        };
-        let result = match rx.try_recv() {
-            Ok(result) => result,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
-            Err(error) => Err(std::io::Error::other(error)),
         };
         listing.pending = None;
         match result {
@@ -86,7 +84,7 @@ impl DraftCommands {
                 listing.commands = commands;
                 listing.error = None;
             }
-            Err(error) => listing.error = Some(error.to_string()),
+            Err(error) => listing.error = Some(super::machines::said(&error, &listing.place)),
         }
         true
     }
@@ -112,8 +110,9 @@ impl CockpitView {
         if !self.draft_commands.is_for(machine, provider, &cwd) {
             let reply = self
                 .cockpit
-                .update(cx, |cockpit, _| cockpit.discover_commands(machine, provider, &cwd));
-            self.draft_commands.listen(machine, provider, cwd, reply);
+                .update(cx, |cockpit, _| cockpit.list_commands(machine, provider, &cwd));
+            let place = self.place_of(machine, cx);
+            self.draft_commands.listen(machine, place, provider, cwd, reply);
         }
         self.draft_commands.listed();
         let listing = self.draft_commands.0.as_ref().expect("listened above");

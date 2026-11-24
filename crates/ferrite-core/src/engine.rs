@@ -55,6 +55,7 @@ mod queue;
 mod rewind;
 mod stop;
 mod threads;
+mod titles;
 mod windows;
 
 use threads::Threads;
@@ -176,11 +177,13 @@ fn project_additional_directories(
 /// How a Session is started. Injected so the cockpit can be driven with
 /// scripted Sessions in tests — nothing below this line spawns a process.
 pub trait Spawner {
+    /// The provider sessions under `roots`, newest first, at most `cap`,
+    /// and the roots it looked in; none, this adapter cannot list them.
     fn discover_sessions(
         &mut self,
         _roots: Vec<(Provider, PathBuf)>,
         _cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<crate::session_file::Candidate>>>> {
+    ) -> Option<Receiver<io::Result<crate::session_file::Found>>> {
         None
     }
 
@@ -202,6 +205,17 @@ pub trait Spawner {
     /// Optional background prediction. Scripted/demo adapters do nothing;
     /// production delegates to the provider one-shot module.
     fn suggest(&mut self, _request: crate::suggest::Request, _replies: Sender<Suggestion>) {}
+
+    /// Write a Thread's title from its first prompt, off the caller's
+    /// thread, and answer it to `replies` once. Scripted and demo adapters
+    /// write none, at once; production runs the Provider's CLI
+    /// (`titler::write`).
+    fn title(&mut self, job: crate::titler::Job, replies: Sender<crate::titler::Titled>) {
+        let _ = replies.send(crate::titler::Titled {
+            thread: job.thread,
+            title: None,
+        });
+    }
 
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>>;
 
@@ -581,6 +595,8 @@ struct Thread {
     /// history holds one. Never disarmed — nothing re-aims a Thread the
     /// operator has spoken in.
     first_prompt_sent: bool,
+    /// Where its title from the first prompt is (`titles`).
+    titling: titles::Titling,
     /// The follow-up predicted for this Thread's last response (`suggest`),
     /// or None while nothing has been predicted — before the first turn ends,
     /// for the ~seconds a prediction is in flight, and whenever the one that
@@ -686,6 +702,7 @@ impl Thread {
             carry: None,
             announced: announced::Announced::open(dir.join("announced.json")),
             first_prompt_sent: false,
+            titling: titles::Titling::default(),
             suggestion: None,
             suggestion_revision: 0,
             tuning: None,
@@ -848,6 +865,7 @@ impl Thread {
                 errors.sort_by(|a, b| a.agent.cmp(&b.agent));
                 errors
             },
+            titling: self.titling.writing(),
         }
     }
 
@@ -1177,6 +1195,8 @@ pub struct Engine {
     suggestions: (Sender<Suggestion>, Receiver<Suggestion>),
     /// Whether completed turns may ask for and show predicted follow-ups.
     suggestions_enabled: bool,
+    /// The titles being written from first prompts.
+    titles: titles::Titles,
     /// Threads whose Session runs a CLI since replaced on disk. Each is
     /// restarted on its own conversation at the first frame it is idle.
     stale_sessions: BTreeSet<ThreadId>,
@@ -1249,6 +1269,7 @@ impl Engine {
             limit: u64::MAX,
             suggestions: crate::doorbell::channel(),
             suggestions_enabled: true,
+            titles: titles::Titles::default(),
             stale_sessions: BTreeSet::new(),
             windows: Default::default(),
             attention_count: Default::default(),
@@ -2769,7 +2790,7 @@ impl Engine {
         &mut self,
         roots: Vec<(Provider, PathBuf)>,
         cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<crate::session_file::Candidate>>>> {
+    ) -> Option<Receiver<io::Result<crate::session_file::Found>>> {
         self.spawner.discover_sessions(roots, cap)
     }
 
@@ -4424,10 +4445,12 @@ impl Engine {
     }
 
     /// What the settings say of the Engine: whether completed turns
-    /// predict a follow-up, and the use, in percent, at which a rising
-    /// window warns the operator (none turns the warnings off).
+    /// predict a follow-up, whether first prompts title their Threads, and
+    /// the use, in percent, at which a rising window warns the operator
+    /// (none turns the warnings off).
     pub fn apply_settings(&mut self, settings: &crate::settings::Settings) {
         self.set_suggestions_enabled(settings.placeholder_suggestions);
+        self.titles.on = settings.auto_title;
         self.allowance_thresholds = settings.allowance_warnings.clone();
     }
 
@@ -5139,6 +5162,7 @@ impl Engine {
                 }
             }
         }
+        self.title_first_prompts();
         self.wake_snoozed();
         self.publish_digests();
         self.let_go_unused();
@@ -6019,7 +6043,11 @@ fn deliver(state: &mut Thread, said: Said, suggestions_enabled: bool) -> io::Res
     state.carry = None;
     // The Session's first prompt has gone out; every later one is bare.
     state.preface_pending = false;
-    // And the Thread's first locks its provider for good (#25, #29).
+    // And the Thread's first locks its provider for good (#25, #29), and
+    // is what its title is written from.
+    if !state.first_prompt_sent && matches!(said, Said::Operator(_)) {
+        state.titling = titles::Titling::Owed(text.clone());
+    }
     state.first_prompt_sent = true;
     let wake = match said {
         Said::Operator(_) => None,

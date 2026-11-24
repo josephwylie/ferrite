@@ -69,11 +69,12 @@ impl Spawner for Spawn {
         &mut self,
         roots: Vec<(Provider, std::path::PathBuf)>,
         cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<crate::session_file::Candidate>>>> {
+    ) -> Option<Receiver<io::Result<crate::session_file::Found>>> {
         let (tx, rx) = crate::doorbell::channel();
         std::thread::Builder::new()
             .name("ferrite-session-discovery".into())
             .spawn(move || {
+                let looked = roots.iter().map(|(_, root)| root.clone()).collect();
                 let mut rows = Vec::new();
                 for (provider, root) in roots {
                     let discovered = match provider {
@@ -93,7 +94,10 @@ impl Spawner for Spawn {
                 }
                 rows.sort_by_key(|row| std::cmp::Reverse(row.modified));
                 rows.truncate(cap);
-                let _ = tx.send(Ok(rows));
+                let _ = tx.send(Ok(crate::session_file::Found {
+                    sessions: rows,
+                    roots: looked,
+                }));
             })
             .ok()?;
         Some(rx)
@@ -105,6 +109,14 @@ impl Spawner for Spawn {
         replies: crate::doorbell::Sender<crate::suggest::Suggestion>,
     ) {
         crate::suggest::spawn(request, replies);
+    }
+
+    fn title(
+        &mut self,
+        job: crate::titler::Job,
+        replies: crate::doorbell::Sender<crate::titler::Titled>,
+    ) {
+        crate::titler::write(job, replies);
     }
 
     fn discover_commands(

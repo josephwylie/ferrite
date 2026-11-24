@@ -13,8 +13,9 @@
 //! Titles and follow-ups share the provider one-shot runner and its deadline. What differs per provider
 //! — which program, which flags, which cheap model — is a [`TitleForm`]
 //! that each provider fills in ([`claude::fill`], [`codex::fill`]); the
-//! cockpit picks the filler by the Thread's Provider. Those fillers live
-//! beside their Sessions in `providers/`.
+//! Engine asks for a title by the Thread's Provider ([`write`]), on the
+//! machine the Thread runs on. Those fillers live beside their Sessions in
+//! `providers/`.
 
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -43,6 +44,25 @@ pub struct TitleRequest {
 }
 
 pub use crate::providers::oneshot::Form as TitleForm;
+
+/// A Thread's title to write from its first prompt (`Spawner::title`):
+/// whose, on which Provider, and the models that Provider offers, which
+/// name Codex's small one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Job {
+    pub thread: crate::ThreadId,
+    pub provider: Provider,
+    pub prompt: String,
+    pub catalog: Vec<crate::ModelInfo>,
+}
+
+/// What the titler wrote for a Thread: its title, or none when it could
+/// not write one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Titled {
+    pub thread: crate::ThreadId,
+    pub title: Option<String>,
+}
 
 /// The instruction text a provider puts in its form.
 pub fn title_prompt(req: &TitleRequest) -> String {
@@ -137,6 +157,34 @@ pub fn spawn_with_timeout(form: TitleForm, timeout: Duration) -> Receiver<Option
         })
         .expect("spawn titler thread");
     rx
+}
+
+/// Write `job`'s title on a background thread, with the copy of its
+/// Provider's CLI a Session would run, and answer it to `replies` once:
+/// the title, or none on any failure, as [`spawn`] does.
+pub fn write(job: Job, replies: crate::doorbell::Sender<Titled>) {
+    let thread = job.thread;
+    let unwritten = replies.clone();
+    let started = thread::Builder::new()
+        .name("ferrite-titler".into())
+        .spawn(move || {
+            let program = crate::providers::discover::program(job.provider);
+            let request = TitleRequest {
+                prompt: job.prompt,
+                reply: None,
+            };
+            let form = form_for(job.provider, &program, &request, &job.catalog);
+            let _ = replies.send(Titled {
+                thread: job.thread,
+                title: run(&form, TIMEOUT),
+            });
+        });
+    if started.is_err() {
+        let _ = unwritten.send(Titled {
+            thread,
+            title: None,
+        });
+    }
 }
 
 fn run(form: &TitleForm, timeout: Duration) -> Option<String> {

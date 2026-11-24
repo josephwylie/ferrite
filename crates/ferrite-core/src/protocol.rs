@@ -491,6 +491,18 @@ pub enum Op {
     /// runs: how a window finds a Project's counterpart on a machine
     /// (ADR 0048). Replied `repositories`.
     Repositories,
+    /// The commands `provider`'s CLI on the Server's computer finds in
+    /// `cwd`, there: what a Draft's `/` menu and a Step's skills list
+    /// before a Session runs (ADR 0049). Replied `commands`.
+    ListCommands {
+        provider: Provider,
+        cwd: PathBuf,
+    },
+    /// The provider sessions on the Server's computer to import, newest
+    /// first, at most `cap` (ADR 0022, 0049). Replied `sessions`.
+    ListSessions {
+        cap: usize,
+    },
     /// A review's git scope of the checkout at `path`, read by git on the
     /// Server's computer (ADR 0021). Replied `diff`: what a window from
     /// before `review_read` reviews with.
@@ -675,6 +687,8 @@ impl Op {
             | Op::Changes { .. }
             | Op::ListRepo { .. }
             | Op::Repositories
+            | Op::ListCommands { .. }
+            | Op::ListSessions { .. }
             | Op::ReviewDiff { .. }
             | Op::ReviewRead { .. }
             | Op::ReviewPullRequestDiff { .. }
@@ -1690,6 +1704,16 @@ pub enum Done {
     Repositories {
         projects: Vec<WireRepository>,
     },
+    /// A `list_commands`' commands, as the CLI listed them.
+    Commands {
+        commands: Vec<WireCommand>,
+    },
+    /// A `list_sessions`' sessions, newest first, and the folders the
+    /// Server looked in: what an empty picker says it searched.
+    Sessions {
+        sessions: Vec<WireSession>,
+        roots: Vec<PathBuf>,
+    },
     /// A `review_diff`'s changes as a git-style unified diff.
     Diff {
         text: String,
@@ -1969,6 +1993,9 @@ pub struct ThreadState {
     /// Subagent histories that could not be read back from the log.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history_errors: Vec<WireHistoryError>,
+    /// The Server's titler is writing its title from its first prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub titling: bool,
 }
 
 impl ThreadState {
@@ -2019,6 +2046,23 @@ pub struct WireCommand {
     /// case), an unknown one decoding as `unknown`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<crate::CommandSource>,
+}
+
+/// A provider session file `list_sessions` found (`session_file::Candidate`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireSession {
+    pub provider: Provider,
+    pub path: PathBuf,
+    /// When the provider last wrote it, in milliseconds since the Unix
+    /// epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3283,6 +3327,37 @@ impl From<&WireCommand> for crate::SessionCommand {
             description: command.description.clone(),
             path: command.path.clone(),
             source: command.source.clone(),
+        }
+    }
+}
+
+impl From<crate::session_file::Candidate> for WireSession {
+    fn from(found: crate::session_file::Candidate) -> Self {
+        Self {
+            provider: found.provider,
+            path: found.path,
+            modified_ms: found
+                .modified
+                .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|since| since.as_millis() as u64),
+            title: found.title,
+            cwd: found.cwd,
+            session_id: found.session_id,
+        }
+    }
+}
+
+impl From<WireSession> for crate::session_file::Candidate {
+    fn from(found: WireSession) -> Self {
+        Self {
+            provider: found.provider,
+            path: found.path,
+            modified: found
+                .modified_ms
+                .map(|ms| std::time::UNIX_EPOCH + Duration::from_millis(ms)),
+            title: found.title,
+            cwd: found.cwd,
+            session_id: found.session_id,
         }
     }
 }
