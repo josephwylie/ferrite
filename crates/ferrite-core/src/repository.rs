@@ -8,17 +8,14 @@
 //! 0047), where `repo_key`, a path, means nothing.
 //!
 //! Read from the repository's git config without running git, as
-//! `checkout_of` reads `.git`: `project.list` asks it of every Project.
-//! T3's ssh alias lookup (`ssh -G`) and `insteadOf` rewrites are not
-//! followed: a remote spelled through one keys as written.
+//! `checkout_of` reads `.git`: `project.list` asks it of every Project, and
+//! a copy to a Machine of the config it finds there (`placement`). T3's ssh
+//! alias lookup (`ssh -G`) and `insteadOf` rewrites are not followed: a
+//! remote spelled through one keys as written.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-use super::registry::Registry;
-use crate::project::ProjectId;
-use crate::protocol::Repositories;
 
 /// The repository the checkout at `root` is, by its primary remote: `None`
 /// outside git, or with no remote that names a host.
@@ -27,25 +24,8 @@ pub fn repository_key(root: &Path) -> Option<String> {
 }
 
 /// `repository_key` of a repository whose git config is `config`.
-pub fn repository_key_of(config: &str) -> Option<String> {
+pub(crate) fn repository_key_of(config: &str) -> Option<String> {
     primary(&remotes(config)).and_then(normalize)
-}
-
-/// Each Project's id and root, to read their repositories off the thread
-/// that holds the registry.
-pub fn project_roots(registry: &Registry) -> Vec<(ProjectId, PathBuf)> {
-    registry
-        .projects()
-        .iter()
-        .map(|project| (project.id, project.root.clone()))
-        .collect()
-}
-
-pub fn repositories(projects: &[(ProjectId, PathBuf)]) -> Repositories {
-    projects
-        .iter()
-        .filter_map(|(id, root)| Some((*id, repository_key(root)?)))
-        .collect()
 }
 
 /// The git directory every worktree of `root`'s repository shares, read

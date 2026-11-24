@@ -58,6 +58,7 @@ pub mod providers;
 pub mod pull_request;
 pub mod questions;
 pub mod replies;
+pub mod repository;
 pub mod roster;
 pub mod runtime_mode;
 pub mod self_update;

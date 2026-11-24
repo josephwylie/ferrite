@@ -211,7 +211,7 @@ impl Server {
         let view = self.engine.thread(parent).expect("open");
         let repository = view
             .workspace()
-            .and_then(|workspace| ferrite_core::workspace::repository_key(workspace.cwd()));
+            .and_then(|workspace| ferrite_core::repository::repository_key(workspace.cwd()));
         let machine = params.machine.clone();
         let chosen = start::mode(params.mode, reach).and_then(|mode| {
             let runs = start::runs(&inherited, params.provider, params.model, params.effort)?;

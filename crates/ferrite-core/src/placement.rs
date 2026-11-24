@@ -813,8 +813,8 @@ fn same_repository(
     let Ok(config) = base64::engine::general_purpose::STANDARD.decode(data) else {
         return false;
     };
-    let theirs = crate::workspace::repository_key_of(&String::from_utf8_lossy(&config));
-    matches!((crate::workspace::repository_key(source), theirs), (Some(ours), Some(theirs)) if ours == theirs)
+    let theirs = crate::repository::repository_key_of(&String::from_utf8_lossy(&config));
+    matches!((crate::repository::repository_key(source), theirs), (Some(ours), Some(theirs)) if ours == theirs)
 }
 
 /// `first` and then `then`, whose problems are the ones left.

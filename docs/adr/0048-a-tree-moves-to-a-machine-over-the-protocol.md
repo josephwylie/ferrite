@@ -204,7 +204,7 @@ Windows window.
 ## 2. The environment chip and Placement (built)
 
 - **A counterpart is computed, not stored.** The counterpart of Project P
-  on Machine E is the Project there with the same `workspace::repository_key`
+  on Machine E is the Project there with the same `repository::repository_key`
   (as delegation matches, ADR 0047; a copied folder carries its `.git`, so
   it matches itself), else the one a **Placement** names. Every copy keeps
   that record, so where it went is known whatever git later says of either

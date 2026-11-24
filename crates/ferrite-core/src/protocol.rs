@@ -1686,7 +1686,7 @@ pub enum Done {
         branches: Vec<String>,
     },
     /// A `repositories`' Projects that are git checkouts with a remote,
-    /// each with `workspace::repository_key` of its root.
+    /// each with `repository::repository_key` of its root.
     Repositories {
         projects: Vec<WireRepository>,
     },

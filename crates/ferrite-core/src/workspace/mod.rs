@@ -24,11 +24,8 @@ use std::process::Command;
 
 pub mod follow;
 pub mod registry;
-mod repository;
 mod stamp;
 
-pub(crate) use repository::{project_roots, repositories};
-pub use repository::{repository_key, repository_key_of};
 pub use stamp::{checkout_stamp, head_of};
 
 /// Move the shared project checkout to an existing branch selected before

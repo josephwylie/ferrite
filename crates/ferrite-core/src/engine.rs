@@ -1302,8 +1302,18 @@ impl Engine {
     /// `repositories` ask, answered off the thread that holds the Engine,
     /// since it reads each Project's git config.
     pub fn repositories(&self) -> impl FnOnce() -> protocol::Repositories + Send + 'static {
-        let roots = workspace::project_roots(&self.registry);
-        move || workspace::repositories(&roots)
+        let roots: Vec<(ProjectId, PathBuf)> = self
+            .registry
+            .projects()
+            .iter()
+            .map(|project| (project.id, project.root.clone()))
+            .collect();
+        move || {
+            roots
+                .iter()
+                .filter_map(|(id, root)| Some((*id, crate::repository::repository_key(root)?)))
+                .collect()
+        }
     }
 
     /// Register a Project over these roots (idempotent, canonicalized).
