@@ -141,9 +141,12 @@ fn band_rows(
     })
 }
 
-/// Press `chip`, then its menu's row named `name`.
+/// Press `chip`, then its menu's row named `name`. What moves the band
+/// (an upload's progress row going) must have landed first: a press goes
+/// where the chip was last drawn.
 fn pick_on(view: &Entity<CockpitView>, chip: &str, name: &str, cx: &mut gpui::VisualTestContext) {
     press(cx, chip);
+    until(cx, |cx| view.read_with(cx, |view, _| view.band_menu().is_some()));
     let at = view.read_with(cx, |view, _| {
         let open = view.band_menu().expect("the chip's menu is up");
         open.rows
@@ -358,6 +361,8 @@ fn picking_a_machine_moves_the_draft_to_its_projects_counterpart_with_all_it_hol
         String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap())
             .contains(r#""op":"attachment","request":{"action":"begin","name":"shot.png""#)
     });
+    // Its progress row goes once box has it, moving the band under it.
+    until(cx, |cx| cx.debug_bounds("attachment-upload-progress").is_none());
 
     view.update(cx, |view, cx| view.open_draft_in_project(lone, cx));
     tick(cx);
