@@ -166,7 +166,12 @@ impl CockpitView {
             .is_some_and(|(_, index)| self.details_standing(index))
     }
 
+    /// Whether Pane `index` has a card to draw: only a Pane showing a
+    /// Thread does.
     fn details_standing(&self, index: usize) -> bool {
+        if self.panes[index].thread().is_none() {
+            return false;
+        }
         if self.details_inline(index) {
             self.details_inline_open(index)
         } else {
