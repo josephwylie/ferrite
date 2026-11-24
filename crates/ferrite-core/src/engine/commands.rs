@@ -280,6 +280,7 @@ impl Engine {
             | Op::ListDir { .. }
             | Op::FileOperation { .. }
             | Op::Attachment { .. }
+            | Op::Tree { .. }
             | Op::Changes { .. }
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }

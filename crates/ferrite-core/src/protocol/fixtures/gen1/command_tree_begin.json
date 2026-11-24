@@ -1,0 +1,1 @@
+{"type":"command","id":321,"op":"tree","request":{"action":"begin","root":{"kind":"path","path":"~/projects/app"},"path":"bin/run","size":3,"executable":true}}
