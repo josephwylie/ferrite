@@ -26,6 +26,12 @@ pub(crate) const MOST_WRITES: usize = 4;
 /// below what a connection may fall behind by (`link::LAGGED_BYTES`).
 pub(super) const PAGE_BYTES: usize = 4 << 20;
 
+/// The bits a directory a tree op makes ends with, whatever the umask: open
+/// to read, as the usual umask makes one. The Server's own umask (077,
+/// `machine/bootstrap.sh`) is for its state, and a manifest lists no
+/// directory's bits for a sender to give.
+const DIR_MODE: u32 = 0o755;
+
 enum Target {
     Path {
         path: PathBuf,
@@ -206,7 +212,10 @@ impl Session {
             Request::MakeDir { root, path } => {
                 let path = inside(&made(&root)?, &path)?;
                 match fs::create_dir(&path) {
-                    Ok(()) => Ok(Reply::Done),
+                    Ok(()) => {
+                        set_mode(&path, DIR_MODE).map_err(|error| at(&path, error))?;
+                        Ok(Reply::Done)
+                    }
                     Err(error)
                         if error.kind() == io::ErrorKind::AlreadyExists
                             && fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) =>
@@ -299,11 +308,19 @@ fn same_dir(_: &Path, _: &Path) -> bool {
     false
 }
 
-/// The root, made if it is not there yet: a tree is often sent to a
-/// directory that does not exist.
+/// The root, made with each directory on the way to it that is not there
+/// yet: a tree is often sent to a directory that does not exist.
 fn made(root: &Root) -> io::Result<PathBuf> {
     let root = resolve(root)?;
+    let missing: Vec<PathBuf> = root
+        .ancestors()
+        .take_while(|dir| fs::symlink_metadata(dir).is_err())
+        .map(Path::to_path_buf)
+        .collect();
     fs::create_dir_all(&root).map_err(|error| at(&root, error))?;
+    for dir in missing {
+        set_mode(&dir, DIR_MODE).map_err(|error| at(&dir, error))?;
+    }
     Ok(root)
 }
 

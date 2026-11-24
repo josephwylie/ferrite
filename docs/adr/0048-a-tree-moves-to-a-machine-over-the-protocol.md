@@ -111,7 +111,9 @@ Windows window.
   sender's where both sides keep bits, and only then does a different
   executable bit make a file differ; a script edited on Windows keeps its
   `+x` there. A new file takes the sender's bits, or the receiver's umask
-  from a side that keeps none.
+  from a side that keeps none. A directory a tree op makes, the root and
+  those on the way to it too, is 0755 whatever the Server's umask (077,
+  for its own state): a manifest lists no directory's bits to send.
 - **`send` takes the steps through an `Exchange`, asking ahead of the
   replies**: a request is written at once (`ask`) and its reply read later
   (`answer`), in the order asked, with at most 64 requests or 4 MiB of
