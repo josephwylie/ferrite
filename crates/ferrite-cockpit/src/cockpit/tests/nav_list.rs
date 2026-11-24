@@ -1011,3 +1011,75 @@ fn a_pinned_thread_heads_the_list_until_unpinned(cx: &mut TestAppContext) {
     });
 }
 
+/// A window lists this computer's Threads as they were last used: the open
+/// ones by their latest turn, newest first, each aged by it, and the parked
+/// ones in the order they were parked, each with its name, provider,
+/// Project and age (ADR 0049).
+#[gpui::test]
+fn a_window_lists_this_computers_threads_by_their_last_turn(cx: &mut TestAppContext) {
+    let clock = hold_wall_clock();
+    let (mut core, fake) = cockpit("nav-last-turn", 0);
+    let machine = core.first_machine();
+    let project = core.register_project(machine, &here()).now().unwrap();
+    let title = core.project(project).unwrap().title.clone();
+    // One answered turn each, an hour or more apart. Each Thread opens as
+    // its turn comes, so its Session is the newest the fake started.
+    let turn = |core: &mut Cockpit, provider: Provider, prompt: &str, hours: u64| {
+        let thread = core
+            .open(machine, provider, WorkspaceChoice::Main { checkout: here() })
+            .unwrap();
+        let _ = core.send(thread, prompt.into());
+        core.pump();
+        spoken(&fake, fake.streams.borrow().len() - 1);
+        core.pump();
+        core.pump();
+        clock.advance(Duration::from_secs(hours * 3600));
+        thread
+    };
+    let oldest = turn(&mut core, Provider::Claude, "the oldest question", 2);
+    let tidy = turn(&mut core, Provider::Codex, "Tidy the release notes", 1);
+    let middle = turn(&mut core, Provider::Claude, "the middle question", 1);
+    let flaky = turn(&mut core, Provider::Claude, "Fix the flaky test", 1);
+    let newest = turn(&mut core, Provider::Claude, "the newest question", 3);
+    core.park(tidy).now().unwrap();
+    core.park(flaky).now().unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+
+    let now = ferrite_core::clock::system_time();
+    let state = view.read_with(cx, |view, cx| view.nav_state(cx));
+    let age = |row: &nav::ThreadRow| {
+        row.activity_at
+            .map(|at| crate::facts::since_label(at, now).to_string())
+    };
+    let project = Some(gpui::SharedString::from(title));
+    let open: Vec<_> = state
+        .active
+        .iter()
+        .map(|row| (row.key, age(row), row.provider, row.project.clone()))
+        .collect();
+    let claude = Some(Provider::Claude);
+    assert_eq!(
+        open,
+        [
+            (newest, Some("3h".into()), claude, project.clone()),
+            (middle, Some("5h".into()), claude, project.clone()),
+            (oldest, Some("8h".into()), claude, project.clone()),
+        ],
+        "the open Threads, newest turn first"
+    );
+    let parked: Vec<_> = state
+        .parked
+        .iter()
+        .map(|row| (row.key, row.name.to_string(), age(row), row.provider, row.project.clone()))
+        .collect();
+    assert_eq!(
+        parked,
+        [
+            (tidy, "Tidy the release notes".into(), Some("6h".into()), Some(Provider::Codex), project.clone()),
+            (flaky, "Fix the flaky test".into(), Some("4h".into()), claude, project),
+        ],
+        "the parked Threads, in the order they were parked"
+    );
+}
