@@ -371,8 +371,11 @@ _Avoid_: mirror, sync target, remote path.
 **Setup sync**
 The operator's agent setup (skills, commands, agents, instructions, rules,
 plugins, settings and sign-ins) kept the same on this computer and each
-Machine, both ways, with this computer as the hub. Never the agents'
-transcripts, history or caches (ADR 0048, planned).
+Machine, both ways, with this computer as the hub. It runs on its own as a
+Machine connects, as the setup here changes and every 5 minutes, unless
+that Machine's "Sync my setup" is off. A file both sides changed goes to the
+newer, and the other copy is kept. Never the agents' transcripts, history
+or caches (ADR 0048).
 _Avoid_: dotfile sync, backup.
 
 **API**

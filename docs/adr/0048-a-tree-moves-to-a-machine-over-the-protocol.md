@@ -11,14 +11,14 @@ of the Project folder, put where the operator says. Their agent setup
 (skills, commands, agents, instructions, rules, plugins, settings and
 sign-ins) follows them to every Machine and stays in sync both ways.
 
-Three pieces do this, in three PRs. The first is built. The other two are
-planned and recorded here so they build on it as designed:
+Three pieces do this, in three PRs. The first and third are built. The
+second is planned and recorded here so it builds on them as designed:
 
 1. **The tree primitive** (built): one way to make a directory on a
    Machine hold what one here holds, over the Ferrite protocol.
 2. **The environment chip and Placement** (planned): the Draft's choice of
    environment, and the Project copy it starts.
-3. **Setup sync** (planned): the operator's agent setup kept the same on
+3. **Setup sync** (built): the operator's agent setup kept the same on
    this computer and each Machine.
 
 "Machine" is the word in code and docs, "environment" in the window's words,
@@ -235,40 +235,79 @@ Windows window.
 - `CONTEXT.md`'s Draft entry and ADR 0045's "locked environment control"
   line change with it: the environment is a choice until the first send.
 
-## 3. Setup sync (planned)
+## 3. Setup sync (built)
 
-- **`Root::Setup`** joins the tree ops, and each side resolves the same
-  table itself, relative to its home:
+`ferrite_core::setup_sync`, run by the window (`cockpit/setup_sync.rs`).
+
+- **`Root::Setup`** joins the tree ops, and each side resolves one table,
+  `setup_sync::ITEMS`, against its own home: `HOME`, else `USERPROFILE`,
+  as everything else in Ferrite reads it, and `$CODEX_HOME` for `.codex`.
+  A path outside the table is refused by the Server, and nothing outside it
+  is read or written. A missing item is nothing, so a Machine with no
+  agent setup yet syncs like any other.
 
   | Paths | Kind |
   | --- | --- |
   | `.claude/{skills,commands,agents,rules,plugins}` | tree |
   | `.claude/{CLAUDE.md,keybindings.json}` | file |
   | `.claude/settings.json`, `.claude/plugins/{installed_plugins,known_marketplaces}.json` | portable JSON |
-  | `.claude.json` | its `mcpServers` key only |
-  | Claude's sign-in | credential: `.claude/.credentials.json` on Linux and Windows, the Keychain item `Claude Code-credentials` on macOS |
-  | `$CODEX_HOME` (else `.codex`)`/{skills,prompts}` | tree |
-  | `.codex/{AGENTS.md,config.toml,auth.json}` | file |
+  | `.claude.json` | its `mcpServers` key only, as portable JSON |
+  | `.claude/.credentials.json` | sign-in: a file on Linux and Windows, the Keychain item `Claude Code-credentials` on macOS |
+  | `.codex/{skills,prompts}` | tree, but `skills/.system`, which each Codex writes for its own version |
+  | `.codex/{AGENTS.md,config.toml}` | file |
+  | `.codex/auth.json` | sign-in file |
 
-  Never transcripts, history, todos, logs or caches of session state.
-- **Portable JSON**: a string that starts with this side's home is kept as
-  `~/…` with `/` separators and written out in the receiver's. Hashes are of
-  the portable form, so the same file on Windows and Linux compares equal.
+  Not synced: transcripts (`projects`, `sessions`), history, todos, logs,
+  backups, the rest of `.claude.json`, `.git` at any depth (a marketplace
+  is a clone, and each side fetches into its own), and folders the table
+  does not name, such as `.claude/hooks` or `.claude/output-styles`.
+- **A symlinked skill is followed**: its contents are sent and the link is
+  recorded. Nothing is ever written or removed through a link on its own
+  side. A change the other side made under it is held, and named in the
+  status line; in a conflict the linked side wins. The link itself can
+  still be removed.
+- **Portable JSON**: a string value that starts with this side's home is
+  carried as `<home>/…` with `/` separators and written out in the
+  receiver's. Every other byte is kept, a `~` the operator wrote
+  included. Hashes are of the carried form, so the same file on Windows
+  and Linux compares equal, and a plugin path goes Windows to Linux to
+  Windows unchanged. JSON that does not parse is held, never sent torn.
+- **Sign-ins** are bytes only: never parsed, logged, or named by content
+  in an error, an outcome or a toast. On Unix the file is 0600 in a 0700
+  folder however it arrives.
 - **Reconcile is pure and three-way**: `reconcile(base, here, there) ->
-  Vec<Action>`, each `Push`, `Pull`, `RemoveHere`, `RemoveThere` or
-  `Conflict`. The base is the manifest of the last good sync with that
-  Machine, at `machine::dir(..)/setup-sync.json`. The first sync, with no
-  base, is the union and removes nothing. A conflict (both sides changed) is
-  won by the newer; the loser is kept under
-  `~/.ferrite/sync-conflicts/<stamp>/` and a toast names it.
+  Vec<Action>`, each `Push`, `Pull`, `RemoveHere`, `RemoveThere`,
+  `Conflict { winner }` or `Hold`. The base is the manifest of the last
+  good sync, at `machine::dir(..)/setup-sync.json`. The first sync, with
+  no base, is the union and removes nothing. A conflict is won by the
+  newer modification time, this computer on a tie; the loser is kept
+  under `sync-conflicts/<stamp>/` in Ferrite's settings folder
+  (`~/.ferrite`), 0600, and a toast names the file and where it is kept.
+- **The valve**: with a base, a sync that would remove more than half of a
+  side's files does nothing and says so, on the row and in a toast. "Sync
+  anyway" on the row runs it.
+- **Idempotent**: each write goes through a temporary file that is synced
+  to disk before it is renamed. Once both sides are done, each is
+  rescanned, and only then is the base written, from what the two now
+  hold alike. A sync cut short anywhere leaves the old base, and the next
+  one finishes it. A lock file keeps one sync per Machine at a time across
+  processes.
 - **This computer is the hub**: each Machine syncs with it, so a change on
   one Machine reaches the others through it.
-- **When**: as a Machine connects, before each bootstrap there, on a local
-  change (debounced), and every 5 minutes while it is connected, for edits
-  made there. One sync per Machine at a time.
-- **Settings › Connections**: each Machine's row has "Sync my setup" (on by
-  default) and a line saying in sync, syncing n files, or the last error.
-- It works for a Machine with no agent setup yet.
+- **When**: as a Machine connects, as a Thread starts there (without
+  waiting for it), 3 seconds after the setup here last changed (a file
+  watcher on the table's folders), and every 5 minutes while it is
+  connected, for edits made there. A change here that leaves the table's
+  bytes as they were never reaches the Machine.
+- **Settings › Connections**: each Machine's row has "Sync my setup" (on
+  by default, `sync_setup` on `Machine`) and a line: "In sync", "Syncing
+  n files", what stopped it, or the last error. A Machine whose Ferrite
+  predates `Root::Setup` says to update it. Off, nothing syncs.
+- **The CLI**: `ferrite --machine <name> setup sync [--allow-removals]`
+  runs one sync and prints its outcome as JSON.
+- **macOS's Keychain** is reached through the `keyring` crate behind a
+  `Keychain` trait, whose errors are replaced by fixed words. The tests
+  use a fake one; no live proof ran on macOS.
 
 ## Tradeoffs
 
@@ -306,8 +345,8 @@ Windows window.
   by default. An attachment is still synced: its store is named by hash,
   and nothing would rewrite a torn one. That holds for a mirror, which the
   next send repairs, and not for Setup sync: a torn `settings.json` or
-  sign-in is what an agent reads next, so PR 3's `Root::Setup` writes must
-  sync before they rename.
+  sign-in is what an agent reads next, so `Root::Setup` writes sync before
+  they rename.
 - **No cancel request.** A cancelled send stops between requests and closes
   its connection, which drops the half-sent file there.
 - **The hash cache is per process** and kept only for files settled 2
@@ -341,3 +380,15 @@ Windows window.
   other, and a mirror there removes what the source does not hold. Callers
   keep destinations sane: the setup sheet's is a new folder under
   `projects_dir`, and Setup sync's are its table's.
+- **Setup sync writes `.claude.json` while Claude Code may.** Only its
+  `mcpServers` key is replaced, through a temporary file and a rename, but
+  a Claude Code that rewrites the file from what it read before the
+  rename puts the old key back. The next sync sees that as an edit there.
+- **A sign-in refreshed on both sides is a conflict.** The newer wins on
+  both, and the other is kept. A provider that rotates refresh tokens may
+  already have retired the loser, so that side signs in with the winner.
+- **A conflict's losing sign-in is kept as a file**, 0600 in a 0700
+  folder, on macOS too, where the live one is in the Keychain.
+- **One failed file stops the sync** before the base is written. The next
+  sync, at most 5 minutes on, tries again from the old base.
+- **The valve counts files only**: removing an empty folder never trips it.
