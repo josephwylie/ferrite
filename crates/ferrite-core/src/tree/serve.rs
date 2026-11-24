@@ -183,9 +183,19 @@ fn resolve(root: &Root) -> io::Result<PathBuf> {
 
 /// Whether `root`, resolved, is the home directory or holds it.
 fn holds_home(root: &Path) -> bool {
-    let home = crate::workspace::expand_home(Path::new("~"));
-    let home = canonical(&home).unwrap_or(home);
-    holds(root, &home) || home.ancestors().any(|dir| same_dir(root, dir))
+    holds_dir(root, &crate::workspace::expand_home(Path::new("~")))
+}
+
+/// Whether `root`, resolved, is `home` or holds it, by either spelling of
+/// `home`: a home that is itself a link lives where the link points and
+/// where the link stands, and a mirror into the directory holding the link
+/// would remove it.
+pub(super) fn holds_dir(root: &Path, home: &Path) -> bool {
+    let resolved = canonical(home).unwrap_or_else(|_| home.to_path_buf());
+    home.ancestors().chain(resolved.ancestors()).any(|dir| {
+        let dir = canonical(dir).unwrap_or_else(|_| dir.to_path_buf());
+        (holds(root, &dir) && holds(&dir, root)) || same_dir(root, &dir)
+    })
 }
 
 /// Whether two paths name one directory, by its device and inode: what a

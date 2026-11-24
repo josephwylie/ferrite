@@ -434,3 +434,24 @@ fn a_mirror_reads_every_page_of_the_far_side_before_it_plans() {
     assert_eq!(sent, Sent::default());
     assert!(far.pages.is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_root_holding_the_link_that_is_the_home_directory_holds_it() {
+    let dir = std::env::temp_dir().join(format!("ferrite-tree-home-link-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let real = dir.join("elsewhere/home");
+    let beside = dir.join("users");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::create_dir_all(beside.join("other")).unwrap();
+    let home = beside.join("me");
+    std::os::unix::fs::symlink(&real, &home).unwrap();
+    let resolved = |path: &std::path::Path| std::fs::canonicalize(path).unwrap();
+
+    assert!(serve::holds_dir(&resolved(&beside), &home));
+    assert!(serve::holds_dir(&resolved(&real), &home));
+    assert!(serve::holds_dir(&resolved(&dir.join("elsewhere")), &home));
+    assert!(!serve::holds_dir(&resolved(&beside.join("other")), &home));
+    assert!(!serve::holds_dir(&resolved(&real).join("project"), &home));
+    let _ = std::fs::remove_dir_all(&dir);
+}
