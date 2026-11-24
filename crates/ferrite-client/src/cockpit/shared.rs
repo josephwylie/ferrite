@@ -3,19 +3,15 @@
 //! Threads, each replaced whole by its latest message. An older Server's
 //! Groups are not read.
 
-use std::path::{Path, PathBuf};
-
 use ferrite_core::notifications::Notifications;
+use ferrite_core::project::Projects;
 use ferrite_core::protocol::{ProviderState, ServerMessage, Snapshot};
 use ferrite_core::provider::Provider;
 use ferrite_core::transcript::RateLimits;
-use ferrite_core::workspace::registry::Registry;
 use ferrite_core::{ModelInfo, ThreadId};
 
 pub(crate) struct Shared {
-    /// The Store these are of.
-    dir: PathBuf,
-    pub(crate) registry: Registry,
+    pub(crate) registry: Projects,
     pub(crate) notifications: Notifications,
     providers: Vec<ProviderState>,
     /// The open Threads, in the order they opened.
@@ -29,12 +25,10 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    /// Nothing yet: the shared state of the Store in `dir` before the
-    /// Engine's first messages.
-    pub(crate) fn new(dir: &Path) -> Self {
+    /// Nothing yet: the shared state before the Engine's first messages.
+    pub(crate) fn new() -> Self {
         Self {
-            dir: dir.to_path_buf(),
-            registry: Registry::empty(dir),
+            registry: Projects::empty(),
             notifications: Notifications::default(),
             providers: Vec::new(),
             open: Vec::new(),
@@ -48,7 +42,7 @@ impl Shared {
     pub(crate) fn attached(&mut self, snapshot: &Snapshot) {
         *self = Self {
             open: snapshot.roster.open.clone(),
-            ..Self::new(&self.dir)
+            ..Self::new()
         };
         if let Some(registry) = &snapshot.registry {
             self.set_registry(registry);
@@ -97,7 +91,7 @@ impl Shared {
     }
 
     fn set_registry(&mut self, registry: &serde_json::Value) {
-        match Registry::from_wire(registry.clone(), &self.dir) {
+        match Projects::from_wire(registry.clone()) {
             Ok(registry) => self.registry = registry,
             Err(error) => ferrite_core::log!("the server's registry could not be read: {error}"),
         }

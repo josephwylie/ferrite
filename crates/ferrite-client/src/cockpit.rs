@@ -26,7 +26,7 @@ pub use ferrite_core::provider::ProviderChoice;
 use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::header::LoadError;
 use ferrite_core::notifications::{DecisionNoticeId, NoticeId, Notifications};
-use ferrite_core::project::ProjectId;
+use ferrite_core::project::{ProjectId, Projects};
 use ferrite_core::prompt_queue::Admission;
 use ferrite_core::protocol::{
     Done, ErrorCode, NoticeAction, Op, ProjectAction, ServerMessage, When, WireError,
@@ -35,7 +35,6 @@ use ferrite_core::provider::Provider;
 use ferrite_core::roster::{DraftId, PaneIdentity, Roster};
 use ferrite_core::store::Store;
 use ferrite_core::transcript::Input;
-use ferrite_core::workspace::registry::Registry;
 use ferrite_core::{
     Decision, DecisionAnswer, MachineId, MachineKey, ModelInfo, ProjectKey, SavedThread, ThreadId,
     ThreadKey,
@@ -250,14 +249,12 @@ impl Cockpit {
         saved_as: MachineKey,
     ) -> io::Result<HeldMachine> {
         let logs = store.clone();
-        let dir = store.dir().to_path_buf();
         let mut engine = Engine::try_new(store, spawner)?;
         // Its window pumps it: a park is listed by the pump that parked it.
         engine.read_parked_in_place();
         Ok(HeldMachine::new(
             Link::InProcess(Box::new(engine)),
             Some(logs),
-            &dir,
             saved_as,
         ))
     }
@@ -273,7 +270,7 @@ impl Cockpit {
     pub fn empty() -> Self {
         Self {
             machines: BTreeMap::new(),
-            nothing: shared::Shared::new(Path::new("")),
+            nothing: shared::Shared::new(),
             roster: Roster::default(),
             said: Said::default(),
             follows: Follows::default(),
@@ -309,11 +306,10 @@ impl Cockpit {
     pub fn hold(&mut self, attach: Attach) -> io::Result<MachineId> {
         let local = matches!(attach.server, Endpoint::Local { .. });
         let logs = local.then(|| Store::reader(&attach.store)).transpose()?;
-        let dir = attach.store.clone();
         let saved_as = attach.saved_as.clone();
         let mut remote = remote::Remote::new(attach);
         let arrived = if local { remote.attach_now() } else { None };
-        let mut machine = HeldMachine::new(Link::Server(Box::new(remote)), logs, &dir, saved_as);
+        let mut machine = HeldMachine::new(Link::Server(Box::new(remote)), logs, saved_as);
         // A window streams only what it draws, from its first attach on: it
         // draws nothing yet (ADR 0032).
         machine.drawn = Some(Drawn::default());
@@ -1589,7 +1585,7 @@ mod parity {
 /// What the Engine answers, as this window asks it.
 impl Cockpit {
     /// `machine`'s Projects.
-    pub fn registry(&self, machine: MachineId) -> OnMachine<'_, Registry> {
+    pub fn registry(&self, machine: MachineId) -> OnMachine<'_, Projects> {
         self.reading(machine, |shared| &shared.registry)
     }
 

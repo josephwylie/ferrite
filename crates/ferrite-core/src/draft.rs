@@ -262,7 +262,7 @@ mod tests {
             draft.resolve(self.registry.project(draft.project().project()), true)
         }
 
-        fn worktree(&mut self, project: ProjectKey) -> crate::workspace::registry::WorktreeEntry {
+        fn worktree(&mut self, project: ProjectKey) -> crate::project::WorktreeEntry {
             let entry = self.registry.reserve_worktree(project.project()).unwrap();
             ensure_worktree(
                 &self.registry.project(project.project()).unwrap().root,

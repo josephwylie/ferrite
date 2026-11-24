@@ -6,72 +6,38 @@
 //! canonicalization and dedup, the central worktree layout, branch minting,
 //! and the adoption conflict check against `git worktree list`. Callers
 //! speak ids and verbs; render code never holds a repo path of its own.
+//! What it holds reads as `project::Projects`, the type a window's copy of
+//! it is.
 //!
 //! The registry is a menu, not history: the Thread headers keep the resolved
 //! paths as the durable truth, so a registry file lost by hand orphans
 //! nothing — the menu just starts empty and regrows as Threads bind roots.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
 use crate::git_read::GitError;
-use crate::project::{Project, ProjectId};
-
-/// One registered worktree of one project, labeled by its branch.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorktreeEntry {
-    pub project: ProjectId,
-    /// The repository this worktree belongs to. Kept explicitly so changing
-    /// a Project's primary root cannot retarget an existing worktree.
-    pub repo: PathBuf,
-    pub branch: String,
-    pub path: PathBuf,
-}
+use crate::project::{Project, ProjectId, Projects, WorktreeEntry};
 
 /// The registered projects and their worktrees, persisted in one file under
-/// the store directory (beside the Thread logs, never inside a repo).
+/// the store directory (beside the Thread logs, never inside a repo). It
+/// reads as the `Projects` it holds; only its verbs change them.
 #[derive(Clone)]
 pub struct Registry {
     dir: PathBuf,
-    projects: Vec<Project>,
-    worktrees: BTreeMap<ProjectId, Vec<WorktreeEntry>>,
-    next_project: u64,
+    registered: Projects,
 }
-
-/// The registry file's schema, versioned from day one like the Thread log's.
-const SCHEMA_VERSION: u32 = 2;
 
 const FILE_NAME: &str = "registry.json";
 
-#[derive(Serialize, Deserialize)]
-struct PersistedRegistry {
-    schema: u32,
-    next_project: u64,
-    projects: Vec<PersistedProject>,
-    worktrees: Vec<PersistedWorktree>,
-}
+impl std::ops::Deref for Registry {
+    type Target = Projects;
 
-#[derive(Serialize, Deserialize)]
-struct PersistedProject {
-    id: ProjectId,
-    title: String,
-    root: PathBuf,
-    #[serde(default)]
-    additional_roots: Vec<PathBuf>,
-    minted: u64,
-}
-
-#[derive(Serialize, Deserialize)]
-struct PersistedWorktree {
-    project: ProjectId,
-    #[serde(default)]
-    repo: Option<PathBuf>,
-    branch: String,
-    path: PathBuf,
+    fn deref(&self) -> &Projects {
+        &self.registered
+    }
 }
 
 impl Registry {
@@ -80,121 +46,15 @@ impl Registry {
     /// returned: silently treating protected, damaged, or newer data as an
     /// empty registry would let the next mutation overwrite it.
     pub fn open(dir: &Path) -> io::Result<Registry> {
-        let bytes = match fs::read(dir.join(FILE_NAME)) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(Registry::empty(dir))
-            }
+        let registered = match fs::read(dir.join(FILE_NAME)) {
+            Ok(bytes) => Projects::parse(&bytes)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Projects::empty(),
             Err(error) => return Err(error),
         };
-        let persisted = serde_json::from_slice::<PersistedRegistry>(&bytes)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        Registry::from_persisted(dir, persisted)
-    }
-
-    /// The registry as its file spells it: what a window's copy is built
-    /// from (ADR 0025).
-    pub fn to_wire(&self) -> serde_json::Value {
-        serde_json::to_value(self.persisted()).expect("the registry serializes")
-    }
-
-    /// A window's read-only copy of the Server's registry for the Store in
-    /// `dir`. It is never written: every change is the Server's.
-    pub fn from_wire(value: serde_json::Value, dir: &Path) -> io::Result<Registry> {
-        let persisted = serde_json::from_value::<PersistedRegistry>(value)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        Registry::from_persisted(dir, persisted)
-    }
-
-    /// No projects: also a window's copy before the Server's lands.
-    pub fn empty(dir: &Path) -> Registry {
-        Registry {
+        Ok(Registry {
             dir: dir.to_path_buf(),
-            projects: Vec::new(),
-            worktrees: BTreeMap::new(),
-            next_project: 1,
-        }
-    }
-
-    fn from_persisted(dir: &Path, persisted: PersistedRegistry) -> io::Result<Registry> {
-        let mut registry = Registry::empty(dir);
-        if !(1..=SCHEMA_VERSION).contains(&persisted.schema) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "registry schema {} is not supported (expected {SCHEMA_VERSION})",
-                    persisted.schema
-                ),
-            ));
-        }
-        let ids: BTreeSet<ProjectId> = persisted
-            .projects
-            .iter()
-            .map(|project| project.id)
-            .collect();
-        let roots: BTreeSet<&Path> = persisted
-            .projects
-            .iter()
-            .flat_map(|project| {
-                std::iter::once(project.root.as_path())
-                    .chain(project.additional_roots.iter().map(PathBuf::as_path))
-            })
-            .collect();
-        let root_count: usize = persisted
-            .projects
-            .iter()
-            .map(|project| 1 + project.additional_roots.len())
-            .sum();
-        let max_id = persisted
-            .projects
-            .iter()
-            .map(|project| project.id.0)
-            .max()
-            .unwrap_or(0);
-        if ids.len() != persisted.projects.len()
-            || roots.len() != root_count
-            || persisted.next_project <= max_id
-            || persisted
-                .worktrees
-                .iter()
-                .any(|worktree| !ids.contains(&worktree.project))
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "registry contains inconsistent project or worktree records",
-            ));
-        }
-        registry.next_project = persisted.next_project;
-        registry.projects = persisted
-            .projects
-            .into_iter()
-            .map(|project| Project {
-                id: project.id,
-                title: project.title,
-                root: project.root,
-                additional_roots: project.additional_roots,
-                minted: project.minted,
-            })
-            .collect();
-        for worktree in persisted.worktrees {
-            let repo = worktree.repo.unwrap_or_else(|| {
-                registry
-                    .project(worktree.project)
-                    .map(|project| project.root.clone())
-                    .unwrap_or_default()
-            });
-            registry
-                .worktrees
-                .entry(worktree.project)
-                .or_default()
-                .push(WorktreeEntry {
-                    project: worktree.project,
-                    repo,
-                    branch: worktree.branch,
-                    path: worktree.path,
-                });
-        }
-        Ok(registry)
+            registered,
+        })
     }
 
     /// Register a project root, idempotently: the path is canonicalized, and
@@ -224,6 +84,7 @@ impl Registry {
             ));
         };
         let owners: BTreeSet<_> = self
+            .registered
             .projects
             .iter()
             .filter(|project| {
@@ -245,9 +106,9 @@ impl Registry {
         }
 
         let mut next = self.clone();
-        let id = ProjectId(next.next_project);
-        next.next_project += 1;
-        next.projects.push(Project {
+        let id = ProjectId(next.registered.next_project);
+        next.registered.next_project += 1;
+        next.registered.projects.push(Project {
             id,
             title: leaf(&primary),
             root: primary,
@@ -269,6 +130,7 @@ impl Registry {
 
     fn register_resolved(&mut self, root: PathBuf) -> io::Result<ProjectId> {
         if let Some(existing) = self
+            .registered
             .projects
             .iter()
             .find(|project| project.directories().any(|directory| directory == root))
@@ -276,9 +138,9 @@ impl Registry {
             return Ok(existing.id);
         }
         let mut next = self.clone();
-        let id = ProjectId(next.next_project);
-        next.next_project += 1;
-        next.projects.push(Project {
+        let id = ProjectId(next.registered.next_project);
+        next.registered.next_project += 1;
+        next.registered.projects.push(Project {
             id,
             title: leaf(&root),
             root,
@@ -288,26 +150,6 @@ impl Registry {
         next.persist()?;
         *self = next;
         Ok(id)
-    }
-
-    /// Every registered project, in registration order.
-    pub fn projects(&self) -> &[Project] {
-        &self.projects
-    }
-
-    pub fn project(&self, id: ProjectId) -> Option<&Project> {
-        self.projects.iter().find(|project| project.id == id)
-    }
-
-    /// The Project with a directory holding `path` (canonical), the nearest
-    /// one where directories nest.
-    pub fn containing(&self, path: &Path) -> Option<ProjectId> {
-        self.projects
-            .iter()
-            .flat_map(|project| project.directories().map(move |root| (project.id, root)))
-            .filter(|(_, root)| path.starts_with(root))
-            .max_by_key(|(_, root)| root.components().count())
-            .map(|(id, _)| id)
     }
 
     /// Add roots to one Project atomically. Paths are canonicalized and no
@@ -321,6 +163,7 @@ impl Registry {
         let mut next = self.clone();
         for root in roots {
             if let Some(owner) = next
+                .registered
                 .projects
                 .iter()
                 .find(|project| project.directories().any(|directory| directory == root))
@@ -360,7 +203,7 @@ impl Registry {
         if current == root {
             return Ok(());
         }
-        if self.projects.iter().any(|project| {
+        if self.registered.projects.iter().any(|project| {
             project
                 .directories()
                 .any(|directory| directory == root.as_path())
@@ -406,7 +249,7 @@ impl Registry {
     }
 
     fn project_mut(&mut self, id: ProjectId) -> io::Result<&mut Project> {
-        self.projects
+        self.registered.projects
             .iter_mut()
             .find(|project| project.id == id)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "project is not registered"))
@@ -427,8 +270,8 @@ impl Registry {
             ));
         }
         let mut next = self.clone();
-        next.projects.retain(|project| project.id != id);
-        next.worktrees.remove(&id);
+        next.registered.projects.retain(|project| project.id != id);
+        next.registered.worktrees.remove(&id);
         next.persist()?;
         *self = next;
         Ok(())
@@ -449,6 +292,7 @@ impl Registry {
         }
         let mut next = self.clone();
         let project = next
+            .registered
             .projects
             .iter_mut()
             .find(|project| project.id == id)
@@ -460,28 +304,6 @@ impl Registry {
         next.persist()?;
         *self = next;
         Ok(())
-    }
-
-    /// The worktrees Ferrite itself minted for one project — its record of
-    /// what `reserve_worktree` placed, not the repo's worktrees: the
-    /// workspace chip lists those from `git worktree list`, hand-made ones
-    /// included. Scoped by construction: no verb answers a cross-project
-    /// list.
-    pub fn worktrees(&self, project: ProjectId) -> &[WorktreeEntry] {
-        self.worktrees
-            .get(&project)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-    }
-
-    /// The branch a registered worktree lives on, found by its path — what
-    /// a revive recreates a hand-deleted tree onto.
-    pub fn branch_for(&self, path: &Path) -> Option<&str> {
-        self.worktrees
-            .values()
-            .flatten()
-            .find(|entry| entry.path == path)
-            .map(|entry| entry.branch.as_str())
     }
 
     /// Deal the next worktree branch for a project: `ferrite/wt-N` off the
@@ -496,6 +318,7 @@ impl Registry {
     pub fn reserve_worktree(&mut self, project: ProjectId) -> io::Result<WorktreeEntry> {
         let mut next = self.clone();
         let registered = next
+            .registered
             .projects
             .iter_mut()
             .find(|entry| entry.id == project)
@@ -510,7 +333,7 @@ impl Registry {
             branch,
             path,
         };
-        next.worktrees
+        next.registered.worktrees
             .entry(project)
             .or_default()
             .push(entry.clone());
@@ -523,6 +346,7 @@ impl Registry {
     pub fn reserve_branch(&mut self, project: ProjectId) -> io::Result<String> {
         let mut next = self.clone();
         let registered = next
+            .registered
             .projects
             .iter_mut()
             .find(|entry| entry.id == project)
@@ -558,6 +382,7 @@ impl Registry {
         path: &Path,
     ) -> io::Result<()> {
         if self
+            .registered
             .worktrees
             .get(&project)
             .is_some_and(|entries| entries.iter().any(|entry| entry.path == path))
@@ -565,7 +390,7 @@ impl Registry {
             return Ok(());
         }
         let mut next = self.clone();
-        next.worktrees
+        next.registered.worktrees
             .entry(project)
             .or_default()
             .push(WorktreeEntry {
@@ -587,7 +412,7 @@ impl Registry {
     pub fn remove_worktree(&mut self, path: &Path) -> io::Result<()> {
         let mut next = self.clone();
         let mut removed = false;
-        for entries in next.worktrees.values_mut() {
+        for entries in next.registered.worktrees.values_mut() {
             let before = entries.len();
             entries.retain(|entry| entry.path != path);
             removed |= entries.len() != before;
@@ -605,37 +430,8 @@ impl Registry {
         fs::create_dir_all(&self.dir)?;
         crate::disk::replace_file(
             &self.dir.join(FILE_NAME),
-            &serde_json::to_vec(&self.persisted()).map_err(io::Error::other)?,
+            &self.registered.to_bytes()?,
         )
-    }
-
-    fn persisted(&self) -> PersistedRegistry {
-        PersistedRegistry {
-            schema: SCHEMA_VERSION,
-            next_project: self.next_project,
-            projects: self
-                .projects
-                .iter()
-                .map(|project| PersistedProject {
-                    id: project.id,
-                    title: project.title.clone(),
-                    root: project.root.clone(),
-                    additional_roots: project.additional_roots.clone(),
-                    minted: project.minted,
-                })
-                .collect(),
-            worktrees: self
-                .worktrees
-                .values()
-                .flatten()
-                .map(|entry| PersistedWorktree {
-                    project: entry.project,
-                    repo: Some(entry.repo.clone()),
-                    branch: entry.branch.clone(),
-                    path: entry.path.clone(),
-                })
-                .collect(),
-        }
     }
 }
 
