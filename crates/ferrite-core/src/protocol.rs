@@ -154,6 +154,9 @@ pub struct Command {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
     Attachment { request: crate::attachment_transfer::Request },
+    /// A directory tree's op on the Server's computer (ADR 0048), on a
+    /// connection of its own. Only a Server answers. Replied `tree`.
+    Tree { request: crate::tree::Request },
     Changes { request: crate::changes::Request },
     FileOperation {
         request: crate::file_operations::Request,
@@ -663,6 +666,7 @@ impl Op {
             | Op::ListDir { .. }
             | Op::FileOperation { .. }
             | Op::Attachment { .. }
+            | Op::Tree { .. }
             | Op::Changes { .. }
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }
@@ -1566,6 +1570,7 @@ pub enum ErrorCode {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Done {
     Attachment { reply: crate::attachment_transfer::Reply },
+    Tree { reply: crate::tree::Reply },
     Changes { reply: crate::changes::Reply },
     FileOperation {
         reply: crate::file_operations::Reply,

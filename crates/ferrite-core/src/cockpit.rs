@@ -1984,6 +1984,14 @@ impl Cockpit {
         }
     }
 
+    /// Opens, when run, a connection of its own to `machine`'s Server that
+    /// carries a tree's ops there (ADR 0048), so a long copy holds up
+    /// neither the window nor its acts. Only a Server answers, as
+    /// `list_dir`.
+    pub fn tree(&mut self, machine: MachineId) -> io::Result<crate::tree::Connect> {
+        self.held_mut(machine)?.remote()?.tree()
+    }
+
     /// A directory's entries on the computer the Server runs on — on a
     /// machine, the machine's (ADR 0026). Answered later: a machine is a
     /// round trip away. Only a Server answers: a window that runs its

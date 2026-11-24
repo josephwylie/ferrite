@@ -1,0 +1,1 @@
+{"type":"command","id":327,"op":"tree","request":{"action":"remove","root":{"kind":"path","path":"~/projects/app"},"path":"old"}}

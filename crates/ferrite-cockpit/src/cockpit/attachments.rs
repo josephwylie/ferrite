@@ -313,7 +313,7 @@ impl CockpitView {
     }
 }
 
-struct CancelUpload(ferrite_core::attachment_transfer::Cancellation);
+struct CancelUpload(ferrite_core::chunked::Cancellation);
 
 impl Drop for CancelUpload {
     fn drop(&mut self) {

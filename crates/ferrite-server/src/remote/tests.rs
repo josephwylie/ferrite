@@ -38,8 +38,11 @@ mod network {
                 link::LAGGED_BYTES,
             )
             .unwrap();
-            ferrite_core::api::accept_all(link::listen(&ferrite_core::api::address(&store)).unwrap(), heard)
-                .unwrap();
+            ferrite_core::api::accept_all(
+                link::listen(&ferrite_core::api::address(&store)).unwrap(),
+                heard.clone(),
+            )
+            .unwrap();
             let server_store = store.clone();
             std::thread::spawn(move || {
                 let engine = ferrite_core::engine::Engine::try_new(
@@ -59,6 +62,7 @@ mod network {
                     renders,
                     Arc::default(),
                     server_store.parent().unwrap().to_path_buf(),
+                    heard,
                 )
                 .serve(hear);
             });
@@ -476,7 +480,7 @@ mod network {
         }
 
         let fixture = Fixture::new();
-        let bytes: Vec<u8> = (0..attachment_transfer::CHUNK_SIZE * 3 + 17)
+        let bytes: Vec<u8> = (0..ferrite_core::chunked::CHUNK_SIZE * 3 + 17)
             .map(|index| (index % 251) as u8)
             .collect();
         let source = fixture.folder.join("fragmented.bin");

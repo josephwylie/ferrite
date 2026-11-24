@@ -1,6 +1,6 @@
 use super::*;
 
-fn machine(harness: &Harness, sent: &Arc<Mutex<Vec<u8>>>) -> ferrite_core::cockpit::Cockpit {
+pub(super) fn machine(harness: &Harness, sent: &Arc<Mutex<Vec<u8>>>) -> ferrite_core::cockpit::Cockpit {
     let mut cockpit = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
         store: harness.dir.join("desktop"),
         server: ferrite_core::cockpit::Endpoint::Machine(bridge(harness, sent)),
@@ -101,7 +101,7 @@ fn remote_attachment_bytes_and_previews_cross_the_bridge_without_polling_the_win
     let sent = Arc::default();
     let mut cockpit = machine(&harness, &sent);
     let source = harness.dir.join("desktop-capture.png");
-    let bytes = vec![97; ferrite_core::attachment_transfer::CHUNK_SIZE + 7];
+    let bytes = vec![97; ferrite_core::chunked::CHUNK_SIZE + 7];
     std::fs::write(&source, &bytes).unwrap();
     let upload = cockpit.upload_attachment(cockpit.first_machine(), source.clone()).unwrap();
     let retained = upload
