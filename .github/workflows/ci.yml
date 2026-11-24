@@ -46,7 +46,7 @@ jobs:
         run: |
           python -m unittest discover -s scripts -p test_ci_scope.py
           python -m unittest discover -s scripts -p test_check_raw_presses.py
-          python -m unittest discover -s scripts -p test_check_core_layers.py
+          python -m unittest discover -s scripts -p test_check_core_sides.py
       - id: scope
         name: Check architecture and select verification
         env:
@@ -58,7 +58,7 @@ jobs:
           if [ "$EVENT" = pull_request ]; then args+=(--base "$BASE"); fi
           if [ "$FULL_LABEL" = true ]; then args+=(--full); fi
           python scripts/ci_scope.py "${args[@]}" --github-output "$GITHUB_OUTPUT"
-          python scripts/check_core_layers.py
+          python scripts/check_core_sides.py
 
   macos:
     name: macOS (Metal)
