@@ -20,8 +20,9 @@ gpui::actions!(folder_browser, [Up, Down, Open, Cancel]);
 /// The key context of the browser's lines (`ferrite_ui::keymap`).
 const KEY_CONTEXT: &str = "FolderBrowser";
 
-/// How many rows the list shows, however many the folder has, so the
-/// sheet holds still as the browser moves: more scroll.
+/// How many rows the list shows at least, however few the folder has, so
+/// the sheet holds still as the browser moves. It takes the card's free
+/// height too; more scroll.
 const ROWS: f32 = 6.0;
 
 /// Where the browser goes when the folder it was put at cannot be read.
@@ -610,8 +611,8 @@ impl Render for FolderBrowser {
             cx.processor(|browser, range, _, cx| browser.drawn_rows(range, cx)),
         )
         .track_scroll(&self.scroll)
-        .h(px((self.rows.len() as f32).min(ROWS) * FILES_ROW_H))
-        .flex_shrink(1.)
+        .flex_grow(1.)
+        .flex_basis(px(0.))
         .min_h_0();
         div()
             .key_context(KEY_CONTEXT)
@@ -620,6 +621,7 @@ impl Render for FolderBrowser {
             .on_action(cx.listener(|browser, _: &Open, window, cx| browser.confirm(window, cx)))
             .on_action(cx.listener(|browser, _: &Cancel, window, cx| browser.cancel(window, cx)))
             .flex_shrink_0()
+            .flex_grow(1.)
             .flex()
             .flex_col()
             .gap(px(SPACE_1))
@@ -632,9 +634,10 @@ impl Render for FolderBrowser {
                 div()
                     .debug_selector(|| "folder-browser-rows".into())
                     .flex_shrink_0()
+                    .flex_grow(1.)
                     .flex()
                     .flex_col()
-                    .h(px(ROWS * FILES_ROW_H))
+                    .min_h(px(ROWS * FILES_ROW_H))
                     .child(rows)
                     .children(naming)
                     .children(note),

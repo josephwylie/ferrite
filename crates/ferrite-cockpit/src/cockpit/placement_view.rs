@@ -779,7 +779,10 @@ impl PlacementView {
         } else {
             self.name.clone().into_any_element()
         };
+        // The body fills the card, the browser's folders taking what the
+        // rest leaves.
         let mut body = project_editor::body()
+            .flex_grow(1.)
             .debug_selector(|| "placement-body".into())
             .track_scroll(&self.scroll)
             .child(self.dest.clone())

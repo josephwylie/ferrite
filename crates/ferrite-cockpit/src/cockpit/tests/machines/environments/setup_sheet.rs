@@ -374,6 +374,12 @@ fn the_card_is_one_size_whatever_it_lists(cx: &mut TestAppContext) {
     });
     settles(cx);
     assert_eq!(card_size(cx), with_list);
+    let folders = debug_bounds(cx, "folder-browser-rows".into()).expect("the folders");
+    assert!(
+        folders.size.height > px(6.0 * ferrite_ui::theme::FILES_ROW_H),
+        "the folders take the card's free height: {:?}",
+        folders.size.height
+    );
 }
 
 /// A destination that holds something takes no first copy: the sheet says
