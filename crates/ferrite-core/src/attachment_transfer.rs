@@ -8,7 +8,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::chunked::{self, hex, Cancellation, Progress, CHUNK_SIZE, EXPIRY};
+use crate::chunked::{self, hex, Cancellation, Progress, CHUNK_SIZE};
 
 pub const MAX_SIZE: u64 = crate::attachment::RETAIN_LIMIT;
 const MAX_PENDING: usize = 4;
@@ -92,17 +92,15 @@ impl Session {
                 let dir = self.store.join("attachments").join(".uploads");
                 private_dir(&dir)?;
                 for entry in std::fs::read_dir(&dir)?.flatten() {
-                    if entry.metadata().is_ok_and(|metadata| {
-                        metadata.is_file()
-                            && metadata.modified().is_ok_and(|modified| {
-                                modified.elapsed().is_ok_and(|age| age >= EXPIRY)
-                            })
-                    }) {
+                    if entry
+                        .metadata()
+                        .is_ok_and(|metadata| metadata.is_file() && chunked::stale(&metadata))
+                    {
                         let _ = std::fs::remove_file(entry.path());
                     }
                 }
                 self.last += 1;
-                self.incoming.begin(self.last, &dir, size, name)?;
+                self.incoming.begin(self.last, &dir, size, None, name)?;
                 Ok(Reply::Begun { upload: self.last })
             }
             Request::Chunk {
@@ -403,6 +401,32 @@ mod tests {
             offset,
             data: base64::engine::general_purpose::STANDARD.encode(bytes),
         })
+    }
+
+    #[test]
+    fn a_file_that_grows_while_it_uploads_fails_and_retains_nothing() {
+        let session = session("growing");
+        let store = session.store.clone();
+        let source = store.join("growing.bin");
+        std::fs::write(&source, vec![1; CHUNK_SIZE + 1]).unwrap();
+        let growing = source.clone();
+        let upload = upload(source, move || {
+            let mut session = session;
+            Ok(Box::new(move |request: Request| {
+                if matches!(request, Request::Chunk { offset: 0, .. }) {
+                    use std::io::Write as _;
+                    let mut file = std::fs::OpenOptions::new().append(true).open(&growing)?;
+                    file.write_all(b"more")?;
+                }
+                session.execute(request)
+            }) as Exchange)
+        });
+        assert!(upload.result.recv().unwrap().is_err());
+        let retained = std::fs::read_dir(store.join("attachments"))
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_name() != ".uploads")
+            .count();
+        assert_eq!(retained, 0);
     }
 
     #[test]

@@ -68,7 +68,7 @@ pub fn scan(root: &Path, skip: &[String]) -> io::Result<Manifest> {
             } else if kind.is_dir() {
                 dirs.push((entry.path(), path.clone()));
                 Entry::Dir
-            } else if kind.is_file() && !chunked::receiving(&entry.file_name()) {
+            } else if kind.is_file() && !chunked::temporary(&entry.file_name()) {
                 let (size, modified) = (meta.len(), meta.modified()?);
                 let sha256 = match known.get(&path) {
                     Some(hashed) if hashed.size == size && hashed.modified == modified => {

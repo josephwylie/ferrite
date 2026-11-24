@@ -61,7 +61,7 @@ impl Writes {
                     return Err(invalid(format!("{} is a directory", path.display())));
                 }
                 let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-                self.0.begin(write, &dir, size, Target { path, executable })?;
+                self.0.begin(write, &dir, size, None, Target { path, executable })?;
                 Ok(Reply::Done)
             }
             Request::Chunk {

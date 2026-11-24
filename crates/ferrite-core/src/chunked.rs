@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::{self, Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -61,10 +61,29 @@ impl<T> Drop for Part<T> {
     }
 }
 
-/// Whether `name` is the temporary file of a file still being received.
-pub fn receiving(name: &OsStr) -> bool {
-    name.to_str()
-        .is_some_and(|name| name.starts_with(".ferrite-") && name.ends_with(".part"))
+/// Whether `name` is one a receiver gives a temporary file:
+/// `.ferrite-<process>-<micros>-<nonce>.part`, each a number.
+pub fn temporary(name: &OsStr) -> bool {
+    let numbers = name
+        .to_str()
+        .and_then(|name| name.strip_prefix(".ferrite-")?.strip_suffix(".part"));
+    numbers.is_some_and(|numbers| {
+        let numbers: Vec<&str> = numbers.split('-').collect();
+        numbers.len() == 3
+            && numbers
+                .iter()
+                .all(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
+    })
+}
+
+/// Whether a temporary file was left by a write that is over, in this
+/// process or one that stopped: nothing was written to it for [`EXPIRY`],
+/// and no write takes a chunk after that.
+pub fn stale(meta: &Metadata) -> bool {
+    meta.modified()
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age >= EXPIRY)
 }
 
 /// The files one sender has under way, each by its number, and what the
@@ -113,9 +132,10 @@ impl<T> Incoming<T> {
         self.parts.retain(|_, part| part.touched.elapsed() < EXPIRY);
     }
 
-    /// Receive `size` bytes as file `id` into a new temporary file in `dir`.
-    /// An `id` already under way is refused, and that file dropped too.
-    pub fn begin(&mut self, id: u64, dir: &Path, size: u64, what: T) -> io::Result<()> {
+    /// Receive `size` bytes as file `id` into a new temporary file in `dir`,
+    /// made with the permission bits `mode` where this side keeps them. An
+    /// `id` already under way is refused, and that file dropped too.
+    pub fn begin(&mut self, id: u64, dir: &Path, size: u64, mode: Option<u32>, what: T) -> io::Result<()> {
         self.expire();
         if self.parts.remove(&id).is_some() {
             return Err(invalid("That upload was already under way"));
@@ -131,11 +151,15 @@ impl<T> Incoming<T> {
                 std::process::id(),
                 crate::clock::now().timestamp_micros()
             ));
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            if let Some(mode) = mode {
+                std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
+            }
+            #[cfg(not(unix))]
+            let _ = mode;
+            match options.open(&path) {
                 Ok(file) => break (path, file),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error),
@@ -160,6 +184,7 @@ impl<T> Incoming<T> {
     /// has reached: the offset reached after it. Anything out of order
     /// drops the file.
     pub fn chunk(&mut self, id: u64, offset: u64, data: &str) -> io::Result<u64> {
+        self.expire();
         if data.len() > CHUNK_SIZE.div_ceil(3) * 4 {
             self.parts.remove(&id);
             return Err(invalid("A chunk is over 256 KiB"));
@@ -189,6 +214,7 @@ impl<T> Incoming<T> {
 
     /// The file, once all of it arrived and it hashes to `sha256`.
     pub fn finish(&mut self, id: u64, sha256: &str) -> io::Result<Received<T>> {
+        self.expire();
         let part = self.parts.remove(&id).ok_or_else(unknown)?;
         let actual = hex(&part.hash.clone().finalize());
         if part.received != part.size || sha256 != actual {
@@ -226,10 +252,11 @@ impl<R: Read> Pieces<R> {
         }
     }
 
-    /// The SHA-256 of the pieces, for the receiver's finish, once they
-    /// came to all `size` bytes.
+    /// The SHA-256 of the pieces, once they came to all `size` bytes and
+    /// the file held no more.
     pub fn sha256(self) -> io::Result<String> {
-        if self.offset != self.size {
+        let mut rest = self.from.into_inner();
+        if self.offset != self.size || fill(&mut rest, &mut [0])? != 0 {
             return Err(invalid("The file changed while it was sent"));
         }
         Ok(hex(&self.hash.finalize()))
@@ -297,18 +324,18 @@ mod tests {
     fn cancellation_expiry_and_dropping_remove_the_temporary_files() {
         let dir = dir("cleanup");
         let mut incoming = Incoming::new(4);
-        incoming.begin(1, &dir, 4, ()).unwrap();
-        incoming.begin(2, &dir, 4, ()).unwrap();
+        incoming.begin(1, &dir, 4, None, ()).unwrap();
+        incoming.begin(2, &dir, 4, None, ()).unwrap();
         assert_eq!(files(&dir), 2);
         incoming.cancel(1);
         assert_eq!(files(&dir), 1);
         incoming.parts.get_mut(&2).unwrap().touched = Instant::now() - EXPIRY;
         incoming.expire();
         assert_eq!(files(&dir), 0);
-        incoming.begin(3, &dir, 4, ()).unwrap();
-        assert!(incoming.begin(3, &dir, 4, ()).is_err(), "a number already under way");
+        incoming.begin(3, &dir, 4, None, ()).unwrap();
+        assert!(incoming.begin(3, &dir, 4, None, ()).is_err(), "a number already under way");
         assert_eq!(files(&dir), 0, "and the file under it dropped");
-        incoming.begin(4, &dir, 4, ()).unwrap();
+        incoming.begin(4, &dir, 4, None, ()).unwrap();
         drop(incoming);
         assert_eq!(files(&dir), 0);
     }
@@ -318,7 +345,7 @@ mod tests {
         let dir = dir("whole");
         let bytes: Vec<u8> = (0..CHUNK_SIZE * 2 + 5).map(|at| at as u8).collect();
         let mut incoming = Incoming::new(1);
-        incoming.begin(7, &dir, bytes.len() as u64, "kept").unwrap();
+        incoming.begin(7, &dir, bytes.len() as u64, None, "kept").unwrap();
         let mut pieces = Pieces::new(&bytes[..], bytes.len() as u64);
         let mut chunks = 0;
         for piece in &mut pieces {
