@@ -416,7 +416,7 @@ impl Manifest {
     }
 }
 
-/// What a [`send`] did, and what each side could not list.
+/// What a [`send`] did, and what each side could not list or read.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Sent {
     pub removed: usize,
@@ -428,7 +428,37 @@ pub struct Sent {
     pub problems: Vec<Problem>,
 }
 
-/// An entry a side could not list: it was left as each side has it.
+/// A send that stopped before its last step: why, and what it had taken
+/// there by then.
+#[derive(Debug)]
+pub struct Stopped {
+    pub error: io::Error,
+    pub sent: Sent,
+}
+
+impl From<io::Error> for Stopped {
+    fn from(error: io::Error) -> Self {
+        Self {
+            error,
+            sent: Sent::default(),
+        }
+    }
+}
+
+impl From<Stopped> for io::Error {
+    fn from(stopped: Stopped) -> Self {
+        stopped.error
+    }
+}
+
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+/// An entry a side could not list, or a file this side could not read as
+/// it listed it: it was left as each side has it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Problem {
     pub path: String,
@@ -481,10 +511,13 @@ impl<T: AsRef<Path> + ?Sized> Source for T {
 }
 
 /// Take each of `steps` to `dest` through `exchange`, the files read from
-/// `source`, asking ahead of the replies. `progress` hears how many
-/// bytes of all the steps' files the far side has. An error names the
-/// entry it was for; what was asked after it may still be taken there,
-/// since each step is whole on its own.
+/// under `source`, asking ahead of the replies. `progress` hears how many
+/// bytes of all the steps' files the far side has. A file that cannot be
+/// read here as its step lists it (gone, held by another program, changed
+/// since it was listed) is left as the far side has it, a problem of this
+/// side, and the send goes on. An error names the entry it was for, and
+/// comes with what was taken by then; what was asked after it may still
+/// be taken there, since each step is whole on its own.
 pub fn send(
     source: &(impl Source + ?Sized),
     steps: &[Step],
@@ -492,7 +525,7 @@ pub fn send(
     exchange: &mut dyn Exchange,
     progress: &mut dyn FnMut(Progress),
     cancel: &Cancellation,
-) -> io::Result<Sent> {
+) -> Result<Sent, Stopped> {
     let total = steps
         .iter()
         .map(|step| match step {
@@ -511,7 +544,9 @@ pub fn send(
         sent: Sent::default(),
     };
     for step in steps {
-        cancel.check()?;
+        if let Err(error) = cancel.check() {
+            return Err(flight.stop(error));
+        }
         let root = dest.clone();
         let request = match step {
             Step::Remove(path) => Request::Remove {
@@ -533,7 +568,13 @@ pub fn send(
                 sha256,
                 mode,
             } => {
-                let file = source.open(path).map_err(|error| named(step, Side::Here, error))?;
+                let file = match source.open(path) {
+                    Ok(file) => file,
+                    Err(error) => {
+                        flight.left_here(path, error);
+                        continue;
+                    }
+                };
                 let write = WRITES.fetch_add(1, Ordering::Relaxed) + 1;
                 let finish = Request::Finish {
                     write,
@@ -547,22 +588,22 @@ pub fn send(
                         size: *size,
                         mode: *mode,
                     };
-                    flight.ask(step, begin, Expect::Begun)?;
+                    flight.ask(step, begin, Expect::Begun).map_err(Halt::Stop)?;
                     let mut pieces = chunked::Pieces::new(file, *size);
                     for piece in &mut pieces {
-                        cancel.check()?;
-                        let (piece, data) = piece.map_err(|error| named(step, Side::Here, error))?;
+                        cancel.check().map_err(Halt::Stop)?;
+                        let (piece, data) = piece.map_err(Halt::Unread)?;
                         let chunk = Request::Chunk {
                             write,
                             offset: piece.start,
                             data,
                         };
-                        flight.ask(step, chunk, Expect::Written(piece))?;
+                        flight.ask(step, chunk, Expect::Written(piece)).map_err(Halt::Stop)?;
                     }
                     if pieces.sha256().ok().as_ref() != Some(sha256) {
-                        return Err(named(step, Side::Here, changed()));
+                        return Err(Halt::Unread(changed()));
                     }
-                    flight.ask(step, finish.clone(), Expect::Taken)
+                    flight.ask(step, finish.clone(), Expect::Taken).map_err(Halt::Stop)
                 })();
                 if sent.is_err() {
                     // The far side lets go of a write only once it is
@@ -570,13 +611,26 @@ pub fn send(
                     // hashes as it was listed.
                     let _ = flight.exchange.ask(finish);
                 }
-                sent?;
+                match sent {
+                    Ok(()) => {}
+                    Err(Halt::Unread(error)) => flight.left_here(path, error),
+                    Err(Halt::Stop(error)) => return Err(flight.stop(error)),
+                }
                 continue;
             }
         };
-        flight.ask(step, request, Expect::Taken)?;
+        if let Err(error) = flight.ask(step, request, Expect::Taken) {
+            return Err(flight.stop(error));
+        }
     }
     flight.land()
+}
+
+/// Why a file's write ended early: it could not be read here as listed,
+/// and the send goes on; or the send itself must stop.
+enum Halt {
+    Unread(io::Error),
+    Stop(io::Error),
 }
 
 /// What a send has asked and not yet heard the replies to, oldest first.
@@ -644,11 +698,39 @@ impl<'a> Flight<'a> {
     }
 
     /// What the send did, once every reply is heard.
-    fn land(mut self) -> io::Result<Sent> {
+    fn land(mut self) -> Result<Sent, Stopped> {
         while !self.waiting.is_empty() {
-            self.hear()?;
+            if let Err(error) = self.hear() {
+                return Err(self.stop(error));
+            }
         }
         Ok(self.sent)
+    }
+
+    /// The file at `path` is left as the far side has it.
+    fn left_here(&mut self, path: &str, error: io::Error) {
+        self.sent.problems.push(Problem {
+            path: path.to_string(),
+            side: Side::Here,
+            error: error.to_string(),
+        });
+    }
+
+    /// The send stops for `error`, with what was taken there once the
+    /// replies already on their way are heard, a refusal among them passed
+    /// over. A line that is down is not waited on again.
+    fn stop(&mut self, error: io::Error) -> Stopped {
+        if !line_down(&error) {
+            while !self.waiting.is_empty() {
+                if self.hear().is_err_and(|error| line_down(&error)) {
+                    break;
+                }
+            }
+        }
+        Stopped {
+            error,
+            sent: std::mem::take(&mut self.sent),
+        }
     }
 }
 
@@ -662,7 +744,7 @@ pub fn mirror(
     exchange: &mut dyn Exchange,
     progress: &mut dyn FnMut(Progress),
     cancel: &Cancellation,
-) -> io::Result<Sent> {
+) -> Result<Sent, Stopped> {
     let asked = exchange.ask(scan_request(dest, skip, None))?;
     let here = scan(source, skip)?;
     let there = pages(exchange, dest, skip, asked)?;
@@ -829,7 +911,7 @@ pub(crate) fn at(path: &Path, error: io::Error) -> io::Error {
 fn changed() -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
-        "it changed after it was listed: send again",
+        "it changed after it was listed",
     )
 }
 

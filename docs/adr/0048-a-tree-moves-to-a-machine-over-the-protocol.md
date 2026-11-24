@@ -118,16 +118,21 @@ Windows window.
   (`answer`), in the order asked, with at most 64 requests or 4 MiB of
   files out at once. It reads each file from the source tree, reports
   `Progress` as the far side acknowledges bytes, and stops on its
-  `Cancellation`. A file whose bytes now do not hash to what its scan
-  listed fails by its name ("changed after it was listed"), and its
+  `Cancellation`. A file that cannot be read here as its scan listed it
+  (gone, held by another program, or its bytes no longer hashing to what
+  was listed: "it changed after it was listed") is left as the far side
+  has it, a `Side::Here` problem of the send, and the send goes on. Its
   `finish` carries the listed hash, so the Server never puts a torn file in
   place. Every write begun is finished, however its send ends, so a failed
-  send never holds a write slot of its connection. An error names the
-  entry whose request it answered; what was asked after it may still be
-  taken there, since every step is whole on its own, and an `answer` passes
-  over replies nobody waited for, so the connection carries on. `mirror`
-  asks for the scan there, scans here while it runs, then `plan`, `send`,
-  and returns what it did with both sides' problems.
+  send never holds a write slot of its connection. A send that stops
+  returns `Stopped { error, sent }`: the error names the entry whose
+  request it answered, and `sent` is what was taken there once the replies
+  already on their way are heard, unless the line itself is down. What was
+  asked after it may still be taken there, since every step is whole on its
+  own, and an `answer` passes over replies nobody waited for, so the
+  connection carries on. `mirror` asks for the scan there, scans here while
+  it runs, then `plan`, `send`, and returns what it did with both sides'
+  problems.
 - **A rerun sends only what still differs.** The steps come from the two
   manifests alone, never from a record of an earlier run, so a send cut off
   anywhere is finished by the next one, however much it had asked ahead. A
@@ -398,7 +403,7 @@ Windows window.
 - **What was asked after an error may still be taken.** The Server runs
   each request in order and the sender stops at the first error, so steps
   after it may land there too. Each is whole on its own: the tree is only
-  further along, and a rerun finishes it.
+  further along, `Stopped.sent` counts them, and a rerun finishes it.
 - **A tree's files are not synced to disk before they are renamed into
   place.** A sync per file took 0.66 to 4.1 s per 706 small files on WSL's
   ext4 (median 0.94 ms, up to 158 ms each), most of a crate's send. A
@@ -417,8 +422,9 @@ Windows window.
   rewritten in place at its old size with its old modification time put
   back (`touch -r`, a restore) keeps its old hash until the process ends.
 - **A tree is only as consistent as its source while it is read.** A file
-  that changes after it is listed, or while it is read, fails by its name
-  and stops the send; a rerun sends it again.
+  that changes after it is listed, or while it is read (a live log, a git
+  index), is left out of that send by its name; the setup sheet sends what
+  was left once more and lists what still is.
 - **A Windows Server makes no symlinks**, so a tree that holds one never
   completes there: each send fails at its first link, though what it asked
   ahead lands. Making one there needs Developer Mode or an elevated

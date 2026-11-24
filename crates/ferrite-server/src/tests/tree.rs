@@ -3,7 +3,7 @@
 
 use base64::Engine as _;
 use ferrite_core::chunked::{Cancellation, CHUNK_SIZE};
-use ferrite_core::tree::{self, Asked, Exchange, Reply, Request, Root, Sent, Step};
+use ferrite_core::tree::{self, Asked, Exchange, Problem, Reply, Request, Root, Sent, Side, Step};
 
 use super::remote_operations::machine;
 use super::*;
@@ -21,6 +21,16 @@ fn mirror(source: &Path, dest: &Path, skip: &[String], exchange: &mut dyn Exchan
         &mut |_| {},
         &Cancellation::default(),
     )
+    .map_err(io::Error::from)
+}
+
+/// The paths a send left as the far side has them, unread here.
+fn left_here(sent: &Sent) -> Vec<&str> {
+    sent.problems
+        .iter()
+        .filter(|problem| problem.side == Side::Here)
+        .map(|problem| problem.path.as_str())
+        .collect()
 }
 
 fn same(source: &Path, dest: &Path) {
@@ -259,6 +269,7 @@ fn a_refused_entry_fails_the_send_by_its_name_and_its_later_requests_do_no_harm(
     )
     .unwrap_err();
     assert!(refused.to_string().starts_with("never-made/b.bin: "), "{refused}");
+    assert_eq!(refused.sent.written, 2, "what was asked around the refusal is taken and told");
 
     let Reply::Scanned { manifest, .. } = exchange
         .call(Request::Scan {
@@ -272,6 +283,7 @@ fn a_refused_entry_fails_the_send_by_its_name_and_its_later_requests_do_no_harm(
     };
     let here = tree::scan(&source, &[]).unwrap();
     assert!(manifest.entries.contains_key("a.txt"));
+    assert!(manifest.entries.contains_key("c.txt"));
     for (path, there) in &manifest.entries {
         assert_eq!(here.entries.get(path), Some(there), "{path} is whole or not there");
     }
@@ -280,7 +292,7 @@ fn a_refused_entry_fails_the_send_by_its_name_and_its_later_requests_do_no_harm(
 }
 
 #[test]
-fn a_file_that_shrinks_as_it_is_sent_fails_by_its_name_and_the_connection_sends_on() {
+fn a_file_that_shrinks_as_it_is_sent_is_left_by_its_name_and_the_send_goes_on() {
     let harness = start("tree-shrunk");
     let sent = Arc::default();
     let mut cockpit = machine(&harness, &sent);
@@ -289,22 +301,24 @@ fn a_file_that_shrinks_as_it_is_sent_fails_by_its_name_and_the_connection_sends_
     write(&source.join("a.bin"), big());
     write(&source.join("b.txt"), "second");
     let mut exchange = connect(&mut cockpit);
-    let changed = tree::send(
+    let sent = tree::send(
         &source,
-        &[shrunk(&source, "a.bin")],
+        &[shrunk(&source, "a.bin"), listed(&source, "b.txt")],
         &Root::Path { path: dest.clone() },
         &mut *exchange,
         &mut |_| {},
         &Cancellation::default(),
     )
-    .unwrap_err();
-    assert!(changed.to_string().starts_with("a.bin: "), "{changed}");
+    .unwrap();
+    assert_eq!(left_here(&sent), ["a.bin"]);
+    assert_eq!(sent.written, 1);
+    assert!(!dest.join("a.bin").exists());
 
     assert_eq!(
         mirror(&source, &dest, &[], &mut *exchange).unwrap(),
         Sent {
-            written: 2,
-            bytes: big().len() as u64 + 6,
+            written: 1,
+            bytes: big().len() as u64,
             ..Sent::default()
         },
         "the write left under way is neither in the way nor taken for a file there"
@@ -462,9 +476,9 @@ fn a_skipped_path_is_left_there_with_the_directories_that_hold_it() {
 }
 
 /// A file that differs from what its scan listed, though of the same size,
-/// fails by its name and is not put in place.
+/// is left by its name and not put in place.
 #[test]
-fn a_file_changed_after_its_scan_fails_by_its_name_and_is_not_put_in_place() {
+fn a_file_changed_after_its_scan_is_left_by_its_name_and_not_put_in_place() {
     let harness = start("tree-changed");
     let sent = Arc::default();
     let mut cockpit = machine(&harness, &sent);
@@ -475,7 +489,7 @@ fn a_file_changed_after_its_scan_fails_by_its_name_and_is_not_put_in_place() {
     write(&source.join("a.txt"), "FIRST");
 
     let mut exchange = connect(&mut cockpit);
-    let changed = tree::send(
+    let sent = tree::send(
         &source,
         &steps,
         &Root::Path { path: dest.clone() },
@@ -483,8 +497,15 @@ fn a_file_changed_after_its_scan_fails_by_its_name_and_is_not_put_in_place() {
         &mut |_| {},
         &Cancellation::default(),
     )
-    .unwrap_err();
-    assert!(changed.to_string().starts_with("a.txt: "), "{changed}");
+    .unwrap();
+    assert_eq!(
+        sent.problems,
+        [Problem {
+            path: "a.txt".into(),
+            side: Side::Here,
+            error: "it changed after it was listed".into(),
+        }]
+    );
     assert!(!dest.join("a.txt").exists());
 }
 
@@ -500,7 +521,7 @@ fn writes_that_failed_on_a_connection_never_hold_up_its_next_send() {
 
     let mut exchange = connect(&mut cockpit);
     for _ in 0..8 {
-        tree::send(
+        let sent = tree::send(
             &source,
             std::slice::from_ref(&shrunk),
             &Root::Path { path: dest.clone() },
@@ -508,7 +529,8 @@ fn writes_that_failed_on_a_connection_never_hold_up_its_next_send() {
             &mut |_| {},
             &Cancellation::default(),
         )
-        .unwrap_err();
+        .unwrap();
+        assert_eq!(left_here(&sent), ["a.bin"]);
     }
     mirror(&source, &dest, &[], &mut *exchange).unwrap();
     same(&source, &dest);
