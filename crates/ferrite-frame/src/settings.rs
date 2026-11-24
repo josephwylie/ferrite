@@ -314,6 +314,9 @@ fn body(
                 .right_0()
                 .bottom_0()
                 .h(px(ROW))
+                // Inside the sheet's 1px edge: GPUI's clip is square, so
+                // the fade rounds its own corner or paints past the sheet's.
+                .rounded_br(px(R_FLOAT - 1.))
                 .bg(gpui::linear_gradient(
                     180.,
                     gpui::linear_color_stop(gpui::Hsla { a: 0., ..ground }, 0.),
