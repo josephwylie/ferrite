@@ -781,12 +781,19 @@ fn settle(dir: &std::path::Path) {
 
 /// An idle window starts no git: each sweep reads every Thread's checkout
 /// from its files, and runs git only for one that moved, such as a file
-/// the operator wrote by hand.
+/// the operator wrote by hand, or one git tracks under an ignored folder.
 #[gpui::test]
 fn an_idle_window_runs_no_git_until_its_checkout_moves(cx: &mut TestAppContext) {
     let spawned = ferrite_core::workspace::git_spawns_on_this_thread;
     let base = scratch("idle-git");
     let repo = repo_in(&base);
+    // Force-added under an ignored folder: no walk of the work tree meets it.
+    let forced = repo.join("target").join("forced.txt");
+    std::fs::create_dir_all(repo.join("target")).unwrap();
+    std::fs::write(repo.join(".gitignore"), "target/\n").unwrap();
+    std::fs::write(&forced, "built\n").unwrap();
+    git_in(&repo, &["add", "-f", ".gitignore", "target/forced.txt"]);
+    git_in(&repo, &["commit", "-q", "-m", "forced"]);
     settle(&repo);
     let store = Store::open(base.join("threads")).unwrap();
     let mut core = Cockpit::new(store, Box::new(Fake::default()));
@@ -812,8 +819,11 @@ fn an_idle_window_runs_no_git_until_its_checkout_moves(cx: &mut TestAppContext) 
                 .map(|status| status.dirty)
         })
     };
+    // The first sweep reads the checkout and lists the forced file; the
+    // next stamps that file too.
     sweep(cx);
-    assert_eq!(dirty(&view, cx), Some(0), "the first sweep read the checkout");
+    sweep(cx);
+    assert_eq!(dirty(&view, cx), Some(0), "the first sweeps read the checkout");
 
     let before = spawned();
     for _ in 0..3 {
@@ -821,10 +831,14 @@ fn an_idle_window_runs_no_git_until_its_checkout_moves(cx: &mut TestAppContext) 
     }
     assert_eq!(spawned() - before, 0, "a sweep ran git for a checkout that did not move");
 
-    std::fs::write(repo.join("by-hand.txt"), "edited\n").unwrap();
+    std::fs::write(&forced, "built again\n").unwrap();
     sweep(cx);
     assert!(spawned() > before, "the moved checkout was read again");
-    assert_eq!(dirty(&view, cx), Some(1), "the file written by hand shows");
+    assert_eq!(dirty(&view, cx), Some(1), "the forced file's edit shows");
+
+    std::fs::write(repo.join("by-hand.txt"), "edited\n").unwrap();
+    sweep(cx);
+    assert_eq!(dirty(&view, cx), Some(2), "the file written by hand shows");
 }
 
 /// A Main turn ending is a moment the checkout may have moved (#29) —

@@ -792,6 +792,18 @@ pub fn branch_status(cwd: &Path) -> Option<BranchStatus> {
     Some(status)
 }
 
+/// The files git tracks in the checkout `cwd` is in though an ignore rule
+/// matches them (force-added, or committed into an ignored folder), from
+/// the checkout's top: `git status` reports on them, but a walk that
+/// honours the ignores never meets them, so `checkout_stamp` reads them by
+/// name. Empty outside a checkout, or when git cannot say.
+pub fn tracked_ignored(cwd: &Path) -> Vec<PathBuf> {
+    let Some((top, _)) = stamp::checkout_dirs(cwd) else {
+        return Vec::new();
+    };
+    ferrite_reviewr::git::tracked_ignored(top).into_iter().map(PathBuf::from).collect()
+}
+
 /// `+3` / `-0` as git writes them in porcelain v2.
 fn parse_signed(token: &str) -> Option<u32> {
     token.trim_start_matches(['+', '-']).parse::<u32>().ok()

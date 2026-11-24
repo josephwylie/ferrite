@@ -17,7 +17,7 @@ use ignore::WalkBuilder;
 const RACY: Duration = Duration::from_secs(2);
 
 /// The checkout `cwd` is in: its top directory and its git dir.
-fn checkout_dirs(cwd: &Path) -> Option<(&Path, PathBuf)> {
+pub(super) fn checkout_dirs(cwd: &Path) -> Option<(&Path, PathBuf)> {
     let root = cwd.ancestors().find(|dir| dir.join(".git").exists())?;
     let dot_git = root.join(".git");
     if dot_git.is_dir() {
@@ -48,16 +48,18 @@ pub fn head_of(cwd: &Path) -> Option<String> {
 /// Everything `branch_status` and `worktree_paths` read of the checkout
 /// `cwd` is in, as one number read with no git process: its `HEAD`, refs,
 /// index and config, the names of its repository's worktrees, and the size
-/// and time of every file in the work tree that git does not ignore. The
+/// and time of every file in the work tree that git does not ignore, and of
+/// each of `tracked_ignored` (`workspace::tracked_ignored`, as git last
+/// listed them), which git reads though the walk never meets them. The
 /// same number means git would answer the same, so a caller on a cadence
 /// runs git only once it moves. Take it before git reads: a write after it
 /// moves the next one. A stamp taken within two seconds of a write matches
 /// no other. `None` outside a checkout.
-pub fn checkout_stamp(cwd: &Path) -> Option<u64> {
-    stamp_at(cwd, SystemTime::now())
+pub fn checkout_stamp(cwd: &Path, tracked_ignored: &[PathBuf]) -> Option<u64> {
+    stamp_at(cwd, tracked_ignored, SystemTime::now())
 }
 
-fn stamp_at(cwd: &Path, now: SystemTime) -> Option<u64> {
+fn stamp_at(cwd: &Path, tracked_ignored: &[PathBuf], now: SystemTime) -> Option<u64> {
     let (root, admin) = checkout_dirs(cwd)?;
     let common = fs::read_to_string(admin.join("commondir"))
         .map_or_else(|_| admin.clone(), |dir| admin.join(dir.trim()));
@@ -97,6 +99,9 @@ fn stamp_at(cwd: &Path, now: SystemTime) -> Option<u64> {
                         && entry.path().join(".git").exists())
             }),
     );
+    for file in tracked_ignored.iter().map(|file| root.join(file)) {
+        stamp.entry(&file, fs::symlink_metadata(&file).ok());
+    }
     Some(stamp.finish(now))
 }
 
@@ -171,9 +176,13 @@ mod tests {
     }
 
     fn moves(root: &Path, change: impl FnOnce()) -> bool {
-        let before = stamp_at(root, later()).expect("a checkout");
+        moves_listing(root, &[], change)
+    }
+
+    fn moves_listing(root: &Path, tracked_ignored: &[PathBuf], change: impl FnOnce()) -> bool {
+        let before = stamp_at(root, tracked_ignored, later()).expect("a checkout");
         change();
-        before != stamp_at(root, later()).expect("a checkout")
+        before != stamp_at(root, tracked_ignored, later()).expect("a checkout")
     }
 
     #[test]
@@ -181,11 +190,11 @@ mod tests {
         let root = checkout("still");
         assert!(!moves(&root, || {}));
         assert_eq!(
-            stamp_at(&root.join("src"), later()),
-            stamp_at(&root, later()),
+            stamp_at(&root.join("src"), &[], later()),
+            stamp_at(&root, &[], later()),
             "any directory of the checkout reads the checkout"
         );
-        assert_eq!(stamp_at(&std::env::temp_dir().join("ferrite-stamp-nowhere"), later()), None);
+        assert_eq!(stamp_at(&std::env::temp_dir().join("ferrite-stamp-nowhere"), &[], later()), None);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -224,14 +233,33 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// A file git tracks though an ignore rule matches it, force-added
+    /// under `target/`: `git status` reports on it, but the walk never
+    /// meets it, so it moves the stamp once git has listed it.
+    #[test]
+    fn a_tracked_file_an_ignore_rule_matches_moves_it_once_listed() {
+        let root = checkout("tracked-ignored");
+        let file = root.join("target").join("forced.txt");
+        fs::create_dir_all(root.join("target")).unwrap();
+        fs::write(&file, "one").unwrap();
+        assert!(!moves(&root, || fs::write(&file, "two!").unwrap()));
+        let listed = [PathBuf::from("target/forced.txt")];
+        assert!(moves_listing(&root, &listed, || fs::write(&file, "three").unwrap()));
+        assert!(moves_listing(&root, &listed, || fs::remove_file(&file).unwrap()));
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// Within two seconds of a write the times cannot vouch for the next
     /// one: the stamp matches nothing until they can.
     #[test]
     fn a_fresh_write_matches_no_other_stamp() {
         let root = checkout("racy");
         let now = SystemTime::now();
-        assert_ne!(stamp_at(&root, now), stamp_at(&root, now + Duration::from_millis(1)));
-        assert_eq!(stamp_at(&root, later()), stamp_at(&root, later() + Duration::from_secs(1)));
+        assert_ne!(stamp_at(&root, &[], now), stamp_at(&root, &[], now + Duration::from_millis(1)));
+        assert_eq!(
+            stamp_at(&root, &[], later()),
+            stamp_at(&root, &[], later() + Duration::from_secs(1))
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }
