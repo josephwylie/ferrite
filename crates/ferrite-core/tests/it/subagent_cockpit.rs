@@ -556,7 +556,7 @@ fn overlapping_tool_and_message_ids_keep_transcripts_usage_and_resume_isolated()
         .load(h.thread.thread())
         .unwrap();
     assert_eq!(snapshot.resume_target(), Some("main-0"));
-    h.cockpit.revive(h.thread).unwrap();
+    h.cockpit.revive(h.thread).now().unwrap();
     // Its agent starts when the operator writes to it (ADR 0032).
     h.cockpit.set_composing(h.thread, true);
     h.cockpit.pump();
@@ -925,7 +925,7 @@ fn stale_request_after_replacement(replacement: Replacement) {
                 1,
                 "a parked Thread exposes its durable child count"
             );
-            h.cockpit.revive(h.thread).unwrap();
+            h.cockpit.revive(h.thread).now().unwrap();
         }
         Replacement::Handover => {
             h.cockpit

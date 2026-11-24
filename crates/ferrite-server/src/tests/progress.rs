@@ -15,6 +15,8 @@ fn a_conversation_progresses_before_incoming_traffic_is_drained() {
         .unwrap();
 
     let (_, renders) = render::remote();
+    // Its own channel, so the pump's closes once the test lets go of it.
+    let (answered, _) = mpsc::channel();
     let server = Server::new(
         engine,
         ServerInfo {
@@ -25,6 +27,7 @@ fn a_conversation_progresses_before_incoming_traffic_is_drained() {
         renders,
         Arc::new(Mutex::new(SessionDefaults::default())),
         dir.clone(),
+        answered,
     );
     let (heard, hear) = mpsc::channel();
     let (answer, answers) = mpsc::channel();

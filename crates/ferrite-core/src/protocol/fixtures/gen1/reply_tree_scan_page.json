@@ -1,0 +1,1 @@
+{"type":"reply","id":328,"ok":{"kind":"tree","reply":{"result":"scanned","manifest":{"entries":{"notes.txt":{"kind":"file","size":3,"sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}},"problems":{"private":"Permission denied (os error 13)"}},"more":true}}}

@@ -178,14 +178,29 @@ impl CockpitView {
             return;
         };
         let Place { thread, subject } = place;
-        self.switch_thread(window, cx, |view, window, cx| {
-            if view.pane_for(thread).is_some() {
+        if self.pane_for(thread).is_some() {
+            self.switch_thread(window, cx, |view, window, cx| {
                 view.focus_thread(thread, cx);
-            } else {
-                view.revive_thread(thread, cx);
-            }
-            view.show_subject(thread, subject, window, cx);
-        });
+                view.show_subject(thread, subject, window, cx);
+            });
+        } else {
+            // What `switch_thread` reads before the switch, read at the
+            // press: the Thread is back only once its Server answers.
+            let shown = self.focused_thread(cx);
+            let on_stop = self.panel_control_focused(window, cx);
+            self.revive_thread_in(
+                thread,
+                window,
+                move |view, _, window, cx| {
+                    view.show_subject(thread, subject, window, cx);
+                    if on_stop && view.focused_thread(cx) != shown {
+                        window.blur(cx);
+                    }
+                    cx.notify();
+                },
+                cx,
+            );
+        }
         cx.notify();
     }
 

@@ -962,6 +962,38 @@ fn the_same_repository_on_two_machines_is_two_projects(cx: &mut TestAppContext) 
     assert_eq!(tooltip_at(cx, mark.center()).as_deref(), Some("On box"));
 }
 
+/// Details names the checkout a Thread works in: this computer's is the
+/// `Local checkout`, a linked machine's just its `Checkout`.
+#[gpui::test]
+fn only_this_computers_checkout_is_local_in_details(cx: &mut TestAppContext) {
+    let (mut core, _fake, machines, _agents) = two_machines("details-checkout", 1);
+    let mine = core.threads()[0];
+    let on_box = machines.held(1).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(theirs).is_some()));
+    tick(cx);
+    let card = |thread, cx: &mut gpui::VisualTestContext| {
+        view.update_in(cx, |view, window, cx| {
+            view.focus_thread(thread, cx);
+            view.toggle_details_now(window, cx);
+        });
+        tick(cx);
+        let lines = cx
+            .update(|window, _| window.debug_text("details-card"))
+            .expect("the card");
+        view.update_in(cx, |view, window, cx| view.toggle_details_now(window, cx));
+        tick(cx);
+        lines
+    };
+    let here = card(mine, cx);
+    assert!(here.iter().any(|line| line == "Local checkout"), "{here:?}");
+    let there = card(theirs, cx);
+    assert!(there.iter().any(|line| line == "Checkout"), "{there:?}");
+    assert!(!there.iter().any(|line| line == "Local checkout"), "{there:?}");
+}
+
 /// What the tooltip says once the pointer has rested on `at`.
 fn tooltip_at(cx: &mut gpui::VisualTestContext, at: gpui::Point<gpui::Pixels>) -> Option<String> {
     cx.simulate_mouse_move(at, None, gpui::Modifiers::none());

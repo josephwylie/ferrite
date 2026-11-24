@@ -111,6 +111,7 @@ fn peer(name: &str) -> Peer {
         renders,
         Arc::new(Mutex::new(SessionDefaults::default())),
         dir.clone(),
+        mpsc::channel().0,
     );
     let (answer, answers) = mpsc::channel();
     server.api_heard(ferrite_core::api::Heard::Joined(1, answer));

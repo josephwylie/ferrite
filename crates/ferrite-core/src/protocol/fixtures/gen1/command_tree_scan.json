@@ -1,0 +1,1 @@
+{"type":"command","id":320,"op":"tree","request":{"action":"scan","root":{"kind":"path","path":"~/projects/app"},"skip":["target"]}}

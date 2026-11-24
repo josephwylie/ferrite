@@ -1,0 +1,1 @@
+{"type":"command","id":325,"op":"tree","request":{"action":"make_dir","root":{"kind":"path","path":"~/projects/app"},"path":"bin"}}

@@ -339,8 +339,8 @@ fn interrogate_a_workflow_read_blocks_the_pump_on_skills_discovery() {
         };
         let (_, renders) = render::remote();
         let defaults = Arc::new(Mutex::new(SessionDefaults::default()));
-        let server = Server::new(engine, info, id, renders, defaults, settings_dir);
         let (heard, hear) = mpsc::channel();
+        let server = Server::new(engine, info, id, renders, defaults, settings_dir, heard.clone());
         ferrite_core::api::accept_all(api_listener, heard.clone()).unwrap();
         link::accept_all(listener, heard, link::LAGGED_BYTES).unwrap();
         server.serve(hear)

@@ -124,6 +124,9 @@ enum Follow {
     Parked(ThreadKey),
     /// A deleted Thread's parked row goes.
     Deleted(ThreadKey),
+    /// A Thread brought back takes the screen, and the park order forgets
+    /// it.
+    Reopened(ThreadKey),
 }
 
 /// The acts a Server answered, each with whether it was done, for the
@@ -198,6 +201,14 @@ impl<T> Clone for OnMachine<'_, T> {
 }
 
 impl<T> Copy for OnMachine<'_, T> {}
+
+/// An act's reply as the text it carried, if it carried one.
+fn text_of(done: Executed) -> io::Result<Option<String>> {
+    Ok(match done {
+        Ok(Some(Done::Text { text })) => Some(text),
+        _ => None,
+    })
+}
 
 /// An act on a machine the window no longer holds.
 /// What became of a send, as its reply says.
@@ -933,7 +944,11 @@ impl Cockpit {
                     machine.parked.forget(thread);
                 }
             }
-            Follow::Deleted(_) => {}
+            Follow::Reopened(thread) if done => {
+                self.roster.note_revived(thread);
+                self.roster.focus(PaneIdentity::Thread(thread));
+            }
+            Follow::Deleted(_) | Follow::Reopened(_) => {}
         }
     }
 
@@ -1164,9 +1179,10 @@ impl Cockpit {
 
     /// The operator opened a Notice of `machine`'s — from a toast or the
     /// bell: it is read, and they land on its Thread's Pane in the view
-    /// that shows it, reviving a parked one. The Thread landed on, or None
-    /// when it is gone.
-    pub fn open_notice(&mut self, machine: MachineId, id: NoticeId) -> Option<ThreadKey> {
+    /// that shows it, reviving a parked one. The Thread landed on, with
+    /// the ask that says whether it took the screen, or None when the
+    /// Notice is gone.
+    pub fn open_notice(&mut self, machine: MachineId, id: NoticeId) -> Option<(ThreadKey, Ask<()>)> {
         let thread = self.shared(machine).notifications.get(id)?.thread;
         self.tell_at(
             machine,
@@ -1174,7 +1190,7 @@ impl Cockpit {
                 action: NoticeAction::Open { notice: id.get() },
             },
         );
-        self.land_on(ThreadKey::new(machine, thread))
+        Some(self.land_on(ThreadKey::new(machine, thread)))
     }
 
     /// Open one live Decision attention record of `machine`'s: its Subject
@@ -1184,7 +1200,7 @@ impl Cockpit {
         &mut self,
         machine: MachineId,
         id: &DecisionNoticeId,
-    ) -> Option<ThreadKey> {
+    ) -> Option<(ThreadKey, Ask<()>)> {
         self.shared(machine).notifications.decision(id)?;
         self.tell_at(
             machine,
@@ -1195,15 +1211,19 @@ impl Cockpit {
                 },
             },
         );
-        self.land_on(ThreadKey::new(machine, id.thread))
+        Some(self.land_on(ThreadKey::new(machine, id.thread)))
     }
 
-    fn land_on(&mut self, thread: ThreadKey) -> Option<ThreadKey> {
-        if !self.focus_thread(thread) {
-            self.reopen(thread).ok()?;
-        }
+    /// Land on `thread`, reviving a parked one: the ask says whether it
+    /// took the screen. What is on screen then is seen by the pump.
+    fn land_on(&mut self, thread: ThreadKey) -> (ThreadKey, Ask<()>) {
+        let landed = if self.focus_thread(thread) {
+            Ask::answered(Ok(()))
+        } else {
+            self.reopen(thread)
+        };
         self.acknowledge_seen();
-        Some(thread)
+        (thread, landed)
     }
 
     /// Whether the operator is looking: the window has the system's focus.
@@ -1749,7 +1769,15 @@ impl Cockpit {
         self.ask_on_then(thread, |thread| Op::Delete { thread }, done, Follow::Deleted(thread))
     }
 
-    pub fn revive(&mut self, thread: ThreadKey) -> io::Result<()> {
+    /// Open a parked Thread again: an `Err` answer says why not. The
+    /// window never waits for it.
+    pub fn revive(&mut self, thread: ThreadKey) -> Ask<()> {
+        self.ask_on(thread, |thread| Op::Revive { thread }, done)
+    }
+
+    /// `revive`, waited for: a launch opens what it imported before it has
+    /// a window, and an import still waits for each of its acts.
+    pub fn revive_and_wait(&mut self, thread: ThreadKey) -> io::Result<()> {
         done(self.act_on(thread, |thread| Op::Revive { thread }))
     }
 
@@ -1954,6 +1982,14 @@ impl Cockpit {
                 crate::file_operations::execute(request).map_err(|error| error.to_string())
             })),
         }
+    }
+
+    /// Opens, when run, a connection of its own to `machine`'s Server that
+    /// carries a tree's ops there (ADR 0048), so a long copy holds up
+    /// neither the window nor its acts. Only a Server answers, as
+    /// `list_dir`.
+    pub fn tree(&mut self, machine: MachineId) -> io::Result<crate::tree::Connect> {
+        self.held_mut(machine)?.remote()?.tree()
     }
 
     /// A directory's entries on the computer the Server runs on — on a
@@ -2609,11 +2645,10 @@ impl Cockpit {
         self.ask_on(thread, |thread| Op::Queue { thread, text }, |queued| Ok(queued.is_ok()))
     }
 
-    pub fn unqueue(&mut self, thread: ThreadKey) -> Option<String> {
-        match self.act_on(thread, |thread| Op::Unqueue { thread }) {
-            Ok(Some(Done::Text { text })) => Some(text),
-            _ => None,
-        }
+    /// Take `thread`'s held prompt back: the answer is its text, or
+    /// `None` when it held none. The window never waits for it.
+    pub fn unqueue(&mut self, thread: ThreadKey) -> Ask<Option<String>> {
+        self.ask_on(thread, |thread| Op::Unqueue { thread }, text_of)
     }
 
     /// Remove the queued prompt `id` names (`QueueItem::id`), back to the
@@ -2647,35 +2682,45 @@ impl Cockpit {
         });
     }
 
-    /// A prompt the provider handed back, for the Composer, and whether it
-    /// goes ahead of the draft.
-    pub fn take_retrieved_prompt(&mut self, thread: ThreadKey) -> Option<(String, bool)> {
-        // Asked every frame: only a Thread holding one is asked.
+    /// Ask for a prompt the provider handed back, for the Composer, and
+    /// whether it goes ahead of the draft. `None` when `thread` holds
+    /// none to ask for. The window never waits for the answer.
+    pub fn take_retrieved_prompt(&mut self, thread: ThreadKey) -> Option<Ask<Option<(String, bool)>>> {
         self.thread(thread)?.recovered()?;
-        match self.act_on(thread, |thread| Op::TakeRecovered { thread }) {
-            Ok(Some(Done::Recovered { text, prepend })) => Some((text, prepend)),
-            _ => None,
-        }
+        Some(self.ask_on(
+            thread,
+            |thread| Op::TakeRecovered { thread },
+            |taken| {
+                Ok(match taken {
+                    Ok(Some(Done::Recovered { text, prepend })) => Some((text, prepend)),
+                    _ => None,
+                })
+            },
+        ))
     }
 
+    /// Step through `thread`'s prompt history from `current_draft`: the
+    /// answer is the prompt stepped to, or `None` at an end. The window
+    /// never waits for it.
     pub fn recall_prompt(
         &mut self,
         thread: ThreadKey,
         direction: HistoryDirection,
         current_draft: &str,
-    ) -> Option<String> {
+    ) -> Ask<Option<String>> {
         let direction = match direction {
             HistoryDirection::Older => crate::protocol::WireDirection::Older,
             HistoryDirection::Newer => crate::protocol::WireDirection::Newer,
         };
-        match self.act_on(thread, |thread| Op::Recall {
+        self.ask_on(
             thread,
-            direction,
-            draft: current_draft.to_string(),
-        }) {
-            Ok(Some(Done::Text { text })) => Some(text),
-            _ => None,
-        }
+            |thread| Op::Recall {
+                thread,
+                direction,
+                draft: current_draft.to_string(),
+            },
+            text_of,
+        )
     }
 
     pub fn answer(&mut self, thread: ThreadKey, id: &str) -> bool {
@@ -3411,12 +3456,24 @@ impl Cockpit {
     /// second time. The shared tail of cmd-o and a parked nav row's click.
     /// An open Thread is only landed on: one a window has no Pane drawn for
     /// yet (a `thread.focus` from Projects) is not started again.
-    pub fn reopen(&mut self, thread: ThreadKey) -> io::Result<()> {
-        if self.thread(thread).is_none() {
-            self.revive(thread)?;
-            self.roster.note_revived(thread);
+    /// An `Err` answer says why it did not come back. The window never
+    /// waits for it: the Thread takes the screen on the beat that brings
+    /// the answer.
+    pub fn reopen(&mut self, thread: ThreadKey) -> Ask<()> {
+        if self.thread(thread).is_some() {
+            self.roster.focus(PaneIdentity::Thread(thread));
+            return Ask::answered(Ok(()));
         }
-        self.roster.focus(PaneIdentity::Thread(thread));
+        self.ask_on_then(thread, |thread| Op::Revive { thread }, done, Follow::Reopened(thread))
+    }
+
+    /// `reopen`, waited for: an import's, which still waits for each of
+    /// its acts.
+    fn reopen_and_wait(&mut self, thread: ThreadKey) -> io::Result<()> {
+        if self.thread(thread).is_none() {
+            self.revive_and_wait(thread)?;
+        }
+        self.follow(Follow::Reopened(thread), true);
         Ok(())
     }
 
@@ -3427,7 +3484,7 @@ impl Cockpit {
     /// is next (accepted v1 behavior). A Thread whose revive fails keeps its
     /// park but loses its slot in the order: cmd-o moves on rather than
     /// jamming on it. None with nothing parked at all.
-    pub fn reopen_last(&mut self) -> Option<(ThreadKey, io::Result<()>)> {
+    pub fn reopen_last(&mut self) -> Option<(ThreadKey, Ask<()>)> {
         let thread = self
             .roster
             .pop_park_order()
@@ -3559,10 +3616,10 @@ impl Cockpit {
             blank_kept: None,
         };
         let Some(into) = into else {
-            adopted.not_opened = self.reopen(thread).err();
+            adopted.not_opened = self.reopen_and_wait(thread).err();
             return Ok(adopted);
         };
-        match self.revive(thread) {
+        match self.revive_and_wait(thread) {
             Ok(()) => {
                 match into {
                     PaneIdentity::Draft(draft) => {

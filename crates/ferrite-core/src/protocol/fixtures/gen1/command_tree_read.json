@@ -1,0 +1,1 @@
+{"type":"command","id":324,"op":"tree","request":{"action":"read","root":{"kind":"path","path":"~/projects/app"},"path":"bin/run","offset":0}}

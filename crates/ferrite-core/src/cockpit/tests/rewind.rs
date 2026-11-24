@@ -64,7 +64,7 @@ fn an_edit_takes_its_turn_back_and_hands_its_words_to_the_composer() {
     assert!(!asked.files);
     assert_eq!(prompts(&cockpit, thread), vec![("one".into(), Some(first))]);
     assert_eq!(
-        cockpit.take_retrieved_prompt(thread),
+        cockpit.take_retrieved_prompt(thread).and_then(|ask| ask.now().unwrap()),
         Some(("two".into(), false))
     );
 }
@@ -76,7 +76,7 @@ fn a_rewind_of_code_says_what_came_back() {
     cockpit.rewind(thread, &first, true, false).now().unwrap();
     cockpit.pump();
     assert!(prompts(&cockpit, thread).is_empty());
-    assert_eq!(cockpit.take_retrieved_prompt(thread), None);
+    assert_eq!(cockpit.take_retrieved_prompt(thread).and_then(|ask| ask.now().unwrap()), None);
     let said = cockpit
         .thread(thread)
         .unwrap()
@@ -161,7 +161,7 @@ fn a_whole_fork_opens_focused_with_its_draft() {
         "the windows land on the fork"
     );
     assert_eq!(
-        cockpit.take_retrieved_prompt(fork),
+        cockpit.take_retrieved_prompt(fork).and_then(|ask| ask.now().unwrap()),
         Some(("> the passage".into(), false))
     );
 }

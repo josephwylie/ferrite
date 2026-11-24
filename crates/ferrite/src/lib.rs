@@ -324,7 +324,7 @@ pub fn launch() {
                 core.watch_memory(Box::new(ProcessRss::default()), spawner::RSS_LIMIT);
             }
             for thread in adopted {
-                if let Err(e) = core.revive(thread) {
+                if let Err(e) = core.revive_and_wait(thread) {
                     ferrite_core::log!("imported thread {} would not open: {e}", thread.thread());
                 }
             }

@@ -36,6 +36,7 @@ mod progress;
 mod publish;
 mod starts;
 mod stop;
+mod tree;
 
 /// How long a test waits for something that must arrive. The wait ends the
 /// moment it arrives, so this costs time only on a slow machine. A wait that
@@ -335,7 +336,7 @@ fn serve_configured(
         };
         let (_, renders) = render::remote();
         let defaults = Arc::new(Mutex::new(SessionDefaults::default()));
-        let mut server = Server::new(engine, info, id, renders, defaults, settings_dir);
+        let mut server = Server::new(engine, info, id, renders, defaults, settings_dir, heard.clone());
         server.browser_requests = browser_requests;
         disk_ready.send(server.browser_disk.control()).unwrap();
         server.relaunch = Box::new(move |executable: &Path| {
@@ -3806,7 +3807,7 @@ fn api_revival_scopes_launch_overrides_to_their_provider() {
         "thread.start",
         serde_json::json!({
             "cwd": harness.dir, "provider": "codex", "ready": true,
-            "args": ["-c", "model_reasoning_effort=high"],
+            "args": ["-c", "shell_environment_policy.inherit=all"],
         }),
     );
     let thread = started["result"]["thread"]["thread"].clone();
@@ -3856,7 +3857,7 @@ fn api_revival_scopes_launch_overrides_to_their_provider() {
     assert_eq!(args["provider"], "codex");
     assert_eq!(
         args["args"],
-        serde_json::json!(["-c", "model_reasoning_effort=high"])
+        serde_json::json!(["-c", "shell_environment_policy.inherit=all"])
     );
 }
 

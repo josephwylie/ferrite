@@ -65,6 +65,7 @@ mod settings_view;
 mod sheets;
 mod side_chat_view;
 mod rename;
+mod returns;
 use rename::{rename_field, RenameTarget};
 mod snooze;
 pub(crate) mod starts;
@@ -440,6 +441,9 @@ pub struct CockpitView {
     outbox: sends::Outbox,
     /// What follows each Server answer the window waits for (`asks`).
     awaited: asks::Awaited,
+    /// The prompts asked back to a Composer and not yet answered
+    /// (`returns`).
+    returning: returns::Returning,
     tools: tools::Tools,
     /// Every Thread's Files: its tree, editor tabs and their unsaved edits.
     files: Entity<tools::FilesView>,
@@ -1314,6 +1318,7 @@ impl CockpitView {
             held_sends: Default::default(),
             outbox: Default::default(),
             awaited: Default::default(),
+            returning: Default::default(),
             tools: Default::default(),
             files,
             terminals,
@@ -2243,15 +2248,9 @@ impl CockpitView {
                 for draft in self.lost_sends(thread) {
                     self.put_back_send(index, draft, true, cx);
                 }
-                while let Some((held, prepend)) = self.cockpit.update(cx, |cockpit, _| cockpit.take_retrieved_prompt(thread)) {
-                    let content = self.recovered_content(thread, held);
-                    self.panes[index].composer.update(cx, |composer, cx| {
-                        composer.restore_content(content, prepend, cx)
-                    });
-                    cx.notify();
-                }
             }
         }
+        self.take_handed_back_prompts(cx);
         let models_changed = self.cockpit.update(cx, |cockpit, _| cockpit.take_models_changed());
         let tuning_availability_changed = self.model_picker().is_some_and(|open| {
             open.pane.thread().is_some_and(|thread| {
@@ -4024,13 +4023,7 @@ impl CockpitView {
         }
         if text.is_empty() {
             // Enter on an empty line takes a held prompt back to edit it.
-            if let Some(held) = self.cockpit.update(cx, |cockpit, _| cockpit.unqueue(thread)) {
-                let content = self.recovered_content(thread, held);
-                composer.update(cx, |composer, cx| {
-                    composer.restore_content(content, true, cx)
-                });
-                cx.notify();
-            }
+            self.take_back_held(thread, cx);
             return;
         }
         // Typing does not wait for the agent; sending does.
@@ -4611,17 +4604,7 @@ impl CockpitView {
             }
             return;
         }
-        let composer = self.panes[index].composer.clone();
-        let draft = composer.read(cx).editable();
-        self.unsent
-            .step_from(thread, draft.clone(), composer.read(cx).content());
-        let Some(text) = self.cockpit.update(cx, |cockpit, _| cockpit.recall_prompt(thread, direction, &draft)) else {
-            return;
-        };
-        self.composer_menu.update(cx, |menu, cx| menu.recalled(cx));
-        let content = self.unsent.stepped_to(text);
-        composer.update(cx, |composer, cx| composer.put(content, cx));
-        cx.notify();
+        self.step_history_of(thread, direction, cx);
     }
 
     fn history_available(&self, index: usize, cx: &gpui::App) -> bool {
@@ -6226,32 +6209,71 @@ impl CockpitView {
     }
 
     /// Revive one parked Thread into the view that shows it: the shared
-    /// tail of cmd-o and a parked nav row's click (#21). Whether it came
-    /// back; when it did not, the nav says so.
-    fn revive_thread(&mut self, thread: ThreadKey, cx: &mut Context<Self>) -> bool {
-        let revived = self.try_revive(thread, cx);
-        let outcome = nav_undo::Outcome {
-            thread,
-            result: revived.as_ref().map(drop).map_err(|e| e.to_string()),
-        };
-        self.report_failures("reopen", &[outcome]);
-        cx.notify();
-        revived.is_ok()
+    /// tail of cmd-o and a parked nav row's click (#21). When it does not
+    /// come back, the nav says so.
+    fn revive_thread(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
+        self.reopen_threads(vec![thread], "reopen", cx);
     }
 
-    /// `revive_thread` without the words, for a caller with several to
-    /// tell. The board's own state gives way only to a Thread that is back.
-    fn try_revive(
+    /// `revive_thread` for a caller that follows it with the window in
+    /// hand: `then` hears whether the Thread came back.
+    fn revive_thread_in(
         &mut self,
         thread: ThreadKey,
+        window: &mut Window,
+        then: impl FnOnce(&mut Self, bool, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
-    ) -> std::io::Result<()> {
-        self.cockpit.update(cx, |cockpit, _| cockpit.reopen(thread))?;
-        self.leave_destination();
-        self.widen_scope_to(thread, cx);
+    ) {
+        let asked = self.cockpit.update(cx, |cockpit, _| cockpit.reopen(thread));
+        self.when_answered_in(
+            asked,
+            window,
+            move |view, answer, window, cx| {
+                let back = view.reopened(vec![(thread, answer)], "reopen", cx);
+                then(view, back, window, cx);
+            },
+            cx,
+        );
+    }
+
+    /// Revive each of `threads`, in order, into the view that shows it.
+    /// The nav names each that did not come back, by what `verb` was asked.
+    fn reopen_threads(&mut self, threads: Vec<ThreadKey>, verb: &'static str, cx: &mut Context<Self>) {
+        let asked = self.cockpit.update(cx, |cockpit, _| {
+            threads.iter().map(|thread| cockpit.reopen(*thread)).collect()
+        });
+        self.when_all_answered(
+            asked,
+            move |view, answers, cx| {
+                view.reopened(threads.into_iter().zip(answers).collect(), verb, cx);
+            },
+            cx,
+        );
+    }
+
+    /// The Server answered for Threads asked back: the board's own state
+    /// gives way only to a Thread that is back. Whether all came back.
+    fn reopened(
+        &mut self,
+        answers: Vec<(ThreadKey, std::io::Result<()>)>,
+        verb: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let outcomes: Vec<nav_undo::Outcome> = answers
+            .into_iter()
+            .map(|(thread, answer)| nav_undo::Outcome {
+                thread,
+                result: answer.map_err(|error| error.to_string()),
+            })
+            .collect();
+        for back in outcomes.iter().filter(|outcome| outcome.result.is_ok()) {
+            self.leave_destination();
+            self.widen_scope_to(back.thread, cx);
+        }
         self.sync_panes(cx);
+        self.report_failures(verb, &outcomes);
         cx.notify();
-        Ok(())
+        outcomes.iter().all(|outcome| outcome.result.is_ok())
     }
 
     /// Focus by grid index — the pointer's and the tests' spelling of the
@@ -6301,20 +6323,33 @@ impl CockpitView {
     /// closed, which is the one they want back (#17); the core walks the
     /// park order, then creation order.
     fn reopen_thread(&mut self, _: &ReopenThread, window: &mut Window, cx: &mut Context<Self>) {
-        self.switch_thread(window, cx, |view, _, cx| {
-            if let Some((thread, result)) = view.cockpit.update(cx, |cockpit, _| cockpit.reopen_last()) {
+        let Some((thread, asked)) = self.cockpit.update(cx, |cockpit, _| cockpit.reopen_last()) else {
+            return;
+        };
+        // What `switch_thread` reads before the switch, read at the press:
+        // the Thread is back only once its Server answers.
+        let shown = self.focused_thread(cx);
+        let on_stop = self.panel_control_focused(window, cx);
+        self.when_answered_in(
+            asked,
+            window,
+            move |view, answer, window, cx| {
                 let outcome = nav_undo::Outcome {
                     thread,
-                    result: result.map_err(|e| e.to_string()),
+                    result: answer.map_err(|e| e.to_string()),
                 };
                 if outcome.result.is_ok() {
                     view.widen_scope_to(thread, cx);
                     view.sync_panes(cx);
                 }
                 view.report_failures("reopen", &[outcome]);
+                if on_stop && view.focused_thread(cx) != shown {
+                    window.blur(cx);
+                }
                 cx.notify();
-            }
-        });
+            },
+            cx,
+        );
     }
 
     /// Close the focused Pane — cmd-w. The core decides what that means
@@ -7961,11 +7996,11 @@ impl CockpitView {
             return;
         }
         let pane = self.panes[index].identity;
-        let window = window.window_handle();
         let asked = self.cockpit.update(cx, |cockpit, _| cockpit.start_fresh_conversation(thread));
-        self.when_answered(
+        self.when_answered_in(
             asked,
-            move |view, answered, cx| {
+            window,
+            move |view, answered, window, cx| {
                 cx.notify();
                 if let Err(error) = answered {
                     view.cockpit.update(cx, |cockpit, _| {
@@ -7973,23 +8008,13 @@ impl CockpitView {
                     });
                     return;
                 }
-                // The answer comes with no window in hand, so the resend
-                // goes out once this one is back in the window's.
-                let cockpit = cx.entity().downgrade();
-                cx.defer(move |cx| {
-                    let _ = window.update(cx, |_, window, cx| {
-                        let _ = cockpit.update(cx, |view, cx| {
-                            let Some(index) = view.index_of(pane) else {
-                                return;
-                            };
-                            view.focus_pane(index, cx);
-                            if !view.panes[index].composer.read(cx).is_empty() {
-                                view.submit(&Submit, window, cx);
-                            }
-                            cx.notify();
-                        });
-                    });
-                });
+                let Some(index) = view.index_of(pane) else {
+                    return;
+                };
+                view.focus_pane(index, cx);
+                if !view.panes[index].composer.read(cx).is_empty() {
+                    view.submit(&Submit, window, cx);
+                }
             },
             cx,
         );
@@ -8227,12 +8252,11 @@ impl CockpitView {
         let open = self.cockpit.read(cx).thread(thread)?;
         let provider = open.provider();
         let hold = tuning_hold(&open);
-        // The standing choice names the chip; else what the Session's own
-        // Init said is serving; until either, the provider's default model —
-        // never the provider, and never the id on the wire.
+        // The model it runs; until one is known, the provider's default
+        // model — never the provider, and never the id on the wire.
         let label = SharedString::from(ferrite_core::providers::models::footer_name(
             provider,
-            open.model().or(open.transcript().model()),
+            open.running_model(),
             open.models(),
         ));
         let effort = self.thread_effort(&open);
@@ -8330,11 +8354,20 @@ impl CockpitView {
             Verb::OpenThread(thread) => self.land_on_thread(thread, cx),
             Verb::Open(machine, id) => {
                 self.drop_toast(machine, &crate::notifications::RowTarget::Notice(id), cx);
-                if self
+                if let Some((_, landed)) = self
                     .cockpit
-                    .update(cx, |cockpit, _| cockpit.open_notice(machine, id).is_some())
+                    .update(cx, |cockpit, _| cockpit.open_notice(machine, id))
                 {
-                    self.sync_panes(cx);
+                    self.when_answered(
+                        landed,
+                        |view, landed, cx| {
+                            if landed.is_ok() {
+                                view.sync_panes(cx);
+                                cx.notify();
+                            }
+                        },
+                        cx,
+                    );
                 }
                 self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
             }
@@ -8369,15 +8402,32 @@ impl CockpitView {
                             .clone()
                             .unwrap_or(ferrite_core::activity::Subject::Main)
                     });
-                if let Some(thread) = self
+                // A request whose Notice is gone, or whose Thread did not
+                // take the screen, is still landed on while it is pending.
+                let pending = move |view: &mut Self, cx: &mut Context<Self>| {
+                    if let Some(subject) = pending_subject {
+                        view.land_on_thread(thread, cx);
+                        view.select_subject_from_notice(thread, subject, cx);
+                    }
+                };
+                match self
                     .cockpit
                     .update(cx, |cockpit, _| cockpit.open_decision_notice(machine, &id))
                 {
-                    self.sync_panes(cx);
-                    self.select_subject_from_notice(thread, subject, cx);
-                } else if let Some(subject) = pending_subject {
-                    self.land_on_thread(thread, cx);
-                    self.select_subject_from_notice(thread, subject, cx);
+                    Some((thread, landed)) => self.when_answered(
+                        landed,
+                        move |view, landed, cx| {
+                            if landed.is_ok() {
+                                view.sync_panes(cx);
+                                view.select_subject_from_notice(thread, subject, cx);
+                            } else {
+                                pending(view, cx);
+                            }
+                            cx.notify();
+                        },
+                        cx,
+                    ),
+                    None => pending(self, cx),
                 }
                 self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
             }

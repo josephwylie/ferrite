@@ -30,11 +30,14 @@ gpui::actions!(
     [Up, Down, Confirm, Dismiss, Left, Right, Jump1, Jump2, Jump3, Jump4, Jump5, Jump6, Jump7, Jump8, Jump9]
 );
 
-/// The soft key caps the first nine listed models wear (`⌘1` … `⌘9`).
-const JUMP_LABELS: [&str; 9] = [
-    "\u{2318}1", "\u{2318}2", "\u{2318}3", "\u{2318}4", "\u{2318}5", "\u{2318}6", "\u{2318}7",
-    "\u{2318}8", "\u{2318}9",
-];
+/// The soft key caps the first nine listed models wear: this platform's
+/// primary chord with 1 to 9, as the keymap binds them.
+static JUMP_LABELS: std::sync::LazyLock<[String; 9]> = std::sync::LazyLock::new(|| {
+    std::array::from_fn(|nth| {
+        let keys = ferrite_ui::keymap::PLATFORM.chord(&(nth + 1).to_string());
+        ferrite_ui::components::chord_text(&keys)
+    })
+});
 
 /// What the list shows while nothing is searched: the starred models, or
 /// one Provider's.
@@ -446,7 +449,7 @@ impl ModelPickerView {
         }
     }
 
-    /// ⌘N: pick the Nth listed model (T3's `modelPicker.jump.N`).
+    /// The primary chord with N: pick the Nth listed model (T3's `modelPicker.jump.N`).
     fn jump(&mut self, nth: usize, cx: &mut Context<Self>) {
         let Some(row) = self.shown.iter().copied().filter(|at| !self.rows[*at].inert).nth(nth)
         else {
@@ -649,7 +652,7 @@ impl ModelPickerView {
             let row = &self.rows[at];
             let choice = row_choice(row);
             let favourite = is_favourite(&self.favourites, row);
-            let jump = live.iter().position(|live| *live == at).map(|nth| JUMP_LABELS[nth]);
+            let jump = live.iter().position(|live| *live == at).map(|nth| JUMP_LABELS[nth].as_str());
             let handover = choice.is_some_and(|choice| Some(choice.provider) == self.handover);
             rows = rows.child(model_row(
                 place,
@@ -1094,7 +1097,7 @@ impl CockpitView {
                 );
                 let label = ferrite_core::providers::models::footer_name(
                     current,
-                    open.model().or(open.transcript().model()),
+                    open.running_model(),
                     open.models(),
                 );
                 let efforts = self

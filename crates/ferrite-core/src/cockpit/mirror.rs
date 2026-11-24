@@ -269,7 +269,8 @@ pub struct Mirrors {
     updates: Vec<PaneUpdate>,
     /// Threads whose Activity started over: every Block is new to the Pane.
     restarted: Vec<ThreadId>,
-    /// A Session announced other models since the window last asked.
+    /// A Session announced other models, or a Thread's model or effort
+    /// moved, since the window last asked: an open model picker's ✓.
     models_changed: bool,
     /// Whether the Engine sends digests: only then can a window hold less
     /// than every open Thread whole.
@@ -383,10 +384,10 @@ impl Mirrors {
                     .entry(thread)
                     .or_insert_with(|| Mirror::new(limits));
                 let facts = Facts::from(state);
-                self.models_changed |= mirror
-                    .facts
-                    .as_ref()
-                    .is_none_or(|before| before.models != facts.models);
+                self.models_changed |= mirror.facts.as_ref().is_none_or(|before| {
+                    (&before.models, &before.model, &before.effort)
+                        != (&facts.models, &facts.model, &facts.effort)
+                });
                 mirror.facts = Some(facts);
                 updated(&mut self.updates, thread).activity_changed = true;
             }
@@ -662,10 +663,19 @@ impl<'a> ThreadView<'a> {
         self.facts.project
     }
 
-    /// The model this Thread chose before its first prompt (#25) — the ✓ in
-    /// the provider picker. `None` is the provider's default.
+    /// The model this Thread chose, in the window or by its launch
+    /// arguments (#25) — the ✓ in the provider picker. `None` is the
+    /// provider's default.
     pub fn model(&self) -> Option<&'a str> {
         self.facts.model.as_deref()
+    }
+
+    /// The model it runs, as its Composer's footer names it: its own
+    /// choice, else what its Session announced. The Server's digest
+    /// carries the same for a window that does not mirror it
+    /// (`Engine::publish_digests`).
+    pub fn running_model(&self) -> Option<&'a str> {
+        self.model().or(self.transcript().model())
     }
 
     /// The reasoning effort this Thread chose, in the provider's own word.

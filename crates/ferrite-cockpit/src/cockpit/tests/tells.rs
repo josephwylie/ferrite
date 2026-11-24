@@ -207,3 +207,62 @@ fn deleting_a_thread_does_not_wait_and_is_answered(cx: &mut gpui::TestAppContext
     assert!(!heard.get(), "nothing is heard before the Server answers");
     until(cx, |_| heard.get());
 }
+
+/// A parked Thread asked back over a Server does not wait: its Pane is
+/// there, with the screen, once the Server answers.
+#[gpui::test]
+fn reopening_a_parked_thread_does_not_wait_and_takes_the_screen_when_answered(cx: &mut gpui::TestAppContext) {
+    use ferrite_core::roster::PaneIdentity;
+    let (_engine, view, thread, cx) = super::browser_chrome::browser_window(cx, "reopen-ask");
+    let shown = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.panes.iter().any(|pane| pane.thread() == Some(thread)))
+    };
+    view.update(cx, |view, cx| view.close_pane(PaneIdentity::Thread(thread), cx));
+    until(cx, |cx| !shown(cx));
+
+    waits::start();
+    view.update(cx, |view, cx| view.revive_thread(thread, cx));
+    let revives: Vec<_> = waits::take().into_iter().filter(|wait| wait.op == "revive").collect();
+    assert_eq!(revives.len(), 1, "{revives:?}");
+    assert!(!revives[0].waited, "the revive does not wait for its reply: {revives:?}");
+    until(cx, |cx| shown(cx));
+    let focused = view.read_with(cx, |view, cx| view.cockpit.read(cx).roster().focused_thread());
+    assert_eq!(focused, Some(thread), "the Thread asked back takes the screen");
+}
+
+/// ↑ twice in the Composer over a Server: neither waits, and the second
+/// step is asked only once the first is answered, since it starts from
+/// what the first put in the Composer.
+#[gpui::test]
+fn history_steps_go_in_order_and_none_waits(cx: &mut gpui::TestAppContext) {
+    use ferrite_core::cockpit::HistoryDirection;
+    let (_engine, view, thread, cx) = super::browser_chrome::browser_window(cx, "recall-asks");
+    let recalls = || -> Vec<waits::Wait> { waits::take().into_iter().filter(|wait| wait.op == "recall").collect() };
+    waits::start();
+    view.update(cx, |view, cx| {
+        view.step_history_of(thread, HistoryDirection::Older, cx);
+        view.step_history_of(thread, HistoryDirection::Older, cx);
+    });
+    let first = recalls();
+    assert_eq!(first.len(), 1, "the second step waits for the first's answer: {first:?}");
+    assert!(!first[0].waited, "{first:?}");
+
+    waits::start();
+    until(cx, |cx| view.read_with(cx, |view, _| view.returning_steps(thread) == 0));
+    let second = recalls();
+    assert_eq!(second.len(), 1, "then the second goes: {second:?}");
+    assert!(!second[0].waited, "{second:?}");
+}
+
+/// Taking a held prompt back is asked, never waited for, and answered.
+#[test]
+fn taking_a_held_prompt_back_does_not_wait_and_is_answered() {
+    let (mut core, thread, _) = super::machines::browser_core("unqueue-ask");
+    waits::start();
+    let held = core.unqueue(thread);
+    let waits = waits::take();
+    let ops: Vec<_> = waits.iter().map(|wait| wait.op.as_str()).collect();
+    assert_eq!(ops, ["unqueue"]);
+    assert!(!waits[0].waited, "{waits:?}");
+    assert_eq!(core.wait_for(held).expect("the Server answers"), None, "the Thread held none");
+}

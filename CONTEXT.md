@@ -361,6 +361,20 @@ delegated it, over its rows and in its Lineage.
 _Avoid_: child, subagent (a Provider's), task (the Factory's), remote
 thread.
 
+**Placement**
+Where a Project of this computer lives on a Machine: the folder its copy
+was sent to there. A Project with a repository finds its counterpart on a
+Machine by that repository, so only one without needs a Placement kept
+(ADR 0048, planned).
+_Avoid_: mirror, sync target, remote path.
+
+**Setup sync**
+The operator's agent setup (skills, commands, agents, instructions, rules,
+plugins, settings and sign-ins) kept the same on this computer and each
+Machine, both ways, with this computer as the hub. Never the agents'
+transcripts, history or caches (ADR 0048, planned).
+_Avoid_: dotfile sync, backup.
+
 **API**
 The Server's automation surface: requests and answers as JSON lines on a
 socket of its own, spoken by the `ferrite` CLI, so a script or an agent in

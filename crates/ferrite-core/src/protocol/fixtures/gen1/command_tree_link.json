@@ -1,0 +1,1 @@
+{"type":"command","id":326,"op":"tree","request":{"action":"link","root":{"kind":"path","path":"~/projects/app"},"path":"latest","target":"bin/run"}}

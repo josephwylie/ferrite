@@ -346,9 +346,13 @@ impl CockpitView {
             bridge.map_or_else(|| "Local".to_string(), |machine| machine.name().to_string()),
             icons::machine(bridge.is_none()),
         );
+        // "Local" says this computer: a linked machine's own checkout is
+        // just its checkout.
         environment.meta = self.facts.get(thread).map(|facts| {
             if facts.worktree.is_some() {
                 "Worktree"
+            } else if bridge.is_some() {
+                "Checkout"
             } else {
                 "Local checkout"
             }
