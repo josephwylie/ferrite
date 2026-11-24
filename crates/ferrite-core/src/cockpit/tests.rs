@@ -5252,7 +5252,7 @@ fn a_launchs_model_and_effort_are_the_threads_from_its_start() {
     );
     assert_eq!(started(&mut core), pinned);
     core.park(thread).now().unwrap();
-    core.revive(thread).unwrap();
+    core.revive(thread).now().unwrap();
     assert_eq!(started(&mut core), pinned, "revived from its header");
 }
 
