@@ -4685,6 +4685,42 @@ fn a_digest_refolds_four_times_a_second_and_a_decision_at_once() {
     );
 }
 
+/// A digest says when its Server last wrote the Thread's log: what a
+/// window reads for a working Thread's order and its last use, which it
+/// once read off the log itself (ADR 0049).
+#[test]
+fn a_digest_says_when_its_log_was_last_written() {
+    let (spawner, providers) = spawn();
+    let (mut engine, thread, agent, _clock) = at_rest("digest-written", spawner, &providers);
+    agent.send(text("All done")).unwrap();
+    agent
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    pump_engine_until(&mut engine, "the turn never ended", |engine| {
+        engine.thread(thread).unwrap().transcript().turn_completed()
+    });
+    engine.pump();
+
+    let written = engine
+        .take_messages()
+        .into_iter()
+        .filter_map(|message| match message {
+            ServerMessage::Digest { thread: of, digest } if of == thread => digest.written_ms,
+            _ => None,
+        })
+        .last();
+    let log = engine
+        .browser_store()
+        .last_used(thread)
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| since.as_millis() as i64);
+    assert!(log.is_some(), "the log is on disk");
+    assert_eq!(written, log, "the turn's end is written, then folded");
+}
+
 /// A window mirrors the settled Threads it draws at Transcript level (ADR
 /// 0032). One off screen reads from its digest and holds none of its
 /// transcript; drawn, its history arrives; five minutes off screen, the

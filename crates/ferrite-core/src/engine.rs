@@ -4820,6 +4820,16 @@ impl Engine {
         self.hold(thread);
     }
 
+    /// Fixtures only (the mockups): fold `thread`'s digest again at the
+    /// next pump, as a world that stamped its log's time behind the
+    /// Engine's back needs it to say that time (`Digest::written_ms`).
+    pub fn fixture_refold_digest(&mut self, thread: ThreadId) {
+        if let Some(published) = self.published.get_mut(&thread) {
+            published.digest = None;
+        }
+        self.hold(thread);
+    }
+
     /// Fixtures only (the parity scenes): a Notice for `thread`, born now
     /// (`Notifications::fixture_push`).
     pub fn fixture_notice(&mut self, thread: ThreadId, outcome: crate::TurnOutcome) {
@@ -5455,6 +5465,11 @@ impl Engine {
                 delegated_from: thread.delegated_from.clone(),
                 branch: thread.branch.clone(),
                 model: model.map(str::to_string),
+                written_ms: self
+                    .store
+                    .last_used(id)
+                    .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|since| since.as_millis() as i64),
                 ..Digest::of(id, activity, shown, self.boot)
             };
             if published.digest.as_ref() != Some(&digest) {

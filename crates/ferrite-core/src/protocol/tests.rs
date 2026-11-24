@@ -227,6 +227,7 @@ fn digest() -> crate::digest::Digest {
         }),
         prompt_title: Some("Make the suite pass".into()),
         active_ms: None,
+        written_ms: None,
         branch: None,
         model: None,
         turns: 3,
@@ -1413,6 +1414,10 @@ fn samples() -> Vec<(&'static str, Sample)> {
         ),
         ("command_list_sessions", command(237, Op::ListSessions { cap: 200 })),
         (
+            "command_read_transcript",
+            command(238, Op::ReadTranscript { thread: ThreadId::new(4) }),
+        ),
+        (
             "reply_sessions",
             Sample::Server(ServerMessage::Reply {
                 id: 237,
@@ -2246,6 +2251,17 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 thread,
                 digest: crate::digest::Digest {
                     active_ms: Some(1_763_900_000_000),
+                    ..digest()
+                },
+            }),
+        ),
+        (
+            "digest_written",
+            Sample::Server(ServerMessage::Digest {
+                thread,
+                digest: crate::digest::Digest {
+                    active_ms: Some(1_763_900_000_000),
+                    written_ms: Some(1_763_900_004_000),
                     ..digest()
                 },
             }),
