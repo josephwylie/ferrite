@@ -516,6 +516,46 @@ pub fn check_path(path: &str) -> io::Result<()> {
     }
 }
 
+/// Whether two directories of this computer are one, or one holds the
+/// other, however each is spelled.
+pub(crate) fn overlap(one: &Path, other: &Path) -> io::Result<bool> {
+    let one = canonical(one).map_err(|error| at(one, error))?;
+    let other = canonical(other).map_err(|error| at(other, error))?;
+    Ok(holds(&one, &other) || holds(&other, &one))
+}
+
+/// `path` as this computer names it: its deepest ancestor that is there
+/// resolved, links followed and, on Windows, in its true case with no
+/// `\\?\`, and the rest of it joined on.
+fn canonical(path: &Path) -> io::Result<PathBuf> {
+    let mut rest = Vec::new();
+    let mut at = path;
+    loop {
+        match dunce::canonicalize(at) {
+            Ok(found) => return Ok(rest.into_iter().rev().fold(found, |path, name| path.join(name))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let (Some(parent), Some(name)) = (at.parent(), at.file_name()) else {
+                    return Err(error);
+                };
+                rest.push(name);
+                at = parent;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Whether `outer` is `inner` or holds it, compared without case where the
+/// filesystem usually has none.
+fn holds(outer: &Path, inner: &Path) -> bool {
+    if cfg!(any(windows, target_os = "macos")) {
+        let fold = |path: &Path| PathBuf::from(path.to_string_lossy().to_lowercase());
+        fold(inner).starts_with(fold(outer))
+    } else {
+        inner.starts_with(outer)
+    }
+}
+
 /// `path` as this computer spells it under `root`.
 fn local(root: &Path, path: &str) -> PathBuf {
     path.split('/').fold(root.to_path_buf(), |at, part| at.join(part))
@@ -523,6 +563,11 @@ fn local(root: &Path, path: &str) -> PathBuf {
 
 fn named(step: &Step, error: io::Error) -> io::Error {
     io::Error::new(error.kind(), format!("{}: {error}", step.path()))
+}
+
+/// `error`, saying it was at `path`.
+fn at(path: &Path, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("{}: {error}", path.display()))
 }
 
 fn unanswered() -> io::Error {

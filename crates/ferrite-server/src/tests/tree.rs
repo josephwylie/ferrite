@@ -377,6 +377,84 @@ fn a_tree_op_outside_its_root_is_refused() {
     }
 }
 
+/// `link` made a directory link to `target`: a symlink on Unix, a junction
+/// on Windows, which needs no privilege.
+fn dir_link(target: &Path, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    {
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    }
+}
+
+/// Every spelling of the home directory is refused as a root. Only a read
+/// of a file that is not there is asked, so the home is never touched.
+#[test]
+fn a_root_that_is_the_home_directory_however_it_is_spelled_is_refused() {
+    let harness = start("tree-home-spelled");
+    let sent = Arc::default();
+    let mut cockpit = machine(&harness, &sent);
+    let mut exchange = connect(&mut cockpit);
+    let home = ferrite_core::workspace::expand_home(Path::new("~"));
+    let link = harness.dir.join("homelink");
+    dir_link(&home, &link);
+    let parent = harness.dir.join("parentlink");
+    dir_link(home.parent().unwrap(), &parent);
+    let mut spellings = vec![link, parent];
+    if cfg!(any(windows, target_os = "macos")) {
+        spellings.push(home.to_string_lossy().to_uppercase().into());
+    }
+    if cfg!(windows) {
+        spellings.push(format!(r"\\?\{}", home.display()).into());
+    }
+    for root in spellings {
+        let refused = exchange
+            .call(Request::Read {
+                root: Root::Path { path: root.clone() },
+                path: format!("ferrite-not-here-{}", std::process::id()),
+                offset: 0,
+            })
+            .unwrap_err();
+        assert!(refused.to_string().contains("home directory"), "{}: {refused}", root.display());
+    }
+}
+
+#[test]
+fn a_send_into_or_around_its_own_source_on_this_computer_is_refused() {
+    let harness = start("tree-overlap");
+    let source = harness.dir.join("desktop-tree");
+    write(&source.join("inner/a.txt"), "first");
+    write(&source.join("b.txt"), "second");
+    let listed = || tree::scan(&source, &[]).unwrap();
+    let before = listed();
+    for (from, to) in [
+        (source.clone(), source.join("copy")),
+        (source.join("inner"), source.clone()),
+        (source.clone(), source.clone()),
+    ] {
+        let args: Vec<String> = ["ferrite", "tree", "send"]
+            .into_iter()
+            .map(String::from)
+            .chain([from.to_string_lossy().into(), to.to_string_lossy().into()])
+            .collect();
+        assert_eq!(
+            ferrite_core::api::cli::run(&args, &harness.dir.join("threads"), &harness.dir),
+            Some(1),
+            "{} into {}",
+            from.display(),
+            to.display()
+        );
+        assert_eq!(listed(), before);
+    }
+}
+
 #[test]
 fn the_cli_sends_a_tree_to_its_server_leaving_what_it_skips() {
     let harness = start("tree-cli");

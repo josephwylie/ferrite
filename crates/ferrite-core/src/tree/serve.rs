@@ -2,8 +2,10 @@
 //! they were asked (ADR 0048). A chunk or finish of a write that failed,
 //! expired or never began is refused, so what a sender asked after a
 //! failure never puts part of a file in place. Nothing is read or written
-//! through a symlink inside a root, and no root is the home directory, an
-//! ancestor of it, or the filesystem's root, which a mirror would empty.
+//! through a symlink inside a root. A root is resolved once, links
+//! followed, and refused if it is the home directory, an ancestor of it, or
+//! the filesystem's root, which a mirror would empty, however it is
+//! spelled.
 
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -11,7 +13,7 @@ use std::path::{Component, Path, PathBuf};
 
 use base64::Engine as _;
 
-use super::{check_path, local, scan, Manifest, Reply, Request, Root};
+use super::{at, canonical, check_path, holds, local, scan, Manifest, Reply, Request, Root};
 use crate::chunked::{self, CHUNK_SIZE};
 
 /// At most this many files are written at once on one connection.
@@ -122,31 +124,54 @@ impl Writes {
 }
 
 fn resolve(root: &Root) -> io::Result<PathBuf> {
-    let Root::Path { path } = root else {
+    let Root::Path { path: given } = root else {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "This server does not know that kind of root",
         ));
     };
-    let path = crate::workspace::expand_home(path);
-    let home = crate::workspace::expand_home(Path::new("~"));
-    if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
-        return Err(invalid(format!("{} is not an absolute path", path.display())));
+    let given = crate::workspace::expand_home(given);
+    if !given.is_absolute() || given.components().any(|part| part == Component::ParentDir) {
+        return Err(invalid(format!("{} is not an absolute path", given.display())));
     }
-    if path.parent().is_none() || home.starts_with(&path) {
+    let path = canonical(&given).map_err(|error| at(&given, error))?;
+    if path.parent().is_none() || holds_home(&path) {
         return Err(invalid(format!(
             "{} holds the home directory: name a folder inside it",
-            path.display()
+            given.display()
         )));
     }
     Ok(path)
+}
+
+/// Whether `root`, resolved, is the home directory or holds it.
+fn holds_home(root: &Path) -> bool {
+    let home = crate::workspace::expand_home(Path::new("~"));
+    let home = canonical(&home).unwrap_or(home);
+    holds(root, &home) || home.ancestors().any(|dir| same_dir(root, dir))
+}
+
+/// Whether two paths name one directory, by its device and inode: what a
+/// bind mount or a macOS firmlink spells twice.
+#[cfg(unix)]
+fn same_dir(one: &Path, other: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (fs::metadata(one), fs::metadata(other)) {
+        (Ok(one), Ok(other)) => (one.dev(), one.ino()) == (other.dev(), other.ino()),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_dir(_: &Path, _: &Path) -> bool {
+    false
 }
 
 /// The root, made if it is not there yet: a tree is often sent to a
 /// directory that does not exist.
 fn made(root: &Root) -> io::Result<PathBuf> {
     let root = resolve(root)?;
-    fs::create_dir_all(&root)?;
+    fs::create_dir_all(&root).map_err(|error| at(&root, error))?;
     Ok(root)
 }
 

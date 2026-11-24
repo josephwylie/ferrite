@@ -84,6 +84,21 @@ fn send(
     store: &Path,
     settings_dir: &Path,
 ) -> Result<Sent, ApiError> {
+    if machine.is_none() {
+        let here = crate::workspace::expand_home(&dest);
+        let overlap = tree::overlap(source, &here)
+            .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
+        if overlap {
+            return Err(ApiError::new(
+                Code::InvalidRequest,
+                format!(
+                    "{} and {} are one folder or hold one another: send to a folder outside the source",
+                    source.display(),
+                    here.display()
+                ),
+            ));
+        }
+    }
     let hello = ClientMessage::Hello {
         generation: protocol::GENERATION,
         client: Peer {
