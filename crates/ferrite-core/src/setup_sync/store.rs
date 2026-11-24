@@ -622,10 +622,10 @@ fn present(at: &Path) -> io::Result<bool> {
             Ok(meta) if meta.file_type().is_symlink() => {
                 if let Err(error) = fs::metadata(step) {
                     return Err(match error.kind() {
-                        io::ErrorKind::NotFound => io::Error::other(format!(
-                            "{} is a link to something not there",
-                            step.display()
-                        )),
+                        io::ErrorKind::NotFound if step == at => io::Error::other("it is a link to something not there"),
+                        io::ErrorKind::NotFound => {
+                            io::Error::other(format!("{} is a link to something not there", step.display()))
+                        }
                         _ => tree::at(step, error),
                     });
                 }

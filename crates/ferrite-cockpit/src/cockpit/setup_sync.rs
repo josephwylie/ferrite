@@ -150,7 +150,7 @@ impl Status {
             Status::Syncing(None) => "Syncing…".into(),
             Status::Syncing(Some(count)) => format!("Syncing {}", files(*count)),
             Status::InSync { sign_ins: true, .. } => {
-                "Signed in differently here and on the Machine: choose which sign-in to keep".into()
+                "Signed in differently on each side: choose which to keep".into()
             }
             Status::InSync { held, .. } => match held.as_slice() {
                 [] => "In sync".into(),
@@ -258,7 +258,8 @@ fn toast(news: &BTreeMap<String, News>, settings_dir: &Path) -> Option<(String, 
                 1 => format!("Here and on {machine}. The newer copy is on both now; the other is kept in {kept}."),
                 _ => format!("Here and on {machine}. The newer copy of each is on both now; the others are kept in {kept}."),
             };
-            said.push((title.clone(), message, format!("{machine}: {}", title)));
+            let line = format!("{machine}: {title}");
+            said.push((title, message, line));
             folder = news.kept.clone();
         }
         if let Some(valve) = &news.stopped {
@@ -482,19 +483,21 @@ impl Track {
     }
 
     /// Take in what a sync came to: the line it leaves, and what `news`
-    /// says of it. Whether the news moved.
+    /// says of it. Whether the news moved. A sync of what changed here
+    /// that found nothing changed learned nothing of the Machine, so the
+    /// line and the news stand; one that found another under way looks at
+    /// all of it next, since the other may have moved anything.
     fn finished(&mut self, done: std::io::Result<Outcome>, ask: Ask, now: Instant, news: &mut News) -> bool {
+        if matches!(&done, Ok(Outcome::Synced(synced)) if ask.only_if_changed_here && *synced == Synced::default()) {
+            return false;
+        }
         let before = news.clone();
         self.status = match done {
             Ok(Outcome::Synced(synced)) => {
                 news.stopped = None;
                 news.failed = None;
                 news.conflicted(&synced.conflicts);
-                let quiet = ask.only_if_changed_here && synced == Synced::default();
-                match &self.status {
-                    Status::InSync { .. } if quiet => self.status.clone(),
-                    _ => in_sync(&synced),
-                }
+                in_sync(&synced)
             }
             Ok(Outcome::Stopped(valve)) => {
                 news.failed = None;
@@ -504,6 +507,10 @@ impl Track {
                 Status::Stopped(valve)
             }
             Ok(Outcome::Busy) => {
+                let ask = Ask {
+                    only_if_changed_here: false,
+                    ..ask
+                };
                 self.again = Some(self.again.map_or(ask, |again| again.and(ask)));
                 self.retry = Some(now + SETTLE);
                 Status::Syncing(None)
@@ -757,7 +764,25 @@ mod tests {
         assert_eq!(track.status, Status::Syncing(None));
         assert!(!track.status.failed());
         assert_eq!(track.due(now + Duration::from_secs(1), false, false), None, "it waits a moment");
-        assert_eq!(track.due(now + SETTLE, false, false), Some(Ask::HERE));
+        assert_eq!(track.due(now + SETTLE, false, false), Some(Ask::WHOLE), "all of it, as the other sync may have moved anything");
+    }
+
+    #[test]
+    fn a_change_here_that_changed_nothing_leaves_a_stop_standing() {
+        let mut track = track();
+        let mut news = News::default();
+        let now = Instant::now();
+        let valve = Valve {
+            side: Side::Here,
+            item: ".claude/skills".into(),
+            removing: 410,
+            holding: 410,
+            vanished: true,
+        };
+        assert!(track.finished(Ok(Outcome::Stopped(valve.clone())), Ask::CHECK, now, &mut news));
+        assert!(!track.finished(Ok(Outcome::Synced(Synced::default())), Ask::HERE, now, &mut news));
+        assert_eq!(track.status, Status::Stopped(valve.clone()));
+        assert_eq!(news.stopped, Some(valve));
     }
 
     #[test]
@@ -796,13 +821,13 @@ mod tests {
             problems: vec![ferrite_core::tree::Problem {
                 path: ".claude/skills".into(),
                 side: Side::There,
-                error: "/home/me/.claude/skills is a link to something not there".into(),
+                error: "it is a link to something not there".into(),
             }],
             ..Synced::default()
         };
         assert_eq!(
             in_sync(&synced).line(),
-            "In sync except ~/.claude/skills: /home/me/.claude/skills is a link to something not there (the Machine)"
+            "In sync except ~/.claude/skills: it is a link to something not there (the Machine)"
         );
         let signed_in = Synced {
             held: BTreeMap::from([(".claude/.credentials.json".to_string(), Hold::SignIn)]),

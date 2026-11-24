@@ -1306,7 +1306,7 @@ mod tests {
                     sync: Some(ConnectionSync {
                         on: true,
                         toggle: press("connection-sync-0", "Sync my setup"),
-                        status: "Signed in differently here and on the Machine: choose which sign-in to keep".into(),
+                        status: "Signed in differently on each side: choose which to keep".into(),
                         failed: false,
                         actions: vec![
                             press("connection-sync-here-0", "Use this computer's"),
