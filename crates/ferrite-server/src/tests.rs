@@ -3524,6 +3524,34 @@ fn told(window: &mut Window, wanted: impl Fn(&ServerMessage) -> bool) -> ServerM
     }
 }
 
+/// A window lands only on a Thread its Roster carries: told first, it
+/// would try to reopen a Thread that is open and say it could not.
+#[test]
+fn a_focused_start_is_told_after_the_roster_that_carries_it() {
+    let harness = start("api-focus-after-roster");
+    let mut window = attach(&harness.address);
+    let mut caller = call(&harness);
+    let started = caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir, "ready": true, "focus": true }),
+    );
+    let thread = ThreadId::new(started["result"]["thread"]["thread"].as_u64().unwrap());
+    let mut carried = false;
+    loop {
+        match told(&mut window, |message| {
+            matches!(message, ServerMessage::Roster { .. } | ServerMessage::Focus { .. })
+        }) {
+            ServerMessage::Roster { roster, .. } => carried |= roster.open.contains(&thread),
+            message => {
+                assert_eq!(message, ServerMessage::Focus { thread, fork_of: None });
+                break;
+            }
+        }
+    }
+    assert!(carried, "the Roster came first");
+}
+
 /// What a coordinating agent reads of another (ADR 0030): a Thread started
 /// `ready` answers once it is up, landing the windows on it; the windows
 /// say which Thread the operator is looking at and which Composer holds

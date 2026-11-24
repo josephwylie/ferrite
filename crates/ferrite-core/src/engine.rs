@@ -1247,6 +1247,10 @@ pub struct Engine {
     /// (`take_messages`), and the state each Thread's last `thread`
     /// message carried.
     outbox: Vec<ServerMessage>,
+    /// The Threads asked to be shown (and the Thread each was forked from),
+    /// told after what `publish` adds: a window can land only on a Thread
+    /// its Roster already carries.
+    asked_focus: Vec<(ThreadId, Option<ThreadId>)>,
     published: BTreeMap<ThreadId, Published>,
     published_open: Vec<ThreadId>,
     published_shared: PublishedShared,
@@ -1333,6 +1337,7 @@ impl Engine {
             boot: crate::clock::instant(),
             boot_id: boot_id(),
             outbox: Vec::new(),
+            asked_focus: Vec::new(),
             published: BTreeMap::new(),
             published_open: Vec::new(),
             published_shared: PublishedShared::default(),
@@ -5138,7 +5143,15 @@ impl Engine {
     /// state when that changed, and the open Threads when they changed.
     pub fn take_messages(&mut self) -> Vec<ServerMessage> {
         self.publish();
+        let asked = self.asked_focus.drain(..);
+        self.outbox
+            .extend(asked.map(|(thread, fork_of)| ServerMessage::Focus { thread, fork_of }));
         std::mem::take(&mut self.outbox)
+    }
+
+    /// Ask every window to show `thread`, once they have heard of it.
+    pub fn ask_focus(&mut self, thread: ThreadId, fork_of: Option<ThreadId>) {
+        self.asked_focus.push((thread, fork_of));
     }
 
     fn publish(&mut self) {
