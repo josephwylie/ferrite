@@ -1,5 +1,6 @@
-//! A draft's choices before its first send. Selection rules and registry
-//! resolution live here; Pane focus/errors and Thread creation do not.
+//! A draft's choices before its first send. Selection rules and their
+//! resolution against the chosen Project live here; Pane focus/errors and
+//! Thread creation do not.
 
 use std::io;
 
@@ -8,9 +9,8 @@ use std::path::PathBuf;
 
 use crate::checkout::WorkspaceChoice;
 use crate::models::efforts_for;
-use crate::project::ProjectId;
+use crate::project::{Project, ProjectId};
 use crate::provider::ProviderChoice;
-use crate::workspace::registry::Registry;
 use crate::{MachineKey, ModelInfo, ProjectKey};
 
 /// The workspace choice within the selected Project: the checkout as it
@@ -150,15 +150,15 @@ impl DraftBinding {
     }
 
     /// Interpret the choice once for both first send and file completion.
-    /// This only reads the registry of the Project's machine and, when its
-    /// paths are this
+    /// This only reads `project`, the Project as its machine lists it now
+    /// (none once it is no longer registered), and, when its paths are this
     /// computer's (`here`), asks whether a chosen worktree's directory
     /// still stands: bootstrap still owns worktree creation and the git
     /// adoption check, and on a machine (ADR 0026) its Server asks. Stale
     /// choices fail without selecting a different checkout or mutating the
     /// draft.
-    pub fn resolve(&self, registry: &Registry, here: bool) -> io::Result<WorkspaceChoice> {
-        let project = registry.project(self.project.project()).ok_or_else(|| {
+    pub fn resolve(&self, project: Option<&Project>, here: bool) -> io::Result<WorkspaceChoice> {
+        let project = project.ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
                 "the chosen project is no longer registered — re-pick it",
@@ -200,6 +200,7 @@ mod tests {
     use super::*;
     use crate::prompt_files::mention_files;
     use crate::provider::Provider;
+    use crate::workspace::registry::Registry;
     use crate::workspace::{ensure_worktree, git_for_tests};
 
     struct Fixture {
@@ -256,6 +257,11 @@ mod tests {
             )
         }
 
+        /// `draft` resolved against the Project the registry lists for it.
+        fn resolve(&self, draft: &DraftBinding) -> io::Result<WorkspaceChoice> {
+            draft.resolve(self.registry.project(draft.project().project()), true)
+        }
+
         fn worktree(&mut self, project: ProjectKey) -> crate::workspace::registry::WorktreeEntry {
             let entry = self.registry.reserve_worktree(project.project()).unwrap();
             ensure_worktree(
@@ -295,10 +301,7 @@ mod tests {
             assert_eq!(draft.project(), fixture.two);
             assert_eq!(draft.target(), &DraftTarget::Main);
             assert_eq!(
-                draft
-                    .resolve(&fixture.registry, true)
-                    .unwrap()
-                    .source_root(),
+                fixture.resolve(&draft).unwrap().source_root(),
                 fixture.registry.project(fixture.two.project()).unwrap().root,
             );
         }
@@ -317,7 +320,7 @@ mod tests {
         fs::write(tree.path.join("tree-only.txt"), "tree").unwrap();
 
         let mut draft = fixture.draft(DraftTarget::Main);
-        let main = draft.resolve(&fixture.registry, true).unwrap();
+        let main = fixture.resolve(&draft).unwrap();
         assert_eq!(
             main,
             WorkspaceChoice::Main {
@@ -327,7 +330,7 @@ mod tests {
         assert!(mention_files(main.source_root(), 100).contains(&"main-only.txt".into()));
 
         draft.choose_target(DraftTarget::New);
-        let new = draft.resolve(&fixture.registry, true).unwrap();
+        let new = fixture.resolve(&draft).unwrap();
         assert_eq!(new, WorkspaceChoice::NewWorktree { repo: repo.clone() });
         assert_eq!(new.source_root(), main.source_root());
         assert_eq!(
@@ -340,7 +343,7 @@ mod tests {
             branch: tree.branch.clone(),
             path: tree.path.clone(),
         });
-        let existing = draft.resolve(&fixture.registry, true).unwrap();
+        let existing = fixture.resolve(&draft).unwrap();
         assert_eq!(
             existing,
             WorkspaceChoice::ExistingWorktree {
@@ -357,10 +360,7 @@ mod tests {
             path: other_tree.path.clone(),
         });
         assert_eq!(
-            draft
-                .resolve(&fixture.registry, true)
-                .unwrap()
-                .source_root(),
+            fixture.resolve(&draft).unwrap().source_root(),
             other_tree.path
         );
     }
@@ -378,7 +378,7 @@ mod tests {
         // The worktree is gone from disk — git removed it — so the choice
         // names a directory that no longer stands.
         crate::workspace::remove_worktree(&repo, &tree.path).unwrap();
-        let error = draft.resolve(&fixture.registry, true).unwrap_err();
+        let error = fixture.resolve(&draft).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
         assert!(error.to_string().contains(&tree.branch));
         assert_eq!(draft.target(), &target);
@@ -387,7 +387,7 @@ mod tests {
         assert_ne!(replacement, fixture.one.project());
         for target in [DraftTarget::Main, DraftTarget::New, target] {
             draft.choose_target(target.clone());
-            let error = draft.resolve(&fixture.registry, true).unwrap_err();
+            let error = fixture.resolve(&draft).unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::NotFound);
             assert!(error
                 .to_string()

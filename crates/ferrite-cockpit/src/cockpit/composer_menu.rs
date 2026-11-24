@@ -764,7 +764,7 @@ impl CockpitView {
                         let cwd = draft
                             .binding
                             .resolve(
-                                self.cockpit.read(cx).registry(machine).reading(),
+                                self.cockpit.read(cx).project(draft.binding.project()),
                                 !self.elsewhere(machine, cx),
                             )
                             .ok()?
@@ -785,7 +785,7 @@ impl CockpitView {
                         let cwd = draft
                             .binding
                             .resolve(
-                                self.cockpit.read(cx).registry(machine).reading(),
+                                self.cockpit.read(cx).project(draft.binding.project()),
                                 !self.elsewhere(machine, cx),
                             )
                             .ok()

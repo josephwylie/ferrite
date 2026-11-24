@@ -5644,7 +5644,7 @@ impl CockpitView {
         let machine = binding.project().machine();
         let resolved = binding
             .resolve(
-                self.cockpit.read(cx).registry(machine).reading(),
+                self.cockpit.read(cx).project(binding.project()),
                 !self.elsewhere(machine, cx),
             )
             .map_err(|e| e.to_string());
