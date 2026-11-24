@@ -582,7 +582,8 @@ impl Render for FolderBrowser {
             cx.processor(|browser, range, _, cx| browser.drawn_rows(range, cx)),
         )
         .track_scroll(&self.scroll)
-        .flex_1()
+        .h(px((self.rows.len() as f32).min(ROWS) * FILES_ROW_H))
+        .flex_shrink(1.)
         .min_h_0();
         div()
             .key_context(KEY_CONTEXT)
