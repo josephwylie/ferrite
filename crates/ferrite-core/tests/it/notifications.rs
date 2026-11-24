@@ -316,7 +316,7 @@ fn notifications_discard_a_parked_deferral_but_keep_existing_notices() {
     assert_eq!(h.count(), 1, "the new finish is deferred");
     h.cockpit.park(thread).now().unwrap();
     assert!(h.cockpit.notifications(h.here).get(notice).is_some());
-    h.cockpit.reopen(thread).unwrap();
+    h.cockpit.reopen(thread).now().unwrap();
     for _ in 0..3 {
         h.cockpit.pump();
     }
@@ -379,14 +379,16 @@ fn opening_a_notice_lands_on_its_thread_and_revives_a_parked_one() {
     // Parked after it finished: opening the Notice brings it back.
     h.cockpit.park(second).now().unwrap();
     assert!(h.cockpit.thread(second).is_none());
-    assert_eq!(h.cockpit.open_notice(h.here, id), Some(second));
+    let (landed_on, landed) = h.cockpit.open_notice(h.here, id).expect("its Notice stands");
+    assert_eq!(landed_on, second);
+    landed.now().unwrap();
     assert_eq!(h.cockpit.roster().focused_thread(), Some(second));
     assert!(h.cockpit.thread(second).is_some(), "revived");
     assert!(h.cockpit.notifications(h.here).get(id).unwrap().read);
 
     assert!(h.cockpit.dismiss_notice(h.here, id));
     assert_eq!(h.count(), 0);
-    assert_eq!(h.cockpit.open_notice(h.here, id), None);
+    assert!(h.cockpit.open_notice(h.here, id).is_none());
 }
 
 #[test]

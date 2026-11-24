@@ -1273,8 +1273,15 @@ never waits. The rest still do.
      window's part (the Panes, the nav's notice, the undo it offers)
      runs from `when_answered`, or from `when_all_answered` for a press
      on several Threads. So over a Server a closed Pane goes a beat
-     after the press. Open, revive and import still wait. What follows
-     them is the root's (the Panes, focus, the Project filter).
+     after the press. Revive and reopen are asks the same way: a parked
+     row's press, ⌘O, ⌘Z on a park, back and forward, a Notice opened
+     and the Factory's earlier-Worker reader. The model's part of a
+     reopen is a `Follow` too (the Thread takes the screen and the park
+     order forgets it). What follows with the window in hand (a search
+     that ends, a Subject shown, the keyboard let go) runs from
+     `when_answered_in`, a turn of the loop after the answer. Open and
+     import still wait, and a launch waits for the Threads it imported
+     (`revive_and_wait`): it has no window yet.
   4. Queue: 5 asks, 15 sites. These are Composer presses, with the
      queue's rows answered by the Server's state.
   5. Projects: 7 asks, 11 sites. These are rare presses in the settings

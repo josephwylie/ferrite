@@ -124,6 +124,9 @@ enum Follow {
     Parked(ThreadKey),
     /// A deleted Thread's parked row goes.
     Deleted(ThreadKey),
+    /// A Thread brought back takes the screen, and the park order forgets
+    /// it.
+    Reopened(ThreadKey),
 }
 
 /// The acts a Server answered, each with whether it was done, for the
@@ -933,7 +936,11 @@ impl Cockpit {
                     machine.parked.forget(thread);
                 }
             }
-            Follow::Deleted(_) => {}
+            Follow::Reopened(thread) if done => {
+                self.roster.note_revived(thread);
+                self.roster.focus(PaneIdentity::Thread(thread));
+            }
+            Follow::Deleted(_) | Follow::Reopened(_) => {}
         }
     }
 
@@ -1164,9 +1171,10 @@ impl Cockpit {
 
     /// The operator opened a Notice of `machine`'s — from a toast or the
     /// bell: it is read, and they land on its Thread's Pane in the view
-    /// that shows it, reviving a parked one. The Thread landed on, or None
-    /// when it is gone.
-    pub fn open_notice(&mut self, machine: MachineId, id: NoticeId) -> Option<ThreadKey> {
+    /// that shows it, reviving a parked one. The Thread landed on, with
+    /// the ask that says whether it took the screen, or None when the
+    /// Notice is gone.
+    pub fn open_notice(&mut self, machine: MachineId, id: NoticeId) -> Option<(ThreadKey, Ask<()>)> {
         let thread = self.shared(machine).notifications.get(id)?.thread;
         self.tell_at(
             machine,
@@ -1174,7 +1182,7 @@ impl Cockpit {
                 action: NoticeAction::Open { notice: id.get() },
             },
         );
-        self.land_on(ThreadKey::new(machine, thread))
+        Some(self.land_on(ThreadKey::new(machine, thread)))
     }
 
     /// Open one live Decision attention record of `machine`'s: its Subject
@@ -1184,7 +1192,7 @@ impl Cockpit {
         &mut self,
         machine: MachineId,
         id: &DecisionNoticeId,
-    ) -> Option<ThreadKey> {
+    ) -> Option<(ThreadKey, Ask<()>)> {
         self.shared(machine).notifications.decision(id)?;
         self.tell_at(
             machine,
@@ -1195,15 +1203,19 @@ impl Cockpit {
                 },
             },
         );
-        self.land_on(ThreadKey::new(machine, id.thread))
+        Some(self.land_on(ThreadKey::new(machine, id.thread)))
     }
 
-    fn land_on(&mut self, thread: ThreadKey) -> Option<ThreadKey> {
-        if !self.focus_thread(thread) {
-            self.reopen(thread).ok()?;
-        }
+    /// Land on `thread`, reviving a parked one: the ask says whether it
+    /// took the screen. What is on screen then is seen by the pump.
+    fn land_on(&mut self, thread: ThreadKey) -> (ThreadKey, Ask<()>) {
+        let landed = if self.focus_thread(thread) {
+            Ask::answered(Ok(()))
+        } else {
+            self.reopen(thread)
+        };
         self.acknowledge_seen();
-        Some(thread)
+        (thread, landed)
     }
 
     /// Whether the operator is looking: the window has the system's focus.
@@ -1749,7 +1761,15 @@ impl Cockpit {
         self.ask_on_then(thread, |thread| Op::Delete { thread }, done, Follow::Deleted(thread))
     }
 
-    pub fn revive(&mut self, thread: ThreadKey) -> io::Result<()> {
+    /// Open a parked Thread again: an `Err` answer says why not. The
+    /// window never waits for it.
+    pub fn revive(&mut self, thread: ThreadKey) -> Ask<()> {
+        self.ask_on(thread, |thread| Op::Revive { thread }, done)
+    }
+
+    /// `revive`, waited for: a launch opens what it imported before it has
+    /// a window, and an import still waits for each of its acts.
+    pub fn revive_and_wait(&mut self, thread: ThreadKey) -> io::Result<()> {
         done(self.act_on(thread, |thread| Op::Revive { thread }))
     }
 
@@ -3411,12 +3431,24 @@ impl Cockpit {
     /// second time. The shared tail of cmd-o and a parked nav row's click.
     /// An open Thread is only landed on: one a window has no Pane drawn for
     /// yet (a `thread.focus` from Projects) is not started again.
-    pub fn reopen(&mut self, thread: ThreadKey) -> io::Result<()> {
-        if self.thread(thread).is_none() {
-            self.revive(thread)?;
-            self.roster.note_revived(thread);
+    /// An `Err` answer says why it did not come back. The window never
+    /// waits for it: the Thread takes the screen on the beat that brings
+    /// the answer.
+    pub fn reopen(&mut self, thread: ThreadKey) -> Ask<()> {
+        if self.thread(thread).is_some() {
+            self.roster.focus(PaneIdentity::Thread(thread));
+            return Ask::answered(Ok(()));
         }
-        self.roster.focus(PaneIdentity::Thread(thread));
+        self.ask_on_then(thread, |thread| Op::Revive { thread }, done, Follow::Reopened(thread))
+    }
+
+    /// `reopen`, waited for: an import's, which still waits for each of
+    /// its acts.
+    fn reopen_and_wait(&mut self, thread: ThreadKey) -> io::Result<()> {
+        if self.thread(thread).is_none() {
+            self.revive_and_wait(thread)?;
+        }
+        self.follow(Follow::Reopened(thread), true);
         Ok(())
     }
 
@@ -3427,7 +3459,7 @@ impl Cockpit {
     /// is next (accepted v1 behavior). A Thread whose revive fails keeps its
     /// park but loses its slot in the order: cmd-o moves on rather than
     /// jamming on it. None with nothing parked at all.
-    pub fn reopen_last(&mut self) -> Option<(ThreadKey, io::Result<()>)> {
+    pub fn reopen_last(&mut self) -> Option<(ThreadKey, Ask<()>)> {
         let thread = self
             .roster
             .pop_park_order()
@@ -3559,10 +3591,10 @@ impl Cockpit {
             blank_kept: None,
         };
         let Some(into) = into else {
-            adopted.not_opened = self.reopen(thread).err();
+            adopted.not_opened = self.reopen_and_wait(thread).err();
             return Ok(adopted);
         };
-        match self.revive(thread) {
+        match self.revive_and_wait(thread) {
             Ok(()) => {
                 match into {
                     PaneIdentity::Draft(draft) => {

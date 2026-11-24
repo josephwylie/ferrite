@@ -352,31 +352,44 @@ impl CockpitView {
             );
         }
         if let Some(thread) = thread {
-            let reopened = match was {
-                Some((same, reopened)) if same == thread => Ok(reopened),
-                _ if self.cockpit.read(cx).thread(thread).is_some() => Ok(false),
-                _ => self.cockpit.update(cx, |cockpit, _| cockpit.revive(thread).map(|()| true)),
-            };
-            // Reopening it moves the roster's focus before this window has
-            // its Pane: that is not the operator leaving the board.
-            let focused = self.cockpit.read(cx).roster().focused();
-            if let Some(Destination {
-                shows: Shows::Factory(_, view),
-                focus_at_open,
-            }) = self.destination.as_mut()
-            {
-                *focus_at_open = focused;
-                view.update(cx, |view, cx| match reopened {
-                    Ok(reopened) => view.archive.update(cx, |archive, _| {
-                        archive.reading = Some((thread, reopened))
-                    }),
-                    Err(error) => {
-                        view.note = Some(SharedString::from(format!(
-                            "That agent's transcript could not be opened: {error}"
-                        )))
-                    }
-                });
+            match was {
+                Some((same, reopened)) if same == thread => self.worker_opened(thread, Ok(reopened), cx),
+                _ if self.cockpit.read(cx).thread(thread).is_some() => self.worker_opened(thread, Ok(false), cx),
+                _ => {
+                    let revived = self.cockpit.update(cx, |cockpit, _| cockpit.revive(thread));
+                    self.when_answered(
+                        revived,
+                        move |view, revived, cx| view.worker_opened(thread, revived.map(|()| true), cx),
+                        cx,
+                    );
+                }
             }
+        }
+        cx.notify();
+    }
+
+    /// The earlier Worker asked for is open to be read, or is not:
+    /// `reopened` when this window opened its Thread for it.
+    fn worker_opened(&mut self, thread: ThreadKey, reopened: std::io::Result<bool>, cx: &mut Context<Self>) {
+        // Reopening it moves the roster's focus before this window has
+        // its Pane: that is not the operator leaving the board.
+        let focused = self.cockpit.read(cx).roster().focused();
+        if let Some(Destination {
+            shows: Shows::Factory(_, view),
+            focus_at_open,
+        }) = self.destination.as_mut()
+        {
+            *focus_at_open = focused;
+            view.update(cx, |view, cx| match reopened {
+                Ok(reopened) => view.archive.update(cx, |archive, _| {
+                    archive.reading = Some((thread, reopened))
+                }),
+                Err(error) => {
+                    view.note = Some(SharedString::from(format!(
+                        "That agent's transcript could not be opened: {error}"
+                    )))
+                }
+            });
         }
         cx.notify();
     }
