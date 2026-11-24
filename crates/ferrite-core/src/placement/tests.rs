@@ -192,6 +192,9 @@ fn what_git_ignores_is_listed_each_directory_whole_with_its_size() {
     fs::write(root.join("target/notes.txt"), "built").unwrap();
     fs::write(root.join("run.log"), "log").unwrap();
     fs::write(root.join(".env"), "KEY=1\n").unwrap();
+    fs::create_dir_all(root.join("logs")).unwrap();
+    fs::write(root.join("logs/a.log"), "a").unwrap();
+    fs::write(root.join("logs/b.log"), "b").unwrap();
 
     let mut listed = ignored(&root);
     listed.sort_by(|a, b| a.path.cmp(&b.path));
@@ -199,7 +202,16 @@ fn what_git_ignores_is_listed_each_directory_whole_with_its_size() {
         path: path.into(),
         directory,
     };
-    assert_eq!(listed, [entry(".env", false), entry("run.log", false), entry("target", true)]);
+    assert_eq!(
+        listed,
+        [
+            entry(".env", false),
+            entry("logs", true),
+            entry("run.log", false),
+            entry("target", true)
+        ],
+        "a folder of only ignored files is one entry: its files are not listed again"
+    );
     assert_eq!(size(&root, "target"), 305);
     assert_eq!(ignored(&scratch("not-git")), []);
 }
@@ -331,6 +343,70 @@ fn a_copy_from_windows_sends_what_git_would_check_out_on_the_machine() {
     assert_eq!(status_there(&root, "crlf-there"), " M edited.txt\n", "only the edit is a change");
     git(&root, &["update-index", "--index-version", "4"]);
     assert_eq!(status_there(&root, "crlf-there-v4"), " M edited.txt\n", "an index of version 4 too");
+}
+
+/// A copy from Windows makes LF only what git itself made CRLF: a file
+/// whose attributes say text (`text`, `text=auto`) or say nothing under
+/// `core.autocrlf`. One git keeps byte for byte (`-text`, `binary`,
+/// `eol=crlf`, a `working-tree-encoding`) goes as it is here, an
+/// uncommitted CRLF edit and all, which git there still reads as one.
+#[test]
+fn a_copy_from_windows_converts_only_what_git_itself_converts() {
+    let root = scratch("eol-table");
+    let utf16 = b"\xff\xfeo\x00n\x00e\x00\n\x00";
+    checkout(
+        &root,
+        &[
+            (
+                ".gitattributes",
+                b"raw.txt -text\nbin.dat binary\nwin.bat eol=crlf\nenc.txt working-tree-encoding=UTF-16LE-BOM text\nauto.txt text=auto\ntext.txt text\n",
+            ),
+            ("auto.txt", b"one\ntwo\n"),
+            ("text.txt", b"one\ntwo\n"),
+            ("plain.txt", b"one\ntwo\n"),
+            ("raw.txt", b"one\ntwo\n"),
+            ("bin.dat", b"a\nb\n"),
+            ("win.bat", b"echo\n"),
+            ("enc.txt", utf16),
+        ],
+        "",
+    );
+    git(&root, &["config", "core.autocrlf", "true"]);
+    for path in ["auto.txt", "text.txt", "plain.txt", "raw.txt", "bin.dat", "win.bat", "enc.txt"] {
+        fs::remove_file(root.join(path)).unwrap();
+    }
+    git(&root, &["checkout", "--", "."]);
+    fs::write(root.join("raw.txt"), b"one\r\ntwo\r\nthree\r\n").unwrap();
+    fs::write(root.join("bin.dat"), b"a\r\nb\r\n").unwrap();
+    assert_eq!(git(&root, &["status", "--porcelain"]), " M bin.dat\n M raw.txt\n");
+
+    let sent = |checkout: &Checkout, path: &str| {
+        let mut bytes = Vec::new();
+        tree::Source::open(checkout, path).unwrap().read_to_end(&mut bytes).unwrap();
+        bytes
+    };
+    let checkout = Checkout::from_windows(&root);
+    for converted in ["auto.txt", "text.txt", "plain.txt"] {
+        assert_eq!(sent(&checkout, converted), b"one\ntwo\n", "{converted}");
+    }
+    for (kept, why) in [("raw.txt", "-text"), ("bin.dat", "binary"), ("win.bat", "eol=crlf"), ("enc.txt", "an encoding")] {
+        assert_eq!(sent(&checkout, kept), fs::read(root.join(kept)).unwrap(), "{kept}: {why}");
+    }
+    assert_eq!(fs::read(root.join("win.bat")).unwrap(), b"echo\r\n");
+    assert_eq!(
+        status_there(&root, "eol-table-there"),
+        " M bin.dat\n M raw.txt\n",
+        "the edits are still edits there"
+    );
+
+    git(&root, &["config", "core.autocrlf", "false"]);
+    let checkout = Checkout::from_windows(&root);
+    assert_eq!(
+        sent(&checkout, "plain.txt"),
+        b"one\r\ntwo\r\n",
+        "with no attribute and no core.autocrlf, git made no CRLF"
+    );
+    assert_eq!(sent(&checkout, "text.txt"), b"one\ntwo\n");
 }
 
 /// What git on a Machine says of the Windows checkout at `root` once it

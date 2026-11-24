@@ -215,8 +215,8 @@ pub struct Ignored {
     pub directory: bool,
 }
 
-/// What git ignores in the checkout at `root`, each directory as a whole:
-/// none outside git.
+/// What git ignores in the checkout at `root`, each directory as a whole,
+/// none under it listed again: none outside git.
 pub fn ignored(root: &Path) -> Vec<Ignored> {
     let Some(listed) = git(
         root,
@@ -224,14 +224,28 @@ pub fn ignored(root: &Path) -> Vec<Ignored> {
     ) else {
         return Vec::new();
     };
-    listed
+    let mut ignored: Vec<Ignored> = listed
         .split('\0')
         .filter(|path| !path.is_empty())
         .map(|path| Ignored {
             path: path.trim_end_matches('/').to_string(),
             directory: path.ends_with('/'),
         })
-        .collect()
+        .collect();
+    // A folder that holds only ignored files is listed, and so is each of
+    // them: unticked, they would keep its files here when it is ticked.
+    let folders: BTreeSet<String> = ignored
+        .iter()
+        .filter(|entry| entry.directory)
+        .map(|entry| entry.path.clone())
+        .collect();
+    ignored.retain(|entry| {
+        !entry
+            .path
+            .match_indices('/')
+            .any(|(at, _)| folders.contains(&entry.path[..at]))
+    });
+    ignored
 }
 
 /// The linked worktrees of the checkout at `root` that lie inside it
@@ -318,15 +332,16 @@ fn git(root: &Path, args: &[&str]) -> Option<String> {
 /// A Project folder of this computer as a copy sends it: what git would
 /// check out on a Machine. From a computer that keeps no permission bits
 /// (Windows), each file gets its own ([`Checkout::list`]); a file git has
-/// as LF in its index and this checkout as CRLF goes as LF, edits and all,
-/// and the index lists it with no size, as git lists a file it must read
-/// again; and the copy's `.git/config` goes without this computer's
-/// line-end, file-mode and case settings. So git there reads the files as
-/// unchanged and keeps the bits an agent gives them. Everything else goes
-/// byte for byte.
+/// as LF in its index and this checkout as CRLF by git's own conversion
+/// (`text`, `text=auto`, or no attribute under `core.autocrlf`) goes as LF,
+/// edits and all, and the index lists it with no size, as git lists a file
+/// it must read again; and the copy's `.git/config` goes without this
+/// computer's line-end, file-mode and case settings. So git there reads
+/// the files as unchanged and keeps the bits an agent gives them.
+/// Everything else goes byte for byte.
 pub struct Checkout {
     root: PathBuf,
-    /// Files git has as LF in its index and CRLF here.
+    /// Files git has as LF in its index and made CRLF here.
     crlf: BTreeSet<String>,
     /// Files git has as executable (100755).
     executable: BTreeSet<String>,
@@ -367,14 +382,21 @@ impl Checkout {
     /// and checks text out with CRLF.
     pub fn from_windows(root: &Path) -> Self {
         let lines = |args: &[&str]| git(root, args).unwrap_or_default();
-        let crlf = lines(&["ls-files", "--eol", "-z"])
+        let autocrlf = lines(&["config", "--type=bool", "--get", "core.autocrlf"]).trim() == "true";
+        // Git says each file's line ends and attributes: one it checks out
+        // as CRLF by its own conversion, never one it keeps byte for byte.
+        let crlf = lines(&["ls-files", "--eol", "-z", "--", ":(attr:!working-tree-encoding)"])
             .split('\0')
             .filter_map(|record| {
                 let (info, path) = record.split_once('\t')?;
-                let mut info = info.split_whitespace();
-                let checked_out_as_lf = !info.clone().any(|field| field.contains("eol=crlf"));
-                (info.next() == Some("i/lf") && info.next() == Some("w/crlf") && checked_out_as_lf)
-                    .then(|| path.to_string())
+                let (ends, attr) = info.split_once("attr/")?;
+                let converted = match attr.trim() {
+                    "text" | "text=auto" => true,
+                    "" => autocrlf,
+                    _ => false,
+                };
+                let ends: Vec<&str> = ends.split_whitespace().collect();
+                (ends == ["i/lf", "w/crlf"] && converted).then(|| path.to_string())
             })
             .collect();
         let executable = lines(&["ls-files", "--stage", "-z"])
