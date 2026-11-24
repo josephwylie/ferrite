@@ -7557,10 +7557,20 @@ impl CockpitView {
             .children(self.sheet_floats(window, cx))
             .children(self.lightbox_element(cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
-            .children(
-                gpui::component::Root::render_notification_layer(window, cx)
-                    .map(|layer| deferred(layer).with_priority(crate::float::FLOAT_PRIORITY)),
-            )
+            .children(gpui::component::Root::render_notification_layer(window, cx).map(|layer| {
+                let lowered = div().absolute().inset_0().top(self.toasts_lowered(cx)).child(layer);
+                deferred(lowered).with_priority(crate::float::FLOAT_PRIORITY)
+            }))
+    }
+
+    /// How far under where they hang the toasts hang while a sheet is up:
+    /// below its head, so they never cover its close button.
+    fn toasts_lowered(&self, cx: &gpui::App) -> Pixels {
+        use ferrite_ui::theme::{MODAL_HEAD_H, PANE_HEAD_H, WIN_CHROME_H};
+        let Some(card) = self.sheets.read(cx).card() else {
+            return px(0.);
+        };
+        (card.top() + px(MODAL_HEAD_H) - px(WIN_CHROME_H + PANE_HEAD_H)).max(px(0.))
     }
 }
 

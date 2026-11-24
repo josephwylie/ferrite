@@ -16,6 +16,7 @@ use crate::{
     ActiveTheme as _, Edges, ElementExt as _, Icon, IconName, Sizable as _, StyledExt, TITLE_BAR_HEIGHT,
     animation::cubic_bezier,
     button::{Button, ButtonVariants as _},
+    h_flex,
     styled::toast_shadow,
     v_flex,
 };
@@ -420,7 +421,7 @@ impl Render for Notification {
         let action = self
             .action_builder
             .clone()
-            .map(|builder| builder(self, window, cx).small().mr_3p5());
+            .map(|builder| builder(self, window, cx).small());
 
         let transition_status = self.transition_status;
         let closing = transition_status == ToastTransitionStatus::Ending;
@@ -481,11 +482,25 @@ impl Render for Notification {
                         )
                     })
                     .when_some(self.message.clone(), |this, message| {
-                        this.child(div().text_sm().child(message))
+                        this.child(
+                            div()
+                                .debug_selector(|| "notification-message".into())
+                                .text_sm()
+                                .child(message),
+                        )
                     })
-                    .when_some(content, |this, content| this.child(content)),
+                    .when_some(content, |this, content| this.child(content))
+                    // Ferrite's patch: the press goes under the words, which
+                    // keep the card's whole width.
+                    .when_some(action, |this, action| {
+                        this.child(
+                            h_flex()
+                                .debug_selector(|| "notification-action".into())
+                                .pt_2()
+                                .child(action),
+                        )
+                    }),
             )
-            .when_some(action, |this, action| this.child(action))
             .child(
                 div()
                     .debug_selector(|| "notification-close".into())
@@ -1196,6 +1211,40 @@ mod tests {
         let title = cx.debug_bounds("notification-title").expect("a title");
         let close = cx.debug_bounds("notification-close").expect("a close button");
         assert!(title.right() <= close.left(), "{title:?} runs under {close:?}");
+    }
+
+    /// Ferrite's patch: a toast's press sits under its words, which keep
+    /// the card's whole width rather than wrap beside the press.
+    #[gpui::test]
+    fn a_press_sits_under_the_words(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_global(Theme::default()));
+        let (root, cx) = cx.add_window_view(|window, cx| TestRoot {
+            list: cx.new(|cx| NotificationList::new(window, cx)),
+            other_focus: cx.focus_handle(),
+        });
+        let list = root.read_with(cx, |root, _| root.list.clone());
+        list.update_in(cx, |list, window, cx| {
+            list.push(
+                Notification::new()
+                    .title("3 files changed on both sides")
+                    .message("Here and on wsl. The newer copy of each is on both now.")
+                    .action(|_, _, _| Button::new("open").label("Open folder"))
+                    .autohide(false),
+                window,
+                cx,
+            );
+        });
+        cx.background_executor
+            .advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        let card = cx.debug_bounds("notification-card").expect("a card");
+        let message = cx.debug_bounds("notification-message").expect("a message");
+        let action = cx.debug_bounds("notification-action").expect("a press");
+        assert!(action.top() >= message.bottom(), "{action:?} beside {message:?}");
+        assert!(
+            card.right() - message.right() <= px(32.),
+            "{message:?} stops short of {card:?}'s end"
+        );
     }
 
     /// A stack's element id must not depend on how many other placements are

@@ -1032,8 +1032,9 @@ fn connection_pairing_url_paste_fills_host_and_code_after_replacing_text(cx: &mu
     });
 }
 
-/// A toast stands over Settings: it draws over the sheet's veil, and a
-/// press on it is the toast's, not the veil's, which would close Settings.
+/// A toast stands over Settings: it draws over the sheet's veil, below the
+/// sheet's head so its close button stays in reach, and a press on it is
+/// the toast's, not the veil's, which would close Settings.
 #[gpui::test]
 fn a_toast_stands_over_the_settings_sheet(cx: &mut TestAppContext) {
     use gpui::component::notification::Notification;
@@ -1060,6 +1061,8 @@ fn a_toast_stands_over_the_settings_sheet(cx: &mut TestAppContext) {
         cx.run_until_parked();
     }
     let card = bounds(cx, "notification-card".into());
+    let close = bounds(cx, "settings-close".into());
+    assert!(!card.intersects(&close), "{card:?} covers Settings' close button at {close:?}");
     cx.simulate_click(card.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(pressed.get(), 1, "the press reached the toast");
