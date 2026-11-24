@@ -35,11 +35,14 @@ pub mod factory;
 pub mod factory_board;
 pub mod folder;
 pub mod followup;
+pub mod git_read;
+pub mod header;
 pub mod import;
 pub mod layout;
 pub mod link;
 pub mod login_shell;
 pub mod machine;
+pub mod memory;
 pub mod models;
 pub mod notifications;
 pub mod pane_update;
@@ -88,9 +91,10 @@ pub use attention::Attention;
 pub use session_event::{
     validate_form, CommandSource, ContextCategory, ContextDetails, ContextItem, ControlKind,
     Decision, DecisionAnswer, DecisionChoice, DecisionDelivery, DecisionKind, DecisionPolicy,
-    FileEdit, FormChoice, FormField, FormFieldKind, Hunk, McpServer, McpStatus, ModelInfo,
-    PermissionModeChoice, QueueEvent, QueuedPrompt, RateLimitWindow, RunState, SessionCommand,
-    SessionControl, SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
+    Discovery, FileEdit, FormChoice, FormField, FormFieldKind, Hunk, McpServer, McpStatus,
+    ModelInfo, PermissionModeChoice, QueueEvent, QueuedPrompt, RateLimitWindow, RunState,
+    SessionCommand, SessionControl, SessionEvent, ToolResult, TurnOutcome, UsageDetails,
+    UsageScope,
 };
 pub use thread::{
     DelegatedFrom, MachineId, MachineKey, ProjectKey, SavedThread, ThreadId, ThreadKey,

@@ -6,7 +6,7 @@
 //! listing: the root asks (`listen`) and its pump takes each answer
 //! (`listed`).
 
-use ferrite_core::providers::commands::Discovery;
+use ferrite_core::Discovery;
 use ferrite_core::SessionCommand;
 
 use super::*;

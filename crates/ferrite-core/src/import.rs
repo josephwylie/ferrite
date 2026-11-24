@@ -25,7 +25,6 @@ use serde_json::Value;
 
 use crate::checkout::WorkspaceBinding;
 use crate::provider::Provider;
-use crate::session_file::Candidate;
 use crate::store::Store;
 use crate::{SessionEvent, ThreadId, ToolResult, TurnOutcome};
 
@@ -76,66 +75,6 @@ struct ParsedSession {
 enum Entry {
     Prompt(String),
     Event(SessionEvent),
-}
-
-/// Where the vendors write session files, per the layouts the import
-/// fixtures capture: `~/.claude/projects/<slug>/<session>.jsonl` and
-/// `~/.codex/sessions/<date dirs>/rollout-*.jsonl`. Windows spells the
-/// home directory USERPROFILE, not HOME.
-pub fn default_roots() -> Vec<(Provider, PathBuf)> {
-    let home = PathBuf::from(
-        std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| ".".into()),
-    );
-    vec![
-        (Provider::Claude, home.join(".claude").join("projects")),
-        (Provider::Codex, home.join(".codex").join("sessions")),
-    ]
-}
-
-/// Candidate session files under the vendors' roots: every `.jsonl` in
-/// either tree — the layouts differ (per-project slugs vs per-date
-/// directories), so the walk recurses instead of assuming a depth, the
-/// same read the live import probes use — newest first, capped. A missing
-/// root lists nothing: that vendor was simply never run here. Whether a
-/// candidate really is an adoptable session stays the parser's verdict,
-/// not the filename's.
-pub fn candidates(roots: &[(Provider, PathBuf)], cap: usize) -> Vec<Candidate> {
-    fn walk(provider: Provider, dir: &Path, into: &mut Vec<Candidate>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(provider, &path, into);
-            } else if path
-                .extension()
-                .is_some_and(|extension| extension == "jsonl")
-            {
-                into.push(Candidate {
-                    provider,
-                    title: None,
-                    cwd: None,
-                    session_id: None,
-                    modified: std::fs::metadata(&path)
-                        .and_then(|metadata| metadata.modified())
-                        .ok(),
-                    path,
-                });
-            }
-        }
-    }
-    let mut found = Vec::new();
-    for (provider, root) in roots {
-        walk(*provider, root, &mut found);
-    }
-    // Newest first; a file with no readable mtime sorts oldest rather than
-    // vanishing.
-    found.sort_by_key(|candidate| std::cmp::Reverse(candidate.modified));
-    found.truncate(cap);
-    found
 }
 
 /// Adopt the session file at `path` as a new Thread in `store`. The Thread

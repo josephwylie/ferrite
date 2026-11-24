@@ -913,7 +913,7 @@ impl Server {
                 Some(project) => {
                     let root = project.root.clone();
                     self.read_off_pump(id, request, move || {
-                        Ok(Some(ferrite_core::workspace::repo_listing(&root).into()))
+                        Ok(Some(ferrite_core::git_read::repo_listing(&root).into()))
                     });
                     return;
                 }

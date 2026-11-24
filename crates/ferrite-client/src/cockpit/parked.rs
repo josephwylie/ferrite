@@ -6,8 +6,8 @@
 use std::collections::BTreeMap;
 use std::io;
 
+use ferrite_core::header::{LoadError, ThreadMeta};
 use ferrite_core::protocol::{ParkedThread, ServerMessage, Snapshot};
-use ferrite_core::store::{LoadError, ThreadMeta};
 use ferrite_core::ThreadId;
 
 #[derive(Default)]

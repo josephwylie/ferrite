@@ -12,8 +12,6 @@ use std::time::Duration;
 use crate::{provider::Provider, ModelInfo, SessionCommand};
 use serde_json::{json, Value};
 
-pub type Discovery = mpsc::Receiver<io::Result<Vec<SessionCommand>>>;
-
 pub fn list(program: &str, provider: Provider, cwd: &Path) -> io::Result<Vec<SessionCommand>> {
     list_with_timeout(program, provider, cwd, Duration::from_secs(10))
 }
@@ -51,7 +49,7 @@ fn probe<T: Send + 'static>(
     timeout: Duration,
     query: fn(ChildStdin, BufReader<ChildStdout>, Provider, &Path) -> io::Result<T>,
 ) -> io::Result<T> {
-    let mut command = crate::spawn::agent(super::spawnable_program(program));
+    let mut command = crate::spawn::agent(crate::spawn::spawnable_program(program));
     match provider {
         Provider::Codex => {
             command.arg("app-server");

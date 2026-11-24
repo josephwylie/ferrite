@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 
-use ferrite_core::workspace;
+use ferrite_core::git_read;
 use ferrite_core::ThreadId;
 
 /// A checkout whose `HEAD` moved: what it says now, and the branch it names.
@@ -39,7 +39,7 @@ impl Checkouts {
         let (answer, looking) = mpsc::channel();
         std::thread::spawn(move || {
             ferrite_core::spawn::serve_the_operator();
-            let _ = answer.send(moved(checkouts, &known, workspace::checkout_branch));
+            let _ = answer.send(moved(checkouts, &known, git_read::checkout_branch));
         });
         self.looking = Some(looking);
     }
@@ -76,7 +76,7 @@ fn moved(
     checkouts
         .into_iter()
         .filter_map(|(thread, cwd)| {
-            let head = workspace::head_of(&cwd);
+            let head = git_read::head_of(&cwd);
             if known.get(&thread) == Some(&head) {
                 return None;
             }
@@ -150,7 +150,7 @@ mod tests {
         std::fs::create_dir_all(tree.join("src")).unwrap();
         std::fs::write(tree.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
         assert_eq!(
-            workspace::head_of(&tree.join("src")).as_deref(),
+            git_read::head_of(&tree.join("src")).as_deref(),
             Some("ref: refs/heads/wt"),
             "from inside the tree, too"
         );
@@ -167,9 +167,9 @@ mod tests {
         std::fs::create_dir_all(admin.join("reftable")).unwrap();
         let tables = admin.join("reftable").join("tables.list");
         std::fs::write(&tables, "0x01.ref\n").unwrap();
-        let before = workspace::head_of(&repo);
+        let before = git_read::head_of(&repo);
         std::fs::write(&tables, "0x01.ref\n0x02.ref\n").unwrap();
-        assert_ne!(workspace::head_of(&repo), before);
+        assert_ne!(git_read::head_of(&repo), before);
         let _ = std::fs::remove_dir_all(&repo);
     }
 }

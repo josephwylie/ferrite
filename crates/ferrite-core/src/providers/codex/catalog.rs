@@ -25,7 +25,7 @@ pub(super) fn request_only<T: Send + 'static>(
     timeout: Duration,
     query: impl FnOnce(ChildStdin, BufReader<ChildStdout>) -> io::Result<T> + Send + 'static,
 ) -> io::Result<T> {
-    let program = super::super::spawnable_program(program);
+    let program = crate::spawn::spawnable_program(program);
     super::check_version(&program).map_err(io::Error::other)?;
     let mut child = crate::spawn::agent(program)
         .arg("app-server")

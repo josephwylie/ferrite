@@ -20,8 +20,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::providers::spawnable_program;
-use crate::spawn::NoConsoleWindow as _;
+use crate::spawn::{spawnable_program, NoConsoleWindow as _};
 use crate::ThreadId;
 
 /// One command, as `settings.json` spells it:

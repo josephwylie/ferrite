@@ -598,7 +598,7 @@ mod tests {
         assert_eq!(dock_launch_dir(&core), home, "an empty store: home");
 
         let checkout =
-            ferrite_core::workspace::follow::canonical(&std::env::current_dir().unwrap());
+            ferrite_core::git_read::canonical(&std::env::current_dir().unwrap());
         let here = core.this_computer().unwrap();
         core.register_project(here, &checkout).now().unwrap();
         assert_eq!(

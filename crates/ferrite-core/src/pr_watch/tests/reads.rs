@@ -2,6 +2,7 @@
 //! watch fact's start and end.
 
 use super::*;
+use crate::pull_request::Stamp;
 use serde_json::{json, Value};
 
 const WATCH_426: &str = include_str!("../../../tests/fixtures/gh/pr-426-watch.json");

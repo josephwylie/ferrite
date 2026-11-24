@@ -4,7 +4,8 @@
 //! `combinePullRequestWatchWakes`, word for word with "Ferrite" in place of
 //! "T3 Code".
 
-use super::{Change, Check, CheckStatus, End, Report, Watch, READ_FAILURE_LIMIT, WAKE_LIMIT};
+use super::{Change, Check, CheckStatus, End, Report, READ_FAILURE_LIMIT, WAKE_LIMIT};
+use crate::pull_request::Watch;
 use crate::wake::{Outcome, Source, Wake};
 
 const LISTED_ITEMS: usize = 10;

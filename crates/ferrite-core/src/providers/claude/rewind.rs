@@ -231,9 +231,9 @@ fn refusal(body: &Value) -> String {
     }
 }
 
-/// Where Claude keeps its session files (`import::default_roots`).
+/// Where Claude keeps its session files (`session_file::default_roots`).
 fn projects_root() -> PathBuf {
-    crate::import::default_roots()
+    crate::session_file::default_roots()
         .into_iter()
         .find(|(provider, _)| *provider == crate::provider::Provider::Claude)
         .map(|(_, root)| root)

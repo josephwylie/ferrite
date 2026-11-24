@@ -280,7 +280,7 @@ fn an_unconfirmed_send_returns_the_draft_and_names_the_request(cx: &mut TestAppC
         let draft = view.panes[0]
             .composer
             .update(cx, |composer, cx| composer.take_draft(cx));
-        let admission = ferrite_client::cockpit::Admission::Unconfirmed("no reply".into());
+        let admission = ferrite_core::prompt_queue::Admission::Unconfirmed("no reply".into());
         assert!(!view.settle_send(thread, draft, admission, cx));
     });
     tick(cx);

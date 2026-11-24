@@ -64,7 +64,7 @@ fn a_send_and_a_queueing_do_not_wait_and_are_answered() {
     assert!(waits.iter().all(|wait| !wait.waited), "neither waits for its reply: {waits:?}");
     let admission = core.wait_for(sent).expect("the Server answers a send");
     let queued = core.wait_for(queued).expect("the Server answers a queueing");
-    assert_eq!(admission, ferrite_client::cockpit::Admission::Delivered);
+    assert_eq!(admission, ferrite_core::prompt_queue::Admission::Delivered);
     assert!(!queued, "an idle Thread queues nothing");
 }
 

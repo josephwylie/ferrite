@@ -198,8 +198,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::prompt_files::mention_files;
     use crate::provider::Provider;
-    use crate::workspace::{ensure_worktree, git_for_tests, mention_files};
+    use crate::workspace::{ensure_worktree, git_for_tests};
 
     struct Fixture {
         dir: PathBuf,

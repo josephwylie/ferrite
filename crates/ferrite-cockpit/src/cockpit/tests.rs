@@ -291,7 +291,7 @@ struct Fake {
     model_discovery: Rc<RefCell<Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>>>>,
     session_discovery:
         Rc<RefCell<Option<Receiver<std::io::Result<Vec<ferrite_core::session_file::Candidate>>>>>>,
-    command_discovery: Rc<RefCell<Option<ferrite_core::providers::commands::Discovery>>>,
+    command_discovery: Rc<RefCell<Option<ferrite_core::Discovery>>>,
     command_requests: Rc<RefCell<Vec<(Provider, std::path::PathBuf)>>>,
     streams: Rc<RefCell<Vec<Sender<SessionEvent>>>>,
     /// Every spawn's choice, in call order — what the provider-picker
@@ -337,7 +337,7 @@ impl Spawner for Fake {
         &mut self,
         provider: Provider,
         cwd: &std::path::Path,
-    ) -> Option<ferrite_core::providers::commands::Discovery> {
+    ) -> Option<ferrite_core::Discovery> {
         self.command_requests
             .borrow_mut()
             .push((provider, cwd.to_path_buf()));

@@ -717,7 +717,7 @@ fn a_machines_row_has_its_branch_and_a_local_rows_height(cx: &mut TestAppContext
     let (mut core, _fake, machines, _agents) = two_machines("branch-row", 1);
     let on_box = machines.held(1).unwrap();
     let theirs = open_on(&mut core, on_box);
-    let branch = ferrite_core::workspace::checkout_branch(&here()).expect("this checkout's branch");
+    let branch = ferrite_core::git_read::checkout_branch(&here()).expect("this checkout's branch");
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
     until(cx, |cx| {
@@ -2210,7 +2210,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         let registry = view.cockpit.read(cx).registry(on_box);
         let project = registry.projects().last().unwrap();
         assert_eq!(project.title, "repo");
-        assert_eq!(project.root, ferrite_core::workspace::follow::canonical(&repo));
+        assert_eq!(project.root, ferrite_core::git_read::canonical(&repo));
         registry.project_key(project.id)
     });
 
@@ -2280,7 +2280,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     });
     assert_eq!(
         *started.lock().unwrap(),
-        [ferrite_core::workspace::follow::canonical(&repo)]
+        [ferrite_core::git_read::canonical(&repo)]
     );
 }
 

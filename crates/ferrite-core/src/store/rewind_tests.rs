@@ -252,8 +252,8 @@ fn a_fork_watches_nothing_and_a_wake_is_no_prompt() {
     let dir = scratch("rewind-fork-watch");
     let store = Store::open(&dir).unwrap();
     let (id, mut writer) = three_prompts(&store);
-    let mut fact = crate::pr_watch::WatchFact::default();
-    let target = crate::pr_watch::Target::of("acme/app", 7).unwrap();
+    let mut fact = crate::pull_request::WatchFact::default();
+    let target = crate::pull_request::Target::of("acme/app", 7).unwrap();
     assert!(!fact.watch(target, None, None, 1));
     store
         .set_pr_watch(id, fact.clone(), Some(&mut writer))

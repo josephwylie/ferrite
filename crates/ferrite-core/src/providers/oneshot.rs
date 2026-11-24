@@ -9,8 +9,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{codex, discover, spawnable_program};
+use super::{codex, discover};
 use crate::provider::Provider;
+use crate::spawn::spawnable_program;
 
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_millis(25);

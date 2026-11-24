@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::GitError;
+use crate::git_read::GitError;
 use crate::project::{Project, ProjectId};
 
 /// One registered worktree of one project, labeled by its branch.
@@ -645,7 +645,7 @@ impl Registry {
 /// worktree of some other repo, refuses adoption instead of hosting a
 /// Session under a lie.
 pub fn adoption_check(repo: &Path, path: &Path) -> Result<(), GitError> {
-    let registered = super::worktree_paths(repo)?;
+    let registered = crate::git_read::worktree_paths(repo)?;
     // Compared canonicalized: git prints resolved paths, and the registry
     // stores what it was handed.
     let canonical = dunce::canonicalize(path).map_err(GitError::Io)?;

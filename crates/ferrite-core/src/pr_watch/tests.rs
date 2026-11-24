@@ -5,6 +5,7 @@
 //! T3 really sent on Ferrite's own PRs and a real `gh api graphql` read.
 
 use super::*;
+use crate::pull_request::{Target, Until, Watch, WatchFact};
 use CheckStatus::{ActionRequired, Failure, Pending, Skipped, Success};
 
 const STARTED: &str = "2026-10-02T12:00:00.000Z";

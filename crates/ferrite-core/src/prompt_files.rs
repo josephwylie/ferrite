@@ -3,6 +3,7 @@
 //! Quoted references use JSON strings, so spaces, quotes, Unicode and Windows
 //! separators round-trip without shell escaping or a new persisted schema.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 fn token(path: &Path) -> String {
@@ -136,6 +137,81 @@ pub struct FileSuggestion {
     pub is_directory: bool,
     pub matched: Vec<usize>,
 }
+
+/// The files and directories under `root` the Composer's `@` menu
+/// completes over (#23): relative paths with `/` separators, a directory
+/// with a trailing `/`, breadth-first — everything at the top before
+/// anything nested, so a deep tree cannot bury the root's own files under
+/// the cap — each directory read in name order, dotfiles and the noise
+/// directories of `MENTION_SKIP` skipped wholesale, symlinks never
+/// followed, and the whole answer capped at `cap` so a monorepo cannot
+/// stall a keystroke. A root that cannot be read is an empty menu, not an
+/// error — the walk is a menu, not an audit.
+pub fn mention_files(root: &Path, cap: usize) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back((root.to_path_buf(), String::new()));
+    while let Some((dir, prefix)) = queue.pop_front() {
+        if found.len() >= cap {
+            break;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            if found.len() >= cap {
+                break;
+            }
+            // `file_type` over `path().is_dir()`: it does not follow
+            // symlinks, so a link cannot loop the walk or reach outside.
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                // A path the menu could not insert as text is not offered.
+                continue;
+            };
+            if name.starts_with('.') {
+                continue;
+            }
+            let relative = if prefix.is_empty() {
+                name.to_string()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            if kind.is_dir() {
+                if MENTION_SKIP.contains(&name) {
+                    continue;
+                }
+                found.push(format!("{relative}/"));
+                queue.push_back((entry.path(), relative));
+            } else if kind.is_file() {
+                found.push(relative);
+            }
+        }
+    }
+    found
+}
+
+/// Directories the `@` menu never lists: build output, dependencies,
+/// caches — bulk nobody mentions on purpose.
+const MENTION_SKIP: [&str; 12] = [
+    "node_modules",
+    "dist",
+    "target",
+    "build",
+    "out",
+    "coverage",
+    "vendor",
+    "venv",
+    "__pycache__",
+    "DerivedData",
+    "Pods",
+    "tmp",
+];
 
 #[cfg(test)]
 mod tests {
