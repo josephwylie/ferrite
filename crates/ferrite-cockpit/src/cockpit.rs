@@ -1651,7 +1651,7 @@ impl CockpitView {
         };
         // What the root's own reads give, before the model is lent to the
         // transcript's update below.
-        let earlier = self.earlier_history(thread, subject_view.transcript(), self.panes[index].is_main(), cx);
+        let earlier = Self::earlier_history(subject_view.transcript(), self.panes[index].is_main());
         let delegates = self.delegate_faces(thread, subject_view.transcript(), cx);
         let parent = self.delegator_link(index, cx);
         let tail = self.transcript_tail(index, cx);
@@ -1758,21 +1758,16 @@ impl CockpitView {
 
     /// Whether the Thread began before the first row `transcript` draws: its
     /// Blocks were dropped to the limit, or the pane's window is cut from
-    /// them. Its whole history can be copied out when the log is readable
-    /// here, or when nothing was dropped from the Blocks.
+    /// them. Main's whole history can be copied out: its Server replays the
+    /// log (`copy_transcript`).
     fn earlier_history(
-        &self,
-        thread: ThreadKey,
         transcript: &ferrite_core::transcript::Transcript,
         main: bool,
-        cx: &gpui::App,
     ) -> Option<ferrite_pane::transcript::Earlier> {
         let dropped = transcript.earlier_dropped();
         let cut = pane::rendered_window(transcript.blocks()).len()
             < transcript.blocks().len();
-        (dropped || cut).then(|| ferrite_pane::transcript::Earlier {
-            copyable: main && (!dropped || self.cockpit.read(cx).history_log(thread).is_some()),
-        })
+        (dropped || cut).then_some(ferrite_pane::transcript::Earlier { copyable: main })
     }
 
     /// What the open floats make of each Composer: the open popover widens
@@ -2580,12 +2575,8 @@ impl CockpitView {
                     open.session_project_root(),
                     open.workspace(),
                 )?;
-                let project = self
-                    .cockpit
-                    .read(cx)
-                    .peek(thread)
-                    .ok()
-                    .and_then(|meta| meta.project_id)
+                let project = open
+                    .project_id()
                     .and_then(|project| {
                         self.cockpit
                             .read(cx)
@@ -6253,9 +6244,9 @@ impl CockpitView {
         }
     }
 
-    /// When a Thread was last used, for `sort: recent`. A Thread whose log
-    /// cannot be stat'd sorts to the bottom rather than to the top: an
-    /// unknown time is not a recent one.
+    /// When a Thread was last used, for `sort: recent`. A Thread with no
+    /// known time sorts to the bottom rather than to the top: an unknown
+    /// time is not a recent one.
     fn last_used(&self, thread: ThreadKey) -> std::time::SystemTime {
         self.facts
             .last_used(thread)

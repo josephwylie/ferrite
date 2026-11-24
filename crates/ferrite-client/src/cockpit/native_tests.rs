@@ -148,7 +148,7 @@ fn a_model_choice_tunes_the_native_conversation_in_place() {
         );
         assert_eq!(calls.lock().unwrap().model.as_deref(), Some("selected"));
         assert_eq!(
-            cockpit.peek(thread).unwrap().model.as_deref(),
+            cockpit.engine().store().peek(thread.thread()).unwrap().model.as_deref(),
             Some("selected")
         );
         assert_eq!(
@@ -161,7 +161,7 @@ fn a_model_choice_tunes_the_native_conversation_in_place() {
         assert!(error.to_string().contains("native model unavailable"));
         assert_eq!(calls.lock().unwrap().spawns, 1);
         assert_eq!(
-            cockpit.peek(thread).unwrap().model.as_deref(),
+            cockpit.engine().store().peek(thread.thread()).unwrap().model.as_deref(),
             Some("selected")
         );
         let _ = cockpit.send(thread, "after rejected model change".into());

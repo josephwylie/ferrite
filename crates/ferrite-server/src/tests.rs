@@ -1440,7 +1440,6 @@ fn cockpit(harness: &Harness) -> ferrite_client::cockpit::Cockpit {
         browser: false,
         driven: false,
     })
-    .unwrap()
 }
 
 /// `thread` of the harness's Server as `window` names it: this computer's,
@@ -2900,8 +2899,7 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
         renderer: None,
         browser: false,
         driven: false,
-    })
-    .unwrap();
+    });
     assert!(
         matches!(
             window.server(window.first_machine()),
@@ -2953,8 +2951,7 @@ fn every_window_learns_its_server_names_fork_owners() {
         renderer: None,
         browser: false,
         driven: false,
-    })
-    .unwrap();
+    });
     pump_until(&mut machine, |window| {
         matches!(
             window.server(window.first_machine()),
@@ -2980,8 +2977,7 @@ fn a_machine_streams_a_thread_whole_only_while_drawn() {
         renderer: None,
         browser: false,
         driven: false,
-    })
-    .unwrap();
+    });
     let machine = window.first_machine();
     pump_until(&mut window, |window| {
         matches!(

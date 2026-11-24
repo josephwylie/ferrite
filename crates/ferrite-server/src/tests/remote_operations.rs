@@ -9,8 +9,7 @@ pub(super) fn machine(harness: &Harness, sent: &Arc<Mutex<Vec<u8>>>) -> ferrite_
         renderer: None,
         browser: false,
         driven: false,
-    })
-    .unwrap();
+    });
     pump_until(&mut cockpit, |cockpit| {
         matches!(
             cockpit.server(cockpit.first_machine()),

@@ -1,7 +1,7 @@
 //! What the nav and the Pane head say about a Thread that costs more than
-//! an O(1) read: its checkout branch (a `git` call), its Project label (a
-//! store peek), a parked Thread's provider (a peek) and the wall card
-//! (a walk of every Block). Cached here and refreshed by *moment* — a Pane
+//! an O(1) read: its checkout branch (a `git` call), its Project label, a
+//! parked Thread's provider (its row) and the wall card (a walk of every
+//! Block). Cached here and refreshed by *moment* — a Pane
 //! opened, a Thread streamed or was acted on, the watchdog's tick, the
 //! parked set changed — never per frame. Which of the four facts a moment
 //! refreshes is this module's knowledge alone, so a new door that opens,
@@ -74,9 +74,10 @@ pub struct ThreadFacts {
     /// `~` (the nav card's worktree glyph and its tooltip); `None` for a
     /// main checkout.
     pub worktree: Option<SharedString>,
-    /// When the Thread was last written to (#21) — what the nav orders
-    /// rows by and what its "40m / 2h / 3d" line says. `None` when the log
-    /// cannot be stat'd; such a row claims nothing and sorts last.
+    /// When the Thread was last used (#21, `Cockpit::last_activity`) —
+    /// what the nav orders rows by and what its "40m / 2h / 3d" line says.
+    /// `None` when its Server says no time; such a row claims nothing and
+    /// sorts last.
     pub last_used: Option<SystemTime>,
     /// The Project's default branch (`git_read::default_branch`), read
     /// once per Project and shared by every Thread in it. `None` until
@@ -392,15 +393,10 @@ impl Facts {
     /// default branch, read once). This path stays in the pump, so it must
     /// never launch Git. Answers whether any of these facts moved.
     fn refresh_metadata(&mut self, cockpit: &Cockpit, key: ThreadKey) -> bool {
-        let (project_id, workspace) = match cockpit.peek(key) {
-            Ok(meta) => (meta.project_id, meta.workspace),
-            // Another machine's open Thread has no log here: its mirror
-            // says.
-            Err(_) => cockpit
-                .thread(key)
-                .map(|open| (open.project_id(), open.workspace().cloned()))
-                .unwrap_or_default(),
-        };
+        let (project_id, workspace) = cockpit
+            .thread(key)
+            .map(|open| (open.project_id(), open.workspace().cloned()))
+            .unwrap_or_default();
         let project = project_id.map(|id| cockpit.registry(key.machine()).project_key(id));
         let project_label = project_label(cockpit, project, workspace.as_ref());
         let worktree = worktree_label(workspace.as_ref());

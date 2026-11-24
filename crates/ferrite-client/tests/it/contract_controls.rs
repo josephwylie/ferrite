@@ -123,7 +123,15 @@ fn exercise_model_control(reject: bool) {
         })
         .unwrap();
     cockpit.pump();
-    let previous = cockpit.peek(thread).unwrap().model;
+    // The model its log's header keeps, read through a second handle.
+    let header = || {
+        Store::open(path.join("store"))
+            .unwrap()
+            .peek(thread.thread())
+            .unwrap()
+            .model
+    };
+    let previous = header();
     native.0.lock().unwrap().reject = reject;
     let result = cockpit.set_model(thread, Some("selected".into())).now();
     assert_eq!(
@@ -136,15 +144,12 @@ fn exercise_model_control(reject: bool) {
             .unwrap_err()
             .to_string()
             .contains("native model unavailable"));
-        assert_eq!(cockpit.peek(thread).unwrap().model, previous);
+        assert_eq!(header(), previous);
         assert_eq!(cockpit.thread(thread).unwrap().model(), previous.as_deref());
     } else {
         result.unwrap();
         assert_eq!(native.0.lock().unwrap().models, [Some("selected".into())]);
-        assert_eq!(
-            cockpit.peek(thread).unwrap().model.as_deref(),
-            Some("selected")
-        );
+        assert_eq!(header().as_deref(), Some("selected"));
         assert_eq!(cockpit.thread(thread).unwrap().model(), Some("selected"));
         assert_eq!(
             cockpit.thread(thread).unwrap().transcript().session_id(),

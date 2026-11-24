@@ -204,9 +204,10 @@ pub(super) const SUBMENU: &str = "context-submenu";
 
 impl CockpitView {
     /// `thread`'s conversation to the clipboard. Once the view dropped its
-    /// oldest Blocks, the whole of it is replayed from the Thread's log off
-    /// the window's thread; with no log to read here, or none readable, the
-    /// kept part is copied and says it is partial.
+    /// oldest Blocks, the whole of it is asked of the Thread's Server, which
+    /// replays its log, on this computer and on a Machine alike. When that
+    /// read fails, the kept part is copied and says it is partial; a Server
+    /// too old to replay it is named, to update.
     pub(super) fn copy_transcript(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         let Some(open) = self.cockpit.read(cx).thread(thread) else {
             return;
@@ -219,20 +220,23 @@ impl CockpitView {
             cx.write_to_clipboard(ClipboardItem::new_string(kept));
             return;
         }
-        let partial = format!("{PARTIAL_HISTORY}\n\n{kept}");
-        let Some(store) = self.cockpit.read(cx).history_log(thread).cloned() else {
-            cx.write_to_clipboard(ClipboardItem::new_string(partial));
-            return;
-        };
-        cx.spawn(async move |_, cx| {
-            let whole = cx
-                .background_executor()
-                .spawn(async move { store.full_history_text(thread.thread()) })
-                .await;
-            let text = whole.ok().filter(|text| !text.is_empty()).unwrap_or(partial);
-            cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(text)));
-        })
-        .detach();
+        let place = self.place_of(thread.machine(), cx);
+        let whole = self.cockpit.update(cx, |cockpit, _| cockpit.read_transcript(thread));
+        self.when_answered(
+            whole,
+            move |_, whole, cx| {
+                let text = match whole {
+                    Ok(text) if !text.is_empty() => text,
+                    Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
+                        let update = super::machines::said(&error, &place);
+                        format!("[Earlier messages are not included: {update} to copy them.]\n\n{kept}")
+                    }
+                    _ => format!("{PARTIAL_HISTORY}\n\n{kept}"),
+                };
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            },
+            cx,
+        );
     }
 
     /// Summon the context menu for `target` at the pointer, in place of

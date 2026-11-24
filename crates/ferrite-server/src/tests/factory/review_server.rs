@@ -430,7 +430,8 @@ fn interrogate_one_unreadable_part_keeps_every_window_from_attaching() {
         browser: false,
         driven: false,
     });
-    eprintln!("the Cockpit's attach: {:?}", cockpit.as_ref().err());
+    let here = cockpit.this_computer().and_then(|machine| cockpit.server(machine));
+    eprintln!("the Cockpit's attach: {here:?}");
     assert!(attached.is_ok(), "a window attaches");
 }
 

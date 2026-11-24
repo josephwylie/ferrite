@@ -294,7 +294,7 @@ fn beside_box(
 fn box_alone(name: &str, bridge: fn(&Machine, &std::path::Path) -> Bridge) -> (Cockpit, Machines) {
     fresh(name);
     let mut machines = Machines::new(reach(name, bridge), &[box_machine()], None, false);
-    let core = machines.cockpit().unwrap();
+    let core = machines.cockpit();
     (core, machines)
 }
 
@@ -373,8 +373,7 @@ fn another_client(name: &str) -> Cockpit {
             version: "0".into(),
         },
         renderer: None,
-    })
-    .unwrap();
+    });
     let machine = core.first_machine();
     ferrite_core::doorbell::until("the other client never attached", || {
         core.pump();
@@ -1172,7 +1171,7 @@ fn a_draft_on_the_one_machine_on_names_it_in_a_word(cx: &mut TestAppContext) {
     )
     .unwrap();
     let mut machines = Machines::new(reach("draft-machine-alone", serving), &[box_machine()], None, false);
-    let core = machines.cockpit().unwrap();
+    let core = machines.cockpit();
     let on_box = machines.held(1).unwrap();
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     until(cx, |cx| view.read_with(cx, |view, cx| attached(view.cockpit.read(cx), on_box)));
@@ -1334,7 +1333,7 @@ fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut Test
         ))),
         client: ferrite_core::protocol::Peer { name: "test".into(), version: "0".into() },
         renderer: None,
-    }).unwrap();
+    });
     ferrite_core::doorbell::until("remote server never attached", || {
         core.pump();
         matches!(core.server(core.first_machine()), Some(ServerState::Attached { .. }))
@@ -1386,8 +1385,7 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
                 version: "0".into(),
             },
             renderer: None,
-        })
-        .unwrap();
+        });
         ferrite_core::doorbell::until("client did not attach", || {
             core.pump();
             matches!(core.server(core.first_machine()), Some(ServerState::Attached { .. }))
@@ -1953,8 +1951,7 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
             version: "0".into(),
         },
         renderer: None,
-    })
-    .unwrap();
+    });
     ferrite_core::doorbell::until("never attached", || {
         core.pump();
         matches!(core.server(core.first_machine()), Some(ServerState::Attached { .. }))
@@ -2221,7 +2218,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     )
     .unwrap();
     let mut machines = Machines::new(reach("typed", serving), &[box_machine()], None, false);
-    let core = machines.cockpit().unwrap();
+    let core = machines.cockpit();
     let on_box = machines.held(1).unwrap();
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     until(cx, |cx| view.read_with(cx, |view, cx| attached(view.cockpit.read(cx), on_box)));
@@ -2390,7 +2387,7 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
     )
     .unwrap();
     let mut machines = Machines::new(reach("reviewed", serving), &[box_machine()], None, false);
-    let core = machines.cockpit().unwrap();
+    let core = machines.cockpit();
     let on_box = machines.held(1).unwrap();
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -2538,7 +2535,7 @@ pub(super) fn browser_core(name: &str) -> (Cockpit, ThreadKey, ferrite_core::bro
         store: dir.join("window"), server: Endpoint::Machine(bridge),
         client: ferrite_core::protocol::Peer { name: name.into(), version: "0".into() },
         renderer: None, browser: true, driven: false,
-    }).unwrap();
+    });
     ferrite_core::doorbell::until("browser window did not attach", || {
         core.pump(); matches!(core.server(core.first_machine()), Some(ServerState::Attached { .. }))
     });
@@ -2667,7 +2664,7 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
         store: dir.join("window"), server: Endpoint::Machine(bridge),
         client: ferrite_core::protocol::Peer { name: "browser-preview".into(), version: "0".into() },
         renderer: None, browser: true, driven: false,
-    }).unwrap();
+    });
     ferrite_core::doorbell::until("browser window did not attach", || {
         core.pump(); matches!(core.server(core.first_machine()), Some(ServerState::Attached { .. }))
     });
@@ -2815,8 +2812,7 @@ fn settings_on_a_machine<'a>(
             version: "0".into(),
         },
         renderer: None,
-    })
-    .unwrap();
+    });
     ferrite_core::doorbell::until("client did not attach", || {
         core.pump();
         matches!(core.server(core.first_machine()), Some(ServerState::Attached { .. }))
@@ -3180,7 +3176,7 @@ fn local_environment_switch_persists_and_empty_client_blocks_new_threads(cx: &mu
     bind_production_keys(cx);
     fresh("local-environment-toggle");
     let mut machines = Machines::new(reach("local-environment-toggle", needs_sign_in), &[], None, false);
-    let core = machines.cockpit().unwrap();
+    let core = machines.cockpit();
     let dir = settings_dir("local-environment-toggle-prefs");
     let mut prefs = Preferences::ephemeral();
     prefs.dir = dir.clone();
@@ -3226,7 +3222,7 @@ fn open_connections_opens_settings_on_connections(cx: &mut TestAppContext) {
     bind_production_keys(cx);
     fresh("open-connections");
     let mut machines = Machines::new(reach("open-connections", needs_sign_in), &[], None, false);
-    let core = machines.cockpit().unwrap();
+    let core = machines.cockpit();
     let mut prefs = Preferences::ephemeral();
     prefs.settings.local_environment_enabled = false;
     let (view, cx) = window_of(cx, core, machines, prefs);

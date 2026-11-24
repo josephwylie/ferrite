@@ -1004,8 +1004,7 @@ fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
             version: "0".into(),
         },
         renderer: None,
-    })
-    .unwrap();
+    });
     assert!(matches!(
         core.server(core.first_machine()),
         Some(ferrite_client::cockpit::ServerState::Detached { .. })
@@ -1042,8 +1041,7 @@ fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
             version: "0".into(),
         },
         renderer: None,
-    })
-    .unwrap();
+    });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     view.update(cx, |view, cx| {

@@ -61,7 +61,7 @@ fn silenceable_browser(name: &str) -> (Cockpit, ThreadKey, Arc<AtomicBool>) {
         client: ferrite_core::protocol::Peer { name: name.into(), version: "0".into() },
         renderer: None, browser: true, driven: false,
         saved_as: ferrite_core::MachineKey(Some("box".into())),
-    }).unwrap();
+    });
     ferrite_core::doorbell::until("browser window did not attach", || {
         core.pump(); matches!(core.server(core.first_machine()), Some(ServerState::Attached { .. }))
     });

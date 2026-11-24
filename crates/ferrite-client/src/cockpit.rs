@@ -33,7 +33,6 @@ use ferrite_core::protocol::{
 };
 use ferrite_core::provider::Provider;
 use ferrite_core::roster::{DraftId, PaneIdentity, Roster};
-use ferrite_core::store::Store;
 use ferrite_core::{
     Decision, DecisionAnswer, MachineId, MachineKey, ModelInfo, ProjectKey, SavedThread, ThreadId,
     ThreadKey,
@@ -228,10 +227,10 @@ impl Cockpit {
     }
 
     /// A window holding one machine's Server (`hold`).
-    pub fn attach(attach: Attach) -> io::Result<Self> {
+    pub fn attach(attach: Attach) -> Self {
         let mut cockpit = Self::empty();
-        cockpit.hold(attach)?;
-        Ok(cockpit)
+        cockpit.hold(attach);
+        cockpit
     }
 
     /// Hold another machine beside the rest: this computer's Server,
@@ -240,13 +239,15 @@ impl Cockpit {
     /// never runs the agents itself. Its parked Threads are what its Server
     /// publishes (ADR 0026), wherever the logs are. Its open Threads join
     /// the Roster as its Server says them, beside every other machine's.
-    pub fn hold(&mut self, attach: Attach) -> io::Result<MachineId> {
+    /// The window reads none of its files, so holding one never fails: a
+    /// Store its Server cannot open is the Server's to say.
+    pub fn hold(&mut self, attach: Attach) -> MachineId {
         let local = matches!(attach.server, Endpoint::Local { .. });
-        let logs = local.then(|| Store::reader(&attach.store)).transpose()?;
         let saved_as = attach.saved_as.clone();
         let mut remote = remote::Remote::new(attach);
         let arrived = if local { remote.attach_now() } else { None };
-        let mut machine = HeldMachine::new(Box::new(remote), logs, saved_as);
+        // A Server's Store retains what a Store does by default.
+        let mut machine = HeldMachine::new(Box::new(remote), Default::default(), saved_as);
         // A window streams only what it draws, from its first attach on: it
         // draws nothing yet (ADR 0032).
         machine.drawn = Some(Drawn::default());
@@ -254,7 +255,7 @@ impl Cockpit {
         self.machines.insert(id, machine);
         self.roster.set_start(self.start_machine());
         self.arrive(id, arrived.into_iter().collect());
-        Ok(id)
+        id
     }
 
     /// Let `machine` go: turned off or removed in Settings. Its Panes leave
@@ -1889,23 +1890,24 @@ impl Cockpit {
         .unwrap_or(false)
     }
 
-    /// A Thread's header: a parked one's from its published row; an open
-    /// one's off its log's header line, on this computer only.
+    /// A parked Thread's header, from the row its Server published. An
+    /// open Thread's facts are its mirror's (`thread`), on every machine.
     pub fn peek(&self, thread: ThreadKey) -> Result<ferrite_core::header::ThreadMeta, LoadError> {
         let Some((machine, thread)) = self.at(thread) else {
             return Err(LoadError::Io(gone().into()));
         };
-        match machine.open_log(thread) {
-            Some(logs) => logs.peek(thread),
-            None => machine.parked.peek(thread),
-        }
+        machine.parked.peek(thread)
     }
 
-    /// The log of an open Thread, to read its whole history on a worker;
-    /// `None` when the log is on another computer.
-    pub fn history_log(&self, thread: ThreadKey) -> Option<&Store> {
-        let (machine, thread) = self.at(thread)?;
-        machine.open_log(thread)
+    /// Main's whole conversation as plain text, which its machine's Server
+    /// replays from the log under no Block limit: what Copy conversation
+    /// copies once a Pane's view dropped its earliest Blocks. A Server
+    /// from before it refuses as unsupported.
+    pub fn read_transcript(&mut self, thread: ThreadKey) -> Ask<String> {
+        match self.held_mut(thread.machine()) {
+            Ok(held) => held.link.read_transcript(thread.thread()),
+            Err(error) => Ask::answered(Err(error)),
+        }
     }
 
     /// The subagents a Thread knows, live or parked: a parked Thread's as
@@ -1929,32 +1931,31 @@ impl Cockpit {
 
     /// When a Thread was last used, live or parked — the nav's default
     /// order and its "3 days" line — on this computer's clock. A parked
-    /// Thread's is in its row; an open one's is a `stat` of its log, so
-    /// callers still cache it rather than ask per frame. Another machine's
-    /// open Thread has no log here: its digest's newest activity stands in.
+    /// Thread's is in its row. An open one's is when its Server last wrote
+    /// its log, as its digest says; a Server from before that says its
+    /// newest prompt or turn end.
     pub fn last_used(&self, key: ThreadKey) -> Option<std::time::SystemTime> {
         let (machine, thread) = self.at(key)?;
-        if let Some(logs) = machine.open_log(thread) {
-            return logs.last_used(thread);
-        }
         let server_ms = match machine.parked.last_used_ms(thread) {
             Some(ms) => ms,
-            None => self.thread(key)?.digest().active_ms?,
+            None => {
+                let digest = self.thread(key)?.digest();
+                digest.written_ms.or(digest.active_ms)?
+            }
         };
         Some(machine.wall(server_ms))
     }
 
-    /// When an open Thread last had a prompt sent or a turn end
-    /// (`Store::last_activity`): what the bell groups by, not the log's
-    /// write time. It reads an idle Thread's log tail, so callers cache it.
+    /// When an open Thread last had a prompt sent or a turn end, as its
+    /// digest says: what the nav orders and ages by, not the log's write
+    /// time, which Ferrite's own marks move. A running Thread's writes are
+    /// its activity (`last_used`).
     pub fn last_activity(&self, key: ThreadKey) -> Option<std::time::SystemTime> {
-        // A running Thread's writes are its activity: no tail to read.
-        let working = self.thread(key).is_some_and(|open| open.busy());
-        let (machine, thread) = self.at(key)?;
-        match machine.open_log(thread) {
-            Some(logs) if !working => logs.last_activity(thread),
-            _ => self.last_used(key),
-        }
+        let Some(open) = self.thread(key).filter(|open| !open.busy()) else {
+            return self.last_used(key);
+        };
+        let (machine, _) = self.at(key)?;
+        Some(machine.wall(open.digest().active_ms?))
     }
 
     /// The open Threads, each machine's in the order its mirrors hold them.
@@ -1978,9 +1979,9 @@ impl Cockpit {
     /// no Thread names a registered Project, which is what a fresh
     /// installation looks like.
     ///
-    /// A parked Thread answers from its row; an open one costs a `stat`
-    /// and a header line. Launch-time only: callers keep the answer rather
-    /// than ask it per frame.
+    /// A parked Thread answers from its row, an open one from its mirror.
+    /// Launch-time only: callers keep the answer rather than ask it per
+    /// frame.
     pub fn last_worked_project(&self, machine: MachineId) -> Option<ProjectKey> {
         let mut threads: Vec<(Option<std::time::SystemTime>, ThreadKey)> = self
             .parked()
@@ -1990,8 +1991,8 @@ impl Cockpit {
             .filter(|thread| thread.machine() == machine)
             .map(|thread| (self.last_used(thread), thread))
             .collect();
-        // Newest first, and a Thread whose log cannot be stat'd sorts last
-        // rather than counting as the epoch's most recent.
+        // Newest first, and a Thread with no known time sorts last rather
+        // than counting as the epoch's most recent.
         threads
             .sort_by_key(|(used, thread)| (std::cmp::Reverse(*used), std::cmp::Reverse(*thread)));
         threads.into_iter().find_map(|(_, thread)| {

@@ -290,6 +290,12 @@ impl Link for InProcess {
         }
     }
 
+    /// Read off its Store at once, as a Server reads it off its pump.
+    fn read_transcript(&mut self, thread: ThreadId) -> Ask<String> {
+        let text = self.engine.browser_store().full_history_text(thread);
+        Ask::answered(text.map_err(io::Error::other))
+    }
+
     fn search_files(
         &mut self,
         thread: ThreadId,
@@ -619,13 +625,13 @@ impl Cockpit {
         spawner: Box<dyn Spawner>,
         saved_as: MachineKey,
     ) -> io::Result<HeldMachine> {
-        let logs = store.clone();
+        let limits = store.activity_limits();
         let mut engine = Engine::try_new(store, spawner)?;
         // Its window pumps it: a park is listed by the pump that parked it.
         engine.read_parked_in_place();
         Ok(HeldMachine::new(
             Box::new(InProcess::new(engine)),
-            Some(logs),
+            limits,
             saved_as,
         ))
     }
@@ -789,6 +795,12 @@ impl Cockpit {
         self.in_process_of(thread)
             .fixture_delegated_from(thread.thread(), from);
         self.receive_from(thread.machine());
+    }
+
+    /// A fixture world's `thread` folds its digest again, at the next pump.
+    pub fn fixture_refold_digest(&mut self, thread: ThreadKey) {
+        self.in_process_of(thread)
+            .fixture_refold_digest(thread.thread());
     }
 
     pub fn fixture_backdate_notices(&mut self, thread: ThreadKey, at: std::time::SystemTime) {

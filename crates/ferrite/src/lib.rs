@@ -318,10 +318,7 @@ pub fn launch() {
                     remote.as_deref(),
                     settings.local_environment_enabled,
                 );
-                let core = machines.cockpit().unwrap_or_else(|e| {
-                    ferrite_core::log!("cannot read the Thread store: {e}");
-                    std::process::exit(1);
-                });
+                let core = machines.cockpit();
                 (core, Some(machines))
             };
             let (adopted, refused) = adopt(&mut core, &imports);
