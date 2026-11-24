@@ -24,7 +24,7 @@ use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject};
-use ferrite_core::cockpit::Cockpit;
+use ferrite_client::cockpit::Cockpit;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::workspace::{BranchStatus, WorkspaceChoice};
 use ferrite_core::{Hunk, RunState, SessionEvent, ThreadKey, ToolResult, TurnOutcome};

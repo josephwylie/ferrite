@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use ferrite_core::activity::{
     ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject, TranscriptCoverage,
 };
-use ferrite_core::cockpit::{Cockpit, SpawnRequest, Spawner};
+use ferrite_client::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::progress::{Phase, ProgressEvent};
 use ferrite_core::providers::{ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session};
 use ferrite_core::roster::PaneIdentity;
@@ -599,7 +599,7 @@ impl Replay {
 
 fn fixture_path(name: &str) -> PathBuf {
     // Cargo runs a crate's tests in the crate's own directory.
-    std::path::absolute("tests/fixtures/subagents")
+    std::path::absolute("../ferrite-core/tests/fixtures/subagents")
         .unwrap()
         .join(name)
 }

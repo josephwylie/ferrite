@@ -9,7 +9,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ferrite_core::cockpit::{Attach, Cockpit, Endpoint, ServerState};
+use ferrite_client::cockpit::{Attach, Cockpit, Endpoint, ServerState};
 use ferrite_core::machine::{self, Bridge, Machine};
 use ferrite_core::protocol::Peer;
 use ferrite_core::spawner::{self, SessionDefaults};

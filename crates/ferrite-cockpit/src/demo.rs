@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use ferrite_core::cockpit::{Cockpit, SpawnRequest, Spawner};
+use ferrite_client::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::doorbell::Sender;
 use ferrite_core::providers::{applied, Session, SettingAck};
 use ferrite_core::store::Provider;
@@ -1340,7 +1340,7 @@ mod tests {
     /// log — the fresh Session must not play the same turn over it again.
     #[test]
     fn a_revived_demo_thread_announces_its_mode_and_replays_nothing() {
-        use ferrite_core::cockpit::Spawner;
+        use ferrite_client::cockpit::Spawner;
         use ferrite_core::store::Provider;
         let mut spawn = Spawn::new(false);
         let revived = spawn

@@ -3,6 +3,7 @@
 //! cuts the transcript, recall and the log, or opens a fork.
 
 use super::*;
+use ferrite_core::SessionEvent;
 
 fn live(fake: &Fake) -> Sender<SessionEvent> {
     fake.streams.borrow().last().unwrap().clone()

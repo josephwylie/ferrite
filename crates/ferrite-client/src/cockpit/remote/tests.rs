@@ -3,15 +3,15 @@
 use super::*;
 use std::sync::mpsc;
 
-use crate::engine::{SpawnRequest, Spawner};
-use crate::link::{Connection, Heard};
-use crate::protocol::{SharedRoster, WireChoice};
-use crate::store::Provider;
+use ferrite_core::engine::{SpawnRequest, Spawner};
+use ferrite_core::link::{Connection, Heard};
+use ferrite_core::protocol::{SharedRoster, WireChoice};
+use ferrite_core::store::Provider;
 
 struct NoDiscovery;
 
 impl Spawner for NoDiscovery {
-    fn spawn(&mut self, _: SpawnRequest) -> io::Result<Box<dyn crate::providers::Session>> {
+    fn spawn(&mut self, _: SpawnRequest) -> io::Result<Box<dyn ferrite_core::providers::Session>> {
         Err(io::Error::other("a window spawns no Session"))
     }
 }
@@ -35,8 +35,8 @@ fn server_answering(
     })
 }
 
-fn server_id() -> crate::server::ServerId {
-    crate::server::ServerId::new("s-1")
+fn server_id() -> ferrite_core::server::ServerId {
+    ferrite_core::server::ServerId::new("s-1")
 }
 
 fn server_info() -> ServerInfo {
@@ -67,7 +67,7 @@ fn server_welcoming(
                 let Ok(stream) = listener.accept() else {
                     return;
                 };
-                if Connection::serve(id, stream, heard.clone(), crate::link::LAGGED_BYTES).is_err()
+                if Connection::serve(id, stream, heard.clone(), ferrite_core::link::LAGGED_BYTES).is_err()
                 {
                     return;
                 }
@@ -139,7 +139,7 @@ fn remote(store: &std::path::Path) -> Remote {
         server: Endpoint::Local {
             executable: "/bin/false".into(),
         },
-        saved_as: crate::MachineKey(None),
+        saved_as: ferrite_core::MachineKey(None),
         client: Peer {
             name: "test".into(),
             version: "0".into(),
@@ -347,7 +347,7 @@ fn a_machine_waiting_for_a_sign_in_is_not_asked_again_until_then() {
     let mut remote = Remote::new(Attach {
         store: store.clone(),
         server: Endpoint::Machine(Arc::clone(&bridge)),
-        saved_as: crate::MachineKey(Some("box".into())),
+        saved_as: ferrite_core::MachineKey(Some("box".into())),
         client: Peer {
             name: "test".into(),
             version: "0".into(),
@@ -506,7 +506,7 @@ fn a_servers_clock_is_kept_after_its_link_goes() {
     // This Server's clock reads the epoch: it runs behind this one by today.
     let _taken = server_answering_nothing(&store, 1);
     let mut remote = remote(&store);
-    let today = crate::clock::now().timestamp_millis();
+    let today = ferrite_core::clock::now().timestamp_millis();
     let reads_today = |remote: &Remote| (remote.clock().local_ms(0) - today).abs() < 60_000;
     assert!(reads_today(&remote), "{:?}", remote.clock());
 

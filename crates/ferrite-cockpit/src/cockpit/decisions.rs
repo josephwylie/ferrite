@@ -754,7 +754,7 @@ impl CockpitView {
     /// covers is allowed as it arrives.
     pub(super) fn apply_thread_rules(
         &mut self,
-        frame: &[ferrite_core::cockpit::PaneUpdate],
+        frame: &[ferrite_client::cockpit::PaneUpdate],
         cx: &mut Context<Self>,
     ) {
         if self.decisions.read(cx).rules.is_empty() {

@@ -1147,7 +1147,7 @@ impl Activity {
     /// A window rebuilds Activity without the requests already answered on
     /// the Server. Its local counter cannot recover their serials, so bind
     /// each live request to the exact handle the Server supplied.
-    pub(crate) fn restore_decision_handle(&mut self, handle: &DecisionHandle) -> bool {
+    pub fn restore_decision_handle(&mut self, handle: &DecisionHandle) -> bool {
         if handle.generation != self.generation {
             return false;
         }

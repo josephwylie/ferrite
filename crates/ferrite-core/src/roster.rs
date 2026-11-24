@@ -129,7 +129,7 @@ impl Roster {
 
     /// The one door to `focused`: every move — keys, clicks, nav rows —
     /// lands here.
-    pub(crate) fn focus(&mut self, identity: PaneIdentity) -> bool {
+    pub fn focus(&mut self, identity: PaneIdentity) -> bool {
         if self.index_of(identity).is_none() {
             return false;
         }
@@ -142,7 +142,7 @@ impl Roster {
 
     /// The machine whose Threads take an empty screen, as machines come
     /// and go. What is focused stays.
-    pub(crate) fn set_start(&mut self, machine: Option<MachineId>) {
+    pub fn set_start(&mut self, machine: Option<MachineId>) {
         self.start = machine;
     }
 
@@ -161,7 +161,7 @@ impl Roster {
     /// A Thread became open: it takes the next Pane, and focus stays put.
     /// With no Pane focused it takes the screen, unless it is another
     /// machine's: nobody went there.
-    pub(crate) fn insert_thread(&mut self, thread: ThreadKey) {
+    pub fn insert_thread(&mut self, thread: ThreadKey) {
         let identity = PaneIdentity::Thread(thread);
         if !self.panes.contains(&identity) {
             self.panes.push(identity);
@@ -173,7 +173,7 @@ impl Roster {
 
     /// A Thread stopped being open: its Pane goes, a surviving focused Pane
     /// keeps focus, and a focused one hands it to its neighbour.
-    pub(crate) fn remove_thread(&mut self, thread: ThreadKey) {
+    pub fn remove_thread(&mut self, thread: ThreadKey) {
         self.remove(PaneIdentity::Thread(thread));
     }
 
@@ -205,7 +205,7 @@ impl Roster {
     // ------------------------------------------------------------ drafts
 
     /// A draft Pane (#29) opens at the end and takes focus.
-    pub(crate) fn open_draft(&mut self) -> DraftId {
+    pub fn open_draft(&mut self) -> DraftId {
         self.next_draft += 1;
         let draft = DraftId(self.next_draft);
         self.drafts.insert(draft);
@@ -217,7 +217,7 @@ impl Roster {
     /// The first send made a Thread of the draft: the Thread takes the
     /// draft's own slot, not a new one at the end. False for a draft the
     /// roster no longer holds.
-    pub(crate) fn draft_became(&mut self, draft: DraftId, thread: ThreadKey) -> bool {
+    pub fn draft_became(&mut self, draft: DraftId, thread: ThreadKey) -> bool {
         if !self.drafts.remove(&draft) {
             return false;
         }
@@ -237,7 +237,7 @@ impl Roster {
 
     /// Discard a draft Pane: nothing durable dies with it. False for a
     /// draft the roster no longer holds.
-    pub(crate) fn remove_draft(&mut self, draft: DraftId) -> bool {
+    pub fn remove_draft(&mut self, draft: DraftId) -> bool {
         if !self.drafts.contains(&draft) {
             return false;
         }
@@ -247,15 +247,15 @@ impl Roster {
 
     // -------------------------------------------------------- park order
 
-    pub(crate) fn note_parked(&mut self, thread: ThreadKey) {
+    pub fn note_parked(&mut self, thread: ThreadKey) {
         self.park_order.push(thread);
     }
 
-    pub(crate) fn note_revived(&mut self, thread: ThreadKey) {
+    pub fn note_revived(&mut self, thread: ThreadKey) {
         self.park_order.retain(|parked| *parked != thread);
     }
 
-    pub(crate) fn pop_park_order(&mut self) -> Option<ThreadKey> {
+    pub fn pop_park_order(&mut self) -> Option<ThreadKey> {
         self.park_order.pop()
     }
 }

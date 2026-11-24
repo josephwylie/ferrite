@@ -211,7 +211,7 @@ fn a_worker_that_never_reports_is_prompted_once_then_needs_the_operator() {
         asked.iter().any(|asked| {
             matches!(
                 asked,
-                ferrite_core::cockpit::Asked::TaskAlert {
+                ferrite_client::cockpit::Asked::TaskAlert {
                     status: ferrite_core::factory::Status::NeedsHuman,
                     ..
                 }

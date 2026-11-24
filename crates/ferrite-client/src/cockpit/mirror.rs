@@ -8,17 +8,17 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::activity::{
+use ferrite_core::activity::{
     Activity, ActivityInput, ActivityLimits, ActivityView, DecisionHandle, PendingDecision,
     Subject, ToolTiming,
 };
-use crate::digest::{Digest, Turn};
-use crate::engine::{event_changes_content, Delivery, PaneUpdate, QueueItem};
-use crate::protocol::{self, ServerMessage, ThreadState, WireInput};
-use crate::store::Provider;
-use crate::transcript::{Input, Transcript};
-use crate::workspace::WorkspaceBinding;
-use crate::{ControlKind, Decision, ModelInfo, PermissionModeChoice, SessionCommand, ThreadId};
+use ferrite_core::digest::{Digest, Turn};
+use ferrite_core::engine::{event_changes_content, Delivery, PaneUpdate, QueueItem};
+use ferrite_core::protocol::{self, ServerMessage, ThreadState, WireInput};
+use ferrite_core::store::Provider;
+use ferrite_core::transcript::{Input, Transcript};
+use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::{ControlKind, Decision, ModelInfo, PermissionModeChoice, SessionCommand, ThreadId};
 
 pub(crate) struct Mirror {
     activity: Activity,
@@ -48,12 +48,12 @@ pub(crate) struct Mirror {
 struct Facts {
     generation: u64,
     provider: Provider,
-    project: Option<crate::workspace::registry::ProjectId>,
+    project: Option<ferrite_core::workspace::registry::ProjectId>,
     model: Option<String>,
     effort: Option<String>,
     title: Option<String>,
-    snooze: Option<crate::snooze::Snooze>,
-    owner: Option<crate::ThreadOwner>,
+    snooze: Option<ferrite_core::snooze::Snooze>,
+    owner: Option<ferrite_core::ThreadOwner>,
     workspace: Option<WorkspaceBinding>,
     session_project_root: Option<PathBuf>,
     first_prompt_sent: bool,
@@ -234,7 +234,7 @@ impl Mirror {
                 ..
             } => event_changes_content(event),
             ActivityInput::Observe { event, .. } => {
-                event_changes_content(&crate::SessionEvent::Activity(event.clone()))
+                event_changes_content(&ferrite_core::SessionEvent::Activity(event.clone()))
             }
             ActivityInput::Main { .. }
             | ActivityInput::Replay(_)
@@ -339,7 +339,7 @@ impl Mirrors {
                         mirror.apply_wire(input, boot, update);
                     }
                     for input in &live {
-                        mirror.apply_wire(input, crate::clock::instant(), update);
+                        mirror.apply_wire(input, ferrite_core::clock::instant(), update);
                     }
                 }
             }
@@ -371,8 +371,8 @@ impl Mirrors {
                 let update = updated(&mut self.updates, thread);
                 mirror.apply(
                     ActivityInput::Main {
-                        input: Input::Event(crate::SessionEvent::ToolDraft { id, name, input }),
-                        at: crate::clock::instant(),
+                        input: Input::Event(ferrite_core::SessionEvent::ToolDraft { id, name, input }),
+                        at: ferrite_core::clock::instant(),
                     },
                     update,
                 );
@@ -442,7 +442,7 @@ impl Mirrors {
                     handle: entry.handle.clone(),
                     decision: entry.decision.clone(),
                 },
-                crate::clock::instant(),
+                ferrite_core::clock::instant(),
             );
         }
     }
@@ -659,7 +659,7 @@ impl<'a> ThreadView<'a> {
         self.facts.provider
     }
 
-    pub fn project_id(&self) -> Option<crate::workspace::registry::ProjectId> {
+    pub fn project_id(&self) -> Option<ferrite_core::workspace::registry::ProjectId> {
         self.facts.project
     }
 
@@ -690,7 +690,7 @@ impl<'a> ThreadView<'a> {
     }
 
     /// Whose the Thread is when not the operator's (ADR 0037).
-    pub fn owner(&self) -> Option<&'a crate::ThreadOwner> {
+    pub fn owner(&self) -> Option<&'a ferrite_core::ThreadOwner> {
         self.facts.owner.as_ref()
     }
 
@@ -705,7 +705,7 @@ impl<'a> ThreadView<'a> {
     /// its Wall card, counts and finish — as the Server last sent it, else
     /// folded here from the Activity: a Server too old to send digests
     /// mirrors every open Thread whole.
-    pub fn snooze(&self) -> Option<crate::snooze::Snooze> {
+    pub fn snooze(&self) -> Option<ferrite_core::snooze::Snooze> {
         self.facts.snooze
     }
 
@@ -716,7 +716,7 @@ impl<'a> ThreadView<'a> {
                 self.thread,
                 self.activity,
                 None,
-                crate::clock::instant(),
+                ferrite_core::clock::instant(),
             )),
         }
     }
@@ -755,7 +755,7 @@ impl<'a> ThreadView<'a> {
     pub fn prompt_title(&self) -> Option<String> {
         match self.stand_in {
             Some(held) => held.digest.prompt_title.clone(),
-            None => crate::digest::prompt_title(self.transcript()),
+            None => ferrite_core::digest::prompt_title(self.transcript()),
         }
     }
 
@@ -910,10 +910,10 @@ mod tests {
     use std::time::Instant;
 
     use super::Mirrors;
-    use crate::activity::ActivityInput;
-    use crate::protocol::{self, Outgoing, ServerMessage, WireInput};
-    use crate::transcript::Input;
-    use crate::{SessionEvent, ThreadId};
+    use ferrite_core::activity::ActivityInput;
+    use ferrite_core::protocol::{self, Outgoing, ServerMessage, WireInput};
+    use ferrite_core::transcript::Input;
+    use ferrite_core::{SessionEvent, ThreadId};
 
     fn said(text: &str) -> WireInput {
         let input = ActivityInput::Main {

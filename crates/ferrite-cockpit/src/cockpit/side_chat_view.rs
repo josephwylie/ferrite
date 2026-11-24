@@ -45,7 +45,7 @@ use crate::cockpit::surfaces::{Rehold, SurfaceId};
 use super::*;
 
 use ferrite_core::activity::Subject;
-use ferrite_core::cockpit::Admission;
+use ferrite_client::cockpit::Admission;
 use ferrite_core::replies::Reply;
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::ThreadKey;

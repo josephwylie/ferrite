@@ -156,7 +156,7 @@ fn a_thread_past_its_cap_says_where_its_history_starts_and_copies_all_of_it(
         .open(core.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
     did_something_now(&dir, thread);
-    assert_eq!(core.send(thread, "the very first question".into()).now().unwrap(), ferrite_core::cockpit::Admission::Delivered);
+    assert_eq!(core.send(thread, "the very first question".into()).now().unwrap(), ferrite_client::cockpit::Admission::Delivered);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(900.)));

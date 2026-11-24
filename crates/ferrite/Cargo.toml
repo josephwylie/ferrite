@@ -42,6 +42,7 @@ browser-smoke = ["cef", "ferrite-cockpit/browser-smoke"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
+ferrite-client = { path = "../ferrite-client" }
 # The Server process `ferrite server` runs (ADR 0025).
 ferrite-server = { path = "../ferrite-server" }
 # The theme, icons, components, motion and menus the Cockpit and Pane share.

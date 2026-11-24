@@ -96,7 +96,7 @@ pub mod changes_frames;
 
 use std::time::Duration;
 
-use ferrite_core::cockpit::{Cockpit, HistoryDirection, ProviderChoice, ThreadView};
+use ferrite_client::cockpit::{Cockpit, HistoryDirection, ProviderChoice, ThreadView};
 use ferrite_core::draft::DraftTarget;
 use ferrite_core::followup;
 use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
@@ -1822,7 +1822,7 @@ impl CockpitView {
     fn release_evicted_transcripts(
         &mut self,
         index: usize,
-        changed: &[ferrite_core::cockpit::SubjectUpdate],
+        changed: &[ferrite_client::cockpit::SubjectUpdate],
         cx: &gpui::App,
     ) {
         let Some(thread) = self.panes[index].thread() else {
@@ -3746,11 +3746,11 @@ impl CockpitView {
     /// fades as a finished turn's does unless important, with its chime.
     fn present(
         &mut self,
-        asked: ferrite_core::cockpit::Asked,
+        asked: ferrite_client::cockpit::Asked,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use ferrite_core::cockpit::Asked;
+        use ferrite_client::cockpit::Asked;
         use gpui::component::notification::{Notification, NotificationType};
         use gpui::component::WindowExt as _;
         match asked {
@@ -4927,7 +4927,7 @@ impl CockpitView {
     fn when_tuned(
         &mut self,
         thread: ThreadKey,
-        asked: ferrite_core::cockpit::Ask<()>,
+        asked: ferrite_client::cockpit::Ask<()>,
         what: &'static str,
         cx: &mut Context<Self>,
     ) {
@@ -5663,7 +5663,7 @@ impl CockpitView {
         &mut self,
         id: ferrite_core::roster::DraftId,
         text: &str,
-        opened: Result<Option<ferrite_core::cockpit::Bootstrapped>, String>,
+        opened: Result<Option<ferrite_client::cockpit::Bootstrapped>, String>,
         cx: &mut Context<Self>,
     ) {
         let Some(index) = self
@@ -8884,7 +8884,7 @@ pub(crate) fn here() -> std::path::PathBuf {
 /// the work they were actually doing — and the newest registered Project
 /// is the fallback for a store whose Threads name nothing the registry
 /// still knows.
-fn startup_project(cockpit: &ferrite_core::cockpit::Cockpit) -> Option<ProjectKey> {
+fn startup_project(cockpit: &ferrite_client::cockpit::Cockpit) -> Option<ProjectKey> {
     let machine = cockpit.start_machine()?;
     cockpit.last_worked_project(machine).or_else(|| {
         let registry = cockpit.registry(machine);

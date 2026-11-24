@@ -3,7 +3,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 
-use ferrite_core::cockpit::{Cockpit, SpawnRequest, Spawner};
+use ferrite_client::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::providers::{applied, Session, SettingAck};
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::workspace::WorkspaceChoice;

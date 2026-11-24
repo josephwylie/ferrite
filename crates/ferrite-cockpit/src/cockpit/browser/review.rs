@@ -8,7 +8,7 @@
 use super::*;
 use ferrite_core::browser_annotations::Annotation;
 use ferrite_pane::annotation_editor::{AnnotationEditor, EditorEvent};
-use ferrite_core::cockpit::Ask;
+use ferrite_client::cockpit::Ask;
 use std::time::{Duration, Instant};
 
 /// One Thread's review.

@@ -9,16 +9,16 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::{Duration, Instant, SystemTime};
 
 use super::{mirror, parked, remote, shared, Asked, Said, Unread};
-use crate::engine::{BootstrapResult, Bootstrapped, Engine, PaneUpdate};
-use crate::protocol::{ClientMessage, Command, Done, Op, ServerMessage, WireError};
-use crate::roster::Roster;
-use crate::store::Store;
-use crate::{MachineId, MachineKey, ProjectKey, ThreadId, ThreadKey};
+use ferrite_core::engine::{BootstrapResult, Bootstrapped, Engine, PaneUpdate};
+use ferrite_core::protocol::{ClientMessage, Command, Done, Op, ServerMessage, WireError};
+use ferrite_core::roster::Roster;
+use ferrite_core::store::Store;
+use ferrite_core::{MachineId, MachineKey, ProjectKey, ThreadId, ThreadKey};
 
 /// How long a Thread off screen and at rest stays streamed whole: as long
 /// as the Server keeps its Session (ADR 0032). One at work stays however
 /// long it works, drawn here or not.
-const UNWATCH_AFTER: Duration = crate::engine::HELD_AT_REST;
+const UNWATCH_AFTER: Duration = ferrite_core::engine::HELD_AT_REST;
 
 /// The window number an Engine in this process knows its one window by.
 const IN_PROCESS_WINDOW: u64 = 0;
@@ -58,7 +58,7 @@ pub(super) struct HeldMachine {
     pub(super) drawn: Option<Drawn>,
     /// The `window.*` actions this machine's Server handed the window and
     /// it has not done: only a `ferrite --headless` one is (ADR 0038).
-    pub(super) drives: Vec<(u64, crate::drive::Action)>,
+    pub(super) drives: Vec<(u64, ferrite_core::drive::Action)>,
     /// A fixture world's Server is one from before `Capability::ForkOf`
     /// (`fixture_server_before_fork_of`).
     pub(super) before_fork_of: bool,
@@ -98,7 +98,7 @@ impl HeldMachine {
         ThreadKey::new(self.id, thread)
     }
 
-    pub(super) fn project_key(&self, project: crate::workspace::registry::ProjectId) -> ProjectKey {
+    pub(super) fn project_key(&self, project: ferrite_core::workspace::registry::ProjectId) -> ProjectKey {
         ProjectKey::new(self.id, project)
     }
 
@@ -196,7 +196,7 @@ impl HeldMachine {
         }
         // What a Server's snapshot lists is not new.
         if !attached {
-            let now = crate::clock::instant();
+            let now = ferrite_core::clock::instant();
             if let Some(drawn) = &mut self.drawn {
                 for &thread in &self.shared.open {
                     if !open_before.contains(&thread) {
@@ -237,7 +237,7 @@ impl HeldMachine {
         {
             if let Ok(window) = (*window).try_into() {
                 said.allowance_warnings
-                    .push(crate::providers::limits::AllowanceWarning {
+                    .push(ferrite_core::providers::limits::AllowanceWarning {
                         provider: *provider,
                         window,
                         threshold: *threshold,
@@ -327,7 +327,7 @@ impl HeldMachine {
         let Some(drawn) = self.drawn.as_ref().filter(|_| self.mirrors.digested()) else {
             return open.clone();
         };
-        let now = crate::clock::instant();
+        let now = ferrite_core::clock::instant();
         let lingers = self.local();
         open.iter()
             .copied()
@@ -344,7 +344,7 @@ impl HeldMachine {
     /// Stream what the window draws, and let the rest go.
     pub(super) fn follow_attention(&mut self) {
         if let Some(drawn) = &mut self.drawn {
-            let now = crate::clock::instant();
+            let now = ferrite_core::clock::instant();
             for thread in self.mirrors.at_work() {
                 drawn.hold(thread, now);
             }
@@ -448,7 +448,7 @@ impl HeldMachine {
     /// The Engine in this process: what only `--demo`, `--load` and the
     /// tests drive. It rings the bell, as an act does.
     pub(super) fn in_process(&mut self) -> &mut Engine {
-        crate::doorbell::ring();
+        ferrite_core::doorbell::ring();
         match &mut self.link {
             Link::InProcess(engine) => engine,
             Link::Server(_) => panic!("only an Engine in this process takes this act"),
@@ -483,8 +483,8 @@ impl HeldMachine {
             engine.notifications().to_wire()
         );
         for provider in [
-            crate::store::Provider::Claude,
-            crate::store::Provider::Codex,
+            ferrite_core::store::Provider::Claude,
+            ferrite_core::store::Provider::Codex,
         ] {
             assert_eq!(
                 self.shared.announced_models(provider),
@@ -569,8 +569,8 @@ pub(super) type Executed = Result<Option<Done>, WireError>;
 pub(super) fn crossed<T: serde::Serialize + serde::de::DeserializeOwned>(message: T) -> T {
     #[cfg(debug_assertions)]
     let message = {
-        let line = crate::protocol::encode(&message);
-        crate::protocol::decode(&line[..line.len() - 1])
+        let line = ferrite_core::protocol::encode(&message);
+        ferrite_core::protocol::decode(&line[..line.len() - 1])
             .expect("every message decodes as it encoded")
     };
     message

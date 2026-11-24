@@ -72,13 +72,13 @@ fn a_starting_session_is_not_working(cx: &mut TestAppContext) {
     impl Spawner for Starting {
         fn spawn(
             &mut self,
-            _: ferrite_core::cockpit::SpawnRequest,
+            _: ferrite_client::cockpit::SpawnRequest,
         ) -> std::io::Result<Box<dyn Session>> {
             panic!("use start")
         }
         fn start(
             &mut self,
-            _: ferrite_core::cockpit::SpawnRequest,
+            _: ferrite_client::cockpit::SpawnRequest,
         ) -> std::io::Result<SessionLifecycle> {
             let (gate, held) = ferrite_core::doorbell::channel::<()>();
             self.0.push(gate);

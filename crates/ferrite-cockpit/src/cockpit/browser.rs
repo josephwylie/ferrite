@@ -20,7 +20,7 @@ pub(super) use page_menu::PageVerb;
 use super::*;
 use ferrite_core::ThreadKey;
 use ferrite_core::browser::{Action, Document, Lease, Owner, PageState, State, Tab, TabId};
-use ferrite_core::cockpit::Ask;
+use ferrite_client::cockpit::Ask;
 use ferrite_pane::composer::{Composer, Role};
 use ferrite_pane::visual::{
     element::WebView,
@@ -692,7 +692,7 @@ impl CockpitView {
         let lost = self.browsers.threads.iter_mut().filter(|(thread, _)| {
             matches!(
                 cockpit.server(thread.machine()),
-                Some(ferrite_core::cockpit::ServerState::Detached { .. })
+                Some(ferrite_client::cockpit::ServerState::Detached { .. })
             )
         });
         for (_, browser) in lost {
@@ -881,7 +881,7 @@ impl CockpitView {
                 Event::Restore(thread, tab) => {
                     if !matches!(
                         self.cockpit.read(cx).server(thread.machine()),
-                        Some(ferrite_core::cockpit::ServerState::Attached { .. })
+                        Some(ferrite_client::cockpit::ServerState::Attached { .. })
                     ) {
                         continue;
                     }

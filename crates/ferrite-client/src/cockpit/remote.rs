@@ -15,24 +15,24 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 
-use crate::ThreadId;
-use crate::clock::ServerClock;
+use ferrite_core::ThreadId;
+use ferrite_core::clock::ServerClock;
 // A Remote's answers ring as the pump routes them (ADR 0041).
-use crate::doorbell::Sender;
-use crate::engine::{BootstrapResult, Bootstrapped};
-use crate::link;
-use crate::machine::{self, Bridge, Failure};
-use crate::protocol::{
+use ferrite_core::doorbell::Sender;
+use ferrite_core::engine::{BootstrapResult, Bootstrapped};
+use ferrite_core::link;
+use ferrite_core::machine::{self, Bridge, Failure};
+use ferrite_core::protocol::{
     self, Capability, ClientMessage, Command, Done, ErrorCode, Op, Peer, Resume, ServerInfo,
     ServerMessage, Snapshot, WireError, WirePng,
 };
-use crate::protocol::{ReviewPullRequest, ReviewPullRequests, WirePrFilter, WirePrList};
-use crate::providers::FileSuggestion;
-use crate::roster::DraftId;
-use crate::server::ServerId;
-use crate::visual::{RenderRequest, Renderer};
-use crate::workspace::registry::ProjectId;
-use crate::workspace::{
+use ferrite_core::protocol::{ReviewPullRequest, ReviewPullRequests, WirePrFilter, WirePrList};
+use ferrite_core::providers::FileSuggestion;
+use ferrite_core::roster::DraftId;
+use ferrite_core::server::ServerId;
+use ferrite_core::visual::{RenderRequest, Renderer};
+use ferrite_core::workspace::registry::ProjectId;
+use ferrite_core::workspace::{
     DirEntry, ListedWorktree, Listing, PullRequest, RepoListing, parse_pr_json,
 };
 use ferrite_reviewr::ferrite::{Bases, FileSides, Read};
@@ -75,7 +75,7 @@ pub struct Attach {
     pub store: PathBuf,
     pub server: Endpoint,
     /// What saved files name the machine (ADR 0045).
-    pub saved_as: crate::MachineKey,
+    pub saved_as: ferrite_core::MachineKey,
     pub client: Peer,
     /// Draws the Visuals the Server's agents ask for; none, and this window
     /// does not offer to.
@@ -87,7 +87,7 @@ pub struct Attach {
     pub driven: bool,
     /// What the window finds on its own: CLI session files to adopt, a
     /// workspace's commands. It spawns no Session.
-    pub discovery: Box<dyn crate::engine::Spawner>,
+    pub discovery: Box<dyn ferrite_core::engine::Spawner>,
 }
 
 /// Where the Server is.
@@ -209,7 +209,7 @@ pub(crate) struct Remote {
     watching: BTreeSet<ThreadId>,
     /// Visuals drawn here, answered from the renderer's threads.
     rendered: (
-        crate::doorbell::Sender<ClientMessage>,
+        ferrite_core::doorbell::Sender<ClientMessage>,
         Receiver<ClientMessage>,
     ),
 }
@@ -240,7 +240,7 @@ impl Remote {
             answers: BTreeMap::new(),
             reviews: BTreeMap::new(),
             watching: BTreeSet::new(),
-            rendered: crate::doorbell::channel(),
+            rendered: ferrite_core::doorbell::channel(),
         }
     }
 
@@ -283,7 +283,7 @@ impl Remote {
     pub(crate) fn boot(&self) -> Instant {
         self.attachment
             .as_ref()
-            .map_or_else(crate::clock::instant, |attachment| attachment.boot)
+            .map_or_else(ferrite_core::clock::instant, |attachment| attachment.boot)
     }
 
     /// Attach again now rather than at the next retry.
@@ -343,7 +343,7 @@ impl Remote {
             && Instant::now() >= self.retry_at
             && !self.waits_for_operator()
         {
-            let (done, attaching) = crate::doorbell::channel();
+            let (done, attaching) = ferrite_core::doorbell::channel();
             let store = self.attach.store.clone();
             let server = self.attach.server.clone();
             let hello = hello(&self.attach);
@@ -455,14 +455,14 @@ impl Remote {
             Ok(id) => id,
             Err(error) => return super::Ask::answered(read(Err(error))),
         };
-        let (answer, answered) = crate::doorbell::channel();
+        let (answer, answered) = ferrite_core::doorbell::channel();
         self.answers.insert(
             id,
             Waiting {
                 answer: Box::new(move |reply| {
                     let _ = answer.send(read(reply));
                 }),
-                by: Some(crate::clock::instant() + REPLY_WAIT),
+                by: Some(ferrite_core::clock::instant() + REPLY_WAIT),
             },
         );
         super::Ask::of(answered)
@@ -470,7 +470,7 @@ impl Remote {
 
     /// Each ask whose time is up is answered so; true when one was.
     fn time_out_asks(&mut self) -> bool {
-        let now = crate::clock::instant();
+        let now = ferrite_core::clock::instant();
         let late: Vec<u64> = self
             .answers
             .iter()
@@ -531,7 +531,7 @@ impl Remote {
         Ok(())
     }
 
-    pub(crate) fn discovery(&mut self) -> &mut dyn crate::engine::Spawner {
+    pub(crate) fn discovery(&mut self) -> &mut dyn ferrite_core::engine::Spawner {
         self.attach.discovery.as_mut()
     }
 
@@ -569,21 +569,21 @@ impl Remote {
                 query: query.to_string(),
             })
             .map_err(io::Error::from)?;
-        let (answer, answered) = crate::doorbell::channel();
+        let (answer, answered) = ferrite_core::doorbell::channel();
         self.searches.insert(id, answer);
         Ok(answered)
     }
 
-    pub(crate) fn changes(&mut self, request: crate::changes::Request) -> io::Result<Receiver<io::Result<crate::changes::Snapshot>>> {
+    pub(crate) fn changes(&mut self, request: ferrite_core::changes::Request) -> io::Result<Receiver<io::Result<ferrite_core::changes::Snapshot>>> {
         self.ask(Op::Changes { request }, |done| match done {
             Done::Changes { reply } => reply.snapshot(),
             _ => None,
         })
     }
 
-    pub(crate) fn set_file_staged(&mut self, request: crate::changes::Request) -> io::Result<Receiver<io::Result<()>>> {
+    pub(crate) fn set_file_staged(&mut self, request: ferrite_core::changes::Request) -> io::Result<Receiver<io::Result<()>>> {
         self.ask(Op::Changes { request }, |done| match done {
-            Done::Changes { reply: crate::changes::Reply::Staged } => Some(()),
+            Done::Changes { reply: ferrite_core::changes::Reply::Staged } => Some(()),
             _ => None,
         })
     }
@@ -606,7 +606,7 @@ impl Remote {
         Ok(move || Ok((attach_to(&store, &endpoint, hello)?, endpoint)))
     }
 
-    fn attachment_connection(&self) -> io::Result<impl FnOnce() -> io::Result<crate::attachment_transfer::Exchange> + Send + 'static> {
+    fn attachment_connection(&self) -> io::Result<impl FnOnce() -> io::Result<ferrite_core::attachment_transfer::Exchange> + Send + 'static> {
         let expected_boot = self.attachment.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, &*self.detached))?.boot_id.clone();
         let connect = self.side_connection()?;
         Ok(move || {
@@ -623,36 +623,36 @@ impl Remote {
                     Some(Done::Attachment { reply }) => Ok(reply),
                     _ => Err(io::Error::new(io::ErrorKind::InvalidData, "The server did not answer the attachment operation")),
                 }
-            }) as crate::attachment_transfer::Exchange)
+            }) as ferrite_core::attachment_transfer::Exchange)
         })
     }
 
-    pub(crate) fn tree(&self) -> io::Result<crate::tree::Connect> {
+    pub(crate) fn tree(&self) -> io::Result<ferrite_core::tree::Connect> {
         let connect = self.side_connection()?;
         Ok(Box::new(move || {
             let (attached, endpoint) = connect()?;
             Ok(Box::new(Routed {
-                exchange: crate::tree::Remote::new(attached.client),
+                exchange: ferrite_core::tree::Remote::new(attached.client),
                 _route: endpoint,
-            }) as Box<dyn crate::tree::Exchange>)
+            }) as Box<dyn ferrite_core::tree::Exchange>)
         }))
     }
 
-    pub(crate) fn upload_attachment(&self, path: PathBuf) -> io::Result<crate::attachment_transfer::Upload> {
-        Ok(crate::attachment_transfer::upload(path, self.attachment_connection()?))
+    pub(crate) fn upload_attachment(&self, path: PathBuf) -> io::Result<ferrite_core::attachment_transfer::Upload> {
+        Ok(ferrite_core::attachment_transfer::upload(path, self.attachment_connection()?))
     }
 
     pub(crate) fn read_attachment(&self, path: PathBuf) -> io::Result<Receiver<io::Result<Vec<u8>>>> {
         let connect = self.attachment_connection()?;
         Ok(super::read_here(move || {
-            crate::attachment_transfer::read(path, connect().map_err(|error| error.to_string())?).map_err(|error| error.to_string())
+            ferrite_core::attachment_transfer::read(path, connect().map_err(|error| error.to_string())?).map_err(|error| error.to_string())
         }))
     }
 
     pub(crate) fn file_operation(
         &mut self,
-        request: crate::file_operations::Request,
-    ) -> io::Result<Receiver<io::Result<crate::file_operations::Reply>>> {
+        request: ferrite_core::file_operations::Request,
+    ) -> io::Result<Receiver<io::Result<ferrite_core::file_operations::Reply>>> {
         self.ask(Op::FileOperation { request }, |done| match done {
             Done::FileOperation { reply } => Some(reply),
             _ => None,
@@ -710,7 +710,7 @@ impl Remote {
         let id = self
             .send_command(Op::review_read(path, read))
             .map_err(io::Error::from)?;
-        let (answer, answered) = crate::doorbell::channel();
+        let (answer, answered) = ferrite_core::doorbell::channel();
         self.reviews
             .insert(id, (path.to_path_buf(), read.clone(), answer));
         Ok(answered)
@@ -784,7 +784,7 @@ impl Remote {
                 code,
                 file_total,
                 code_more,
-            } => Some(crate::protocol::search_results(
+            } => Some(ferrite_core::protocol::search_results(
                 files, code, file_total, code_more,
             )),
             _ => None,
@@ -796,8 +796,8 @@ impl Remote {
         request: u64,
         boot_id: String,
         thread: ThreadId,
-        owner: crate::browser::Owner,
-        document: crate::browser::Document,
+        owner: ferrite_core::browser::Owner,
+        document: ferrite_core::browser::Document,
         revision: u64,
     ) -> io::Result<Receiver<io::Result<u64>>> {
         self.ask(
@@ -812,11 +812,11 @@ impl Remote {
     pub(crate) fn browser_capture(
         &mut self,
         thread: ThreadId,
-        owner: crate::browser::Owner,
-        lease: crate::browser::Lease,
-        capture: crate::browser_annotations::Capture,
-        png: Option<crate::protocol::WirePng>,
-    ) -> io::Result<Receiver<io::Result<crate::browser_annotations::Annotation>>> {
+        owner: ferrite_core::browser::Owner,
+        lease: ferrite_core::browser::Lease,
+        capture: ferrite_core::browser_annotations::Capture,
+        png: Option<ferrite_core::protocol::WirePng>,
+    ) -> io::Result<Receiver<io::Result<ferrite_core::browser_annotations::Annotation>>> {
         let attachment = self
             .attachment
             .as_mut()
@@ -841,7 +841,7 @@ impl Remote {
             self.detach(&format!("the capture upload could not be queued: {error}"));
             return Err(error);
         }
-        let (answer, answered) = crate::doorbell::channel();
+        let (answer, answered) = ferrite_core::doorbell::channel();
         self.answer(id, answer, |done| match done {
             Done::BrowserCapture { annotation } => Some(annotation),
             _ => None,
@@ -853,7 +853,7 @@ impl Remote {
         &mut self,
         thread: ThreadId,
         hash: String,
-    ) -> io::Result<Receiver<io::Result<crate::protocol::WirePng>>> {
+    ) -> io::Result<Receiver<io::Result<ferrite_core::protocol::WirePng>>> {
         self.ask(
             Op::BrowserCaptureImage { thread, hash },
             |done| match done {
@@ -963,7 +963,7 @@ impl Remote {
             path: path.to_path_buf(),
         };
         self.ask(op, |done| match done {
-            Done::Bases { bases, picked } => Some(crate::protocol::bases(bases, picked)),
+            Done::Bases { bases, picked } => Some(ferrite_core::protocol::bases(bases, picked)),
             _ => None,
         })
     }
@@ -1012,7 +1012,7 @@ impl Remote {
     /// What a GitHub start's picker lists (#225).
     pub(crate) fn github_names(
         &mut self,
-        ask: crate::protocol::GitHubAsk,
+        ask: ferrite_core::protocol::GitHubAsk,
     ) -> io::Result<Receiver<io::Result<Vec<String>>>> {
         self.ask(Op::GitHub { ask }, |done| match done {
             Done::Names { names } => Some(names),
@@ -1024,8 +1024,8 @@ impl Remote {
     /// writing them there.
     pub(crate) fn server_defaults(
         &mut self,
-        set: Option<crate::settings::ServerDefaults>,
-    ) -> io::Result<Receiver<io::Result<crate::settings::ServerDefaults>>> {
+        set: Option<ferrite_core::settings::ServerDefaults>,
+    ) -> io::Result<Receiver<io::Result<ferrite_core::settings::ServerDefaults>>> {
         self.ask(Op::ServerDefaults { set }, |done| match done {
             Done::ServerDefaults { defaults } => Some(defaults),
             _ => None,
@@ -1036,7 +1036,7 @@ impl Remote {
     /// ran: the Server's `Done`, for the caller to read.
     pub(crate) fn cli(
         &mut self,
-        action: crate::protocol::CliAction,
+        action: ferrite_core::protocol::CliAction,
     ) -> io::Result<Receiver<io::Result<Done>>> {
         self.ask(Op::Cli { action }, Some)
     }
@@ -1048,7 +1048,7 @@ impl Remote {
         read: fn(Done) -> Option<T>,
     ) -> io::Result<Receiver<io::Result<T>>> {
         let id = self.send_command(op).map_err(io::Error::from)?;
-        let (answer, answered) = crate::doorbell::channel();
+        let (answer, answered) = ferrite_core::doorbell::channel();
         self.answer(id, answer, read);
         Ok(answered)
     }
@@ -1170,7 +1170,7 @@ impl Remote {
         else {
             return None;
         };
-        let now = crate::clock::instant();
+        let now = ferrite_core::clock::instant();
         let boot = now
             .checked_sub(Duration::from_millis(uptime_ms.unwrap_or(0)))
             .unwrap_or(now);
@@ -1187,7 +1187,7 @@ impl Remote {
                 watch.state = ServerRestart::Restarted {
                     version: server.version.clone(),
                 };
-                crate::log!("the Ferrite server restarted: {}", server.version);
+                ferrite_core::log!("the Ferrite server restarted: {}", server.version);
             }
         }
         self.last_boot = Some(snapshot.boot_id.clone());
@@ -1203,7 +1203,7 @@ impl Remote {
         self.backoff = RETRY_FIRST;
         self.attention = None;
         self.watching.clear();
-        crate::log!("attached to the Ferrite server, boot {}", snapshot.boot_id);
+        ferrite_core::log!("attached to the Ferrite server, boot {}", snapshot.boot_id);
         Some(Arrival::Attached { snapshot, new_boot })
     }
 
@@ -1213,7 +1213,7 @@ impl Remote {
         if self.attachment.take().is_none() {
             return;
         }
-        crate::log!("{reason}");
+        ferrite_core::log!("{reason}");
         self.detached = reason.to_string();
         self.retry_at = Instant::now();
         self.watching.clear();
@@ -1311,21 +1311,21 @@ impl Remote {
             .as_ref()
             .map(|attachment| attachment.boot_id.clone())
             .or_else(|| self.last_boot.clone());
-        crate::log!("the Ferrite server is restarting");
+        ferrite_core::log!("the Ferrite server is restarting");
         self.restart = Some(Watch {
             state: ServerRestart::Restarting,
             from,
-            asked: crate::clock::instant(),
+            asked: ferrite_core::clock::instant(),
         });
     }
 
     /// The Server refused the restart.
     pub(crate) fn restart_refused(&mut self, reason: String) {
-        crate::log!("the Ferrite server did not restart: {reason}");
+        ferrite_core::log!("the Ferrite server did not restart: {reason}");
         self.restart = Some(Watch {
             state: ServerRestart::Failed { reason },
             from: None,
-            asked: crate::clock::instant(),
+            asked: ferrite_core::clock::instant(),
         });
     }
 
@@ -1343,7 +1343,7 @@ impl Remote {
             return;
         };
         if watch.state != ServerRestart::Restarting
-            || crate::clock::instant().saturating_duration_since(watch.asked) < RESTART_TIMEOUT
+            || ferrite_core::clock::instant().saturating_duration_since(watch.asked) < RESTART_TIMEOUT
         {
             return;
         }
@@ -1353,7 +1353,7 @@ impl Remote {
         } else {
             format!("Not back after 30 s ({detached})")
         };
-        crate::log!("the Ferrite server did not restart: {reason}");
+        ferrite_core::log!("the Ferrite server did not restart: {reason}");
         // The boot it left stays known: a late new one still reads restarted.
         watch.state = ServerRestart::Failed { reason };
     }
@@ -1387,7 +1387,7 @@ impl Remote {
             });
             return;
         };
-        let (reply, drawn) = crate::visual::reply();
+        let (reply, drawn) = ferrite_core::visual::reply();
         renderer.render(visual, reply);
         let answers = self.rendered.0.clone();
         let waiter = std::thread::Builder::new()
@@ -1417,23 +1417,23 @@ impl Remote {
                 let _ = answers.send(answer);
             });
         if let Err(error) = waiter {
-            crate::log!("a visual could not be answered: {error}");
+            ferrite_core::log!("a visual could not be answered: {error}");
         }
     }
 }
 
 /// A tree's side connection, and the endpoint that carries it.
 struct Routed {
-    exchange: crate::tree::Remote,
+    exchange: ferrite_core::tree::Remote,
     _route: Endpoint,
 }
 
-impl crate::tree::Exchange for Routed {
-    fn ask(&mut self, request: crate::tree::Request) -> io::Result<crate::tree::Asked> {
+impl ferrite_core::tree::Exchange for Routed {
+    fn ask(&mut self, request: ferrite_core::tree::Request) -> io::Result<ferrite_core::tree::Asked> {
         self.exchange.ask(request)
     }
 
-    fn answer(&mut self, asked: crate::tree::Asked) -> io::Result<crate::tree::Reply> {
+    fn answer(&mut self, asked: ferrite_core::tree::Asked) -> io::Result<ferrite_core::tree::Reply> {
         self.exchange.answer(asked)
     }
 }
@@ -1447,7 +1447,7 @@ fn attach_to(
 ) -> io::Result<link::Attached> {
     match server {
         Endpoint::Local { executable } => {
-            crate::server::agent::ensure_running(store, executable)?;
+            ferrite_core::server::agent::ensure_running(store, executable)?;
             link::Client::attach(&link::address(store), hello)
         }
         Endpoint::Machine(bridge) => bridge.attach(hello),
@@ -1486,15 +1486,6 @@ fn gone(reason: &str) -> WireError {
     }
 }
 
-impl From<WireError> for io::Error {
-    fn from(error: WireError) -> Self {
-        match error.code {
-            ErrorCode::Unsupported => io::Error::new(io::ErrorKind::Unsupported, error.message),
-            _ => io::Error::other(error.message),
-        }
-    }
-}
-
 /// How long the window's thread spent on each command it sent its Server:
 /// waiting for the reply (`execute`), or only sending it (an ask). What the
 /// tests read to show which asks hold the window (ADR 0041). It records
@@ -1506,7 +1497,7 @@ pub mod waits {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
 
-    use crate::protocol::Op;
+    use ferrite_core::protocol::Op;
 
     /// One command: its `op` as the wire names it, whether the window
     /// waited for its reply, and how long the window's thread spent on it.

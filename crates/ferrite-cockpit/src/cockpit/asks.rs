@@ -5,7 +5,7 @@
 //! Server's answer rings the bell and the pump runs it.
 
 use super::CockpitView;
-use ferrite_core::cockpit::Ask;
+use ferrite_client::cockpit::Ask;
 use gpui::{Context, Window};
 use std::io;
 

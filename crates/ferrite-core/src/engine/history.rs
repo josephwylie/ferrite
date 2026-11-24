@@ -327,7 +327,7 @@ impl Engine {
 }
 
 // Test-owned disk boundary: release the frozen prefix after a live event.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn gated_loader() -> (Loader, impl FnOnce(&Store)) {
     let (requests, receive) = mpsc::sync_channel::<Request>(8);
     let (send, results) = mpsc::sync_channel(8);

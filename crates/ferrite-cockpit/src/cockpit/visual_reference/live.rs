@@ -16,7 +16,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use ferrite_core::cockpit::{Cockpit, ProviderChoice};
+use ferrite_client::cockpit::{Cockpit, ProviderChoice};
 use ferrite_core::settings::Settings;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::transcript::{Body, ToolState};

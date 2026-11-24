@@ -1,7 +1,7 @@
 //! A Cockpit names its Threads and Projects by its machine (ADR 0045).
 
 use super::*;
-use crate::{MachineId, MachineKey, SavedThread};
+use ferrite_core::{MachineId, MachineKey, SavedThread};
 
 /// A window holding a second machine beside the one on screen, its
 /// Engine in this process and saved as `box`.
@@ -21,7 +21,7 @@ fn two_machines(name: &str) -> (Cockpit, Fake, MachineId, Fake) {
 
 fn says(cockpit: &Cockpit, thread: ThreadKey, text: &str) -> bool {
     let open = cockpit.thread(thread).unwrap();
-    crate::transcript::plain_text(open.transcript().blocks()).contains(text)
+    ferrite_core::transcript::plain_text(open.transcript().blocks()).contains(text)
 }
 
 #[test]

@@ -11,7 +11,7 @@
 //! A retained capture is edited in its review (`review.rs`), with no live page.
 use super::*;
 use ferrite_core::browser::{Lease, Protection};
-use ferrite_core::cockpit::Ask;
+use ferrite_client::cockpit::Ask;
 use ferrite_core::browser_annotations::{
     Annotation, Capture, LiveFeedback, LiveScreenshot, Selection, Viewport,
 };

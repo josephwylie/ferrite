@@ -18,7 +18,7 @@ fn served(
     thread_local! {
         static ASKED: std::cell::RefCell<std::collections::BTreeMap<
             ferrite_core::ThreadKey,
-            ferrite_core::cockpit::Ask<ferrite_core::browser::State>,
+            ferrite_client::cockpit::Ask<ferrite_core::browser::State>,
         >> = Default::default();
     }
     ASKED.with(|asked| {

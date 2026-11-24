@@ -5,12 +5,12 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::notifications::Notifications;
-use crate::protocol::{ProviderState, ServerMessage, Snapshot};
-use crate::store::Provider;
-use crate::transcript::RateLimits;
-use crate::workspace::registry::Registry;
-use crate::{ModelInfo, ThreadId};
+use ferrite_core::notifications::Notifications;
+use ferrite_core::protocol::{ProviderState, ServerMessage, Snapshot};
+use ferrite_core::store::Provider;
+use ferrite_core::transcript::RateLimits;
+use ferrite_core::workspace::registry::Registry;
+use ferrite_core::{ModelInfo, ThreadId};
 
 pub(crate) struct Shared {
     /// The Store these are of.
@@ -24,7 +24,7 @@ pub(crate) struct Shared {
     models_changed: bool,
     /// Every Factory's Tasks (ADR 0037), and whether they changed since
     /// the window last asked.
-    pub(crate) factory: crate::factory::Board,
+    pub(crate) factory: ferrite_core::factory::Board,
     factory_changed: bool,
 }
 
@@ -99,7 +99,7 @@ impl Shared {
     fn set_registry(&mut self, registry: &serde_json::Value) {
         match Registry::from_wire(registry.clone(), &self.dir) {
             Ok(registry) => self.registry = registry,
-            Err(error) => crate::log!("the server's registry could not be read: {error}"),
+            Err(error) => ferrite_core::log!("the server's registry could not be read: {error}"),
         }
     }
 

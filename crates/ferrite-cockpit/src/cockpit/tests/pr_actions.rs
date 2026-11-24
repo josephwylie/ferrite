@@ -5,7 +5,7 @@ use super::pr::snapshot;
 use super::*;
 use crate::cockpit::panel::pr_read::PrTarget;
 use crate::cockpit::panel::PrAction;
-use ferrite_core::cockpit::HeldRead;
+use ferrite_client::cockpit::HeldRead;
 use ferrite_core::protocol::{ReviewPullRequest, WireMerge, WirePr, WirePrState};
 use ferrite_reviewr::forge::PrView;
 

@@ -295,7 +295,7 @@ fn box_alone(name: &str, bridge: fn(&Machine, &std::path::Path) -> Bridge) -> (C
 fn attached(core: &Cockpit, machine: MachineId) -> bool {
     matches!(
         core.server(machine),
-        Some(ferrite_core::cockpit::ServerState::Attached { .. })
+        Some(ferrite_client::cockpit::ServerState::Attached { .. })
     )
 }
 
@@ -330,7 +330,7 @@ fn open_on(core: &mut Cockpit, machine: MachineId) -> ThreadKey {
 
 /// Another client of box's Server — the board, another window — attached.
 fn another_client(name: &str) -> Cockpit {
-    use ferrite_core::cockpit::{Attach, Endpoint};
+    use ferrite_client::cockpit::{Attach, Endpoint};
     use ferrite_core::link;
     let address = link::address(&settings_dir(name).join("box"));
     let dial: machine::Dial = Box::new(move || {
@@ -652,7 +652,7 @@ fn a_machine_that_needs_a_sign_in_has_a_notice_that_signs_in(cx: &mut TestAppCon
         let machines = view.machines.as_ref().unwrap();
         assert!(matches!(
             machines.server_state(1, view.cockpit.read(cx)),
-            Some(ferrite_core::cockpit::ServerState::Detached {
+            Some(ferrite_client::cockpit::ServerState::Detached {
                 attention: Some(Failure::SignIn),
                 ..
             })
@@ -1155,7 +1155,7 @@ fn a_machine_that_needs_a_sign_in_says_so_beside_the_rest(cx: &mut TestAppContex
         view.read_with(cx, |view, cx| {
             matches!(
                 view.cockpit.read(cx).server(on_box),
-                Some(ferrite_core::cockpit::ServerState::Detached {
+                Some(ferrite_client::cockpit::ServerState::Detached {
                     attention: Some(Failure::SignIn),
                     ..
                 })
@@ -1194,7 +1194,7 @@ fn a_machine_without_ferrited_says_so(cx: &mut TestAppContext) {
         view.read_with(cx, |view, cx| {
             matches!(
                 view.cockpit.read(cx).server(on_box),
-                Some(ferrite_core::cockpit::ServerState::Detached {
+                Some(ferrite_client::cockpit::ServerState::Detached {
                     attention: Some(Failure::NotInstalled),
                     ..
                 })
@@ -1243,7 +1243,7 @@ fn turning_a_machine_off_lets_only_it_go(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut TestAppContext) {
-    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    use ferrite_client::cockpit::{Attach, Endpoint, ServerState};
     use crate::cockpit::surfaces::SurfaceId;
     let dir = settings_dir("tool-keys");
     let _ = std::fs::remove_dir_all(&dir);
@@ -1291,7 +1291,7 @@ fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut Test
 /// before routing keyboard input by pane index.
 #[gpui::test]
 fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppContext) {
-    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    use ferrite_client::cockpit::{Attach, Endpoint, ServerState};
     let dir = scratch("input-sync");
     let dial =
         ferrite_server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default())))
@@ -1493,7 +1493,7 @@ fn a_new_thread_with_no_project_here_stays_on_this_computer(cx: &mut TestAppCont
 /// says so when that machine no longer has it.
 #[gpui::test]
 fn a_delegates_thread_opens_in_place_on_its_machine(cx: &mut TestAppContext) {
-    use ferrite_core::cockpit::ServerState;
+    use ferrite_client::cockpit::ServerState;
     bind_production_keys(cx);
     let (mut core, _fake, machines, _agents) = two_machines("delegate-in-place", 1);
     let mine = core.threads()[0];
@@ -1861,7 +1861,7 @@ fn a_restart_restores_each_machines_pins_drafts_and_panes(cx: &mut TestAppContex
 /// log calls them, and a click revives one there.
 #[gpui::test]
 fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAppContext) {
-    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    use ferrite_client::cockpit::{Attach, Endpoint, ServerState};
     let dir = scratch("machine-parked");
     let dial =
         ferrite_server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default())))
@@ -2457,7 +2457,7 @@ pub(super) fn browsed(
 /// a local page, and the Thread and tab document it belongs to.
 pub(super) fn browser_core(name: &str) -> (Cockpit, ThreadKey, ferrite_core::browser::Document) {
     use ferrite_core::browser::Action;
-    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    use ferrite_client::cockpit::{Attach, Endpoint, ServerState};
     let dir = scratch(name);
     let dial = ferrite_server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
     let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
@@ -2579,7 +2579,7 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
 #[gpui::test]
 fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &mut TestAppContext) {
     use ferrite_core::browser::Action;
-    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    use ferrite_client::cockpit::{Attach, Endpoint, ServerState};
     use ferrite_pane::visual::{
         engine::Visuals,
         live_annotation::{Event, Submission},
@@ -2717,7 +2717,7 @@ fn settings_on_a_machine<'a>(
     &'a mut gpui::VisualTestContext,
     std::path::PathBuf,
 ) {
-    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    use ferrite_client::cockpit::{Attach, Endpoint, ServerState};
     let dir = scratch(name);
     let remote = dir.join("r");
     std::fs::create_dir_all(&remote).unwrap();

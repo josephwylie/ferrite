@@ -167,7 +167,7 @@ fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 }
 
 impl Reply {
-    pub(crate) fn snapshot(self) -> Option<Snapshot> {
+    pub fn snapshot(self) -> Option<Snapshot> {
         match self {
             Self::Read {
                 files,

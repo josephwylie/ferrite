@@ -21,6 +21,7 @@ headless = [
     "gpui/test-support",
     "dep:gpui-reference-platform",
     "ferrite-core/test-support",
+    "ferrite-client/test-support",
     "ferrite-ui/test-support",
     "ferrite-pane/test-support",
 ]
@@ -33,6 +34,7 @@ browser-smoke = ["gpui/test-support", "dep:gpui-reference-platform", "ferrite-pa
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
+ferrite-client = { path = "../ferrite-client" }
 # The theme, icons, components, motion and menus the Cockpit and Pane share.
 ferrite-ui = { path = "../ferrite-ui" }
 # The Pane: the transcript, the Composer and the Draft.
@@ -71,6 +73,7 @@ libc = "0.2"
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
 # The in-process machine the window's tests attach to.
 ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
+ferrite-client = { path = "../ferrite-client", features = ["test-support"] }
 ferrite-server = { path = "../ferrite-server", features = ["test-support"] }
 ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
 ferrite-pane = { path = "../ferrite-pane", features = ["test-support"] }

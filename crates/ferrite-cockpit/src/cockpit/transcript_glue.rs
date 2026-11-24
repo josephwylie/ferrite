@@ -36,7 +36,7 @@ pub(super) enum Handoff {
 /// waits for an answer, or the agent is changing — the cut never races
 /// them. Core refuses the same, in the same words.
 pub(super) fn rewind_gate(
-    open: &ferrite_core::cockpit::ThreadView<'_>,
+    open: &ferrite_client::cockpit::ThreadView<'_>,
 ) -> Option<Result<(), SharedString>> {
     if !open.supports_control(ferrite_core::ControlKind::Rewind) {
         return None;

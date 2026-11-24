@@ -416,9 +416,9 @@ fn interrogate_one_unreadable_part_keeps_every_window_from_attaching() {
     eprintln!("task.list trouble: {}", listed["trouble"]);
     let attached = Client::attach(&harness.address, hello());
     eprintln!("a window's attach: {:?}", attached.as_ref().err());
-    let cockpit = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
+    let cockpit = ferrite_client::cockpit::Cockpit::attach(ferrite_client::cockpit::Attach {
         store: harness_dir.join("threads"),
-        server: ferrite_core::cockpit::Endpoint::Local {
+        server: ferrite_client::cockpit::Endpoint::Local {
             executable: "/bin/false".into(),
         },
         saved_as: ferrite_core::MachineKey(None),

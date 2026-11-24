@@ -5,9 +5,9 @@
 
 use std::io;
 
-use crate::factory::{Board, Factory};
-use crate::protocol::{Done, GitHubAsk, Op, TaskAction};
-use crate::store::Provider;
+use ferrite_core::factory::{Board, Factory};
+use ferrite_core::protocol::{Done, GitHubAsk, Op, TaskAction};
+use ferrite_core::store::Provider;
 
 #[derive(Default)]
 pub(crate) struct FactoryFixture {
@@ -28,7 +28,7 @@ impl FactoryFixture {
     /// `op` answered here, with the board the window is to be told, or
     /// `None` when this fixture does not answer it.
     pub(crate) fn execute(&mut self, op: Op) -> Option<(io::Result<Option<Done>>, Option<Board>)> {
-        let agent = crate::factory::Agent {
+        let agent = ferrite_core::factory::Agent {
             provider: Provider::Claude,
             model: None,
             effort: None,
@@ -47,11 +47,11 @@ impl FactoryFixture {
             }
             Op::Workflow { action } => {
                 self.factory.as_ref()?;
-                crate::factory::workflow_command(action, &agent, Vec::new())
+                ferrite_core::factory::workflow_command(action, &agent, Vec::new())
             }
             Op::Coordinator { action } => {
                 self.factory.as_ref()?;
-                crate::factory::coordinator_command(action, &agent, Default::default())
+                ferrite_core::factory::coordinator_command(action, &agent, Default::default())
             }
             _ => return None,
         };
@@ -64,17 +64,17 @@ impl FactoryFixture {
         };
         let answer = factory
             .command(command, 0)
-            .map(|answer| Some(crate::factory::done(answer)))
+            .map(|answer| Some(ferrite_core::factory::done(answer)))
             .map_err(|refusal| io::Error::other(refusal.message));
         Some((answer, Some(factory.board())))
     }
 
     /// A command its Factory hears as a Server's would (a GitHub read's
     /// answer, say), and the board the window is to be told.
-    pub(crate) fn hear(&mut self, command: crate::factory::Command) -> Option<Board> {
+    pub(crate) fn hear(&mut self, command: ferrite_core::factory::Command) -> Option<Board> {
         let factory = self.factory.as_mut()?;
         if let Err(refusal) = factory.command(command, 0) {
-            crate::log!("fixture: the Factory refused: {refusal}");
+            ferrite_core::log!("fixture: the Factory refused: {refusal}");
         }
         Some(factory.board())
     }

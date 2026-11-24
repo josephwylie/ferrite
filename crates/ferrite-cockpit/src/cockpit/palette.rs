@@ -77,7 +77,7 @@ fn session_row(
     let name = candidate
         .title
         .as_deref()
-        .map(ferrite_core::cockpit::title_from_prompt)
+        .map(ferrite_client::cockpit::title_from_prompt)
         .filter(|title| !title.is_empty())
         .unwrap_or_else(|| {
             candidate

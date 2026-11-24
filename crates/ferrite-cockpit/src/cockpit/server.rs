@@ -5,7 +5,7 @@
 //! Engine of its own (`--demo`, `--load`) has none of it.
 
 use super::*;
-use ferrite_core::cockpit::{ServerRestart, ServerState};
+use ferrite_client::cockpit::{ServerRestart, ServerState};
 use ferrite_core::machine::Failure;
 use ferrite_core::protocol::When;
 use ferrite_core::server::agent;

@@ -22,10 +22,10 @@ pub use live::capture as live_capture;
 
 use super::{CockpitView, DraftTarget, MenuTarget};
 use crate::palette::PaletteScope;
+use ferrite_client::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::{
     activity::TranscriptCoverage,
     activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject},
-    cockpit::{Cockpit, SpawnRequest, Spawner},
     providers::Session,
     settings::ReadingSize,
     store::{Provider, Store},
@@ -2086,7 +2086,7 @@ fn nav_card_states(scene: &mut Scene) {
         .core
         .set_provider(
             handed,
-            ferrite_core::cockpit::ProviderChoice {
+            ferrite_client::cockpit::ProviderChoice {
                 provider: Provider::Claude,
                 model: None,
             },

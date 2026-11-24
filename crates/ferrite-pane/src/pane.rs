@@ -54,7 +54,7 @@ use {
 };
 
 use ferrite_core::activity::{AgentStatus, Subject};
-use ferrite_core::cockpit::ThreadView;
+use ferrite_client::cockpit::ThreadView;
 pub use ferrite_core::digest::{Turn, WallCard, WallLine};
 use ferrite_core::docview::{is_test_run, passed_count};
 use ferrite_core::followup::{self, Followup};

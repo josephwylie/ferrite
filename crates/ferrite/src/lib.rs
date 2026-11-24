@@ -21,7 +21,7 @@ use ferrite_ui::{frame, icons, keymap, motion, platform_text, register_fonts, th
 
 use ::gpui as kit;
 use ::gpui::*;
-use ferrite_core::cockpit::Cockpit;
+use ferrite_client::cockpit::Cockpit;
 use ferrite_core::server::{settings_dir, store_dir};
 use ferrite_core::settings::Settings;
 use ferrite_core::store::{Provider, Store};
@@ -571,7 +571,7 @@ mod tests {
     // No `use super::*`: the crate root globs `gpui::*`, whose `test` macro
     // would capture the `#[test]` this macro expands to and recurse.
     use super::{adopt, demo, dock_launch_dir, keep_mouse_cursor_visible};
-    use ferrite_core::cockpit::Cockpit;
+    use ferrite_client::cockpit::Cockpit;
     use ferrite_core::store::{Provider, Store};
     use ferrite_core::workspace::WorkspaceChoice;
 

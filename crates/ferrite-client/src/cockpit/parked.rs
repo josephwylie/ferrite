@@ -6,9 +6,9 @@
 use std::collections::BTreeMap;
 use std::io;
 
-use crate::protocol::{ParkedThread, ServerMessage, Snapshot};
-use crate::store::{LoadError, ThreadMeta};
-use crate::ThreadId;
+use ferrite_core::protocol::{ParkedThread, ServerMessage, Snapshot};
+use ferrite_core::store::{LoadError, ThreadMeta};
+use ferrite_core::ThreadId;
 
 #[derive(Default)]
 pub(crate) struct Parked {
@@ -103,7 +103,7 @@ impl Parked {
     }
 
     /// Whose a parked Thread is when not the operator's (ADR 0037).
-    pub(crate) fn owner(&self, thread: ThreadId) -> Option<crate::ThreadOwner> {
+    pub(crate) fn owner(&self, thread: ThreadId) -> Option<ferrite_core::ThreadOwner> {
         self.rows.get(&thread)?.owner.clone()
     }
 

@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::notifications::Alert;
-use ferrite_core::cockpit::ServerState;
+use ferrite_client::cockpit::ServerState;
 use ferrite_core::machine::Failure;
 use gpui::App;
 

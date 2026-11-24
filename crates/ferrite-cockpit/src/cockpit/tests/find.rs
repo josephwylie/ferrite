@@ -304,7 +304,7 @@ fn in_view(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
 fn find_opens_the_folds_that_hide_a_hit(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("find-folded", 1);
     let thread = core.threads()[0];
-    assert_eq!(core.send(thread, "Look into it".into()).now().unwrap(), ferrite_core::cockpit::Admission::Delivered);
+    assert_eq!(core.send(thread, "Look into it".into()).now().unwrap(), ferrite_client::cockpit::Admission::Delivered);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     super::hold_nav_open(&view, cx);
@@ -366,7 +366,7 @@ fn a_completed_turns_plan_is_kept_in_its_fold(cx: &mut TestAppContext) {
     use ferrite_core::progress::{PlanStep, ProgressEvent, StepStatus};
     let (mut core, fake) = cockpit("plan-kept", 1);
     let thread = core.threads()[0];
-    assert_eq!(core.send(thread, "Ship it".into()).now().unwrap(), ferrite_core::cockpit::Admission::Delivered);
+    assert_eq!(core.send(thread, "Ship it".into()).now().unwrap(), ferrite_client::cockpit::Admission::Delivered);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     super::hold_nav_open(&view, cx);

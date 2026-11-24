@@ -136,7 +136,7 @@ impl Registry {
     }
 
     /// No projects: also a window's copy before the Server's lands.
-    pub(crate) fn empty(dir: &Path) -> Registry {
+    pub fn empty(dir: &Path) -> Registry {
         Registry {
             dir: dir.to_path_buf(),
             projects: Vec::new(),

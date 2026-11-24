@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 
-use ferrite_core::cockpit::Cockpit;
+use ferrite_client::cockpit::Cockpit;
 use ferrite_core::delegate::Delegating;
 use ferrite_core::docview::FileChange;
 use ferrite_core::pr_watch::{WatchedPr, Watching};

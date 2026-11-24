@@ -26,7 +26,7 @@ use gpui::{ClipboardItem, Context};
 use super::pr_read::{PrRead, PrSource, PrTarget};
 use super::pull_request::{PrAction, PrEvent, PullRequestView};
 use crate::cockpit::{CockpitView, Handoff};
-use ferrite_core::cockpit::ThreadView;
+use ferrite_client::cockpit::ThreadView;
 use ferrite_core::transcript::Body;
 
 /// The queue entry an action waits as.

@@ -8,7 +8,7 @@ use ferrite_core::tree::{self, Asked, Exchange, Reply, Request, Root, Sent, Step
 use super::remote_operations::machine;
 use super::*;
 
-fn connect(cockpit: &mut ferrite_core::cockpit::Cockpit) -> Box<dyn Exchange> {
+fn connect(cockpit: &mut ferrite_client::cockpit::Cockpit) -> Box<dyn Exchange> {
     cockpit.tree(cockpit.first_machine()).unwrap()().unwrap()
 }
 

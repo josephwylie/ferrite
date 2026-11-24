@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use ferrite_core::activity::{
     ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject, TranscriptCoverage,
 };
-use ferrite_core::cockpit::{Cockpit, ProviderChoice, RssSampler, SpawnRequest, Spawner};
+use ferrite_client::cockpit::{Cockpit, ProviderChoice, RssSampler, SpawnRequest, Spawner};
 use ferrite_core::providers::Session;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::transcript::{Body, ToolState, Transcript};

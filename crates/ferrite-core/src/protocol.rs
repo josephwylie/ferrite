@@ -1547,6 +1547,15 @@ pub struct WireError {
     pub message: String,
 }
 
+impl From<WireError> for std::io::Error {
+    fn from(error: WireError) -> Self {
+        match error.code {
+            ErrorCode::Unsupported => std::io::Error::new(std::io::ErrorKind::Unsupported, error.message),
+            _ => std::io::Error::other(error.message),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
