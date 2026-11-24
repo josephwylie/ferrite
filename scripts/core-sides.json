@@ -94,25 +94,19 @@
   "ferrite-terminal"
  ],
  "crossings": {
-  "draft -> workspace": 1,
-  "ferrite-client -> engine": 6,
+  "ferrite-client -> engine": 5,
   "ferrite-client -> factory": 2,
-  "ferrite-client -> pr_watch": 1,
-  "ferrite-client -> providers": 1,
-  "ferrite-client -> store": 4,
-  "ferrite-client -> workspace": 3,
+  "ferrite-client -> store": 2,
+  "ferrite-client -> workspace": 1,
   "ferrite-cockpit -> factory": 1,
-  "ferrite-cockpit -> import": 2,
-  "ferrite-cockpit -> providers": 7,
-  "ferrite-cockpit -> spawner": 3,
+  "ferrite-cockpit -> providers": 5,
+  "ferrite-cockpit -> spawner": 2,
   "ferrite-cockpit -> store": 4,
   "ferrite-cockpit -> titler": 3,
-  "ferrite-cockpit -> workspace": 14,
   "link -> api": 1,
   "protocol -> store": 1,
   "server -> pr_watch": 3,
   "server -> providers": 1,
-  "server -> workspace": 1,
-  "user_commands -> providers": 1
+  "server -> workspace": 1
  }
 }
