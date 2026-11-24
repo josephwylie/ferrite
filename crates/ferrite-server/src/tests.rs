@@ -861,8 +861,10 @@ fn repositories_answers_each_project_that_is_a_repository_with_a_remote() {
     std::fs::create_dir_all(&plain).unwrap();
     let mut window = cockpit(&harness);
     let machine = window.first_machine();
-    let project = window.register_project(machine, &repo).unwrap();
-    window.register_project(machine, &plain).unwrap();
+    let asked = window.register_project(machine, &repo);
+    let project = window.wait_for(asked).unwrap();
+    let asked = window.register_project(machine, &plain);
+    window.wait_for(asked).unwrap();
 
     let answer = window.repositories(machine).unwrap();
     let heard = std::cell::RefCell::new(None);
