@@ -451,6 +451,10 @@ impl SessionCommand {
     }
 }
 
+/// A provider's command menu on its way, without a Thread
+/// (`Spawner::discover_commands`).
+pub type Discovery = std::sync::mpsc::Receiver<std::io::Result<Vec<SessionCommand>>>;
+
 /// Where a `/` command comes from.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]

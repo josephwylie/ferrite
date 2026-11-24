@@ -384,7 +384,7 @@ impl CockpitView {
             // No listing thread to be had: the plain walk, here.
             None => {
                 let found =
-                    ferrite_core::import::candidates(&self.session_file_roots, IMPORT_ROWS_MAX);
+                    ferrite_core::session_file::candidates(&self.session_file_roots, IMPORT_ROWS_MAX);
                 self.list_sessions(into, Ok(found), cx);
             }
         }

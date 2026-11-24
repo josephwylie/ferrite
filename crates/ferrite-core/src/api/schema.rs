@@ -331,7 +331,7 @@ pub struct PrWatchParams {
     pub until: Option<PrWatchUntil>,
 }
 
-/// How long a watch keeps its Thread working (`pr_watch::Until`).
+/// How long a watch keeps its Thread working (`pull_request::Until`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PrWatchUntil {
@@ -339,7 +339,7 @@ pub enum PrWatchUntil {
     Merged,
 }
 
-impl From<PrWatchUntil> for crate::pr_watch::Until {
+impl From<PrWatchUntil> for crate::pull_request::Until {
     fn from(until: PrWatchUntil) -> Self {
         match until {
             PrWatchUntil::Checks => Self::Checks,

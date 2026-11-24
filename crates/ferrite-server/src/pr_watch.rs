@@ -18,13 +18,12 @@ use serde_json::{json, Value};
 use ferrite_core::api::schema::{PrParams, PrWatchParams};
 use ferrite_core::api::{unknown_thread, ApiError, CallerId, Code};
 use ferrite_core::pr_watch::{
-    self, Change, CheckStatus, Closes, Cursor, End, Fingerprint, Mergeable, ReadError, Reading,
-    Report, Stamp, Target, Until, Watch,
+    self, Change, CheckStatus, Closes, End, Fingerprint, Mergeable, ReadError, Reading, Report,
 };
+use ferrite_core::pull_request::{self, Cursor, PrState, Stamp, Target, Until, Watch};
 use ferrite_core::server::github::GitHub;
 use ferrite_core::transcript::{tools, Body, ToolState};
 use ferrite_core::wake::Wake;
-use ferrite_core::pull_request::PrState;
 use ferrite_core::link::ClientId;
 use ferrite_core::protocol::{Done, ErrorCode, WireError};
 use ferrite_core::ThreadId;
@@ -875,7 +874,7 @@ impl Server {
 }
 
 /// Apply `commit` to the watch it is about, while that watch is on.
-fn commit_to(fact: &mut pr_watch::WatchFact, watch: &Watch, commit: Commit) -> bool {
+fn commit_to(fact: &mut pull_request::WatchFact, watch: &Watch, commit: Commit) -> bool {
     let (repository, number, started) = (&watch.repository, watch.number, watch.cursor.started_ms);
     match commit {
         Commit::Advance(next) => fact.advance(repository, number, started, next),

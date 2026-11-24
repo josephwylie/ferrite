@@ -34,13 +34,13 @@ of `ferrite-core` on the shared side or the engine's.
 `scripts/check_core_sides.py` counts each **crossing**: a path to an engine
 module from a shared module, or from one of the window's crates
 (`ferrite-client`, `ferrite-cockpit`, `ferrite-pane`, `ferrite-frame`,
-`ferrite-ui`, `ferrite-terminal`). There are 60:
+`ferrite-ui`, `ferrite-terminal`). There are 32:
 
 | From | Crossings | Mostly |
 | --- | --- | --- |
-| shared modules | 9 | the `server` module's GitHub reads and CLI checks |
-| `ferrite-client` | 17 | the Engine a Cockpit can run in itself, its Spawner and its Store |
-| `ferrite-cockpit` | 34 | `git` reads of a checkout, and the Store, Spawner and Sessions of the demo and fixture worlds |
+| shared modules | 7 | the `server` module's GitHub reads and CLI checks |
+| `ferrite-client` | 10 | the Engine a Cockpit can run in itself, its Spawner and its Store |
+| `ferrite-cockpit` | 15 | the Store, Spawner and Sessions of the demo and fixture worlds, and the titler |
 | `ferrite-pane`, `ferrite-ui` | 0 | |
 
 CI fails when a pair's count rises, a new pair appears, or a module is on
@@ -142,6 +142,49 @@ a PR watch's record (`pr_watch::WatchFact`) and the Store's
 `store::LogRecord` is the whole log schema, and `api::Heard` holds the
 API's `Request`.
 
+## Built: what a window reads of the engine side
+
+What a window reads of the engine's modules, and has no reason to ask a
+Server for, moved to the shared side. `runtime_mode` names nothing of the
+engine's, so it is a shared module now. No serialized form changed: one
+`serde` attribute names `WatchFact` at its new path. The crossings went
+from 60 to 32.
+
+- `pull_request` holds a Thread's PR watches (`WatchFact` and all it
+  holds), out of `pr_watch`. `store::ThreadMeta` then held nothing of the
+  engine's, and it moved with `ThreadSummary` and `LoadError` to a new
+  module, `header`.
+- `git_read`, new: the git reads a window makes of a checkout and its repo
+  (`head_of`, `checkout_stamp`, `tracked_ignored`, `branch_status`,
+  `checkout_branch`, `default_branch`, `worktree_paths`, `repo_listing`),
+  what they call, `canonical`, and the `git` runner under them.
+  `workspace` keeps making and removing worktrees, with that runner.
+- `memory`, new: `rss_bytes` and the watchdog's `Restart`. `prompt_queue`
+  took `Admission`, `session_file` the import scan (`default_roots`,
+  `candidates`), `prompt_files` `mention_files`, `spawn`
+  `spawnable_program` and `cmd_shim`, and the crate root `Discovery`,
+  beside `SessionCommand`. `ferrite-client` no longer re-exports
+  `Admission`.
+- The registry's read model is `project::Projects`: the Projects and their
+  worktrees, the form its file and the wire share, and the reads.
+  `workspace::registry::Registry` keeps the Store directory, the file and
+  every verb that changes them, and derefs to its `Projects`. A window's
+  copy is a `Projects`, so it no longer carries a Store directory.
+- `DraftBinding::resolve` takes the Project it reads, not the registry.
+
+The engine side still reaches into seven moved items, so they are
+`pub(crate)`: `git_read::git`, `spawn::spawnable_program`, and the three
+fields of `Projects` with its `parse` and `to_bytes`, which the registry's
+verbs and file use. Step 3 has to make them public.
+
+What is left is work, and two types. `store::LogRecord` is the whole log
+schema, and `protocol` carries it. `api::Heard` holds the API's `Request`,
+and `link` carries it. The `server` module's GitHub reads and CLI checks
+run `gh` and the providers' CLIs. A window still runs the titler, reads a
+checkout's PR through `workspace::pull_request` (`gh`), and builds the
+Engine, Store, Spawner and Sessions of its in-process, demo and fixture
+worlds.
+
 ## What comes next, in order
 
 Each step is one PR and drives its pairs in the baseline to zero.
@@ -149,7 +192,7 @@ Each step is one PR and drives its pairs in the baseline to zero.
 1. **Types move to the shared side.** Every crossing that is only a type
    or a pure function goes, from shared modules and the window crates
    alike. No crate changes. Done (above): what is left is work, and the
-   four types named there.
+   two types named there.
 2. **The Cockpit stops running an Engine in itself.** `Cockpit::new(store,
    spawner)` builds an Engine in the window's process. Production attaches
    to a Server (`Cockpit::attach`); the demo, fixtures and tests use the

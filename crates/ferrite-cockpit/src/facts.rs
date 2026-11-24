@@ -78,7 +78,7 @@ pub struct ThreadFacts {
     /// rows by and what its "40m / 2h / 3d" line says. `None` when the log
     /// cannot be stat'd; such a row claims nothing and sorts last.
     pub last_used: Option<SystemTime>,
-    /// The Project's default branch (`workspace::default_branch`), read
+    /// The Project's default branch (`git_read::default_branch`), read
     /// once per Project and shared by every Thread in it. `None` until
     /// read, or for a Thread no Project claims: then `main` and `master`
     /// stand in for it.
@@ -660,14 +660,14 @@ impl Lookups {
                 .default_branches
                 .into_iter()
                 .map(|(project, checkout)| {
-                    (project, ferrite_core::workspace::default_branch(&checkout))
+                    (project, ferrite_core::git_read::default_branch(&checkout))
                 })
                 .collect(),
             branches: self
                 .branches
                 .into_iter()
                 .map(|(thread, checkout)| {
-                    (thread, ferrite_core::workspace::checkout_branch(&checkout))
+                    (thread, ferrite_core::git_read::checkout_branch(&checkout))
                 })
                 .collect(),
         }
@@ -818,7 +818,7 @@ mod tests {
         facts.looked_up(lookups.run());
         assert_eq!(
             facts.get(thread).unwrap().branch,
-            ferrite_core::workspace::checkout_branch(&checkout).map(SharedString::from),
+            ferrite_core::git_read::checkout_branch(&checkout).map(SharedString::from),
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -919,11 +919,11 @@ mod tests {
         let opened = facts.get(thread).unwrap();
         assert_eq!(
             opened.branch,
-            ferrite_core::workspace::checkout_branch(&checkout).map(SharedString::from),
+            ferrite_core::git_read::checkout_branch(&checkout).map(SharedString::from),
         );
         assert_eq!(
             opened.default_branch.as_deref(),
-            Some(ferrite_core::workspace::default_branch(&checkout).as_str()),
+            Some(ferrite_core::git_read::default_branch(&checkout).as_str()),
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

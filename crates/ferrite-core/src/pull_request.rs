@@ -298,6 +298,337 @@ impl Watching {
     }
 }
 
+/// A Thread's PR watches: the ones on, and the ones that ended, kept so
+/// watching a PR again does not repeat what its last watch told.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WatchFact {
+    pub on: Vec<Watch>,
+    pub ended: Vec<Watch>,
+}
+
+impl WatchFact {
+    /// No watch on, and none ended: what a Thread that never watched has.
+    pub fn is_empty(&self) -> bool {
+        self.on.is_empty() && self.ended.is_empty()
+    }
+
+    /// What a window reads of these watches (`Watching`).
+    pub fn watching(&self, wake_waiting: bool) -> Watching {
+        Watching {
+            prs: self
+                .on
+                .iter()
+                .map(|watch| WatchedPr {
+                    url: watch.url.clone(),
+                    number: watch.number,
+                    holds: watch.holds(),
+                })
+                .collect(),
+            wake_waiting,
+        }
+    }
+
+    /// The watch on `repository#number`, while it is on.
+    pub fn on(&self, repository: &str, number: u64) -> Option<&Watch> {
+        self.on.iter().find(|watch| watch.is(repository, number))
+    }
+
+    /// Watch `target`, as T3's `thread.pull-request.watch` does. A watch
+    /// already on keeps its cursor and only takes `until`; a new one
+    /// starts at `Checks` unless told, from what the PR's ended watch had
+    /// told, so watching again repeats no check or conflict news.
+    /// `checks_pending` is a fresh read's word on whether checks were
+    /// still running, which lets the first read tell a failure CI made
+    /// after the call. Answers whether it was already watched.
+    pub fn watch(
+        &mut self,
+        target: Target,
+        until: Option<Until>,
+        checks_pending: Option<bool>,
+        now_ms: i64,
+    ) -> bool {
+        let (repository, number) = (target.repository.as_str(), target.number);
+        if let Some(watch) = self.on.iter_mut().find(|watch| watch.is(repository, number)) {
+            watch.until = until.unwrap_or(watch.until);
+            return true;
+        }
+        let ended = self
+            .ended
+            .iter()
+            .position(|watch| watch.is(repository, number))
+            .map(|at| self.ended.remove(at).cursor);
+        let cursor = match ended {
+            None => Cursor {
+                awaiting_baseline: Some(Baseline::All),
+                checks_pending: checks_pending.unwrap_or(false),
+                ..Cursor::default()
+            },
+            Some(ended) => Cursor {
+                head: ended.head,
+                failed_checks: ended.failed_checks,
+                passed: ended.passed,
+                passed_checks: ended.passed_checks,
+                owed_checks: ended.owed_checks,
+                awaiting_approval: ended.awaiting_approval,
+                approval_announced: ended.approval_announced,
+                conflicting: ended.conflicting,
+                awaiting_baseline: ended.awaiting_baseline,
+                checks_awaited_since_ms: ended.checks_awaited_since_ms,
+                // A finished-checks answer kept from the last watch may be
+                // an older head's.
+                checks_pending: checks_pending.unwrap_or(ended.checks_pending),
+                ..Cursor::default()
+            },
+        };
+        self.on.push(Watch {
+            url: target.url,
+            number,
+            repository: target.repository,
+            until: until.unwrap_or_default(),
+            cursor: Cursor {
+                started_ms: now_ms,
+                remarks_through_ms: now_ms,
+                ..cursor
+            },
+        });
+        false
+    }
+
+    /// Save what a read told the watch on `repository#number` started at
+    /// `started_ms`: only while that same watch is on, so a stop or a new
+    /// watch that landed during the read wins. Answers whether it saved.
+    pub fn advance(&mut self, repository: &str, number: u64, started_ms: i64, next: Cursor) -> bool {
+        match self
+            .on
+            .iter_mut()
+            .find(|watch| watch.is(repository, number) && watch.cursor.started_ms == started_ms)
+        {
+            Some(watch) => {
+                watch.cursor = next;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// End the watch on `repository#number`, keeping what it told as the
+    /// PR's ended watch: with `last`, what its final read saw (a watch the
+    /// Server ends), else its cursor as it stands (one the agent or the
+    /// operator stops). `started_ms`, when given, must be the watch's.
+    /// Answers whether one ended.
+    pub fn end(
+        &mut self,
+        repository: &str,
+        number: u64,
+        started_ms: Option<i64>,
+        last: Option<Cursor>,
+    ) -> bool {
+        let Some(at) = self.on.iter().position(|watch| {
+            watch.is(repository, number)
+                && started_ms.is_none_or(|started| watch.cursor.started_ms == started)
+        }) else {
+            return false;
+        };
+        let mut watch = self.on.remove(at);
+        if let Some(last) = last {
+            watch.cursor = last;
+        }
+        self.ended.retain(|ended| !ended.is(repository, number));
+        self.ended.push(watch);
+        true
+    }
+
+    /// End every watch, as parking or interrupting the Thread does.
+    /// Answers whether any was on.
+    pub fn end_all(&mut self) -> bool {
+        let on = std::mem::take(&mut self.on);
+        let any = !on.is_empty();
+        for watch in on {
+            self.ended
+                .retain(|ended| !ended.is(&watch.repository, watch.number));
+            self.ended.push(watch);
+        }
+        any
+    }
+}
+
+/// Which watch a waiting wake's news is about, so the wake is dropped once
+/// that news is stale (T3's `isStalePullRequestWatchStamp`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stamp {
+    pub repository: String,
+    pub number: u64,
+    pub started_ms: i64,
+    /// The head the news is about; `None` for news with remarks, which a
+    /// push leaves standing.
+    pub head: Option<String>,
+    /// The news ended the watch.
+    pub ended: bool,
+}
+
+impl WatchFact {
+    /// Whether the agent is still owed a wake about `stamp`: its watch is
+    /// still on, on the same head, or, for the notice that ended it, no
+    /// newer watch replaced it.
+    pub fn owes(&self, stamp: &Stamp) -> bool {
+        let (repository, number) = (stamp.repository.as_str(), stamp.number);
+        if stamp.ended {
+            let latest = self
+                .on(repository, number)
+                .or_else(|| self.ended.iter().find(|watch| watch.is(repository, number)));
+            return latest.is_some_and(|watch| watch.cursor.started_ms == stamp.started_ms);
+        }
+        self.on(repository, number).is_some_and(|watch| {
+            watch.cursor.started_ms == stamp.started_ms
+                && stamp
+                    .head
+                    .as_ref()
+                    .is_none_or(|head| watch.cursor.head.as_ref() == Some(head))
+        })
+    }
+}
+
+/// A PR to watch: where it is, and its number in its repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    pub url: String,
+    pub number: u64,
+    /// `owner/name`.
+    pub repository: String,
+}
+
+impl Target {
+    /// The PR a github.com URL names (`https://github.com/o/r/pull/7`).
+    pub fn of_url(url: &str) -> Option<Self> {
+        let rest = url
+            .trim()
+            .trim_end_matches('/')
+            .strip_prefix("https://github.com/")?;
+        let mut parts = rest.split('/');
+        let (owner, name, pull, number) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+        let number = number.parse().ok().filter(|_| pull == "pull" && parts.next().is_none())?;
+        Self::of(&format!("{owner}/{name}"), number)
+    }
+
+    /// The PR `number` in `repository` (`owner/name`) on github.com.
+    pub fn of(repository: &str, number: u64) -> Option<Self> {
+        let mut parts = repository.split('/');
+        let fine = |part: Option<&str>| {
+            part.is_some_and(|part| {
+                !part.is_empty()
+                    && part
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            })
+        };
+        (fine(parts.next()) && fine(parts.next()) && parts.next().is_none() && number > 0).then(|| {
+            Self {
+                url: format!("https://github.com/{repository}/pull/{number}"),
+                number,
+                repository: repository.to_string(),
+            }
+        })
+    }
+}
+
+/// One watched PR.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Watch {
+    pub url: String,
+    pub number: u64,
+    /// `owner/name`.
+    pub repository: String,
+    pub until: Until,
+    pub cursor: Cursor,
+}
+
+impl Watch {
+    /// Whether this is the watch of `repository#number`. GitHub's names
+    /// ignore case.
+    pub fn is(&self, repository: &str, number: u64) -> bool {
+        self.number == number && self.repository.eq_ignore_ascii_case(repository)
+    }
+
+    /// Whether it holds its Thread working now, as T3's watch task is
+    /// `awaited`: while the head's checks run, and with `until: merged`
+    /// until the watch ends. Once every check finished, a person moves the
+    /// PR next.
+    pub fn holds(&self) -> bool {
+        self.until == Until::Merged || self.cursor.checks_pending
+    }
+}
+
+/// How long the watch holds its Thread.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Until {
+    /// Until every check has finished.
+    #[default]
+    Checks,
+    /// Until the PR merges, closes or is unwatched.
+    Merged,
+}
+
+/// Everything the watch has already told, so the next reading tells only
+/// what is new.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cursor {
+    pub started_ms: i64,
+    /// The head commit last read; `None` before any read named one.
+    pub head: Option<String>,
+    /// The checks failing at the last read.
+    pub failed_checks: Vec<String>,
+    /// Whether the gate (the required checks, or every check when none is
+    /// required) had passed, and which checks it was.
+    pub passed: bool,
+    pub passed_checks: Vec<String>,
+    /// Checks owed one wake once every check has finished: the ones still
+    /// pending when the required ones passed early, or the failed ones
+    /// while a failure keeps the required ones from passing.
+    pub owed_checks: Vec<String>,
+    /// Approval holds, keyed by workflow run URL, or by check name when no
+    /// run URL is known.
+    pub awaiting_approval: Vec<String>,
+    /// The agent was told checks await approval on this head.
+    pub approval_announced: bool,
+    /// The remark watermark: remarks active after it are new, and those at
+    /// it are new unless their id is listed.
+    pub remarks_through_ms: i64,
+    pub remark_ids: Vec<String>,
+    pub conflicting: bool,
+    pub merge_queue: QueueSeen,
+    /// Consecutive comment-only wakes.
+    pub wakes: u32,
+    /// What is already on the PR is recorded, not told.
+    pub awaiting_baseline: Option<Baseline>,
+    /// When the head was first read without any check, until a check shows
+    /// up or the agent is told none did.
+    pub checks_awaited_since_ms: Option<i64>,
+    /// Whether checks were still running on the head at the last read.
+    pub checks_pending: bool,
+}
+
+/// Which baseline a new watch still owes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Baseline {
+    /// The first read records checks and conflicts without telling them.
+    All,
+    /// A read that could not be trusted to show the checks left their
+    /// baseline to the next one.
+    Checks,
+}
+
+/// The last merge queue removal the watch saw.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QueueSeen {
+    /// No read yet: the first one tells only removals since the watch
+    /// started.
+    #[default]
+    Unread,
+    /// Read, and the PR had never left a merge queue.
+    Nothing,
+    Removal(String),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

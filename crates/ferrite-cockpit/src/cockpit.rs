@@ -278,7 +278,7 @@ fn pump_hears(executor: &gpui::BackgroundExecutor) -> ferrite_core::doorbell::He
 }
 
 /// What a Thread's checkouts say, read with no git process: its own
-/// checkout whole (`checkout`, its `workspace::checkout_stamp`), and the
+/// checkout whole (`checkout`, its `git_read::checkout_stamp`), and the
 /// `HEAD` of each of its Project's directories, whose branch is all the
 /// Thread shows of them.
 fn checkouts_stamp(checkout: Option<u64>, directories: &[(SharedString, std::path::PathBuf)]) -> u64 {
@@ -286,7 +286,7 @@ fn checkouts_stamp(checkout: Option<u64>, directories: &[(SharedString, std::pat
     let mut hasher = std::hash::DefaultHasher::new();
     checkout.hash(&mut hasher);
     for (_, directory) in directories {
-        ferrite_core::workspace::head_of(directory).hash(&mut hasher);
+        ferrite_core::git_read::head_of(directory).hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -432,7 +432,7 @@ pub struct CockpitView {
     checkout_stamps: std::collections::HashMap<ThreadKey, u64>,
     /// The files git tracks in each Thread's checkout (by its cwd) though
     /// an ignore rule matches them, as git last listed them
-    /// (`workspace::tracked_ignored`): its stamp reads them by name.
+    /// (`git_read::tracked_ignored`): its stamp reads them by name.
     tracked_ignored: std::collections::HashMap<std::path::PathBuf, std::sync::Arc<[std::path::PathBuf]>>,
     /// The machines whose Threads' branches are being read there.
     /// What a draft's workspace chip and its menu read of its Project's
@@ -1355,7 +1355,7 @@ impl CockpitView {
             activation: None,
             composer_menu,
             draft_commands: Default::default(),
-            session_file_roots: ferrite_core::import::default_roots(),
+            session_file_roots: ferrite_core::session_file::default_roots(),
             launch_project,
             environment_lookup: None,
             checkouts: Default::default(),
@@ -2657,7 +2657,7 @@ impl CockpitView {
                             // the next stamp.
                             let checkout = *walked.entry(cwd.clone()).or_insert_with(|| {
                                 let listed = tracked_ignored.get(&cwd).map_or(&[][..], |files| files);
-                                ferrite_core::workspace::checkout_stamp(&cwd, listed)
+                                ferrite_core::git_read::checkout_stamp(&cwd, listed)
                             });
                             let stamp = checkouts_stamp(checkout, &directories);
                             if !listing_wanted && known.get(&thread) == Some(&stamp) {
@@ -2667,7 +2667,7 @@ impl CockpitView {
                                 let listing = listed
                                     .entry(repo.clone())
                                     .or_insert_with(|| {
-                                        ferrite_core::workspace::worktree_paths(&repo).ok()
+                                        ferrite_core::git_read::worktree_paths(&repo).ok()
                                     })
                                     .clone();
                                 if let Some(listing) = listing {
@@ -2679,15 +2679,15 @@ impl CockpitView {
                             let status = statuses
                                 .entry(cwd.clone())
                                 .or_insert_with(|| {
-                                    let listed = ferrite_core::workspace::tracked_ignored(&cwd);
+                                    let listed = ferrite_core::git_read::tracked_ignored(&cwd);
                                     learned.insert(cwd.clone(), listed.into());
-                                    ferrite_core::workspace::branch_status(&cwd)
+                                    ferrite_core::git_read::branch_status(&cwd)
                                 })
                                 .clone();
                             let project_branches = directories
                                 .into_iter()
                                 .filter_map(|(label, directory)| {
-                                    ferrite_core::workspace::checkout_branch(&directory)
+                                    ferrite_core::git_read::checkout_branch(&directory)
                                         .map(|branch| (label, SharedString::from(branch)))
                                 })
                                 .collect();
@@ -5375,7 +5375,7 @@ impl CockpitView {
         cx.spawn(async move |this, cx| {
             let listing = cx
                 .background_executor()
-                .spawn(async move { ferrite_core::workspace::repo_listing(&root) })
+                .spawn(async move { ferrite_core::git_read::repo_listing(&root) })
                 .await;
             this.update(cx, |view, cx| {
                 view.checkouts.set_listing(project, listing);
@@ -5434,7 +5434,7 @@ impl CockpitView {
 
     /// Ask, off the UI thread, what each of `projects`' checkouts is on:
     /// git only for one whose `HEAD` moved since it last named the branch
-    /// (`workspace::head_of`). Callable from a frame: it only starts the
+    /// (`git_read::head_of`). Callable from a frame: it only starts the
     /// lookup, once per Project at a time, and `checkouts_read` takes the
     /// answers. Never of another machine, whose checkouts no git here can
     /// read.
@@ -5462,9 +5462,9 @@ impl CockpitView {
                     roots
                         .into_iter()
                         .map(|(project, root, known)| {
-                            let head = ferrite_core::workspace::head_of(&root);
+                            let head = ferrite_core::git_read::head_of(&root);
                             let branch = (known.as_ref() != Some(&head))
-                                .then(|| ferrite_core::workspace::checkout_branch(&root));
+                                .then(|| ferrite_core::git_read::checkout_branch(&root));
                             checkouts::Looked { project, head, branch }
                         })
                         .collect::<Vec<_>>()
@@ -5691,7 +5691,7 @@ impl CockpitView {
         self.sync_setup_before_start(machine, cx);
         let resolved = binding
             .resolve(
-                self.cockpit.read(cx).registry(machine).reading(),
+                self.cockpit.read(cx).project(binding.project()),
                 !self.elsewhere(machine, cx),
             )
             .map_err(|e| e.to_string());
@@ -8972,7 +8972,7 @@ fn startup_project(cockpit: &ferrite_client::cockpit::Cockpit) -> Option<Project
 
 /// This process's resident memory, for the perf print.
 fn rss_mb() -> f64 {
-    ferrite_core::spawner::rss_bytes(std::process::id())
+    ferrite_core::memory::rss_bytes(std::process::id())
         .map(|bytes| bytes as f64 / (1024.0 * 1024.0))
         .unwrap_or(0.0)
 }

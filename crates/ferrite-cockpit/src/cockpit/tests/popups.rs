@@ -123,7 +123,7 @@ fn window<'a>(
 ) -> (Entity<CockpitView>, Fake, &'a mut gpui::VisualTestContext) {
     let (mut core, fake) = cockpit(name, threads);
     let thread = core.threads()[0];
-    assert_eq!(core.send(thread, "Ship it".into()).now().unwrap(), ferrite_client::cockpit::Admission::Delivered);
+    assert_eq!(core.send(thread, "Ship it".into()).now().unwrap(), ferrite_core::prompt_queue::Admission::Delivered);
     *fake.native_controls.borrow_mut() = true;
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));

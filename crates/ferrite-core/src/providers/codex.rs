@@ -295,7 +295,7 @@ impl CodexSession {
     pub fn spawn(config: CodexConfig) -> Result<Self, CodexSpawnError> {
         // On Windows an npm install is a `codex.cmd` shim a bare name
         // cannot exec; everything spawns through the resolved answer.
-        let program = super::spawnable_program(&config.program);
+        let program = crate::spawn::spawnable_program(&config.program);
         check_version(&program)?;
 
         // A resume can meet the thread's previous writer still alive: the

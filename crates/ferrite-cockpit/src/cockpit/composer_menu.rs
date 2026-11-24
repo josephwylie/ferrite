@@ -318,7 +318,7 @@ impl ComposerMenuView {
             _ => None,
         };
         let files = walked.unwrap_or_else(|| {
-            std::rc::Rc::new(ferrite_core::workspace::mention_files(
+            std::rc::Rc::new(ferrite_core::prompt_files::mention_files(
                 &root,
                 MENTION_FILE_CAP,
             ))
@@ -397,7 +397,7 @@ impl ComposerMenuView {
                         .name("ferrite-file-fallback".into())
                         .spawn(move || {
                             let paths =
-                                ferrite_core::workspace::mention_files(&root, MENTION_FILE_CAP);
+                                ferrite_core::prompt_files::mention_files(&root, MENTION_FILE_CAP);
                             let _ = tx.send(mention_rows(&paths, &query));
                         })
                         .is_ok()
@@ -764,7 +764,7 @@ impl CockpitView {
                         let cwd = draft
                             .binding
                             .resolve(
-                                self.cockpit.read(cx).registry(machine).reading(),
+                                self.cockpit.read(cx).project(draft.binding.project()),
                                 !self.elsewhere(machine, cx),
                             )
                             .ok()?
@@ -785,7 +785,7 @@ impl CockpitView {
                         let cwd = draft
                             .binding
                             .resolve(
-                                self.cockpit.read(cx).registry(machine).reading(),
+                                self.cockpit.read(cx).project(draft.binding.project()),
                                 !self.elsewhere(machine, cx),
                             )
                             .ok()

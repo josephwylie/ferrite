@@ -158,7 +158,7 @@ fn a_new_worktree_is_made_off_the_loop_while_other_threads_progress() {
         !engine.thread(other).unwrap().starting()
     });
 
-    let asked = ferrite_core::workspace::git_spawns_on_this_thread();
+    let asked = ferrite_core::git_read::git_spawns_on_this_thread();
     let started = engine.bootstrap_command(
         DraftId::new(1),
         &first_send(ferrite_core::checkout::WorkspaceChoice::NewWorktree { repo: repo.clone() }),
@@ -170,7 +170,7 @@ fn a_new_worktree_is_made_off_the_loop_while_other_threads_progress() {
     engine.pump();
 
     assert_eq!(
-        ferrite_core::workspace::git_spawns_on_this_thread() - asked,
+        ferrite_core::git_read::git_spawns_on_this_thread() - asked,
         0,
         "the loop asked git while making the worktree"
     );

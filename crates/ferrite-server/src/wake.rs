@@ -6,7 +6,8 @@
 use std::collections::BTreeMap;
 
 use ferrite_core::engine::WakeTaken;
-use ferrite_core::pr_watch::{self, Stamp};
+use ferrite_core::pr_watch;
+use ferrite_core::pull_request::Stamp;
 use ferrite_core::wake::Wake;
 use ferrite_core::ThreadId;
 

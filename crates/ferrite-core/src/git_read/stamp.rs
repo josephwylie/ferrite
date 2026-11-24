@@ -49,7 +49,7 @@ pub fn head_of(cwd: &Path) -> Option<String> {
 /// `cwd` is in, as one number read with no git process: its `HEAD`, refs,
 /// index and config, the names of its repository's worktrees, and the size
 /// and time of every file in the work tree that git does not ignore, and of
-/// each of `tracked_ignored` (`workspace::tracked_ignored`, as git last
+/// each of `tracked_ignored` (`git_read::tracked_ignored`, as git last
 /// listed them), which git reads though the walk never meets them. The
 /// same number means git would answer the same, so a caller on a cadence
 /// runs git only once it moves. Take it before git reads: a write after it

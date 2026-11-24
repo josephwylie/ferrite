@@ -433,7 +433,7 @@ fn follow_into(
     // Git's list as it stood before the command — what a sweep hands in.
     cockpit.worktrees_listed(
         thread,
-        ferrite_core::workspace::worktree_paths(repo).unwrap(),
+        ferrite_core::git_read::worktree_paths(repo).unwrap(),
         Instant::now(),
     );
     let stream = fake.streams.borrow().last().unwrap().clone();
@@ -467,11 +467,11 @@ fn follow_into(
     );
     assert!(cockpit.worktrees_listed(
         thread,
-        ferrite_core::workspace::worktree_paths(repo).unwrap(),
+        ferrite_core::git_read::worktree_paths(repo).unwrap(),
         Instant::now()
     ));
     assert!(!cockpit.wants_worktree_listing());
-    ferrite_core::workspace::follow::canonical(worktree)
+    ferrite_core::git_read::canonical(worktree)
 }
 
 /// The whole follow flow at the cockpit's seam (`workspace::follow`):
@@ -586,7 +586,7 @@ fn a_followed_worktree_that_vanishes_returns_the_thread_to_main() {
     git(&["worktree", "remove", "--force", live.to_str().unwrap()]);
     assert!(cockpit.worktrees_listed(
         thread,
-        ferrite_core::workspace::worktree_paths(&repo).unwrap(),
+        ferrite_core::git_read::worktree_paths(&repo).unwrap(),
         Instant::now()
     ));
     assert_eq!(cockpit.thread(thread).unwrap().workspace().cloned(), main);
@@ -688,7 +688,7 @@ fn only_mains_own_work_moves_the_thread() {
         .unwrap();
     cockpit.worktrees_listed(
         thread,
-        ferrite_core::workspace::worktree_paths(&repo).unwrap(),
+        ferrite_core::git_read::worktree_paths(&repo).unwrap(),
         Instant::now(),
     );
     let stream = fake.streams.borrow()[0].clone();
@@ -730,7 +730,7 @@ fn only_mains_own_work_moves_the_thread() {
         cockpit.thread(thread).unwrap().workspace().cloned(),
         Some(WorkspaceBinding::Worktree {
             repo: repo.clone(),
-            path: ferrite_core::workspace::follow::canonical(&worktree),
+            path: ferrite_core::git_read::canonical(&worktree),
         })
     );
 }
@@ -757,7 +757,7 @@ fn opening_on_an_existing_branch_switches_the_project_checkout() {
         .unwrap();
 
     assert_eq!(
-        ferrite_core::workspace::checkout_branch(&repo).as_deref(),
+        ferrite_core::git_read::checkout_branch(&repo).as_deref(),
         Some("main")
     );
     assert_eq!(
@@ -785,7 +785,7 @@ fn opening_on_a_new_branch_creates_it_in_the_project_checkout() {
         )
         .unwrap();
 
-    let branch = ferrite_core::workspace::checkout_branch(&repo).expect("a branch");
+    let branch = ferrite_core::git_read::checkout_branch(&repo).expect("a branch");
     assert!(branch.starts_with("ferrite/branch-"), "branch: {branch}");
 }
 
@@ -1029,7 +1029,7 @@ fn a_hand_made_worktree_is_adopted_without_minting_or_registering() {
         "adoption registers nothing"
     );
     assert_eq!(
-        ferrite_core::workspace::worktree_paths(&repo).unwrap().len(),
+        ferrite_core::git_read::worktree_paths(&repo).unwrap().len(),
         2,
         "adoption creates nothing"
     );

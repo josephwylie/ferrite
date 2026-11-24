@@ -21,6 +21,7 @@ use ferrite_core::checkout::{WorkspaceBinding, WorkspaceChoice};
 use ferrite_core::engine::Launch;
 use ferrite_core::factory::{self, Answer, Command, Effect, Seen};
 use ferrite_core::factory_board::{self, Agent, Outcome};
+use ferrite_core::git_read;
 use ferrite_core::project::ProjectId;
 use ferrite_core::protocol::{Done, ServerMessage, TaskAction, WireError, WorkflowAction};
 use ferrite_core::provider::ProviderChoice;
@@ -42,7 +43,7 @@ pub(super) struct SkillsSeen {
     /// When `listed` came back; `None` before any listing has.
     at_ms: Option<i64>,
     listed: Option<Vec<String>>,
-    asking: Option<ferrite_core::providers::commands::Discovery>,
+    asking: Option<ferrite_core::Discovery>,
 }
 
 /// The Factory kept in the Store's directory. One whose file cannot be
@@ -366,7 +367,7 @@ impl Server {
         let worktree = worktree
             .or_else(|| self.factory.task(task)?.worktree.clone())
             .or_else(|| {
-                workspace::worktrees(&repo)
+                git_read::worktrees(&repo)
                     .ok()?
                     .into_iter()
                     .find(|listed| listed.branch.as_deref() == Some(branch.as_str()))

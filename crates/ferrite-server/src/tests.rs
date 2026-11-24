@@ -214,7 +214,7 @@ impl Spawner for Spawn {
         &mut self,
         _provider: ferrite_core::provider::Provider,
         _cwd: &Path,
-    ) -> Option<ferrite_core::providers::commands::Discovery> {
+    ) -> Option<ferrite_core::Discovery> {
         let installed = self.installed.lock().unwrap().clone()?;
         let (tx, rx) = mpsc::channel();
         let skills = installed.into_iter().map(|name| ferrite_core::SessionCommand {

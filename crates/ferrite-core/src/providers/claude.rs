@@ -276,7 +276,7 @@ impl ClaudeSession {
     pub fn spawn(config: ClaudeConfig) -> Result<Self, ClaudeSpawnError> {
         // On Windows an npm install is a `claude.cmd` shim a bare name
         // cannot exec; everything spawns through the resolved answer.
-        let program = super::spawnable_program(&config.program);
+        let program = crate::spawn::spawnable_program(&config.program);
         check_version(&program)?;
 
         let mut command = super::launched(&config.launcher, &program);

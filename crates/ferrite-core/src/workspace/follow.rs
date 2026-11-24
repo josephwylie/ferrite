@@ -28,6 +28,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::git_read::canonical;
 use serde_json::Value;
 
 /// Consecutive Main tool calls inside one other checkout before the Thread
@@ -287,19 +288,6 @@ fn mentions(hint: &str, path: &Path) -> bool {
         || path
             .file_name()
             .is_some_and(|leaf| hint.contains(&*leaf.to_string_lossy()))
-}
-
-/// The path as git would print it: symlinks resolved. A path that does
-/// not exist yet resolves through its nearest standing ancestor, so a file
-/// about to be written still names its checkout.
-pub fn canonical(path: &Path) -> PathBuf {
-    if let Ok(resolved) = dunce::canonicalize(path) {
-        return resolved;
-    }
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(leaf)) => canonical(parent).join(leaf),
-        _ => path.to_path_buf(),
-    }
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 //! and the palette's `Stop watching PR`.
 use super::*;
 use crate::cockpit::surfaces::SurfaceId;
-use ferrite_core::pr_watch::{Target, WatchFact};
+use ferrite_core::pull_request::{Target, WatchFact};
 
 fn palette(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<String> {
     cx.update(|window, cx| {
@@ -109,7 +109,7 @@ fn a_watch_whose_digest_lands_while_the_window_acts_still_reaches_the_card(cx: &
 /// waits for the merge.
 #[gpui::test]
 fn a_watch_holds_the_thread_working_while_checks_run_or_until_merged(cx: &mut TestAppContext) {
-    use ferrite_core::pr_watch::Until;
+    use ferrite_core::pull_request::Until;
     let (core, _fake) = cockpit("pr-watch-working", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);

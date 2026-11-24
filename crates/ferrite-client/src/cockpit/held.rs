@@ -69,7 +69,6 @@ impl HeldMachine {
     pub(super) fn new(
         link: Link,
         logs: Option<Store>,
-        dir: &std::path::Path,
         saved_as: MachineKey,
     ) -> Self {
         let limits = logs
@@ -85,7 +84,7 @@ impl HeldMachine {
             logs,
             synced: Vec::new(),
             mirrors: mirror::Mirrors::retaining(limits),
-            shared: shared::Shared::new(dir),
+            shared: shared::Shared::new(),
             told: None,
             seen_told: BTreeMap::new(),
             drawn: None,

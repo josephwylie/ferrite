@@ -16,28 +16,31 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use crate::doorbell::Sender;
+use crate::git_read;
 
 use crate::activity::{
     Activity, ActivityEvent, ActivityInput, ActivityLimits, ActivityUpdate, ActivityView, AgentKey,
     DecisionHandle, PendingDecision, Subject, ToolTiming,
 };
 use crate::digest::{title_from_prompt, Digest, HELD_AT_REST};
+use crate::header::LoadError;
+use crate::memory::Restart;
 use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
 use crate::checkout::{self, WorkspaceBinding, WorkspaceChoice};
 use crate::pane_update::{event_changes_content, PaneUpdate};
 use crate::project::ProjectId;
 use crate::prompt_history::{HistoryDirection, PromptHistory};
-use crate::prompt_queue::{Delivery, QueueItem};
+use crate::prompt_queue::{Admission, Delivery, QueueItem};
 use crate::protocol::{self, Outgoing, ServerMessage, SharedRoster};
 use crate::provider::{Provider, ProviderChoice};
 use crate::providers::{ResumeFailure, Session, SettingAck};
 use crate::roster::{BootstrapResult, Bootstrapped, DraftId};
 use crate::session::SessionLifecycle;
-use crate::store::{LoadError, Store, ThreadWriter};
+use crate::store::{Store, ThreadWriter};
 use crate::suggest::Suggestion;
 use crate::transcript::{Input, Transcript, Update};
 use crate::workspace;
-use crate::workspace::follow::{self, Follow, Move};
+use crate::workspace::follow::{Follow, Move};
 use crate::workspace::registry::{self, Registry};
 use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
 
@@ -186,7 +189,7 @@ pub trait Spawner {
         &mut self,
         _provider: Provider,
         _cwd: &std::path::Path,
-    ) -> Option<crate::providers::commands::Discovery> {
+    ) -> Option<crate::Discovery> {
         None
     }
 
@@ -238,33 +241,6 @@ pub trait RssSampler {
     /// Bytes resident for the Session serving `thread`, or None when it
     /// cannot be measured. `pid` is the Session's process where it has one.
     fn sample(&mut self, thread: ThreadId, pid: Option<u32>) -> Option<u64>;
-}
-
-/// A Session the watchdog replaced, for the operator and the app's log.
-/// The Engine names its Thread by id; a Cockpit by its key
-/// (`cockpit::Restart`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct Restart<T = ThreadId> {
-    pub thread: T,
-    /// What it had grown to when the watchdog acted.
-    pub rss: u64,
-}
-
-/// What became of a prompt the operator sent, as far as the Engine can
-/// tell at once. The caller keeps the whole draft until it knows.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[must_use = "a refused or unconfirmed send leaves the draft with the caller"]
-pub enum Admission {
-    /// On the wire: the Session has it.
-    Delivered,
-    /// Waiting for the Session to start. If it never does, the prompt comes
-    /// back through `take_retrieved_prompt`.
-    Held,
-    /// Not sent, and nothing will send it: the words say why.
-    Refused(String),
-    /// The Server did not say whether it took the prompt (it never answered
-    /// or went away mid-act): sending again may duplicate it.
-    Unconfirmed(String),
 }
 
 /// What `Engine::send_wake` did with a server wake.
@@ -336,7 +312,7 @@ pub enum DeleteError {
     /// The Thread could not be loaded to learn its binding.
     Load(LoadError),
     /// A git operation failed.
-    Git(workspace::GitError),
+    Git(git_read::GitError),
     Io(io::Error),
 }
 
@@ -535,7 +511,7 @@ struct Thread {
     /// The most its agent may do without asking.
     cap: Option<crate::runtime_mode::RuntimeMode>,
     /// The PRs its agent watches (ADR 0046), as its log holds them.
-    pr_watch: crate::pr_watch::WatchFact,
+    pr_watch: crate::pull_request::WatchFact,
     /// The Threads it started on other machines (ADR 0047), as its log
     /// holds them.
     delegates: crate::delegate::Delegates,
@@ -3018,7 +2994,7 @@ impl Engine {
             .any(|state| state.follow.wants_listing())
     }
 
-    /// Git's worktree list for a Thread's repo (`workspace::worktree_paths`
+    /// Git's worktree list for a Thread's repo (`git_read::worktree_paths`
     /// of the binding's `repo`), as the driver read it off the frame — the
     /// cockpit never runs git in its pump — and `taken_at`, the driver's
     /// clock from before it asked git, so a listing that was already being
@@ -3112,14 +3088,14 @@ impl Engine {
     }
 
     /// Every open Thread's PR watches, as their logs hold them.
-    pub fn pr_watches(&self) -> impl Iterator<Item = (ThreadId, &crate::pr_watch::WatchFact)> {
+    pub fn pr_watches(&self) -> impl Iterator<Item = (ThreadId, &crate::pull_request::WatchFact)> {
         self.threads
             .iter()
             .map(|(id, state)| (*id, &state.pr_watch))
     }
 
     /// An open Thread's PR watches.
-    pub fn pr_watch(&self, thread: ThreadId) -> Option<&crate::pr_watch::WatchFact> {
+    pub fn pr_watch(&self, thread: ThreadId) -> Option<&crate::pull_request::WatchFact> {
         self.threads.get(&thread).map(|state| &state.pr_watch)
     }
 
@@ -3128,7 +3104,7 @@ impl Engine {
     pub fn set_pr_watch(
         &mut self,
         thread: ThreadId,
-        pr_watch: crate::pr_watch::WatchFact,
+        pr_watch: crate::pull_request::WatchFact,
     ) -> io::Result<()> {
         let state = self
             .threads
@@ -3172,7 +3148,7 @@ impl Engine {
 
     /// Stop watching `target` for `thread`, keeping what its watch told as
     /// the PR's ended watch (T3's unwatch). Answers whether it was watched.
-    pub fn unwatch_pr(&mut self, thread: ThreadId, target: &crate::pr_watch::Target) -> io::Result<bool> {
+    pub fn unwatch_pr(&mut self, thread: ThreadId, target: &crate::pull_request::Target) -> io::Result<bool> {
         let mut fact = self
             .pr_watch(thread)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Thread is not open"))?
@@ -4460,7 +4436,7 @@ impl Engine {
         &mut self,
         provider: Provider,
         cwd: &std::path::Path,
-    ) -> Option<crate::providers::commands::Discovery> {
+    ) -> Option<crate::Discovery> {
         self.spawner.discover_commands(provider, cwd)
     }
 
@@ -6202,7 +6178,7 @@ fn placement(
 
 /// A Thread's worktree made real, or the tree standing there checked: the
 /// git half of `placement`, which needs no registry.
-fn place_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), workspace::GitError> {
+fn place_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), git_read::GitError> {
     // Anything already standing at the path must BE the worktree — a
     // directory that merely exists there (squatting where one was, or was
     // never) must not be silently rebuilt over or spawned into.
@@ -6239,7 +6215,7 @@ enum FirstCheckout {
 }
 
 impl FirstCheckout {
-    fn run(self) -> Result<(), workspace::GitError> {
+    fn run(self) -> Result<(), git_read::GitError> {
         match self {
             Self::Switch {
                 checkout,
@@ -6413,7 +6389,7 @@ fn apply_move(store: &Store, id: ThreadId, state: &mut Thread, moved: Move) -> b
     let repo = binding.repo().to_path_buf();
     let next = match moved {
         Move::ToMain => WorkspaceBinding::Main { checkout: repo },
-        Move::Into(path) if follow::canonical(&path) == follow::canonical(&repo) => {
+        Move::Into(path) if git_read::canonical(&path) == git_read::canonical(&repo) => {
             WorkspaceBinding::Main { checkout: repo }
         }
         Move::Into(path) => WorkspaceBinding::Worktree { repo, path },

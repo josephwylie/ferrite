@@ -19,23 +19,22 @@ use std::time::{Duration, Instant};
 use ferrite_core::activity::{AgentKey, DecisionHandle, Subject};
 pub use ferrite_core::activity::ToolTiming;
 pub use ferrite_core::digest::title_from_prompt;
-pub use ferrite_core::engine::{
-    Admission, AgentLaunch, Engine, Preparation, RssSampler, SpawnRequest, Spawner,
-};
+pub use ferrite_core::engine::{AgentLaunch, Engine, Preparation, RssSampler, SpawnRequest, Spawner};
 pub use ferrite_core::pane_update::SubjectUpdate;
 pub use ferrite_core::prompt_history::HistoryDirection;
 pub use ferrite_core::provider::ProviderChoice;
 use ferrite_core::checkout::WorkspaceChoice;
+use ferrite_core::header::LoadError;
 use ferrite_core::notifications::{DecisionNoticeId, NoticeId, Notifications};
-use ferrite_core::project::ProjectId;
+use ferrite_core::project::{ProjectId, Projects};
+use ferrite_core::prompt_queue::Admission;
 use ferrite_core::protocol::{
     Done, ErrorCode, NoticeAction, Op, ProjectAction, ServerMessage, When, WireError,
 };
 use ferrite_core::provider::Provider;
 use ferrite_core::roster::{DraftId, PaneIdentity, Roster};
-use ferrite_core::store::{LoadError, Store};
+use ferrite_core::store::Store;
 use ferrite_core::transcript::Input;
-use ferrite_core::workspace::registry::Registry;
 use ferrite_core::{
     Decision, DecisionAnswer, MachineId, MachineKey, ModelInfo, ProjectKey, SavedThread, ThreadId,
     ThreadKey,
@@ -63,7 +62,7 @@ pub type Bootstrapped = ferrite_core::roster::Bootstrapped<ThreadKey>;
 /// A first send settled by `pump`, its Thread named by its key.
 pub type BootstrapResult = ferrite_core::roster::BootstrapResult<ThreadKey>;
 /// A Session the watchdog replaced, its Thread named by its key.
-pub type Restart = ferrite_core::engine::Restart<ThreadKey>;
+pub type Restart = ferrite_core::memory::Restart<ThreadKey>;
 
 /// One window's hold on every machine it holds (ADR 0045): each machine's
 /// link and what its Engine said (`HeldMachine`), and what exists once per
@@ -250,14 +249,12 @@ impl Cockpit {
         saved_as: MachineKey,
     ) -> io::Result<HeldMachine> {
         let logs = store.clone();
-        let dir = store.dir().to_path_buf();
         let mut engine = Engine::try_new(store, spawner)?;
         // Its window pumps it: a park is listed by the pump that parked it.
         engine.read_parked_in_place();
         Ok(HeldMachine::new(
             Link::InProcess(Box::new(engine)),
             Some(logs),
-            &dir,
             saved_as,
         ))
     }
@@ -273,7 +270,7 @@ impl Cockpit {
     pub fn empty() -> Self {
         Self {
             machines: BTreeMap::new(),
-            nothing: shared::Shared::new(Path::new("")),
+            nothing: shared::Shared::new(),
             roster: Roster::default(),
             said: Said::default(),
             follows: Follows::default(),
@@ -309,11 +306,10 @@ impl Cockpit {
     pub fn hold(&mut self, attach: Attach) -> io::Result<MachineId> {
         let local = matches!(attach.server, Endpoint::Local { .. });
         let logs = local.then(|| Store::reader(&attach.store)).transpose()?;
-        let dir = attach.store.clone();
         let saved_as = attach.saved_as.clone();
         let mut remote = remote::Remote::new(attach);
         let arrived = if local { remote.attach_now() } else { None };
-        let mut machine = HeldMachine::new(Link::Server(Box::new(remote)), logs, &dir, saved_as);
+        let mut machine = HeldMachine::new(Link::Server(Box::new(remote)), logs, saved_as);
         // A window streams only what it draws, from its first attach on: it
         // draws nothing yet (ADR 0032).
         machine.drawn = Some(Drawn::default());
@@ -1589,7 +1585,7 @@ mod parity {
 /// What the Engine answers, as this window asks it.
 impl Cockpit {
     /// `machine`'s Projects.
-    pub fn registry(&self, machine: MachineId) -> OnMachine<'_, Registry> {
+    pub fn registry(&self, machine: MachineId) -> OnMachine<'_, Projects> {
         self.reading(machine, |shared| &shared.registry)
     }
 
@@ -2485,7 +2481,7 @@ impl Cockpit {
 
     /// A Thread's header: a parked one's from its published row; an open
     /// one's off its log's header line, on this computer only.
-    pub fn peek(&self, thread: ThreadKey) -> Result<ferrite_core::store::ThreadMeta, LoadError> {
+    pub fn peek(&self, thread: ThreadKey) -> Result<ferrite_core::header::ThreadMeta, LoadError> {
         let Some((machine, thread)) = self.at(thread) else {
             return Err(LoadError::Io(gone().into()));
         };
@@ -2972,7 +2968,7 @@ impl Cockpit {
         machine: MachineId,
         provider: Provider,
         cwd: &std::path::Path,
-    ) -> Option<ferrite_core::providers::commands::Discovery> {
+    ) -> Option<ferrite_core::Discovery> {
         match &mut self.machines.get_mut(&machine)?.link {
             Link::InProcess(engine) => engine.discover_commands(provider, cwd),
             Link::Server(server) => server.discovery().discover_commands(provider, cwd),
@@ -3121,7 +3117,7 @@ impl Cockpit {
 
     /// A fixture world's PR watches for `thread` (ADR 0046), as the
     /// Server's watcher would have saved them.
-    pub fn fixture_pr_watch(&mut self, thread: ThreadKey, fact: ferrite_core::pr_watch::WatchFact) {
+    pub fn fixture_pr_watch(&mut self, thread: ThreadKey, fact: ferrite_core::pull_request::WatchFact) {
         if let Err(error) = self.in_process_of(thread).set_pr_watch(thread.thread(), fact) {
             ferrite_core::log!("thread {}: a fixture watch was not saved: {error}", thread.thread());
         }

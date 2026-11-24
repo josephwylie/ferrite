@@ -10,6 +10,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use crate::engine::{Preparation, RssSampler, SpawnRequest, Spawner};
+use crate::memory::rss_bytes;
 use crate::provider::Provider;
 use crate::providers::{
     ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, ResumeRefused, Session,
@@ -86,7 +87,7 @@ impl Spawner for Spawn {
                         Ok(found) => rows.extend(found),
                         Err(error) => {
                             crate::log!("native session discovery failed: {error}");
-                            rows.extend(crate::import::candidates(&[(provider, root)], cap));
+                            rows.extend(crate::session_file::candidates(&[(provider, root)], cap));
                         }
                     }
                 }
@@ -110,7 +111,7 @@ impl Spawner for Spawn {
         &mut self,
         provider: Provider,
         cwd: &std::path::Path,
-    ) -> Option<crate::providers::commands::Discovery> {
+    ) -> Option<crate::Discovery> {
         let (tx, rx) = crate::doorbell::channel();
         let failures = tx.clone();
         let cwd = cwd.to_path_buf();
@@ -403,41 +404,6 @@ impl RssSampler for ProcessRss {
             self.pending.remove(&pid);
         }
         self.cached.get(&pid).copied()
-    }
-}
-
-/// One process's resident bytes, the way the panes24 spike reads it.
-#[cfg(not(windows))]
-pub fn rss_bytes(pid: u32) -> Option<u64> {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "rss=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    let kilobytes: u64 = String::from_utf8(out.stdout).ok()?.trim().parse().ok()?;
-    Some(kilobytes * 1024)
-}
-
-/// One process's resident bytes through the native Windows process API.
-#[cfg(windows)]
-pub fn rss_bytes(pid: u32) -> Option<u64> {
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::ProcessStatus::{
-        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
-    };
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
-    };
-
-    unsafe {
-        let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid);
-        if process.is_null() {
-            return None;
-        }
-        let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
-        counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
-        let ok = K32GetProcessMemoryInfo(process, &mut counters, counters.cb);
-        CloseHandle(process);
-        (ok != 0).then_some(counters.WorkingSetSize as u64)
     }
 }
 

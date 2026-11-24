@@ -788,10 +788,10 @@ pub(super) fn read_agent_inputs(
     requested: &AgentKey,
     through: u64,
     limits: crate::activity::ActivityLimits,
-) -> Result<Vec<crate::activity::ActivityInput>, super::LoadError> {
+) -> Result<Vec<crate::activity::ActivityInput>, crate::header::LoadError> {
     use std::io::Seek;
     if file.metadata()?.len() < through {
-        return Err(super::LoadError::Corrupt {
+        return Err(crate::header::LoadError::Corrupt {
             detail: format!("thread {thread} is shorter than its history checkpoint"),
         });
     }
@@ -846,17 +846,17 @@ impl<'a> RecordReader<'a> {
         file: &'a mut std::fs::File,
         thread: crate::ThreadId,
         through: u64,
-    ) -> Result<Self, super::LoadError> {
+    ) -> Result<Self, crate::header::LoadError> {
         use std::io::{BufRead, Read};
         let mut reader = std::io::BufReader::new(file.take(through));
         let mut line = Vec::new();
         reader.read_until(b'\n', &mut line)?;
         let header: super::Header =
-            serde_json::from_slice(&line).map_err(|_| super::LoadError::Corrupt {
+            serde_json::from_slice(&line).map_err(|_| crate::header::LoadError::Corrupt {
                 detail: format!("thread {thread} has no readable header"),
             })?;
         if header.schema > super::SCHEMA_VERSION {
-            return Err(super::LoadError::FutureSchema {
+            return Err(crate::header::LoadError::FutureSchema {
                 found: header.schema,
                 supported: super::SCHEMA_VERSION,
             });
@@ -869,7 +869,7 @@ impl<'a> RecordReader<'a> {
     }
 }
 impl Iterator for RecordReader<'_> {
-    type Item = Result<super::Record, super::LoadError>;
+    type Item = Result<super::Record, crate::header::LoadError>;
     fn next(&mut self) -> Option<Self::Item> {
         use std::io::BufRead;
         if self.ended {
@@ -912,11 +912,11 @@ pub(super) fn agent_inputs(
 }
 
 fn project_agent<R: std::borrow::Borrow<super::Record>>(
-    records: impl IntoIterator<Item = Result<R, super::LoadError>>,
+    records: impl IntoIterator<Item = Result<R, crate::header::LoadError>>,
     aliases: Aliases,
     requested: &AgentKey,
     limits: crate::activity::ActivityLimits,
-) -> Result<Vec<crate::activity::ActivityInput>, super::LoadError> {
+) -> Result<Vec<crate::activity::ActivityInput>, crate::header::LoadError> {
     use crate::activity::ActivityInput;
     use std::collections::{HashMap, VecDeque};
 

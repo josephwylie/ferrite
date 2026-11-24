@@ -93,7 +93,7 @@ fn a_new_thread_binds_to_the_main_checkout(cx: &mut TestAppContext) {
         assert!(matches!(binding, WorkspaceBinding::Main { .. }));
         // The registry canonicalizes what it registers; the binding is
         // the registered root.
-        assert_eq!(binding.cwd(), ferrite_core::workspace::follow::canonical(&repo));
+        assert_eq!(binding.cwd(), ferrite_core::git_read::canonical(&repo));
     });
 }
 
@@ -107,7 +107,7 @@ fn the_branch_chip_offers_the_checkout_its_other_branch_and_both_new_branch_mode
     let base = scratch("branch-menu");
     let repo = repo_in(&base);
     // Whatever this machine's `git init` called its first branch.
-    let default = ferrite_core::workspace::checkout_branch(&repo).expect("a branch");
+    let default = ferrite_core::git_read::checkout_branch(&repo).expect("a branch");
     let switched = std::process::Command::new("git")
         .args(["switch", "-q", "-c", "feature/checked-out"])
         .current_dir(&repo)
@@ -394,7 +394,7 @@ fn picking_an_existing_worktree_binds_the_thread_to_its_path(cx: &mut TestAppCon
             "adoption minted nothing"
         );
         assert_eq!(
-            ferrite_core::workspace::worktree_paths(&repo)
+            ferrite_core::git_read::worktree_paths(&repo)
                 .unwrap()
                 .len(),
             2,
@@ -708,7 +708,7 @@ fn git_in(repo: &std::path::Path, args: &[&str]) {
 /// until the fresh one lands.
 #[gpui::test]
 fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
-    let spawned = ferrite_core::workspace::git_spawns_on_this_thread;
+    let spawned = ferrite_core::git_read::git_spawns_on_this_thread;
     let base = scratch("chip-git-off-ui");
     let repo = repo_in(&base);
     git_in(&repo, &["switch", "-q", "-c", "feature/drafted"]);
@@ -766,7 +766,7 @@ fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
 }
 
 /// Every file of `dir` dated an hour back, so no stamp of it is racy
-/// (`workspace::checkout_stamp`). Git's read-only objects keep their time.
+/// (`git_read::checkout_stamp`). Git's read-only objects keep their time.
 fn settle(dir: &std::path::Path) {
     let then = std::time::SystemTime::now() - Duration::from_secs(3600);
     for entry in std::fs::read_dir(dir).unwrap().flatten() {
@@ -784,7 +784,7 @@ fn settle(dir: &std::path::Path) {
 /// the operator wrote by hand, or one git tracks under an ignored folder.
 #[gpui::test]
 fn an_idle_window_runs_no_git_until_its_checkout_moves(cx: &mut TestAppContext) {
-    let spawned = ferrite_core::workspace::git_spawns_on_this_thread;
+    let spawned = ferrite_core::git_read::git_spawns_on_this_thread;
     let base = scratch("idle-git");
     let repo = repo_in(&base);
     // Force-added under an ignored folder: no walk of the work tree meets it.
@@ -846,7 +846,7 @@ fn an_idle_window_runs_no_git_until_its_checkout_moves(cx: &mut TestAppContext) 
 /// off the UI thread and follows the repo once the answer lands.
 #[gpui::test]
 fn a_turn_end_rereads_the_checkout_off_the_ui_thread(cx: &mut TestAppContext) {
-    let spawned = ferrite_core::workspace::git_spawns_on_this_thread;
+    let spawned = ferrite_core::git_read::git_spawns_on_this_thread;
     let base = scratch("turn-end-git");
     let repo = repo_in(&base);
     let fake = Fake::default();

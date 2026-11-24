@@ -15,7 +15,7 @@
 //! follows it hears where it went.
 
 use super::*;
-use ferrite_client::cockpit::Admission;
+use ferrite_core::prompt_queue::Admission;
 use ferrite_core::draft_content::DraftContent;
 use ferrite_core::ThreadKey;
 use ferrite_pane::composer::SentDraft;

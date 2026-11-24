@@ -807,7 +807,7 @@ fn expanding_completed_work_keeps_the_clicked_heading(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("fold-anchor", 1);
     let thread = core.threads()[0];
     let (view, cx) = {
-        assert_eq!(core.send(thread, "turn 0".into()).now().unwrap(), ferrite_client::cockpit::Admission::Delivered);
+        assert_eq!(core.send(thread, "turn 0".into()).now().unwrap(), ferrite_core::prompt_queue::Admission::Delivered);
         add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx))
     };
     hide_panel(&view, cx);
@@ -815,7 +815,7 @@ fn expanding_completed_work_keeps_the_clicked_heading(cx: &mut TestAppContext) {
     for turn in 0..6 {
         if turn > 0 {
             let admission = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, format!("turn {turn}")).now().unwrap()));
-            assert_eq!(admission, ferrite_client::cockpit::Admission::Delivered);
+            assert_eq!(admission, ferrite_core::prompt_queue::Admission::Delivered);
         }
         let stream = fake.streams.borrow().len() - 1;
         let send = |event| fake.streams.borrow()[stream].send(event).unwrap();
@@ -888,7 +888,7 @@ fn expanding_work_at_the_followed_tail_keeps_the_clicked_heading(cx: &mut TestAp
     let (mut core, fake) = cockpit("fold-tail", 1);
     let thread = core.threads()[0];
     let (view, cx) = {
-        assert_eq!(core.send(thread, "turn 0".into()).now().unwrap(), ferrite_client::cockpit::Admission::Delivered);
+        assert_eq!(core.send(thread, "turn 0".into()).now().unwrap(), ferrite_core::prompt_queue::Admission::Delivered);
         add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx))
     };
     hide_panel(&view, cx);
@@ -896,7 +896,7 @@ fn expanding_work_at_the_followed_tail_keeps_the_clicked_heading(cx: &mut TestAp
     for turn in 0..3 {
         if turn > 0 {
             let admission = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, format!("turn {turn}")).now().unwrap()));
-            assert_eq!(admission, ferrite_client::cockpit::Admission::Delivered);
+            assert_eq!(admission, ferrite_core::prompt_queue::Admission::Delivered);
         }
         let stream = fake.streams.borrow().len() - 1;
         let send = |event| fake.streams.borrow()[stream].send(event).unwrap();

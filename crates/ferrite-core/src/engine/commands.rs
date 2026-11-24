@@ -199,7 +199,7 @@ impl Engine {
                 url,
                 watching: false,
             } => {
-                let target = crate::pr_watch::Target::of_url(url)
+                let target = crate::pull_request::Target::of_url(url)
                     .ok_or_else(|| failed("Name the pull request by its GitHub url."))?;
                 self.unwatch_pr(*thread, &target)
                     .map(|_| Some(Done::PrWatch { watching: false }))
