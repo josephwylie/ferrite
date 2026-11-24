@@ -366,10 +366,19 @@ thread.
 
 **Placement**
 Where a Project of this computer lives on a Machine: the folder its copy
-was sent to there. A Project with a repository finds its counterpart on a
-Machine by that repository, so only one without needs a Placement kept
-(`placements.json` in the Machine's own directory, ADR 0048).
+was sent to there, kept for every copy (`placements.json` in the Machine's
+own directory, ADR 0048). A Project with a repository also finds its
+counterpart on a Machine by that repository.
 _Avoid_: mirror, sync target, remote path.
+
+**Unfinished copy**
+A copy of a Project to a Machine that began and has not ended: cancelled,
+cut off, or stopped with the app. This computer keeps it beside the
+Machine's Placements (`unfinished.json`) from before its first byte until
+it ends. Only its Resume changes its destination: it sends what differs
+and removes only what that copy sent, so what anyone else put there stays
+(ADR 0048).
+_Avoid_: partial copy, interrupted sync, half copy.
 
 **Setup sync**
 The operator's agent setup (skills, commands, agents, instructions, rules,
