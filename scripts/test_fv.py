@@ -30,6 +30,19 @@ class SafetyTests(unittest.TestCase):
         self.assertFalse({"FERRITE_SOCKET", "FERRITE_THREAD_ID", "FERRITE_BIN"} & set(env))
         self.assertEqual(env["FERRITE_STORE"], str(fv.TEMP / "fv-unit" / "threads"))
 
+    def test_a_run_has_a_home_of_its_own_and_keeps_the_toolchains(self):
+        operator = {"HOME": "/home/me", "USERPROFILE": r"C:\Users\me", "CODEX_HOME": "/home/me/codex",
+                    "CLAUDE_CONFIG_DIR": "/home/me/claude", "CARGO_HOME": "/opt/cargo"}
+        with patch.dict(os.environ, operator):
+            env = fv.Run("unit").env()
+            rustup = str(Path.home() / ".rustup")
+            signed_in = fv.Run("unit", operator_home=True).env()
+        home = str(fv.TEMP / "fv-unit" / "home")
+        self.assertEqual((env["HOME"], env["USERPROFILE"]), (home, home))
+        self.assertFalse({"CODEX_HOME", "CLAUDE_CONFIG_DIR"} & set(env))
+        self.assertEqual((env["CARGO_HOME"], env["RUSTUP_HOME"]), ("/opt/cargo", rustup))
+        self.assertEqual((signed_in["HOME"], signed_in["CODEX_HOME"]), ("/home/me", "/home/me/codex"))
+
     def test_a_process_not_running_this_checkouts_binary_is_never_ours(self):
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
                                  env={**os.environ, "FERRITE_STORE": str(fv.TEMP / "fv-unit" / "threads")})

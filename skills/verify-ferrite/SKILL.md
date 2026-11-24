@@ -93,13 +93,18 @@ through ps, lsof or /proc:
 ```sh
 $FV launch                 # headless (default). Or: $FV launch <run-id>
 $FV launch --window [id]   # macOS: the visible window, only for what headless can't show
+$FV launch --operator-home [id]   # the operator's HOME, for agents that must be signed in;
+                           # Ferrite then keeps Setup sync off by itself
 export FV_RUN=<id>         # launch prints this line; every other command needs it
 ```
 
 `launch` does, in order:
 
 1. `cargo build --locked -p ferrite --features headless` (seconds when nothing changed).
-2. Creates `/tmp/fv-<id>/` with a Store at `threads/` (`FERRITE_STORE`), scratch
+2. Creates `/tmp/fv-<id>/` with a Store at `threads/` (`FERRITE_STORE`), a home of its
+   own at `home/` (`HOME` and `USERPROFILE`, with `CODEX_HOME` and `CLAUDE_CONFIG_DIR`
+   dropped and `CARGO_HOME`, `RUSTUP_HOME` kept on the operator's toolchains), so no
+   Claude, Codex or Setup sync of the run reads the operator's setup, scratch
    `settings.json` beside it (haiku at low effort, permission mode `default` so tools
    ask, Codex `on-request` + `read-only`; no login item, update checks, system
    notifications, sounds, auto-titles or prompt suggestions), and a one-commit git repo
