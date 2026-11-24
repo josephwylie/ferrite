@@ -34,13 +34,13 @@ of `ferrite-core` on the shared side or the engine's.
 `scripts/check_core_sides.py` counts each **crossing**: a path to an engine
 module from a shared module, or from one of the window's crates
 (`ferrite-client`, `ferrite-cockpit`, `ferrite-pane`, `ferrite-frame`,
-`ferrite-ui`, `ferrite-terminal`). There are 8:
+`ferrite-ui`, `ferrite-terminal`). There are 2:
 
 | From | Crossings | Mostly |
 | --- | --- | --- |
 | shared modules | 0 | |
-| `ferrite-client` | 3 | the Store a window on this computer reads logs from, and the Spawner a window discovers sessions and commands with |
-| `ferrite-cockpit` | 5 | the titler, and the Spawner it hands each `Attach` |
+| `ferrite-client` | 2 | the Store a window on this computer reads logs from |
+| `ferrite-cockpit` | 0 | |
 | `ferrite-pane`, `ferrite-ui` | 0 | |
 
 CI fails when a pair's count rises, a new pair appears, or a module is on
@@ -280,6 +280,68 @@ Thread's header (`HeldMachine::logs`); the Spawner in `Attach::discovery`,
 which discovers sessions and commands; and the titler, with the provider
 program it runs (`cockpit::titling`).
 
+## Built: a Machine's CLI work is its Server's
+
+The Spawner in `Attach::discovery` and the titler were a window running
+this computer's provider CLI for work that belongs to a Thread's machine.
+On a Machine that was three bugs. A Draft's `/` menu and a Workflow Step's
+skills ran this computer's CLI in a folder that is the Machine's. The
+import picker listed this computer's session files and sent their paths
+to the Machine's Server in `import`. A Thread on a Machine was titled by
+this computer's CLI, from the window that sent its first prompt.
+
+Discovery, two shapes:
+
+- **A. Ask the Server.** Two commands: `list_commands {provider, cwd}`,
+  replied `commands`, and `list_sessions {cap}`, replied `sessions
+  {sessions, roots}`. The Server answers off its pump with its own
+  Spawner: its CLI, its folders, its session roots. A window asks through
+  `Link` and holds an `Ask<T>`, as it holds every ask (ADR 0041).
+- **B. Run the window's Spawner on the Machine.** The window would send
+  each CLI probe down the tunnel to run there. That is a second way to run
+  a process on a Machine beside its Server, with its own errors and its
+  own idea of the Machine's PATH and home.
+
+A was built. `Remote` asks with the untimed `Remote::ask`, as `list_dir`
+does: the Server's own deadlines (a command probe's 10 s, Codex's session
+list's 10 s) would race `REPLY_WAIT`. The window's walk of session files
+and its `session_file_roots` are gone. The Server lists the roots it
+finds on its own computer; an Engine in the window's process, a fixture,
+walks the roots a test gives it (`fixture_session_roots`) when its
+Spawner lists none.
+
+Titles, two shapes:
+
+- **A. The Engine titles on the first prompt.** `deliver` marks a Thread
+  owed a title when the operator's first prompt goes out. The pump asks
+  `Spawner::title` once (`engine::titles`); production runs the Thread's
+  Provider (`titler::write`). The answer is a rename (`rename_thread`)
+  unless the Thread has a title by then or titles were turned off, so it
+  reaches every window as a rename does. While it is out, `ThreadState`
+  says `titling`, which the nav draws as it drew the window's own.
+- **B. The window asks the Server to title.** A `title {thread, prompt}`
+  command after a first send. Every window that sent one would ask, the
+  Server would have to drop all but one, and a window closed before the
+  answer would leave the Thread untitled.
+
+A was built: no window asks. Whether to title is Settings' *Name threads
+automatically*, now a Server default (`ServerDefaults::auto_title`) beside
+follow-up suggestions on the Machine defaults group, so the Machine that
+runs the titler is the one whose switch it reads. The window still reads
+this computer's switch to show an untitled Thread's first-prompt name.
+
+A Server from before these commands refuses them as `unsupported`. The
+menu and the picker then say to update ferrited on that Machine; the
+window never runs its own CLI in their place. Such a Server writes no
+titles, so its Threads keep their first-prompt names, and Settings shows
+*Name threads automatically* on for it whatever is sent: it keeps no such
+default.
+
+`Attach::discovery`, `Reach::defaults`, `cockpit::titling`,
+`Preferences::titler` and the window's walk are gone. The crossings went
+from 8 to 2: what is left is `Store::reader` in `Cockpit::hold` and
+`HeldMachine::logs`.
+
 ## What comes next, in order
 
 Each step is one PR and drives its pairs in the baseline to zero.
@@ -290,8 +352,9 @@ Each step is one PR and drives its pairs in the baseline to zero.
 2. **A released window runs no Engine.** Done (above): the Engine in a
    window's process is a fixture, and the demo is a development build's.
 3. **`ferrite-core` splits in two.** First the window's last work goes
-   to its Server: the titler, session and command discovery, and the logs
-   a window reads itself become questions over the protocol. With no
+   to its Server: the titler and session and command discovery did
+   (above), and the logs a window reads itself become questions over the
+   protocol. With no
    crossings left, the shared modules become one crate and the engine
    modules another. The window's crates drop the engine crate, and
    `ferrite-server` is the one crate that depends on it.

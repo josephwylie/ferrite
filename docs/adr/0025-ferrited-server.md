@@ -220,7 +220,7 @@ Client → Server:
 |---|---|
 | `hello {generation, client:{name, version}, capabilities[]}` | Gen-1 capabilities: `render_visual` (this client can draw Visuals); `parked_threads` (it lists the Server's parked Threads off `parked`, ADR 0026; every window says it, and a Server now publishes rows to every window). |
 | `watch {thread, resume?:{boot_id, after}}` / `unwatch {thread}` | Stream a Thread's inputs. Without `resume`, or when it cannot be met, the stream starts with its history. Only watched Threads stream; every Thread's `ThreadState` and `digest` are always sent. A window watches the Threads it draws at Transcript level, and unwatches one 30 seconds after it stops drawing it (ADR 0032). |
-| `command {id, op, …}` | One per act that changes shared or durable state: `open`, `bootstrap` (a Draft's first prompt; replied once the Thread starts), `cancel_bootstrap {request}`, `send`, `queue`, `unqueue`, `cancel_queued {edit?}`, `take_recovered`, `recall`, `interrupt`, `start_fresh {thread}` (a Thread whose provider lost its conversation starts a new one, the transcript's latest turns carried as context), `stop_subagent {thread, key}`, `answer {thread, handle, answer}`, `control`, `set_model`, `set_effort`, `set_provider`, `rename`, `park`, `revive`, `revive_group`, `delete`, `import`, `group` (replied with what dissolved), `layout`, `project`, `notice` (open, dismiss, read, seen), `show_subject`, `load_subject`, `say`, `worktrees_listed`, `cli_replaced`, `settings_changed`, `server_defaults {set?}` (replied with the Server's own file, reread; ADR 0026), `cli {action}` (`versions`, `check` or `update {provider}`: the Server's machine's CLIs, replied `clis` or `cli_updated`), `search_files`, `list_dir {path}`, `list_repo {project}` (ADR 0026), `tree {request}` (a directory tree's op, on a connection of its own; ADR 0048), `review_diff {path, scope, commit?}` (replied `diff`), `review_read {path, scope, commit?, since?}` (replied `review`; a window falls back to `review_diff` on `unsupported`), `list_commits {path}`, `search_repo {path, query}`, `read_file {path, file}`, `review_pull_request {path}`, `list_files {path}`, `list_bases {path}`, `pick_base {path, base}` (ADR 0021), `pull_request {path}` (ADR 0026), `restart {when}`, `stop {when}`. Each gets exactly one `reply`. |
+| `command {id, op, …}` | One per act that changes shared or durable state: `open`, `bootstrap` (a Draft's first prompt; replied once the Thread starts), `cancel_bootstrap {request}`, `send`, `queue`, `unqueue`, `cancel_queued {edit?}`, `take_recovered`, `recall`, `interrupt`, `start_fresh {thread}` (a Thread whose provider lost its conversation starts a new one, the transcript's latest turns carried as context), `stop_subagent {thread, key}`, `answer {thread, handle, answer}`, `control`, `set_model`, `set_effort`, `set_provider`, `rename`, `park`, `revive`, `revive_group`, `delete`, `import`, `group` (replied with what dissolved), `layout`, `project`, `notice` (open, dismiss, read, seen), `show_subject`, `load_subject`, `say`, `worktrees_listed`, `cli_replaced`, `settings_changed`, `server_defaults {set?}` (replied with the Server's own file, reread; ADR 0026), `cli {action}` (`versions`, `check` or `update {provider}`: the Server's machine's CLIs, replied `clis` or `cli_updated`), `search_files`, `list_dir {path}`, `list_repo {project}` (ADR 0026), `list_commands {provider, cwd}` (a Draft's commands, replied `commands`) and `list_sessions {cap}` (the sessions to import, replied `sessions`; ADR 0049), `tree {request}` (a directory tree's op, on a connection of its own; ADR 0048), `review_diff {path, scope, commit?}` (replied `diff`), `review_read {path, scope, commit?, since?}` (replied `review`; a window falls back to `review_diff` on `unsupported`), `list_commits {path}`, `search_repo {path, query}`, `read_file {path, file}`, `review_pull_request {path}`, `list_files {path}`, `list_bases {path}`, `pick_base {path, base}` (ADR 0021), `pull_request {path}` (ADR 0026), `restart {when}`, `stop {when}`. Each gets exactly one `reply`. |
 | `rendered {request, png?, error?}` | The answer to a `render`. |
 
 Server → Client:
@@ -233,7 +233,7 @@ Server → Client:
 | `input {thread, seq, at_ms, input}` | reliable | One `ActivityInput` the Engine applied, in order. |
 | `decision {thread, subject?, handle, decision}` / `decision_closed {thread, handle, by}` | reliable | To every client, watching or not. `by`: `answered {client}`, `cancelled` (the provider withdrew it), `session_ended`, `server_restart` (the Server restarts or stops). A watcher also reads each Decision from its Thread's inputs. |
 | `reply {id, ok?, error?:{code, message}}` | reliable | Codes: `already_answered`, `invalid_answer`, `unknown_thread`, `unsupported`, `restarting`, `failed`. |
-| `thread {revision, state}` | latest-wins per Thread | `ThreadState`: everything `ThreadView` reads that is not Activity — Header facts, Attention, starting/busy/working/background, queued prompts, suggestion, command and model menus (only to a window watching the Thread: they are nearly all its bytes), permission modes, supported controls, store error, generation. |
+| `thread {revision, state}` | latest-wins per Thread | `ThreadState`: everything `ThreadView` reads that is not Activity — Header facts, Attention, starting/busy/working/background, queued prompts, suggestion, command and model menus (only to a window watching the Thread: they are nearly all its bytes), permission modes, supported controls, store error, generation, whether its title is being written (`titling`). |
 | `tool_draft {thread, tool, input}` | latest-wins per tool | `SessionEvent::ToolDraft`, already a snapshot of the input so far. |
 | `digest {thread, digest}` | latest-wins per Thread | What every surface away from the Transcript reads (ADR 0032): Main's status, turn and outcome, pending Decisions, work behind Main, the Wall card (Main's, and the shown Subagent's), turn and Subagent counts, changed files, the latest turn's finish. None of the transcript's words: the Wall card's gen1 `lines` go empty, and a turn's answer waits for its end, so a stream refolds nothing. Refolded at once when a turn, a phase, a Decision or a Subagent changes, else at most every 250 ms. |
 | `roster`, `groups`, `registry`, `notices`, `providers` `{revision, …}` | latest-wins | Replaces the snapshot's field. |
@@ -356,8 +356,11 @@ still pending means the operator answers again.
   header and last write say (its Project, its age) it still reads
   itself, through a Store handle that never takes the claim
   (`Store::reader`), so a Server started after the window still finds it
-  free. Discovery of CLI session files and workspace commands reads the
-  operator's own files and stays in the window too.
+  free. A Draft's commands and the import picker's sessions are the
+  Server's machine's: the window asks `list_commands` and `list_sessions`,
+  and the Server runs its own CLI and reads its own disk. Titles are
+  written by the Server too, from a Thread's first prompt, and reach every
+  window as a rename (ADR 0049).
 - Per window: focus, View (Solo or a Group), fullscreen, Drafts, the
   Composer's prompt history, find. Shared through the Server: which
   Threads are open, Groups and Layouts, projects, Notices and whether they
@@ -384,7 +387,7 @@ still pending means the operator answers again.
 - Settings stay a file the window writes. `settings_changed` makes the
   Engine reread it; it applies to the next Session, as today. That file is
   this computer's: the defaults a Server's Sessions read (permissions, its
-  Factory limit, follow-up suggestions) and its provider CLIs belong to the
+  Factory limit, follow-up suggestions, titles) and its provider CLIs belong to the
   Server's machine, so a window on a machine reads and writes them through
   `server_defaults` and `cli`, and Settings shows the machine's answer.
 

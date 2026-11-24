@@ -379,7 +379,9 @@ feature, which only the app's dev-dependencies turn on).
   these need git on the machine read as the Thread works, not once per
   chip open as `list_repo` is.
 - On a machine, a file opened beside a Pane and the operator's own
-  commands (ADR 0024) still read or run on this computer.
+  commands (ADR 0024) still read or run on this computer. A Draft's `/`
+  menu, the import picker and a Thread's title are the machine's: its
+  Server runs its own CLI and reads its own disk for them (ADR 0049).
 - An open Thread's Project on a machine: the `thread` state does not
   carry it, so a machine's open Threads group under no Project. A drop
   the Server refuses (a Thread with no Project) shows as allowed while

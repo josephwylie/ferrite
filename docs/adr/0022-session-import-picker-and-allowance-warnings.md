@@ -23,8 +23,9 @@ search past Claude/Codex sessions and resume one, and warn when the
    session's title (or first prompt, cut as a Title is) with its project,
    provider and age as context, so the one query searches all of them.
 2. **Listed lazily, off the UI thread.** The palette opens at once and
-   fills when the Spawner's listing answers (`discover_sessions`); a
-   picker closed or reopened meanwhile drops the late answer. Claude's
+   fills when the Pane's machine's Server answers `list_sessions`, from
+   its own disk (ADR 0049); a picker closed or reopened meanwhile drops
+   the late answer. Claude's
    store is read newest-first by mtime and stops at the cap (200), so a
    long history costs a stat per file rather than a read of each.
 3. **Where an import lands.** Enter adopts through the core's
