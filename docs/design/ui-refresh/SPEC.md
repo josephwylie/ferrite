@@ -1229,8 +1229,10 @@ One phase per pull request, each shippable on its own. In every phase:
   usual checks).
 - **Captures.** Run the visual reference
   (`cargo run -p ferrite --features visual-reference -- --visual-reference <dir>`)
-  and the live demo (`--demo parity`). Compare the relevant scenes with
-  the mockups side by side, and attach the captures to the pull request.
+  and the live demo
+  (`cargo run -p ferrite --features demo -- --demo parity`). Compare the
+  relevant scenes with the mockups side by side, and attach the captures
+  to the pull request.
 - **Parity tests.** Update the parity tests that pin the metrics you
   changed, in the same PR (§9).
 - **Legacy aliases.** When renaming tokens, map the old names onto the

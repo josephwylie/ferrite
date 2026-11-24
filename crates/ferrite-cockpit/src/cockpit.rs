@@ -8907,6 +8907,7 @@ fn head_drag(leaf: Leaf, face: GhostFace) -> impl FnOnce(Div) -> AnyElement {
 
 /// Where Ferrite was started. Demo fixtures use this as their checkout;
 /// production startup must not register it as a Project implicitly.
+#[cfg(any(test, feature = "demo"))]
 pub(crate) fn here() -> std::path::PathBuf {
     std::env::current_dir().unwrap_or_else(|_| ".".into())
 }

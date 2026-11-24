@@ -31,7 +31,7 @@ use crate::cockpit::here;
 /// The kit the scripted worlds are built with: the fixture clock, scripted
 /// Sessions, the timeline and git checkouts. These live beside the visual
 /// reference's scenes, which capture them; they are declared here because
-/// the live demo is always built and the reference is not.
+/// a build with the demo need not have the reference.
 #[path = "cockpit/visual_reference/world.rs"]
 pub(crate) mod world;
 

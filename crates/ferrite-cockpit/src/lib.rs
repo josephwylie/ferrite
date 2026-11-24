@@ -8,6 +8,7 @@ mod test_temp;
 mod cli_updates;
 pub mod cockpit;
 pub mod cockpit_window;
+#[cfg(any(test, feature = "demo"))]
 pub mod demo;
 mod facts;
 pub mod ferrite_update;
