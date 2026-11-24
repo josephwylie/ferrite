@@ -589,12 +589,12 @@ its dev-dependencies, and `scripts/ci_scope.py` checks it.
 What both sides run stays in core. `ferrite_core::server` is the Server as
 the rest of Ferrite sees it: `store_dir` and `settings_dir`, `agent`
 (`ensure_running`, the LaunchAgent, the Run key, the systemd unit) and
-`wants_restart`. The `github` and `clis` seams a Server reads for its
-windows are the engine's (`ferrite_core::github`,
-`ferrite_core::providers::clis`, ADR 0049). The Engine stays in core too:
-`--demo`, `--load` and the window's tests run it in-process, a fixture
-behind `ferrite-client`'s `test-support` (ADR 0049). Splitting core itself
-by side of the wire is later work.
+`wants_restart`. The Engine, the Store, the providers and the `github`
+and `clis` seams a Server reads for its windows are the crate
+`ferrite-engine` (`ferrite_engine::github`,
+`ferrite_engine::providers::clis`, ADR 0049), which `ferrite-server` and
+the app depend on. `--demo`, `--load` and the window's tests run an Engine
+in-process, a fixture behind `ferrite-client`'s `test-support`.
 
 The Layout table's `server` row is this crate's; `Options` and `run` are
 `ferrite_server::Options` and `ferrite_server::run`.

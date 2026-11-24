@@ -1216,7 +1216,7 @@ time of writing; search for the name.
 | Palette | `palette.rs` `row_element` :525–581, input :491, footer :408, filters :376 | `cockpit/palette.rs` `toggle_palette`/`open_palette` :208–244, floats :1377–1428 |
 | Shared widgets | `components.rs` buttons :29–:1142, `floating_surface` :316, `float_shadow` :302, marks :371–392, `key_combo` :846; `menu.rs` float grammar :40–:457 | |
 | Icons | `icons.rs` `icons!` :35–96; `assets/icons/` | |
-| PR label | `pr.rs` `PrWatch` :21, `label` / `symbol`; `ferrite-core/src/workspace/mod.rs` `pull_request` / `pr_view` / `parse_pr_json` (~:625–700) | `OpenPrInBrowser` (cockpit.rs ~248, ~10342) |
+| PR label | `pr.rs` `PrWatch` :21, `label` / `symbol`; `ferrite-engine/src/workspace/mod.rs` `pull_request` / `pr_view` / `parse_pr_json` (~:625–700) | `OpenPrInBrowser` (cockpit.rs ~248, ~10342) |
 | PR tab data | `crates/ferrite-reviewr/src/forge.rs` `PrSnapshot` :104, `read_pr` :553; `ferrite-core/src/protocol/review.rs` `WirePr` :478, `WirePrComment` :558 | `cockpit/beside.rs` `read_pull_request` :329 (the Review's fetch, to reuse); `review.rs` `pr_facts` :2256; checks card pieces `pane::checks_card` / `check_row` / `check_ink` (pane.rs ~2250–2452) |
 | Usage, clock | `ferrite-core` `Cockpit::account_limits` (cockpit.rs ~1921), `progress::clock_label` :393 | |
 | Facts | `facts.rs` `ThreadFacts` :26; `ferrite-core/src/cockpit/mirror.rs` `ThreadView` :520; `workspace/mod.rs` `BranchStatus` :482 | |

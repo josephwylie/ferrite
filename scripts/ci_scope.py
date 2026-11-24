@@ -6,7 +6,7 @@ or without --base to check the boundaries and select the whole workspace.
 """
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import re
@@ -15,11 +15,30 @@ import tomllib
 
 
 @dataclass(frozen=True)
+class Edge:
+    """A normal or build dependency, as its manifest names it."""
+    package: str
+    optional: bool = False
+    default_features: bool = True
+    features: frozenset[str] = frozenset()
+
+
+# The features a release build turns on, where a package has them: its
+# defaults, and the Browser's engine (scripts/install-app.sh,
+# scripts/package-windows.ps1).
+SHIPPED = frozenset({"default", "cef"})
+
+
+@dataclass(frozen=True)
 class Package:
     directory: str
     dependencies: frozenset[str]
     # What its own build links: every edge but a dev-dependency.
     runtime: frozenset[str] = frozenset()
+    # Its normal and build edges by the name its manifest gives each, and its
+    # features, for what a release build links (`shipped`).
+    edges: dict[str, Edge] = field(default_factory=dict)
+    features: dict[str, list[str]] = field(default_factory=dict)
 
 
 def workspace(root: Path) -> dict[str, Package]:
@@ -42,6 +61,7 @@ def workspace(root: Path) -> dict[str, Package]:
             raise ValueError(f"Invalid or duplicate workspace package: {name}")
         dependencies = set()
         runtime = set()
+        edges = {}
         for table in [data, *data.get("target", {}).values()]:
             for kind in ("dependencies", "dev-dependencies", "build-dependencies"):
                 for alias, value in table.get(kind, {}).items():
@@ -62,7 +82,17 @@ def workspace(root: Path) -> dict[str, Package]:
                     dependencies.add(dependency)
                     if kind != "dev-dependencies":
                         runtime.add(dependency)
-        packages[name] = Package(directory.relative_to(root).as_posix(), frozenset(dependencies), frozenset(runtime))
+                        spec = value if isinstance(value, dict) else {}
+                        edge = edges.get(alias)
+                        # A target table's edge and the plain one are one dependency.
+                        edges[alias] = Edge(
+                            dependency,
+                            spec.get("optional", False) and (edge is None or edge.optional),
+                            spec.get("default-features", True) or (edge is not None and edge.default_features),
+                            frozenset(spec.get("features", [])) | (edge.features if edge else frozenset()),
+                        )
+        packages[name] = Package(directory.relative_to(root).as_posix(), frozenset(dependencies), frozenset(runtime),
+                                 edges, data.get("features", {}))
     if not packages:
         raise ValueError("Workspace has no packages")
     return packages
@@ -70,16 +100,16 @@ def workspace(root: Path) -> dict[str, Package]:
 
 # The window's crates. Each builds without the Server process, so an edit to
 # the Server rebuilds no window code; their tests may still run a Server.
-WINDOW_CHAIN = ("ferrite-ui", "ferrite-terminal", "ferrite-pane", "ferrite-frame", "ferrite-cockpit")
+WINDOW_CHAIN = ("ferrite-client", "ferrite-ui", "ferrite-terminal", "ferrite-pane", "ferrite-frame", "ferrite-cockpit")
 
 
 def check_boundaries(packages: dict[str, Package]) -> None:
-    for source in ("ferrite-core", "ferrite-frame"):
+    for source in ("ferrite-core", "ferrite-engine", "ferrite-frame"):
         if source not in packages:
             raise ValueError(f"Required architectural boundary owner is missing: {source}")
     # Core draws nothing (ADR 0001), and `ferrited` runs where no window's
     # libraries are (ADR 0026).
-    for source in ("ferrite-core", "ferrite-client", "ferrite-server"):
+    for source in ("ferrite-core", "ferrite-engine", "ferrite-client", "ferrite-server"):
         if source in packages:
             forbid(packages, source, lambda name: name == "gpui" or name.startswith("gpui-"), "dependencies")
     # The Server holds no window model (ADR 0049); its tests drive one.
@@ -89,22 +119,61 @@ def check_boundaries(packages: dict[str, Package]) -> None:
     for source in WINDOW_CHAIN:
         if source in packages:
             forbid(packages, source, lambda name: name == "ferrite-server", "runtime")
+            # A released window links no Engine (ADR 0049). Its tests, the
+            # demo and the in-process fixture behind a feature may.
+            forbid(packages, source, lambda name: name == "ferrite-engine", "shipped")
 
 
 def forbid(packages: dict[str, Package], source: str, forbidden, edges: str) -> None:
-    """Fail when `source` reaches a `forbidden` package over `edges`."""
-    pending = [(source,)]
+    """Fail when `source` reaches a `forbidden` package over `edges`: every
+    edge (`dependencies`), every edge but a dev-dependency (`runtime`), or
+    what a release build links (`shipped`)."""
+    pending = [((source,), SHIPPED)]
     visited = set()
     while pending:
-        chain = pending.pop()
+        chain, features = pending.pop()
         name = chain[-1]
         if forbidden(name):
             raise ValueError(f"Forbidden dependency: {' -> '.join(chain)}")
-        if name in visited:
+        if (name, features) in visited or name not in packages:
             continue
-        visited.add(name)
-        if name in packages:
-            pending.extend((*chain, dep) for dep in sorted(getattr(packages[name], edges)))
+        visited.add((name, features))
+        if edges == "shipped":
+            pending.extend(((*chain, dep), wanted) for dep, wanted in shipped(packages[name], features))
+        else:
+            pending.extend(((*chain, dep), features) for dep in sorted(getattr(packages[name], edges)))
+
+
+def shipped(package: Package, requested: frozenset[str]) -> list[tuple[str, frozenset[str]]]:
+    """What `package` links when built with the `requested` features, each
+    with the features it is built with: its normal and build edges that are
+    not optional or that a feature turns on (`dep:x`, `x/f` or `x`)."""
+    on, enabled, asked = set(), set(), {}
+    pending = [name for name in requested if name in package.features]
+    while pending:
+        name = pending.pop()
+        if name in on:
+            continue
+        on.add(name)
+        for item in package.features[name]:
+            if item.startswith("dep:"):
+                enabled.add(item[4:])
+            elif "/" in item:
+                alias, feature = item.split("/", 1)
+                if not alias.endswith("?"):
+                    enabled.add(alias)
+                asked.setdefault(alias.rstrip("?"), set()).add(feature)
+            elif item in package.features:
+                pending.append(item)
+            else:
+                enabled.add(item)
+    links = []
+    for alias, edge in sorted(package.edges.items()):
+        if edge.optional and alias not in enabled:
+            continue
+        wanted = edge.features | asked.get(alias, set()) | ({"default"} if edge.default_features else set())
+        links.append((edge.package, frozenset(wanted)))
+    return links
 
 
 # These inputs affect packaging or dependency resolution outside workspace edges.

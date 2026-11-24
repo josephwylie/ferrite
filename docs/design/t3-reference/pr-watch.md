@@ -56,7 +56,7 @@ palette's `Watch PR for changes` and `Stop watching PR`
 thread with a held completion does not settle, and a watched thread never
 auto-settles ("Settling ends a watch").
 
-Ferrite: `Watching::holds` (`ferrite-core/src/pr_watch.rs`), carried in the
+Ferrite: `Watching::holds` (`ferrite-core/src/pull_request.rs`), carried in the
 Thread's `Digest`, makes `ActivityView::background_work` true, so the Thread
 stays on the Working shelf, its background line says `Watching pull request
 #N`, and its Notice waits.

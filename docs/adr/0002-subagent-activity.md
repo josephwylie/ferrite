@@ -79,7 +79,7 @@ through to Main. Nothing Ferrite sends kills every agent at once.
 
 ## Persistence and recovery
 
-[`Store`](../../crates/ferrite-core/src/store.rs) writes schema 9 using its own
+[`Store`](../../crates/ferrite-engine/src/store.rs) writes schema 9 using its own
 record types. Persist accepted attributed facts with actor and content identity;
 never persist actionable Decision handles. Old schemas 1–8 remain Main-only.
 Child terminal facts flush even after Main is idle; attributed chunks never

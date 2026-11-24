@@ -9,7 +9,7 @@ date: 2026-10-07
 > rows became every window's listing, `LogReader` is gone and the parked
 > counts below are read by the Server, once per row.
 
-The [`Store`](../../crates/ferrite-core/src/store.rs) is a synchronous module
+The [`Store`](../../crates/ferrite-engine/src/store.rs) is a synchronous module
 driven from the pump, so every append, flush, sync, header rewrite, load and
 peek runs on the thread that handles keystrokes. Three roots make that
 expensive, and this ADR addresses each of them:
