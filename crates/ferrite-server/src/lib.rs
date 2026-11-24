@@ -925,6 +925,35 @@ impl Server {
                 self.read_off_pump(id, request, move || Ok(Some(read().into())));
                 return;
             }
+            Op::ListCommands { provider, cwd } => {
+                let listing = self.engine.discover_commands(*provider, cwd);
+                self.read_off_pump(id, request, move || {
+                    let commands = match listing {
+                        Some(listing) => listing.recv().map_err(failed)?.map_err(failed)?,
+                        None => Vec::new(),
+                    };
+                    Ok(Some(Done::Commands {
+                        commands: commands.iter().map(Into::into).collect(),
+                    }))
+                });
+                return;
+            }
+            Op::ListSessions { cap } => {
+                let roots = ferrite_core::session_file::default_roots();
+                match self.engine.discover_sessions(roots, *cap) {
+                    Some(listing) => {
+                        self.read_off_pump(id, request, move || {
+                            let found = listing.recv().map_err(failed)?.map_err(failed)?;
+                            Ok(Some(Done::Sessions {
+                                sessions: found.sessions.into_iter().map(Into::into).collect(),
+                                roots: found.roots,
+                            }))
+                        });
+                        return;
+                    }
+                    None => Err(failed("this server lists no sessions")),
+                }
+            }
             Op::Attachment { request: operation } => {
                 if !self.attachments.contains_key(&id) && self.attachments.len() >= 16 {
                     self.reply(id, request, Err(failed("Too many attachment transfers are active. Retry shortly.")));

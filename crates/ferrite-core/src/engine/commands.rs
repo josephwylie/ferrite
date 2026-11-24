@@ -284,6 +284,8 @@ impl Engine {
             | Op::Changes { .. }
             | Op::ListRepo { .. }
             | Op::Repositories
+            | Op::ListCommands { .. }
+            | Op::ListSessions { .. }
             | Op::ReviewDiff { .. }
             | Op::ReviewRead { .. }
             | Op::ReviewPullRequestDiff { .. }

@@ -1424,15 +1424,6 @@ fn a_restart_when_idle_waits_for_background_work() {
         .expect("restarted once the shell ended");
 }
 
-/// What a window finds on its own; a test's finds nothing.
-struct NoDiscovery;
-
-impl Spawner for NoDiscovery {
-    fn spawn(&mut self, _: SpawnRequest) -> io::Result<Box<dyn ferrite_core::providers::Session>> {
-        Err(io::Error::other("a window spawns no Session"))
-    }
-}
-
 /// A Cockpit attached to the harness's Server, as the app attaches.
 fn cockpit(harness: &Harness) -> ferrite_client::cockpit::Cockpit {
     ferrite_client::cockpit::Cockpit::attach(ferrite_client::cockpit::Attach {
@@ -1448,7 +1439,6 @@ fn cockpit(harness: &Harness) -> ferrite_client::cockpit::Cockpit {
         renderer: None,
         browser: false,
         driven: false,
-        discovery: Box::new(NoDiscovery),
     })
     .unwrap()
 }
@@ -2910,7 +2900,6 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
         renderer: None,
         browser: false,
         driven: false,
-        discovery: Box::new(NoDiscovery),
     })
     .unwrap();
     assert!(
@@ -2964,7 +2953,6 @@ fn every_window_learns_its_server_names_fork_owners() {
         renderer: None,
         browser: false,
         driven: false,
-        discovery: Box::new(NoDiscovery),
     })
     .unwrap();
     pump_until(&mut machine, |window| {
@@ -2992,7 +2980,6 @@ fn a_machine_streams_a_thread_whole_only_while_drawn() {
         renderer: None,
         browser: false,
         driven: false,
-        discovery: Box::new(NoDiscovery),
     })
     .unwrap();
     let machine = window.first_machine();

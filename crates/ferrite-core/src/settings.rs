@@ -70,7 +70,8 @@ pub struct Settings {
     pub open_shelves: Vec<NavShelf>,
     /// Whether deleting a Thread asks first. Default: true.
     pub confirm_delete: bool,
-    /// Whether an untitled Thread is named from its first prompt.
+    /// Whether an untitled Thread is named from its first prompt: by this
+    /// machine's titler, and in this window's lists before a title lands.
     /// Default: true.
     pub auto_title: bool,
     /// Whether Ferrite predicts a follow-up prompt in the empty Composer.
@@ -176,6 +177,11 @@ pub struct ServerDefaults {
     pub codex_approval_policy: String,
     pub codex_sandbox: Option<String>,
     pub placeholder_suggestions: bool,
+    /// Whether the machine's titler names a Thread from its first prompt
+    /// (`auto_title`). Written only when off, so a defaults message from
+    /// before it says what it said.
+    #[serde(skip_serializing_if = "is_on")]
+    pub auto_title: bool,
     pub factory_tasks_at_once: usize,
     /// Settings › Labs › Linked machines (`Labs::linked_machines`): the
     /// machine's own, as T3 Code scopes Linked environments to its server.
@@ -187,6 +193,10 @@ impl Default for ServerDefaults {
     fn default() -> Self {
         Settings::default().server_defaults()
     }
+}
+
+fn is_on(on: &bool) -> bool {
+    *on
 }
 
 /// One starred model: its provider and the value the provider takes for it
@@ -463,6 +473,7 @@ impl Settings {
             codex_approval_policy: self.codex_approval_policy.clone(),
             codex_sandbox: self.codex_sandbox.clone(),
             placeholder_suggestions: self.placeholder_suggestions,
+            auto_title: self.auto_title,
             factory_tasks_at_once: self.factory_tasks_at_once,
             linked_machines: self.labs.linked_machines,
         }
@@ -473,6 +484,7 @@ impl Settings {
         self.codex_approval_policy = defaults.codex_approval_policy;
         self.codex_sandbox = defaults.codex_sandbox;
         self.placeholder_suggestions = defaults.placeholder_suggestions;
+        self.auto_title = defaults.auto_title;
         self.factory_tasks_at_once = defaults.factory_tasks_at_once;
         self.labs.linked_machines = defaults.linked_machines;
     }
