@@ -331,10 +331,11 @@ impl SettingsView {
             settings::toggle(
                 "settings-nav-collapsed",
                 "Start with the sidebar collapsed",
-                "cmd-B toggles it any time",
+                "toggles it any time",
                 settings.nav_collapsed,
                 Self::change(cx, |s, v| s.nav_collapsed = v),
-            ),
+            )
+            .bound_keys("cockpit::ToggleNav"),
         ];
         let size = settings.reading_size;
         let reading = vec![settings::stepper(

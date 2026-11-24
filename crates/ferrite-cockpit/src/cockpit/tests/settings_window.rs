@@ -181,6 +181,34 @@ fn leaving_the_connections_page_drops_the_connection_editor(cx: &mut TestAppCont
     assert!(cx.debug_bounds("connection-add").is_some());
 }
 
+/// Behaviour's sidebar hint names the key this platform binds to the
+/// sidebar toggle, drawn as keys: `⌘B` on macOS, `⌃B` on Windows.
+#[gpui::test]
+fn the_sidebar_hint_names_the_key_this_platform_binds(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("settings-sidebar-key", 1);
+    bind_production_keys(cx);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    let page = cx.debug_bounds("settings-page-behaviour").expect("Behaviour");
+    cx.simulate_click(page.center(), gpui::Modifiers::none());
+    tick(cx);
+    let keys = ferrite_ui::keymap::PLATFORM.chord("B");
+    let lines = cx
+        .update(|window, _| window.debug_text("settings-label-Start with the sidebar collapsed"))
+        .expect("the row");
+    assert_eq!(
+        lines,
+        [
+            "Start with the sidebar collapsed",
+            ferrite_ui::components::chord_text(&keys).as_str(),
+            "toggles it any time",
+        ]
+    );
+}
+
 /// Settings › Labs turns Linked machines on and off, and its file says so
 /// for the next start (the Delegate tools are offered by it).
 #[gpui::test]
