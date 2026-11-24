@@ -125,7 +125,8 @@ fn search_and_the_parked_shelf_hold_every_machines_threads(cx: &mut TestAppConte
     core.wait_for(renamed).unwrap();
     // A prompt gives its parked row an age.
     let _ = core.send(parked_there, "go".into());
-    core.park(parked_there).unwrap();
+    let asked = core.park(parked_there);
+    core.wait_for(asked).unwrap();
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
     until_said(cx, "box's park never reached the window", |cx| {
@@ -470,7 +471,8 @@ fn with_a_machine_off_a_new_thread_starts_on_this_computer(cx: &mut TestAppConte
     let mine = core.threads()[0];
     let on_box = machines.held(1).unwrap();
     let theirs = open_on(&mut core, on_box);
-    core.park(mine).unwrap();
+    let asked = core.park(mine);
+    core.wait_for(asked).unwrap();
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
     until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(theirs).is_some()));

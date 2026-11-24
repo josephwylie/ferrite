@@ -730,7 +730,7 @@ pub(crate) fn play(
                     );
                 }
             }
-            Act::Park => core.park(beat.who).expect("park a scripted Thread"),
+            Act::Park => core.park(beat.who).now().expect("park a scripted Thread"),
         }
         core.pump();
         core.pump();

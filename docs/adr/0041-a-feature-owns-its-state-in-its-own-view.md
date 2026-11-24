@@ -1266,9 +1266,15 @@ never waits. The rest still do.
      Session control are asks now, each with what follows its answer in
      `when_answered`: the nav's name and its notice, the undo a snooze
      offers, the snooze field's refusal, and why a control was refused.
-     Open, park, revive, delete and import still wait. What follows them
-     is the root's (the Panes, focus, the Project filter). Each needs a
-     continuation like the Browser's `Then`.
+     Park, close and delete are asks too. What follows one of them has
+     two owners. The model's part (`Follow`: a parked Thread leaves the
+     roster, a deleted Thread's parked row goes) is done by the model on
+     the beat that brings the answer, before the window reads it. The
+     window's part (the Panes, the nav's notice, the undo it offers)
+     runs from `when_answered`, or from `when_all_answered` for a press
+     on several Threads. So over a Server a closed Pane goes a beat
+     after the press. Open, revive and import still wait. What follows
+     them is the root's (the Panes, focus, the Project filter).
   4. Queue: 5 asks, 15 sites. These are Composer presses, with the
      queue's rows answered by the Server's state.
   5. Projects: 7 asks, 11 sites. These are rare presses in the settings

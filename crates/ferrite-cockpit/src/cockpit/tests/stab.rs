@@ -184,7 +184,7 @@ fn the_watchdog_sweeps_on_the_executor_clock(cx: &mut TestAppContext) {
 fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("toast-parked", 5);
     let threads = core.threads();
-    core.park(threads[4]).unwrap();
+    core.park(threads[4]).now().unwrap();
     for (n, thread) in threads[..4].iter().enumerate() {
         let _ = core.send(*thread, format!("task {n}"));
     }

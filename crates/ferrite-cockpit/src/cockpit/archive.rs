@@ -330,17 +330,26 @@ impl CockpitView {
             archive.update(cx, |archive, _| archive.reading.take())
         });
         if let Some((was, true)) = was.filter(|(was, _)| Some(*was) != thread) {
-            if let Err(error) = self.cockpit.update(cx, |cockpit, _| cockpit.park(was)) {
-                ferrite_core::log!("factory: an earlier Worker could not be parked again: {error}");
-            }
-            let focused = self.cockpit.read(cx).roster().focused();
-            if let Some(Destination {
-                shows: Shows::Factory(..),
-                focus_at_open,
-            }) = self.destination.as_mut()
-            {
-                *focus_at_open = focused;
-            }
+            let parked = self.cockpit.update(cx, |cockpit, _| cockpit.park(was));
+            self.when_answered(
+                parked,
+                |view, parked, cx| {
+                    if let Err(error) = parked {
+                        ferrite_core::log!("factory: an earlier Worker could not be parked again: {error}");
+                    }
+                    // Parking it moves the roster's focus: that is not the
+                    // operator leaving the board.
+                    let focused = view.cockpit.read(cx).roster().focused();
+                    if let Some(Destination {
+                        shows: Shows::Factory(..),
+                        focus_at_open,
+                    }) = view.destination.as_mut()
+                    {
+                        *focus_at_open = focused;
+                    }
+                },
+                cx,
+            );
         }
         if let Some(thread) = thread {
             let reopened = match was {

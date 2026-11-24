@@ -135,22 +135,35 @@ impl CockpitView {
         }
     }
 
-    /// Delete `thread`, and with it the sources its quotes were cited from
-    /// and, at the next frame, its Panel.
-    pub(super) fn delete_thread(
+    /// Delete each of `threads`, and with each the sources its quotes
+    /// were cited from and, at the next frame, its Panel. `then` hears how
+    /// each went once the Server has answered for all of them.
+    pub(super) fn delete_threads(
         &mut self,
-        thread: ThreadKey,
-        cx: &mut gpui::App,
-    ) -> std::io::Result<()> {
-        self.cockpit.update(cx, |cockpit, _| cockpit.delete(thread))?;
-        self.panel.deleted.push(thread);
-        let saved = self.cockpit.read(cx).saved(thread);
-        if saved.is_some_and(|saved| self.cited_sources.forget(&saved)) {
-            if let Err(error) = self.cited_sources.save(&self.prefs.dir) {
-                ferrite_core::log!("cited sources were not saved: {error}");
-            }
-        }
-        Ok(())
+        threads: Vec<ThreadKey>,
+        then: impl FnOnce(&mut Self, Vec<(ThreadKey, std::io::Result<()>)>, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let asked = self.cockpit.update(cx, |cockpit, _| {
+            threads.iter().map(|thread| cockpit.delete(*thread)).collect()
+        });
+        self.when_all_answered(
+            asked,
+            move |view, answers, cx| {
+                let deleted: Vec<_> = threads.into_iter().zip(answers).collect();
+                for (thread, _) in deleted.iter().filter(|(_, deleted)| deleted.is_ok()) {
+                    view.panel.deleted.push(*thread);
+                    let saved = view.cockpit.read(cx).saved(*thread);
+                    if saved.is_some_and(|saved| view.cited_sources.forget(&saved)) {
+                        if let Err(error) = view.cited_sources.save(&view.prefs.dir) {
+                            ferrite_core::log!("cited sources were not saved: {error}");
+                        }
+                    }
+                }
+                then(view, deleted, cx);
+            },
+            cx,
+        );
     }
 
     /// `thread`'s Pane just opened: its Composer takes what it was left

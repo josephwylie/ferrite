@@ -129,7 +129,7 @@ fn a_deleted_threads_working_set_is_saved_away_once(cx: &mut TestAppContext) {
         let thread = view.cockpit.read(cx).threads().into_iter().find(|&thread| thread != other).unwrap();
         view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
         view.flush_panel_persistence(cx);
-        view.delete_thread(thread, cx).unwrap();
+        view.delete_threads(vec![thread], |_, deleted, _| assert!(deleted[0].1.is_ok()), cx);
         view.pump(cx);
         view.open_in_files(other, checkout.join("README.md"), None, true, cx);
         view.pump(cx);

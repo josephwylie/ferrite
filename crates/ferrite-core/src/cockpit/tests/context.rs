@@ -29,7 +29,7 @@ fn invariant_resume_ids_persist_exactly() {
     live(&fake).send(text("first")).unwrap();
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
-    cockpit.park(thread).unwrap();
+    cockpit.park(thread).now().unwrap();
     revive_awake(&mut cockpit, thread);
     assert_eq!(last_resume(&fake).as_deref(), Some("sess-1"));
 
@@ -40,7 +40,7 @@ fn invariant_resume_ids_persist_exactly() {
         })
         .unwrap();
     cockpit.pump();
-    cockpit.park(thread).unwrap();
+    cockpit.park(thread).now().unwrap();
     revive_awake(&mut cockpit, thread);
     assert_eq!(last_resume(&fake).as_deref(), Some("sess-2"));
 
@@ -55,7 +55,7 @@ fn invariant_resume_ids_persist_exactly() {
         ).now()
         .unwrap();
     cockpit.pump();
-    cockpit.park(thread).unwrap();
+    cockpit.park(thread).now().unwrap();
     revive_awake(&mut cockpit, thread);
     assert_eq!(fake.providers.borrow().last(), Some(&Provider::Codex));
     assert_eq!(last_resume(&fake), None);
@@ -70,7 +70,7 @@ fn invariant_resume_ids_persist_exactly() {
         .unwrap();
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
-    cockpit.park(thread).unwrap();
+    cockpit.park(thread).now().unwrap();
     revive_awake(&mut cockpit, thread);
     assert_eq!(last_resume(&fake).as_deref(), Some("codex-1"));
 }
@@ -85,7 +85,7 @@ fn parking_syncs_the_log_through_the_drive_cache() {
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
     let (_, full) = cockpit.engine().store.syncs();
-    cockpit.park(thread).unwrap();
+    cockpit.park(thread).now().unwrap();
     cockpit.engine().store.settle_all();
     assert_eq!(cockpit.engine().store.syncs().1, full + 1);
 }
@@ -115,7 +115,7 @@ fn invariant_a_hand_over_after_revive_carries_the_whole_history() {
         cockpit.pump();
         exchanges.push((format!("question {n}"), answer(n)));
     }
-    cockpit.park(thread).unwrap();
+    cockpit.park(thread).now().unwrap();
     cockpit.revive(thread).unwrap();
     cockpit
         .set_provider(
@@ -196,7 +196,7 @@ fn lab_store_costs_on_a_real_log() {
         cockpit.rename_thread(thread, "lab live title").now().unwrap();
         eprintln!("LAB rename_live#{round}_ms={:.1}", ms(started));
         let started = Instant::now();
-        cockpit.park(thread).unwrap();
+        cockpit.park(thread).now().unwrap();
         eprintln!("LAB park#{round}_ms={:.1}", ms(started));
     }
     let started = Instant::now();
@@ -239,7 +239,7 @@ fn parked_lookups_read_the_tail_of_a_parked_thread() {
     let live_count = cockpit.thread(thread).unwrap().activity().children().len();
     assert_eq!(live_count, 1);
     let read = cockpit.engine().store.bytes_read();
-    cockpit.park(thread).unwrap();
+    cockpit.park(thread).now().unwrap();
 
     assert_eq!(cockpit.subagent_count(thread), Some(live_count));
     assert_eq!(cockpit.parked_turns(thread), Some(1));
@@ -276,7 +276,7 @@ fn parking_never_waits_for_the_drive() {
     *crate::store::worker_lock(&cockpit.engine().store.faults().sync_delay) =
         std::time::Duration::from_secs(3);
     let started = std::time::Instant::now();
-    cockpit.park(thread).unwrap();
+    cockpit.park(thread).now().unwrap();
     // Well under the drive's delay, with room for a loaded CI runner.
     assert!(started.elapsed() < std::time::Duration::from_secs(1));
     cockpit.revive(thread).unwrap();
@@ -513,7 +513,7 @@ fn an_unreadable_saved_queue_is_said_not_silently_dropped() {
     let _ = cockpit.send(thread, "one".into());
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
-    cockpit.park(thread).unwrap();
+    cockpit.park(thread).now().unwrap();
     std::fs::write(
         cockpit
             .engine()

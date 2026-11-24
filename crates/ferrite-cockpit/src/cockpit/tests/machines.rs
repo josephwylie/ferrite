@@ -1310,7 +1310,9 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
         view.panes[view.pane_for(editing).unwrap()].composer.clone()
     });
 
-    background.park_thread(earlier).unwrap();
+    let asked = background.park_thread(earlier);
+
+    background.wait_for(asked).unwrap();
     until(cx, |cx| {
         view.read_with(cx, |view, cx| {
             let cockpit = view.cockpit.read(cx);
@@ -1477,7 +1479,8 @@ fn a_delegates_thread_opens_in_place_on_its_machine(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| {
         view.focus_thread(mine, cx);
-        view.cockpit.update(cx, |cockpit, _| cockpit.delete(child)).unwrap();
+        let deleted = view.cockpit.update(cx, |cockpit, _| cockpit.delete(child));
+        view.cockpit.update(cx, |cockpit, _| cockpit.wait_for(deleted)).unwrap();
     });
     until(cx, |cx| {
         view.read_with(cx, |view, cx| view.cockpit.read(cx).holds(child) == Some(false))
@@ -1855,8 +1858,10 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
         .unwrap();
     let renamed = core.rename_thread(named, "Release notes");
     core.wait_for(renamed).unwrap();
-    core.park(named).unwrap();
-    core.park(other).unwrap();
+    let asked = core.park(named);
+    core.wait_for(asked).unwrap();
+    let asked = core.park(other);
+    core.wait_for(asked).unwrap();
 
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -2070,7 +2075,8 @@ fn remote_inbox_follows_its_status_and_another_clients_park(cx: &mut TestAppCont
             thread: theirs.thread(),
         })
         .unwrap();
-    other.park(there).unwrap();
+    let asked = other.park(there);
+    other.wait_for(asked).unwrap();
     until(cx, |cx| rows(cx) == 0);
     view.read_with(cx, |view, cx| {
         assert!(view.cockpit.read(cx).thread(theirs).is_none(), "another client's Park");

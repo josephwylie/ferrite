@@ -1062,15 +1062,21 @@ impl CockpitView {
                 }
             }
             (MenuTarget::Thread(key) | MenuTarget::Pane(key), MenuVerb::Delete) => {
-                match self.delete_thread(key, cx) {
-                    Err(error) => self.nav_notice.problem(format!("delete refused: {error}")),
-                    Ok(()) => self.nav_notice.clear(),
-                }
                 if self.composer_menu.read(cx).pane() == Some(PaneIdentity::Thread(key)) {
                     self.close_composer_menu(cx);
                 }
-                self.sync_panes(cx);
-                self.parked_changed(cx);
+                self.delete_threads(
+                    vec![key],
+                    |view, deleted, cx| {
+                        match deleted.into_iter().find_map(|(_, deleted)| deleted.err()) {
+                            Some(error) => view.nav_notice.problem(format!("delete refused: {error}")),
+                            None => view.nav_notice.clear(),
+                        }
+                        view.sync_panes(cx);
+                        view.parked_changed(cx);
+                    },
+                    cx,
+                );
             }
             _ => {}
         }

@@ -1892,7 +1892,7 @@ fn nav() -> (Scene, Setup) {
             .text("Done; notes are in the thread.")
             .end(0.05);
         scene.core.pump();
-        scene.core.park(thread).expect("park fixture Thread");
+        scene.core.park(thread).now().expect("park fixture Thread");
     }
 
     let (running, feed) = scene.open(Provider::Claude, &ferrite, "Retained transcript rendering");
@@ -2106,7 +2106,7 @@ fn nav_empty() -> Scene {
         let _ = scene.core.send(thread, format!("{title}."));
         feed.boot(Provider::Codex, 30_000).text("Done.").end(0.02);
         scene.core.pump();
-        scene.core.park(thread).expect("park fixture Thread");
+        scene.core.park(thread).now().expect("park fixture Thread");
     }
     scene
 }

@@ -170,3 +170,40 @@ fn a_threads_name_snooze_and_controls_do_not_wait_and_are_answered() {
         let _ = core.wait_for(ask);
     }
 }
+
+/// ⌘W over a Server does not wait: the Pane goes once the Server answers
+/// the park, and the model has taken the Thread off the roster by then.
+#[gpui::test]
+fn closing_a_pane_does_not_wait_and_the_pane_goes_when_answered(cx: &mut gpui::TestAppContext) {
+    use ferrite_core::roster::PaneIdentity;
+    let (_engine, view, thread, cx) = super::browser_chrome::browser_window(cx, "close-ask");
+    let shown = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.panes.iter().any(|pane| pane.thread() == Some(thread)))
+    };
+    assert!(shown(cx));
+    waits::start();
+    view.update(cx, |view, cx| view.close_pane(PaneIdentity::Thread(thread), cx));
+    let parks: Vec<_> = waits::take().into_iter().filter(|wait| wait.op == "park").collect();
+    assert_eq!(parks.len(), 1, "{parks:?}");
+    assert!(!parks[0].waited, "the park does not wait for its reply: {parks:?}");
+    until(cx, |cx| !shown(cx));
+}
+
+/// Deleting a Thread over a Server does not wait, and what follows hears
+/// how it went.
+#[gpui::test]
+fn deleting_a_thread_does_not_wait_and_is_answered(cx: &mut gpui::TestAppContext) {
+    use std::{cell::Cell, rc::Rc};
+    let (_engine, view, thread, cx) = super::browser_chrome::browser_window(cx, "delete-ask");
+    let heard = Rc::new(Cell::new(false));
+    waits::start();
+    view.update(cx, |view, cx| {
+        let heard = heard.clone();
+        view.delete_threads(vec![thread], move |_, deleted, _| heard.set(deleted.len() == 1), cx);
+    });
+    let deletes: Vec<_> = waits::take().into_iter().filter(|wait| wait.op == "delete").collect();
+    assert_eq!(deletes.len(), 1, "{deletes:?}");
+    assert!(!deletes[0].waited, "the delete does not wait for its reply: {deletes:?}");
+    assert!(!heard.get(), "nothing is heard before the Server answers");
+    until(cx, |_| heard.get());
+}

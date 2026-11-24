@@ -699,7 +699,7 @@ fn draft_mentions_follow_the_selected_workspace(cx: &mut TestAppContext) {
                 WorkspaceChoice::NewWorktree { repo: repo.clone() },
             ))
             .unwrap();
-        view.cockpit.update(cx, |cockpit, _| cockpit.park(thread).unwrap());
+        view.cockpit.update(cx, |cockpit, _| cockpit.park(thread).now().unwrap());
         let focused = view.focused(cx);
         let entry = view.panes[focused].draft().unwrap().binding.project();
         let worktree = view.cockpit.read(cx).registry(entry.machine()).worktrees(entry.project())[0].clone();
