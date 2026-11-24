@@ -26,6 +26,7 @@ mod details;
 mod direct_view;
 pub(crate) mod direction;
 mod draft_commands;
+mod draft_environment;
 mod drafts;
 mod fields;
 mod head_cards;
@@ -53,6 +54,7 @@ pub(crate) mod panel;
 mod parts;
 mod popups;
 mod pr_reads;
+mod placement_view;
 mod pr_watching;
 mod prs_view;
 mod sends;
@@ -66,6 +68,7 @@ mod setup_sync;
 mod sheets;
 mod side_chat_view;
 mod rename;
+mod folder_browser;
 mod returns;
 use rename::{rename_field, RenameTarget};
 mod snooze;
@@ -502,6 +505,9 @@ pub struct CockpitView {
     /// selects an already registered Project; it must never turn the app's
     /// process directory into user workspace state.
     launch_project: Option<ProjectKey>,
+    /// A draft's environment pick, waiting for its machines to say which
+    /// Project is its Project's counterpart.
+    environment_lookup: Option<draft_environment::Lookup>,
     /// The inline title rename, in a nav row or the view head.
     rename: rename::Rename,
     /// The one popup that is up: the context menu, the mode menu, or the
@@ -1351,6 +1357,7 @@ impl CockpitView {
             draft_commands: Default::default(),
             session_file_roots: ferrite_core::import::default_roots(),
             launch_project,
+            environment_lookup: None,
             checkouts: Default::default(),
             rename: Default::default(),
             popups: Default::default(),
@@ -2238,6 +2245,10 @@ impl CockpitView {
         if let Some(card) = self.project_card(cx) {
             card.update(cx, |card, cx| card.poll_remote_path(cx));
         }
+        if let Some(sheet) = self.placement_sheet(cx) {
+            sheet.update(cx, |sheet, cx| sheet.poll(cx));
+        }
+        self.poll_environment_lookup(cx);
         self.poll_machine_repo(cx);
         self.tick_setup_sync(cx);
         let server_moved = self.server_moved(cx);
@@ -3971,8 +3982,8 @@ impl CockpitView {
         if self.panes.get(self.focused(cx)).is_some_and(|pane| !pane.composer.read(cx).comment_valid(cx)) {
             return;
         }
-        // The card's ↵ is its confirm — but in a machine's path field that
-        // holds a path, it adds that directory.
+        // The card's ↵ is its confirm — but in a machine's folder browser,
+        // once it is moved, it adds the folder it shows.
         if let Some(card) = self.project_card(cx) {
             let typed = card.update(cx, |card, cx| card.take_remote_path(window, cx));
             if let Some(path) = typed {
@@ -3982,6 +3993,10 @@ impl CockpitView {
             if card.read(cx).ready() {
                 self.confirm_project_editor(cx);
             }
+            return;
+        }
+        if let Some(sheet) = self.placement_sheet(cx) {
+            sheet.update(cx, |sheet, cx| sheet.confirm(cx));
             return;
         }
         if self.nav_view.read(cx).snooze_line().is_some() {
@@ -4114,6 +4129,12 @@ impl CockpitView {
             connections.update(cx, |connections, cx| connections.cancel(cx));
             return;
         }
+        // The setup sheet's esc is its Cancel: a copy under way stops, and
+        // the sheet stays to say so.
+        if let Some(sheet) = self.placement_sheet(cx) {
+            sheet.update(cx, |sheet, cx| sheet.cancel(cx));
+            return;
+        }
         if self.hide_sheet(cx) {
             return;
         }
@@ -4244,6 +4265,9 @@ impl CockpitView {
         if self
             .project_card(cx)
             .is_some_and(|card| card.update(cx, |card, cx| card.tab_remote_path(window, cx)))
+            || self
+                .placement_sheet(cx)
+                .is_some_and(|sheet| sheet.update(cx, |sheet, cx| sheet.tab(window, cx)))
         {
             return;
         }
@@ -4268,20 +4292,24 @@ impl CockpitView {
             window.focus_next(cx);
             return;
         }
-        let composer = self
-            .panes
-            .get(self.focused(cx))
-            .map(|pane| pane.composer.clone());
+        // A draft's files come first; once the band has the ring, tab walks
+        // the band alone, so a file and a chip never hold it at once.
+        let pane = self.panes.get(self.focused(cx));
+        let on_band = pane
+            .and_then(|pane| pane.draft())
+            .is_some_and(|draft| draft.band_focus.is_some());
+        let composer = pane.map(|pane| pane.composer.clone()).filter(|_| !on_band);
         if composer.is_some_and(|composer| {
             composer.update(cx, |composer, cx| composer.cycle_files(false, window, cx))
         }) {
             return;
         }
+        let environment = self.environment_chip_shown(cx);
         let Some(draft) = self.focused_draft_mut(cx) else {
             self.cycle_tools(false, window, cx);
             return;
         };
-        draft.band_focus = pane::BandChip::next(draft.band_focus);
+        draft.band_focus = pane::BandChip::next(draft.band_focus, environment);
         // The menu belongs to the chip it opened from; tab moves on.
         if self.band_menu().is_some() {
             self.close_popup(cx);
@@ -5303,6 +5331,7 @@ impl CockpitView {
                 }
                 return;
             }
+            pane::BandChip::Environment => self.environment_menu_rows(draft, cx),
             pane::BandChip::Project => self.project_menu_rows(draft, cx),
             pane::BandChip::Workspace => self.workspace_menu_rows(draft, cx),
         };
@@ -5566,15 +5595,9 @@ impl CockpitView {
                 }
             }
             BandChoice::Project(project) => {
-                if let Some(draft) = self.focused_draft_mut(cx) {
-                    draft.binding.choose_project(*project);
-                    draft.error = None;
+                if let Some(draft) = self.panes.get(self.focused(cx)).map(|pane| pane.identity) {
+                    self.rebind_draft(draft, *project, cx);
                 }
-                // An explicit pick is the operator saying where they are
-                // working now, so the *next* draft starts there too — the
-                // same answer a relaunch would read off the store, without
-                // waiting for the relaunch.
-                self.launch_project = Some(*project);
             }
             BandChoice::RegisterPath(path) => {
                 let focused = self.focused(cx);
@@ -5626,7 +5649,16 @@ impl CockpitView {
                     draft.error = None;
                 }
             }
-            BandChoice::AddProject => self.open_project_creator(cx),
+            BandChoice::AddProject => {
+                let focused = self.panes.get(self.focused(cx));
+                let draft = focused.filter(|pane| pane.draft().is_some()).map(|pane| pane.identity);
+                match (draft, self.pane_machine(self.focused(cx))) {
+                    (Some(draft), Some(machine)) => self.open_project_creator_for(machine, draft, cx),
+                    _ => self.open_project_creator(cx),
+                }
+            }
+            BandChoice::Environment(machine) => self.pick_environment(*machine, cx),
+            BandChoice::Connections => self.open_connections(cx),
         }
         cx.notify();
     }
@@ -5749,29 +5781,40 @@ impl CockpitView {
             ),
             DraftTarget::New => (ferrite_ui::icons::FOLDER_GIT, SharedString::from("New worktree")),
         };
-        let machine = self
-            .machine_label(draft.binding.project().machine(), cx)
+        // Where the draft runs: a chip while there is more than one
+        // environment to choose, else a word for a machine.
+        let machine = draft.binding.project().machine();
+        let environment = self.environment_chip_shown(cx).then(|| {
+            let mark = if self.elsewhere(machine, cx) {
+                ferrite_ui::icons::SERVER
+            } else {
+                ferrite_ui::icons::LAPTOP
+            };
+            (pane::BandChip::Environment, 2, mark, self.environment_name(machine, cx))
+        });
+        let word = environment
+            .is_none()
+            .then(|| self.machine_label(machine, cx))
+            .flatten()
             .map(|name| pane::env_machine(name.into()).into_any_element());
-        let chips = [
+        let chips = environment.into_iter().chain([
             (
                 pane::BandChip::Project,
+                0,
+                ferrite_ui::icons::FOLDER,
                 pane::band_chip_label(&project_title),
             ),
             (
                 pane::BandChip::Workspace,
+                1,
+                workspace_mark,
                 pane::band_chip_label(&workspace_label),
             ),
-        ];
+        ]);
         let chips = chips
-            .into_iter()
-            .enumerate()
-            .map(|(slot, (chip, label))| {
+            .map(|(chip, slot, mark, label)| {
                 let focused = draft.band_focus == Some(chip);
                 let chip_composer = composer.clone();
-                let mark = match chip {
-                    pane::BandChip::Project => ferrite_ui::icons::FOLDER,
-                    _ => workspace_mark,
-                };
                 let chip_element = pane::band_chip(slot, mark, label, focused).on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -5795,7 +5838,7 @@ impl CockpitView {
                 )
                 .into_any_element()
             });
-        machine.into_iter().chain(chips).collect()
+        word.into_iter().chain(chips).collect()
     }
 
     /// The focused draft's model chip (#29), where a live Thread's stands
@@ -7191,13 +7234,13 @@ impl CockpitView {
             // Native text, dialogs, and the Inbox keep their own keyboard focus.
         } else if self.popup_up() {
             // A popup puts the keyboard where it says (`tend_popup_focus`).
-        } else if let Some(focus) = self.sheets.read(cx).up().map(|sheet| sheet.focus(cx)) {
+        } else if let Some(sheet) = self.sheets.read(cx).up().cloned() {
             // The pump must not steal focus from a sheet's fields or controls.
             let connection_focused = self
                 .connections(cx)
                 .is_some_and(|connections| connections.read(cx).holds_focus(window, cx));
-            if !focus.contains_focused(window, cx) && !connection_focused {
-                window.focus(&focus, cx);
+            if !sheet.holds_focus(window, cx) && !connection_focused {
+                window.focus(&sheet.focus(cx), cx);
             }
         } else if field_holds_keyboard {
         } else if !wanted.is_focused(window)

@@ -438,6 +438,31 @@ fn a_mirror_reads_every_page_of_the_far_side_before_it_plans() {
     assert!(far.pages.is_empty());
 }
 
+/// The Server runs under umask 077; a directory a tree op makes, the root
+/// and those on the way to it too, is still readable by all.
+#[cfg(unix)]
+#[test]
+fn a_directory_a_tree_op_makes_is_readable_by_all_whatever_the_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch("dir-modes");
+    let root = Root::Path {
+        path: dir.join("new/tree"),
+    };
+    let mut session = Session::default();
+    // SAFETY: umask only swaps the process's mask, put back at once.
+    let before = unsafe { libc::umask(0o077) };
+    let made = session.execute(Request::MakeDir {
+        root,
+        path: "src".into(),
+    });
+    unsafe { libc::umask(before) };
+    assert_eq!(made.unwrap(), Reply::Done);
+    for made in ["new", "new/tree", "new/tree/src"] {
+        let mode = fs::metadata(dir.join(made)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755, "{made}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn a_root_holding_the_link_that_is_the_home_directory_holds_it() {

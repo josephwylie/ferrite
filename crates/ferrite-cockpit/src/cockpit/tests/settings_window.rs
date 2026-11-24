@@ -251,9 +251,8 @@ fn a_ready_setup_replaces_the_environment_it_edits_and_keeps_its_warning(
     tick(cx);
     let saved = Machine {
         name: "box".into(),
-        target: "me@box".into(),
         enabled: false,
-        sync_setup: true,
+        ..Machine::new("me@box")
     };
     let other = Machine::new("other.example");
     view.update(cx, |view, _| {

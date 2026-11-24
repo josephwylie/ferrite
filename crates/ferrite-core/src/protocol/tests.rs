@@ -1488,6 +1488,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         ("command_list_repo", command(39, Op::ListRepo { project })),
+        ("command_repositories", command(41, Op::Repositories)),
         (
             "command_review_diff",
             command(
@@ -1868,6 +1869,19 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         },
                     ],
                     branches: vec!["main".into(), "fix".into()],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_repositories",
+            Sample::Server(ServerMessage::Reply {
+                id: 41,
+                ok: Some(Done::Repositories {
+                    projects: vec![WireRepository {
+                        project,
+                        repository: "github.com/acme/app".into(),
+                    }],
                 }),
                 error: None,
             }),

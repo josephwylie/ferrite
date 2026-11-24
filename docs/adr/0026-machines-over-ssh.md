@@ -281,30 +281,31 @@ another computer's. What the Server can answer, it answers; what it
 cannot, the window does without.
 
 - **Folders.** The Project card's folder dialog could only browse this
-  computer, so on a machine it is not offered. A path field stands in for
-  it, starting at `~/`, whose listing is asked for as the card opens:
-  what is typed completes (a press, or Tab) against the directory it
-  names, listed by the machine's Server through a new gen-1 command,
+  computer, so on a machine it is not offered. A browser of the
+  machine's folders stands in for it (ADR 0048's `FolderBrowser`),
+  opening at `~/`, whose listing is asked for as the card opens: each
+  folder is listed by the machine's Server through a new gen-1 command,
   `list_dir {path}`, replied `listing {path, entries[{name, directory}]}`
-  with `~` spelled out (`workspace::list_dir`). ↵ in the field adds the
-  directory to the card and empties the field, so a second ↵ confirms
-  the card rather than adding anything more; Create registers the
-  Project through the existing `project` command. The card stages the
-  path as the listing in hand spelled it out (of it, or of its parent),
-  so `~` is named for the home's leaf and one directory typed two ways
-  stages once; with no listing in hand it goes as typed, and the
-  registry spells `~` out. Additive under ADR 0025's rules: an older
-  Server answers `unsupported`, and the field then completes nothing. A
-  listing is one `read_dir`, never a walk, on a thread of its own as
-  `list_repo`'s git is, never the pump: a huge folder or a hung mount on
-  the machine holds up only the field. A directory that cannot be read
-  is not asked about again until the field leaves it. Only a Server
-  answers `list_dir`, as `list_repo`: the Server, not the Engine, owns
-  both, so a window that runs its agents itself never shows the field.
+  with `~` spelled out (`workspace::list_dir`). "+ Add directory" under
+  it, or ↵ once it has moved, adds the folder shown to the card and goes
+  back to the folder that one is in, so a second ↵ confirms the card
+  rather than adding anything more; Create registers the Project through
+  the existing `project` command. The card stages the path as the
+  listing in hand spelled it out (of it, or of its parent), so `~` is
+  named for the home's leaf and one directory reached two ways stages
+  once; with no listing in hand it goes as typed, and the registry spells
+  `~` out. Additive under ADR 0025's rules: an older Server answers
+  `unsupported`, and the browser then lists nothing. A listing is one
+  `read_dir`, never a walk, on a thread of its own as `list_repo`'s git
+  is, never the pump: a huge folder or a hung mount on the machine holds
+  up only the browser. A directory that cannot be read is not asked
+  about again until the browser leaves it. Only a Server answers
+  `list_dir`, as `list_repo`: the Server, not the Engine, owns both, so a
+  window that runs its agents itself never shows the browser.
 - **`~`.** A path goes to the Server as typed; the registry spells out
   `~` against its own computer's home before canonicalizing
   (`folder::expand_home`), so `path ~/src/x` on a draft's Project chip
-  and the card's field mean the machine's home. The window's own
+  and the card's browser mean the machine's home. The window's own
   expansion is gone: it would have meant this computer's.
 - **Drafts.** The Project chip lists the machine's Projects (the
   registry is the Server's), and a first send starts the Thread there, as

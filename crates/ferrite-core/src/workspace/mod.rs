@@ -24,10 +24,8 @@ use std::process::Command;
 
 pub mod follow;
 pub mod registry;
-mod repository;
 mod stamp;
 
-pub use repository::repository_key;
 pub use stamp::{checkout_stamp, head_of};
 
 /// Move the shared project checkout to an existing branch selected before
@@ -661,7 +659,7 @@ pub fn git_spawns_on_this_thread() -> u64 {
 /// Never with git's optional locks: the checkouts Ferrite reads are the
 /// ones its agents are writing, and a read that refreshed the index on the
 /// side would take `index.lock` from under the agent's own `git`.
-fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
+pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
     GIT_SPAWNS.with(|spawns| spawns.set(spawns.get() + 1));
     let output = Command::new("git")
         .arg("-C")

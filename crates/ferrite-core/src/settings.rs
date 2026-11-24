@@ -727,9 +727,9 @@ mod tests {
             local_environment_enabled: false,
             machines: vec![crate::machine::Machine {
                 name: "build box".into(),
-                target: "me@build.example.com".into(),
                 enabled: false,
                 sync_setup: false,
+                ..crate::machine::Machine::new("me@build.example.com")
             }],
             forge_hosts: ForgeHosts {
                 github: Some("ghe.corp.example".into()),

@@ -11,12 +11,11 @@ of the Project folder, put where the operator says. Their agent setup
 (skills, commands, agents, instructions, rules, plugins, settings and
 sign-ins) follows them to every Machine and stays in sync both ways.
 
-Three pieces do this, in three PRs. The first and third are built. The
-second is planned and recorded here so it builds on them as designed:
+Three pieces do this, in three PRs, all built:
 
 1. **The tree primitive** (built): one way to make a directory on a
    Machine hold what one here holds, over the Ferrite protocol.
-2. **The environment chip and Placement** (planned): the Draft's choice of
+2. **The environment chip and Placement** (built): the Draft's choice of
    environment, and the Project copy it starts.
 3. **Setup sync** (built): the operator's agent setup kept the same on
    this computer and each Machine.
@@ -112,22 +111,31 @@ Windows window.
   sender's where both sides keep bits, and only then does a different
   executable bit make a file differ; a script edited on Windows keeps its
   `+x` there. A new file takes the sender's bits, or the receiver's umask
-  from a side that keeps none.
+  from a side that keeps none. A directory a tree op makes, the root and
+  those on the way to it too, is 0755 whatever the Server's umask (077,
+  for its own state): a manifest lists no directory's bits to send.
+  `Root::dir_mode` is the one place that says so.
 - **`send` takes the steps through an `Exchange`, asking ahead of the
   replies**: a request is written at once (`ask`) and its reply read later
   (`answer`), in the order asked, with at most 64 requests or 4 MiB of
-  files out at once. It reads each file from the source tree, reports
+  files out at once. It reads each file through a `tree::Source`, a plain
+  root or a Project's `placement::Checkout` (section 2), reports
   `Progress` as the far side acknowledges bytes, and stops on its
-  `Cancellation`. A file whose bytes now do not hash to what its scan
-  listed fails by its name ("changed after it was listed"), and its
+  `Cancellation`. A file that cannot be read here as its scan listed it
+  (gone, held by another program, or its bytes no longer hashing to what
+  was listed: "it changed after it was listed") is left as the far side
+  has it, a `Side::Here` problem of the send, and the send goes on. Its
   `finish` carries the listed hash, so the Server never puts a torn file in
   place. Every write begun is finished, however its send ends, so a failed
-  send never holds a write slot of its connection. An error names the
-  entry whose request it answered; what was asked after it may still be
-  taken there, since every step is whole on its own, and an `answer` passes
-  over replies nobody waited for, so the connection carries on. `mirror`
-  asks for the scan there, scans here while it runs, then `plan`, `send`,
-  and returns what it did with both sides' problems.
+  send never holds a write slot of its connection. A send that stops
+  returns `Stopped { error, sent }`: the error names the entry whose
+  request it answered, and `sent` is what was taken there once the replies
+  already on their way are heard, unless the line itself is down. What was
+  asked after it may still be taken there, since every step is whole on its
+  own, and an `answer` passes over replies nobody waited for, so the
+  connection carries on. `mirror` asks for the scan there, scans here while
+  it runs, then `plan`, `send`, and returns what it did with both sides'
+  problems.
 - **A rerun sends only what still differs.** The steps come from the two
   manifests alone, never from a record of an earlier run, so a send cut off
   anywhere is finished by the next one, however much it had asked ahead. A
@@ -147,9 +155,10 @@ Windows window.
 - **A write's temporary file** is `.ferrite-<process>-<micros>-<nonce>.part`,
   each a number, so a user's `.ferrite-notes.part` is an ordinary file and
   is sent. A scan leaves temporary files out, so a write under way there is
-  neither copied nor removed. One nothing wrote to for 10 minutes belongs
-  to no write, in this process or one that stopped mid-write, since none
-  takes a chunk after that: the Server's scan of a tree removes it.
+  neither copied nor removed. One whose process is gone, or that nothing
+  wrote to for 10 minutes, belongs to no write, since none takes a chunk
+  after that: the Server's scan of a tree removes it, so the Resume after
+  a lost connection leaves none of the old Server's behind.
 - **Only a Server answers**, as `list_dir`. Each connection's tree ops run
   in the order asked on a thread of their own (a `Lane`), at most 16
   connections at once: a read off the pump takes a thread per request, and
@@ -192,48 +201,170 @@ Windows window.
   sshd under a temporary HOME, and gives Windows an ssh shim with its own
   config, so the operator's keys, ssh config and Machines are never used.
 
-## 2. The environment chip and Placement (planned)
+## 2. The environment chip and Placement (built)
 
 - **A counterpart is computed, not stored.** The counterpart of Project P
-  on Machine E is the Project there with the same `workspace::repository_key`
+  on Machine E is the Project there with the same `repository::repository_key`
   (as delegation matches, ADR 0047; a copied folder carries its `.git`, so
-  it matches itself). Only a Project with no repository key needs a record:
-  a **Placement** `{ local_root, remote_root }` per Machine at
-  `machine::dir(..)/placements.json`. One lookup answers "counterpart of P
-  on E", for the chip, and nothing else asks.
+  it matches itself), else the one a **Placement** names. Every copy keeps
+  that record, so where it went is known whatever git later says of either
+  side: `{ local_root, remote_root }` per Machine at
+  `machine::dir(..)/placements.json`, read both ways (this computer to E
+  and back). A Machine set up again keeps its projects folder, and one
+  whose target is edited takes what this computer keeps of it to its new
+  folder (`placement::follow`). `placement::counterpart` is the one lookup. The
+  window learns each machine's repositories by asking its Server
+  (`Op::Repositories`, additive under ADR 0025; an older Server answers
+  none), so a pick waits for both answers before it moves the Draft.
+  `placement` is on the shared side (ADR 0049): it names no Engine module,
+  so `counterpart` takes the Projects there by id and root, and the
+  answer's type is the protocol's (`protocol::Repositories`).
 - **Each Machine has a projects folder**, `projects_dir` on `Machine`
-  (default `~/projects`), edited on its Connections row.
-- **The chip** replaces the machine word at the front of the draft band
-  (`pane::env_machine`) whenever more than one environment is on. It names
-  the Draft's environment and lists this computer and each enabled Machine,
-  a check on the Draft's, then "Add environment…" (Settings › Connections).
-  It is the Project chip's band chip and popup, pressed through the shared
-  control (ADR 0044). The setup sheet and its state are a view of their own
-  (ADR 0041 to 0043).
-- **Picking environment E** on a Draft whose Project is P:
-  1. a counterpart exists: `choose_project(counterpart)`. The text,
-     attachments (re-aimed at E), provider and effort stay;
-  2. none, and P is on this computer: the setup sheet. A destination field
-     prefilled `<projects_dir>/<name>` completes against E's `list_dir`; P's
-     git-ignored entries are listed with their sizes, unchecked; Copy shows
-     progress and can be cancelled. On finish: `register_project(E,
-     destination)`, a Placement if P has no repository key, and
-     `choose_project(new)`;
-  3. none, and P is on another Machine: the Project card on E, since there
-     is no folder here to copy.
-- **What is there is never overwritten silently.** A destination that holds
-  something offers "Use what is there" (register, no copy) or another path.
-- **Windows to Linux**: after the copy, the source repo's effective
-  `core.autocrlf` and `core.filemode=false` go into the copy's local config,
-  so git there does not see the whole tree as modified.
-- **A Machine not reached or not set up** is listed dimmed with its state
-  and opens the Connections flow.
-- **The Draft's "Add project…"** opens on the Draft's Machine, not always on
-  this computer.
-- **The sheet is one state machine**: `Choosing → Scanning →
-  Copying { progress } → Registering → Done | Failed { reason }`.
-- `CONTEXT.md`'s Draft entry and ADR 0045's "locked environment control"
-  line change with it: the environment is a choice until the first send.
+  (default `~/projects`, not written while it is the default), changed on
+  its Connections row: its ⋯ menu's "Projects folder…" opens a field in the
+  row, saved through Connections' own save.
+- **The chip** stands at the front of the draft band in place of the
+  machine word (`pane::env_machine`) whenever more than one environment is
+  on, the laptop or the server mark and the environment's name ("Local"
+  for this computer). Its menu lists this computer and each enabled
+  Machine, a check on the Draft's, then "Add environment…" (Settings ›
+  Connections). It is the Project chip's band chip and popup, pressed
+  through the shared control (ADR 0044), and Tab reaches it between the
+  model chip and the Project chip (`BandChip::Environment`). One control
+  of a Draft holds the ring at a time, a file or a band chip, and none
+  once a sheet is up; Send sends whichever holds it. With one environment
+  on, the band keeps the machine word.
+- **Turning a Machine off puts its Drafts away**, and Connections says so
+  ("Your draft on E is put away until E is on again."); turned on again,
+  each comes back with its words.
+- **Picking environment E** on a Draft whose Project is P
+  (`draft_environment.rs`):
+  1. a counterpart exists: the Draft's Project becomes it. Its text,
+     attachments, provider and effort stay; its attachments are aimed at E
+     and their upload there starts at once. A Draft keeps a file of this
+     computer by its path here, and a Machine's copy of it beside it
+     (`DraftContent.uploaded`), never in its place: put away and back on
+     that Machine it sends the copy without uploading again, and picked
+     onto this computer it sends the file here. One no longer here says
+     "Gone from this computer" on either side and asks for no upload;
+     put back, its Retry sends it;
+  2. none, and P is on this computer: the setup sheet (`PlacementView`).
+     Where the copy goes is chosen by browsing E, never by typing a path
+     (though one can be typed): see **The folder browser** below. The copy
+     goes to `<folder browsed>/<name>`, its name P's folder name until
+     edited ("Copies to"). P's git-ignored entries are listed with their
+     sizes, unticked; a folder git ignores whole is one row, nothing in it
+     listed apart, and ticked it carries all it holds; past 20, the rest
+     are one row, "and N more", that ticks them all. Worktrees inside P
+     are never copied nor listed, and the sheet says so; a P that is
+     itself a linked worktree is refused, since its `.git` names a path
+     here, and the sheet names the folder of its main checkout where that
+     `.git` file leads to one. Copy
+     runs on a thread of its own over a connection of its own
+     (`Cockpit::tree`), with its progress and Cancel. Then the window
+     registers the destination on E, names a Project made there as P is
+     named, so both read as one Project (one there before keeps its name,
+     as the registry's answer says), keeps a Placement, and chooses the
+     new Project on the Draft;
+  3. none, and P is on another Machine: the Project card on E (a folder
+     dialog when E is this computer), which chooses what it makes on the
+     Draft.
+- **The folder browser** (`FolderBrowser`, a view of its own) shows E's
+  folders as a file explorer would, read by E's Server one directory at a
+  time (`list_dir`, ADR 0026) on a thread of its own, so a slow listing
+  holds up nothing: "Reading …" stands in its rows until it lands. It
+  opens at `projects_dir`. One E does not have yet, as a fresh Machine
+  lacks `~/projects`, is shown as the folder the copy makes when the
+  folder it is in holds nothing of its name; else the browser opens at
+  E's home. A line names the folder shown; under it, `..` and that
+  folder's folders, never its files, and a dot folder only once a dot is
+  typed. Only the rows in view are drawn, so a folder of 20,000 folders
+  opens and scrolls as one of 20. A press goes into a row, the arrows walk
+  them and ↵ goes into the one they rest on, so the sheet is finished with
+  the mouse or with the arrows and ↵ alone. Tab finishes the line's last
+  name to the first folder it starts, and with none to finish moves on.
+  "New folder" names a folder in the one shown, which "The copy makes
+  this folder" marks; one that cannot be read says so in place, in two
+  lines at most, and `..` leads out of it. On the setup sheet its folders
+  take the card's free height, six rows at least, and it reads its folder
+  again once a copy ends or is cancelled. The
+  Project card on a Machine uses the same browser in place of its path
+  field: "+ Add directory" under it, or ↵ once it has moved, adds the
+  folder shown, and the browser goes back to the folder that one is in.
+- **What is there is never overwritten.** Before it writes, a copy reads
+  the destination as the mirror would, through the same exchange. A first
+  copy into one that holds anything sends nothing and stops at
+  **Occupied**: the sheet says so and offers "Use what is there"
+  (register, no copy); another folder or name chooses afresh.
+- **An unfinished copy can be resumed.** Before its first byte a copy is
+  kept on this computer as **unfinished**, at
+  `machine::dir(..)/unfinished.json` beside the Placements, by P's root
+  and the destination alone. It is cleared once the copy is in, or once
+  it stops with nothing landed; `placement::copy` alone writes and clears
+  it. A copy cancelled, cut off, or stopped with the app is resumed by the
+  next copy of P to that destination, which reads what is done off the
+  destination rather than a list: a file there as the copy sends it is
+  done, one not there is sent, and one there that differs is someone
+  else's, left as it is and listed under Not copied as "changed on E".
+  A resume removes nothing. A destination that holds another repository
+  by then (its `.git/config` names another remote) takes no resume, and
+  its record goes. One that holds another Project's unfinished copy is
+  that Project's: the sheet says "D holds an unfinished copy of Q." and
+  offers nothing to use there. The sheet reads the records: for a P with
+  one it opens on that destination, under `~/`, says "An unfinished copy
+  of P is here." and offers Resume, never "Use what is there"; to start
+  elsewhere, the operator browses away or makes a New folder. Removing a
+  Machine in Settings forgets its Placements and unfinished copies.
+- **A destination is kept sane by the sheet**: `/` or `~/` first (or a
+  drive, for a Server on Windows), not the home or a root itself, nothing
+  through `.` or `..` (`placement::refuse_destination`).
+- **A file that changes or cannot be read** during the copy is left by its
+  name, sent once more, and if it still cannot be, listed when the copy is
+  in: the sheet stays up on Done to list it under Not copied, "Left as it
+  was", each with why: "in use here", "unreadable on E" or "changed on
+  E".
+- **A copy sends what git would check out on the Machine**
+  (`placement::Checkout`, the copy's `tree::Source`). From Windows, a file
+  `git ls-files --eol` has as `i/lf w/crlf` goes with each CRLF made LF,
+  uncommitted edits and all, when git itself converts it: its attribute
+  is `text` or `text=auto`, or it has none and `core.autocrlf` is true.
+  One that is `-text`, binary, `eol=crlf` or has a
+  `working-tree-encoding` goes as it is; each
+  file gets bits of its own, which Windows does not keep: 0755 for one the
+  index has as 100755, 0600 for one git ignores (this computer's own, as a
+  `.env` is), 0644 for the rest; the copy's `.git/index` lists each file
+  sent as LF with no size, as git lists a racily clean file, so git there
+  reads what it holds rather than the CRLF size it had here; and its
+  `.git/config` goes without `core.autocrlf`, `core.filemode` and
+  `core.ignorecase`, which say how this computer checks out. Everything
+  else goes byte for byte, and the manifest's sizes and hashes are of what
+  is sent. So git there reads the tree as unchanged and a script checked
+  out here with CRLF runs there. From a side that keeps bits, everything
+  goes as it is.
+- **A Machine not reached or not set up** is listed dimmed with why
+  ("connecting", "sign in", "not set up", "offline"). A press on it opens
+  Connections; the arrows pass over it, as over every dimmed row.
+- **The Draft's "Add project…"** opens the card on the Draft's Machine.
+- **The sheet is one state machine**: `Choosing → Listing { count } →
+  Copying { progress } → Registering → Done { skipped } | Failed { reason }`,
+  with `Occupied` after `Listing` when a first copy finds the destination
+  holding something, and `Cancelled` from `Listing` or `Copying`. Listing
+  counts the files as it goes, and Cancel stops it there too. While a copy
+  runs a press outside the card does nothing, and ✕, Esc and Cancel are
+  one act: the copy stops, the sheet stays and says it can be resumed.
+  Through a first copy its button stays Copy; only a resume's reads
+  Resume. Retry from a failure copies again. A failure is said in the
+  operator's words: "The connection to E was lost. Resume finishes the
+  copy once it is back." when the connection went, else the folder that
+  could not be written and why, under `~/`: "Can't write in
+  ~/projects/app: permission denied." From Copy on, where the copy goes is
+  held: the browser, the copy's name and the ticks take no press or key
+  until it stops. How it stands is a two-line slot under "Copies to",
+  whole in its tooltip, there in every stage. Over a draft the card, as
+  the Project card on a Machine, is one size in every stage, centred in
+  the room above the band and never reaching it.
+- `CONTEXT.md`'s Draft entry and ADR 0045's line on the strip over the
+  Composer say the environment is a choice until the first send.
 
 ## 3. Setup sync (built)
 
@@ -398,7 +529,7 @@ Windows window.
 - **What was asked after an error may still be taken.** The Server runs
   each request in order and the sender stops at the first error, so steps
   after it may land there too. Each is whole on its own: the tree is only
-  further along, and a rerun finishes it.
+  further along, `Stopped.sent` counts them, and a rerun finishes it.
 - **A tree's files are not synced to disk before they are renamed into
   place.** A sync per file took 0.66 to 4.1 s per 706 small files on WSL's
   ext4 (median 0.94 ms, up to 158 ms each), most of a crate's send. A
@@ -417,8 +548,9 @@ Windows window.
   rewritten in place at its old size with its old modification time put
   back (`touch -r`, a restore) keeps its old hash until the process ends.
 - **A tree is only as consistent as its source while it is read.** A file
-  that changes after it is listed, or while it is read, fails by its name
-  and stops the send; a rerun sends it again.
+  that changes after it is listed, or while it is read (a live log, a git
+  index), is left out of that send by its name; the setup sheet sends what
+  was left once more and lists what still is.
 - **A Windows Server makes no symlinks**, so a tree that holds one never
   completes there: each send fails at its first link, though what it asked
   ahead lands. Making one there needs Developer Mode or an elevated
@@ -437,6 +569,31 @@ Windows window.
   (the API's tools on `main`, each lane and read here), so a Server whose
   accept failed ran on with no way in. The accept loop now says so
   (`Heard::Stopped`). No test makes an accept fail.
+- **A submodule goes as this computer checked it out.** Its files' line
+  ends, bits and checkout settings come from the Project's own index and
+  config, which list a submodule as one entry; the submodule's own are not
+  read. From Windows an executable in one lands 0644 and its text keeps
+  CRLF under its own `core.autocrlf`, so a script there does not run until
+  the submodule is checked out afresh on the Machine.
+- **A converted file reads modified on the Machine under
+  `core.splitIndex`.** The copy clears the sizes of what it converts in
+  `.git/index`, and a split index keeps most entries in
+  `sharedindex.*`, which it sends as it is; `git status` there lists
+  those files until the index is refreshed.
+- **`core.eol` goes in the copy's `.git/config`.** Only `core.autocrlf`,
+  `core.filemode` and `core.ignorecase` are taken out; a `core.eol=crlf`
+  set here makes git there check out CRLF.
+- **"Use what is there" registers what is there under P's name.** The
+  destination may hold an unrelated repository; the sheet registers it as
+  the operator asked, and the window names a Project made there as P is
+  named, as for a copy.
+- **Submodules were not tried live**: the tests and the WSL Machine runs
+  copy Projects without one.
+- **Switching a Draft's environment sets its workspace target back to
+  Main**, and whether the Draft's provider is installed on the Machine is
+  not checked until the first send.
+- **A Machine's Server remembers a missing agent CLI until it restarts**:
+  one installed there after the Server looked is still missing to it.
 - **Only the filesystem's root, the home directory and its ancestors are
   refused.** `~/.ssh`, `/etc` or a Project's own folder is a root like any
   other, and a mirror there removes what the source does not hold. Callers

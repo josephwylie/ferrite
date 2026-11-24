@@ -38,10 +38,24 @@ pub struct Machine {
     /// ways (ADR 0048).
     #[serde(default = "enabled")]
     pub sync_setup: bool,
+    /// Where a Project copied there goes, in a folder of its name, unless
+    /// the operator says otherwise (ADR 0048). `~` is its home.
+    #[serde(default = "projects_dir", skip_serializing_if = "is_projects_dir")]
+    pub projects_dir: String,
 }
 
 fn enabled() -> bool {
     true
+}
+
+pub const PROJECTS_DIR: &str = "~/projects";
+
+fn projects_dir() -> String {
+    PROJECTS_DIR.into()
+}
+
+fn is_projects_dir(dir: &str) -> bool {
+    dir == PROJECTS_DIR
 }
 
 impl Machine {
@@ -52,6 +66,7 @@ impl Machine {
             target: target.to_string(),
             enabled: true,
             sync_setup: true,
+            projects_dir: projects_dir(),
         }
     }
 

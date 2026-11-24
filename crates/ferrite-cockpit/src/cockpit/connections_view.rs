@@ -26,6 +26,9 @@ pub(crate) struct ConnectionsView {
     // open shows once it closes.
     /// The saved environment whose Remove waits for its confirm.
     removing: Option<String>,
+    /// The saved environment whose projects folder is being changed, and
+    /// the field it is typed in.
+    projects: Option<(String, Entity<InputState>)>,
     warning: Option<String>,
     error: Option<String>,
     generation: u64,
@@ -51,6 +54,8 @@ pub(crate) enum ConnectionsEvent {
     UseSignIns(String, ferrite_core::tree::Side),
     /// Remove a saved environment, as confirmed.
     Remove { machine: Machine, unsaved: bool },
+    /// Copy Projects into this folder on the saved environment `target`.
+    ProjectsDir { target: String, dir: String },
     /// A setup or pairing finished: save `machine` in place of the
     /// environment it set up again, if it did.
     Ready {
@@ -179,6 +184,7 @@ impl ConnectionsView {
             cockpit,
             editor: None,
             removing: None,
+            projects: None,
             warning: None,
             error: None,
             generation: 0,
@@ -848,6 +854,35 @@ impl ConnectionsView {
         cx.notify();
     }
 
+    /// Change `machine`'s projects folder in its row, starting from the
+    /// one it has.
+    fn edit_projects_dir(&mut self, machine: &Machine, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(machine::PROJECTS_DIR));
+        input.update(cx, |input, cx| {
+            input.set_value(machine.projects_dir.clone(), window, cx);
+            input.focus(window, cx);
+        });
+        cx.subscribe_in(&input, window, |view, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                view.save_projects_dir(cx);
+            }
+        })
+        .detach();
+        self.projects = Some((machine.target.clone(), input));
+        cx.notify();
+    }
+
+    /// Keep the folder typed, or the default for none.
+    fn save_projects_dir(&mut self, cx: &mut Context<Self>) {
+        let Some((target, input)) = self.projects.take() else {
+            return;
+        };
+        let typed = input.read(cx).value().trim().to_string();
+        let dir = if typed.is_empty() { machine::PROJECTS_DIR.to_string() } else { typed };
+        cx.emit(ConnectionsEvent::ProjectsDir { target, dir });
+        cx.notify();
+    }
+
     /// The Cockpit's answer to a change asked of it: the error it met,
     /// if any.
     pub(super) fn answered(&mut self, error: Option<String>, cx: &mut Context<Self>) {
@@ -1083,6 +1118,7 @@ impl ConnectionsView {
             }],
             removal: None,
             sync: None,
+            projects: None,
         });
         let form = self.form(&saved, window, cx);
         let mut remote = vec![settings::Row::new(
@@ -1175,6 +1211,13 @@ impl ConnectionsView {
                     }),
                 });
             }
+            let folder = machine.clone();
+            actions.push(settings::ConnectionAction {
+                id: format!("connection-projects-{index}").into(),
+                label: "Projects folder…".into(),
+                enabled: self.editor.is_none(),
+                act: action(cx, move |view, window, cx| view.edit_projects_dir(&folder, window, cx)),
+            });
             let removing = target.clone();
             actions.push(settings::ConnectionAction {
                 id: format!("connection-remove-{index}").into(),
@@ -1246,6 +1289,18 @@ impl ConnectionsView {
                     status: status.line(&machine.name).into(),
                 }
             });
+            let projects = self
+                .projects
+                .as_ref()
+                .filter(|(editing, _)| *editing == target)
+                .map(|(_, input)| settings::ProjectsFolder {
+                    input: input.clone(),
+                    save: action(cx, |view, _, cx| view.save_projects_dir(cx)),
+                    cancel: action(cx, |view, _, cx| {
+                        view.projects = None;
+                        cx.notify();
+                    }),
+                });
             let display_target = machine.display_target(&dir);
             remote.push(connection_row(settings::ConnectionRow {
                 name: machine.name.into(),
@@ -1257,6 +1312,7 @@ impl ConnectionsView {
                 actions,
                 removal,
                 sync,
+                projects,
             }));
         }
         let mut group = settings::Group::new(Some("Environments")).rows(remote);
@@ -1333,6 +1389,7 @@ impl CockpitView {
                 view.update(cx, |view, cx| view.answered(error, cx));
             }
             ConnectionsEvent::Toggle(target) => {
+                let away = self.drafts_on(&target);
                 let saved = self.save_connections(
                     |saved| {
                         for machine in saved.iter_mut().filter(|machine| machine.target == target) {
@@ -1341,7 +1398,14 @@ impl CockpitView {
                     },
                     cx,
                 );
+                let put_away = saved.is_ok() && away > 0 && self.drafts_on(&target) == 0;
                 view.update(cx, |view, cx| view.answered(saved.err(), cx));
+                if let Some(name) = put_away.then(|| self.saved_name(&target)).flatten() {
+                    let drafts = if away == 1 { "Your draft" } else { "Your drafts" };
+                    let are = if away == 1 { "is" } else { "are" };
+                    let warning = format!("{drafts} on {name} {are} put away until {name} is on again.");
+                    view.update(cx, |view, cx| view.warn(warning, cx));
+                }
             }
             ConnectionsEvent::ToggleSync(target) => {
                 let saved = self.save_connections(
@@ -1360,11 +1424,48 @@ impl CockpitView {
             ConnectionsEvent::Remove { machine, unsaved } => {
                 self.remove_connection(&view, machine, unsaved, cx)
             }
+            ConnectionsEvent::ProjectsDir { target, dir } => {
+                let saved = self.save_connections(
+                    |saved| {
+                        for machine in saved.iter_mut().filter(|machine| machine.target == target) {
+                            machine.projects_dir = dir.clone();
+                        }
+                    },
+                    cx,
+                );
+                view.update(cx, |view, cx| view.answered(saved.err(), cx));
+            }
             ConnectionsEvent::Ready { machine, replacing } => {
                 self.add_connection(&view, machine, replacing, cx)
             }
         }
         cx.notify();
+    }
+
+    /// How many drafts are open on the environment `target` names.
+    fn drafts_on(&self, target: &str) -> usize {
+        let Some(machine) = self
+            .machines
+            .as_ref()
+            .and_then(|machines| machines.held(machines.named(target)?))
+        else {
+            return 0;
+        };
+        self.panes
+            .iter()
+            .filter_map(|pane| pane.draft())
+            .filter(|draft| draft.binding.project().machine() == machine)
+            .count()
+    }
+
+    /// What Settings calls the environment `target` names.
+    fn saved_name(&self, target: &str) -> Option<String> {
+        self.prefs
+            .settings
+            .machines
+            .iter()
+            .find(|machine| machine.target == target)
+            .map(|machine| machine.name.clone())
     }
 
     /// Why the window cannot let the environment `target` names go now
@@ -1427,7 +1528,12 @@ impl CockpitView {
                     .iter_mut()
                     .find(|saved| replacing.as_ref() == Some(&saved.target))
                 {
-                    *existing = machine.clone();
+                    // Set up again, it is the same environment: what the
+                    // setup does not ask stays as it was.
+                    *existing = Machine {
+                        projects_dir: existing.projects_dir.clone(),
+                        ..machine.clone()
+                    };
                 } else {
                     saved.push(machine.clone());
                 }
@@ -1438,6 +1544,16 @@ impl CockpitView {
         view.update(cx, |view, cx| view.added(saved, cx));
         if !added {
             return;
+        }
+        if let Some(old) = replacing.filter(|old| *old != machine.target) {
+            let (from, to) = (
+                machine::dir(&self.prefs.dir, &old),
+                machine::dir(&self.prefs.dir, &machine.target),
+            );
+            if let Err(error) = ferrite_core::placement::follow(&from, &to) {
+                let warning = format!("Where Projects were copied to {} was not kept: {error}", machine.name);
+                view.update(cx, |view, cx| view.warn(warning, cx));
+            }
         }
         if let Some(machines) = &self.machines {
             if let Some(index) = machines.named(&machine.target) {
@@ -1464,6 +1580,13 @@ impl CockpitView {
         view.update(cx, |view, cx| view.removed(saved, cx));
         if !removed {
             return;
+        }
+        // Where the Machine's copies went goes with it: a Machine saved
+        // again under that name is another.
+        let kept = ferrite_core::machine::dir(&self.prefs.dir, &target);
+        if let Err(error) = ferrite_core::placement::forget(&kept) {
+            let warning = format!("Environment removed, but where its copies went could not be forgotten: {error}");
+            view.update(cx, |view, cx| view.warn(warning, cx));
         }
         if machine.is_link() {
             let directory = self.prefs.dir.clone();

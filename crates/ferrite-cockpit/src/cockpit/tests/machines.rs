@@ -15,6 +15,7 @@ use ferrite_core::{MachineId, MachineKey, SavedThread};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+mod environments;
 mod everywhere;
 
 /// A bridge whose every tunnel ends as ssh does after `failure`.
@@ -53,6 +54,9 @@ static SENT_TO_BOX: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 /// While set, box's Server is down: its links have ended and no tunnel
 /// reaches it (`box_down`).
 static BOX_DOWN: AtomicBool = AtomicBool::new(false);
+/// While set, what a window sends box's Server crawls, as over a slow
+/// line: a copy there takes long enough to stop part way.
+static BOX_SLOW: AtomicBool = AtomicBool::new(false);
 /// Box's links as `serving` made them, to end when it goes down.
 static BOX_LINKS: Mutex<Vec<ferrite_core::link::Stream>> = Mutex::new(Vec::new());
 
@@ -76,6 +80,9 @@ fn serving(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
     struct Kept(link::Stream);
     impl std::io::Write for Kept {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if BOX_SLOW.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_micros(buf.len() as u64 / 4));
+            }
             SENT_TO_BOX.lock().unwrap().extend_from_slice(buf);
             self.0.write(buf)
         }
@@ -261,9 +268,7 @@ fn reach(name: &str, bridge: fn(&Machine, &std::path::Path) -> Bridge) -> Reach 
 fn box_machine() -> Machine {
     Machine {
         name: "box".into(),
-        target: "me@box".into(),
-        enabled: true,
-        sync_setup: true,
+        ..Machine::new("me@box")
     }
 }
 
@@ -304,6 +309,11 @@ fn attached(core: &Cockpit, machine: MachineId) -> bool {
 /// beside it, whose Server runs in this process with `Agents` for its
 /// Sessions: both attached.
 fn two_machines(name: &str, panes: usize) -> (Cockpit, Fake, Machines, Agents) {
+    two_machines_with(name, panes, box_machine())
+}
+
+/// `two_machines`, box saved as `saved`.
+fn two_machines_with(name: &str, panes: usize, saved: Machine) -> (Cockpit, Fake, Machines, Agents) {
     let (mut core, fake) = cockpit(&format!("machines-{name}"), panes);
     fresh(name);
     let agents = Agents::default();
@@ -313,7 +323,7 @@ fn two_machines(name: &str, panes: usize) -> (Cockpit, Fake, Machines, Agents) {
         Box::new(agents.clone()),
     )
     .unwrap();
-    let mut machines = Machines::new(reach(name, serving), &[box_machine()], None, true);
+    let mut machines = Machines::new(reach(name, serving), &[saved], None, true);
     machines.beside(&mut core);
     let on_box = machines.held(1).expect("box is held");
     ferrite_core::doorbell::until("box never attached", || {
@@ -678,9 +688,7 @@ fn a_revoked_session_asks_to_sign_in_and_opens_its_pairing(cx: &mut TestAppConte
     fresh("revoked");
     let link = Machine {
         name: "box".into(),
-        target: "ferrite-link:00112233445566778899aabbccddeeff".into(),
-        enabled: true,
-        sync_setup: true,
+        ..Machine::new("ferrite-link:00112233445566778899aabbccddeeff")
     };
     let mut machines = Machines::new(reach("revoked", revoked), &[link], None, true);
     machines.beside(&mut core);
@@ -761,6 +769,31 @@ fn removing_a_connection_confirms_then_lets_its_machine_go(cx: &mut TestAppConte
         assert_eq!(view.cockpit.read(cx).machines().count(), 1, "box is let go");
         assert_eq!(view.panes.len(), 1, "this computer's Pane stays");
     });
+}
+
+/// Removing box forgets where this computer's Projects were copied to
+/// on it: a Machine saved again under its name is another (ADR 0048).
+#[gpui::test]
+fn removing_a_connection_forgets_where_copies_to_it_went(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("machines-remove-placed", 1);
+    let machines = beside_box("remove-placed", &mut core, needs_sign_in);
+    let mut prefs = Preferences::ephemeral();
+    prefs.settings.machines = vec![box_machine()];
+    let kept = ferrite_core::machine::dir(&prefs.dir, &box_machine().target);
+    let copy = ferrite_core::placement::Placement {
+        local_root: here(),
+        remote_root: "/home/operator/projects/ferrite".into(),
+    };
+    ferrite_core::placement::place(&kept, copy.clone()).unwrap();
+    assert_eq!(ferrite_core::placement::placements(&kept), [copy]);
+    let (view, cx) = window_of(cx, core, machines, prefs);
+    let remove = connection_act(&view, "connection-remove-1", cx);
+    cx.update(|window, cx| remove(window, cx));
+    let confirm = connection_removal(&view, cx);
+    cx.update(|window, cx| confirm(window, cx));
+    tick(cx);
+    view.read_with(cx, |view, _| assert!(view.prefs.settings.machines.is_empty()));
+    assert_eq!(ferrite_core::placement::placements(&kept), []);
 }
 
 /// Both machines' Threads are cards in the one list, box's after this
@@ -1089,9 +1122,10 @@ fn the_pick_describes_this_computer() {
     assert_eq!(this_computer_row(None), ("This computer".into(), String::new()));
 }
 
-/// A draft aimed at box's Project names box first in the strip over its
-/// Composer, as T3's locked environment control does; one on this
-/// computer names no machine.
+/// A draft on box, the one environment on, names box first in the strip
+/// over its Composer, a word with nothing to choose; beside this computer
+/// the environment chip stands there instead, naming box, then this
+/// computer's draft `Local`.
 #[gpui::test]
 fn a_draft_on_a_machine_names_it(cx: &mut TestAppContext) {
     let (mut core, _fake, machines, _agents) = two_machines("draft-machine", 1);
@@ -1106,15 +1140,45 @@ fn a_draft_on_a_machine_names_it(cx: &mut TestAppContext) {
     tick(cx);
     view.update(cx, |view, cx| view.open_draft_in_project(theirs, cx));
     tick(cx);
-    let word = cx.debug_bounds("band-machine").expect("the draft names box");
+    assert!(cx.debug_bounds("band-machine").is_none(), "the chip stands there");
+    let chip = cx.debug_bounds("band-chip-2").expect("the environment chip");
     let project = cx.debug_bounds("band-chip-0").expect("its Project's chip");
-    assert!(word.right() <= project.left(), "first: {word:?} {project:?}");
-    let said = cx.update(|window, _| window.debug_text("band-machine"));
-    assert_eq!(said.map(|lines| lines.join(" ")).as_deref(), Some("box"));
-
+    assert!(chip.right() <= project.left(), "first: {chip:?} {project:?}");
+    let said = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, _| window.debug_text("band-chip-2"))
+            .map(|lines| lines.join(" "))
+    };
+    assert_eq!(said(cx).as_deref(), Some("box"));
     view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
     tick(cx);
-    assert!(cx.debug_bounds("band-machine").is_none(), "this computer's names none");
+    assert_eq!(said(cx).as_deref(), Some("Local"));
+}
+
+/// With box the one environment on, its draft names it in a word.
+#[gpui::test]
+fn a_draft_on_the_one_machine_on_names_it_in_a_word(cx: &mut TestAppContext) {
+    fresh("draft-machine-alone");
+    let _ = ferrite_server::fixture_machine(
+        settings_dir("draft-machine-alone").join("box"),
+        Box::new(Agents::default()),
+    )
+    .unwrap();
+    let mut machines = Machines::new(reach("draft-machine-alone", serving), &[box_machine()], None, false);
+    let core = machines.cockpit().unwrap();
+    let on_box = machines.held(1).unwrap();
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    until(cx, |cx| view.read_with(cx, |view, cx| attached(view.cockpit.read(cx), on_box)));
+    let theirs = view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |core, _| {
+            let asked = core.register_project(on_box, &here());
+            core.wait_for(asked).unwrap()
+        })
+    });
+    view.update(cx, |view, cx| view.open_draft_in_project(theirs, cx));
+    tick(cx);
+    assert!(cx.debug_bounds("band-chip-2").is_none(), "nothing to choose");
+    let said = cx.update(|window, _| window.debug_text("band-machine"));
+    assert_eq!(said.map(|lines| lines.join(" ")).as_deref(), Some("box"));
 }
 
 /// A Thread on box is one row in the one list: no second listing under
@@ -2124,10 +2188,10 @@ fn remote_inbox_follows_its_status_and_another_clients_park(cx: &mut TestAppCont
 }
 
 /// On a machine the Project card has no folder dialog, which could only
-/// browse this computer: a path field, listing the machine's home from
-/// the start, completes against the machine's folders through its Server
-/// (`list_dir`), Tab taking the first, ↵ adding it and the next ↵
-/// confirming. The Project it makes is the machine's; a draft chooses it,
+/// browse this computer: a browser of the machine's folders, which its
+/// Server lists (`list_dir`), its home from the start. What is typed
+/// narrows its rows, Tab goes into the first, ↵ adds it and the next ↵
+/// confirms. The Project it makes is the machine's; a draft chooses it,
 /// its workspace chip names and offers what git on the machine lists
 /// (`list_repo`) — no git here is asked — and its first send starts the
 /// Thread in that directory on the machine.
@@ -2160,8 +2224,8 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     let field = view.update(cx, |view, cx| {
         view.open_project_creator_on(on_box, cx);
         let card = view.project_card(cx).unwrap();
-        let field = card.read(cx).remote.as_ref();
-        field.expect("a path field on a machine").field.clone()
+        let browser = card.read(cx).remote.as_ref();
+        browser.expect("a folder browser on a machine").read(cx).field.clone()
     });
     assert!(
         String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap())
@@ -2172,13 +2236,10 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     field.update(cx, |field, cx| {
         field.set(format!("{}/re", folder.display()), cx)
     });
-    until(cx, |cx| {
-        view.read_with(cx, |view, cx| {
-            view.project_card(cx).unwrap().read(cx).remote_completions(cx) == ["repo"]
-        })
-    });
-    tick(cx);
-    assert!(debug_bounds(cx, "project-path-completion:repo".into()).is_some());
+    until(cx, |cx| debug_bounds(cx, "folder-row:repo".into()).is_some());
+    for hidden in ["folder-row:.re-hidden", "folder-row:readme.txt"] {
+        assert!(debug_bounds(cx, hidden.into()).is_none(), "{hidden}");
+    }
     assert!(
         debug_bounds(cx, "project-add-directory".into()).is_none(),
         "no folder dialog for a machine"
@@ -2199,7 +2260,11 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
             view.project_card(cx).unwrap().read(cx).staged,
             std::slice::from_ref(&repo)
         );
-        assert_eq!(field.read(cx).text(), "", "the field empties");
+        assert_eq!(
+            field.read(cx).text(),
+            format!("{}/", folder.display()),
+            "back in the folder it is in"
+        );
     });
     cx.simulate_keystrokes("enter");
     // The machine's Server answers the commit a beat after the press.
