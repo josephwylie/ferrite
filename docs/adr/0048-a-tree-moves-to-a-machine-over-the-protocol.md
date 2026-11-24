@@ -358,8 +358,8 @@ Windows window.
   raises it once until a sync succeeds. "Open folder" opens where the
   losing copies are kept, named as Ferrite's `sync-conflicts` folder, and
   sits under the words. A folded toast ends with one line saying where to
-  act. Toasts draw over the Settings sheet, below its head, so its close
-  button stays in reach.
+  act. Toasts draw over the Settings sheet, at their own height and short
+  of its close button, which stays in reach.
 - **The CLI**: `ferrite --machine <name> setup sync [--allow-removals]`
   runs one sync and prints its outcome as JSON.
 - **macOS's Keychain** is reached through the `keyring` crate behind a
