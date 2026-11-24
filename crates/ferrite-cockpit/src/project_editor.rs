@@ -77,13 +77,34 @@ pub fn name_field(editor: impl IntoElement, focused: bool) -> Div {
         focused,
         "project-name-focused",
         false,
+        None,
     )
 }
 
-/// On a machine (ADR 0026), where no folder dialog can browse: the row a
-/// directory on the machine is typed into, in the name row's field.
+/// On a machine (ADR 0026), where no folder dialog can browse: the line a
+/// folder browser shows its folder in, in the name row's field.
 pub fn path_field(label: SharedString, editor: impl IntoElement, focused: bool) -> Div {
-    field(label, editor, focused, "project-path-focused", false)
+    field(label, editor, focused, "project-path-focused", false, None)
+}
+
+/// A one-line field whose value follows `prefix`, drawn in the box before
+/// it in `INK_SUBTLE` and cut from its start: a name in the folder the
+/// prefix names.
+pub fn prefixed_field(
+    label: SharedString,
+    prefix: SharedString,
+    editor: impl IntoElement,
+    focused: bool,
+    focused_selector: &'static str,
+) -> Div {
+    field(
+        label,
+        editor,
+        focused,
+        focused_selector,
+        false,
+        Some(prefix),
+    )
 }
 
 /// Any one-line field on a sheet in the name row's face.
@@ -93,7 +114,7 @@ pub fn text_field(
     focused: bool,
     focused_selector: &'static str,
 ) -> Div {
-    field(label, editor, focused, focused_selector, false)
+    field(label, editor, focused, focused_selector, false, None)
 }
 
 /// A field for prose: three lines tall at rest, growing with what is
@@ -104,7 +125,7 @@ pub fn text_area(
     focused: bool,
     focused_selector: &'static str,
 ) -> Div {
-    field(label, editor, focused, focused_selector, true)
+    field(label, editor, focused, focused_selector, true, None)
 }
 
 /// A text area's least height: three lines and its padding.
@@ -116,6 +137,7 @@ fn field(
     focused: bool,
     focused_selector: &'static str,
     area: bool,
+    prefix: Option<SharedString>,
 ) -> Div {
     div()
         .flex_shrink_0()
@@ -145,26 +167,106 @@ fn field(
                         field.border_color(paint::FIELD_RING)
                     }
                 })
-                .child(div().min_w_0().flex_1().child(editor)),
+                .children(prefix.map(|prefix| {
+                    components::text_ui()
+                        .flex_shrink_1()
+                        .min_w_0()
+                        .max_w(gpui::relative(0.7))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis_start()
+                        .text_color(rgb(INK_SUBTLE))
+                        .child(prefix)
+                }))
+                .child(div().min_w(px(8.0 * CH)).flex_1().child(editor)),
         )
 }
 
-/// One directory the machine's Server listed under what the path field
-/// holds: its name and a `/` in `INK_SUBTLE`, the quiet text control
-/// `add_directory` is, hung a cell outside the text's edge.
-pub fn path_completion(index: usize, name: &str, cx: &App) -> Button {
-    let selector: SharedString = format!("project-path-completion:{name}").into();
-    components::form_button(("project-path-completion", index), cx)
-        .debug_selector(move || selector.to_string())
-        .h(px(ROW))
-        .ml(px(-CH))
-        .px(px(CH))
+/// One row of a folder browser, the Files tree's row (`FILES_ROW_H`, its
+/// mark in a chevron-wide column, `FS_LABEL` in `INK_STRONG`) as the shared
+/// press: a folder to go into, or `..` out of one. The row the arrows rest
+/// on is `paint::SELECTED`, as the tree's open file is.
+pub fn folder_row(
+    id: impl Into<gpui::ElementId>,
+    mark: &'static str,
+    label: SharedString,
+    cursor: bool,
+    cx: &App,
+) -> Button {
+    let rest = if cursor {
+        paint::SELECTED
+    } else {
+        Paint(TRANSPARENT)
+    };
+    components::form_button_on(id, rest, cx)
+        .w_full()
+        .h(px(FILES_ROW_H))
+        .rounded(px(R_CONTROL))
         .child(
-            components::text_ui()
+            folder_line(mark).child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(FS_LABEL))
+                    .text_color(rgb(INK_STRONG))
+                    .child(label),
+            ),
+        )
+}
+
+/// A new folder's name, typed in a row of the browser's: the field's ring
+/// a row's height inside it, `Folder name` while it is empty.
+pub fn folder_name_row(editor: impl IntoElement, focused: bool, empty: bool) -> Div {
+    folder_line(ferrite_ui::icons::FOLDER_PLUS)
+        .h(px(FILES_ROW_H))
+        .child(
+            div()
+                .relative()
+                .flex()
+                .items_center()
+                .flex_1()
                 .min_w_0()
-                .truncate()
-                .text_color(rgb(INK_SUBTLE))
-                .child(format!("{name}/")),
+                .h(px(FILES_ROW_H - SPACE_1))
+                .px(px(FORM_FIELD_PAD_X))
+                .rounded(px(R_CONTROL))
+                .border_1()
+                .border_color(if focused {
+                    gpui::Hsla::from(rgb(CONTROL_FOCUS))
+                } else {
+                    paint::FIELD_RING.into()
+                })
+                .child(div().flex_1().min_w_0().child(editor))
+                .when(empty, |field| {
+                    field.child(
+                        components::text_ui()
+                            .absolute()
+                            .left(px(FORM_FIELD_PAD_X))
+                            .text_color(rgb(INK_SUBTLE))
+                            .child("Folder name"),
+                    )
+                }),
+        )
+}
+
+/// A folder row's line: its mark in a chevron-wide column, as the Files
+/// tree sets its rows.
+fn folder_line(mark: &'static str) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .w_full()
+        .min_w_0()
+        .gap(px(SPACE_1_5))
+        .pl(px(SPACE_1))
+        .pr(px(SPACE_2))
+        .child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .justify_center()
+                .w(px(ICON_CHEVRON + SPACE_1))
+                .child(ferrite_ui::icons::icon(mark, ICON_CHEVRON, INK_SUBTLE)),
         )
 }
 

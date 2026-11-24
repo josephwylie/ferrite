@@ -1,14 +1,14 @@
 //! The Project card as a view of its own (ADR 0041), made when it opens and
 //! dropped once it has gone (ADR 0042), so the view is the card. It owns
 //! what only the card reads: its name line, a new Project's directories,
-//! its refusal, its focus, and on a machine its path field and the listings
-//! it completes from. It draws the Project it edits from what the Cockpit
-//! gives it (`ProjectEditorInputs`), asked for each frame, so the Cockpit's
-//! own notify still redraws it; and whatever would change the Projects it
-//! says as a `ProjectEditorEvent`, which the Cockpit answers once the
-//! card's own update has ended.
+//! its refusal, its focus, and on a machine the browser of its folders. It
+//! draws the Project it edits from what the Cockpit gives it
+//! (`ProjectEditorInputs`), asked for each frame, so the Cockpit's own
+//! notify still redraws it; and whatever would change the Projects it says
+//! as a `ProjectEditorEvent`, which the Cockpit answers once the card's
+//! own update has ended.
 
-use super::remote_path::RemotePath;
+use super::folder_browser::FolderBrowser;
 use super::*;
 use gpui::{App, WeakEntity};
 use std::path::PathBuf;
@@ -34,15 +34,17 @@ pub(crate) struct ProjectEditorView {
     pub(super) committing: bool,
     /// The body's scroll, for its overlay scrollbar.
     scroll: ScrollHandle,
-    /// On a machine, the path field that stands in for the folder dialog.
-    pub(super) remote: Option<RemotePath>,
+    /// On a machine, the browser of its folders that stands in for the
+    /// folder dialog.
+    pub(super) remote: Option<Entity<FolderBrowser>>,
     /// The draft the card was opened for: the Project it creates is chosen
     /// on it.
     pub(super) draft: Option<PaneIdentity>,
     pub(super) focus: FocusHandle,
 }
 
-/// Where the field starts: the machine's home, which its Server spells out.
+/// Where the browser opens: the machine's home, which its Server spells
+/// out.
 const REMOTE_HOME: &str = "~/";
 
 /// What the card draws from, as the Cockpit has it this frame.
@@ -53,9 +55,6 @@ pub(crate) struct ProjectEditorInputs {
     project: Option<(String, Vec<PathBuf>)>,
     /// Some Thread, open or parked, records the Project being edited.
     in_use: bool,
-    /// The card's machine's name, for the path field's label; empty for
-    /// this computer.
-    machine: String,
 }
 
 /// What the card asks of the window.
@@ -68,8 +67,6 @@ pub(crate) enum ProjectEditorEvent {
     RemoveProject(ProjectKey),
     /// Create or Done, pressed while the card can commit.
     Confirm,
-    /// The path field moved: list the directory it names.
-    PathEdited,
     /// The close button closed it.
     Closed,
 }
@@ -78,14 +75,14 @@ impl EventEmitter<ProjectEditorEvent> for ProjectEditorView {}
 
 impl ProjectEditorView {
     /// A card on `target` (`None` creates on `machine`), its name line
-    /// seeded with `title`, and on another machine a path field for the
-    /// folder dialog.
+    /// seeded with `title`, and on another machine, `browse`, a browser of
+    /// its folders labelled for it in place of the folder dialog.
     pub(super) fn new(
         cockpit: WeakEntity<CockpitView>,
         machine: ferrite_core::MachineId,
         target: Option<ProjectKey>,
         title: Option<String>,
-        on_machine: bool,
+        browse: Option<(Entity<Cockpit>, SharedString)>,
         cx: &mut Context<Self>,
     ) -> Self {
         let name = cx.new(ferrite_pane::composer::Composer::new);
@@ -95,7 +92,9 @@ impl ProjectEditorView {
                 name.set(title, cx)
             }
         });
-        let remote = on_machine.then(|| Self::remote_path(cx));
+        let remote = browse.map(|(model, label)| {
+            cx.new(|cx| FolderBrowser::new(model, machine, label, REMOTE_HOME.into(), cx))
+        });
         Self {
             cockpit,
             machine,
@@ -109,16 +108,6 @@ impl ProjectEditorView {
             draft: None,
             focus: cx.focus_handle(),
         }
-    }
-
-    /// The path field a new card gets on a machine.
-    fn remote_path(cx: &mut Context<Self>) -> RemotePath {
-        let remote = RemotePath::new(REMOTE_HOME.into(), cx);
-        cx.subscribe(&remote.field, |_, _, _: &Edited, cx| {
-            cx.emit(ProjectEditorEvent::PathEdited)
-        })
-        .detach();
-        remote
     }
 
     /// Whether the card's confirm can commit — a new Project needs at least
@@ -184,7 +173,7 @@ impl ProjectEditorView {
     }
 
     /// One directory of this computer, for the card (a machine's card
-    /// has a path field instead). The picker is single-select
+    /// has a browser of its folders instead). The picker is single-select
     /// deliberately: a Project's main directory is the first one added, and
     /// a multi-select would leave which-is-which to the file dialog.
     fn browse_for_project_directory(&mut self, cx: &mut Context<Self>) {
@@ -208,60 +197,38 @@ impl ProjectEditorView {
         .detach();
     }
 
-    /// Ask the card's machine for the directory its path field names.
-    pub(super) fn list_remote_path(&mut self, model: &Entity<Cockpit>, cx: &mut Context<Self>) {
-        let machine = self.machine;
-        if let Some(remote) = self.remote.as_mut() {
-            remote.list(model, machine, cx);
-        }
-    }
-
-    /// Take the machine's answer to the field's listing, once it lands.
+    /// Take the machine's answers to the browser's listings, once they
+    /// land.
     pub(super) fn poll_remote_path(&mut self, cx: &mut Context<Self>) {
-        if self.remote.as_mut().is_some_and(RemotePath::poll) {
-            cx.notify();
-        }
-    }
-
-    /// The directories that complete the path field.
-    pub(super) fn remote_completions(&self, cx: &App) -> Vec<String> {
-        self.remote
-            .as_ref()
-            .map(|remote| remote.completions(cx))
-            .unwrap_or_default()
-    }
-
-    fn complete_remote_path(&mut self, name: &str, cx: &mut Context<Self>) {
         if let Some(remote) = &self.remote {
-            remote.complete(name, cx);
+            remote.update(cx, |remote, cx| remote.poll(cx));
         }
     }
 
-    /// Tab in the path field: complete it to the first directory that
-    /// fits. False when the field does not hold the keyboard.
+    /// Tab in the browser: go into the first folder its line fits. False
+    /// when it does not hold the keyboard.
     pub(super) fn tab_remote_path(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
-        self.remote.as_ref().is_some_and(|remote| remote.tab(window, cx))
+        self.remote
+            .clone()
+            .is_some_and(|remote| remote.update(cx, |remote, cx| remote.tab(window, cx)))
     }
 
-    /// ↵ in the path field: the directory it names, for the card, and the
-    /// field empties, so the next ↵ confirms the card. None when the field
-    /// does not hold the keyboard or holds nothing.
+    /// ↵ in the browser: the folder it shows, for the card, and it goes
+    /// back to the folder that one is in, so the next ↵ confirms the card.
+    /// None when the browser does not hold the keyboard or has not been
+    /// moved since.
     pub(super) fn take_remote_path(
         &mut self,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<PathBuf> {
-        let remote = self.remote.as_ref().filter(|remote| remote.focused(window, cx))?;
-        let field = remote.field.clone();
-        let typed = field.read(cx).text().trim().to_string();
-        let path = match typed.trim_end_matches('/') {
-            "" if typed.starts_with('/') => "/",
-            "" => return None,
-            path => path,
-        };
-        let path = remote.spelled_out(path);
-        field.update(cx, |field, cx| field.set(String::new(), cx));
-        Some(path)
+        self.remote
+            .clone()
+            .filter(|remote| {
+                let remote = remote.read(cx);
+                remote.focused(window, cx) && !remote.untouched()
+            })?
+            .update(cx, |remote, cx| remote.take(cx))
     }
 
     /// Project mutations stay visible together in one protected surface.
@@ -272,13 +239,9 @@ impl ProjectEditorView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<ferrite_ui::sheet::Drawn> {
-        let ProjectEditorInputs {
-            project,
-            in_use,
-            machine,
-        } = self
+        let ProjectEditorInputs { project, in_use } = self
             .cockpit
-            .read_with(cx, |cockpit, cx| cockpit.project_editor_inputs(self.machine, self.target, cx))
+            .read_with(cx, |cockpit, cx| cockpit.project_editor_inputs(self.target, cx))
             .ok()?;
         // An editing card whose Project was removed underneath it has
         // nothing left to edit.
@@ -346,34 +309,41 @@ impl ProjectEditorView {
             ));
         }
         body = body.child(project_editor::directory_list(rows));
-        // On a machine a path field stands in for the folder dialog, which
-        // could only browse this computer (ADR 0026).
+        // On a machine a browser of its folders stands in for the folder
+        // dialog, which could only browse this computer (ADR 0026), and the
+        // control under it adds the folder it shows.
+        let add = project_editor::add_directory(
+            if empty {
+                "+ Add main directory"
+            } else {
+                "+ Add directory"
+            },
+            cx,
+        );
         body = match &self.remote {
-            Some(remote) => body.child(remote.element(
-                format!("Directory on {machine}").into(),
-                window,
-                Self::complete_remote_path,
-                cx,
-            )),
-            // Its own flex row, so the control hugs its label on the list's edge.
-            None => body.child(
-                div().flex().child(
-                    project_editor::add_directory(
-                        if empty {
-                            "+ Add main directory"
-                        } else {
-                            "+ Add directory"
-                        },
-                        cx,
-                    )
-                    .on_click(cx.listener(
-                        move |view, _: &ClickEvent, _, cx| {
+            Some(remote) => body.child(remote.clone()).child(
+                div()
+                    .flex()
+                    .child(add.debug_selector(|| "project-add-shown".into()).on_click(
+                        cx.listener(move |view, _: &ClickEvent, _, cx| {
                             cx.stop_propagation();
-                            view.browse_for_project_directory(cx);
-                        },
+                            let shown = view
+                                .remote
+                                .clone()
+                                .and_then(|remote| remote.update(cx, |remote, cx| remote.take(cx)));
+                            if let Some(path) = shown {
+                                cx.emit(ProjectEditorEvent::Adopt(path));
+                            }
+                        }),
                     )),
-                ),
             ),
+            // Its own flex row, so the control hugs its label on the list's edge.
+            None => body.child(div().flex().child(add.on_click(cx.listener(
+                move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.browse_for_project_directory(cx);
+                },
+            )))),
         };
         let mut left = div().flex().items_center();
         if let Some(project) = editing {
@@ -442,12 +412,7 @@ impl ProjectEditorView {
 impl CockpitView {
     /// Everything the card draws from, for the card on `target`. It never
     /// reads the card: the card calls it while its own update is running.
-    fn project_editor_inputs(
-        &self,
-        machine: ferrite_core::MachineId,
-        target: Option<ProjectKey>,
-        cx: &App,
-    ) -> ProjectEditorInputs {
+    fn project_editor_inputs(&self, target: Option<ProjectKey>, cx: &App) -> ProjectEditorInputs {
         let project = target
             .and_then(|project| self.cockpit.read(cx).project(project))
             .map(|project| {
@@ -461,7 +426,6 @@ impl CockpitView {
         ProjectEditorInputs {
             project,
             in_use: target.is_some_and(|project| self.project_in_use(project, cx)),
-            machine: self.machine_label(machine, cx).unwrap_or_default(),
         }
     }
 
@@ -511,7 +475,6 @@ impl CockpitView {
                 );
             }
             ProjectEditorEvent::Confirm => self.confirm_project_editor(cx),
-            ProjectEditorEvent::PathEdited => self.list_remote_path(cx),
             ProjectEditorEvent::Closed => {
                 self.hide_sheet(cx);
             }
@@ -578,14 +541,16 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         let cockpit = cx.weak_entity();
-        let on_machine = self.elsewhere(machine, cx);
+        let browse = self.elsewhere(machine, cx).then(|| {
+            let name = self.machine_label(machine, cx).unwrap_or_default();
+            (self.cockpit.clone(), format!("Directory on {name}").into())
+        });
         let card = cx.new(|cx| {
-            ProjectEditorView::new(cockpit, machine, target, title, on_machine, cx)
+            ProjectEditorView::new(cockpit, machine, target, title, browse, cx)
         });
         cx.subscribe(&card, Self::on_project_editor_event).detach();
         self.show_sheet(sheets::Sheet::ProjectEditor(card), cx);
         self.close_composer_menu(cx);
-        self.list_remote_path(cx);
         cx.notify();
     }
 
@@ -730,17 +695,6 @@ impl CockpitView {
             }
             None => card.update(cx, |card, cx| card.stage(path, cx)),
         }
-        cx.notify();
-    }
-
-    /// List the directory the card's field names — on opening, and each
-    /// time it moves — unless that listing is in hand or on its way.
-    fn list_remote_path(&mut self, cx: &mut Context<Self>) {
-        let Some(card) = self.project_card(cx) else {
-            return;
-        };
-        let model = self.cockpit.clone();
-        card.update(cx, |card, cx| card.list_remote_path(&model, cx));
         cx.notify();
     }
 }

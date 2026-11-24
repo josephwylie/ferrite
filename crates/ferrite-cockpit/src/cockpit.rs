@@ -68,7 +68,7 @@ mod setup_sync;
 mod sheets;
 mod side_chat_view;
 mod rename;
-mod remote_path;
+mod folder_browser;
 mod returns;
 use rename::{rename_field, RenameTarget};
 mod snooze;
@@ -3982,8 +3982,8 @@ impl CockpitView {
         if self.panes.get(self.focused(cx)).is_some_and(|pane| !pane.composer.read(cx).comment_valid(cx)) {
             return;
         }
-        // The card's ↵ is its confirm — but in a machine's path field that
-        // holds a path, it adds that directory.
+        // The card's ↵ is its confirm — but in a machine's folder browser,
+        // once it is moved, it adds the folder it shows.
         if let Some(card) = self.project_card(cx) {
             let typed = card.update(cx, |card, cx| card.take_remote_path(window, cx));
             if let Some(path) = typed {
@@ -7225,13 +7225,13 @@ impl CockpitView {
             // Native text, dialogs, and the Inbox keep their own keyboard focus.
         } else if self.popup_up() {
             // A popup puts the keyboard where it says (`tend_popup_focus`).
-        } else if let Some(focus) = self.sheets.read(cx).up().map(|sheet| sheet.focus(cx)) {
+        } else if let Some(sheet) = self.sheets.read(cx).up().cloned() {
             // The pump must not steal focus from a sheet's fields or controls.
             let connection_focused = self
                 .connections(cx)
                 .is_some_and(|connections| connections.read(cx).holds_focus(window, cx));
-            if !focus.contains_focused(window, cx) && !connection_focused {
-                window.focus(&focus, cx);
+            if !sheet.holds_focus(window, cx) && !connection_focused {
+                window.focus(&sheet.focus(cx), cx);
             }
         } else if field_holds_keyboard {
         } else if !wanted.is_focused(window)

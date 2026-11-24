@@ -44,6 +44,15 @@ impl Sheet {
         }
     }
 
+    /// Whether the keyboard is the sheet's, so the focus rule leaves it be:
+    /// in what `focus` names, or in another of the sheet's fields.
+    pub(super) fn holds_focus(&self, window: &Window, cx: &App) -> bool {
+        match self {
+            Sheet::Placement(view) => view.read(cx).holds_focus(window, cx),
+            sheet => sheet.focus(cx).contains_focused(window, cx),
+        }
+    }
+
     /// The card's entrance, by sheet: a sheet replacing another plays its
     /// own, over the veil that stays.
     fn entrance(&self) -> &'static str {

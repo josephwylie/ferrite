@@ -1,12 +1,13 @@
 //! The setup sheet (ADR 0048) as a view of its own (ADR 0041, 0042): a
 //! Project of this computer copied to a Machine for a draft picking that
-//! environment. It owns the destination field, the entries git ignores and
+//! environment. It owns where the copy goes, a folder browsed on the
+//! Machine and the name of the copy in it, the entries git ignores and
 //! which of them go too, and the copy, which runs on a thread of its own
 //! over its own connection (`Cockpit::tree`). Once the folder is there it
 //! says so as a `PlacementEvent`, and the Cockpit registers it and chooses
 //! it on the draft.
 
-use super::remote_path::RemotePath;
+use super::folder_browser::{FolderBrowser, Moved};
 use super::*;
 use ferrite_core::chunked::{Cancellation, Progress};
 use ferrite_core::placement::{self, Ignored};
@@ -26,7 +27,7 @@ pub(crate) struct Placing {
     pub(crate) repository: Option<String>,
     pub(crate) machine: ferrite_core::MachineId,
     pub(crate) machine_name: SharedString,
-    /// The Machine's projects folder, where the destination starts.
+    /// The Machine's projects folder, where the browser opens.
     pub(crate) projects_dir: String,
 }
 
@@ -46,12 +47,15 @@ enum Stage {
     Choosing,
     /// Looking at the destination before anything is sent there.
     Scanning,
-    /// The destination holds something: it takes no copy.
-    Occupied,
+    /// `dest` holds something: it takes no copy.
+    Occupied {
+        dest: String,
+    },
     Copying(Progress),
-    /// Copied; the window is registering it. What could not be read stays
-    /// behind and is listed once it is in.
+    /// Copied to `dest`; the window is registering it. What could not be
+    /// read stays behind and is listed once it is in.
     Registering {
+        dest: String,
         skipped: Vec<String>,
     },
     Done {
@@ -85,11 +89,14 @@ enum Heard {
 pub(crate) struct PlacementView {
     model: Entity<Cockpit>,
     pub(crate) placing: Placing,
-    pub(super) dest: RemotePath,
+    /// The folder on the Machine the copy goes into.
+    pub(super) dest: Entity<FolderBrowser>,
+    /// The copy's own folder in it: the Project's folder name until edited.
+    pub(super) name: Entity<Composer>,
     entries: Option<Vec<Entry>>,
     listing: Option<Receiver<Listed>>,
     stage: Stage,
-    /// Why the destination as typed takes no copy, once Copy was pressed.
+    /// Why the destination takes no copy, once Copy was pressed.
     refusal: Option<&'static str>,
     /// The destination a copy last went to: one into it again finishes
     /// that copy rather than meets what it left.
@@ -98,7 +105,7 @@ pub(crate) struct PlacementView {
     scroll: ScrollHandle,
 }
 
-/// A copy under way: to `dest`, as it was typed when it began.
+/// A copy under way: to `dest`, as it was chosen when it began.
 struct Running {
     dest: String,
     hear: Receiver<Heard>,
@@ -112,9 +119,23 @@ impl PlacementView {
             .file_name()
             .map(|leaf| leaf.to_string_lossy().into_owned())
             .unwrap_or_else(|| placing.title.to_string());
-        let start = format!("{}/{leaf}", placing.projects_dir.trim_end_matches('/'));
-        let dest = RemotePath::new(start, cx);
-        cx.subscribe(&dest.field, |sheet: &mut Self, _, _: &Edited, cx| {
+        let dest = cx.new(|cx| {
+            FolderBrowser::new(
+                model.clone(),
+                placing.machine,
+                format!("Folder on {}", placing.machine_name).into(),
+                format!("{}/", placing.projects_dir.trim_end_matches('/')),
+                cx,
+            )
+        });
+        cx.subscribe(&dest, |sheet: &mut Self, _, _: &Moved, cx| sheet.edited(cx))
+            .detach();
+        let name = cx.new(Composer::new);
+        name.update(cx, |name, cx| {
+            name.set_role(ferrite_pane::composer::Role::Field(None), cx);
+            name.set(leaf, cx);
+        });
+        cx.subscribe(&name, |sheet: &mut Self, _, _: &Edited, cx| {
             sheet.edited(cx)
         })
         .detach();
@@ -135,10 +156,11 @@ impl PlacementView {
                 }
             }
         });
-        let mut sheet = Self {
+        Self {
             model,
             placing,
             dest,
+            name,
             entries: None,
             listing: Some(listing),
             stage: Stage::Choosing,
@@ -146,29 +168,45 @@ impl PlacementView {
             copied_into: None,
             copy: None,
             scroll: ScrollHandle::new(),
-        };
-        sheet.list_dest(cx);
-        sheet
+        }
     }
 
     pub(super) fn focus(&self, cx: &App) -> FocusHandle {
-        self.dest.field.read(cx).focus_handle(cx)
+        self.dest.read(cx).focus_handle(cx)
     }
 
-    fn typed(&self, cx: &App) -> String {
-        self.dest.typed(cx).trim().trim_end_matches('/').to_string()
+    /// Whether one of the sheet's fields holds the keyboard: the browser's,
+    /// or the copy's name.
+    pub(super) fn holds_focus(&self, window: &Window, cx: &App) -> bool {
+        self.dest.read(cx).focused(window, cx)
+            || self.name.read(cx).focus_handle(cx).is_focused(window)
     }
 
-    fn list_dest(&mut self, cx: &mut Context<Self>) {
-        let model = self.model.clone();
-        self.dest.list(&model, self.placing.machine, cx);
+    fn copy_name<'a>(&self, cx: &'a App) -> &'a str {
+        self.name.read(cx).text().trim()
     }
 
-    /// The destination moved: what it was found to hold no longer counts.
+    /// The folder the browser shows, `/` last: what the copy's name goes
+    /// after.
+    fn folder_prefix(&self, cx: &App) -> String {
+        let folder = self.dest.read(cx).folder(cx);
+        if folder.ends_with(['/', '\\']) {
+            folder
+        } else {
+            format!("{folder}/")
+        }
+    }
+
+    /// Where the copy goes: its name in the folder browsed.
+    pub(super) fn destination(&self, cx: &App) -> String {
+        format!("{}{}", self.folder_prefix(cx), self.copy_name(cx))
+    }
+
+    /// Where the copy goes moved: what it was found to hold no longer
+    /// counts.
     fn edited(&mut self, cx: &mut Context<Self>) {
-        self.list_dest(cx);
         self.refusal = None;
-        if matches!(self.stage, Stage::Occupied | Stage::Failed { .. }) {
+        if matches!(self.stage, Stage::Occupied { .. } | Stage::Failed { .. }) {
             self.stage = Stage::Choosing;
         }
         cx.notify();
@@ -181,14 +219,18 @@ impl PlacementView {
         )
     }
 
-    /// Copy to the destination as typed, unless it is no folder to copy
-    /// into, or holds something this sheet did not put there.
+    /// Copy to the destination chosen, unless it is no folder to copy into,
+    /// or holds something this sheet did not put there.
     fn start(&mut self, cx: &mut Context<Self>) {
         if self.busy() || self.entries.is_none() {
             return;
         }
-        let dest = self.typed(cx);
-        self.refusal = placement::refuse_destination(&dest);
+        let dest = self.destination(cx);
+        self.refusal = if self.copy_name(cx).is_empty() {
+            Some("Name the copy's folder")
+        } else {
+            placement::refuse_destination(&dest)
+        };
         if self.refusal.is_some() {
             cx.notify();
             return;
@@ -239,14 +281,16 @@ impl PlacementView {
 
     /// Register what is at the destination as it is, copying nothing.
     fn use_what_is_there(&mut self, cx: &mut Context<Self>) {
-        if !matches!(self.stage, Stage::Occupied) {
+        let Stage::Occupied { dest } = &self.stage else {
             return;
-        }
+        };
+        let dest = dest.clone();
+        let spelled = self.dest.read(cx).spelled_out(&dest);
         self.stage = Stage::Registering {
+            dest,
             skipped: Vec::new(),
         };
-        let dest = self.dest.spelled_out(&self.typed(cx));
-        cx.emit(PlacementEvent::Place { dest });
+        cx.emit(PlacementEvent::Place { dest: spelled });
         cx.notify();
     }
 
@@ -278,10 +322,10 @@ impl PlacementView {
         }
     }
 
-    /// Tab in the destination: complete it. False when it does not hold
-    /// the keyboard.
-    pub(super) fn tab(&self, window: &Window, cx: &mut App) -> bool {
-        self.dest.tab(window, cx)
+    /// Tab in the browser: go into the first folder its line fits. False
+    /// when it does not hold the keyboard.
+    pub(super) fn tab(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+        self.dest.update(cx, |dest, cx| dest.tab(window, cx))
     }
 
     pub(super) fn failed(&mut self, reason: String, cx: &mut Context<Self>) {
@@ -296,7 +340,7 @@ impl PlacementView {
     /// the sheet stays up to list what stayed behind.
     pub(super) fn placed(&mut self, cx: &mut Context<Self>) -> bool {
         let skipped = match &mut self.stage {
-            Stage::Registering { skipped } => std::mem::take(skipped),
+            Stage::Registering { skipped, .. } => std::mem::take(skipped),
             _ => Vec::new(),
         };
         let stays = !skipped.is_empty();
@@ -306,8 +350,8 @@ impl PlacementView {
     }
 
     pub(super) fn poll(&mut self, cx: &mut Context<Self>) {
-        let mut moved = self.dest.poll();
-        moved |= self.poll_listing();
+        self.dest.update(cx, |dest, cx| dest.poll(cx));
+        let mut moved = self.poll_listing();
         moved |= self.poll_copy(cx);
         if moved {
             cx.notify();
@@ -381,12 +425,14 @@ impl PlacementView {
                     self.stage = Stage::Copying(progress);
                 }
                 Heard::Occupied => {
+                    let dest = copy.dest.clone();
                     self.copy = None;
-                    self.stage = Stage::Occupied;
+                    self.stage = Stage::Occupied { dest };
                     return true;
                 }
                 Heard::Copied(copied) => {
-                    let dest = self.dest.spelled_out(&copy.dest);
+                    let dest = copy.dest.clone();
+                    let spelled = self.dest.read(cx).spelled_out(&dest);
                     self.copy = None;
                     match copied {
                         Ok(sent) => {
@@ -395,8 +441,8 @@ impl PlacementView {
                                 .into_iter()
                                 .map(|problem| problem.path)
                                 .collect();
-                            self.stage = Stage::Registering { skipped };
-                            cx.emit(PlacementEvent::Place { dest });
+                            self.stage = Stage::Registering { dest, skipped };
+                            cx.emit(PlacementEvent::Place { dest: spelled });
                         }
                         Err(stopped) => {
                             self.stage = Stage::Failed {
@@ -421,10 +467,6 @@ impl PlacementView {
         cx.notify();
     }
 
-    fn complete(&mut self, name: &str, cx: &mut Context<Self>) {
-        self.dest.complete(name, cx);
-    }
-
     /// The card, for the sheet host.
     pub(super) fn card(
         &self,
@@ -442,12 +484,17 @@ impl PlacementView {
         let busy = self.busy();
         let mut body = project_editor::body()
             .track_scroll(&self.scroll)
-            .child(self.dest.element(
-                format!("Folder on {machine}").into(),
-                window,
-                Self::complete,
-                cx,
-            ));
+            .child(self.dest.clone())
+            .child(
+                project_editor::prefixed_field(
+                    "Copied to".into(),
+                    self.folder_prefix(cx).into(),
+                    self.name.clone(),
+                    self.name.read(cx).focus_handle(cx).is_focused(window),
+                    "placement-name-focused",
+                )
+                .debug_selector(|| "placement-name".into()),
+            );
         if let Some(refusal) = self.refusal {
             body = body.child(
                 project_editor::error_line(refusal.into())
@@ -485,7 +532,10 @@ impl PlacementView {
                                     .debug_selector(move || selector.clone())
                                     .checked(entry.ticked)
                                     .disabled(busy)
-                                    .label(shown)
+                                    .accessibility_label(shown.clone())
+                                    // A label is drawn one line high, which
+                                    // clips an underscore.
+                                    .child(shown)
                                     .on_click(cx.listener(
                                         move |sheet: &mut Self, ticked: &bool, _, cx| {
                                             sheet.tick(index, *ticked, cx)
@@ -498,11 +548,15 @@ impl PlacementView {
             }
             Some(_) => {}
         }
-        let dest = self.typed(cx);
+        let copying_to = self
+            .copy
+            .as_ref()
+            .map(|copy| copy.dest.as_str())
+            .unwrap_or_default();
         body = match &self.stage {
             Stage::Choosing => body,
-            Stage::Scanning => body.child(note(format!("Checking {dest}"))),
-            Stage::Occupied => body.child(
+            Stage::Scanning => body.child(note(format!("Checking {copying_to}"))),
+            Stage::Occupied { dest } => body.child(
                 project_editor::error_line(
                     format!("{dest} is not empty. Nothing there is changed.").into(),
                 )
@@ -520,7 +574,9 @@ impl PlacementView {
                 })
                 .debug_selector(|| "placement-progress".into()),
             ),
-            Stage::Registering { .. } => body.child(note(format!("Adding {dest} on {machine}"))),
+            Stage::Registering { dest, .. } => {
+                body.child(note(format!("Adding {dest} on {machine}")))
+            }
             Stage::Done { skipped } if !skipped.is_empty() => body
                 .child(project_editor::section_label(
                     "Not copied",
@@ -537,7 +593,7 @@ impl PlacementView {
             ),
         };
         let (verb, selector, disabled): (&'static str, &'static str, bool) = match self.stage {
-            Stage::Occupied => ("Use what is there", "placement-use", false),
+            Stage::Occupied { .. } => ("Use what is there", "placement-use", false),
             Stage::Failed { .. } => ("Retry", "placement-retry", false),
             Stage::Done { .. } => ("Done", "placement-done", false),
             Stage::Registering { .. } | Stage::Scanning | Stage::Copying(_) => {
@@ -550,11 +606,23 @@ impl PlacementView {
             .on_click(cx.listener(|sheet: &mut Self, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 match sheet.stage {
-                    Stage::Occupied => sheet.use_what_is_there(cx),
+                    Stage::Occupied { .. } => sheet.use_what_is_there(cx),
                     _ => sheet.confirm(cx),
                 }
             }));
         let done = matches!(self.stage, Stage::Done { .. } | Stage::Registering { .. });
+        let footer_left = div().when(!busy && !done, |left| {
+            left.child(
+                ferrite_ui::components::ghost_button("placement-new-folder", "New folder", cx)
+                    .debug_selector(|| "placement-new-folder".into())
+                    .on_click(cx.listener(|sheet: &mut Self, _: &ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        sheet
+                            .dest
+                            .update(cx, |dest, cx| dest.new_folder(window, cx));
+                    })),
+            )
+        });
         let footer_right = div()
             .flex()
             .items_center()
@@ -591,7 +659,7 @@ impl PlacementView {
                         &self.scroll,
                     )),
             )
-            .child(project_editor::footer(div(), footer_right));
+            .child(project_editor::footer(footer_left, footer_right));
         Some(ferrite_ui::sheet::Drawn { card, above: None })
     }
 }

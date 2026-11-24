@@ -2163,10 +2163,10 @@ fn remote_inbox_follows_its_status_and_another_clients_park(cx: &mut TestAppCont
 }
 
 /// On a machine the Project card has no folder dialog, which could only
-/// browse this computer: a path field, listing the machine's home from
-/// the start, completes against the machine's folders through its Server
-/// (`list_dir`), Tab taking the first, ↵ adding it and the next ↵
-/// confirming. The Project it makes is the machine's; a draft chooses it,
+/// browse this computer: a browser of the machine's folders, which its
+/// Server lists (`list_dir`), its home from the start. What is typed
+/// narrows its rows, Tab goes into the first, ↵ adds it and the next ↵
+/// confirms. The Project it makes is the machine's; a draft chooses it,
 /// its workspace chip names and offers what git on the machine lists
 /// (`list_repo`) — no git here is asked — and its first send starts the
 /// Thread in that directory on the machine.
@@ -2199,8 +2199,8 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     let field = view.update(cx, |view, cx| {
         view.open_project_creator_on(on_box, cx);
         let card = view.project_card(cx).unwrap();
-        let field = card.read(cx).remote.as_ref();
-        field.expect("a path field on a machine").field.clone()
+        let browser = card.read(cx).remote.as_ref();
+        browser.expect("a folder browser on a machine").read(cx).field.clone()
     });
     assert!(
         String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap())
@@ -2211,13 +2211,10 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     field.update(cx, |field, cx| {
         field.set(format!("{}/re", folder.display()), cx)
     });
-    until(cx, |cx| {
-        view.read_with(cx, |view, cx| {
-            view.project_card(cx).unwrap().read(cx).remote_completions(cx) == ["repo"]
-        })
-    });
-    tick(cx);
-    assert!(debug_bounds(cx, "project-path-completion:repo".into()).is_some());
+    until(cx, |cx| debug_bounds(cx, "folder-row:repo".into()).is_some());
+    for hidden in ["folder-row:.re-hidden", "folder-row:readme.txt"] {
+        assert!(debug_bounds(cx, hidden.into()).is_none(), "{hidden}");
+    }
     assert!(
         debug_bounds(cx, "project-add-directory".into()).is_none(),
         "no folder dialog for a machine"
@@ -2238,7 +2235,11 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
             view.project_card(cx).unwrap().read(cx).staged,
             std::slice::from_ref(&repo)
         );
-        assert_eq!(field.read(cx).text(), "", "the field empties");
+        assert_eq!(
+            field.read(cx).text(),
+            format!("{}/", folder.display()),
+            "back in the folder it is in"
+        );
     });
     cx.simulate_keystrokes("enter");
     // The machine's Server answers the commit a beat after the press.

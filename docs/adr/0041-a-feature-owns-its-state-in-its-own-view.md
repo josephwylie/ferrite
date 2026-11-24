@@ -55,8 +55,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   hands over with the inputs. Each moves when its feature does.
 - **The Project card is the third.** `ProjectEditorView`
   (`cockpit/project_editor_view.rs`) owns the open card, the one fading
-  out, its focus, and on a machine its path field and the listings it
-  completes from. It emits `ProjectEditorEvent`. What changes the Projects
+  out, its focus, and on a machine the browser of its folders
+  (`FolderBrowser`, ADR 0048). It emits `ProjectEditorEvent`. What changes the Projects
   (create, rename, add or remove a directory, remove a Project) stays the
   root's, as do the closes that make the card modal, since they close other
   features' state.
