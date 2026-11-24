@@ -25,8 +25,8 @@ use activity::{Execution as PersistedExecution, PersistedActivity};
 mod base;
 use base::{Base, Tracker};
 mod worker;
-#[cfg(test)]
-pub(crate) use worker::lock as worker_lock;
+#[cfg(any(test, feature = "test-support"))]
+pub use worker::lock as worker_lock;
 use worker::Worker;
 #[cfg(test)]
 mod activity_tests;
@@ -1851,11 +1851,11 @@ pub struct Store {
     /// retains of Main before the end, so its window lies wholly after it.
     activity_limits: crate::activity::ActivityLimits,
     shared: std::sync::Arc<Shared>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fail_create: bool,
     /// Held by a test: a large switch's exchanges are not read until it
     /// lets go, so the switch is seen pending however fast the read is.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     exchange_reads: Option<std::sync::Arc<std::sync::Mutex<()>>>,
 }
 
@@ -1875,15 +1875,15 @@ struct Shared {
     /// The store's worker, started with its first writer.
     worker: std::sync::OnceLock<std::sync::Arc<Worker>>,
     /// What the worker synced and marked, in order, for tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     journal: std::sync::Mutex<Vec<(&'static str, u64)>>,
     /// Every byte read off a log, so tests can bound what a read costs.
     #[cfg(any(test, feature = "test-support"))]
     read_bytes: std::sync::atomic::AtomicU64,
     /// Syncs so far, barrier then full, so tests can see which one ran.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     syncs: [std::sync::atomic::AtomicU64; 2],
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     faults: Faults,
 }
 
@@ -1896,7 +1896,7 @@ impl Shared {
     }
 
     fn synced(&self, _level: SyncLevel) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.syncs[_level as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -1909,7 +1909,7 @@ impl Shared {
 
     /// A sync the worker runs: where a test can slow or fail it.
     fn sync_in_worker(&self, file: &File, level: SyncLevel) -> io::Result<()> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             let delay = *worker::lock(&self.faults.sync_delay);
             std::thread::sleep(delay);
@@ -1924,33 +1924,33 @@ impl Shared {
         self.sync(file, level)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn journal(&self, what: &'static str, at: u64) {
         worker::lock(&self.journal).push((what, at));
     }
 }
 
 /// Failures a test can switch on for every handle on one store.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Default)]
-pub(crate) struct Faults {
+pub struct Faults {
     /// Fail replacing a log at this step.
-    pub(crate) replace_fails_at: std::sync::Mutex<Option<ReplaceStep>>,
+    pub replace_fails_at: std::sync::Mutex<Option<ReplaceStep>>,
     /// Fail an amendment or handover after its line is written, before
     /// it is synced.
-    pub(crate) fail_commit: std::sync::atomic::AtomicBool,
+    pub fail_commit: std::sync::atomic::AtomicBool,
     /// And then fail taking it back off the log.
-    pub(crate) fail_rollback: std::sync::atomic::AtomicBool,
+    pub fail_rollback: std::sync::atomic::AtomicBool,
     /// Slow every sync the worker runs by this much.
-    pub(crate) sync_delay: std::sync::Mutex<std::time::Duration>,
+    pub sync_delay: std::sync::Mutex<std::time::Duration>,
     /// Fail every sync the worker runs.
-    pub(crate) fail_sync: std::sync::atomic::AtomicBool,
+    pub fail_sync: std::sync::atomic::AtomicBool,
 }
 
 /// The steps of putting a rewritten log in place, for fault injection.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReplaceStep {
+pub enum ReplaceStep {
     /// Mid-write of the new file: a crash leaves half of it behind.
     Write,
     /// Syncing the new file.
@@ -1961,9 +1961,9 @@ pub(crate) enum ReplaceStep {
     Durable,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Faults {
-    pub(crate) fn fail_replace_at(&self, step: Option<ReplaceStep>) {
+    pub fn fail_replace_at(&self, step: Option<ReplaceStep>) {
         *self
             .replace_fails_at
             .lock()
@@ -2009,13 +2009,13 @@ impl Shared {
             summaries: std::sync::Mutex::new(None),
             minting: std::sync::Mutex::new(()),
             worker: std::sync::OnceLock::new(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             journal: Default::default(),
             #[cfg(any(test, feature = "test-support"))]
             read_bytes: Default::default(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             syncs: Default::default(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             faults: Faults::default(),
         }
     }
@@ -2465,9 +2465,9 @@ impl Store {
             mark_spacing: MARK_SPACING,
             activity_limits: crate::activity::ActivityLimits::default(),
             shared,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             fail_create: false,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             exchange_reads: None,
         }
     }
@@ -2522,14 +2522,14 @@ impl Store {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    #[cfg(test)]
-    pub(crate) fn faults(&self) -> &Faults {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn faults(&self) -> &Faults {
         &self.shared.faults
     }
 
     /// Syncs run so far on this store: (barriers, full syncs).
-    #[cfg(test)]
-    pub(crate) fn syncs(&self) -> (u64, u64) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn syncs(&self) -> (u64, u64) {
         let count = |level: SyncLevel| {
             self.shared.syncs[level as usize].load(std::sync::atomic::Ordering::Relaxed)
         };
@@ -2538,8 +2538,8 @@ impl Store {
 
     /// Marks this far apart at least, and replay bases sized for an
     /// Activity with these limits: a small world for a test.
-    #[cfg(test)]
-    pub(crate) fn scaled(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn scaled(
         mut self,
         mark_spacing: u64,
         limits: crate::activity::ActivityLimits,
@@ -2568,8 +2568,8 @@ impl Store {
 
     /// A switch's exchanges read on a thread of their own wait for `hold`
     /// to be let go.
-    #[cfg(test)]
-    pub(crate) fn hold_exchange_reads(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn hold_exchange_reads(
         mut self,
         hold: std::sync::Arc<std::sync::Mutex<()>>,
     ) -> Self {
@@ -2578,8 +2578,8 @@ impl Store {
     }
 
     /// The writers' longest wait for a full sync, shortened for a test.
-    #[cfg(test)]
-    pub(crate) fn full_sync_every(mut self, interval: std::time::Duration) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn full_sync_every(mut self, interval: std::time::Duration) -> Self {
         self.full_sync_interval = interval;
         self
     }
@@ -2704,8 +2704,8 @@ impl Store {
     }
 
     /// Write what the writers of this store hold, as a panic would.
-    #[cfg(test)]
-    pub(crate) fn rescue(&self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn rescue(&self) {
         rescue(Some(&self.dir));
     }
 
@@ -2727,8 +2727,8 @@ impl Store {
     }
 
     /// Wait until the worker has synced everything written so far.
-    #[cfg(test)]
-    pub(crate) fn settle_all(&self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn settle_all(&self) {
         let Some(worker) = self.shared.worker.get() else {
             return;
         };
@@ -2752,8 +2752,8 @@ impl Store {
     }
 
     /// What the worker synced and marked, in order.
-    #[cfg(test)]
-    pub(crate) fn journal(&self) -> Vec<(&'static str, u64)> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn journal(&self) -> Vec<(&'static str, u64)> {
         worker::lock(&self.shared.journal).clone()
     }
 
@@ -2773,8 +2773,8 @@ impl Store {
         Ok(bytes)
     }
 
-    #[cfg(test)]
-    pub(crate) fn refuse_create(mut self) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn refuse_create(mut self) -> Self {
         self.fail_create = true;
         self
     }
@@ -2814,7 +2814,7 @@ impl Store {
         binding: WorkspaceBinding,
         origin: Origin,
     ) -> io::Result<(ThreadId, ThreadWriter)> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.fail_create {
             return Err(io::Error::other("stub refused Thread creation"));
         }
@@ -3459,12 +3459,12 @@ impl Store {
             return ExchangeRead::Ready(Some(read()));
         }
         let (send, receive) = crate::doorbell::channel();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let hold = self.exchange_reads.clone();
         let spawned = std::thread::Builder::new()
             .name("ferrite-handover".into())
             .spawn(move || {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 let _held = hold.as_ref().map(|hold| hold.lock());
                 let _ = send.send(read());
             });
@@ -4003,7 +4003,7 @@ impl Store {
         let path = self.log_path(id);
         let tmp = temp_beside(&path);
         let mut file = File::create(&tmp)?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.injected(ReplaceStep::Write) {
             // A crash mid-write: half the file, and the temp left behind.
             file.write_all(&contents[..contents.len() / 2])?;
@@ -4011,13 +4011,13 @@ impl Store {
         }
         let handle = (|| -> io::Result<File> {
             file.write_all(contents)?;
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             if self.injected(ReplaceStep::Sync) {
                 return Err(io::Error::other("injected failure while syncing"));
             }
             self.shared.sync(&file, SyncLevel::Full)?;
             let handle = OpenOptions::new().append(true).open(&tmp)?;
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             if self.injected(ReplaceStep::Rename) {
                 return Err(io::Error::other("injected failure while renaming"));
             }
@@ -4027,7 +4027,7 @@ impl Store {
         .inspect_err(|_: &io::Error| {
             let _ = fs::remove_file(&tmp);
         })?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.injected(ReplaceStep::Durable) {
             return Err(io::Error::other(
                 "injected failure making the rename durable",
@@ -4037,7 +4037,7 @@ impl Store {
         Ok(handle)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn injected(&self, step: ReplaceStep) -> bool {
         *self
             .shared
@@ -4237,7 +4237,7 @@ pub struct ResumePoint {
 
 /// The last provider switch a log records, and what the next prompt on
 /// the new provider owes it.
-pub(crate) struct Handover {
+pub struct Handover {
     /// The provider the conversation before the switch was held with.
     pub from: Provider,
     /// Every prompt before the switch with the answer text that followed
@@ -4439,7 +4439,7 @@ impl ThreadSnapshot {
     /// it as prompt/answer pairs (answer = the assistant text that followed
     /// the prompt, tool runs and reasoning left out). `None` for a Thread
     /// that never switched.
-    pub(crate) fn last_handover(&self) -> Option<Handover> {
+    pub fn last_handover(&self) -> Option<Handover> {
         let at = self
             .records
             .iter()
@@ -4585,8 +4585,8 @@ impl ThreadSnapshot {
     /// into the cockpit's timings so a revived Thread's rows still carry
     /// the durations they were drawn with; calls logged before the clock
     /// was persisted are simply absent.
-    #[cfg(test)]
-    pub(crate) fn tool_durations(&self) -> Vec<(String, std::time::Duration)> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn tool_durations(&self) -> Vec<(String, std::time::Duration)> {
         self.records
             .iter()
             .filter_map(|record| match record {
@@ -4600,7 +4600,7 @@ impl ThreadSnapshot {
             .collect()
     }
 
-    pub(crate) fn prompt_texts(&self) -> Vec<String> {
+    pub fn prompt_texts(&self) -> Vec<String> {
         let after_reset = self
             .records
             .iter()
@@ -4676,8 +4676,8 @@ impl ThreadWriter {
 
     /// Make every later write fail, for a test: the descriptor becomes one
     /// opened for reading.
-    #[cfg(test)]
-    pub(crate) fn break_writes(&self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn break_writes(&self) {
         let mut state = self.lock();
         state.file = File::open(&state.path).expect("the log opens for reading");
     }
@@ -5164,7 +5164,7 @@ impl WriterState {
         written?;
         self.last_mark = Some(at);
         self.mark_len = mark.len();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.shared.journal("mark", at);
         Ok(())
     }
@@ -5226,7 +5226,7 @@ impl WriterState {
         let before = self.len;
         let written = (|| {
             self.file.write_all(bytes)?;
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             if self
                 .shared
                 .faults
@@ -5239,7 +5239,7 @@ impl WriterState {
         })();
         if let Err(error) = written {
             let rolled_back = (|| {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 if self
                     .shared
                     .faults

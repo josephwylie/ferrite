@@ -22,6 +22,7 @@ browser-smoke = []
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
+ferrite-client = { path = "../ferrite-client" }
 ferrite-ui = { path = "../ferrite-ui" }
 # herdr-reviewr's review core, vendored: a Composer's review comments and
 # their prompt text (ADR 0021).
@@ -64,6 +65,7 @@ ctor = "1"
 libc = "0.2"
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
 ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
+ferrite-client = { path = "../ferrite-client", features = ["test-support"] }
 ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
 # The browser controller's sockets, tested without the `cef` feature.
 tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }

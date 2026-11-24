@@ -16,7 +16,7 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ferrite_core::cockpit::{Cockpit, SpawnRequest, Spawner};
+use ferrite_client::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::progress::{Phase, ProgressEvent};
 use ferrite_core::providers::{applied, Session, SettingAck};
 use ferrite_core::store::Provider;

@@ -63,7 +63,7 @@ and a window that holds every machine at once.
   name, and read back for every machine the window holds.
 - **The shape: one `Cockpit` holds each machine as a `HeldMachine`.** The
   window keeps its one `Cockpit`. Inside it, the private `HeldMachine`
-  (`ferrite-core/src/cockpit/held.rs`) keeps what one link means: its
+  (`ferrite-client/src/cockpit/held.rs`) keeps what one link means: its
   `MachineId`, its saved name, the link (an Engine in this process or a
   Server's), the mirrors, the shared state, the parked rows, the logs,
   what the Server was told of this window and of what it has seen

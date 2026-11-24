@@ -11,7 +11,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use ferrite_core::cockpit::{Cockpit, SpawnRequest, Spawner};
+use ferrite_client::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::providers::Session;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::workspace::WorkspaceChoice;

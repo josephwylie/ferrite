@@ -1,9 +1,13 @@
 //! Delayed provider adapters cross the same startup seam as production.
 //! Gates decide readiness; no CLI, timing assumptions, or worker-side sends.
 use super::*;
+use ferrite_core::providers::{Session, SettingAck};
+use ferrite_core::session::SessionLifecycle;
+use ferrite_core::SessionEvent;
+use ferrite_core::engine::*;
 use crate::cockpit::{BootstrapResult, Cockpit};
-use crate::providers::applied;
-use crate::roster::PaneIdentity;
+use ferrite_core::providers::applied;
+use ferrite_core::roster::PaneIdentity;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -67,7 +71,7 @@ impl Control {
     fn ended(&self) {
         self.events
             .send(SessionEvent::TurnEnded {
-                outcome: crate::TurnOutcome::Completed,
+                outcome: ferrite_core::TurnOutcome::Completed,
                 cost_usd: None,
             })
             .unwrap();
@@ -147,7 +151,7 @@ fn workspace() -> WorkspaceChoice {
 }
 /// Look again each time a startup lands (`doorbell`), not on the wall clock.
 fn until(predicate: impl FnMut() -> bool) {
-    crate::doorbell::until("startup did not settle", predicate);
+    ferrite_core::doorbell::until("startup did not settle", predicate);
 }
 fn settle(cockpit: &mut Cockpit) -> BootstrapResult {
     let mut result = None;
@@ -173,7 +177,7 @@ fn delayed_draft_success_delivers_once_and_preserves_unrelated_roster_actions() 
     assert!(!cockpit.thread(provisional).unwrap().has_prompt_history());
     assert!(cockpit
         .engine()
-        .store
+        .store()
         .load(provisional.thread())
         .unwrap()
         .prompt_texts()
@@ -243,7 +247,7 @@ fn delayed_draft_startup_and_first_send_failures_restore_the_original_draft() {
         assert_eq!(completed.prompt, "keep my prompt");
         assert!(completed.result.is_err());
         assert!(cockpit.threads().is_empty());
-        assert!(cockpit.engine().store.thread_ids().unwrap().is_empty());
+        assert!(cockpit.engine().store().thread_ids().unwrap().is_empty());
         assert_eq!(cockpit.roster().panes(), &[PaneIdentity::Draft(draft)]);
         assert!(provider.sent().is_empty());
     }
@@ -273,7 +277,7 @@ fn discard_and_park_before_ready_cannot_deliver_even_without_another_pump() {
         provider.ready();
         until(|| provider.dropped.load(Ordering::SeqCst) == 1);
         assert!(provider.sent().is_empty());
-        assert!(cockpit.engine().store.thread_ids().unwrap().is_empty());
+        assert!(cockpit.engine().store().thread_ids().unwrap().is_empty());
     }
 }
 
@@ -315,7 +319,7 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
     let _ = cockpit.send(thread, "after".into());
     assert!(cockpit
         .engine()
-        .store
+        .store()
         .load(thread.thread())
         .unwrap()
         .last_handover()
@@ -332,7 +336,7 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
     assert!(
         !cockpit
             .engine()
-            .store
+            .store()
             .load(thread.thread())
             .unwrap()
             .last_handover()
@@ -353,7 +357,7 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
     assert!(
         cockpit
             .engine()
-            .store
+            .store()
             .load(thread.thread())
             .unwrap()
             .last_handover()
@@ -376,7 +380,7 @@ fn failed_handover_rewrite_leaves_no_durable_handover_and_keeps_serving() {
         .unwrap();
     cockpit
         .engine()
-        .store
+        .store()
         .faults()
         .fail_commit
         .store(true, Ordering::SeqCst);
@@ -385,7 +389,7 @@ fn failed_handover_rewrite_leaves_no_durable_handover_and_keeps_serving() {
         cockpit.pump();
         !cockpit.thread(thread).unwrap().starting()
     });
-    let snapshot = cockpit.engine().store.load(thread.thread()).unwrap();
+    let snapshot = cockpit.engine().store().load(thread.thread()).unwrap();
     assert_eq!(snapshot.provider(), Provider::Claude);
     assert!(snapshot.last_handover().is_none());
     assert_eq!(original.dropped.load(Ordering::SeqCst), 0);
@@ -475,7 +479,7 @@ fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
     assert!(
         !cockpit
             .engine()
-            .store
+            .store()
             .load(thread.thread())
             .unwrap()
             .last_handover()
@@ -520,7 +524,7 @@ fn halting_sessions_drops_ready_and_starting_sessions_alike() {
 
     assert_eq!(ready.dropped.load(Ordering::SeqCst), 1);
     assert!(!cockpit.thread(live).unwrap().starting());
-    assert!(cockpit.engine().threads[&live.thread()].session.is_none());
+    assert!(!cockpit.engine().has_session(live.thread()));
     // A startup still in flight is abandoned: its worker drops the late
     // process on its own, and nothing waits for it.
     assert!(!cockpit.thread(pending).unwrap().starting());

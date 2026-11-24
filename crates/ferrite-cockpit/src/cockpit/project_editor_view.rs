@@ -834,7 +834,7 @@ impl CockpitView {
     fn directory_changed(
         &mut self,
         card: Entity<ProjectEditorView>,
-        changed: ferrite_core::cockpit::Ask<()>,
+        changed: ferrite_client::cockpit::Ask<()>,
         cx: &mut Context<Self>,
     ) {
         self.when_answered(

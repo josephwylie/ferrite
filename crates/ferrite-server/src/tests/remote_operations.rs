@@ -1,9 +1,9 @@
 use super::*;
 
-pub(super) fn machine(harness: &Harness, sent: &Arc<Mutex<Vec<u8>>>) -> ferrite_core::cockpit::Cockpit {
-    let mut cockpit = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
+pub(super) fn machine(harness: &Harness, sent: &Arc<Mutex<Vec<u8>>>) -> ferrite_client::cockpit::Cockpit {
+    let mut cockpit = ferrite_client::cockpit::Cockpit::attach(ferrite_client::cockpit::Attach {
         store: harness.dir.join("desktop"),
-        server: ferrite_core::cockpit::Endpoint::Machine(bridge(harness, sent)),
+        server: ferrite_client::cockpit::Endpoint::Machine(bridge(harness, sent)),
         saved_as: ferrite_core::MachineKey(Some("box".into())),
         client: peer(),
         renderer: None,
@@ -15,13 +15,13 @@ pub(super) fn machine(harness: &Harness, sent: &Arc<Mutex<Vec<u8>>>) -> ferrite_
     pump_until(&mut cockpit, |cockpit| {
         matches!(
             cockpit.server(cockpit.first_machine()),
-            Some(ferrite_core::cockpit::ServerState::Attached { .. })
+            Some(ferrite_client::cockpit::ServerState::Attached { .. })
         )
     });
     cockpit
 }
 
-fn answer<T>(cockpit: &mut ferrite_core::cockpit::Cockpit, receiver: Receiver<io::Result<T>>) -> T {
+fn answer<T>(cockpit: &mut ferrite_client::cockpit::Cockpit, receiver: Receiver<io::Result<T>>) -> T {
     let deadline = Instant::now() + PATIENCE;
     loop {
         cockpit.pump();

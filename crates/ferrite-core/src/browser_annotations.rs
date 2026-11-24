@@ -276,7 +276,7 @@ impl Annotation {
         path.is_file().then_some(path)
     }
 
-    pub(crate) fn local_image(&self) -> io::Result<Vec<u8>> {
+    pub fn local_image(&self) -> io::Result<Vec<u8>> {
         let original = self
             .original()
             .ok_or_else(|| io::Error::other("This annotation has no screenshot"))?;

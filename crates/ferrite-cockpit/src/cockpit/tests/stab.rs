@@ -991,12 +991,12 @@ fn the_solo_composer_holds_its_place_through_a_decision(cx: &mut TestAppContext)
 #[gpui::test]
 fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
     let dir = scratch("no-server");
-    let core = Cockpit::attach(ferrite_core::cockpit::Attach {
+    let core = Cockpit::attach(ferrite_client::cockpit::Attach {
             saved_as: ferrite_core::MachineKey(None),
             browser: false,
             driven: false,
         store: dir.clone(),
-        server: ferrite_core::cockpit::Endpoint::Local {
+        server: ferrite_client::cockpit::Endpoint::Local {
             executable: dir.join("no-such-ferrite"),
         },
         client: ferrite_core::protocol::Peer {
@@ -1009,7 +1009,7 @@ fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
     .unwrap();
     assert!(matches!(
         core.server(core.first_machine()),
-        Some(ferrite_core::cockpit::ServerState::Detached { .. })
+        Some(ferrite_client::cockpit::ServerState::Detached { .. })
     ));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
@@ -1030,12 +1030,12 @@ fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
     let dir = scratch("restart-press");
-    let core = Cockpit::attach(ferrite_core::cockpit::Attach {
+    let core = Cockpit::attach(ferrite_client::cockpit::Attach {
             saved_as: ferrite_core::MachineKey(None),
             browser: false,
             driven: false,
         store: dir.clone(),
-        server: ferrite_core::cockpit::Endpoint::Local {
+        server: ferrite_client::cockpit::Endpoint::Local {
             executable: dir.join("no-such-ferrite"),
         },
         client: ferrite_core::protocol::Peer {
@@ -1068,7 +1068,7 @@ fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
         assert!(
             matches!(
                 view.cockpit.read(cx).server_restart(view.cockpit.read(cx).first_machine()),
-                Some(ferrite_core::cockpit::ServerRestart::Failed { .. })
+                Some(ferrite_client::cockpit::ServerRestart::Failed { .. })
             ),
             "a Server that does not answer cannot restart, and the window says so"
         );

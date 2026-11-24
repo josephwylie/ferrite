@@ -23,7 +23,7 @@ use crate::float::{self, FloatPlace};
 use crate::notifications::{Alert, QuickAnswer, ToastStage};
 use crate::system_notifications::Posting;
 use ferrite_core::notifications::{DecisionNoticeId, NoticeId, Notifications};
-use ferrite_core::cockpit::OnMachine;
+use ferrite_client::cockpit::OnMachine;
 use ferrite_core::MachineId;
 use std::time::Instant;
 

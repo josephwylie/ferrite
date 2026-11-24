@@ -10,7 +10,7 @@
 
 use super::*;
 use crate::machines::{Connection, MachineRow};
-use ferrite_core::cockpit::ServerState;
+use ferrite_client::cockpit::ServerState;
 use ferrite_core::machine::{self, auth, remote, setup, Machine};
 use gpui::component::input::{InputEvent, InputState};
 use gpui::{App, EntityInputHandler, WeakEntity};

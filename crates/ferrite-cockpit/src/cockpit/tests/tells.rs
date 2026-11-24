@@ -1,9 +1,9 @@
 //! An act whose reply nobody reads never holds the window's thread (ADR
 //! 0041): it is told to the Server, and what is seen is told once, though
 //! the window looks every frame. Read from core's probe
-//! (`ferrite_core::cockpit::waits`).
+//! (`ferrite_client::cockpit::waits`).
 use super::*;
-use ferrite_core::cockpit::waits;
+use ferrite_client::cockpit::waits;
 use ferrite_core::protocol::ServerMessage;
 
 fn notice_acts() -> Vec<waits::Wait> {
@@ -64,7 +64,7 @@ fn a_send_and_a_queueing_do_not_wait_and_are_answered() {
     assert!(waits.iter().all(|wait| !wait.waited), "neither waits for its reply: {waits:?}");
     let admission = core.wait_for(sent).expect("the Server answers a send");
     let queued = core.wait_for(queued).expect("the Server answers a queueing");
-    assert_eq!(admission, ferrite_core::cockpit::Admission::Delivered);
+    assert_eq!(admission, ferrite_client::cockpit::Admission::Delivered);
     assert!(!queued, "an idle Thread queues nothing");
 }
 
@@ -135,7 +135,7 @@ fn a_turns_presses_that_read_a_reply_do_not_wait_and_are_answered() {
     waits::start();
     let model = core.set_model(thread, Some("sonnet".into()));
     let effort = core.set_effort(thread, Some("high".into()));
-    let provider = core.set_provider(thread, ferrite_core::cockpit::ProviderChoice { provider: Provider::Codex, model: None });
+    let provider = core.set_provider(thread, ferrite_client::cockpit::ProviderChoice { provider: Provider::Codex, model: None });
     let fresh = core.start_fresh_conversation(thread);
     let rewind = core.rewind(thread, "none", false, false);
     let fork = core.fork(thread, None, None);
@@ -235,7 +235,7 @@ fn reopening_a_parked_thread_does_not_wait_and_takes_the_screen_when_answered(cx
 /// what the first put in the Composer.
 #[gpui::test]
 fn history_steps_go_in_order_and_none_waits(cx: &mut gpui::TestAppContext) {
-    use ferrite_core::cockpit::HistoryDirection;
+    use ferrite_client::cockpit::HistoryDirection;
     let (_engine, view, thread, cx) = super::browser_chrome::browser_window(cx, "recall-asks");
     let recalls = || -> Vec<waits::Wait> { waits::take().into_iter().filter(|wait| wait.op == "recall").collect() };
     waits::start();

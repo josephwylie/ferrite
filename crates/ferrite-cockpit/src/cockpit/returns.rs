@@ -4,7 +4,7 @@
 //! Composer when the answer comes; the window never waits for it.
 
 use super::*;
-use ferrite_core::cockpit::HistoryDirection;
+use ferrite_client::cockpit::HistoryDirection;
 use ferrite_core::roster::PaneIdentity;
 use ferrite_core::ThreadKey;
 use std::collections::{HashMap, HashSet, VecDeque};

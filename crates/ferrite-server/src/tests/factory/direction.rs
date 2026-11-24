@@ -232,18 +232,18 @@ fn the_windows_are_alerted_on_the_four_task_events_and_not_between_steps() {
     task_until(&mut caller, &asked, |task| task["status"] == "needs_human");
     ok(&harness, "task.stop", serde_json::json!({ "task": asked }));
 
-    let status = |window: &ferrite_core::cockpit::Cockpit, task: &str| {
+    let status = |window: &ferrite_client::cockpit::Cockpit, task: &str| {
         window.factory(window.first_machine()).task(task).map(|task| task.status)
     };
     pump_until(&mut window, |window| {
         status(window, &shipped) == Some(Status::Completed)
             && status(window, &asked) == Some(Status::Stopped)
     });
-    let of = |alerts: &[ferrite_core::cockpit::Asked], task: &str| -> Vec<Status> {
+    let of = |alerts: &[ferrite_client::cockpit::Asked], task: &str| -> Vec<Status> {
         alerts
             .iter()
             .filter_map(|alert| match alert {
-                ferrite_core::cockpit::Asked::TaskAlert {
+                ferrite_client::cockpit::Asked::TaskAlert {
                     task: alerted,
                     status,
                     ..
@@ -474,7 +474,7 @@ fn a_workers_provider_decision_needs_the_operator_in_the_task_not_the_inbox() {
         asked.iter().any(|asked| {
             matches!(
                 asked,
-                ferrite_core::cockpit::Asked::TaskAlert {
+                ferrite_client::cockpit::Asked::TaskAlert {
                     status: ferrite_core::factory::Status::NeedsHuman,
                     ..
                 }

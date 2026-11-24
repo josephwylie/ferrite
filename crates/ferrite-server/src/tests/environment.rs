@@ -56,9 +56,9 @@ fn machine_world(name: &str) -> (Harness, Arc<Machine>) {
 }
 
 fn answered<T>(
-    window: &mut ferrite_core::cockpit::Cockpit,
+    window: &mut ferrite_client::cockpit::Cockpit,
     ask: impl FnOnce(
-        &mut ferrite_core::cockpit::Cockpit,
+        &mut ferrite_client::cockpit::Cockpit,
     ) -> io::Result<std::sync::mpsc::Receiver<io::Result<T>>>,
 ) -> io::Result<T> {
     let answer = ask(window).unwrap();

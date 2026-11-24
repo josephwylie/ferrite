@@ -83,7 +83,7 @@ pub(crate) struct PreviewTab {
 pub(in crate::cockpit) struct AnnotationImage {
     annotation: ferrite_core::browser_annotations::Annotation,
     opened: Option<u64>,
-    image: ferrite_core::cockpit::Ask<PathBuf>,
+    image: ferrite_client::cockpit::Ask<PathBuf>,
 }
 
 impl PreviewTab {
@@ -248,7 +248,7 @@ impl FileSurfaceView {
         owner: PaneIdentity,
         preview: &Preview,
         annotation: ferrite_core::browser_annotations::Annotation,
-        image: ferrite_core::cockpit::Ask<PathBuf>,
+        image: ferrite_client::cockpit::Ask<PathBuf>,
     ) {
         let opened = preview.opened().map(|(open, _)| open);
         self.tab(owner, preview).annotation_image = Some(AnnotationImage {

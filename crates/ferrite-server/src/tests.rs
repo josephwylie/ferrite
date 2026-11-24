@@ -9,7 +9,7 @@ use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use super::*;
-use ferrite_core::cockpit::mirror::Mirrors;
+use ferrite_client::cockpit::mirror::Mirrors;
 use ferrite_core::engine::{SpawnRequest, Spawner};
 use ferrite_core::link::{Attached, Client};
 use ferrite_core::protocol::{Peer, Resume, WireAnswer, WireChoice, WireEntry};
@@ -872,7 +872,7 @@ fn a_review_is_read_by_git_where_the_server_runs() {
     std::fs::write(repo.join("notes.md"), "fresh\n").unwrap();
     let mut window = cockpit(&harness);
     fn landed<T>(
-        window: &mut ferrite_core::cockpit::Cockpit,
+        window: &mut ferrite_client::cockpit::Cockpit,
         answer: io::Result<Receiver<io::Result<T>>>,
     ) -> io::Result<T> {
         let answer = answer.unwrap();
@@ -1403,10 +1403,10 @@ impl Spawner for NoDiscovery {
 }
 
 /// A Cockpit attached to the harness's Server, as the app attaches.
-fn cockpit(harness: &Harness) -> ferrite_core::cockpit::Cockpit {
-    ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
+fn cockpit(harness: &Harness) -> ferrite_client::cockpit::Cockpit {
+    ferrite_client::cockpit::Cockpit::attach(ferrite_client::cockpit::Attach {
         store: harness.dir.join("threads"),
-        server: ferrite_core::cockpit::Endpoint::Local {
+        server: ferrite_client::cockpit::Endpoint::Local {
             executable: "/bin/false".into(),
         },
         saved_as: ferrite_core::MachineKey(None),
@@ -1424,7 +1424,7 @@ fn cockpit(harness: &Harness) -> ferrite_core::cockpit::Cockpit {
 
 /// `thread` of the harness's Server as `window` names it: this computer's,
 /// which saved files name `MachineKey(None)`.
-fn here(window: &ferrite_core::cockpit::Cockpit, thread: ThreadId) -> ThreadKey {
+fn here(window: &ferrite_client::cockpit::Cockpit, thread: ThreadId) -> ThreadKey {
     let saved = ferrite_core::SavedThread {
         machine: ferrite_core::MachineKey(None),
         thread,
@@ -1434,8 +1434,8 @@ fn here(window: &ferrite_core::cockpit::Cockpit, thread: ThreadId) -> ThreadKey 
 
 /// Pump a window until `done` holds, for at most [`PATIENCE`].
 fn pump_until(
-    window: &mut ferrite_core::cockpit::Cockpit,
-    done: impl Fn(&ferrite_core::cockpit::Cockpit) -> bool,
+    window: &mut ferrite_client::cockpit::Cockpit,
+    done: impl Fn(&ferrite_client::cockpit::Cockpit) -> bool,
 ) {
     let deadline = Instant::now() + PATIENCE;
     while !done(window) {
@@ -1449,9 +1449,9 @@ fn pump_until(
 /// [`PATIENCE`], answering all it was asked. A Task's alert follows the board
 /// that shows it, so a wait on the board alone can end before the alert.
 fn pump_until_asked(
-    window: &mut ferrite_core::cockpit::Cockpit,
-    done: impl Fn(&[ferrite_core::cockpit::Asked]) -> bool,
-) -> Vec<ferrite_core::cockpit::Asked> {
+    window: &mut ferrite_client::cockpit::Cockpit,
+    done: impl Fn(&[ferrite_client::cockpit::Asked]) -> bool,
+) -> Vec<ferrite_client::cockpit::Asked> {
     let deadline = Instant::now() + PATIENCE;
     let mut asked = window.take_asked();
     while !done(&asked) {
@@ -1465,7 +1465,7 @@ fn pump_until_asked(
 
 /// Whether the window's digest of `thread` reads `said` as the answer of
 /// its latest turn, the one row of words the bell says.
-fn digest_says(window: &ferrite_core::cockpit::Cockpit, thread: ThreadKey, said: &str) -> bool {
+fn digest_says(window: &ferrite_client::cockpit::Cockpit, thread: ThreadKey, said: &str) -> bool {
     window
         .thread(thread)
         .is_some_and(|open| answered(&open.digest(), said))
@@ -1480,7 +1480,7 @@ fn answered(digest: &ferrite_core::digest::Digest, said: &str) -> bool {
         .is_some_and(|answer| answer.contains(said))
 }
 
-fn shows(window: &ferrite_core::cockpit::Cockpit, thread: ThreadKey, said: &str) -> bool {
+fn shows(window: &ferrite_client::cockpit::Cockpit, thread: ThreadKey, said: &str) -> bool {
     window.thread(thread).is_some_and(|open| {
         open.transcript()
             .blocks()
@@ -1495,7 +1495,7 @@ fn shows(window: &ferrite_core::cockpit::Cockpit, thread: ThreadKey, said: &str)
 fn a_window_attached_to_a_server_knows_its_id_and_clock() {
     let harness = start("server-id");
     let window = cockpit(&harness);
-    let Some(ferrite_core::cockpit::ServerState::Attached { id, clock, .. }) = window.server(window.first_machine())
+    let Some(ferrite_client::cockpit::ServerState::Attached { id, clock, .. }) = window.server(window.first_machine())
     else {
         panic!("attached");
     };
@@ -1513,7 +1513,7 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     let mut window = cockpit(&harness);
     assert!(matches!(
         window.server(window.first_machine()),
-        Some(ferrite_core::cockpit::ServerState::Attached { .. })
+        Some(ferrite_client::cockpit::ServerState::Attached { .. })
     ));
     let thread = window
         .open(
@@ -1545,7 +1545,7 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     pump_until(&mut second, |second| shows(second, theirs, "on it"));
 
     provider.send(decision()).unwrap();
-    let pending = |window: &ferrite_core::cockpit::Cockpit, thread| {
+    let pending = |window: &ferrite_client::cockpit::Cockpit, thread| {
         window
             .thread(thread)
             .is_some_and(|open| open.pending().is_some())
@@ -1603,7 +1603,7 @@ fn a_reopened_window_can_answer_questions() {
             .recv_timeout(PATIENCE)
             .unwrap();
         provider.send(decision()).unwrap();
-        let pending = |window: &ferrite_core::cockpit::Cockpit, thread| {
+        let pending = |window: &ferrite_client::cockpit::Cockpit, thread| {
             window
                 .thread(thread)
                 .is_some_and(|open| open.pending().is_some())
@@ -2871,9 +2871,9 @@ fn said(sent: &Arc<Mutex<Vec<u8>>>) -> Vec<String> {
 fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
     let harness = start("machine-window");
     let sent = Arc::default();
-    let mut window = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
+    let mut window = ferrite_client::cockpit::Cockpit::attach(ferrite_client::cockpit::Attach {
         store: harness.dir.join("box").join("threads"),
-        server: ferrite_core::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
+        server: ferrite_client::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
         saved_as: ferrite_core::MachineKey(Some("box".into())),
         client: peer(),
         renderer: None,
@@ -2885,14 +2885,14 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
     assert!(
         matches!(
             window.server(window.first_machine()),
-            Some(ferrite_core::cockpit::ServerState::Detached { .. })
+            Some(ferrite_client::cockpit::ServerState::Detached { .. })
         ),
         "a machine is connected to in the background"
     );
     pump_until(&mut window, |window| {
         matches!(
             window.server(window.first_machine()),
-            Some(ferrite_core::cockpit::ServerState::Attached { .. })
+            Some(ferrite_client::cockpit::ServerState::Attached { .. })
         )
     });
     let thread = window
@@ -2925,9 +2925,9 @@ fn every_window_learns_its_server_names_fork_owners() {
     let local = cockpit(&harness);
     assert!(local.names_fork_owners(local.first_machine()), "this computer's Server says it");
     let sent = Arc::default();
-    let mut machine = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
+    let mut machine = ferrite_client::cockpit::Cockpit::attach(ferrite_client::cockpit::Attach {
         store: harness.dir.join("box").join("threads"),
-        server: ferrite_core::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
+        server: ferrite_client::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
         saved_as: ferrite_core::MachineKey(Some("box".into())),
         client: peer(),
         renderer: None,
@@ -2939,7 +2939,7 @@ fn every_window_learns_its_server_names_fork_owners() {
     pump_until(&mut machine, |window| {
         matches!(
             window.server(window.first_machine()),
-            Some(ferrite_core::cockpit::ServerState::Attached { .. })
+            Some(ferrite_client::cockpit::ServerState::Attached { .. })
         )
     });
     assert!(machine.names_fork_owners(machine.first_machine()), "a machine's Server says it");
@@ -2953,9 +2953,9 @@ fn every_window_learns_its_server_names_fork_owners() {
 fn a_machine_streams_a_thread_whole_only_while_drawn() {
     let harness = start("machine-drawn");
     let sent = Arc::default();
-    let mut window = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
+    let mut window = ferrite_client::cockpit::Cockpit::attach(ferrite_client::cockpit::Attach {
         store: harness.dir.join("box").join("threads"),
-        server: ferrite_core::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
+        server: ferrite_client::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
         saved_as: ferrite_core::MachineKey(Some("box".into())),
         client: peer(),
         renderer: None,
@@ -2968,7 +2968,7 @@ fn a_machine_streams_a_thread_whole_only_while_drawn() {
     pump_until(&mut window, |window| {
         matches!(
             window.server(machine),
-            Some(ferrite_core::cockpit::ServerState::Attached { .. })
+            Some(ferrite_client::cockpit::ServerState::Attached { .. })
         )
     });
     let mut other = attach(&harness.address);
@@ -5353,14 +5353,14 @@ fn gone(address: &Path) {
 #[cfg(unix)]
 #[test]
 fn a_window_sees_its_restart_through() {
-    use ferrite_core::cockpit::ServerRestart;
+    use ferrite_client::cockpit::ServerRestart;
     let harness = start("restart-seen");
     let mut window = cockpit(&harness);
     let here = window.first_machine();
     pump_until(&mut window, |window| {
         matches!(
             window.server(here),
-            Some(ferrite_core::cockpit::ServerState::Attached { .. })
+            Some(ferrite_client::cockpit::ServerState::Attached { .. })
         )
     });
 
@@ -5374,7 +5374,7 @@ fn a_window_sees_its_restart_through() {
     pump_until(&mut window, |window| {
         matches!(
             window.server(here),
-            Some(ferrite_core::cockpit::ServerState::Detached { .. })
+            Some(ferrite_client::cockpit::ServerState::Detached { .. })
         )
     });
     assert_eq!(window.server_restart(here), Some(&ServerRestart::Restarting));
@@ -5405,7 +5405,7 @@ fn a_window_sees_its_restart_through() {
 #[cfg(unix)]
 #[test]
 fn a_restart_not_back_in_time_reads_failed_until_it_is() {
-    use ferrite_core::cockpit::ServerRestart;
+    use ferrite_client::cockpit::ServerRestart;
     let clock = ferrite_core::clock::ThreadFixture::install(chrono::Local::now());
     let harness = start("restart-lost");
     let mut window = cockpit(&harness);
@@ -5413,7 +5413,7 @@ fn a_restart_not_back_in_time_reads_failed_until_it_is() {
     pump_until(&mut window, |window| {
         matches!(
             window.server(here),
-            Some(ferrite_core::cockpit::ServerState::Attached { .. })
+            Some(ferrite_client::cockpit::ServerState::Attached { .. })
         )
     });
 

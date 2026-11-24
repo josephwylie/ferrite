@@ -54,7 +54,7 @@ impl std::fmt::Display for ThreadId {
 pub struct MachineId(u32);
 
 impl MachineId {
-    pub(crate) fn mint() -> Self {
+    pub fn mint() -> Self {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }
@@ -75,7 +75,7 @@ pub struct ThreadKey {
 }
 
 impl ThreadKey {
-    pub(crate) fn new(machine: MachineId, thread: ThreadId) -> Self {
+    pub fn new(machine: MachineId, thread: ThreadId) -> Self {
         Self { machine, thread }
     }
 
@@ -115,7 +115,7 @@ pub struct ProjectKey {
 }
 
 impl ProjectKey {
-    pub(crate) fn new(machine: MachineId, project: ProjectId) -> Self {
+    pub fn new(machine: MachineId, project: ProjectId) -> Self {
         Self { machine, project }
     }
 

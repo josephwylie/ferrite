@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/ferrite-core",
+    "crates/ferrite-client",
     "crates/ferrite-server",
     "crates/ferrite",
     "crates/ferrite-ui",

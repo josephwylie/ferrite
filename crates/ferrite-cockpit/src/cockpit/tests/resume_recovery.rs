@@ -9,7 +9,7 @@ const PROMPT: &str = "carry on from where we stopped";
 
 struct Meter;
 
-impl ferrite_core::cockpit::RssSampler for Meter {
+impl ferrite_client::cockpit::RssSampler for Meter {
     fn sample(&mut self, _: ThreadId, _: Option<u32>) -> Option<u64> {
         Some(u64::MAX)
     }

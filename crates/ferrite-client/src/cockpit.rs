@@ -16,21 +16,21 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
-use crate::activity::{AgentKey, DecisionHandle, Subject};
-pub use crate::engine::{
+use ferrite_core::activity::{AgentKey, DecisionHandle, Subject};
+pub use ferrite_core::engine::{
     title_from_prompt, Admission, AgentLaunch, Engine, HistoryDirection, Preparation,
     ProviderChoice, RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
 };
-use crate::notifications::{DecisionNoticeId, NoticeId, Notifications};
-use crate::protocol::{
+use ferrite_core::notifications::{DecisionNoticeId, NoticeId, Notifications};
+use ferrite_core::protocol::{
     Done, ErrorCode, NoticeAction, Op, ProjectAction, ServerMessage, When, WireError,
 };
-use crate::roster::{DraftId, PaneIdentity, Roster};
-use crate::store::{LoadError, Provider, Store};
-use crate::transcript::Input;
-use crate::workspace::registry::{ProjectId, Registry};
-use crate::workspace::WorkspaceChoice;
-use crate::{
+use ferrite_core::roster::{DraftId, PaneIdentity, Roster};
+use ferrite_core::store::{LoadError, Provider, Store};
+use ferrite_core::transcript::Input;
+use ferrite_core::workspace::registry::{ProjectId, Registry};
+use ferrite_core::workspace::WorkspaceChoice;
+use ferrite_core::{
     Decision, DecisionAnswer, MachineId, MachineKey, ModelInfo, ProjectKey, SavedThread, ThreadId,
     ThreadKey,
 };
@@ -51,13 +51,13 @@ mod shared;
 
 /// What changed for one of the window's Panes in a frame, its Thread named
 /// by its key.
-pub type PaneUpdate = crate::engine::PaneUpdate<ThreadKey>;
+pub type PaneUpdate = ferrite_core::engine::PaneUpdate<ThreadKey>;
 /// A draft's first send, done: the Thread it became, by its key.
-pub type Bootstrapped = crate::engine::Bootstrapped<ThreadKey>;
+pub type Bootstrapped = ferrite_core::engine::Bootstrapped<ThreadKey>;
 /// A first send settled by `pump`, its Thread named by its key.
-pub type BootstrapResult = crate::engine::BootstrapResult<ThreadKey>;
+pub type BootstrapResult = ferrite_core::engine::BootstrapResult<ThreadKey>;
 /// A Session the watchdog replaced, its Thread named by its key.
-pub type Restart = crate::engine::Restart<ThreadKey>;
+pub type Restart = ferrite_core::engine::Restart<ThreadKey>;
 
 /// One window's hold on every machine it holds (ADR 0045): each machine's
 /// link and what its Engine said (`HeldMachine`), and what exists once per
@@ -98,10 +98,10 @@ pub struct Cockpit {
     /// answered in place of its CLI. Empty outside fixtures.
     forge_fixture: HashMap<PathBuf, ferrite_reviewr::forge::PrView>,
     /// A fixture world's pull requests read by number, and its lists.
-    forge_numbered: HashMap<(PathBuf, u64), crate::protocol::ReviewPullRequest>,
+    forge_numbered: HashMap<(PathBuf, u64), ferrite_core::protocol::ReviewPullRequest>,
     forge_diffs: HashMap<(PathBuf, u64), Vec<ferrite_reviewr::ferrite::FileSides>>,
     forge_lists:
-        HashMap<(PathBuf, crate::protocol::WirePrFilter), crate::protocol::ReviewPullRequests>,
+        HashMap<(PathBuf, ferrite_core::protocol::WirePrFilter), ferrite_core::protocol::ReviewPullRequests>,
     /// The checkouts whose whole-PR reads wait for a test's answer
     /// (`fixture_hold_pr_reads`), and the reads waiting.
     forge_held: std::collections::HashSet<PathBuf>,
@@ -150,7 +150,7 @@ struct Said {
     bootstrap_results: Vec<BootstrapResult>,
     /// The browser messages, each with the Thread its page is of.
     browser: Vec<(ThreadKey, ServerMessage)>,
-    allowance_warnings: Vec<crate::providers::limits::AllowanceWarning>,
+    allowance_warnings: Vec<ferrite_core::providers::limits::AllowanceWarning>,
     /// What API callers asked of the windows, oldest first.
     asked: Vec<Asked>,
 }
@@ -341,7 +341,7 @@ impl Cockpit {
         self.visible_subjects.retain(|key, _| !gone(key));
         self.composing.retain(|key| !gone(key));
         self.said.browser.retain(|(key, _)| !gone(key));
-        crate::doorbell::ring();
+        ferrite_core::doorbell::ring();
     }
 
     /// Every machine the window holds, in the order it took them.
@@ -463,15 +463,15 @@ impl Cockpit {
     // and is answered through its `Ask` by the pump, so the window's thread
     // never waits on the Server for its pages.
 
-    pub fn browser_attach(&mut self, thread: ThreadKey) -> Ask<crate::browser::State> {
+    pub fn browser_attach(&mut self, thread: ThreadKey) -> Ask<ferrite_core::browser::State> {
         self.browser_op(thread, |thread| Op::BrowserAttach { thread })
     }
 
     pub fn browser(
         &mut self,
         thread: ThreadKey,
-        action: crate::browser::Action,
-    ) -> Ask<crate::browser::State> {
+        action: ferrite_core::browser::Action,
+    ) -> Ask<ferrite_core::browser::State> {
         self.browser_op(thread, |thread| Op::Browser { thread, action })
     }
 
@@ -479,9 +479,9 @@ impl Cockpit {
         &mut self,
         key: ThreadKey,
         op: impl FnOnce(ThreadId) -> Op,
-    ) -> Ask<crate::browser::State> {
+    ) -> Ask<ferrite_core::browser::State> {
         if self.browser_fixture {
-            return Ask::answered(Ok(crate::browser::State::default()));
+            return Ask::answered(Ok(ferrite_core::browser::State::default()));
         }
         self.browser_ask(key, op, |done| match done {
             Some(Done::Browser { state }) => Ok(state),
@@ -516,11 +516,11 @@ impl Cockpit {
     pub fn browser_capture(
         &mut self,
         thread: ThreadKey,
-        owner: crate::browser::Owner,
-        lease: crate::browser::Lease,
-        capture: crate::browser_annotations::Capture,
-        png: Option<crate::protocol::WirePng>,
-    ) -> Ask<crate::browser_annotations::Annotation> {
+        owner: ferrite_core::browser::Owner,
+        lease: ferrite_core::browser::Lease,
+        capture: ferrite_core::browser_annotations::Capture,
+        png: Option<ferrite_core::protocol::WirePng>,
+    ) -> Ask<ferrite_core::browser_annotations::Annotation> {
         match self
             .remote_of(thread)
             .and_then(|remote| remote.browser_capture(thread.thread(), owner, lease, capture, png))
@@ -535,7 +535,7 @@ impl Cockpit {
     pub fn browser_annotation_image(
         &mut self,
         thread: ThreadKey,
-        annotation: crate::browser_annotations::Annotation,
+        annotation: ferrite_core::browser_annotations::Annotation,
     ) -> Ask<PathBuf> {
         let Some((machine, thread)) = self.at_mut(thread) else {
             return Ask::answered(Err(gone().into()));
@@ -571,10 +571,10 @@ impl Cockpit {
     pub fn browser_protect(
         &mut self,
         thread: ThreadKey,
-        owner: crate::browser::Owner,
-        document: crate::browser::Document,
-        protection: crate::browser::Protection,
-    ) -> Ask<crate::browser::Lease> {
+        owner: ferrite_core::browser::Owner,
+        document: ferrite_core::browser::Document,
+        protection: ferrite_core::browser::Protection,
+    ) -> Ask<ferrite_core::browser::Lease> {
         self.browser_ask(
             thread,
             |thread| Op::BrowserProtect {
@@ -595,8 +595,8 @@ impl Cockpit {
     pub fn browser_release(
         &mut self,
         thread: ThreadKey,
-        owner: crate::browser::Owner,
-        lease: crate::browser::Lease,
+        owner: ferrite_core::browser::Owner,
+        lease: ferrite_core::browser::Lease,
     ) {
         self.browser_tell(thread, |thread| Op::BrowserRelease {
             thread,
@@ -608,9 +608,9 @@ impl Cockpit {
     pub fn browser_reclaim(
         &mut self,
         thread: ThreadKey,
-        owner: crate::browser::Owner,
-        document: crate::browser::Document,
-    ) -> Ask<Option<crate::browser::Lease>> {
+        owner: ferrite_core::browser::Owner,
+        document: ferrite_core::browser::Document,
+    ) -> Ask<Option<ferrite_core::browser::Lease>> {
         self.browser_ask(
             thread,
             |thread| Op::BrowserReclaim {
@@ -630,10 +630,10 @@ impl Cockpit {
     pub fn browser_reclaimed(
         &mut self,
         thread: ThreadKey,
-        owner: crate::browser::Owner,
-        lease: crate::browser::Lease,
+        owner: ferrite_core::browser::Owner,
+        lease: ferrite_core::browser::Lease,
         released: bool,
-    ) -> Ask<crate::browser::State> {
+    ) -> Ask<ferrite_core::browser::State> {
         self.browser_op(thread, |thread| Op::BrowserReclaimed {
             thread,
             owner,
@@ -645,9 +645,9 @@ impl Cockpit {
     pub fn browser_page(
         &mut self,
         thread: ThreadKey,
-        owner: crate::browser::Owner,
-        page: crate::browser::PageState,
-    ) -> Ask<crate::browser::State> {
+        owner: ferrite_core::browser::Owner,
+        page: ferrite_core::browser::PageState,
+    ) -> Ask<ferrite_core::browser::State> {
         self.browser_op(thread, |thread| Op::BrowserPage {
             thread,
             owner,
@@ -660,8 +660,8 @@ impl Cockpit {
         request: u64,
         boot_id: String,
         thread: ThreadKey,
-        owner: crate::browser::Owner,
-        document: crate::browser::Document,
+        owner: ferrite_core::browser::Owner,
+        document: ferrite_core::browser::Document,
         revision: u64,
     ) -> Ask<u64> {
         match self.remote_of(thread).and_then(|remote| {
@@ -677,13 +677,13 @@ impl Cockpit {
         request: u64,
         boot_id: Option<String>,
         thread: ThreadKey,
-        owner: crate::browser::Owner,
-        document: crate::browser::Document,
+        owner: ferrite_core::browser::Owner,
+        document: ferrite_core::browser::Document,
         revision: u64,
-        outcome: crate::browser::Outcome,
+        outcome: ferrite_core::browser::Outcome,
     ) {
         if let Ok(remote) = self.remote_of(thread) {
-            remote.say(&crate::protocol::ClientMessage::BrowserReply {
+            remote.say(&ferrite_core::protocol::ClientMessage::BrowserReply {
                 request,
                 boot_id,
                 thread: thread.thread(),
@@ -698,8 +698,8 @@ impl Cockpit {
     pub fn browser_settled(
         &mut self,
         thread: ThreadKey,
-        owner: crate::browser::Owner,
-        document: crate::browser::Document,
+        owner: ferrite_core::browser::Owner,
+        document: ferrite_core::browser::Document,
         revision: u64,
     ) {
         self.browser_tell(thread, |thread| Op::BrowserSettled {
@@ -713,8 +713,8 @@ impl Cockpit {
     pub fn browser_input(
         &mut self,
         thread: ThreadKey,
-        owner: crate::browser::Owner,
-        document: crate::browser::Document,
+        owner: ferrite_core::browser::Owner,
+        document: ferrite_core::browser::Document,
     ) -> Ask<u64> {
         self.browser_ask(
             thread,
@@ -737,7 +737,7 @@ impl Cockpit {
     #[cfg(any(test, feature = "test-support"))]
     pub fn wait_for<T>(&mut self, mut ask: Ask<T>) -> io::Result<T> {
         let mut answer = None;
-        crate::doorbell::until("an ask was never answered", || {
+        ferrite_core::doorbell::until("an ask was never answered", || {
             self.receive();
             answer = ask.answer();
             answer.is_some()
@@ -761,7 +761,7 @@ impl Cockpit {
     }
 
     /// The bridge `machine` is reached through; `None` for this computer.
-    pub fn bridge(&self, machine: MachineId) -> Option<&std::sync::Arc<crate::machine::Bridge>> {
+    pub fn bridge(&self, machine: MachineId) -> Option<&std::sync::Arc<ferrite_core::machine::Bridge>> {
         match &self.machines.get(&machine)?.link {
             Link::InProcess(_) => None,
             Link::Server(server) => server.bridge(),
@@ -846,7 +846,7 @@ impl Cockpit {
             None => Err(gone()),
         };
         self.receive_from(machine);
-        crate::doorbell::ring();
+        ferrite_core::doorbell::ring();
         executed
     }
 
@@ -867,7 +867,7 @@ impl Cockpit {
             Link::InProcess(_) => said(self.act_at(machine, op)),
             Link::Server(remote) => {
                 remote.tell(op);
-                crate::doorbell::ring();
+                ferrite_core::doorbell::ring();
             }
         }
     }
@@ -895,7 +895,7 @@ impl Cockpit {
         match self.machines.get_mut(&machine).map(|held| &mut held.link) {
             Some(Link::Server(remote)) => {
                 let ask = remote.ask_act(op, read);
-                crate::doorbell::ring();
+                ferrite_core::doorbell::ring();
                 ask
             }
             _ => Ask::answered(read(self.act_at(machine, op))),
@@ -920,7 +920,7 @@ impl Cockpit {
                     let _ = done.send((follow, answer.is_ok()));
                     answer
                 });
-                crate::doorbell::ring();
+                ferrite_core::doorbell::ring();
                 ask
             }
             _ => {
@@ -1018,7 +1018,7 @@ impl Cockpit {
     /// sent.
     fn receive_fixture(&mut self, message: ServerMessage) {
         // It rings as a Server's message does (ADR 0041).
-        crate::doorbell::ring();
+        ferrite_core::doorbell::ring();
         self.arrive(self.first(), vec![remote::Arrival::Message(message)]);
     }
 
@@ -1047,7 +1047,7 @@ impl Cockpit {
     /// while it is at work and for `UNWATCH_AFTER` after (ADR 0032; F-A2).
     pub fn draws_transcripts(&mut self, threads: impl IntoIterator<Item = ThreadKey>) {
         let threads: Vec<ThreadKey> = threads.into_iter().collect();
-        let at = crate::clock::instant();
+        let at = ferrite_core::clock::instant();
         for machine in self.machines.values_mut() {
             let drawn = threads
                 .iter()
@@ -1095,7 +1095,7 @@ impl Cockpit {
         };
         // The pump tells the Engine on its next beat (ADR 0041).
         if changed {
-            crate::doorbell::ring();
+            ferrite_core::doorbell::ring();
         }
     }
 
@@ -1179,7 +1179,7 @@ impl Cockpit {
         machine: MachineId,
         roots: Vec<(Provider, PathBuf)>,
         cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
+    ) -> Option<Receiver<io::Result<Vec<ferrite_core::import::Candidate>>>> {
         match &mut self.machines.get_mut(&machine)?.link {
             Link::InProcess(engine) => engine.discover_sessions(roots, cap),
             Link::Server(server) => server.discovery().discover_sessions(roots, cap),
@@ -1249,7 +1249,7 @@ impl Cockpit {
         self.window_active = active;
         // The pump tells the Engine which Thread the operator is looking
         // at on its next beat (ADR 0041).
-        crate::doorbell::ring();
+        ferrite_core::doorbell::ring();
         self.acknowledge_seen()
     }
 
@@ -1362,7 +1362,7 @@ fn complete_draft(roster: &mut Roster, draft: DraftId, thread: ThreadKey) -> Boo
 fn read_here<T: Send + 'static>(
     read: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Receiver<io::Result<T>> {
-    let (answer, answered) = crate::doorbell::channel();
+    let (answer, answered) = ferrite_core::doorbell::channel();
     std::thread::spawn(move || {
         let _ = answer.send(read().map_err(io::Error::other));
     });
@@ -1373,11 +1373,11 @@ fn read_here<T: Send + 'static>(
 /// the window waits on it until a test answers.
 pub struct HeldRead {
     pub path: PathBuf,
-    answer: crate::doorbell::Sender<io::Result<crate::protocol::ReviewPullRequest>>,
+    answer: ferrite_core::doorbell::Sender<io::Result<ferrite_core::protocol::ReviewPullRequest>>,
 }
 
 impl HeldRead {
-    pub fn answer(self, read: crate::protocol::ReviewPullRequest) {
+    pub fn answer(self, read: ferrite_core::protocol::ReviewPullRequest) {
         let _ = self.answer.send(Ok(read));
     }
 
@@ -1403,7 +1403,7 @@ fn changed(executed: Result<Option<Done>, WireError>) -> io::Result<bool> {
 /// `notices` message.
 fn notice(executed: Executed) {
     if let Err(error) = executed {
-        crate::log!("a notice act did not reach the server: {}", error.message);
+        ferrite_core::log!("a notice act did not reach the server: {}", error.message);
     }
 }
 
@@ -1415,9 +1415,7 @@ impl Cockpit {
     /// A UI test's park that fails: the Engine reports this Thread's park
     /// as refused.
     pub fn refuse_park(&mut self, thread: ThreadKey) {
-        self.in_process_of(thread)
-            .refuse_park
-            .insert(thread.thread());
+        self.in_process_of(thread).refuse_park(thread.thread());
     }
 }
 
@@ -1495,7 +1493,7 @@ impl Cockpit {
 mod parity {
     use std::fmt::Write;
 
-    use crate::activity::ActivityView;
+    use ferrite_core::activity::ActivityView;
 
     /// What a window could read of one Thread, as text.
     macro_rules! seen {
@@ -1590,7 +1588,7 @@ impl Cockpit {
     }
 
     /// The Project `key` names, while its machine lists it.
-    pub fn project(&self, key: ProjectKey) -> Option<&crate::workspace::registry::Project> {
+    pub fn project(&self, key: ProjectKey) -> Option<&ferrite_core::workspace::registry::Project> {
         self.shared(key.machine()).registry.project(key.project())
     }
 
@@ -1706,7 +1704,7 @@ impl Cockpit {
         // Nothing follows the answer but its log line.
         let _ = self.ask_at(machine, Op::CliReplaced { provider }, move |reply| {
             if let Err(error) = &reply {
-                crate::log!(
+                ferrite_core::log!(
                     "the server did not hear of the new {provider} CLI: {}",
                     error.message
                 );
@@ -1907,7 +1905,7 @@ impl Cockpit {
         &mut self,
         key: ThreadKey,
         query: &str,
-    ) -> io::Result<Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>> {
+    ) -> io::Result<Receiver<io::Result<Vec<ferrite_core::providers::FileSuggestion>>>> {
         let (machine, thread) = self.at_mut(key).ok_or_else(|| io::Error::from(gone()))?;
         let asked = match &mut machine.link {
             Link::InProcess(engine) => engine.search_files(thread, query),
@@ -1921,13 +1919,13 @@ impl Cockpit {
         &mut self,
         machine: MachineId,
         path: PathBuf,
-    ) -> io::Result<crate::attachment_transfer::Upload> {
+    ) -> io::Result<ferrite_core::attachment_transfer::Upload> {
         match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.upload_attachment(path),
             Link::InProcess(engine) => {
                 let store = engine.browser_store().dir().to_path_buf();
-                Ok(crate::attachment_transfer::upload(path, move || {
-                    let mut session = crate::attachment_transfer::Session::new(store);
+                Ok(ferrite_core::attachment_transfer::upload(path, move || {
+                    let mut session = ferrite_core::attachment_transfer::Session::new(store);
                     Ok(Box::new(move |request| session.execute(request)))
                 }))
             }
@@ -1941,8 +1939,8 @@ impl Cockpit {
             Link::InProcess(engine) => {
                 let store = engine.browser_store().dir().to_path_buf();
                 Ok(read_here(move || {
-                    let mut session = crate::attachment_transfer::Session::new(store);
-                    crate::attachment_transfer::read(path, |request| session.execute(request)).map_err(|error| error.to_string())
+                    let mut session = ferrite_core::attachment_transfer::Session::new(store);
+                    ferrite_core::attachment_transfer::read(path, |request| session.execute(request)).map_err(|error| error.to_string())
                 }))
             }
         }
@@ -1952,16 +1950,16 @@ impl Cockpit {
         &mut self,
         machine: MachineId,
         root: &Path,
-        scope: crate::changes::Scope,
-    ) -> io::Result<Receiver<io::Result<crate::changes::Snapshot>>> {
-        let request = crate::changes::Request::Read {
+        scope: ferrite_core::changes::Scope,
+    ) -> io::Result<Receiver<io::Result<ferrite_core::changes::Snapshot>>> {
+        let request = ferrite_core::changes::Request::Read {
             root: root.to_path_buf(),
             scope,
         };
         match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.changes(request),
             Link::InProcess(_) => Ok(read_here(move || {
-                crate::changes::execute(request)?.snapshot().ok_or_else(|| "Missing Changes snapshot".into())
+                ferrite_core::changes::execute(request)?.snapshot().ok_or_else(|| "Missing Changes snapshot".into())
             })),
         }
     }
@@ -1973,14 +1971,14 @@ impl Cockpit {
         path: String,
         staged: bool,
     ) -> io::Result<Receiver<io::Result<()>>> {
-        let request = crate::changes::Request::SetStaged {
+        let request = ferrite_core::changes::Request::SetStaged {
             root: root.to_path_buf(),
             path,
             staged,
         };
         match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.set_file_staged(request),
-            Link::InProcess(_) => Ok(read_here(move || crate::changes::execute(request).map(|_| ()))),
+            Link::InProcess(_) => Ok(read_here(move || ferrite_core::changes::execute(request).map(|_| ()))),
         }
     }
 
@@ -1988,12 +1986,12 @@ impl Cockpit {
     pub fn file_operation(
         &mut self,
         machine: MachineId,
-        request: crate::file_operations::Request,
-    ) -> io::Result<Receiver<io::Result<crate::file_operations::Reply>>> {
+        request: ferrite_core::file_operations::Request,
+    ) -> io::Result<Receiver<io::Result<ferrite_core::file_operations::Reply>>> {
         match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.file_operation(request),
             Link::InProcess(_) => Ok(read_here(move || {
-                crate::file_operations::execute(request).map_err(|error| error.to_string())
+                ferrite_core::file_operations::execute(request).map_err(|error| error.to_string())
             })),
         }
     }
@@ -2002,7 +2000,7 @@ impl Cockpit {
     /// carries a tree's ops there (ADR 0048), so a long copy holds up
     /// neither the window nor its acts. Only a Server answers, as
     /// `list_dir`.
-    pub fn tree(&mut self, machine: MachineId) -> io::Result<crate::tree::Connect> {
+    pub fn tree(&mut self, machine: MachineId) -> io::Result<ferrite_core::tree::Connect> {
         self.held_mut(machine)?.remote()?.tree()
     }
 
@@ -2014,7 +2012,7 @@ impl Cockpit {
         &mut self,
         machine: MachineId,
         path: &Path,
-    ) -> io::Result<Receiver<io::Result<crate::workspace::Listing>>> {
+    ) -> io::Result<Receiver<io::Result<ferrite_core::workspace::Listing>>> {
         self.held_mut(machine)?.remote()?.list_dir(path)
     }
 
@@ -2024,7 +2022,7 @@ impl Cockpit {
     pub fn list_repo(
         &mut self,
         project: ProjectKey,
-    ) -> io::Result<Receiver<io::Result<crate::workspace::RepoListing>>> {
+    ) -> io::Result<Receiver<io::Result<ferrite_core::workspace::RepoListing>>> {
         self.machines
             .get_mut(&project.machine())
             .ok_or_else(|| io::Error::from(gone()))?
@@ -2142,9 +2140,9 @@ impl Cockpit {
         machine: MachineId,
         path: &Path,
         number: Option<u64>,
-    ) -> io::Result<Receiver<io::Result<crate::protocol::ReviewPullRequest>>> {
+    ) -> io::Result<Receiver<io::Result<ferrite_core::protocol::ReviewPullRequest>>> {
         if self.forge_held.contains(path) {
-            let (answer, answered) = crate::doorbell::channel();
+            let (answer, answered) = ferrite_core::doorbell::channel();
             self.held_reads.push(HeldRead {
                 path: path.to_path_buf(),
                 answer,
@@ -2164,7 +2162,7 @@ impl Cockpit {
                 ferrite_reviewr::forge::PrView::NoPr
             };
             return Ok(read_here(move || {
-                Ok(crate::protocol::ReviewPullRequest::of(view, "PR"))
+                Ok(ferrite_core::protocol::ReviewPullRequest::of(view, "PR"))
             }));
         }
         match &mut self.held_mut(machine)?.link {
@@ -2178,7 +2176,7 @@ impl Cockpit {
                         }
                         None => ferrite_reviewr::ferrite::pull_request(&path, &forge),
                     };
-                    Ok(crate::protocol::ReviewPullRequest::of(view, noun))
+                    Ok(ferrite_core::protocol::ReviewPullRequest::of(view, noun))
                 }))
             }
         }
@@ -2190,8 +2188,8 @@ impl Cockpit {
         &mut self,
         machine: MachineId,
         path: &Path,
-        filter: crate::protocol::WirePrFilter,
-    ) -> io::Result<Receiver<io::Result<crate::protocol::ReviewPullRequests>>> {
+        filter: ferrite_core::protocol::WirePrFilter,
+    ) -> io::Result<Receiver<io::Result<ferrite_core::protocol::ReviewPullRequests>>> {
         if let Some(list) = self.forge_lists.get(&(path.to_path_buf(), filter)).cloned() {
             return Ok(read_here(move || Ok(list)));
         }
@@ -2201,7 +2199,7 @@ impl Cockpit {
                 let (path, forge) = (path.to_path_buf(), self.forge.clone());
                 Ok(read_here(move || {
                     let list = ferrite_reviewr::forge::list(&path, &forge, filter.into());
-                    Ok(crate::protocol::ReviewPullRequests::of(list, "PR"))
+                    Ok(ferrite_core::protocol::ReviewPullRequests::of(list, "PR"))
                 }))
             }
         }
@@ -2268,16 +2266,16 @@ impl Cockpit {
         &mut self,
         machine: MachineId,
         path: &Path,
-    ) -> io::Result<Receiver<io::Result<Option<crate::workspace::PullRequest>>>> {
+    ) -> io::Result<Receiver<io::Result<Option<ferrite_core::workspace::PullRequest>>>> {
         if let Some(view) = self.forge_fixture.get(path) {
-            let reading = crate::workspace::PullRequest::of_view(view);
+            let reading = ferrite_core::workspace::PullRequest::of_view(view);
             return Ok(read_here(move || Ok(reading)));
         }
         match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.pull_request(path),
             Link::InProcess(_) => {
                 let path = path.to_path_buf();
-                Ok(read_here(move || Ok(crate::workspace::pull_request(&path))))
+                Ok(read_here(move || Ok(ferrite_core::workspace::pull_request(&path))))
             }
         }
     }
@@ -2326,7 +2324,7 @@ impl Cockpit {
     pub fn cancel_delegate(
         &mut self,
         key: ThreadKey,
-        delegate: crate::delegate::DelegateId,
+        delegate: ferrite_core::delegate::DelegateId,
     ) -> io::Result<Receiver<io::Result<()>>> {
         let (machine, thread) = self.at_mut(key).ok_or_else(|| io::Error::from(gone()))?;
         let op = Op::CancelDelegate { thread, delegate };
@@ -2344,9 +2342,9 @@ impl Cockpit {
     pub fn github_names(
         &mut self,
         machine: MachineId,
-        ask: crate::protocol::GitHubAsk,
+        ask: ferrite_core::protocol::GitHubAsk,
     ) -> io::Result<Receiver<io::Result<Vec<String>>>> {
-        use crate::protocol::GitHubAsk;
+        use ferrite_core::protocol::GitHubAsk;
         if let Some(names) = self
             .factory_fixture
             .as_ref()
@@ -2357,8 +2355,8 @@ impl Cockpit {
         match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.github_names(ask),
             Link::InProcess(_) => Ok(read_here(move || {
-                use crate::server::github::GitHub;
-                let gh = crate::server::github::Gh;
+                use ferrite_core::server::github::GitHub;
+                let gh = ferrite_core::server::github::Gh;
                 match ask {
                     GitHubAsk::Repositories => gh.repositories(),
                     GitHubAsk::Labels { repository } => gh.labels(&repository),
@@ -2370,7 +2368,7 @@ impl Cockpit {
 
     /// Ask `thread`'s Session to do `action`: an `Err` answer says why
     /// not. The window never waits for it.
-    pub fn control(&mut self, thread: ThreadKey, action: crate::SessionControl) -> Ask<()> {
+    pub fn control(&mut self, thread: ThreadKey, action: ferrite_core::SessionControl) -> Ask<()> {
         self.ask_on(
             thread,
             |thread| Op::Control {
@@ -2423,7 +2421,7 @@ impl Cockpit {
 
     /// Whose `thread` is when not the operator's (ADR 0037), open or
     /// parked: a Worker's Task, a Coordinator's Factory.
-    pub fn owner(&self, thread: ThreadKey) -> Option<crate::ThreadOwner> {
+    pub fn owner(&self, thread: ThreadKey) -> Option<ferrite_core::ThreadOwner> {
         match self.thread(thread) {
             Some(open) => open.owner().cloned(),
             None => {
@@ -2454,7 +2452,7 @@ impl Cockpit {
         listed: Vec<PathBuf>,
         taken_at: Instant,
     ) -> bool {
-        let age = crate::clock::instant().saturating_duration_since(taken_at);
+        let age = ferrite_core::clock::instant().saturating_duration_since(taken_at);
         changed(self.act_on(thread, |thread| Op::WorktreesListed {
             thread,
             listed,
@@ -2465,7 +2463,7 @@ impl Cockpit {
 
     /// A Thread's header: a parked one's from its published row; an open
     /// one's off its log's header line, on this computer only.
-    pub fn peek(&self, thread: ThreadKey) -> Result<crate::store::ThreadMeta, LoadError> {
+    pub fn peek(&self, thread: ThreadKey) -> Result<ferrite_core::store::ThreadMeta, LoadError> {
         let Some((machine, thread)) = self.at(thread) else {
             return Err(LoadError::Io(gone().into()));
         };
@@ -2723,8 +2721,8 @@ impl Cockpit {
         current_draft: &str,
     ) -> Ask<Option<String>> {
         let direction = match direction {
-            HistoryDirection::Older => crate::protocol::WireDirection::Older,
-            HistoryDirection::Newer => crate::protocol::WireDirection::Newer,
+            HistoryDirection::Older => ferrite_core::protocol::WireDirection::Older,
+            HistoryDirection::Newer => ferrite_core::protocol::WireDirection::Newer,
         };
         self.ask_on(
             thread,
@@ -2758,7 +2756,7 @@ impl Cockpit {
     /// Settings changed on disk: whether completed turns predict a
     /// follow-up, where an allowance warns, and the self-hosted forges a
     /// review reads, among them.
-    pub fn settings_changed(&mut self, settings: &crate::settings::Settings) {
+    pub fn settings_changed(&mut self, settings: &ferrite_core::settings::Settings) {
         self.forge = settings.forge_hosts.review_config();
         let machines: Vec<MachineId> = self.machines.keys().copied().collect();
         for machine in machines {
@@ -2776,8 +2774,8 @@ impl Cockpit {
     pub fn server_defaults(
         &mut self,
         machine: MachineId,
-        set: Option<crate::settings::ServerDefaults>,
-    ) -> io::Result<Receiver<io::Result<crate::settings::ServerDefaults>>> {
+        set: Option<ferrite_core::settings::ServerDefaults>,
+    ) -> io::Result<Receiver<io::Result<ferrite_core::settings::ServerDefaults>>> {
         self.held_mut(machine)?.remote()?.server_defaults(set)
     }
 
@@ -2787,12 +2785,12 @@ impl Cockpit {
     pub fn cli(
         &mut self,
         machine: MachineId,
-        action: crate::protocol::CliAction,
+        action: ferrite_core::protocol::CliAction,
     ) -> io::Result<Receiver<io::Result<Done>>> {
         match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.cli(action),
             Link::InProcess(_) => Ok(read_here(move || {
-                crate::server::clis::perform(&crate::server::clis::Host, &action)
+                ferrite_core::server::clis::perform(&ferrite_core::server::clis::Host, &action)
                     .map_err(|error| error.message)
             })),
         }
@@ -2810,7 +2808,7 @@ impl Cockpit {
         &self,
         machine: MachineId,
         provider: Provider,
-    ) -> crate::transcript::RateLimits {
+    ) -> ferrite_core::transcript::RateLimits {
         self.shared(machine).account_limits(provider)
     }
 
@@ -2838,7 +2836,7 @@ impl Cockpit {
     }
 
     /// The allowance warnings due since the last take, oldest first.
-    pub fn take_allowance_warnings(&mut self) -> Vec<crate::providers::limits::AllowanceWarning> {
+    pub fn take_allowance_warnings(&mut self) -> Vec<ferrite_core::providers::limits::AllowanceWarning> {
         std::mem::take(&mut self.said.allowance_warnings)
     }
 
@@ -2854,7 +2852,7 @@ impl Cockpit {
 
     /// Every Factory's Tasks on `machine`, as its Server last said them
     /// (ADR 0037).
-    pub fn factory(&self, machine: MachineId) -> OnMachine<'_, crate::factory::Board> {
+    pub fn factory(&self, machine: MachineId) -> OnMachine<'_, ferrite_core::factory::Board> {
         self.reading(machine, |shared| &shared.factory)
     }
 
@@ -2870,7 +2868,7 @@ impl Cockpit {
     pub fn task(
         &mut self,
         machine: MachineId,
-        action: crate::protocol::TaskAction,
+        action: ferrite_core::protocol::TaskAction,
     ) -> io::Result<Option<Done>> {
         self.factory_ask(machine, Op::Task { action })
     }
@@ -2880,7 +2878,7 @@ impl Cockpit {
     pub fn workflow(
         &mut self,
         machine: MachineId,
-        action: crate::protocol::WorkflowAction,
+        action: ferrite_core::protocol::WorkflowAction,
     ) -> io::Result<Option<Done>> {
         self.factory_ask(machine, Op::Workflow { action })
     }
@@ -2889,7 +2887,7 @@ impl Cockpit {
     pub fn coordinator(
         &mut self,
         machine: MachineId,
-        action: crate::protocol::CoordinatorAction,
+        action: ferrite_core::protocol::CoordinatorAction,
     ) -> io::Result<Option<Done>> {
         self.factory_ask(machine, Op::Coordinator { action })
     }
@@ -2919,7 +2917,7 @@ impl Cockpit {
     /// The `window.*` actions every machine's Server handed this window
     /// since the last take, each by its machine and request;
     /// [`Self::driven`] answers it.
-    pub fn take_drives(&mut self) -> Vec<(MachineId, u64, crate::drive::Action)> {
+    pub fn take_drives(&mut self) -> Vec<(MachineId, u64, ferrite_core::drive::Action)> {
         self.machines
             .values_mut()
             .flat_map(|held| {
@@ -2935,14 +2933,14 @@ impl Cockpit {
         &mut self,
         machine: MachineId,
         request: u64,
-        answer: Result<crate::drive::Answer, String>,
+        answer: Result<ferrite_core::drive::Answer, String>,
     ) {
         if let Some(Link::Server(server)) = self.machines.get_mut(&machine).map(|held| &mut held.link) {
             let (ok, error) = match answer {
                 Ok(answer) => (Some(answer), None),
                 Err(error) => (None, Some(error)),
             };
-            server.say(&crate::protocol::ClientMessage::Driven { request, ok, error });
+            server.say(&ferrite_core::protocol::ClientMessage::Driven { request, ok, error });
         }
     }
 
@@ -2952,7 +2950,7 @@ impl Cockpit {
         machine: MachineId,
         provider: Provider,
         cwd: &std::path::Path,
-    ) -> Option<crate::providers::commands::Discovery> {
+    ) -> Option<ferrite_core::providers::commands::Discovery> {
         match &mut self.machines.get_mut(&machine)?.link {
             Link::InProcess(engine) => engine.discover_commands(provider, cwd),
             Link::Server(server) => server.discovery().discover_commands(provider, cwd),
@@ -2962,7 +2960,7 @@ impl Cockpit {
     /// `machine`'s provider's announced model rows, else the fallback
     /// catalog.
     pub fn model_catalog(&self, machine: MachineId, provider: Provider) -> Vec<ModelInfo> {
-        crate::providers::models::catalog(provider, &self.announced_models(machine, provider))
+        ferrite_core::providers::models::catalog(provider, &self.announced_models(machine, provider))
     }
 
     pub fn set_model(&mut self, thread: ThreadKey, model: Option<String>) -> Ask<()> {
@@ -3101,9 +3099,9 @@ impl Cockpit {
 
     /// A fixture world's PR watches for `thread` (ADR 0046), as the
     /// Server's watcher would have saved them.
-    pub fn fixture_pr_watch(&mut self, thread: ThreadKey, fact: crate::pr_watch::WatchFact) {
+    pub fn fixture_pr_watch(&mut self, thread: ThreadKey, fact: ferrite_core::pr_watch::WatchFact) {
         if let Err(error) = self.in_process_of(thread).set_pr_watch(thread.thread(), fact) {
-            crate::log!("thread {}: a fixture watch was not saved: {error}", thread.thread());
+            ferrite_core::log!("thread {}: a fixture watch was not saved: {error}", thread.thread());
         }
         // The digest it sends is left for the window's pump, which reads
         // the watch from it as a window of the Server does.
@@ -3115,16 +3113,16 @@ impl Cockpit {
     pub fn fixture_delegates(
         &mut self,
         thread: ThreadKey,
-        change: impl FnOnce(&mut crate::delegate::Delegates) -> bool,
+        change: impl FnOnce(&mut ferrite_core::delegate::Delegates) -> bool,
     ) {
         if let Err(error) = self.in_process_of(thread).amend_delegates(thread.thread(), change) {
-            crate::log!("thread {}: fixture Delegates were not saved: {error}", thread.thread());
+            ferrite_core::log!("thread {}: fixture Delegates were not saved: {error}", thread.thread());
         }
         self.receive_from(thread.machine());
     }
 
     /// A fixture world's `thread`, delegated from `from` (ADR 0047).
-    pub fn fixture_delegated_from(&mut self, thread: ThreadKey, from: crate::DelegatedFrom) {
+    pub fn fixture_delegated_from(&mut self, thread: ThreadKey, from: ferrite_core::DelegatedFrom) {
         self.in_process_of(thread)
             .fixture_delegated_from(thread.thread(), from);
         self.receive_from(thread.machine());
@@ -3150,7 +3148,7 @@ impl Cockpit {
         &mut self,
         path: PathBuf,
         number: u64,
-        read: crate::protocol::ReviewPullRequest,
+        read: ferrite_core::protocol::ReviewPullRequest,
     ) {
         self.forge_numbered.insert((path, number), read);
     }
@@ -3160,8 +3158,8 @@ impl Cockpit {
     pub fn fixture_pr_list(
         &mut self,
         path: PathBuf,
-        filter: crate::protocol::WirePrFilter,
-        list: crate::protocol::ReviewPullRequests,
+        filter: ferrite_core::protocol::WirePrFilter,
+        list: ferrite_core::protocol::ReviewPullRequests,
     ) {
         self.forge_lists.insert((path, filter), list);
     }
@@ -3250,9 +3248,9 @@ impl Cockpit {
         &mut self,
         provider: Provider,
         workspace: WorkspaceChoice,
-        owner: crate::ThreadOwner,
+        owner: ferrite_core::ThreadOwner,
     ) -> io::Result<ThreadKey> {
-        let launch = crate::engine::Launch {
+        let launch = ferrite_core::engine::Launch {
             owner: Some(owner),
             ..Default::default()
         };
@@ -3263,14 +3261,14 @@ impl Cockpit {
     }
 
     /// A fixture world's Factory board, as a Server would say it.
-    pub fn fixture_factory(&mut self, board: crate::factory::Board) {
+    pub fn fixture_factory(&mut self, board: ferrite_core::factory::Board) {
         self.receive_fixture(ServerMessage::Factory { revision: 0, board });
     }
 
     /// A fixture world with a Factory of its own that answers Workflow
     /// asks as a Server's does, starting empty.
     pub fn fixture_live_factory(&mut self) {
-        let factory = crate::factory::Factory::in_memory();
+        let factory = ferrite_core::factory::Factory::in_memory();
         let board = factory.board();
         self.factory_fixture.get_or_insert_default().factory = Some(factory);
         self.receive_fixture(ServerMessage::Factory { revision: 0, board });
@@ -3288,7 +3286,7 @@ impl Cockpit {
         self.factory_fixture.get_or_insert_default().starts = true;
     }
 
-    pub fn fixture_task_asks(&self) -> &[crate::protocol::TaskAction] {
+    pub fn fixture_task_asks(&self) -> &[ferrite_core::protocol::TaskAction] {
         self.factory_fixture
             .as_ref()
             .and_then(|fixture| fixture.asks.as_deref())
@@ -3297,7 +3295,7 @@ impl Cockpit {
 
     /// A fixture world's Factory hears `command` as a Server's would
     /// (a GitHub read's answer, say), and the window is told the board.
-    pub fn fixture_factory_command(&mut self, command: crate::factory::Command) {
+    pub fn fixture_factory_command(&mut self, command: ferrite_core::factory::Command) {
         if let Some(board) = self
             .factory_fixture
             .as_mut()
@@ -3312,7 +3310,7 @@ impl Cockpit {
         self.receive_fixture(alert);
     }
 
-    pub fn fixture_notice(&mut self, thread: ThreadKey, outcome: crate::TurnOutcome) {
+    pub fn fixture_notice(&mut self, thread: ThreadKey, outcome: ferrite_core::TurnOutcome) {
         self.in_process_of(thread)
             .fixture_notice(thread.thread(), outcome);
         self.receive_from(thread.machine());
@@ -3333,7 +3331,7 @@ impl Cockpit {
 /// shows.
 fn said(executed: Executed) {
     if let Err(error) = executed {
-        crate::log!("the server refused an act: {}", error.message);
+        ferrite_core::log!("the server refused an act: {}", error.message);
     }
 }
 
@@ -3375,7 +3373,7 @@ pub enum Asked {
     Notification {
         title: String,
         body: Option<String>,
-        sound: Option<crate::sound::Sound>,
+        sound: Option<ferrite_core::sound::Sound>,
         important: bool,
     },
     /// A Task needs the operator, stopped or completed (ADR 0037): a
@@ -3383,7 +3381,7 @@ pub enum Asked {
     TaskAlert {
         project: ProjectKey,
         task: String,
-        status: crate::factory::Status,
+        status: ferrite_core::factory::Status,
         title: String,
         detail: Option<String>,
     },
@@ -3679,3 +3677,11 @@ impl Cockpit {
             .collect())
     }
 }
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+mod lifecycle_tests;
+#[cfg(test)]
+mod native_tests;

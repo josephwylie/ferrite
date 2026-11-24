@@ -2316,6 +2316,7 @@ name = "ferrite"
 version = "0.4.0"
 dependencies = [
  "ctor",
+ "ferrite-client",
  "ferrite-cockpit",
  "ferrite-core",
  "ferrite-frame",
@@ -2329,10 +2330,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrite-client"
+version = "0.4.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "ctor",
+ "dunce",
+ "ferrite-core",
+ "ferrite-reviewr",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ferrite-cockpit"
 version = "0.4.0"
 dependencies = [
  "ctor",
+ "ferrite-client",
  "ferrite-core",
  "ferrite-focus-notify",
  "ferrite-frame",
@@ -2409,6 +2426,7 @@ dependencies = [
  "base64 0.22.1",
  "cef",
  "ctor",
+ "ferrite-client",
  "ferrite-core",
  "ferrite-reviewr",
  "ferrite-ui",
@@ -2455,6 +2473,7 @@ dependencies = [
  "chrono",
  "ctor",
  "dunce",
+ "ferrite-client",
  "ferrite-core",
  "ferrite-reviewr",
  "futures-util",

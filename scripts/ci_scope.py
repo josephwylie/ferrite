@@ -79,9 +79,12 @@ def check_boundaries(packages: dict[str, Package]) -> None:
             raise ValueError(f"Required architectural boundary owner is missing: {source}")
     # Core draws nothing (ADR 0001), and `ferrited` runs where no window's
     # libraries are (ADR 0026).
-    for source in ("ferrite-core", "ferrite-server"):
+    for source in ("ferrite-core", "ferrite-client", "ferrite-server"):
         if source in packages:
             forbid(packages, source, lambda name: name == "gpui" or name.startswith("gpui-"), "dependencies")
+    # The Server holds no window model (ADR 0049); its tests drive one.
+    if "ferrite-server" in packages:
+        forbid(packages, "ferrite-server", lambda name: name == "ferrite-client", "runtime")
     forbid(packages, "ferrite-frame", lambda name: name == "ferrite-cockpit", "dependencies")
     for source in WINDOW_CHAIN:
         if source in packages:

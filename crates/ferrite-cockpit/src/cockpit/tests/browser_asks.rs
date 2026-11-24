@@ -1,11 +1,11 @@
 //! A Browser's asks of the Server never hold the window's thread (ADR
 //! 0041): what each costs the window, read from core's probe
-//! (`ferrite_core::cockpit::waits`), and a window whose Server never
+//! (`ferrite_client::cockpit::waits`), and a window whose Server never
 //! answers that keeps pumping and drawing until the ask times out.
 use super::machines::OnBox;
 use super::*;
 use ferrite_core::browser::{Action, State};
-use ferrite_core::cockpit::{waits, Attach, Endpoint, ServerState};
+use ferrite_client::cockpit::{waits, Attach, Endpoint, ServerState};
 use ferrite_core::machine::{Bridge, Dial, Tunnel};
 use ferrite_pane::visual::{engine::Visuals, web::fake::FakeEngine};
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -530,13 +530,13 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
     impl Spawner for Delayed {
         fn spawn(
             &mut self,
-            _: ferrite_core::cockpit::SpawnRequest,
+            _: ferrite_client::cockpit::SpawnRequest,
         ) -> std::io::Result<Box<dyn Session>> {
             panic!("use start")
         }
         fn start(
             &mut self,
-            _: ferrite_core::cockpit::SpawnRequest,
+            _: ferrite_client::cockpit::SpawnRequest,
         ) -> std::io::Result<SessionLifecycle> {
             let gate = self.gates.pop_front().expect("one start per submission");
             let sent = self.sent.clone();

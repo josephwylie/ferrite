@@ -71,7 +71,7 @@ enum Phase {
         started: std::time::Instant,
         permission:
             std::sync::mpsc::SyncSender<ferrite_pane::visual::browser_control::native::Permission>,
-        answer: ferrite_core::cockpit::Ask<u64>,
+        answer: ferrite_client::cockpit::Ask<u64>,
     },
     Running,
 }

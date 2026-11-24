@@ -13,7 +13,7 @@ pub(super) const WORDS: &str = "Please check the quoted passage";
 /// A Session grown past any limit: `Some(thread)`'s only, or every one's.
 struct Meter(Option<ThreadKey>);
 
-impl ferrite_core::cockpit::RssSampler for Meter {
+impl ferrite_client::cockpit::RssSampler for Meter {
     fn sample(&mut self, thread: ThreadId, _: Option<u32>) -> Option<u64> {
         Some(if self.0.is_none_or(|grown| grown.thread() == thread) {
             u64::MAX
@@ -280,7 +280,7 @@ fn an_unconfirmed_send_returns_the_draft_and_names_the_request(cx: &mut TestAppC
         let draft = view.panes[0]
             .composer
             .update(cx, |composer, cx| composer.take_draft(cx));
-        let admission = ferrite_core::cockpit::Admission::Unconfirmed("no reply".into());
+        let admission = ferrite_client::cockpit::Admission::Unconfirmed("no reply".into());
         assert!(!view.settle_send(thread, draft, admission, cx));
     });
     tick(cx);

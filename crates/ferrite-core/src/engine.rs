@@ -3,7 +3,7 @@
 //! queue, pending Decisions, Notices, the registry, and every
 //! policy — Handover, the memory watchdog, ending idle Sessions, the titler,
 //! suggestions, deferred finish. The Server owns one; a window reads it
-//! through its client, `cockpit::Cockpit`, and changes it only by its acts.
+//! through its client, `ferrite_client::cockpit::Cockpit`, and changes it only by its acts.
 //!
 //! What it shares of the Roster is which Threads are open, in the order
 //! they opened (`open_threads`). Focus and Drafts are each window's own.
@@ -41,6 +41,8 @@ use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
 mod announced;
 mod commands;
 mod history;
+#[cfg(any(test, feature = "test-support"))]
+mod probe;
 mod launch_args;
 mod parked;
 mod queue;
@@ -272,7 +274,7 @@ pub struct SubjectUpdate {
 }
 
 impl<T> PaneUpdate<T> {
-    pub(crate) fn new(thread: T) -> Self {
+    pub fn new(thread: T) -> Self {
         Self {
             thread,
             dirty: Vec::new(),
@@ -283,7 +285,7 @@ impl<T> PaneUpdate<T> {
         }
     }
 
-    pub(crate) fn absorb(&mut self, applied: ActivityUpdate, content_changed: bool) {
+    pub fn absorb(&mut self, applied: ActivityUpdate, content_changed: bool) {
         self.activity_changed |=
             !applied.changed.is_empty() || applied.attention_changed || applied.order_changed;
         self.redirects.extend(applied.redirects);
@@ -5544,7 +5546,7 @@ impl Engine {
 
     /// Read the parked Threads' rows on the caller's thread: an Engine its
     /// window pumps, which must list a park at once.
-    pub(crate) fn read_parked_in_place(&mut self) {
+    pub fn read_parked_in_place(&mut self) {
         self.parked_listing.read_in_place();
     }
 
@@ -6217,13 +6219,13 @@ fn resend_held(state: &mut Thread, suggestions_enabled: bool) -> Option<Update> 
 /// the last `CARRY_PAIRS` prompt/answer pairs, within `CARRY_CHARS`
 /// characters — enough to continue, never the whole log.
 const CARRY_PAIRS: usize = 12;
-const CARRY_CHARS: usize = 6_000;
+pub const CARRY_CHARS: usize = 6_000;
 
 /// The earlier conversation as the next Provider reads it: the newest
 /// pairs that fit the budget, oldest first, each `User:`/`Assistant:`
 /// pair as it was said (an answer that never came is left out). One pair
 /// too long for the whole budget keeps its head and says so.
-fn carry_digest(from: Provider, exchanges: &[(String, String)]) -> String {
+pub fn carry_digest(from: Provider, exchanges: &[(String, String)]) -> String {
     let mut entries: Vec<String> = exchanges
         .iter()
         .rev()
@@ -6383,7 +6385,7 @@ fn changes_decisions(event: &SessionEvent) -> bool {
     )
 }
 
-pub(crate) fn event_changes_content(event: &SessionEvent) -> bool {
+pub fn event_changes_content(event: &SessionEvent) -> bool {
     use crate::activity::ExecutionEvent;
     match event {
         SessionEvent::Activity(
@@ -6665,11 +6667,3 @@ fn replayed_subagents(snapshot: &crate::store::ThreadSnapshot) -> usize {
     }
     activity.view().children().len()
 }
-
-#[cfg(test)]
-#[path = "cockpit/tests.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "cockpit/lifecycle_tests.rs"]
-mod lifecycle_tests;

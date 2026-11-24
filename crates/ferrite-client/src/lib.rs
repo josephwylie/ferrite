@@ -1,0 +1,4 @@
+//! Ferrite's window model (ADR 0049): what a window holds of its
+//! machines' Servers, and how it asks them. No UI.
+
+pub mod cockpit;

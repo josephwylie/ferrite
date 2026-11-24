@@ -8,16 +8,22 @@ mod keys;
 #[path = "tests/rewind.rs"]
 mod rewind;
 use super::*;
+use ferrite_core::providers::SettingAck;
+use ferrite_core::session::SessionLifecycle;
+use ferrite_core::suggest::Suggestion;
+use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::SessionEvent;
+use ferrite_core::engine::*;
 use crate::cockpit::Cockpit;
-use crate::roster::PaneIdentity;
-use crate::ThreadKey;
+use ferrite_core::roster::PaneIdentity;
+use ferrite_core::ThreadKey;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Sender};
 
-use crate::store::{Provider, Store};
-use crate::transcript::{Body, Class};
-use crate::TurnOutcome;
+use ferrite_core::store::{Provider, Store};
+use ferrite_core::transcript::{Body, Class};
+use ferrite_core::TurnOutcome;
 
 /// A fresh per-test scratch directory.
 fn scratch(name: &str) -> std::path::PathBuf {
@@ -40,30 +46,30 @@ struct Scripted {
     answer_later: Rc<RefCell<bool>>,
     answers: Rc<RefCell<Vec<mpsc::SyncSender<io::Result<()>>>>>,
     native_suggestion: Rc<RefCell<Option<String>>>,
-    rewinds: Rc<RefCell<Vec<crate::providers::RewindRequest>>>,
-    forks: Rc<RefCell<Vec<crate::providers::ForkRequest>>>,
+    rewinds: Rc<RefCell<Vec<ferrite_core::providers::RewindRequest>>>,
+    forks: Rc<RefCell<Vec<ferrite_core::providers::ForkRequest>>>,
     rewindable: Rc<RefCell<bool>>,
     steers: Rc<RefCell<bool>>,
     folds: Rc<RefCell<bool>>,
     interrupts: Rc<RefCell<usize>>,
 }
 
-impl crate::providers::Session for Scripted {
+impl ferrite_core::providers::Session for Scripted {
     fn steers(&self) -> bool {
         *self.steers.borrow()
     }
     fn queue_folds(&self) -> bool {
         *self.folds.borrow()
     }
-    fn supports_control(&self, kind: crate::ControlKind) -> bool {
-        kind == crate::ControlKind::Rewind && *self.rewindable.borrow()
+    fn supports_control(&self, kind: ferrite_core::ControlKind) -> bool {
+        kind == ferrite_core::ControlKind::Rewind && *self.rewindable.borrow()
     }
     /// Cuts in place at once, restoring one file when asked to.
     fn rewind(
         &mut self,
-        request: crate::providers::RewindRequest,
-    ) -> io::Result<crate::providers::RewindAck> {
-        let files = request.files.then(|| crate::providers::FilesRestored {
+        request: ferrite_core::providers::RewindRequest,
+    ) -> io::Result<ferrite_core::providers::RewindAck> {
+        let files = request.files.then(|| ferrite_core::providers::FilesRestored {
             files: 1,
             insertions: 2,
             deletions: 3,
@@ -71,8 +77,8 @@ impl crate::providers::Session for Scripted {
         self.rewinds.borrow_mut().push(request);
         let (answer, ack) = mpsc::sync_channel(1);
         answer
-            .send(Ok(crate::providers::Rewound {
-                cut: crate::providers::Cut::InPlace,
+            .send(Ok(ferrite_core::providers::Rewound {
+                cut: ferrite_core::providers::Cut::InPlace,
                 files,
             }))
             .unwrap();
@@ -81,19 +87,19 @@ impl crate::providers::Session for Scripted {
     /// Forks afresh: the new Thread's agent starts a conversation of its own.
     fn fork(
         &mut self,
-        request: crate::providers::ForkRequest,
-    ) -> io::Result<crate::providers::ForkAck> {
+        request: ferrite_core::providers::ForkRequest,
+    ) -> io::Result<ferrite_core::providers::ForkAck> {
         self.forks.borrow_mut().push(request);
         let (answer, ack) = mpsc::sync_channel(1);
-        answer.send(Ok(crate::providers::Forked::Fresh)).unwrap();
+        answer.send(Ok(ferrite_core::providers::Forked::Fresh)).unwrap();
         Ok(ack)
     }
 
     fn enqueue(&mut self, id: &str, text: &str) -> io::Result<()> {
         self.native.borrow_mut().push((id.into(), text.into()));
         self.tx
-            .send(SessionEvent::Queue(crate::QueueEvent::Accepted(
-                crate::QueuedPrompt {
+            .send(SessionEvent::Queue(ferrite_core::QueueEvent::Accepted(
+                ferrite_core::QueuedPrompt {
                     id: id.into(),
                     client_id: id.into(),
                     text: text.into(),
@@ -104,7 +110,7 @@ impl crate::providers::Session for Scripted {
     }
     fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
         self.tx
-            .send(SessionEvent::Queue(crate::QueueEvent::Cancelled {
+            .send(SessionEvent::Queue(ferrite_core::QueueEvent::Cancelled {
                 id: id.into(),
                 cancelled: true,
                 error: None,
@@ -129,7 +135,7 @@ impl crate::providers::Session for Scripted {
             self.answers.borrow_mut().push(answer);
             return Ok(ack);
         }
-        Ok(crate::providers::applied())
+        Ok(ferrite_core::providers::applied())
     }
     fn events(&self) -> &Receiver<SessionEvent> {
         &self.rx
@@ -151,7 +157,7 @@ impl crate::providers::Session for Scripted {
     fn respond_to_decision(
         &mut self,
         _id: &str,
-        _answer: crate::DecisionAnswer,
+        _answer: ferrite_core::DecisionAnswer,
     ) -> std::io::Result<()> {
         Ok(())
     }
@@ -195,11 +201,11 @@ struct Fake {
     fail: Rc<RefCell<bool>>,
     fail_at: Rc<RefCell<Option<usize>>>,
     fail_send: Rc<RefCell<bool>>,
-    suggestions: Rc<RefCell<Vec<crate::suggest::Request>>>,
+    suggestions: Rc<RefCell<Vec<ferrite_core::suggest::Request>>>,
     native_suggestion: Rc<RefCell<Option<String>>>,
     /// Every rewind and fork a Session was asked for.
-    rewinds: Rc<RefCell<Vec<crate::providers::RewindRequest>>>,
-    forks: Rc<RefCell<Vec<crate::providers::ForkRequest>>>,
+    rewinds: Rc<RefCell<Vec<ferrite_core::providers::RewindRequest>>>,
+    forks: Rc<RefCell<Vec<ferrite_core::providers::ForkRequest>>>,
     /// While set, Sessions offer rewind (`ControlKind::Rewind`): off, the
     /// controls they announce stay what other tests pin.
     rewindable: Rc<RefCell<bool>>,
@@ -214,7 +220,7 @@ struct Fake {
 }
 
 impl Fake {
-    fn suggest_calls(&self) -> Vec<crate::suggest::Request> {
+    fn suggest_calls(&self) -> Vec<ferrite_core::suggest::Request> {
         self.suggestions.borrow().clone()
     }
     /// Every spawn's choice, in call order.
@@ -232,13 +238,13 @@ impl Fake {
 }
 
 impl Spawner for Fake {
-    fn suggest(&mut self, request: crate::suggest::Request, _: crate::doorbell::Sender<Suggestion>) {
+    fn suggest(&mut self, request: ferrite_core::suggest::Request, _: ferrite_core::doorbell::Sender<Suggestion>) {
         self.suggestions.borrow_mut().push(request);
     }
     fn spawn(
         &mut self,
         request: SpawnRequest,
-    ) -> std::io::Result<Box<dyn crate::providers::Session>> {
+    ) -> std::io::Result<Box<dyn ferrite_core::providers::Session>> {
         *self.attempts.borrow_mut() += 1;
         let attempt = *self.attempts.borrow();
         if *self.fail.borrow() || *self.fail_at.borrow() == Some(attempt) {
@@ -396,7 +402,7 @@ fn the_last_worked_project_is_a_registered_one_or_nothing() {
 fn init_repo(root: &Path) -> std::path::PathBuf {
     let repo = root.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
-    let git = |args: &[&str]| crate::workspace::git_for_tests(&repo, args);
+    let git = |args: &[&str]| ferrite_core::workspace::git_for_tests(&repo, args);
     git(&["init", "-q", "-b", "main"]);
     git(&["config", "core.autocrlf", "false"]);
     std::fs::write(repo.join("file.txt"), "base\n").unwrap();
@@ -426,7 +432,7 @@ fn follow_into(
     // Git's list as it stood before the command — what a sweep hands in.
     cockpit.worktrees_listed(
         thread,
-        crate::workspace::worktree_paths(repo).unwrap(),
+        ferrite_core::workspace::worktree_paths(repo).unwrap(),
         Instant::now(),
     );
     let stream = fake.streams.borrow().last().unwrap().clone();
@@ -441,7 +447,7 @@ fn follow_into(
         })
         .unwrap();
     cockpit.pump();
-    crate::workspace::git_for_tests(
+    ferrite_core::workspace::git_for_tests(
         repo,
         &["worktree", "add", "-b", leaf, worktree.to_str().unwrap()],
     );
@@ -450,7 +456,7 @@ fn follow_into(
             id: "wt".into(),
             output: String::new(),
             is_error: false,
-            result: crate::ToolResult::Opaque,
+            result: ferrite_core::ToolResult::Opaque,
         })
         .unwrap();
     cockpit.pump();
@@ -460,11 +466,11 @@ fn follow_into(
     );
     assert!(cockpit.worktrees_listed(
         thread,
-        crate::workspace::worktree_paths(repo).unwrap(),
+        ferrite_core::workspace::worktree_paths(repo).unwrap(),
         Instant::now()
     ));
     assert!(!cockpit.wants_worktree_listing());
-    crate::workspace::follow::canonical(worktree)
+    ferrite_core::workspace::follow::canonical(worktree)
 }
 
 /// The whole follow flow at the cockpit's seam (`workspace::follow`):
@@ -539,7 +545,7 @@ fn exiting_a_worktree_returns_the_thread_to_main() {
             id: "x".into(),
             output: "Exited worktree".into(),
             is_error: false,
-            result: crate::ToolResult::Opaque,
+            result: ferrite_core::ToolResult::Opaque,
         })
         .unwrap();
     cockpit.pump();
@@ -572,14 +578,14 @@ fn a_followed_worktree_that_vanishes_returns_the_thread_to_main() {
     let main = Some(WorkspaceBinding::Main {
         checkout: repo.clone(),
     });
-    let git = |args: &[&str]| crate::workspace::git_for_tests(&repo, args);
+    let git = |args: &[&str]| ferrite_core::workspace::git_for_tests(&repo, args);
 
     // Live: gone from git's list, gone from the binding.
     let live = follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-live"));
     git(&["worktree", "remove", "--force", live.to_str().unwrap()]);
     assert!(cockpit.worktrees_listed(
         thread,
-        crate::workspace::worktree_paths(&repo).unwrap(),
+        ferrite_core::workspace::worktree_paths(&repo).unwrap(),
         Instant::now()
     ));
     assert_eq!(cockpit.thread(thread).unwrap().workspace().cloned(), main);
@@ -607,7 +613,7 @@ fn a_followed_worktree_that_vanishes_returns_the_thread_to_main() {
 /// before the rewrite (ADR 0002), like the model and effort setters do.
 #[test]
 fn a_move_drops_child_history_reads_in_flight() {
-    use crate::activity::{ActivityEvent, ActivityInput, AgentKey, ExecutionEvent, Subject};
+    use ferrite_core::activity::{ActivityEvent, AgentKey, ExecutionEvent, Subject};
     let root = scratch("follow-history");
     let (mut cockpit, fake) = cockpit("follow-history-store");
     let repo = init_repo(&root);
@@ -634,27 +640,18 @@ fn a_move_drops_child_history_reads_in_flight() {
     cockpit.pump();
     cockpit
         .engine_mut()
-        .threads
-        .get_mut(&thread.thread())
-        .unwrap()
-        .activity
-        .apply(ActivityInput::Evict(subject.clone()));
-    let (loader, _finish) = history::gated_loader();
-    cockpit.engine_mut().history_loader = Some(loader);
+        .evict_history(thread.thread(), &subject);
+    let _finish = cockpit.engine_mut().gate_history();
     assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
     assert!(
-        !cockpit.engine().threads[&thread.thread()]
-            .history
-            .is_empty(),
+        cockpit.engine().history_read_pending(thread.thread()),
         "a read is pending against the old log"
     );
 
     follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-history"));
 
     assert!(
-        cockpit.engine().threads[&thread.thread()]
-            .history
-            .is_empty(),
+        !cockpit.engine().history_read_pending(thread.thread()),
         "the pending read was invalidated before the header rewrite"
     );
 }
@@ -664,12 +661,12 @@ fn a_move_drops_child_history_reads_in_flight() {
 /// well be working somewhere else on purpose.
 #[test]
 fn only_mains_own_work_moves_the_thread() {
-    use crate::activity::{ActivityEvent, AgentKey, ExecutionEvent};
+    use ferrite_core::activity::{ActivityEvent, AgentKey, ExecutionEvent};
     let root = scratch("follow-evidence");
     let (mut cockpit, fake) = cockpit("follow-evidence-store");
     let repo = init_repo(&root);
     let worktree = root.join("wt-standing");
-    crate::workspace::git_for_tests(
+    ferrite_core::workspace::git_for_tests(
         &repo,
         &[
             "worktree",
@@ -690,7 +687,7 @@ fn only_mains_own_work_moves_the_thread() {
         .unwrap();
     cockpit.worktrees_listed(
         thread,
-        crate::workspace::worktree_paths(&repo).unwrap(),
+        ferrite_core::workspace::worktree_paths(&repo).unwrap(),
         Instant::now(),
     );
     let stream = fake.streams.borrow()[0].clone();
@@ -701,7 +698,7 @@ fn only_mains_own_work_moves_the_thread() {
     };
 
     let child = AgentKey::new(Provider::Claude, "root", "child");
-    for n in 0..crate::workspace::follow::EVIDENCE_CALLS as usize + 2 {
+    for n in 0..ferrite_core::workspace::follow::EVIDENCE_CALLS as usize + 2 {
         stream
             .send(SessionEvent::Activity(ActivityEvent::Content {
                 key: child.clone(),
@@ -719,7 +716,7 @@ fn only_mains_own_work_moves_the_thread() {
         "a Subagent's work never moves the Thread"
     );
 
-    for n in 0..crate::workspace::follow::EVIDENCE_CALLS as usize {
+    for n in 0..ferrite_core::workspace::follow::EVIDENCE_CALLS as usize {
         stream
             .send(SessionEvent::Activity(ActivityEvent::MainContent {
                 id: Some(format!("m{n}")),
@@ -732,7 +729,7 @@ fn only_mains_own_work_moves_the_thread() {
         cockpit.thread(thread).unwrap().workspace().cloned(),
         Some(WorkspaceBinding::Worktree {
             repo: repo.clone(),
-            path: crate::workspace::follow::canonical(&worktree),
+            path: ferrite_core::workspace::follow::canonical(&worktree),
         })
     );
 }
@@ -745,7 +742,7 @@ fn opening_on_an_existing_branch_switches_the_project_checkout() {
     let root = scratch("branch-open");
     let (mut cockpit, _fake) = cockpit("branch-open-store");
     let repo = init_repo(&root);
-    crate::workspace::git_for_tests(&repo, &["switch", "-q", "-c", "feature/side"]);
+    ferrite_core::workspace::git_for_tests(&repo, &["switch", "-q", "-c", "feature/side"]);
 
     let thread = cockpit
         .open(
@@ -759,7 +756,7 @@ fn opening_on_an_existing_branch_switches_the_project_checkout() {
         .unwrap();
 
     assert_eq!(
-        crate::workspace::checkout_branch(&repo).as_deref(),
+        ferrite_core::workspace::checkout_branch(&repo).as_deref(),
         Some("main")
     );
     assert_eq!(
@@ -787,7 +784,7 @@ fn opening_on_a_new_branch_creates_it_in_the_project_checkout() {
         )
         .unwrap();
 
-    let branch = crate::workspace::checkout_branch(&repo).expect("a branch");
+    let branch = ferrite_core::workspace::checkout_branch(&repo).expect("a branch");
     assert!(branch.starts_with("ferrite/branch-"), "branch: {branch}");
 }
 
@@ -963,7 +960,7 @@ fn opening_with_an_existing_worktree_adopts_the_standing_tree() {
     // Adoption minted nothing: one worktree entry, one branch.
     let project = cockpit.registry(cockpit.first_machine()).projects()[0].id;
     assert_eq!(cockpit.registry(cockpit.first_machine()).worktrees(project).len(), 1);
-    let branches = crate::workspace::git_for_tests(&repo, &["branch", "--list", "ferrite/*"]);
+    let branches = ferrite_core::workspace::git_for_tests(&repo, &["branch", "--list", "ferrite/*"]);
     assert_eq!(branches.matches("ferrite/").count(), 1, "{branches:?}");
 }
 
@@ -1001,7 +998,7 @@ fn a_hand_made_worktree_is_adopted_without_minting_or_registering() {
     let (mut cockpit, fake) = cockpit("adopt-hand-made-store");
     let repo = init_repo(&root);
     let hand_made = root.join("hand-made");
-    crate::workspace::ensure_worktree(&repo, &hand_made, "feature/hand-made").unwrap();
+    ferrite_core::workspace::ensure_worktree(&repo, &hand_made, "feature/hand-made").unwrap();
 
     let thread = cockpit
         .open(
@@ -1031,7 +1028,7 @@ fn a_hand_made_worktree_is_adopted_without_minting_or_registering() {
         "adoption registers nothing"
     );
     assert_eq!(
-        crate::workspace::worktree_paths(&repo).unwrap().len(),
+        ferrite_core::workspace::worktree_paths(&repo).unwrap().len(),
         2,
         "adoption creates nothing"
     );
@@ -1196,7 +1193,7 @@ fn waking_leaves_the_worktree_to_the_spawners_preparation() {
         fn spawn(
             &mut self,
             request: SpawnRequest,
-        ) -> io::Result<Box<dyn crate::providers::Session>> {
+        ) -> io::Result<Box<dyn ferrite_core::providers::Session>> {
             self.fake.spawn(request)
         }
         fn start_after(
@@ -1332,7 +1329,7 @@ fn deleting_a_legacy_worktree_thread_removes_its_tree() {
     let root = scratch("delete-legacy-worktree");
     let repo = init_repo(&root);
     let path = root.join("legacy-tree");
-    crate::workspace::git_for_tests(
+    ferrite_core::workspace::git_for_tests(
         &repo,
         &[
             "worktree",
@@ -1452,8 +1449,8 @@ fn two_threads_on_one_repo_work_in_isolated_worktrees() {
     // Each "agent" writes in its own workspace; neither sees the other.
     std::fs::write(cwd_one.join("only-one.txt"), "one\n").unwrap();
     std::fs::write(cwd_two.join("file.txt"), "two edited\n").unwrap();
-    let status_one = crate::workspace::git_for_tests(&cwd_one, &["status", "--porcelain"]);
-    let status_two = crate::workspace::git_for_tests(&cwd_two, &["status", "--porcelain"]);
+    let status_one = ferrite_core::workspace::git_for_tests(&cwd_one, &["status", "--porcelain"]);
+    let status_two = ferrite_core::workspace::git_for_tests(&cwd_two, &["status", "--porcelain"]);
     assert!(status_one.contains("only-one.txt"), "one: {status_one}");
     assert!(!status_one.contains("file.txt"), "one: {status_one}");
     assert!(status_two.contains("file.txt"), "two: {status_two}");
@@ -1486,7 +1483,7 @@ fn a_timed_interruption_is_never_read_as_a_completion() {
     cockpit.pump();
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
-            outcome: crate::TurnOutcome::Interrupted,
+            outcome: ferrite_core::TurnOutcome::Interrupted,
             cost_usd: None,
         })
         .unwrap();
@@ -1502,7 +1499,7 @@ fn a_timed_interruption_is_never_read_as_a_completion() {
         })
         .collect();
     assert_eq!(ends.len(), 1, "the observation times the row, adds none");
-    assert_eq!(ends[0].outcome, crate::TurnOutcome::Interrupted);
+    assert_eq!(ends[0].outcome, ferrite_core::TurnOutcome::Interrupted);
     assert!(ends[0].elapsed_ms.is_some(), "the interruption is timed");
     assert!(ends[0].text().starts_with("You stopped after "));
     assert!(!transcript.turn_completed());
@@ -1679,19 +1676,15 @@ fn disabling_suggestions_clears_an_existing_prediction() {
 fn a_stale_prediction_is_dropped() {
     let (mut cockpit, _fake) = cockpit("suggest-stale");
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
-    let generation = cockpit.engine().threads[&thread.thread()].generation;
+    let generation = cockpit.engine().generation(thread.thread());
 
     cockpit
-        .engine()
-        .suggestions
-        .0
-        .send(Suggestion {
+        .engine().land_suggestion(Suggestion {
             thread: thread.thread(),
             generation: generation.wrapping_add(1),
-            revision: cockpit.engine().threads[&thread.thread()].suggestion_revision,
+            revision: cockpit.engine().suggestion_revision(thread.thread()),
             text: "Run the tests".into(),
-        })
-        .unwrap();
+        });
     cockpit.pump();
     assert_eq!(
         cockpit.thread(thread).unwrap().suggestion(),
@@ -1700,16 +1693,12 @@ fn a_stale_prediction_is_dropped() {
     );
 
     cockpit
-        .engine()
-        .suggestions
-        .0
-        .send(Suggestion {
+        .engine().land_suggestion(Suggestion {
             thread: thread.thread(),
             generation,
-            revision: cockpit.engine().threads[&thread.thread()].suggestion_revision,
+            revision: cockpit.engine().suggestion_revision(thread.thread()),
             text: "Run the tests".into(),
-        })
-        .unwrap();
+        });
     cockpit.pump();
     assert_eq!(
         cockpit.thread(thread).unwrap().suggestion(),
@@ -1725,7 +1714,7 @@ fn a_new_turn_drops_the_previous_prediction() {
     let thread = cockpit.open(cockpit.first_machine(), Provider::Codex, main_choice()).unwrap();
     let _ = cockpit.send(thread, "go".into());
 
-    let generation = cockpit.engine().threads[&thread.thread()].generation;
+    let generation = cockpit.engine().generation(thread.thread());
     fake.streams.borrow()[0].send(text("Done.")).unwrap();
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
@@ -1735,16 +1724,12 @@ fn a_new_turn_drops_the_previous_prediction() {
         .unwrap();
     cockpit.pump();
     cockpit
-        .engine()
-        .suggestions
-        .0
-        .send(Suggestion {
+        .engine().land_suggestion(Suggestion {
             thread: thread.thread(),
             generation,
-            revision: cockpit.engine().threads[&thread.thread()].suggestion_revision,
+            revision: cockpit.engine().suggestion_revision(thread.thread()),
             text: "Run the tests".into(),
-        })
-        .unwrap();
+        });
     cockpit.pump();
     assert_eq!(
         cockpit.thread(thread).unwrap().suggestion(),
@@ -1791,14 +1776,14 @@ fn older_turn_predictions_cannot_replace_the_latest_or_survive_disabling() {
         text: "Run the tests".into(),
     };
     // Sending invalidates an outstanding prediction immediately.
-    cockpit.engine().suggestions.0.send(old.clone()).unwrap();
+    cockpit.engine().land_suggestion(old.clone());
     cockpit.pump();
     assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
     finish();
     cockpit.pump();
     cockpit.deliver_suggestion(thread, "Commit the fix".into());
     cockpit.pump();
-    cockpit.engine().suggestions.0.send(old).unwrap();
+    cockpit.engine().land_suggestion(old);
     cockpit.pump();
     assert_eq!(
         cockpit.thread(thread).unwrap().suggestion(),
@@ -1898,7 +1883,7 @@ fn completion_observation_is_quiet_factual_and_unchanged_after_reopen() {
         .unwrap();
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
-            outcome: crate::TurnOutcome::Completed,
+            outcome: ferrite_core::TurnOutcome::Completed,
             cost_usd: Some(0.038),
         })
         .unwrap();
@@ -1966,7 +1951,7 @@ fn completion_observation_is_quiet_factual_and_unchanged_after_reopen() {
 
 #[test]
 fn completion_observations_follow_only_accepted_live_turn_ends() {
-    use crate::activity::{ActivityEvent, AgentKey, ExecutionEvent, Subject};
+    use ferrite_core::activity::{ActivityEvent, AgentKey, ExecutionEvent, Subject};
     let (mut cockpit, fake) = cockpit("completion-attribution-reference");
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let key = AgentKey::new(Provider::Claude, "root", "child");
@@ -2055,7 +2040,7 @@ fn completion_observations_follow_only_accepted_live_turn_ends() {
 
 #[test]
 fn child_completion_survives_a_history_read_already_in_flight() {
-    use crate::activity::{ActivityEvent, ActivityInput, AgentKey, ExecutionEvent, Subject};
+    use ferrite_core::activity::{ActivityEvent, AgentKey, ExecutionEvent, Subject};
     let (mut cockpit, fake) = cockpit("completion-history-race");
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let key = AgentKey::new(Provider::Claude, "root", "child");
@@ -2076,13 +2061,8 @@ fn child_completion_survives_a_history_read_already_in_flight() {
     // Arrange the normal evicted-child state, and gate the disk boundary.
     cockpit
         .engine_mut()
-        .threads
-        .get_mut(&thread.thread())
-        .unwrap()
-        .activity
-        .apply(ActivityInput::Evict(subject.clone()));
-    let (loader, finish) = history::gated_loader();
-    cockpit.engine_mut().history_loader = Some(loader);
+        .evict_history(thread.thread(), &subject);
+    let finish = cockpit.engine_mut().gate_history();
     assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
     emit(ActivityEvent::Content {
         key,
@@ -2093,7 +2073,7 @@ fn child_completion_survives_a_history_read_already_in_flight() {
         },
     });
     cockpit.pump();
-    finish(&cockpit.engine().store);
+    finish(cockpit.engine().store());
     cockpit.pump();
     let view = cockpit.thread(thread).unwrap().activity();
     let child = view.subject(&subject).unwrap();
@@ -2129,15 +2109,10 @@ fn child_completion_survives_a_history_read_already_in_flight() {
     // after the in-flight buffer that supplied it above has been consumed.
     cockpit
         .engine_mut()
-        .threads
-        .get_mut(&thread.thread())
-        .unwrap()
-        .activity
-        .apply(ActivityInput::Evict(subject.clone()));
-    let (loader, finish) = history::gated_loader();
-    cockpit.engine_mut().history_loader = Some(loader);
+        .evict_history(thread.thread(), &subject);
+    let finish = cockpit.engine_mut().gate_history();
     assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
-    finish(&cockpit.engine().store);
+    finish(cockpit.engine().store());
     cockpit.pump();
     assert_eq!(
         completion(&cockpit),
@@ -2148,7 +2123,7 @@ fn child_completion_survives_a_history_read_already_in_flight() {
 
 #[test]
 fn child_tool_duration_survives_a_history_read_already_in_flight() {
-    use crate::activity::{ActivityEvent, ActivityInput, AgentKey, ExecutionEvent, Subject};
+    use ferrite_core::activity::{ActivityEvent, AgentKey, ExecutionEvent, Subject};
     for native_duration in [None, Some(42)] {
         let (mut cockpit, fake) = cockpit("tool-duration-history-race");
         let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
@@ -2167,7 +2142,7 @@ fn child_tool_duration_survives_a_history_read_already_in_flight() {
             id: "tool".into(),
             output: String::new(),
             is_error: false,
-            result: crate::ToolResult::Command {
+            result: ferrite_core::ToolResult::Command {
                 stdout: String::new(),
                 stderr: String::new(),
                 exit_code: Some(0),
@@ -2190,13 +2165,8 @@ fn child_tool_duration_survives_a_history_read_already_in_flight() {
         cockpit.pump();
         cockpit
             .engine_mut()
-            .threads
-            .get_mut(&thread.thread())
-            .unwrap()
-            .activity
-            .apply(ActivityInput::Evict(subject.clone()));
-        let (loader, finish) = history::gated_loader();
-        cockpit.engine_mut().history_loader = Some(loader);
+        .evict_history(thread.thread(), &subject);
+        let finish = cockpit.engine_mut().gate_history();
         assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
         emit("completion", completed(native_duration));
         cockpit.pump();
@@ -2208,7 +2178,7 @@ fn child_tool_duration_survives_a_history_read_already_in_flight() {
             .unwrap()
             .timings()
             .is_empty());
-        finish(&cockpit.engine().store);
+        finish(cockpit.engine().store());
         cockpit.pump();
         let timing = |cockpit: &Cockpit| match cockpit
             .thread(thread)
@@ -2232,15 +2202,10 @@ fn child_tool_duration_survives_a_history_read_already_in_flight() {
         // agree, allowing the log's millisecond precision.
         cockpit
             .engine_mut()
-            .threads
-            .get_mut(&thread.thread())
-            .unwrap()
-            .activity
-            .apply(ActivityInput::Evict(subject.clone()));
-        let (loader, finish) = history::gated_loader();
-        cockpit.engine_mut().history_loader = Some(loader);
+        .evict_history(thread.thread(), &subject);
+        let finish = cockpit.engine_mut().gate_history();
         assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
-        finish(&cockpit.engine().store);
+        finish(cockpit.engine().store());
         cockpit.pump();
         assert_eq!(timing(&cockpit).as_millis(), observed.as_millis());
     }
@@ -2275,7 +2240,7 @@ fn tool_calls_are_clocked_at_ingestion() {
             id: "t1".into(),
             output: String::new(),
             is_error: false,
-            result: crate::ToolResult::Opaque,
+            result: ferrite_core::ToolResult::Opaque,
         })
         .unwrap();
     cockpit.pump();
@@ -2298,7 +2263,7 @@ fn tool_calls_are_clocked_at_ingestion() {
             id: "ghost".into(),
             output: String::new(),
             is_error: false,
-            result: crate::ToolResult::Opaque,
+            result: ferrite_core::ToolResult::Opaque,
         })
         .unwrap();
     cockpit.pump();
@@ -2327,7 +2292,7 @@ fn decision(id: &str, tool: &str) -> SessionEvent {
 
 fn ended() -> SessionEvent {
     SessionEvent::TurnEnded {
-        outcome: crate::TurnOutcome::Completed,
+        outcome: ferrite_core::TurnOutcome::Completed,
         cost_usd: None,
     }
 }
@@ -2416,13 +2381,13 @@ fn native_queue_history_records_consumption_once() {
     };
     assert_eq!(
         delivery(&cockpit),
-        [("held".into(), crate::engine::Delivery::Sending)],
+        [("held".into(), ferrite_core::engine::Delivery::Sending)],
         "pipe write is not admission"
     );
     cockpit.pump();
     assert_eq!(
         delivery(&cockpit),
-        [("held".into(), crate::engine::Delivery::Queued)]
+        [("held".into(), ferrite_core::engine::Delivery::Queued)]
     );
     fake.streams.borrow()[0].send(ended()).unwrap();
     cockpit.pump();
@@ -2438,7 +2403,7 @@ fn native_queue_history_records_consumption_once() {
     let id = fake.native.borrow()[0].0.clone();
     for _ in 0..2 {
         fake.streams.borrow()[0]
-            .send(SessionEvent::Queue(crate::QueueEvent::Started {
+            .send(SessionEvent::Queue(ferrite_core::QueueEvent::Started {
                 historical: false,
                 client_id: id.clone(),
                 text: None,
@@ -2472,7 +2437,7 @@ fn native_queue_history_records_consumption_once() {
     assert_eq!(
         cockpit
             .engine()
-            .store
+            .store()
             .load(thread.thread())
             .unwrap()
             .prompt_texts(),
@@ -2509,7 +2474,7 @@ fn a_sent_prompts_own_echo_is_not_drawn_again() {
         .and_then(|block| block.prompt_id.clone())
         .expect("the prompt is drawn under the id it was sent as");
     fake.streams.borrow()[0]
-        .send(SessionEvent::Queue(crate::QueueEvent::Started {
+        .send(SessionEvent::Queue(ferrite_core::QueueEvent::Started {
             historical: false,
             client_id: id,
             text: Some("again".into()),
@@ -2531,7 +2496,7 @@ fn a_sent_prompts_own_echo_is_not_drawn_again() {
     assert_eq!(
         cockpit
             .engine()
-            .store
+            .store()
             .load(thread.thread())
             .unwrap()
             .prompt_texts(),
@@ -2824,7 +2789,7 @@ fn replacing_a_claude_session_does_not_resubmit_native_pending_work() {
         .unwrap();
     let _ = cockpit.send(thread, "new input".into());
     fake.streams.borrow()[0]
-        .send(SessionEvent::Queue(crate::QueueEvent::Started {
+        .send(SessionEvent::Queue(ferrite_core::QueueEvent::Started {
             historical: false,
             client_id: fake.native.borrow()[0].0.clone(),
             text: None,
@@ -2890,7 +2855,7 @@ fn answering_through_the_cockpit_clears_the_card_and_records_who_did_it() {
     cockpit.respond(
         thread,
         &pending,
-        crate::DecisionAnswer::Allow {
+        ferrite_core::DecisionAnswer::Allow {
             input: pending.input.clone(),
         },
     );
@@ -2909,7 +2874,7 @@ fn answering_through_the_cockpit_clears_the_card_and_records_who_did_it() {
     cockpit.respond(
         thread,
         &pending,
-        crate::DecisionAnswer::Allow {
+        ferrite_core::DecisionAnswer::Allow {
             input: pending.input.clone(),
         },
     );
@@ -2964,7 +2929,7 @@ fn the_log_holds_everything_before_a_pending_decision() {
     cockpit.respond(
         thread,
         &pending,
-        crate::DecisionAnswer::Allow {
+        ferrite_core::DecisionAnswer::Allow {
             input: pending.input.clone(),
         },
     );
@@ -3342,7 +3307,7 @@ fn a_queued_prompt_is_removed_by_its_own_id() {
     assert_eq!(texts, ["third", "second", "first"], "newest first");
     assert!(queue
         .iter()
-        .all(|item| item.delivery == crate::engine::Delivery::Queued));
+        .all(|item| item.delivery == ferrite_core::engine::Delivery::Queued));
 
     cockpit.remove_queued_item(thread, &queue[1].id, true);
     cockpit.pump();
@@ -3419,7 +3384,7 @@ fn a_queue_that_folds_says_steering_and_send_now_never_interrupts() {
     assert!(cockpit.queue(thread, "also this".into()).now().unwrap());
     cockpit.pump();
     let item = cockpit.thread(thread).unwrap().queue()[0].clone();
-    assert_eq!(item.delivery, crate::engine::Delivery::Folding);
+    assert_eq!(item.delivery, ferrite_core::engine::Delivery::Folding);
 
     cockpit.send_queued_now(thread, &item.id);
     cockpit.pump();
@@ -3486,7 +3451,7 @@ fn escape_on_codex_resends_the_whole_pile_as_one_prompt() {
     );
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
-            outcome: crate::TurnOutcome::Interrupted,
+            outcome: ferrite_core::TurnOutcome::Interrupted,
             cost_usd: None,
         })
         .unwrap();
@@ -3502,7 +3467,7 @@ fn escape_on_codex_resends_the_whole_pile_as_one_prompt() {
     // second prompt; nor does its cancellation receipt say anything.
     let id = fake.native.borrow()[0].0.clone();
     fake.streams.borrow()[0]
-        .send(SessionEvent::Queue(crate::QueueEvent::Started {
+        .send(SessionEvent::Queue(ferrite_core::QueueEvent::Started {
             historical: false,
             client_id: id,
             text: Some("first".into()),
@@ -3541,7 +3506,7 @@ fn escape_on_claude_leaves_the_native_queue_to_the_provider() {
     cockpit.interrupt(thread);
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
-            outcome: crate::TurnOutcome::Interrupted,
+            outcome: ferrite_core::TurnOutcome::Interrupted,
             cost_usd: None,
         })
         .unwrap();
@@ -3622,7 +3587,7 @@ fn a_commands_event_becomes_the_thread_menu_and_never_the_history() {
         "nothing is static"
     );
 
-    let menu = vec![crate::SessionCommand {
+    let menu = vec![ferrite_core::SessionCommand {
         name: "compact".into(),
         description: "summarize context".into(),
         path: None,
@@ -3738,7 +3703,7 @@ fn a_models_event_becomes_the_thread_menu_and_never_the_history() {
 #[test]
 fn learned_provider_models_survive_parking_and_a_restart() {
     let (mut cockpit, fake) = cockpit("learned-models");
-    let dir = cockpit.engine().store.dir().to_path_buf();
+    let dir = cockpit.engine().store().dir().to_path_buf();
     let mut expected = Vec::new();
     for (index, provider) in [Provider::Claude, Provider::Codex].into_iter().enumerate() {
         let thread = cockpit.open(cockpit.first_machine(), provider, main_choice()).unwrap();
@@ -4039,7 +4004,7 @@ fn trimming_the_displayed_history_never_loses_agent_context() {
     );
 
     // (1) Every event is in the log, in order.
-    let log = cockpit.engine().store.load(thread.thread()).unwrap();
+    let log = cockpit.engine().store().load(thread.thread()).unwrap();
     let mut prompts = Vec::new();
     let mut answers = String::new();
     for input in log.inputs() {
@@ -4080,7 +4045,7 @@ fn trimming_the_displayed_history_never_loses_agent_context() {
         cockpit.pump();
         handover = cockpit
             .engine()
-            .store
+            .store()
             .load(thread.thread())
             .unwrap()
             .last_handover();
@@ -4250,7 +4215,7 @@ fn the_model_can_change_after_the_first_prompt_by_resuming() {
 
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
-            outcome: crate::TurnOutcome::Completed,
+            outcome: ferrite_core::TurnOutcome::Completed,
             cost_usd: None,
         })
         .unwrap();
@@ -4542,7 +4507,7 @@ fn effort_changes_in_place_and_persists() {
     // Parked: the header alone changes, and a revive reads it.
     cockpit.park(thread).now().unwrap();
     cockpit.set_effort(thread, None).now().unwrap();
-    let store = &cockpit.engine().store;
+    let store = &cockpit.engine().store();
     assert_eq!(store.peek(thread.thread()).unwrap().effort, None);
     assert_eq!(
         store.peek(thread.thread()).unwrap().model.as_deref(),
@@ -4886,7 +4851,7 @@ fn local_thread_revival_probe() {
         let open = cockpit.thread(cockpit.key(ThreadId::new(id))).unwrap();
         let subject = open
             .activity()
-            .subject(&crate::activity::Subject::Main)
+            .subject(&ferrite_core::activity::Subject::Main)
             .unwrap();
         eprintln!(
             "PERF thread={id} revive_ms={:.3} blocks={}",
@@ -4949,7 +4914,7 @@ fn a_closed_thread_takes_no_draft() {
     core.pump();
     core.engine_mut().window_says(
         7,
-        &crate::protocol::Op::Composing {
+        &ferrite_core::protocol::Op::Composing {
             thread: thread.thread(),
             unsent: true,
         },
@@ -4963,7 +4928,7 @@ fn a_closed_thread_takes_no_draft() {
 fn a_thread_started_with_args_is_revived_with_them() {
     let (mut core, fake) = cockpit("launch-args");
     let args = vec!["--permission-mode".to_string(), "plan".to_string()];
-    let launch = crate::engine::Launch {
+    let launch = ferrite_core::engine::Launch {
         args: args.clone(),
         ..Default::default()
     };
@@ -5029,7 +4994,7 @@ fn stale_board_launch_after_handover_resumes_the_current_provider() {
         core.engine_mut()
             .revive_with(
                 thread.thread(),
-                crate::engine::Launch {
+                ferrite_core::engine::Launch {
                     launch_provider: Some(from),
                     args: args.into_iter().map(String::from).collect(),
                     resume: Some("old-conversation".into()),
@@ -5075,7 +5040,7 @@ fn stale_board_launch_after_handover_resumes_the_current_provider() {
 #[test]
 fn only_the_first_session_names_the_conversation_it_begins() {
     let (mut core, fake) = cockpit("launch-session-id");
-    let launch = crate::engine::Launch {
+    let launch = ferrite_core::engine::Launch {
         args: vec![
             "--session-id".into(),
             "4a76".into(),
@@ -5144,7 +5109,7 @@ fn a_thread_started_with_env_and_a_launcher_is_revived_with_them() {
     let launcher: Vec<String> = ["bwrap", "--ro-bind", "/r", "/r", "--"]
         .map(String::from)
         .into();
-    let launch = crate::engine::Launch {
+    let launch = ferrite_core::engine::Launch {
         env: env.clone(),
         launcher: launcher.clone(),
         ..Default::default()
@@ -5165,7 +5130,7 @@ fn a_thread_started_with_env_and_a_launcher_is_revived_with_them() {
 #[test]
 fn a_thread_revived_with_a_new_launch_keeps_its_id() {
     let (mut core, fake) = cockpit("launch-revive");
-    let launch = crate::engine::Launch {
+    let launch = ferrite_core::engine::Launch {
         args: vec!["--permission-mode".into(), "plan".into()],
         resume: Some("sess-1".into()),
         ..Default::default()
@@ -5176,7 +5141,7 @@ fn a_thread_revived_with_a_new_launch_keeps_its_id() {
         .unwrap();
     let thread = core.key(thread);
     core.park(thread).now().unwrap();
-    let again = crate::engine::Launch {
+    let again = ferrite_core::engine::Launch {
         args: vec!["--model".into(), "opus".into()],
         ..Default::default()
     };
@@ -5192,7 +5157,7 @@ fn a_thread_revived_with_a_new_launch_keeps_its_id() {
         "a new conversation"
     );
     core.park(thread).now().unwrap();
-    let resumed = crate::engine::Launch {
+    let resumed = ferrite_core::engine::Launch {
         resume: Some("sess-1".into()),
         ..Default::default()
     };
@@ -5220,7 +5185,7 @@ fn a_thread_revived_with_a_new_launch_keeps_its_id() {
 #[test]
 fn a_launchs_model_and_effort_are_the_threads_from_its_start() {
     let (mut core, fake) = cockpit("launch-pinned");
-    let launch = crate::engine::Launch {
+    let launch = ferrite_core::engine::Launch {
         args: ["--model", "haiku", "--verbose", "--effort=high"].map(String::from).to_vec(),
         ..Default::default()
     };
@@ -5261,7 +5226,7 @@ fn a_launchs_model_and_effort_are_the_threads_from_its_start() {
 #[test]
 fn a_thread_started_on_a_provider_conversation_resumes_it() {
     let (mut core, fake) = cockpit("launch-resume");
-    let launch = crate::engine::Launch {
+    let launch = ferrite_core::engine::Launch {
         resume: Some("sess-9".into()),
         ..Default::default()
     };
@@ -5328,8 +5293,8 @@ fn a_store_with_groups_lists_every_thread_and_opens_each_alone() {
 /// open or its end untold. A Thread another machine delegated says whose.
 #[test]
 fn a_threads_delegates_reach_its_window_by_its_digest() {
-    use crate::delegate::{Started, Status};
-    use crate::server::ServerId;
+    use ferrite_core::delegate::{Started, Status};
+    use ferrite_core::server::ServerId;
     let (mut cockpit, _fake) = cockpit("delegates-digest");
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     cockpit.pump();
@@ -5384,7 +5349,7 @@ fn a_threads_delegates_reach_its_window_by_its_digest() {
     cockpit.pump();
     assert!(!seen(&cockpit).1, "told: nothing holds it");
 
-    let from = crate::DelegatedFrom {
+    let from = ferrite_core::DelegatedFrom {
         server: ServerId::new("s-mac"),
         label: "mac".into(),
         thread: ThreadId::new(3),

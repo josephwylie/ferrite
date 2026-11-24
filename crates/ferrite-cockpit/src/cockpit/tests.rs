@@ -120,7 +120,7 @@ use std::rc::Rc;
 
 use std::sync::mpsc::{self, Receiver};
 
-use ferrite_core::cockpit::Spawner;
+use ferrite_client::cockpit::Spawner;
 
 use ferrite_core::doorbell::Sender;
 
@@ -350,7 +350,7 @@ impl Spawner for Fake {
 
     fn start(
         &mut self,
-        request: ferrite_core::cockpit::SpawnRequest,
+        request: ferrite_client::cockpit::SpawnRequest,
     ) -> std::io::Result<ferrite_core::session::SessionLifecycle> {
         self.resumed
             .borrow_mut()
@@ -374,7 +374,7 @@ impl Spawner for Fake {
 
     fn spawn(
         &mut self,
-        request: ferrite_core::cockpit::SpawnRequest,
+        request: ferrite_client::cockpit::SpawnRequest,
     ) -> std::io::Result<Box<dyn Session>> {
         if *self.fail.borrow() {
             return Err(std::io::Error::other("stub refused to spawn"));

@@ -321,7 +321,7 @@ pub fn upload(
     }
 }
 
-pub(crate) fn read(
+pub fn read(
     path: PathBuf,
     mut request: impl FnMut(Request) -> io::Result<Reply>,
 ) -> io::Result<Vec<u8>> {

@@ -3,6 +3,8 @@
 //! through park and revive.
 
 use super::*;
+use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::SessionEvent;
 
 fn live(fake: &Fake) -> Sender<SessionEvent> {
     fake.streams.borrow().last().unwrap().clone()
@@ -84,10 +86,10 @@ fn parking_syncs_the_log_through_the_drive_cache() {
     let _ = cockpit.send(thread, "one".into());
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
-    let (_, full) = cockpit.engine().store.syncs();
+    let (_, full) = cockpit.engine().store().syncs();
     cockpit.park(thread).now().unwrap();
-    cockpit.engine().store.settle_all();
-    assert_eq!(cockpit.engine().store.syncs().1, full + 1);
+    cockpit.engine().store().settle_all();
+    assert_eq!(cockpit.engine().store().syncs().1, full + 1);
 }
 
 /// Invariant 3: a hand-over after a revive carries what the whole log
@@ -95,7 +97,7 @@ fn parking_syncs_the_log_through_the_drive_cache() {
 #[test]
 fn invariant_a_hand_over_after_revive_carries_the_whole_history() {
     // A small world: Activity retains 64 KiB of a Thread, not 4 MiB.
-    let limits = crate::activity::ActivityLimits {
+    let limits = ferrite_core::activity::ActivityLimits {
         content_bytes_per_subject: 64 * 1024,
         ..Default::default()
     };
@@ -137,7 +139,7 @@ fn invariant_a_hand_over_after_revive_carries_the_whole_history() {
         fake.sent.borrow().last().unwrap(),
         &format!("{}\n\nnext", carry_digest(Provider::Claude, &exchanges))
     );
-    let _ = std::fs::remove_dir_all(cockpit.engine().store.dir());
+    let _ = std::fs::remove_dir_all(cockpit.engine().store().dir());
 }
 
 /// What the store costs on a real log, end to end through the Cockpit:
@@ -213,7 +215,7 @@ fn lab_store_costs_on_a_real_log() {
 /// for a Thread this Ferrite parked: no replay, however long the log.
 #[test]
 fn parked_lookups_read_the_tail_of_a_parked_thread() {
-    use crate::activity::{ActivityEvent, AgentInfo, AgentKey};
+    use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey};
     let (mut cockpit, fake) = cockpit("parked-lookups");
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
     let _ = cockpit.send(thread, "start".into());
@@ -238,7 +240,7 @@ fn parked_lookups_read_the_tail_of_a_parked_thread() {
     cockpit.pump();
     let live_count = cockpit.thread(thread).unwrap().activity().children().len();
     assert_eq!(live_count, 1);
-    let read = cockpit.engine().store.bytes_read();
+    let read = cockpit.engine().store().bytes_read();
     cockpit.park(thread).now().unwrap();
 
     assert_eq!(cockpit.subagent_count(thread), Some(live_count));
@@ -246,7 +248,7 @@ fn parked_lookups_read_the_tail_of_a_parked_thread() {
     let size = std::fs::metadata(
         cockpit
             .engine()
-            .store
+            .store()
             .dir()
             .join(thread.thread().to_string())
             .join("log.jsonl"),
@@ -256,11 +258,11 @@ fn parked_lookups_read_the_tail_of_a_parked_thread() {
     assert!(size > 3_000_000);
     // Its row: the header line and one chunk back from the end.
     assert!(
-        cockpit.engine().store.bytes_read() - read <= 256 * 1024,
+        cockpit.engine().store().bytes_read() - read <= 256 * 1024,
         "the parked row read {} bytes of a {size} byte log",
-        cockpit.engine().store.bytes_read() - read
+        cockpit.engine().store().bytes_read() - read
     );
-    let _ = std::fs::remove_dir_all(cockpit.engine().store.dir());
+    let _ = std::fs::remove_dir_all(cockpit.engine().store().dir());
 }
 
 /// Parking returns before the drive's cache is flushed; the store's worker
@@ -272,8 +274,8 @@ fn parking_never_waits_for_the_drive() {
     let _ = cockpit.send(thread, "one".into());
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
-    cockpit.engine().store.settle_all();
-    *crate::store::worker_lock(&cockpit.engine().store.faults().sync_delay) =
+    cockpit.engine().store().settle_all();
+    *ferrite_core::store::worker_lock(&cockpit.engine().store().faults().sync_delay) =
         std::time::Duration::from_secs(3);
     let started = std::time::Instant::now();
     cockpit.park(thread).now().unwrap();
@@ -288,7 +290,7 @@ fn parking_never_waits_for_the_drive() {
             .map(|summary| summary.turns),
         Some(1)
     );
-    *crate::store::worker_lock(&cockpit.engine().store.faults().sync_delay) =
+    *ferrite_core::store::worker_lock(&cockpit.engine().store().faults().sync_delay) =
         std::time::Duration::ZERO;
 }
 
@@ -302,7 +304,7 @@ fn a_failed_sync_holds_the_session_until_it_succeeds() {
     let _ = cockpit.send(thread, "one".into());
     cockpit
         .engine()
-        .store
+        .store()
         .faults()
         .fail_sync
         .store(true, Ordering::SeqCst);
@@ -324,7 +326,7 @@ fn a_failed_sync_holds_the_session_until_it_succeeds() {
     cockpit.pump();
     let log = cockpit
         .engine()
-        .store
+        .store()
         .dir()
         .join(thread.thread().to_string())
         .join("log.jsonl");
@@ -332,7 +334,7 @@ fn a_failed_sync_holds_the_session_until_it_succeeds() {
 
     cockpit
         .engine()
-        .store
+        .store()
         .faults()
         .fail_sync
         .store(false, Ordering::SeqCst);
@@ -355,11 +357,11 @@ fn quitting_writes_every_accepted_record() {
     let _ = cockpit.send(thread, "one".into());
     live(&fake).send(text("still streaming")).unwrap();
     cockpit.pump();
-    let (_, full) = cockpit.engine().store.syncs();
+    let (_, full) = cockpit.engine().store().syncs();
     cockpit.halt_sessions();
     let log = cockpit
         .engine()
-        .store
+        .store()
         .dir()
         .join(thread.thread().to_string())
         .join("log.jsonl");
@@ -373,7 +375,7 @@ fn quitting_writes_every_accepted_record() {
     // Quit waits on the final syncs only so long (QUIT_SYNC_DEADLINE); a
     // slow drive finishes the full sync after it.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while cockpit.engine().store.syncs().1 <= full {
+    while cockpit.engine().store().syncs().1 <= full {
         assert!(
             std::time::Instant::now() < deadline,
             "synced through the drive's cache"
@@ -381,7 +383,7 @@ fn quitting_writes_every_accepted_record() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert_eq!(
-        cockpit.engine().store.open_threads().unwrap(),
+        cockpit.engine().store().open_threads().unwrap(),
         vec![thread.thread()],
         "reopened next launch"
     );
@@ -397,17 +399,15 @@ fn what_quitting_cannot_write_is_kept_and_reported() {
     live(&fake).send(text("unsaved words")).unwrap();
     cockpit.pump();
     // A descriptor that cannot write: every append fails.
-    cockpit.engine().threads[&thread.thread()]
-        .writer
-        .break_writes();
+    cockpit.engine().break_writes(thread.thread());
     cockpit.halt_sessions();
-    let kept = cockpit.engine().store.pending_records(thread.thread());
+    let kept = cockpit.engine().store().pending_records(thread.thread());
     assert_eq!(kept.len(), 1);
     assert!(std::fs::read_to_string(&kept[0])
         .unwrap()
         .contains("unsaved words"));
 
-    let dir = cockpit.engine().store.dir().to_path_buf();
+    let dir = cockpit.engine().store().dir().to_path_buf();
     drop(cockpit);
     let mut relaunched = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
     // The relaunch holds its machine under a new id.
@@ -492,7 +492,7 @@ fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
     let log = std::fs::read_to_string(
         cockpit
             .engine()
-            .store
+            .store()
             .dir()
             .join(thread.thread().to_string())
             .join("log.jsonl"),
@@ -502,7 +502,7 @@ fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
         !log.contains("late-claude"),
         "no old word after the switch's line"
     );
-    let _ = std::fs::remove_dir_all(cockpit.engine().store.dir());
+    let _ = std::fs::remove_dir_all(cockpit.engine().store().dir());
 }
 
 /// A saved queue that cannot be read starts empty — and says so.
@@ -517,7 +517,7 @@ fn an_unreadable_saved_queue_is_said_not_silently_dropped() {
     std::fs::write(
         cockpit
             .engine()
-            .store
+            .store()
             .dir()
             .join(thread.thread().to_string())
             .join("queue.json"),

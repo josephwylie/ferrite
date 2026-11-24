@@ -92,7 +92,7 @@ impl Work {
 /// work into the background that nothing else accounts for, and what the
 /// Server holds of it as the Facts hold it, which the details card reads
 /// too: the PRs it watches and its open Delegates.
-fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>, facts: Option<&ThreadFacts>) -> Vec<Work> {
+fn running_work(open: &ferrite_client::cockpit::ThreadView<'_>, facts: Option<&ThreadFacts>) -> Vec<Work> {
     use ferrite_core::activity::AgentStatus;
     use ferrite_core::progress::TaskStatus;
     let transcript = open.transcript();

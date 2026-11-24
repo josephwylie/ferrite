@@ -24,7 +24,7 @@ impl<T> Ask<T> {
 
     /// Answered already. It rings the bell, so the pump that holds it looks.
     pub(crate) fn answered(result: io::Result<T>) -> Self {
-        let (answer, answered) = crate::doorbell::channel();
+        let (answer, answered) = ferrite_core::doorbell::channel();
         let _ = answer.send(result);
         Self { answer: answered }
     }

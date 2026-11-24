@@ -31,13 +31,13 @@ pub(super) struct Queue {
     dirty: bool,
 }
 
-pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Queue {
     /// The live writers still alive.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn live_writers(&self) -> Vec<Arc<Mutex<WriterState>>> {
         self.live.iter().filter_map(Weak::upgrade).collect()
     }
@@ -219,7 +219,7 @@ fn step(writer: &Mutex<WriterState>) -> bool {
                 state.fully_synced = std::time::Instant::now();
             }
             state.failure = None;
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             state.shared.journal("synced", len);
             true
         }

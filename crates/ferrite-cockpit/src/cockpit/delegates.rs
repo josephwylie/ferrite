@@ -8,7 +8,7 @@
 
 use super::*;
 use crate::notifications::{Alert, RowTarget};
-use ferrite_core::cockpit::ServerState;
+use ferrite_client::cockpit::ServerState;
 use ferrite_core::delegate::{self, DelegateId, Delegated};
 use ferrite_core::notifications::{DecisionNoticeId, RequestKind};
 use ferrite_core::server::ServerId;

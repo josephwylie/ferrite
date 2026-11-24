@@ -468,8 +468,8 @@ impl Bridge {
         self.signed_in.swap(false, Ordering::AcqRel)
     }
 
-    #[cfg(test)]
-    pub(crate) fn signed_in(&self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn signed_in(&self) {
         self.signed_in.store(true, Ordering::Release);
     }
 

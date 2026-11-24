@@ -47,7 +47,7 @@ pub(crate) use working_set::WorkingSets;
 
 impl CockpitView {
     /// Note that the agent of each of these Threads worked this frame.
-    pub(super) fn note_work(&mut self, frame: &[ferrite_core::cockpit::PaneUpdate]) {
+    pub(super) fn note_work(&mut self, frame: &[ferrite_client::cockpit::PaneUpdate]) {
         self.tools
             .worked
             .extend(frame.iter().map(|update| update.thread));

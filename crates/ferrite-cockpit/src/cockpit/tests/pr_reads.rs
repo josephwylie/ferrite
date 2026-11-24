@@ -3,7 +3,7 @@
 use super::pr::snapshot;
 use super::*;
 use crate::cockpit::surfaces::SurfaceId;
-use ferrite_core::cockpit::HeldRead;
+use ferrite_client::cockpit::HeldRead;
 use ferrite_core::protocol::{ReviewPullRequest, WirePr, WirePrState, WirePrUnread};
 use ferrite_reviewr::forge::PrView;
 
