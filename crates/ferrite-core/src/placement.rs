@@ -6,16 +6,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Mutex;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::chunked::{self, Cancellation, Progress};
-use crate::project::ProjectId;
+use crate::spawn::NoConsoleWindow;
 use crate::tree::{self, Entry, Exchange, Manifest, Root, Sent, Side, Stopped};
-use crate::workspace::registry::Registry;
-use crate::workspace::Repositories;
 
 /// Where a Project of this computer was copied to on a Machine: which
 /// Project there is its counterpart, whatever git says of either.
@@ -137,21 +136,21 @@ pub enum Across<'a> {
     Between,
 }
 
-/// The counterpart there of the Project at `root` whose repository is
-/// `repository`: the first Project there of the same repository, else the
-/// one a Placement says it was copied to or from.
-pub fn counterpart(
+/// The counterpart of the Project at `root` whose repository is
+/// `repository`, among the Projects `there`, each by its id and root: the
+/// first of the same repository, else the one a Placement says it was
+/// copied to or from.
+pub fn counterpart<Id: Copy + Ord>(
     root: &Path,
     repository: Option<&str>,
     across: Across<'_>,
-    there: &Registry,
-    repositories: &Repositories,
-) -> Option<ProjectId> {
+    there: &[(Id, PathBuf)],
+    repositories: &BTreeMap<Id, String>,
+) -> Option<Id> {
     let by_repository = repository.and_then(|repository| {
         there
-            .projects()
             .iter()
-            .find(|project| repositories.get(&project.id).map(String::as_str) == Some(repository))
+            .find(|(id, _)| repositories.get(id).map(String::as_str) == Some(repository))
     });
     let placed = match across {
         Across::ToMachine(placements) => placements
@@ -167,9 +166,9 @@ pub fn counterpart(
     by_repository
         .or_else(|| {
             let placed = placed?;
-            there.projects().iter().find(|project| &project.root == placed)
+            there.iter().find(|(_, root)| root == placed)
         })
-        .map(|project| project.id)
+        .map(|(id, _)| *id)
 }
 
 /// Why `dest`, a directory on a Machine as the operator gave it, cannot
@@ -219,7 +218,7 @@ pub struct Ignored {
 /// What git ignores in the checkout at `root`, each directory as a whole:
 /// none outside git.
 pub fn ignored(root: &Path) -> Vec<Ignored> {
-    let Ok(listed) = crate::workspace::git(
+    let Some(listed) = git(
         root,
         &["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"],
     ) else {
@@ -239,7 +238,7 @@ pub fn ignored(root: &Path) -> Vec<Ignored> {
 /// (`.worktrees/feature`), by their paths under it: each one's `.git` names
 /// its repository by a path of this computer, so none is copied.
 pub fn worktrees(root: &Path) -> Vec<String> {
-    let Ok(listed) = crate::workspace::git(root, &["worktree", "list", "--porcelain", "-z"]) else {
+    let Some(listed) = git(root, &["worktree", "list", "--porcelain", "-z"]) else {
         return Vec::new();
     };
     let Ok(root) = dunce::canonicalize(root) else {
@@ -298,6 +297,24 @@ pub fn size(root: &Path, path: &str) -> u64 {
     walk(&root.join(path))
 }
 
+/// What git prints for `args` in the checkout at `root`, or None when it
+/// fails. Without git's optional locks, as the Engine's reads run: an agent
+/// may be committing in that checkout.
+fn git(root: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .no_console_window()
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// A Project folder of this computer as a copy sends it: what git would
 /// check out on a Machine. From a computer that keeps no permission bits
 /// (Windows), each file gets its own ([`Checkout::list`]); a file git has
@@ -349,7 +366,7 @@ impl Checkout {
     /// The checkout at `root` on a computer that keeps no permission bits
     /// and checks text out with CRLF.
     pub fn from_windows(root: &Path) -> Self {
-        let lines = |args: &[&str]| crate::workspace::git(root, args).unwrap_or_default();
+        let lines = |args: &[&str]| git(root, args).unwrap_or_default();
         let crlf = lines(&["ls-files", "--eol", "-z"])
             .split('\0')
             .filter_map(|record| {

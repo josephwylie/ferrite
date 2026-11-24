@@ -11,7 +11,7 @@ use super::*;
 use ferrite_client::cockpit::ServerState;
 use ferrite_core::machine::Failure;
 use ferrite_core::placement::{self, Across, Placement};
-use ferrite_core::workspace::Repositories;
+use ferrite_core::protocol::Repositories;
 use gpui::App;
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -211,11 +211,17 @@ impl CockpitView {
             _ => Across::Between,
         };
         let registry = cockpit.registry(lookup.to);
+        let projects: Vec<_> = registry
+            .reading()
+            .projects()
+            .iter()
+            .map(|project| (project.id, project.root.clone()))
+            .collect();
         placement::counterpart(
             root,
             repository.map(String::as_str),
             across,
-            registry.reading(),
+            &projects,
             lookup.there.repositories(),
         )
         .map(|project| registry.project_key(project))

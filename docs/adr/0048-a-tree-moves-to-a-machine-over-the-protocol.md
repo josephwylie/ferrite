@@ -216,6 +216,9 @@ Windows window.
   window learns each machine's repositories by asking its Server
   (`Op::Repositories`, additive under ADR 0025; an older Server answers
   none), so a pick waits for both answers before it moves the Draft.
+  `placement` is on the shared side (ADR 0049): it names no Engine module,
+  so `counterpart` takes the Projects there by id and root, and the
+  answer's type is the protocol's (`protocol::Repositories`).
 - **Each Machine has a projects folder**, `projects_dir` on `Machine`
   (default `~/projects`, not written while it is the default), changed on
   its Connections row: its ⋯ menu's "Projects folder…" opens a field in the

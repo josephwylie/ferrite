@@ -701,7 +701,7 @@ impl Remote {
         })
     }
 
-    pub(crate) fn repositories(&mut self) -> io::Result<Receiver<io::Result<ferrite_core::workspace::Repositories>>> {
+    pub(crate) fn repositories(&mut self) -> io::Result<Receiver<io::Result<ferrite_core::protocol::Repositories>>> {
         self.ask(Op::Repositories, |done| match done {
             Done::Repositories { projects } => Some(
                 projects

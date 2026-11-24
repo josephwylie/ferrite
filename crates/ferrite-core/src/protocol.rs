@@ -1811,8 +1811,12 @@ pub struct WireRepository {
     pub repository: String,
 }
 
-impl From<crate::workspace::Repositories> for Done {
-    fn from(repositories: crate::workspace::Repositories) -> Self {
+/// Which repository each Project is, by its id: those whose root is a git
+/// checkout with a remote that names a host. A `repositories`' answer.
+pub type Repositories = BTreeMap<ProjectId, String>;
+
+impl From<Repositories> for Done {
+    fn from(repositories: Repositories) -> Self {
         Done::Repositories {
             projects: repositories
                 .into_iter()

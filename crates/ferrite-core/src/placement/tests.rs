@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use super::*;
+use crate::project::ProjectId;
+use crate::protocol::Repositories;
 use crate::tree::{Asked, Reply, Request, Session};
+use crate::workspace::registry::Registry;
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ferrite-placement-{}-{name}", std::process::id()));
@@ -10,10 +13,11 @@ fn scratch(name: &str) -> PathBuf {
     dunce::canonicalize(&dir).unwrap()
 }
 
-/// A Machine's registry of a Project at each of `roots`, made under `dir`.
-fn registry(dir: &Path, roots: &[&str]) -> (Registry, Vec<(ProjectId, PathBuf)>) {
+/// The id and root of a Project at each of `roots`, registered on a
+/// Machine whose registry is under `dir`.
+fn registered(dir: &Path, roots: &[&str]) -> Vec<(ProjectId, PathBuf)> {
     let mut registry = Registry::open(&dir.join("registry")).unwrap();
-    let projects = roots
+    roots
         .iter()
         .map(|root| {
             let root = dir.join(root);
@@ -21,14 +25,13 @@ fn registry(dir: &Path, roots: &[&str]) -> (Registry, Vec<(ProjectId, PathBuf)>)
             let id = registry.register(&root).unwrap();
             (id, registry.project(id).unwrap().root.clone())
         })
-        .collect();
-    (registry, projects)
+        .collect()
 }
 
 #[test]
 fn a_counterpart_is_the_first_project_there_of_the_same_repository() {
     let dir = scratch("by-repository");
-    let (there, projects) = registry(&dir, &["other", "app", "app-again"]);
+    let projects = registered(&dir, &["other", "app", "app-again"]);
     let repositories: Repositories = BTreeMap::from([
         (projects[0].0, "github.com/acme/other".to_string()),
         (projects[1].0, "github.com/acme/app".to_string()),
@@ -38,7 +41,7 @@ fn a_counterpart_is_the_first_project_there_of_the_same_repository() {
         Path::new("C:/src/app"),
         Some("github.com/acme/app"),
         Across::ToMachine(&[]),
-        &there,
+        &projects,
         &repositories,
     );
     assert_eq!(found, Some(projects[1].0));
@@ -47,7 +50,7 @@ fn a_counterpart_is_the_first_project_there_of_the_same_repository() {
 #[test]
 fn a_project_with_no_repository_is_found_by_its_placement_either_way() {
     let dir = scratch("by-placement");
-    let (there, projects) = registry(&dir, &["notes", "elsewhere"]);
+    let projects = registered(&dir, &["notes", "elsewhere"]);
     let local = PathBuf::from("C:/Users/me/notes");
     let placements = [Placement {
         local_root: local.clone(),
@@ -55,11 +58,11 @@ fn a_project_with_no_repository_is_found_by_its_placement_either_way() {
     }];
     let none = Repositories::new();
     assert_eq!(
-        counterpart(&local, None, Across::ToMachine(&placements), &there, &none),
+        counterpart(&local, None, Across::ToMachine(&placements), &projects, &none),
         Some(projects[0].0)
     );
 
-    let (here, local_projects) = registry(&dir.join("here"), &["notes"]);
+    let local_projects = registered(&dir.join("here"), &["notes"]);
     let back = [Placement {
         local_root: local_projects[0].1.clone(),
         remote_root: PathBuf::from("/home/me/projects/notes"),
@@ -69,7 +72,7 @@ fn a_project_with_no_repository_is_found_by_its_placement_either_way() {
             Path::new("/home/me/projects/notes"),
             None,
             Across::FromMachine(&back),
-            &here,
+            &local_projects,
             &none
         ),
         Some(local_projects[0].0)
@@ -79,20 +82,20 @@ fn a_project_with_no_repository_is_found_by_its_placement_either_way() {
 #[test]
 fn a_project_with_neither_has_no_counterpart() {
     let dir = scratch("none");
-    let (there, projects) = registry(&dir, &["app"]);
+    let projects = registered(&dir, &["app"]);
     let repositories: Repositories = BTreeMap::from([(projects[0].0, "github.com/acme/app".to_string())]);
     let root = Path::new("C:/src/tool");
     assert_eq!(
-        counterpart(root, Some("github.com/acme/tool"), Across::ToMachine(&[]), &there, &repositories),
+        counterpart(root, Some("github.com/acme/tool"), Across::ToMachine(&[]), &projects, &repositories),
         None
     );
-    assert_eq!(counterpart(root, None, Across::Between, &there, &repositories), None);
+    assert_eq!(counterpart(root, None, Across::Between, &projects, &repositories), None);
     let elsewhere = [Placement {
         local_root: PathBuf::from("C:/src/other"),
         remote_root: projects[0].1.clone(),
     }];
     assert_eq!(
-        counterpart(root, None, Across::ToMachine(&elsewhere), &there, &repositories),
+        counterpart(root, None, Across::ToMachine(&elsewhere), &projects, &repositories),
         None
     );
 }

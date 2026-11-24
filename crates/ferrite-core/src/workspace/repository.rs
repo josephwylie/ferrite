@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 use super::registry::Registry;
 use crate::project::ProjectId;
+use crate::protocol::Repositories;
 
 /// The repository the checkout at `root` is, by its primary remote: `None`
 /// outside git, or with no remote that names a host.
@@ -26,10 +27,6 @@ pub fn repository_key(root: &Path) -> Option<String> {
     let remotes = remotes(&config);
     primary(&remotes).and_then(normalize)
 }
-
-/// Which repository each Project is, by its id: those whose root is a git
-/// checkout with a remote that names a host.
-pub type Repositories = BTreeMap<ProjectId, String>;
 
 /// Each Project's id and root, to read their repositories off the thread
 /// that holds the registry.

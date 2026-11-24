@@ -2042,12 +2042,12 @@ impl Cockpit {
     pub fn repositories(
         &mut self,
         machine: MachineId,
-    ) -> io::Result<Receiver<io::Result<ferrite_core::workspace::Repositories>>> {
+    ) -> io::Result<Receiver<io::Result<ferrite_core::protocol::Repositories>>> {
         match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.repositories(),
             Link::InProcess(engine) => {
-                let roots = ferrite_core::workspace::project_roots(engine.registry());
-                Ok(read_here(move || Ok(ferrite_core::workspace::repositories(&roots))))
+                let read = engine.repositories();
+                Ok(read_here(move || Ok(read())))
             }
         }
     }

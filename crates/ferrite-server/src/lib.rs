@@ -920,8 +920,8 @@ impl Server {
                 None => Err(failed("no such Project")),
             },
             Op::Repositories => {
-                let roots = ferrite_core::workspace::project_roots(self.engine.registry());
-                self.read_off_pump(id, request, move || Ok(Some(ferrite_core::workspace::repositories(&roots).into())));
+                let read = self.engine.repositories();
+                self.read_off_pump(id, request, move || Ok(Some(read().into())));
                 return;
             }
             Op::Attachment { request: operation } => {

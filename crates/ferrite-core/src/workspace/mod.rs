@@ -27,7 +27,8 @@ pub mod registry;
 mod repository;
 mod stamp;
 
-pub use repository::{project_roots, repositories, repository_key, Repositories};
+pub(crate) use repository::{project_roots, repositories};
+pub use repository::repository_key;
 pub use stamp::{checkout_stamp, head_of};
 
 /// Move the shared project checkout to an existing branch selected before

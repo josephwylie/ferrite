@@ -1298,6 +1298,14 @@ impl Engine {
         &self.registry
     }
 
+    /// Which repository each Project is, read when the answer is called: a
+    /// `repositories` ask, answered off the thread that holds the Engine,
+    /// since it reads each Project's git config.
+    pub fn repositories(&self) -> impl FnOnce() -> protocol::Repositories + Send + 'static {
+        let roots = workspace::project_roots(&self.registry);
+        move || workspace::repositories(&roots)
+    }
+
     /// Register a Project over these roots (idempotent, canonicalized).
     pub fn register_project_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectId> {
         self.registry.register_directories(roots)
