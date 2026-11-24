@@ -14,14 +14,6 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    // A Details card standing open moves the toast left of it; shut it so
-    // the panel is the only thing in the toast's way.
-    view.update_in(cx, |view, window, cx| {
-        if view.details_open(cx) {
-            view.toggle_details_now(window, cx);
-        }
-    });
-    tick(cx);
     let off_focus = view.read_with(cx, |view, cx| {
         threads
             .iter()
@@ -47,6 +39,16 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
         "the nav is open: its row is the queue, nothing toasts"
     );
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
+    ring(cx);
+    // The folded nav widens the Pane, and a wide Pane stands its Details
+    // card open, which moves the toast left of it; shut it so the panel is
+    // the only thing in the toast's way.
+    view.update_in(cx, |view, window, cx| {
+        if view.details_open(cx) {
+            view.toggle_details_now(window, cx);
+        }
+    });
+    tick(cx);
     ring(cx);
     let toast = cx
         .debug_bounds(selector)
