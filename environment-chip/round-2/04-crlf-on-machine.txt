@@ -1,0 +1,64 @@
+$ pwd
+/home/joseph/ferrite-wsl-machine/home/projects/crlf-app
+$ ls -la ~/projects
+total 12
+drwxr-xr-x 3 joseph joseph 4096 Nov 24 22:17 .
+drwxr-xr-x 5 joseph joseph 4096 Nov 24 22:17 ..
+drwxr-xr-x 6 joseph joseph 4096 Nov 24 22:17 crlf-app
+$ stat -c '%a %n' scripts/run.sh README.md src/main.c tools/win.cmd .gitignore
+755 scripts/run.sh
+644 README.md
+644 src/main.c
+644 tools/win.cmd
+644 .gitignore
+$ ls -a
+.
+..
+.git
+.gitattributes
+.gitignore
+README.md
+scripts
+src
+tools
+$ file scripts/run.sh README.md tools/win.cmd
+scripts/run.sh: POSIX shell script, ASCII text executable
+README.md:      ASCII text
+tools/win.cmd:  DOS batch file, ASCII text, with CRLF line terminators
+$ ./scripts/run.sh
+run.sh ran in /home/joseph/ferrite-wsl-machine/home/projects/crlf-app
+exit 0
+$ git config --local core.autocrlf
+exit 1
+$ git config --local core.filemode
+exit 1
+$ git status --porcelain
+ M README.md
+exit 0
+$ git diff --stat
+ README.md | 1 +
+ 1 file changed, 1 insertion(+)
+$ git ls-files --eol
+i/lf    w/lf    attr/                 	.gitattributes
+i/lf    w/lf    attr/                 	.gitignore
+i/lf    w/lf    attr/                 	README.md
+i/lf    w/lf    attr/                 	scripts/run.sh
+i/lf    w/lf    attr/                 	src/main.c
+i/lf    w/crlf  attr/text eol=crlf    	tools/win.cmd
+$ cat .git/config
+[core]
+	repositoryformatversion = 0
+	bare = false
+	logallrefupdates = true
+	symlinks = false
+[remote "origin"]
+	url = C:/Users/josep/AppData/Local/Temp/ferrite-wsl-machine/home/src/crlf-origin
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[branch "main"]
+	remote = origin
+	merge = refs/heads/main
+$ tail -1 README.md
+An uncommitted line.
+$ git config --local core.ignorecase
+exit 1
+# README.md's M is the line added to it on Windows and never committed (make_projects.sh); the converted files (CRLF here, LF there) all read as unchanged.

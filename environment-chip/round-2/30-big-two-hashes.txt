@@ -1,0 +1,7 @@
+# big-two: Copy to 31%, the Machine's Server killed (lost connection; it left .ferrite-10863-*.part), a file added on the Machine, Resume to 52% (the old .part swept), then the window AND the local Server killed; both started again; the sheet opened on the unfinished copy; Resume to the end.
+# local files: 301; Machine files: 302
+# diff local -> Machine:
+1a2
+> 878f369e9f77493a7dca8904dc8582d8159621421aff92362f7ffc39d5a65dc3  ./added-there.txt
+# .part files on the Machine:
+none

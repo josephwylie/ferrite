@@ -1,0 +1,8 @@
+baseline fv round trip (find): [0.094, 0.11, 0.093]
+type ~/many2/: 0.250s; first rows drawn 0.484s after typing began (0 extra polls)
+key up: 0.188s {"id":"1","result":{"answer":"pressed","unhandled":[]}}
+key down: 0.172s {"id":"1","result":{"answer":"pressed","unhandled":[]}}
+key down: 0.156s {"id":"1","result":{"answer":"pressed","unhandled":[]}}
+key up: 0.172s {"id":"1","result":{"answer":"pressed","unhandled":[]}}
+key up: 0.187s {"id":"1","result":{"answer":"pressed","unhandled":[]}}
+text rows: 0.110s {"id":"1","result":{"answer":"read","lines":["g19994","g19995","g19996","g19997","g19998","g19999"]}}

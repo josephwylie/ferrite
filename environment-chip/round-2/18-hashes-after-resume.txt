@@ -1,0 +1,8 @@
+# big-app after Cancel, a file added on the Machine, Resume to 43%, the Machine's Server killed (lost connection), Resume after it came back, then the window killed at 78% (the local Server finished the copy)
+# local files (.git excluded; big-app has none): 251; Machine files: 253
+# diff local -> Machine:
+0a1
+> a67ed0f6d9da53476e3d91b5d111b6961a46893782951a7a934b1581fe2adc62  ./.ferrite-9314-1795521369001675-233.part
+1a3
+> 89cf21545515004a0002eb3dcba0a5b19bfe450d13850b2441d00bbbbe77fb14  ./added-there.txt
+# Found here: the .part is the write the killed Machine Server was making. Fixed in cc677dd4 (a write whose process is gone is swept at once); 30-big-two-hashes.txt repeats this with the fix and none is left.
