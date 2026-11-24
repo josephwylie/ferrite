@@ -44,6 +44,25 @@ pub struct TitleRequest {
 
 pub use crate::providers::oneshot::Form as TitleForm;
 
+/// A Thread's title to write from its first prompt (`Spawner::title`):
+/// whose, on which Provider, and the models that Provider offers, which
+/// name Codex's small one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Job {
+    pub thread: crate::ThreadId,
+    pub provider: Provider,
+    pub prompt: String,
+    pub catalog: Vec<crate::ModelInfo>,
+}
+
+/// What the titler wrote for a Thread: its title, or none when it could
+/// not write one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Titled {
+    pub thread: crate::ThreadId,
+    pub title: Option<String>,
+}
+
 /// The instruction text a provider puts in its form.
 pub fn title_prompt(req: &TitleRequest) -> String {
     let mut text = String::from(

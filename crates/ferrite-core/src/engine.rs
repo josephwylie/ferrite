@@ -203,6 +203,11 @@ pub trait Spawner {
     /// production delegates to the provider one-shot module.
     fn suggest(&mut self, _request: crate::suggest::Request, _replies: Sender<Suggestion>) {}
 
+    /// Write a Thread's title from its first prompt, off the caller's
+    /// thread, its answer to `replies`. Scripted and demo adapters write
+    /// none; production runs the Provider's CLI (`titler::write`).
+    fn title(&mut self, _job: crate::titler::Job, _replies: Sender<crate::titler::Titled>) {}
+
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>>;
 
     /// The operator's effort for `provider`, as it stands now: what a live

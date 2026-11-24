@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 
 mod environments;
 mod everywhere;
+mod on_its_machine;
 
 /// A bridge whose every tunnel ends as ssh does after `failure`.
 fn failing(machine: &Machine, settings_dir: &std::path::Path, failure: Failure) -> Bridge {
@@ -314,15 +315,24 @@ fn two_machines(name: &str, panes: usize) -> (Cockpit, Fake, Machines, Agents) {
 
 /// `two_machines`, box saved as `saved`.
 fn two_machines_with(name: &str, panes: usize, saved: Machine) -> (Cockpit, Fake, Machines, Agents) {
+    let agents = Agents::default();
+    let (core, fake, machines) = beside_serving(name, panes, saved, Box::new(agents.clone()));
+    (core, fake, machines, agents)
+}
+
+/// This computer, an Engine of its own with `panes` Threads, and box
+/// beside it, saved as `saved`, whose Server runs in this process with
+/// `spawner` for its CLIs: both attached.
+fn beside_serving(
+    name: &str,
+    panes: usize,
+    saved: Machine,
+    spawner: Box<dyn ferrite_core::engine::Spawner + Send>,
+) -> (Cockpit, Fake, Machines) {
     let (mut core, fake) = cockpit(&format!("machines-{name}"), panes);
     fresh(name);
-    let agents = Agents::default();
     // `serving` dials it itself, to keep what the window sends.
-    let _ = ferrite_server::fixture_machine(
-        settings_dir(name).join("box"),
-        Box::new(agents.clone()),
-    )
-    .unwrap();
+    let _ = ferrite_server::fixture_machine(settings_dir(name).join("box"), spawner).unwrap();
     let mut machines = Machines::new(reach(name, serving), &[saved], None, true);
     machines.beside(&mut core);
     let on_box = machines.held(1).expect("box is held");
@@ -330,7 +340,7 @@ fn two_machines_with(name: &str, panes: usize, saved: Machine) -> (Cockpit, Fake
         core.pump();
         attached(&core, on_box)
     });
-    (core, fake, machines, agents)
+    (core, fake, machines)
 }
 
 /// A Claude Thread opened on `machine`, in this checkout.
