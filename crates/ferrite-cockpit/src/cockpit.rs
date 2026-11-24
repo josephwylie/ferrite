@@ -66,6 +66,7 @@ mod setup_sync;
 mod sheets;
 mod side_chat_view;
 mod rename;
+mod remote_path;
 mod returns;
 use rename::{rename_field, RenameTarget};
 mod snooze;

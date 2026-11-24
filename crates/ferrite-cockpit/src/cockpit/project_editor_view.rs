@@ -8,11 +8,10 @@
 //! says as a `ProjectEditorEvent`, which the Cockpit answers once the
 //! card's own update has ended.
 
+use super::remote_path::RemotePath;
 use super::*;
-use ferrite_core::folder::Listing;
 use gpui::{App, WeakEntity};
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, TryRecvError};
 
 /// The Project card. One surface serves both verbs: `target` names the
 /// Project being edited, or `None` while one is being created.
@@ -40,45 +39,8 @@ pub(crate) struct ProjectEditorView {
     pub(super) focus: FocusHandle,
 }
 
-/// The Project card's path field on a machine (ADR 0026), where no folder
-/// dialog can browse: what is typed completes against the directory it
-/// names there, listed by the machine's Server (`list_dir`).
-pub(super) struct RemotePath {
-    pub(super) field: Entity<Composer>,
-    /// The listing the completions come from, of the directory as typed:
-    /// empty when it could not be read, which is not asked again.
-    listed: Option<(String, Listing)>,
-    /// A listing asked for and not answered yet, of the directory as typed.
-    asking: Option<(String, Receiver<std::io::Result<Listing>>)>,
-}
-
 /// Where the field starts: the machine's home, which its Server spells out.
 const REMOTE_HOME: &str = "~/";
-
-/// How many completions the card lists under the field.
-const REMOTE_COMPLETIONS: usize = 8;
-
-/// `path` as the machine's Server spelled it out in the listing in hand —
-/// of it, or of the directory it is in — so `~` stages as the machine's
-/// home, named for its leaf, and one directory typed two ways stages
-/// once. As typed otherwise: the Server spells `~` out when it registers.
-fn spelled_out(remote: &RemotePath, path: &str) -> PathBuf {
-    let (directory, leaf) = split_typed(path);
-    match &remote.listed {
-        Some((listed, listing)) if listed.trim_end_matches('/') == path => listing.path.clone(),
-        Some((listed, listing)) if listed == directory => listing.path.join(leaf),
-        _ => path.into(),
-    }
-}
-
-/// A typed path's directory, to list, and the start of the name in it, to
-/// complete: `~/src/fe` is `~/src/` and `fe`.
-fn split_typed(typed: &str) -> (&str, &str) {
-    match typed.rfind('/') {
-        Some(at) => typed.split_at(at + 1),
-        None => ("", typed),
-    }
-}
 
 /// What the card draws from, as the Cockpit has it this frame.
 pub(crate) struct ProjectEditorInputs {
@@ -147,20 +109,12 @@ impl ProjectEditorView {
 
     /// The path field a new card gets on a machine.
     fn remote_path(cx: &mut Context<Self>) -> RemotePath {
-        let field = cx.new(Composer::new);
-        field.update(cx, |field, cx| {
-            field.set_role(ferrite_pane::composer::Role::Field(None), cx);
-            field.set(REMOTE_HOME.into(), cx);
-        });
-        cx.subscribe(&field, |_, _, _: &Edited, cx| {
+        let remote = RemotePath::new(REMOTE_HOME.into(), cx);
+        cx.subscribe(&remote.field, |_, _, _: &Edited, cx| {
             cx.emit(ProjectEditorEvent::PathEdited)
         })
         .detach();
-        RemotePath {
-            field,
-            listed: None,
-            asking: None,
-        }
+        remote
     }
 
     /// Whether the card's confirm can commit — a new Project needs at least
@@ -250,115 +204,39 @@ impl ProjectEditorView {
         .detach();
     }
 
-    /// The card's path field, on a machine.
-    fn remote(&self) -> Option<&RemotePath> {
-        self.remote.as_ref()
-    }
-
-    /// The directory the card's field names, unless its listing is in
-    /// hand or on its way.
-    pub(super) fn unlisted_directory(&self, cx: &App) -> Option<String> {
-        let remote = self.remote()?;
-        let typed = remote.field.read(cx).text();
-        let (directory, _) = split_typed(typed);
-        let known = |held: Option<&String>| held.is_some_and(|held| held == directory);
-        if known(remote.listed.as_ref().map(|(at, _)| at))
-            || known(remote.asking.as_ref().map(|(at, _)| at))
-        {
-            return None;
-        }
-        Some(directory.to_string())
-    }
-
-    /// The listing the Cockpit asked the machine for, on its way.
-    pub(super) fn ask(
-        &mut self,
-        asking: Option<(String, Receiver<std::io::Result<Listing>>)>,
-        cx: &mut Context<Self>,
-    ) {
+    /// Ask the card's machine for the directory its path field names.
+    pub(super) fn list_remote_path(&mut self, model: &Entity<Cockpit>, cx: &mut Context<Self>) {
+        let machine = self.machine;
         if let Some(remote) = self.remote.as_mut() {
-            remote.asking = asking;
+            remote.list(model, machine, cx);
         }
-        cx.notify();
     }
 
-    /// Take the machine's answer to the field's listing, once it lands. A
-    /// directory that cannot be read lists nothing; one whose answer the
-    /// lost connection took is asked again at the next keystroke.
+    /// Take the machine's answer to the field's listing, once it lands.
     pub(super) fn poll_remote_path(&mut self, cx: &mut Context<Self>) {
-        let Some(remote) = self.remote.as_mut() else {
-            return;
-        };
-        let Some((directory, answer)) = &remote.asking else {
-            return;
-        };
-        let listing = match answer.try_recv() {
-            Err(TryRecvError::Empty) => return,
-            Ok(Ok(listing)) => Some(listing),
-            Ok(Err(_)) => Some(Listing {
-                path: directory.into(),
-                entries: Vec::new(),
-            }),
-            Err(TryRecvError::Disconnected) => None,
-        };
-        if let Some(listing) = listing {
-            remote.listed = Some((directory.clone(), listing));
+        if self.remote.as_mut().is_some_and(RemotePath::poll) {
+            cx.notify();
         }
-        remote.asking = None;
-        cx.notify();
     }
 
-    /// The directories in the listing whose names start as the field's
-    /// last name does; a dot directory only once a dot is typed.
+    /// The directories that complete the path field.
     pub(super) fn remote_completions(&self, cx: &App) -> Vec<String> {
-        let Some(remote) = self.remote() else {
-            return Vec::new();
-        };
-        let typed = remote.field.read(cx).text();
-        let (directory, start) = split_typed(typed);
-        let Some((_, listing)) = remote
-            .listed
+        self.remote
             .as_ref()
-            .filter(|(listed, _)| listed == directory)
-        else {
-            return Vec::new();
-        };
-        listing
-            .entries
-            .iter()
-            .filter(|entry| {
-                entry.directory
-                    && entry.name.starts_with(start)
-                    && (start.starts_with('.') || !entry.name.starts_with('.'))
-            })
-            .take(REMOTE_COMPLETIONS)
-            .map(|entry| entry.name.clone())
-            .collect()
+            .map(|remote| remote.completions(cx))
+            .unwrap_or_default()
     }
 
-    /// Complete the field's last name to `name`, a directory: the field
-    /// then lists what is in it.
     fn complete_remote_path(&mut self, name: &str, cx: &mut Context<Self>) {
-        let Some(remote) = self.remote() else {
-            return;
-        };
-        let field = remote.field.clone();
-        let typed = field.read(cx).text().to_string();
-        let (directory, _) = split_typed(&typed);
-        let completed = format!("{directory}{name}/");
-        field.update(cx, |field, cx| field.set(completed, cx));
+        if let Some(remote) = &self.remote {
+            remote.complete(name, cx);
+        }
     }
 
     /// Tab in the path field: complete it to the first directory that
     /// fits. False when the field does not hold the keyboard.
     pub(super) fn tab_remote_path(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
-        if !self.remote_path_focused(window, cx) {
-            return false;
-        }
-        if let Some(first) = self.remote_completions(cx).into_iter().next() {
-            self.complete_remote_path(&first, cx);
-        }
-        true
+        self.remote.as_ref().is_some_and(|remote| remote.tab(window, cx))
     }
 
     /// ↵ in the path field: the directory it names, for the card, and the
@@ -369,10 +247,7 @@ impl ProjectEditorView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<PathBuf> {
-        if !self.remote_path_focused(window, cx) {
-            return None;
-        }
-        let remote = self.remote()?;
+        let remote = self.remote.as_ref().filter(|remote| remote.focused(window, cx))?;
         let field = remote.field.clone();
         let typed = field.read(cx).text().trim().to_string();
         let path = match typed.trim_end_matches('/') {
@@ -380,49 +255,9 @@ impl ProjectEditorView {
             "" => return None,
             path => path,
         };
-        let path = spelled_out(remote, path);
+        let path = remote.spelled_out(path);
         field.update(cx, |field, cx| field.set(String::new(), cx));
         Some(path)
-    }
-
-    fn remote_path_focused(&self, window: &Window, cx: &App) -> bool {
-        self.remote()
-            .is_some_and(|remote| remote.field.read(cx).focus_handle(cx).is_focused(window))
-    }
-
-    /// The path field and, under it, the directories that complete it —
-    /// each a press away.
-    fn remote_path_element(
-        &self,
-        remote: &RemotePath,
-        machine: &str,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let focused = remote.field.read(cx).focus_handle(cx).is_focused(window);
-        let completions =
-            self.remote_completions(cx)
-                .into_iter()
-                .enumerate()
-                .map(|(index, name)| {
-                    project_editor::path_completion(index, &name).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.complete_remote_path(&name, cx);
-                        }),
-                    )
-                });
-        div()
-            .flex_shrink_0()
-            .flex()
-            .flex_col()
-            .child(project_editor::path_field(
-                machine,
-                remote.field.clone(),
-                focused,
-            ))
-            .child(project_editor::directory_list(completions.collect()))
     }
 
     /// Project mutations stay visible together in one protected surface.
@@ -510,7 +345,12 @@ impl ProjectEditorView {
         // On a machine a path field stands in for the folder dialog, which
         // could only browse this computer (ADR 0026).
         body = match &self.remote {
-            Some(remote) => body.child(self.remote_path_element(remote, &machine, window, cx)),
+            Some(remote) => body.child(remote.element(
+                format!("Directory on {machine}").into(),
+                window,
+                Self::complete_remote_path,
+                cx,
+            )),
             // Its own flex row, so the control hugs its label on the list's edge.
             None => body.child(
                 div().flex().child(
@@ -875,21 +715,8 @@ impl CockpitView {
         let Some(card) = self.project_card(cx) else {
             return;
         };
-        let Some(directory) = card.read(cx).unlisted_directory(cx) else {
-            return;
-        };
-        let machine = card.read(cx).machine;
-        let asking = if directory.is_empty() {
-            None
-        } else {
-            self.cockpit
-                .update(cx, |cockpit, _| {
-                    cockpit.list_dir(machine, std::path::Path::new(&directory))
-                })
-                .ok()
-                .map(|answer| (directory, answer))
-        };
-        card.update(cx, |card, cx| card.ask(asking, cx));
+        let model = self.cockpit.clone();
+        card.update(cx, |card, cx| card.list_remote_path(&model, cx));
         cx.notify();
     }
 }

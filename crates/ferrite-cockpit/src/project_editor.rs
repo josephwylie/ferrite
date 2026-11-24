@@ -82,14 +82,8 @@ pub fn name_field(editor: impl IntoElement, focused: bool) -> Div {
 
 /// On a machine (ADR 0026), where no folder dialog can browse: the row a
 /// directory on the machine is typed into, in the name row's field.
-pub fn path_field(machine: &str, editor: impl IntoElement, focused: bool) -> Div {
-    field(
-        format!("Directory on {machine}").into(),
-        editor,
-        focused,
-        "project-path-focused",
-        false,
-    )
+pub fn path_field(label: SharedString, editor: impl IntoElement, focused: bool) -> Div {
+    field(label, editor, focused, "project-path-focused", false)
 }
 
 /// Any one-line field on a sheet in the name row's face.
@@ -156,21 +150,15 @@ fn field(
 }
 
 /// One directory the machine's Server listed under what the path field
-/// holds: its name and a `/`, `INK_SUBTLE`, `paint::RAISED` under the
-/// pointer, hung a cell outside the text's edge like a directory row.
-pub fn path_completion(index: usize, name: &str) -> gpui::Stateful<Div> {
+/// holds: its name and a `/` in `INK_SUBTLE`, the quiet text control
+/// `add_directory` is, hung a cell outside the text's edge.
+pub fn path_completion(index: usize, name: &str, cx: &App) -> Button {
     let selector: SharedString = format!("project-path-completion:{name}").into();
-    div()
-        .id(("project-path-completion", index))
+    components::form_button(("project-path-completion", index), cx)
         .debug_selector(move || selector.to_string())
-        .flex()
-        .items_center()
-        .flex_shrink_0()
         .h(px(ROW))
         .ml(px(-CH))
         .px(px(CH))
-        .hover_raised(format!("project-path-completion-{index}"))
-        .cursor_default()
         .child(
             components::text_ui()
                 .min_w_0()
@@ -190,7 +178,7 @@ pub fn error_line(message: SharedString) -> Div {
 }
 
 /// The directory list: no frame, the rows flush on the grid.
-pub fn directory_list(rows: Vec<gpui::Stateful<Div>>) -> Div {
+pub fn directory_list(rows: impl IntoIterator<Item = impl IntoElement>) -> Div {
     div().flex_shrink_0().flex().flex_col().children(rows)
 }
 
