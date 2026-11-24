@@ -375,7 +375,8 @@ computer and each Machine, both ways, with this computer as the hub. It runs
 on its own as a Machine connects, as the setup here changes and every minute,
 unless that Machine's "Sync my setup" is off. A file both sides changed goes
 to the newer, and the other copy is kept; two sign-ins that differ with none
-agreed wait for the operator to pick one. A sync that would remove most of
+agreed wait for the operator to pick one, and a sign-in is never removed: a
+side signed out takes the other's. A sync that would remove most of
 an item, or all of one, waits for "Sync anyway", and what it removes here is
 kept in a trash folder for 14 days. Never the agents' transcripts, history
 or caches (ADR 0048).
