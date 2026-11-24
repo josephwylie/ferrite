@@ -5,6 +5,7 @@
 //! files this way.
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::ops::Range;
@@ -58,6 +59,12 @@ impl<T> Drop for Part<T> {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
     }
+}
+
+/// Whether `name` is the temporary file of a file still being received.
+pub fn receiving(name: &OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|name| name.starts_with(".ferrite-") && name.ends_with(".part"))
 }
 
 /// The files one sender has under way, each by its number, and what the

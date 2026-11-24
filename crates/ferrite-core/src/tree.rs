@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -137,6 +138,10 @@ const SCAN_PATIENCE: Duration = Duration::from_secs(600);
 /// holding at most this many bytes of files.
 const AHEAD: usize = 64;
 const AHEAD_BYTES: u64 = 4 << 20;
+/// Each write's number, never the same twice in this process: a send cut
+/// short leaves its last write under way on a connection the next send
+/// may use.
+static WRITES: AtomicU64 = AtomicU64::new(0);
 
 /// What tree ops are asked through: a request goes out at once and its
 /// reply is waited for later, the replies coming in the order asked.
@@ -339,7 +344,6 @@ pub fn send(
         total,
         sent: Sent::default(),
     };
-    let mut writes = 0;
     for step in steps {
         cancel.check()?;
         let root = dest.clone();
@@ -362,8 +366,7 @@ pub fn send(
                 size,
                 executable,
             } => {
-                writes += 1;
-                let write = writes;
+                let write = WRITES.fetch_add(1, Ordering::Relaxed) + 1;
                 let file =
                     std::fs::File::open(local(source, path)).map_err(|error| named(step, error))?;
                 let begin = Request::Begin {

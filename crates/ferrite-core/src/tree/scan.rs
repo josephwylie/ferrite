@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 use sha2::{Digest, Sha256};
 
 use super::{check_path, Entry, Manifest};
-use crate::chunked::hex;
+use crate::chunked::{self, hex};
 
 struct Hashed {
     size: u64,
@@ -27,9 +27,10 @@ const SETTLED: Duration = Duration::from_secs(2);
 
 /// `root` as a Manifest, with `skip` (paths in it) and everything under
 /// them left out. Symlinks are listed and never followed; what is none of a
-/// file, a directory or a symlink (a socket, a FIFO) is left out. A file is
-/// read only when its size or modification time moved since this process
-/// last listed `root`.
+/// file, a directory or a symlink (a socket, a FIFO), and a file's temporary
+/// file while it is received there, is left out. A file is read only when
+/// its size or modification time moved since this process last listed
+/// `root`.
 pub fn scan(root: &Path, skip: &[String]) -> io::Result<Manifest> {
     for path in skip {
         check_path(path)?;
@@ -67,7 +68,7 @@ pub fn scan(root: &Path, skip: &[String]) -> io::Result<Manifest> {
             } else if kind.is_dir() {
                 dirs.push((entry.path(), path.clone()));
                 Entry::Dir
-            } else if kind.is_file() {
+            } else if kind.is_file() && !chunked::receiving(&entry.file_name()) {
                 let (size, modified) = (meta.len(), meta.modified()?);
                 let sha256 = match known.get(&path) {
                     Some(hashed) if hashed.size == size && hashed.modified == modified => {

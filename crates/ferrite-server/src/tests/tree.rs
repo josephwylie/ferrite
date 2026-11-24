@@ -256,6 +256,47 @@ fn a_refused_entry_fails_the_send_by_its_name_and_its_later_requests_do_no_harm(
 }
 
 #[test]
+fn a_file_that_shrinks_as_it_is_sent_fails_by_its_name_and_the_connection_sends_on() {
+    let harness = start("tree-shrunk");
+    let sent = Arc::default();
+    let mut cockpit = machine(&harness, &sent);
+    let source = harness.dir.join("desktop-tree");
+    let dest = harness.dir.join("box-tree");
+    write(&source.join("a.bin"), big());
+    write(&source.join("b.txt"), "second");
+    // Listed a byte longer than it reads, so its write is left under way
+    // there, never finished.
+    let shrunk = Step::Write {
+        path: "a.bin".into(),
+        size: big().len() as u64 + 1,
+        executable: false,
+    };
+
+    let mut exchange = connect(&mut cockpit);
+    let changed = tree::send(
+        &source,
+        &[shrunk],
+        &Root::Path(dest.clone()),
+        &mut *exchange,
+        &mut |_| {},
+        &Cancellation::default(),
+    )
+    .unwrap_err();
+    assert!(changed.to_string().starts_with("a.bin: "), "{changed}");
+
+    assert_eq!(
+        mirror(&source, &dest, &[], &mut *exchange).unwrap(),
+        Sent {
+            written: 2,
+            bytes: big().len() as u64 + 6,
+            ..Sent::default()
+        },
+        "the write left under way is neither in the way nor taken for a file there"
+    );
+    same(&source, &dest);
+}
+
+#[test]
 fn a_tree_op_outside_its_root_is_refused() {
     let harness = start("tree-refused");
     let sent = Arc::default();
