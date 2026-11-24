@@ -50,6 +50,33 @@ fn big() -> Vec<u8> {
     (0..CHUNK_SIZE * 2 + 3).map(|at| (at % 251) as u8).collect()
 }
 
+/// The step that writes `path` as a scan of `source` lists it.
+fn listed(source: &Path, path: &str) -> Step {
+    let Some(tree::Entry::File { size, sha256, mode }) = tree::scan(source, &[]).unwrap().entries.remove(path) else {
+        panic!("{path} is not a file there");
+    };
+    Step::Write {
+        path: path.into(),
+        size,
+        sha256,
+        mode,
+    }
+}
+
+/// `path` listed a byte longer than it reads, so its write is left
+/// unfinished when its pieces run out.
+fn shrunk(source: &Path, path: &str) -> Step {
+    let Step::Write { path, size, sha256, mode } = listed(source, path) else {
+        unreachable!()
+    };
+    Step::Write {
+        path,
+        size: size + 1,
+        sha256,
+        mode,
+    }
+}
+
 #[test]
 fn a_tree_reaches_a_machine_whole_and_sending_it_again_moves_nothing() {
     let harness = start("tree-whole");
@@ -82,6 +109,7 @@ fn a_tree_reaches_a_machine_whole_and_sending_it_again_moves_nothing() {
             written: 4,
             linked: usize::from(cfg!(unix)),
             bytes: big().len() as u64 + 15 + 8 + 10,
+            ..Sent::default()
         }
     );
     assert_eq!(
@@ -216,14 +244,9 @@ fn a_refused_entry_fails_the_send_by_its_name_and_its_later_requests_do_no_harm(
     write(&source.join("a.txt"), "first");
     write(&source.join("never-made/b.bin"), big());
     write(&source.join("c.txt"), "third");
-    let file = |path: &str, size: usize| Step::Write {
-        path: path.into(),
-        size: size as u64,
-        executable: false,
-    };
     // `never-made` is not made there first, so the Server refuses b.bin's
     // begin while its chunks and finish are already on their way.
-    let steps = [file("a.txt", 5), file("never-made/b.bin", big().len()), file("c.txt", 5)];
+    let steps = ["a.txt", "never-made/b.bin", "c.txt"].map(|path| listed(&source, path));
 
     let mut exchange = connect(&mut cockpit);
     let refused = tree::send(
@@ -237,10 +260,11 @@ fn a_refused_entry_fails_the_send_by_its_name_and_its_later_requests_do_no_harm(
     .unwrap_err();
     assert!(refused.to_string().starts_with("never-made/b.bin: "), "{refused}");
 
-    let Reply::Scanned { manifest } = exchange
+    let Reply::Scanned { manifest, .. } = exchange
         .call(Request::Scan {
             root: Root::Path { path: dest.clone() },
             skip: Vec::new(),
+            after: None,
         })
         .unwrap()
     else {
@@ -264,18 +288,10 @@ fn a_file_that_shrinks_as_it_is_sent_fails_by_its_name_and_the_connection_sends_
     let dest = harness.dir.join("box-tree");
     write(&source.join("a.bin"), big());
     write(&source.join("b.txt"), "second");
-    // Listed a byte longer than it reads, so its write is left under way
-    // there, never finished.
-    let shrunk = Step::Write {
-        path: "a.bin".into(),
-        size: big().len() as u64 + 1,
-        executable: false,
-    };
-
     let mut exchange = connect(&mut cockpit);
     let changed = tree::send(
         &source,
-        &[shrunk],
+        &[shrunk(&source, "a.bin")],
         &Root::Path { path: dest.clone() },
         &mut *exchange,
         &mut |_| {},
@@ -318,7 +334,7 @@ fn a_tree_op_outside_its_root_is_refused() {
             root: root.clone(),
             path: path.into(),
             size: 1,
-            executable: false,
+            mode: None,
         });
         assert!(begun.is_err(), "{path:?}");
     }
@@ -350,6 +366,7 @@ fn a_tree_op_outside_its_root_is_refused() {
     let unknown = exchange.call(Request::Scan {
         root: Root::Unknown,
         skip: Vec::new(),
+        after: None,
     })
     .unwrap_err();
     assert_eq!(unknown.kind(), io::ErrorKind::Unsupported);
@@ -365,7 +382,7 @@ fn a_tree_op_outside_its_root_is_refused() {
             root: root.clone(),
             path: "through/x.txt".into(),
             size: 1,
-            executable: false,
+            mode: None,
         })
         .is_err());
         assert!(exchange.call(Request::Remove {
@@ -427,6 +444,120 @@ fn a_root_that_is_the_home_directory_however_it_is_spelled_is_refused() {
 }
 
 #[test]
+fn a_skipped_path_is_left_there_with_the_directories_that_hold_it() {
+    let harness = start("tree-nested-skip");
+    let sent = Arc::default();
+    let mut cockpit = machine(&harness, &sent);
+    let source = harness.dir.join("desktop-tree");
+    let dest = harness.dir.join("box-tree");
+    write(&source.join("a.txt"), "first");
+    write(&dest.join("keep/inner.txt"), "theirs");
+    write(&dest.join("keep/other.txt"), "goes");
+
+    let mut exchange = connect(&mut cockpit);
+    mirror(&source, &dest, &["keep/inner.txt".into()], &mut *exchange).unwrap();
+    assert_eq!(std::fs::read(dest.join("keep/inner.txt")).unwrap(), b"theirs");
+    assert!(!dest.join("keep/other.txt").exists());
+    assert_eq!(std::fs::read(dest.join("a.txt")).unwrap(), b"first");
+}
+
+/// A file that differs from what its scan listed, though of the same size,
+/// fails by its name and is not put in place.
+#[test]
+fn a_file_changed_after_its_scan_fails_by_its_name_and_is_not_put_in_place() {
+    let harness = start("tree-changed");
+    let sent = Arc::default();
+    let mut cockpit = machine(&harness, &sent);
+    let source = harness.dir.join("desktop-tree");
+    let dest = harness.dir.join("box-tree");
+    write(&source.join("a.txt"), "first");
+    let steps = tree::plan(&tree::scan(&source, &[]).unwrap(), &tree::Manifest::default(), &[]);
+    write(&source.join("a.txt"), "FIRST");
+
+    let mut exchange = connect(&mut cockpit);
+    let changed = tree::send(
+        &source,
+        &steps,
+        &Root::Path { path: dest.clone() },
+        &mut *exchange,
+        &mut |_| {},
+        &Cancellation::default(),
+    )
+    .unwrap_err();
+    assert!(changed.to_string().starts_with("a.txt: "), "{changed}");
+    assert!(!dest.join("a.txt").exists());
+}
+
+#[test]
+fn writes_that_failed_on_a_connection_never_hold_up_its_next_send() {
+    let harness = start("tree-failed-writes");
+    let sent = Arc::default();
+    let mut cockpit = machine(&harness, &sent);
+    let source = harness.dir.join("desktop-tree");
+    let dest = harness.dir.join("box-tree");
+    write(&source.join("a.bin"), big());
+    let shrunk = shrunk(&source, "a.bin");
+
+    let mut exchange = connect(&mut cockpit);
+    for _ in 0..8 {
+        tree::send(
+            &source,
+            std::slice::from_ref(&shrunk),
+            &Root::Path { path: dest.clone() },
+            &mut *exchange,
+            &mut |_| {},
+            &Cancellation::default(),
+        )
+        .unwrap_err();
+    }
+    mirror(&source, &dest, &[], &mut *exchange).unwrap();
+    same(&source, &dest);
+}
+
+#[test]
+fn a_remove_of_what_is_already_gone_is_not_counted() {
+    let harness = start("tree-removed-count");
+    let sent = Arc::default();
+    let mut cockpit = machine(&harness, &sent);
+    let source = harness.dir.join("desktop-tree");
+    let dest = harness.dir.join("box-tree");
+    std::fs::create_dir_all(&source).unwrap();
+    write(&dest.join("there.txt"), "goes");
+
+    let mut exchange = connect(&mut cockpit);
+    let sent = tree::send(
+        &source,
+        &[Step::Remove("there.txt".into()), Step::Remove("never-there.txt".into())],
+        &Root::Path { path: dest.clone() },
+        &mut *exchange,
+        &mut |_| {},
+        &Cancellation::default(),
+    )
+    .unwrap();
+    assert_eq!(sent.removed, 1);
+}
+
+#[test]
+fn a_file_named_like_a_write_in_progress_is_sent_and_a_stale_write_is_swept() {
+    let harness = start("tree-parts");
+    let sent = Arc::default();
+    let mut cockpit = machine(&harness, &sent);
+    let source = harness.dir.join("desktop-tree");
+    let dest = harness.dir.join("box-tree");
+    write(&source.join(".ferrite-notes.part"), "mine");
+    write(&source.join("a.txt"), "first");
+    let stale = dest.join(".ferrite-1-2-3.part");
+    write(&stale, "left by a Server that stopped");
+    let old = std::time::SystemTime::now() - ferrite_core::chunked::EXPIRY * 2;
+    std::fs::File::options().write(true).open(&stale).unwrap().set_modified(old).unwrap();
+
+    let mut exchange = connect(&mut cockpit);
+    mirror(&source, &dest, &[], &mut *exchange).unwrap();
+    assert_eq!(std::fs::read(dest.join(".ferrite-notes.part")).unwrap(), b"mine");
+    assert!(!stale.exists(), "the stale write is swept");
+}
+
+#[test]
 fn a_send_into_or_around_its_own_source_on_this_computer_is_refused() {
     let harness = start("tree-overlap");
     let source = harness.dir.join("desktop-tree");
@@ -474,4 +605,58 @@ fn the_cli_sends_a_tree_to_its_server_leaving_what_it_skips() {
     );
     assert_eq!(std::fs::read(dest.join("src/main.rs")).unwrap(), b"fn main() {}\n");
     assert!(!dest.join("target").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rewrite_keeps_the_far_side_permission_bits_and_a_new_file_takes_the_senders() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    let chmod = |path: &Path, mode| std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    let harness = start("tree-modes");
+    let sent = Arc::default();
+    let mut cockpit = machine(&harness, &sent);
+    let source = harness.dir.join("desktop-tree");
+    let dest = harness.dir.join("box-tree");
+    for (path, bytes) in [("secret", "new secret"), ("run.sh", "#!/bin/sh\necho new\n"), ("fresh", "new")] {
+        write(&source.join(path), bytes);
+        chmod(&source.join(path), 0o644);
+    }
+    write(&dest.join("secret"), "old");
+    chmod(&dest.join("secret"), 0o600);
+    write(&dest.join("run.sh"), "#!/bin/sh\n");
+    chmod(&dest.join("run.sh"), 0o755);
+
+    // As from Windows, which keeps no bits.
+    let steps = ["secret", "run.sh"].map(|path| match listed(&source, path) {
+        Step::Write { path, size, sha256, .. } => Step::Write {
+            path,
+            size,
+            sha256,
+            mode: None,
+        },
+        _ => unreachable!(),
+    });
+    let mut exchange = connect(&mut cockpit);
+    tree::send(
+        &source,
+        &steps,
+        &Root::Path { path: dest.clone() },
+        &mut *exchange,
+        &mut |_| {},
+        &Cancellation::default(),
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(dest.join("run.sh")).unwrap(), b"#!/bin/sh\necho new\n");
+    assert_eq!(mode(&dest.join("secret")), 0o600);
+    assert_eq!(mode(&dest.join("run.sh")), 0o755);
+
+    // From Unix: the executable bits follow the sender's, the rest stay.
+    chmod(&source.join("fresh"), 0o640);
+    write(&source.join("secret"), "newer secret");
+    mirror(&source, &dest, &[], &mut *exchange).unwrap();
+    assert_eq!(std::fs::read(dest.join("secret")).unwrap(), b"newer secret");
+    assert_eq!(mode(&dest.join("secret")), 0o600);
+    assert_eq!(mode(&dest.join("run.sh")), 0o644);
+    assert_eq!(mode(&dest.join("fresh")), 0o640);
 }

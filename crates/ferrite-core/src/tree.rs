@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
-use std::ops::Range;
+use std::ops::{Bound, Range};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -25,17 +25,17 @@ mod serve;
 mod tests;
 
 pub use scan::scan;
-pub use serve::Writes;
+pub use serve::Session;
 
 /// What a tree holds, by path: relative, `/`-separated, never absolute and
 /// never through `..`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
     pub entries: BTreeMap<String, Entry>,
-    /// Whether this side keeps an executable bit (Windows does not). The bit
-    /// is a difference only between two sides that both keep one.
-    #[serde(default)]
-    pub modes: bool,
+    /// What this side could not list, by path, and why: each is left as
+    /// each side has it, with all under it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub problems: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,7 +45,10 @@ pub enum Entry {
     File {
         size: u64,
         sha256: String,
-        executable: bool,
+        /// Its permission bits, on a side that keeps them (Windows does
+        /// not).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<u32>,
     },
     Symlink {
         target: String,
@@ -68,21 +71,26 @@ pub enum Root {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Request {
-    /// Replied `scanned`. A root that is not there yet holds nothing.
+    /// Replied `scanned`, a page at a time: the entries and problems after
+    /// `after`, in path order. A root that is not there yet holds nothing.
     Scan {
         root: Root,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         skip: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<String>,
     },
     /// Start writing a file as `write`, a number the sender gives it, so
     /// its chunks can follow without waiting for the reply: its bytes go to
     /// a temporary file beside it until `finish` renames it into place.
+    /// `mode` is the sender's permission bits, where it keeps them.
     Begin {
         write: u64,
         root: Root,
         path: String,
         size: u64,
-        executable: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<u32>,
     },
     /// Base64, at most [`chunked::CHUNK_SIZE`] bytes, in order. Replied
     /// `written`.
@@ -91,6 +99,8 @@ pub enum Request {
         offset: u64,
         data: String,
     },
+    /// Put the file in place if all of it arrived and it hashes to
+    /// `sha256`; either way the write is over.
     Finish {
         write: u64,
         sha256: String,
@@ -110,7 +120,7 @@ pub enum Request {
         path: String,
         target: String,
     },
-    /// The entry and all under it. One already gone is removed.
+    /// The entry and all under it.
     Remove {
         root: Root,
         path: String,
@@ -122,10 +132,22 @@ pub enum Request {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum Reply {
-    Scanned { manifest: Manifest },
-    Written { offset: u64 },
-    Bytes { data: String, size: u64 },
+    /// A page of a scan, and whether more follow it.
+    Scanned {
+        manifest: Manifest,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        more: bool,
+    },
+    Written {
+        offset: u64,
+    },
+    Bytes {
+        data: String,
+        size: u64,
+    },
     Done,
+    /// It was already so: nothing was done.
+    Unchanged,
     #[serde(other)]
     Unknown,
 }
@@ -211,10 +233,13 @@ impl Exchange for Remote {
 pub enum Step {
     Remove(String),
     MakeDir(String),
+    /// The file as this side listed it: it is taken there only if what is
+    /// read of it now hashes to `sha256`.
     Write {
         path: String,
         size: u64,
-        executable: bool,
+        sha256: String,
+        mode: Option<u32>,
     },
     Link {
         path: String,
@@ -234,50 +259,61 @@ impl Step {
 /// What makes `dest` equal `source`: first what must go, the outermost
 /// entry of each removal only, then what is made, in path order so a
 /// directory is made before what it holds. A file of the same kind is
-/// rewritten in place.
-pub fn plan(source: &Manifest, dest: &Manifest) -> Vec<Step> {
-    let modes = source.modes && dest.modes;
+/// rewritten in place. What `skip` names, what either side could not list,
+/// and each directory that holds one of those are left as each side has
+/// them.
+pub fn plan(source: &Manifest, dest: &Manifest, skip: &[String]) -> Vec<Step> {
+    let held = Held(
+        skip.iter()
+            .chain(source.problems.keys())
+            .chain(dest.problems.keys())
+            .map(String::as_str)
+            .collect(),
+    );
     let mut removed = BTreeSet::new();
     for (path, there) in &dest.entries {
-        if inside_any(path, &removed) {
+        if inside_any(path, &removed) || held.covers(path) {
             continue;
         }
-        let stays = match (source.entries.get(path), there) {
+        let same_kind = match (source.entries.get(path), there) {
             (Some(Entry::Dir), Entry::Dir) | (Some(Entry::File { .. }), Entry::File { .. }) => true,
             (Some(here @ Entry::Symlink { .. }), there) => here == there,
             _ => false,
         };
+        let stays = same_kind
+            || matches!(there, Entry::Unknown)
+            || (matches!(there, Entry::Dir) && held.under(path));
         if !stays {
             removed.insert(path.as_str());
         }
     }
     let mut steps: Vec<Step> = removed.iter().map(|path| Step::Remove(path.to_string())).collect();
     for (path, here) in &source.entries {
+        if held.covers(path) {
+            continue;
+        }
         let there = dest
             .entries
             .get(path)
             .filter(|_| !removed.contains(path.as_str()) && !inside_any(path, &removed));
-        match here {
-            Entry::Dir if there.is_none() => steps.push(Step::MakeDir(path.clone())),
-            Entry::File {
-                size,
-                sha256,
-                executable,
-            } => {
+        match (here, there) {
+            (Entry::Dir, None) => steps.push(Step::MakeDir(path.clone())),
+            (Entry::File { size, sha256, mode }, None | Some(Entry::File { .. })) => {
                 let same = matches!(
                     there,
-                    Some(Entry::File { size: s, sha256: h, executable: x })
-                        if s == size && h == sha256 && (!modes || x == executable)
+                    Some(Entry::File { size: s, sha256: h, mode: m })
+                        if s == size && h == sha256 && !executable_differs(*mode, *m)
                 );
                 if !same {
                     steps.push(Step::Write {
                         path: path.clone(),
                         size: *size,
-                        executable: *executable,
+                        sha256: sha256.clone(),
+                        mode: *mode,
                     });
                 }
             }
-            Entry::Symlink { target } if there.is_none() => steps.push(Step::Link {
+            (Entry::Symlink { target }, None) => steps.push(Step::Link {
                 path: path.clone(),
                 target: target.clone(),
             }),
@@ -287,11 +323,68 @@ pub fn plan(source: &Manifest, dest: &Manifest) -> Vec<Step> {
     steps
 }
 
+/// The paths a plan leaves as each side has them.
+struct Held<'a>(BTreeSet<&'a str>);
+
+impl Held<'_> {
+    /// Whether `path` is held or lies under one that is.
+    fn covers(&self, path: &str) -> bool {
+        self.0.contains(path) || inside_any(path, &self.0)
+    }
+
+    /// Whether a held path lies under `path`.
+    fn under(&self, path: &str) -> bool {
+        let dir = format!("{path}/");
+        self.0.iter().any(|held| held.starts_with(&dir))
+    }
+}
+
+/// The executable bits differ, and both sides keep them.
+fn executable_differs(here: Option<u32>, there: Option<u32>) -> bool {
+    matches!((here, there), (Some(here), Some(there)) if here & 0o111 != there & 0o111)
+}
+
 fn inside_any(path: &str, dirs: &BTreeSet<&str>) -> bool {
     path.match_indices('/').any(|(at, _)| dirs.contains(&path[..at]))
 }
 
-/// What a [`send`] did.
+impl Manifest {
+    /// The entries and problems after `after`, in path order, as many as
+    /// take at most `budget` bytes of JSON (and at least one), and whether
+    /// more follow them.
+    fn page(&self, after: Option<&str>, budget: usize) -> (Manifest, bool) {
+        let from = (after.map_or(Bound::Unbounded, Bound::Excluded), Bound::Unbounded);
+        let mut entries = self.entries.range::<str, _>(from).peekable();
+        let mut problems = self.problems.range::<str, _>(from).peekable();
+        let mut page = Manifest::default();
+        let mut used = 0;
+        loop {
+            let entry_next = match (entries.peek(), problems.peek()) {
+                (None, None) => return (page, false),
+                (Some((entry, _)), Some((problem, _))) => entry <= problem,
+                (entry, _) => entry.is_some(),
+            };
+            let size = if entry_next {
+                serde_json::to_vec(&entries.peek()).map_or(0, |json| json.len())
+            } else {
+                serde_json::to_vec(&problems.peek()).map_or(0, |json| json.len())
+            };
+            if used > 0 && used + size > budget {
+                return (page, true);
+            }
+            used += size;
+            if entry_next {
+                if let Some((path, entry)) = entries.next() {
+                    page.entries.insert(path.clone(), entry.clone());
+                }
+            } else if let Some((path, why)) = problems.next() {
+                page.problems.insert(path.clone(), why.clone());
+            }
+        }
+    }
+}
+
+/// What a [`send`] did, and what each side could not list.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Sent {
     pub removed: usize,
@@ -299,6 +392,25 @@ pub struct Sent {
     pub written: usize,
     pub linked: usize,
     pub bytes: u64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<Problem>,
+}
+
+/// An entry a side could not list: it was left as each side has it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Problem {
+    pub path: String,
+    pub side: Side,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    /// This computer, which sends.
+    Here,
+    /// The Server's computer, which receives.
+    There,
 }
 
 impl Sent {
@@ -365,32 +477,49 @@ pub fn send(
             Step::Write {
                 path,
                 size,
-                executable,
+                sha256,
+                mode,
             } => {
-                let write = WRITES.fetch_add(1, Ordering::Relaxed) + 1;
                 let file =
                     std::fs::File::open(local(source, path)).map_err(|error| named(step, error))?;
-                let begin = Request::Begin {
+                let write = WRITES.fetch_add(1, Ordering::Relaxed) + 1;
+                let finish = Request::Finish {
                     write,
-                    root,
-                    path: path.clone(),
-                    size: *size,
-                    executable: *executable,
+                    sha256: sha256.clone(),
                 };
-                flight.ask(step, begin, Expect::Begun)?;
-                let mut pieces = chunked::Pieces::new(file, *size);
-                for piece in &mut pieces {
-                    cancel.check()?;
-                    let (piece, data) = piece.map_err(|error| named(step, error))?;
-                    let chunk = Request::Chunk {
+                let sent = (|| {
+                    let begin = Request::Begin {
                         write,
-                        offset: piece.start,
-                        data,
+                        root,
+                        path: path.clone(),
+                        size: *size,
+                        mode: *mode,
                     };
-                    flight.ask(step, chunk, Expect::Written(piece))?;
+                    flight.ask(step, begin, Expect::Begun)?;
+                    let mut pieces = chunked::Pieces::new(file, *size);
+                    for piece in &mut pieces {
+                        cancel.check()?;
+                        let (piece, data) = piece.map_err(|error| named(step, error))?;
+                        let chunk = Request::Chunk {
+                            write,
+                            offset: piece.start,
+                            data,
+                        };
+                        flight.ask(step, chunk, Expect::Written(piece))?;
+                    }
+                    if pieces.sha256().ok().as_ref() != Some(sha256) {
+                        return Err(named(step, changed()));
+                    }
+                    flight.ask(step, finish.clone(), Expect::Taken)
+                })();
+                if sent.is_err() {
+                    // The far side lets go of a write only once it is
+                    // finished, and puts in place only a whole file that
+                    // hashes as it was listed.
+                    let _ = flight.exchange.ask(finish);
                 }
-                let sha256 = pieces.sha256().map_err(|error| named(step, error))?;
-                Request::Finish { write, sha256 }
+                sent?;
+                continue;
             }
         };
         flight.ask(step, request, Expect::Taken)?;
@@ -413,7 +542,7 @@ struct Flight<'a> {
 
 /// What a reply says when all went well.
 enum Expect {
-    /// `done`: the step taken.
+    /// `done`, or `unchanged` when it was already so: the step taken.
     Taken,
     /// `done`: the write under way.
     Begun,
@@ -447,7 +576,7 @@ impl<'a> Flight<'a> {
         let reply = self.exchange.answer(asked).map_err(|error| named(step, error))?;
         match (expect, reply) {
             (Expect::Taken, Reply::Done) => self.sent.took(step),
-            (Expect::Begun, Reply::Done) => {}
+            (Expect::Taken, Reply::Unchanged) | (Expect::Begun, Reply::Done) => {}
             (Expect::Written(piece), Reply::Written { offset }) if offset == piece.end => {
                 let bytes = piece.end - piece.start;
                 self.ahead -= bytes;
@@ -482,15 +611,36 @@ pub fn mirror(
     progress: &mut dyn FnMut(Progress),
     cancel: &Cancellation,
 ) -> io::Result<Sent> {
-    let there = exchange.ask(Request::Scan {
+    let scan_there = |after| Request::Scan {
         root: dest.clone(),
         skip: skip.to_vec(),
-    })?;
-    let here = scan(source, skip)?;
-    let Reply::Scanned { manifest: there } = exchange.answer(there)? else {
-        return Err(unanswered());
+        after,
     };
-    send(source, &plan(&here, &there), dest, exchange, progress, cancel)
+    let mut asked = exchange.ask(scan_there(None))?;
+    let here = scan(source, skip)?;
+    let mut there = Manifest::default();
+    loop {
+        let Reply::Scanned { manifest, more } = exchange.answer(asked)? else {
+            return Err(unanswered());
+        };
+        let last = manifest.entries.keys().chain(manifest.problems.keys()).max().cloned();
+        there.entries.extend(manifest.entries);
+        there.problems.extend(manifest.problems);
+        match (more, last) {
+            (false, _) => break,
+            (true, Some(last)) => asked = exchange.ask(scan_there(Some(last)))?,
+            (true, None) => return Err(unanswered()),
+        }
+    }
+    let mut sent = send(source, &plan(&here, &there, skip), dest, exchange, progress, cancel)?;
+    for (side, manifest) in [(Side::Here, here), (Side::There, there)] {
+        sent.problems.extend(manifest.problems.into_iter().map(|(path, error)| Problem {
+            path,
+            side,
+            error,
+        }));
+    }
+    Ok(sent)
 }
 
 /// Refuse a path a manifest cannot hold: empty, absolute, through `.` or
@@ -568,6 +718,13 @@ fn named(step: &Step, error: io::Error) -> io::Error {
 /// `error`, saying it was at `path`.
 fn at(path: &Path, error: io::Error) -> io::Error {
     io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+}
+
+fn changed() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "it changed after it was listed: send again",
+    )
 }
 
 fn unanswered() -> io::Error {

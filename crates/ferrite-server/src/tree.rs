@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use ferrite_core::chunked::{Cancellation, EXPIRY};
 use ferrite_core::link::{ClientId, Heard};
 use ferrite_core::protocol::{Done, ErrorCode, WireError};
-use ferrite_core::tree::{Request, Writes};
+use ferrite_core::tree::{Request, Session};
 
 use super::failed;
 
@@ -31,7 +31,7 @@ impl Lane {
         let going = gone.clone();
         std::thread::spawn(move || {
             ferrite_core::spawn::serve_the_operator();
-            let mut writes = Writes::default();
+            let mut session = Session::default();
             loop {
                 match asks.recv_timeout(EXPIRY) {
                     Ok((request, operation)) => {
@@ -39,7 +39,7 @@ impl Lane {
                             return;
                         }
                         let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            writes.execute(operation)
+                            session.execute(operation)
                         }))
                         .unwrap_or_else(|_| Err(io::Error::other("the tree op ended")))
                         .map(|reply| Some(Done::Tree { reply }))
@@ -48,7 +48,7 @@ impl Lane {
                             return;
                         }
                     }
-                    Err(RecvTimeoutError::Timeout) => writes.expire(),
+                    Err(RecvTimeoutError::Timeout) => session.expire(),
                     Err(RecvTimeoutError::Disconnected) => return,
                 }
             }

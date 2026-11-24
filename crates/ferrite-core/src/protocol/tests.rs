@@ -1429,8 +1429,9 @@ fn samples() -> Vec<(&'static str, Sample)> {
         ("reply_attachment_finish", Sample::Server(ServerMessage::Reply { id: 312, ok: Some(Done::Attachment { reply: crate::attachment_transfer::Reply::Retained(crate::attachment_transfer::Retained { path: "/store/attachments/hash/shot.png".into(), sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), size: 3 }) }), error: None })),
         ("reply_attachment_cancel", Sample::Server(ServerMessage::Reply { id: 313, ok: Some(Done::Attachment { reply: crate::attachment_transfer::Reply::Cancelled }), error: None })),
         ("reply_attachment_read", Sample::Server(ServerMessage::Reply { id: 314, ok: Some(Done::Attachment { reply: crate::attachment_transfer::Reply::Bytes { data: "YWJj".into(), size: 3 } }), error: None })),
-        ("command_tree_scan", command(320, Op::Tree { request: crate::tree::Request::Scan { root: crate::tree::Root::Path { path: "~/projects/app".into() }, skip: vec!["target".into()] } })),
-        ("command_tree_begin", command(321, Op::Tree { request: crate::tree::Request::Begin { write: 1, root: crate::tree::Root::Path { path: "~/projects/app".into() }, path: "bin/run".into(), size: 3, executable: true } })),
+        ("command_tree_scan", command(320, Op::Tree { request: crate::tree::Request::Scan { root: crate::tree::Root::Path { path: "~/projects/app".into() }, skip: vec!["target".into()], after: None } })),
+        ("command_tree_scan_page", command(328, Op::Tree { request: crate::tree::Request::Scan { root: crate::tree::Root::Path { path: "~/projects/app".into() }, skip: Vec::new(), after: Some("bin/run".into()) } })),
+        ("command_tree_begin", command(321, Op::Tree { request: crate::tree::Request::Begin { write: 1, root: crate::tree::Root::Path { path: "~/projects/app".into() }, path: "bin/run".into(), size: 3, mode: Some(0o755) } })),
         ("command_tree_chunk", command(322, Op::Tree { request: crate::tree::Request::Chunk { write: 1, offset: 0, data: "YWJj".into() } })),
         ("command_tree_finish", command(323, Op::Tree { request: crate::tree::Request::Finish { write: 1, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into() } })),
         ("command_tree_read", command(324, Op::Tree { request: crate::tree::Request::Read { root: crate::tree::Root::Path { path: "~/projects/app".into() }, path: "bin/run".into(), offset: 0 } })),
@@ -1440,14 +1441,19 @@ fn samples() -> Vec<(&'static str, Sample)> {
         ("reply_tree_scan", Sample::Server(ServerMessage::Reply { id: 320, ok: Some(Done::Tree { reply: crate::tree::Reply::Scanned { manifest: crate::tree::Manifest {
             entries: [
                 ("bin".to_string(), crate::tree::Entry::Dir),
-                ("bin/run".to_string(), crate::tree::Entry::File { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), executable: true }),
+                ("bin/run".to_string(), crate::tree::Entry::File { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), mode: Some(0o755) }),
                 ("latest".to_string(), crate::tree::Entry::Symlink { target: "bin/run".into() }),
             ].into_iter().collect(),
-            modes: true,
-        } } }), error: None })),
+            problems: Default::default(),
+        }, more: false } }), error: None })),
+        ("reply_tree_scan_page", Sample::Server(ServerMessage::Reply { id: 328, ok: Some(Done::Tree { reply: crate::tree::Reply::Scanned { manifest: crate::tree::Manifest {
+            entries: [("notes.txt".to_string(), crate::tree::Entry::File { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), mode: None })].into_iter().collect(),
+            problems: [("private".to_string(), "Permission denied (os error 13)".to_string())].into_iter().collect(),
+        }, more: true } }), error: None })),
         ("reply_tree_chunk", Sample::Server(ServerMessage::Reply { id: 322, ok: Some(Done::Tree { reply: crate::tree::Reply::Written { offset: 3 } }), error: None })),
         ("reply_tree_read", Sample::Server(ServerMessage::Reply { id: 324, ok: Some(Done::Tree { reply: crate::tree::Reply::Bytes { data: "YWJj".into(), size: 3 } }), error: None })),
         ("reply_tree_done", Sample::Server(ServerMessage::Reply { id: 325, ok: Some(Done::Tree { reply: crate::tree::Reply::Done }), error: None })),
+        ("reply_tree_unchanged", Sample::Server(ServerMessage::Reply { id: 327, ok: Some(Done::Tree { reply: crate::tree::Reply::Unchanged }), error: None })),
         ("command_changes_read", command(315, Op::Changes { request: crate::changes::Request::Read { root: "/workspace".into(), scope: crate::changes::Scope::Against("main".into()) } })),
         ("command_changes_stage", command(316, Op::Changes { request: crate::changes::Request::SetStaged { root: "/workspace".into(), path: "a.rs".into(), staged: true } })),
         ("reply_changes_read", Sample::Server(ServerMessage::Reply { id: 315, ok: Some(Done::Changes { reply: crate::changes::Reply::Read { files: vec![], branches: vec!["main".into()], staged: vec!["a.rs".into()] } }), error: None })),
@@ -3062,6 +3068,7 @@ fn a_tree_root_from_a_newer_window_decodes_to_unknown_and_keeps_its_command() {
                 request: crate::tree::Request::Scan {
                     root: crate::tree::Root::Unknown,
                     skip: Vec::new(),
+                    after: None,
                 },
             },
         })

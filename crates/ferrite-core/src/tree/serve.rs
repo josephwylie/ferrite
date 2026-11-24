@@ -19,51 +19,85 @@ use crate::chunked::{self, CHUNK_SIZE};
 /// At most this many files are written at once on one connection.
 const MOST_WRITES: usize = 4;
 
+/// A scan's reply goes in pages of at most about this many bytes, far
+/// below what a connection may fall behind by (`link::LAGGED_BYTES`).
+pub(super) const PAGE_BYTES: usize = 4 << 20;
+
 struct Target {
     path: PathBuf,
-    executable: bool,
+    /// The permission bits it ends with, where this side keeps them.
+    mode: Option<u32>,
 }
 
-/// The files one connection is writing, each received beside where it goes.
-pub struct Writes(chunked::Incoming<Target>);
+/// One connection's tree ops: the files it is writing, each received
+/// beside where it goes, and the scan whose pages it is reading.
+pub struct Session {
+    writes: chunked::Incoming<Target>,
+    scanned: Option<Scanned>,
+}
 
-impl Default for Writes {
+/// A scan not yet read to its last page.
+struct Scanned {
+    root: PathBuf,
+    skip: Vec<String>,
+    manifest: Manifest,
+}
+
+impl Default for Session {
     fn default() -> Self {
-        Self(chunked::Incoming::new(MOST_WRITES))
+        Self {
+            writes: chunked::Incoming::new(MOST_WRITES),
+            scanned: None,
+        }
     }
 }
 
-impl Writes {
+impl Session {
     pub fn expire(&mut self) {
-        self.0.expire();
+        self.writes.expire();
     }
 
     pub fn execute(&mut self, request: Request) -> io::Result<Reply> {
         match request {
-            Request::Scan { root, skip } => {
+            Request::Scan { root, skip, after } => {
                 let root = resolve(&root)?;
-                let manifest = match fs::symlink_metadata(&root) {
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => Manifest {
-                        modes: cfg!(unix),
-                        ..Manifest::default()
+                let manifest = match self.scanned.take() {
+                    Some(kept) if after.is_some() && kept.root == root && kept.skip == skip => {
+                        kept.manifest
+                    }
+                    _ => match fs::symlink_metadata(&root) {
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => Manifest::default(),
+                        _ => scan::sweeping(&root, &skip)?,
                     },
-                    _ => scan(&root, &skip)?,
                 };
-                Ok(Reply::Scanned { manifest })
+                let (page, more) = manifest.page(after.as_deref(), PAGE_BYTES);
+                if more {
+                    self.scanned = Some(Scanned {
+                        root,
+                        skip,
+                        manifest,
+                    });
+                }
+                Ok(Reply::Scanned {
+                    manifest: page,
+                    more,
+                })
             }
             Request::Begin {
                 write,
                 root,
                 path,
                 size,
-                executable,
+                mode,
             } => {
                 let path = inside(&made(&root)?, &path)?;
-                if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+                let there = fs::symlink_metadata(&path).ok();
+                if there.as_ref().is_some_and(fs::Metadata::is_dir) {
                     return Err(invalid(format!("{} is a directory", path.display())));
                 }
+                let mode = permissions(there.as_ref(), mode);
                 let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-                self.0.begin(write, &dir, size, None, Target { path, executable })?;
+                self.writes.begin(write, &dir, size, mode, Target { path, mode })?;
                 Ok(Reply::Done)
             }
             Request::Chunk {
@@ -71,24 +105,24 @@ impl Writes {
                 offset,
                 data,
             } => Ok(Reply::Written {
-                offset: self.0.chunk(write, offset, &data)?,
+                offset: self.writes.chunk(write, offset, &data)?,
             }),
             Request::Finish { write, sha256 } => {
-                let received = self.0.finish(write, &sha256)?;
+                let received = self.writes.finish(write, &sha256)?;
                 let target = received.what();
-                if target.executable {
-                    executable(received.path())?;
+                if let Some(mode) = target.mode {
+                    set_mode(received.path(), mode)?;
                 }
-                fs::rename(received.path(), &target.path)?;
+                fs::rename(received.path(), &target.path).map_err(|error| at(&target.path, error))?;
                 Ok(Reply::Done)
             }
             Request::Read { root, path, offset } => {
                 let path = inside(&resolve(&root)?, &path)?;
-                let meta = fs::symlink_metadata(&path)?;
+                let meta = fs::symlink_metadata(&path).map_err(|error| at(&path, error))?;
                 if !meta.is_file() || offset > meta.len() {
                     return Err(invalid(format!("{} has no file to read there", path.display())));
                 }
-                let mut file = fs::File::open(&path)?;
+                let mut file = fs::File::open(&path).map_err(|error| at(&path, error))?;
                 file.seek(SeekFrom::Start(offset))?;
                 let mut bytes = Vec::with_capacity(CHUNK_SIZE);
                 file.take(CHUNK_SIZE as u64).read_to_end(&mut bytes)?;
@@ -100,20 +134,23 @@ impl Writes {
             Request::MakeDir { root, path } => {
                 let path = inside(&made(&root)?, &path)?;
                 match fs::create_dir(&path) {
+                    Ok(()) => Ok(Reply::Done),
                     Err(error)
                         if error.kind() == io::ErrorKind::AlreadyExists
-                            && fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) => {}
-                    made => made?,
+                            && fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) =>
+                    {
+                        Ok(Reply::Unchanged)
+                    }
+                    Err(error) => Err(at(&path, error)),
                 }
-                Ok(Reply::Done)
             }
             Request::Link { root, path, target } => {
-                link(&target, &inside(&made(&root)?, &path)?)?;
-                Ok(Reply::Done)
+                let made = link(&target, &inside(&made(&root)?, &path)?)?;
+                Ok(if made { Reply::Done } else { Reply::Unchanged })
             }
             Request::Remove { root, path } => {
-                remove(&resolve(&root)?, &path)?;
-                Ok(Reply::Done)
+                let removed = remove(&resolve(&root)?, &path)?;
+                Ok(if removed { Reply::Done } else { Reply::Unchanged })
             }
             Request::Unknown => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -195,55 +232,80 @@ fn inside(root: &Path, path: &str) -> io::Result<PathBuf> {
     Ok(local(root, path))
 }
 
-fn remove(root: &Path, path: &str) -> io::Result<()> {
+/// Remove the entry at `path` and all under it: whether anything was there.
+fn remove(root: &Path, path: &str) -> io::Result<bool> {
     let gone = |error: &io::Error| error.kind() == io::ErrorKind::NotFound;
     let path = match inside(root, path) {
-        Err(error) if gone(&error) => return Ok(()),
+        Err(error) if gone(&error) => return Ok(false),
         inside => inside?,
     };
     let meta = match fs::symlink_metadata(&path) {
-        Err(error) if gone(&error) => return Ok(()),
+        Err(error) if gone(&error) => return Ok(false),
         meta => meta?,
     };
-    if meta.is_dir() {
-        return fs::remove_dir_all(&path);
-    }
-    // A Windows symlink to a directory is removed as a directory.
-    fs::remove_file(&path).or_else(|error| {
-        if cfg!(windows) {
-            fs::remove_dir(&path)
-        } else {
-            Err(error)
-        }
-    })
+    let removed = if meta.is_dir() {
+        fs::remove_dir_all(&path)
+    } else {
+        // A Windows symlink to a directory is removed as a directory.
+        fs::remove_file(&path).or_else(|error| {
+            if cfg!(windows) {
+                fs::remove_dir(&path)
+            } else {
+                Err(error)
+            }
+        })
+    };
+    removed.map(|()| true).map_err(|error| at(&path, error))
 }
 
+/// Make the symlink: whether it was not already so.
 #[cfg(unix)]
-fn link(target: &str, path: &Path) -> io::Result<()> {
+fn link(target: &str, path: &Path) -> io::Result<bool> {
     if fs::read_link(path).is_ok_and(|there| there == Path::new(target)) {
-        return Ok(());
+        return Ok(false);
     }
-    std::os::unix::fs::symlink(target, path)
+    std::os::unix::fs::symlink(target, path).map_err(|error| at(path, error))?;
+    Ok(true)
 }
 
 #[cfg(not(unix))]
-fn link(_: &str, path: &Path) -> io::Result<()> {
+fn link(_: &str, path: &Path) -> io::Result<bool> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         format!("{}: this Server does not make symlinks on Windows", path.display()),
     ))
 }
 
-/// Executable by whoever may read it.
+/// The permission bits a file written over `there` ends with. A file
+/// already there keeps its own, its executable bits following the
+/// sender's where the sender keeps them; a new one takes the sender's.
+/// `None`: as it is made, by the process's umask.
 #[cfg(unix)]
-fn executable(path: &Path) -> io::Result<()> {
+fn permissions(there: Option<&fs::Metadata>, sent: Option<u32>) -> Option<u32> {
     use std::os::unix::fs::PermissionsExt;
-    let mode = fs::metadata(path)?.permissions().mode();
-    fs::set_permissions(path, fs::Permissions::from_mode(mode | (mode & 0o444) >> 2))
+    let kept = there
+        .filter(|meta| meta.is_file())
+        .map(|meta| meta.permissions().mode() & 0o777);
+    match (kept, sent) {
+        (Some(kept), Some(sent)) => Some(kept & !0o111 | sent & 0o111),
+        (Some(kept), None) => Some(kept),
+        (None, sent) => sent.map(|sent| sent & 0o777),
+    }
 }
 
 #[cfg(not(unix))]
-fn executable(_: &Path) -> io::Result<()> {
+fn permissions(_: Option<&fs::Metadata>, _: Option<u32>) -> Option<u32> {
+    None
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+}
+
+#[cfg(not(unix))]
+fn set_mode(_: &Path, _: u32) -> io::Result<()> {
     Ok(())
 }
 
