@@ -282,7 +282,11 @@ Windows window.
   { progress } → Registering → Done { skipped } | Failed { reason }`, with
   `Occupied` after `Scanning` when the destination holds something.
   Cancel is `Failed { "Cancelled" }`, and Retry from any failure copies
-  again. Closing the sheet cancels its copy.
+  again. Closing the sheet cancels its copy. From Copy on, where the copy
+  goes is held: the browser, the copy's name and the ticks take no press
+  or key until it fails. How it stands is one line under "Copies to",
+  there in every stage, so the card keeps one size; over a draft the card
+  is centred in the room above its band and never reaches it.
 - `CONTEXT.md`'s Draft entry and ADR 0045's line on the strip over the
   Composer say the environment is a choice until the first send.
 

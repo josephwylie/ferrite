@@ -50,6 +50,9 @@ pub(super) struct FolderBrowser {
     /// A new folder's name, while one is being named.
     naming: Option<Entity<Composer>>,
     scroll: ScrollHandle,
+    /// The folder shown is held, while a copy goes into it: the line takes
+    /// no keys and the rows no presses, all drawn quiet.
+    held: bool,
 }
 
 /// The line moved: to another folder, or by a keystroke.
@@ -123,9 +126,21 @@ impl FolderBrowser {
             made: HashSet::new(),
             naming: None,
             scroll: ScrollHandle::new(),
+            held: false,
         };
         browser.edited(cx);
         browser
+    }
+
+    /// Hold the folder shown, or let it go.
+    pub(super) fn hold(&mut self, held: bool, cx: &mut Context<Self>) {
+        if self.held == held {
+            return;
+        }
+        self.held = held;
+        self.naming = None;
+        self.cursor = None;
+        cx.notify();
     }
 
     fn line(cx: &mut Context<Self>) -> Entity<Composer> {
@@ -165,9 +180,11 @@ impl FolderBrowser {
             .is_some_and(|naming| naming.read(cx).focus_handle(cx).is_focused(window))
     }
 
-    /// Show `folder`, `/` last.
+    /// Show `folder`, `/` last, unless the folder shown is held.
     fn go(&mut self, folder: String, cx: &mut Context<Self>) {
-        self.field.update(cx, |field, cx| field.set(folder, cx));
+        if !self.held {
+            self.field.update(cx, |field, cx| field.set(folder, cx));
+        }
     }
 
     /// Show `folder`, as the browser's own move rather than the operator's.
@@ -344,7 +361,7 @@ impl FolderBrowser {
             return cx.propagate();
         }
         let rows = self.rows(cx).len();
-        if rows == 0 {
+        if rows == 0 || self.held {
             return;
         }
         let last = rows as isize - 1;
@@ -385,6 +402,9 @@ impl FolderBrowser {
     /// Name a folder in the one shown, made by what goes into it: a row
     /// under its folders.
     pub(super) fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.held {
+            return;
+        }
         let naming = match &self.naming {
             Some(naming) => naming.clone(),
             None => Self::line(cx),
@@ -476,6 +496,7 @@ impl Render for FolderBrowser {
                     icon,
                     label.into(),
                     self.cursor == Some(at),
+                    self.held,
                     cx,
                 )
                 .debug_selector(move || selector.clone())
@@ -488,6 +509,15 @@ impl Render for FolderBrowser {
                 ))
             })
             .collect();
+        let line = if self.held {
+            ferrite_ui::components::text_ui()
+                .truncate()
+                .text_color(gpui::rgb(INK_SUBTLE))
+                .child(self.typed(cx).to_string())
+                .into_any_element()
+        } else {
+            self.field.clone().into_any_element()
+        };
         let naming = self.naming.clone().map(|naming| {
             let focused = naming.read(cx).focus_handle(cx).is_focused(window);
             let empty = naming.read(cx).text().is_empty();
@@ -506,8 +536,8 @@ impl Render for FolderBrowser {
             .gap(px(SPACE_1))
             .child(project_editor::path_field(
                 self.label.clone(),
-                self.field.clone(),
-                self.focus_handle(cx).is_focused(window),
+                line,
+                !self.held && self.focus_handle(cx).is_focused(window),
             ))
             .child(
                 div()

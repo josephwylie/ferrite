@@ -8,6 +8,7 @@
 //! as a `ProjectEditorEvent`, which the Cockpit answers once the card's
 //! own update has ended.
 
+use super::draft_environment::Band;
 use super::folder_browser::FolderBrowser;
 use super::*;
 use gpui::{App, WeakEntity};
@@ -40,6 +41,8 @@ pub(crate) struct ProjectEditorView {
     /// The draft the card was opened for: the Project it creates is chosen
     /// on it.
     pub(super) draft: Option<PaneIdentity>,
+    /// That draft's band, which the card keeps clear of.
+    band: Option<Band>,
     pub(super) focus: FocusHandle,
 }
 
@@ -106,6 +109,7 @@ impl ProjectEditorView {
             scroll: ScrollHandle::new(),
             remote,
             draft: None,
+            band: None,
             focus: cx.focus_handle(),
         }
     }
@@ -381,7 +385,8 @@ impl ProjectEditorView {
             body = body.child(project_editor::error_line(error));
         }
 
-        let card = project_editor::card(f32::from(window.viewport_size().height))
+        let band_top = self.band.as_ref().and_then(Band::top);
+        let card = project_editor::card_over(f32::from(window.viewport_size().height), band_top)
             .id("project-editor-card")
             .debug_selector(|| "project-editor-card".into())
             .track_focus(&self.focus)
@@ -527,8 +532,12 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.open_project_creator_on(machine, cx);
+        let band = self.band_of(draft);
         if let Some(card) = self.project_card(cx) {
-            card.update(cx, |card, _| card.draft = Some(draft));
+            card.update(cx, |card, _| {
+                card.draft = Some(draft);
+                card.band = band;
+            });
         }
     }
 

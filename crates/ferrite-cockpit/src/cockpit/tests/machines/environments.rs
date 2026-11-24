@@ -500,6 +500,71 @@ fn a_copy_cancelled_part_way_adds_nothing_and_its_retry_finishes_it(cx: &mut Tes
     assert_eq!(std::fs::read(dest.join("big.bin")).unwrap(), big);
 }
 
+/// While a copy runs, where it goes is held: a press on a folder or a
+/// tick and keys in the copy's name change nothing, and New folder is
+/// gone. The card keeps one size from Choosing through Copying to Failed,
+/// clear of the draft's band, and once failed the sheet is the operator's
+/// again.
+#[gpui::test]
+fn while_a_copy_runs_where_it_goes_is_held_and_the_card_keeps_its_size(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let base = settings_dir("env-held");
+    let projects = base.join("projects");
+    let (mut core, _fake, machines, _agents) =
+        two_machines_keeping_projects_in("env-held", &projects);
+    let on_box = machines.held(1).unwrap();
+    std::fs::create_dir_all(projects.join("elsewhere")).unwrap();
+    let source = project_folder(&base.join("here/app"), None);
+    std::fs::write(source.join("big.bin"), vec![9u8; 4 << 20]).unwrap();
+    let mine = registered_here(&mut core, &source);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    let draft = focused_draft(&view, cx);
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    drawn(cx, "folder-row:elsewhere");
+    drawn(cx, "placement-ignored:.env");
+    settles(cx);
+    let card = |cx: &mut gpui::VisualTestContext| {
+        debug_bounds(cx, "placement-card".into()).expect("the card").size
+    };
+    let choosing = card(cx);
+    let band = debug_bounds(cx, "composer-env".into()).expect("the draft's band");
+    let bottom = debug_bounds(cx, "placement-card".into()).unwrap().bottom();
+    assert!(bottom < band.top(), "the card ends at {bottom:?}, over the band at {:?}", band.top());
+
+    let (line, name) = sheet(&view, cx)
+        .unwrap()
+        .read_with(cx, |sheet, cx| (sheet.dest.read(cx).field.clone(), sheet.name.clone()));
+    let aimed = destination(&view, cx);
+    cx.update(|window, cx| window.focus(&name.read(cx).focus_handle(cx), cx));
+    BOX_SLOW.store(true, Ordering::SeqCst);
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| {
+        text_of(cx, "placement-progress").is_some_and(|said| said.starts_with("Copying "))
+    });
+    assert_eq!(card(cx), choosing, "Copying keeps the card's size");
+    cx.simulate_input("zz");
+    press(cx, "folder-row:elsewhere");
+    press(cx, "placement-ignored:target");
+    assert_eq!(destination(&view, cx), aimed, "neither the name nor the folder moved");
+    assert_eq!(text_in(&line, cx), format!("{}/", projects.display()));
+    assert!(debug_bounds(cx, "placement-new-folder".into()).is_none());
+
+    press(cx, "placement-cancel");
+    BOX_SLOW.store(false, Ordering::SeqCst);
+    assert_eq!(text_of(cx, "placement-failed").as_deref(), Some("Cancelled"));
+    assert_eq!(card(cx), choosing, "Failed keeps it too");
+    assert!(debug_bounds(cx, "placement-new-folder".into()).is_some(), "the sheet is free again");
+
+    press(cx, "placement-retry");
+    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
+    let dest = projects.join("app");
+    assert!(dest.join("big.bin").is_file());
+    assert!(!dest.join("target").exists(), "the tick pressed mid-copy did not take");
+}
+
 /// A destination that holds something takes no copy: the sheet says so
 /// and nothing there changes. Another path copies; `Use what is there`
 /// registers it as it is.

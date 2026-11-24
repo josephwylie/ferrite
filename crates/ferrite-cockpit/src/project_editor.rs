@@ -24,6 +24,25 @@ pub fn card(viewport_h: f32) -> Div {
     sheet::sheet_fit(WIDTH, MAX_HEIGHT.min(viewport_h * MODAL_VIEWPORT_FRACTION))
 }
 
+/// The least room above a draft's band a card is fitted into; with less,
+/// it is centred on the window as any other.
+const LEAST_ROOM: f32 = 320.;
+
+/// `card`, over a draft whose band starts `band_top` down the window: no
+/// taller than the room above the band, `SPACE_2` short of it, and centred
+/// there, a bottom margin as tall as the window under the room lifting it
+/// in the veil.
+pub fn card_over(viewport_h: f32, band_top: Option<f32>) -> Div {
+    let room = band_top
+        .map(|top| top - SPACE_2)
+        .filter(|room| (LEAST_ROOM..viewport_h).contains(room));
+    match room {
+        Some(room) => sheet::sheet_fit(WIDTH, MAX_HEIGHT.min(room * MODAL_VIEWPORT_FRACTION))
+            .mb(px(viewport_h - room)),
+        None => card(viewport_h),
+    }
+}
+
 pub fn head(title: SharedString, close: impl IntoElement) -> Div {
     sheet::sheet_head(title, close)
 }
@@ -186,12 +205,14 @@ fn field(
 /// One row of a folder browser, the Files tree's row (`FILES_ROW_H`, its
 /// mark in a chevron-wide column, `FS_LABEL` in `INK_STRONG`) as the shared
 /// press: a folder to go into, or `..` out of one. The row the arrows rest
-/// on is `paint::SELECTED`, as the tree's open file is.
+/// on is `paint::SELECTED`, as the tree's open file is. A `held` row takes
+/// no press and its name is `INK_SUBTLE`.
 pub fn folder_row(
     id: impl Into<gpui::ElementId>,
     mark: &'static str,
     label: SharedString,
     cursor: bool,
+    held: bool,
     cx: &App,
 ) -> Button {
     let rest = if cursor {
@@ -200,6 +221,8 @@ pub fn folder_row(
         Paint(TRANSPARENT)
     };
     components::form_button_on(id, rest, cx)
+        .disabled(held)
+        .when(held, |row| row.cursor_default())
         .w_full()
         .h(px(FILES_ROW_H))
         .p_0()
@@ -212,7 +235,7 @@ pub fn folder_row(
                     .truncate()
                     .text_size(px(FS_LABEL))
                     .line_height(px(LH_UI))
-                    .text_color(rgb(INK_STRONG))
+                    .text_color(rgb(if held { INK_SUBTLE } else { INK_STRONG }))
                     .child(label),
             ),
         )

@@ -7,6 +7,7 @@
 //! says so as a `PlacementEvent`, and the Cockpit registers it and chooses
 //! it on the draft.
 
+use super::draft_environment::Band;
 use super::folder_browser::{FolderBrowser, Moved};
 use super::*;
 use ferrite_core::chunked::{Cancellation, Progress};
@@ -103,6 +104,8 @@ pub(crate) struct PlacementView {
     copied_into: Option<String>,
     copy: Option<Running>,
     scroll: ScrollHandle,
+    /// The draft's band, which the card keeps clear of.
+    band: Option<Band>,
 }
 
 /// A copy under way: to `dest`, as it was chosen when it began.
@@ -113,7 +116,12 @@ struct Running {
 }
 
 impl PlacementView {
-    pub(crate) fn new(model: Entity<Cockpit>, placing: Placing, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        model: Entity<Cockpit>,
+        placing: Placing,
+        band: Option<Band>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let leaf = placing
             .root
             .file_name()
@@ -168,6 +176,7 @@ impl PlacementView {
             copied_into: None,
             copy: None,
             scroll: ScrollHandle::new(),
+            band,
         }
     }
 
@@ -207,7 +216,7 @@ impl PlacementView {
     fn edited(&mut self, cx: &mut Context<Self>) {
         self.refusal = None;
         if matches!(self.stage, Stage::Occupied { .. } | Stage::Failed { .. }) {
-            self.stage = Stage::Choosing;
+            self.enter(Stage::Choosing, cx);
         }
         cx.notify();
     }
@@ -217,6 +226,21 @@ impl PlacementView {
             self.stage,
             Stage::Scanning | Stage::Copying(_) | Stage::Registering { .. }
         )
+    }
+
+    /// From Copy on, where the copy goes is held: the browser, the copy's
+    /// name and the ticks take nothing, unless it stops short (`Occupied`,
+    /// `Failed`).
+    fn held(&self) -> bool {
+        self.busy() || matches!(self.stage, Stage::Done { .. })
+    }
+
+    /// The sheet moves to `stage`, the browser held or let go with it.
+    fn enter(&mut self, stage: Stage, cx: &mut Context<Self>) {
+        self.stage = stage;
+        let held = self.held();
+        self.dest.update(cx, |dest, cx| dest.hold(held, cx));
+        cx.notify();
     }
 
     /// Copy to the destination chosen, unless it is no folder to copy into,
@@ -275,8 +299,7 @@ impl PlacementView {
             let _ = heard.send(last.unwrap_or_else(|stopped| Heard::Copied(Err(stopped))));
         });
         self.copy = Some(Running { dest, hear, cancel });
-        self.stage = Stage::Scanning;
-        cx.notify();
+        self.enter(Stage::Scanning, cx);
     }
 
     /// Register what is at the destination as it is, copying nothing.
@@ -286,12 +309,14 @@ impl PlacementView {
         };
         let dest = dest.clone();
         let spelled = self.dest.read(cx).spelled_out(&dest);
-        self.stage = Stage::Registering {
-            dest,
-            skipped: Vec::new(),
-        };
+        self.enter(
+            Stage::Registering {
+                dest,
+                skipped: Vec::new(),
+            },
+            cx,
+        );
         cx.emit(PlacementEvent::Place { dest: spelled });
-        cx.notify();
     }
 
     /// Stop the copy under way; what it sent stays, for the next to finish.
@@ -304,10 +329,12 @@ impl PlacementView {
     fn cancel(&mut self, cx: &mut Context<Self>) {
         if matches!(self.stage, Stage::Scanning | Stage::Copying(_)) {
             self.stop();
-            self.stage = Stage::Failed {
-                reason: "Cancelled".into(),
-            };
-            cx.notify();
+            self.enter(
+                Stage::Failed {
+                    reason: "Cancelled".into(),
+                },
+                cx,
+            );
         } else {
             cx.emit(PlacementEvent::Closed);
         }
@@ -330,10 +357,12 @@ impl PlacementView {
 
     pub(super) fn failed(&mut self, reason: String, cx: &mut Context<Self>) {
         self.copy = None;
-        self.stage = Stage::Failed {
-            reason: reason.into(),
-        };
-        cx.notify();
+        self.enter(
+            Stage::Failed {
+                reason: reason.into(),
+            },
+            cx,
+        );
     }
 
     /// The window registered the copy and chose it on the draft. True when
@@ -344,8 +373,7 @@ impl PlacementView {
             _ => Vec::new(),
         };
         let stays = !skipped.is_empty();
-        self.stage = Stage::Done { skipped };
-        cx.notify();
+        self.enter(Stage::Done { skipped }, cx);
         stays
     }
 
@@ -398,58 +426,46 @@ impl PlacementView {
     }
 
     fn poll_copy(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(copy) = &self.copy else {
-            return false;
-        };
         let mut moved = false;
         loop {
+            let Some(copy) = &self.copy else {
+                return moved;
+            };
             let heard = match copy.hear.try_recv() {
                 Ok(heard) => heard,
                 Err(TryRecvError::Empty) => return moved,
                 Err(TryRecvError::Disconnected) => {
                     self.copy = None;
                     if self.busy() {
-                        self.stage = Stage::Failed {
-                            reason: "The copy stopped".into(),
-                        };
+                        self.failed("The copy stopped".into(), cx);
                     }
                     return true;
                 }
             };
+            let dest = copy.dest.clone();
             moved = true;
             match heard {
                 Heard::Progress(progress) => {
                     if !matches!(self.stage, Stage::Copying(_)) {
-                        self.copied_into = Some(copy.dest.clone());
+                        self.copied_into = Some(dest);
                     }
-                    self.stage = Stage::Copying(progress);
+                    self.enter(Stage::Copying(progress), cx);
                 }
                 Heard::Occupied => {
-                    let dest = copy.dest.clone();
                     self.copy = None;
-                    self.stage = Stage::Occupied { dest };
+                    self.enter(Stage::Occupied { dest }, cx);
                     return true;
                 }
-                Heard::Copied(copied) => {
-                    let dest = copy.dest.clone();
+                Heard::Copied(Ok(sent)) => {
                     let spelled = self.dest.read(cx).spelled_out(&dest);
                     self.copy = None;
-                    match copied {
-                        Ok(sent) => {
-                            let skipped = sent
-                                .problems
-                                .into_iter()
-                                .map(|problem| problem.path)
-                                .collect();
-                            self.stage = Stage::Registering { dest, skipped };
-                            cx.emit(PlacementEvent::Place { dest: spelled });
-                        }
-                        Err(stopped) => {
-                            self.stage = Stage::Failed {
-                                reason: format!("Not copied: {}", stopped.error).into(),
-                            };
-                        }
-                    }
+                    let skipped = sent.problems.into_iter().map(|problem| problem.path).collect();
+                    self.enter(Stage::Registering { dest, skipped }, cx);
+                    cx.emit(PlacementEvent::Place { dest: spelled });
+                    return true;
+                }
+                Heard::Copied(Err(stopped)) => {
+                    self.failed(format!("Not copied: {}", stopped.error), cx);
                     return true;
                 }
             }
@@ -467,6 +483,65 @@ impl PlacementView {
         cx.notify();
     }
 
+    /// How the copy stands, on a line the card keeps in every stage so it
+    /// holds its size as the copy moves: cut at its end, whole in its
+    /// tooltip.
+    fn stage_line(&self) -> gpui::Stateful<Div> {
+        use ferrite_ui::theme::{BLOCKED, INK_SUBTLE, LH_UI};
+        let machine = &self.placing.machine_name;
+        let leaf = |dest: &str| {
+            let dest = dest.trim_end_matches(['/', '\\']);
+            dest.rsplit(['/', '\\']).next().unwrap_or(dest).to_string()
+        };
+        let (text, ink, selector): (String, u32, &'static str) = match (self.refusal, &self.stage) {
+            (Some(refusal), _) => (refusal.into(), BLOCKED, "placement-refusal"),
+            (None, Stage::Choosing) => (String::new(), INK_SUBTLE, "placement-choosing"),
+            (None, Stage::Scanning) => ("Checking the folder".into(), INK_SUBTLE, "placement-checking"),
+            (None, Stage::Occupied { dest }) => (
+                format!("{} is not empty. Nothing there is changed.", leaf(dest)),
+                BLOCKED,
+                "placement-occupied",
+            ),
+            (None, &Stage::Copying(Progress { sent, total })) => (
+                match total {
+                    0 => "Listing files".into(),
+                    total => format!(
+                        "Copying {}% \u{b7} {} of {}",
+                        (sent.saturating_mul(100) / total).min(100),
+                        bytes(sent),
+                        bytes(total)
+                    ),
+                },
+                INK_SUBTLE,
+                "placement-progress",
+            ),
+            (None, Stage::Registering { dest, .. }) => (
+                format!("Adding {} on {machine}", leaf(dest)),
+                INK_SUBTLE,
+                "placement-adding",
+            ),
+            (None, Stage::Done { .. }) => (format!("Added on {machine}"), INK_SUBTLE, "placement-added"),
+            (None, Stage::Failed { reason }) => (reason.to_string(), BLOCKED, "placement-failed"),
+        };
+        let text = SharedString::from(text);
+        div()
+            .id("placement-stage")
+            .debug_selector(|| "placement-stage".into())
+            .flex_shrink_0()
+            .min_w_0()
+            .h(px(LH_UI))
+            .when(!text.is_empty(), |line| {
+                line.tooltip(ferrite_ui::menu::tooltip(text.clone()))
+            })
+            .child(
+                ferrite_ui::components::text_ui()
+                    .truncate()
+                    .text_color(gpui::rgb(ink))
+                    .debug_selector(move || selector.into())
+                    .child(text),
+            )
+    }
+
     /// The card, for the sheet host.
     pub(super) fn card(
         &self,
@@ -481,70 +556,50 @@ impl PlacementView {
                 cx.emit(PlacementEvent::Closed);
             }),
         );
-        let busy = self.busy();
+        let held = self.held();
+        let name: AnyElement = if held {
+            ferrite_ui::components::text_ui()
+                .truncate()
+                .text_color(gpui::rgb(INK_SUBTLE))
+                .child(self.copy_name(cx).to_string())
+                .into_any_element()
+        } else {
+            self.name.clone().into_any_element()
+        };
         let mut body = project_editor::body()
             .track_scroll(&self.scroll)
             .child(self.dest.clone())
             .child(
                 project_editor::prefixed_field(
-                    "Copied to".into(),
+                    if matches!(self.stage, Stage::Done { .. }) {
+                        "Copied to"
+                    } else {
+                        "Copies to"
+                    }
+                    .into(),
                     self.folder_prefix(cx).into(),
-                    self.name.clone(),
-                    self.name.read(cx).focus_handle(cx).is_focused(window),
+                    name,
+                    !held && self.name.read(cx).focus_handle(cx).is_focused(window),
                     "placement-name-focused",
                 )
                 .debug_selector(|| "placement-name".into()),
-            );
-        if let Some(refusal) = self.refusal {
-            body = body.child(
-                project_editor::error_line(refusal.into())
-                    .debug_selector(|| "placement-refusal".into()),
-            );
-        }
-        let copying_to = self
-            .copy
-            .as_ref()
-            .map(|copy| copy.dest.as_str())
-            .unwrap_or_default();
-        body = match &self.stage {
-            Stage::Choosing => body,
-            Stage::Scanning => body.child(note(format!("Checking {copying_to}"))),
-            Stage::Occupied { dest } => body.child(
-                project_editor::error_line(
-                    format!("{dest} is not empty. Nothing there is changed.").into(),
-                )
-                .debug_selector(|| "placement-occupied".into()),
-            ),
-            &Stage::Copying(Progress { sent, total }) => body.child(
-                note(match total {
-                    0 => "Listing files".to_string(),
-                    total => format!(
-                        "Copying {}% \u{b7} {} of {}",
-                        (sent.saturating_mul(100) / total).min(100),
-                        bytes(sent),
-                        bytes(total)
-                    ),
-                })
-                .debug_selector(|| "placement-progress".into()),
-            ),
-            Stage::Registering { dest, .. } => {
-                body.child(note(format!("Adding {dest} on {machine}")))
-            }
-            Stage::Done { skipped } if !skipped.is_empty() => body
-                .child(project_editor::section_label(
-                    "Not copied",
-                    "In use while copying",
-                ))
-                .child(
-                    project_editor::directory_list(skipped.iter().map(|path| note(path.clone())))
+            )
+            .child(self.stage_line());
+        if let Stage::Done { skipped } = &self.stage {
+            if !skipped.is_empty() {
+                body = body
+                    .child(project_editor::section_label(
+                        "Not copied",
+                        "In use while copying",
+                    ))
+                    .child(
+                        project_editor::directory_list(
+                            skipped.iter().map(|path| note(path.clone())),
+                        )
                         .debug_selector(|| "placement-skipped".into()),
-                ),
-            Stage::Done { .. } => body,
-            Stage::Failed { reason } => body.child(
-                project_editor::error_line(reason.clone())
-                    .debug_selector(|| "placement-failed".into()),
-            ),
-        };
+                    );
+            }
+        }
         match &self.entries {
             None => {
                 body = body.child(
@@ -575,7 +630,7 @@ impl PlacementView {
                                 Checkbox::new(("placement-ignored", index))
                                     .debug_selector(move || selector.clone())
                                     .checked(entry.ticked)
-                                    .disabled(busy)
+                                    .disabled(held)
                                     .accessibility_label(shown.clone())
                                     // A label is drawn one line high, which
                                     // clips an underscore; a child is taller
@@ -613,7 +668,7 @@ impl PlacementView {
                 }
             }));
         let done = matches!(self.stage, Stage::Done { .. } | Stage::Registering { .. });
-        let footer_left = div().when(!busy && !done, |left| {
+        let footer_left = div().when(!held, |left| {
             left.child(
                 ferrite_ui::components::ghost_button("placement-new-folder", "New folder", cx)
                     .debug_selector(|| "placement-new-folder".into())
@@ -640,7 +695,8 @@ impl PlacementView {
                 )
             })
             .child(primary);
-        let card = project_editor::card(f32::from(window.viewport_size().height))
+        let band_top = self.band.as_ref().and_then(Band::top);
+        let card = project_editor::card_over(f32::from(window.viewport_size().height), band_top)
             .id("placement-card")
             .debug_selector(|| "placement-card".into())
             .occlude()
