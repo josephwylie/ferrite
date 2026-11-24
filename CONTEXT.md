@@ -305,7 +305,10 @@ _Avoid_: Park (the separate action for finished handling), stopped agent.
 
 **Draft**
 A Pane's pending Provider, Effort, Project, and Workspace choices before its
-first prompt creates a Thread. It has no durable history or Session.
+first prompt creates a Thread. It has no durable history or Session. Its
+environment is its Project's Machine, a choice on its environment chip
+until that first prompt: picking another moves it to its Project's
+counterpart there, made by a copy when there is none (ADR 0048).
 
 **Current Thread**
 The Thread the operator is in: the focused one, else the open Thread focus
@@ -363,10 +366,19 @@ thread.
 
 **Placement**
 Where a Project of this computer lives on a Machine: the folder its copy
-was sent to there. A Project with a repository finds its counterpart on a
-Machine by that repository, so only one without needs a Placement kept
-(ADR 0048, planned).
+was sent to there, kept for every copy (`placements.json` in the Machine's
+own directory, ADR 0048). A Project with a repository also finds its
+counterpart on a Machine by that repository.
 _Avoid_: mirror, sync target, remote path.
+
+**Unfinished copy**
+A copy of a Project to a Machine that began and has not ended: cancelled,
+cut off, or stopped with the app. This computer keeps it beside the
+Machine's Placements (`unfinished.json`) from before its first byte until
+it ends, or until it stops with nothing landed. Only its Resume changes its
+destination: it sends what is not there, and leaves each file someone else
+changed there as it is and lists it; it removes nothing (ADR 0048).
+_Avoid_: partial copy, interrupted sync, half copy.
 
 **Setup sync**
 The operator's agent setup (skills, commands, agents, instructions, rules,

@@ -542,7 +542,7 @@ fn image_card(
     let retry = retry_of(readiness, on_retry);
     let repair_on_open = matches!(
         readiness,
-        Some(Readiness::Failed(Failure::Missing | Failure::Unreadable(_)))
+        Some(Readiness::Failed(Failure::Missing | Failure::Gone | Failure::Unreadable(_)))
     );
     let repair = retry.clone();
     let repair_path = path.to_path_buf();
@@ -962,7 +962,9 @@ fn status_label(id: impl Into<ElementId>, state: &Readiness) -> Option<gpui::Sta
 /// change what it says. A file that is on the wrong machine stays so.
 fn retry_of(state: Option<&Readiness>, retry: Option<Retry>) -> Option<Retry> {
     match state {
-        Some(Readiness::Failed(Failure::Missing | Failure::Unreadable(_) | Failure::Upload(_))) => {
+        Some(Readiness::Failed(
+            Failure::Missing | Failure::Gone | Failure::Unreadable(_) | Failure::Upload(_),
+        )) => {
             retry
         }
         _ => None,

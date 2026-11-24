@@ -203,21 +203,25 @@ pub struct DraftBinding {
     pub error: Option<SharedString>,
 }
 
-/// The band's three chips, in tab order: the model (its effort a
-/// submenu there), the Project, the Workspace.
+/// The band's chips, in tab order: the model (its effort a submenu
+/// there), the environment while there is more than one, the Project, the
+/// Workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BandChip {
     Provider,
+    Environment,
     Project,
     Workspace,
 }
 
 impl BandChip {
-    /// Where tab goes next: across the band, then back to the prompt.
-    pub fn next(current: Option<BandChip>) -> Option<BandChip> {
+    /// Where tab goes next: across the band, then back to the prompt. The
+    /// environment chip is passed over while it is not shown.
+    pub fn next(current: Option<BandChip>, environment: bool) -> Option<BandChip> {
         match current {
             None => Some(BandChip::Provider),
-            Some(BandChip::Provider) => Some(BandChip::Project),
+            Some(BandChip::Provider) if environment => Some(BandChip::Environment),
+            Some(BandChip::Provider | BandChip::Environment) => Some(BandChip::Project),
             Some(BandChip::Project) => Some(BandChip::Workspace),
             Some(BandChip::Workspace) => None,
         }

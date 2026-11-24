@@ -482,6 +482,14 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         (with_primary("7"), "model_picker::Jump7", Some("ModelPicker")),
         (with_primary("8"), "model_picker::Jump8", Some("ModelPicker")),
         (with_primary("9"), "model_picker::Jump9", Some("ModelPicker")),
+        // A folder browser's keys on its lines, after the Composer's so they
+        // win there: ↑↓ walk its rows, ⏎ goes into the one they rest on,
+        // esc leaves a new folder unnamed. Each hands the key on when it has
+        // nothing to do, so ⏎ still confirms the sheet.
+        ("up".into(), "folder_browser::Up", Some("FolderBrowser")),
+        ("down".into(), "folder_browser::Down", Some("FolderBrowser")),
+        ("enter".into(), "folder_browser::Open", Some("FolderBrowser")),
+        ("escape".into(), "folder_browser::Cancel", Some("FolderBrowser")),
         ("up".into(), "nav::SelectPrevious", Some("NavTree")),
         ("down".into(), "nav::SelectNext", Some("NavTree")),
         ("enter".into(), "nav::Open", Some("NavTree")),

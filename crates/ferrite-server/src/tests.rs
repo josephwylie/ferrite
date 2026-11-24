@@ -850,6 +850,36 @@ fn list_repo_answers_a_projects_worktrees_and_branches_read_by_the_server() {
     assert_eq!(listing.branches, ["fix", "main", "spare"]);
 }
 
+/// A window finds a Project's counterpart on a machine by the repository
+/// the machine's Server reads each of its Projects to be (ADR 0048).
+#[test]
+fn repositories_answers_each_project_that_is_a_repository_with_a_remote() {
+    let harness = start("repositories");
+    let repo = repository(&harness.dir);
+    ferrite_core::workspace::git_for_tests(&repo, &["remote", "add", "origin", "git@github.com:Acme/App.git"]);
+    let plain = harness.dir.join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    let mut window = cockpit(&harness);
+    let machine = window.first_machine();
+    let asked = window.register_project(machine, &repo);
+    let project = window.wait_for(asked).unwrap();
+    let asked = window.register_project(machine, &plain);
+    window.wait_for(asked).unwrap();
+
+    let answer = window.repositories(machine).unwrap();
+    let heard = std::cell::RefCell::new(None);
+    pump_until(&mut window, |_| {
+        if let Ok(answered) = answer.try_recv() {
+            *heard.borrow_mut() = Some(answered);
+        }
+        heard.borrow().is_some()
+    });
+    assert_eq!(
+        heard.into_inner().unwrap().unwrap(),
+        [(project.project(), "github.com/acme/app".to_string())].into()
+    );
+}
+
 /// A review reads git where the Server runs (ADR 0021): a window asks
 /// for a checkout's uncommitted work, its branch's commits and one
 /// commit's diff, a file of it, a search of it and its pull request, and

@@ -701,6 +701,18 @@ impl Remote {
         })
     }
 
+    pub(crate) fn repositories(&mut self) -> io::Result<Receiver<io::Result<ferrite_core::protocol::Repositories>>> {
+        self.ask(Op::Repositories, |done| match done {
+            Done::Repositories { projects } => Some(
+                projects
+                    .into_iter()
+                    .map(|known| (known.project, known.repository))
+                    .collect(),
+            ),
+            _ => None,
+        })
+    }
+
     pub(crate) fn review_diff(
         &mut self,
         path: &Path,

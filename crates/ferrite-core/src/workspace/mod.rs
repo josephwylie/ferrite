@@ -24,9 +24,6 @@ use std::process::Command;
 
 pub mod follow;
 pub mod registry;
-mod repository;
-
-pub use repository::repository_key;
 
 /// Move the shared project checkout to an existing branch selected before
 /// the Thread starts. Git owns validation and refuses dirty/conflicting moves.

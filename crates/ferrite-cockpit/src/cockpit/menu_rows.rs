@@ -119,8 +119,13 @@ pub(super) enum BandChoice {
     /// choose it.
     RegisterPath(std::path::PathBuf),
     Target(DraftTarget),
-    /// Open the Project card, as the nav's dropdown does.
+    /// Open the Project card on the draft's machine.
     AddProject,
+    /// Run the draft on this machine instead (`pick_environment`).
+    Environment(ferrite_core::MachineId),
+    /// Settings › Connections: `Add environment…`, or a machine the window
+    /// cannot reach.
+    Connections,
 }
 
 /// How many rows a Composer menu shows — a dense keyboard menu, not a
@@ -439,6 +444,44 @@ pub(super) fn project_rows(
         SharedString::from("name it and choose its directories"),
         false,
         BandChoice::AddProject,
+    ));
+    rows
+}
+
+/// One environment a draft can run on, as its chip's menu lists it.
+pub(super) struct Environment {
+    pub(super) machine: ferrite_core::MachineId,
+    pub(super) name: SharedString,
+    /// Why it cannot be chosen now, when it cannot.
+    pub(super) unreached: Option<SharedString>,
+}
+
+/// A draft's environment chip's rows: each environment on, `draft`'s
+/// ticked, one the window cannot reach dimmed with why (its pick opens
+/// Connections), then `Add environment…`.
+pub(super) fn environment_rows(environments: &[Environment], draft: &pane::DraftBinding) -> Vec<Row> {
+    let mut rows: Vec<Row> = environments
+        .iter()
+        .map(|environment| {
+            let choice = match environment.unreached {
+                None => BandChoice::Environment(environment.machine),
+                Some(_) => BandChoice::Connections,
+            };
+            let mut row = band_row(
+                environment.name.clone(),
+                environment.unreached.clone().unwrap_or_default(),
+                draft.binding.project().machine() == environment.machine,
+                choice,
+            );
+            row.row.inert = environment.unreached.is_some();
+            row
+        })
+        .collect();
+    rows.push(band_row(
+        SharedString::from("Add environment…"),
+        SharedString::default(),
+        false,
+        BandChoice::Connections,
     ));
     rows
 }

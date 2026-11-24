@@ -459,9 +459,7 @@ fn pair(
         }
         Ok(Machine {
             name: descriptor.name,
-            target,
-            enabled: true,
-            sync_setup: true,
+            ..Machine::new(&target)
         })
     })();
     if result.is_err() {

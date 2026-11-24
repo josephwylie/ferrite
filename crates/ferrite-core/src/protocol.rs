@@ -487,6 +487,10 @@ pub enum Op {
     ListRepo {
         project: ProjectId,
     },
+    /// Which repository each of the Server's Projects is, read where it
+    /// runs: how a window finds a Project's counterpart on a machine
+    /// (ADR 0048). Replied `repositories`.
+    Repositories,
     /// A review's git scope of the checkout at `path`, read by git on the
     /// Server's computer (ADR 0021). Replied `diff`: what a window from
     /// before `review_read` reviews with.
@@ -670,6 +674,7 @@ impl Op {
             | Op::Tree { .. }
             | Op::Changes { .. }
             | Op::ListRepo { .. }
+            | Op::Repositories
             | Op::ReviewDiff { .. }
             | Op::ReviewRead { .. }
             | Op::ReviewPullRequestDiff { .. }
@@ -1680,6 +1685,11 @@ pub enum Done {
         worktrees: Vec<WireWorktree>,
         branches: Vec<String>,
     },
+    /// A `repositories`' Projects that are git checkouts with a remote,
+    /// each with `repository::repository_key` of its root.
+    Repositories {
+        projects: Vec<WireRepository>,
+    },
     /// A `review_diff`'s changes as a git-style unified diff.
     Diff {
         text: String,
@@ -1793,6 +1803,27 @@ pub struct WireWorktree {
     /// None when its HEAD is detached.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireRepository {
+    pub project: ProjectId,
+    pub repository: String,
+}
+
+/// Which repository each Project is, by its id: those whose root is a git
+/// checkout with a remote that names a host. A `repositories`' answer.
+pub type Repositories = BTreeMap<ProjectId, String>;
+
+impl From<Repositories> for Done {
+    fn from(repositories: Repositories) -> Self {
+        Done::Repositories {
+            projects: repositories
+                .into_iter()
+                .map(|(project, repository)| WireRepository { project, repository })
+                .collect(),
+        }
+    }
 }
 
 impl From<crate::checkout::RepoListing> for Done {

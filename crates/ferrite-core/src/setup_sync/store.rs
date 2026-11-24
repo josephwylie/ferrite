@@ -743,7 +743,9 @@ fn sweep(dir: &Path) {
         return;
     };
     for entry in entries.flatten() {
-        let stale = entry.metadata().is_ok_and(|meta| meta.is_file() && chunked::stale(&meta));
+        let stale = entry
+            .metadata()
+            .is_ok_and(|meta| meta.is_file() && chunked::stale(&entry.file_name(), &meta));
         if stale && chunked::temporary(&entry.file_name()) {
             let _ = fs::remove_file(entry.path());
         }
