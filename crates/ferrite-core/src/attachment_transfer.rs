@@ -115,6 +115,7 @@ impl Session {
             }
             Request::Finish { upload, sha256 } => {
                 let received = self.incoming.finish(upload, &sha256)?;
+                received.sync()?;
                 let dir = self.store.join("attachments").join(&received.sha256);
                 private_dir(&dir)?;
                 let path = std::path::absolute(dir.join(received.what()))?;

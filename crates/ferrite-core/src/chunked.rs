@@ -86,6 +86,11 @@ impl<T> Received<T> {
     pub fn size(&self) -> u64 {
         self.part.size
     }
+
+    /// Wait until its bytes are on disk.
+    pub fn sync(&self) -> io::Result<()> {
+        self.part.file.sync_all()
+    }
 }
 
 impl<T> Incoming<T> {
@@ -175,16 +180,13 @@ impl<T> Incoming<T> {
         Ok(part.received)
     }
 
-    /// The file, once all of it arrived and it hashes to `sha256`, flushed
-    /// to disk.
+    /// The file, once all of it arrived and it hashes to `sha256`.
     pub fn finish(&mut self, id: u64, sha256: &str) -> io::Result<Received<T>> {
-        let mut part = self.parts.remove(&id).ok_or_else(unknown)?;
+        let part = self.parts.remove(&id).ok_or_else(unknown)?;
         let actual = hex(&part.hash.clone().finalize());
         if part.received != part.size || sha256 != actual {
             return Err(invalid("The length or SHA-256 did not match"));
         }
-        part.file.flush()?;
-        part.file.sync_all()?;
         Ok(Received {
             part,
             sha256: actual,
