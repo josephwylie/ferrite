@@ -52,7 +52,7 @@ fn big() -> Vec<u8> {
 
 /// The step that writes `path` as a scan of `source` lists it.
 fn listed(source: &Path, path: &str) -> Step {
-    let Some(tree::Entry::File { size, sha256, mode }) = tree::scan(source, &[]).unwrap().entries.remove(path) else {
+    let Some(tree::Entry::File { size, sha256, mode, .. }) = tree::scan(source, &[]).unwrap().entries.remove(path) else {
         panic!("{path} is not a file there");
     };
     Step::Write {

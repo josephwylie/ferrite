@@ -1441,15 +1441,26 @@ fn samples() -> Vec<(&'static str, Sample)> {
         ("reply_tree_scan", Sample::Server(ServerMessage::Reply { id: 320, ok: Some(Done::Tree { reply: crate::tree::Reply::Scanned { manifest: crate::tree::Manifest {
             entries: [
                 ("bin".to_string(), crate::tree::Entry::Dir),
-                ("bin/run".to_string(), crate::tree::Entry::File { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), mode: Some(0o755) }),
+                ("bin/run".to_string(), crate::tree::Entry::File { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), mode: Some(0o755), modified: None }),
                 ("latest".to_string(), crate::tree::Entry::Symlink { target: "bin/run".into() }),
             ].into_iter().collect(),
             problems: Default::default(),
+            links: Default::default(),
         }, more: false } }), error: None })),
         ("reply_tree_scan_page", Sample::Server(ServerMessage::Reply { id: 328, ok: Some(Done::Tree { reply: crate::tree::Reply::Scanned { manifest: crate::tree::Manifest {
-            entries: [("notes.txt".to_string(), crate::tree::Entry::File { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), mode: None })].into_iter().collect(),
+            entries: [("notes.txt".to_string(), crate::tree::Entry::File { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), mode: None, modified: None })].into_iter().collect(),
             problems: [("private".to_string(), "Permission denied (os error 13)".to_string())].into_iter().collect(),
+            links: Default::default(),
         }, more: true } }), error: None })),
+        ("command_tree_scan_setup", command(329, Op::Tree { request: crate::tree::Request::Scan { root: crate::tree::Root::Setup, skip: Vec::new(), after: None } })),
+        ("reply_tree_scan_setup", Sample::Server(ServerMessage::Reply { id: 329, ok: Some(Done::Tree { reply: crate::tree::Reply::Scanned { manifest: crate::tree::Manifest {
+            entries: [
+                (".claude/skills/shared".to_string(), crate::tree::Entry::Dir),
+                (".claude/skills/shared/SKILL.md".to_string(), crate::tree::Entry::File { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), mode: Some(0o644), modified: Some(1_764_000_000_000) }),
+            ].into_iter().collect(),
+            problems: Default::default(),
+            links: [".claude/skills/shared".to_string()].into_iter().collect(),
+        }, more: false } }), error: None })),
         ("reply_tree_chunk", Sample::Server(ServerMessage::Reply { id: 322, ok: Some(Done::Tree { reply: crate::tree::Reply::Written { offset: 3 } }), error: None })),
         ("reply_tree_read", Sample::Server(ServerMessage::Reply { id: 324, ok: Some(Done::Tree { reply: crate::tree::Reply::Bytes { data: "YWJj".into(), size: 3 } }), error: None })),
         ("reply_tree_done", Sample::Server(ServerMessage::Reply { id: 325, ok: Some(Done::Tree { reply: crate::tree::Reply::Done }), error: None })),
@@ -3059,7 +3070,7 @@ fn a_cli_status_from_a_newer_server_decodes_to_unknown() {
 
 #[test]
 fn a_tree_root_from_a_newer_window_decodes_to_unknown_and_keeps_its_command() {
-    let line = br#"{"type":"command","id":9,"op":"tree","request":{"action":"scan","root":{"kind":"setup","path":{"group":"skills"},"home":"~"}}}"#;
+    let line = br#"{"type":"command","id":9,"op":"tree","request":{"action":"scan","root":{"kind":"vault","path":{"group":"skills"},"home":"~"}}}"#;
     assert_eq!(
         decode::<ClientMessage>(line).unwrap(),
         ClientMessage::Command(Command {

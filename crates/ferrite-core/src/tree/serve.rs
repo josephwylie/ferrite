@@ -5,7 +5,9 @@
 //! through a symlink inside a root. A root is resolved once, links
 //! followed, and refused if it is the home directory, an ancestor of it, or
 //! the filesystem's root, which a mirror would empty, however it is
-//! spelled.
+//! spelled. The Setup root is the operator's setup in this side's home
+//! directory, as `setup_sync` spells it, and each write to it is on disk
+//! before it is in place.
 
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -15,6 +17,7 @@ use base64::Engine as _;
 
 use super::{at, canonical, check_path, holds, local, scan, Manifest, Reply, Request, Root};
 use crate::chunked::{self, CHUNK_SIZE};
+use crate::setup_sync::{Home, Place};
 
 /// At most this many files are written at once on one connection.
 const MOST_WRITES: usize = 4;
@@ -23,10 +26,13 @@ const MOST_WRITES: usize = 4;
 /// below what a connection may fall behind by (`link::LAGGED_BYTES`).
 pub(super) const PAGE_BYTES: usize = 4 << 20;
 
-struct Target {
-    path: PathBuf,
-    /// The permission bits it ends with, where this side keeps them.
-    mode: Option<u32>,
+enum Target {
+    Path {
+        path: PathBuf,
+        /// The permission bits it ends with, where this side keeps them.
+        mode: Option<u32>,
+    },
+    Setup(Place),
 }
 
 /// One connection's tree ops: the files it is writing, each received
@@ -34,13 +40,22 @@ struct Target {
 pub struct Session {
     writes: chunked::Incoming<Target>,
     scanned: Option<Scanned>,
+    /// The setup the Setup root names: this process's home directory's
+    /// unless given.
+    home: Option<Home>,
 }
 
 /// A scan not yet read to its last page.
 struct Scanned {
-    root: PathBuf,
+    root: Resolved,
     skip: Vec<String>,
     manifest: Manifest,
+}
+
+#[derive(PartialEq, Eq)]
+enum Resolved {
+    Path(PathBuf),
+    Setup,
 }
 
 impl Default for Session {
@@ -48,26 +63,49 @@ impl Default for Session {
         Self {
             writes: chunked::Incoming::new(MOST_WRITES),
             scanned: None,
+            home: None,
         }
     }
 }
 
 impl Session {
+    /// Ops on the Setup root work on `home`.
+    pub fn with_home(home: Home) -> Self {
+        Self {
+            home: Some(home),
+            ..Self::default()
+        }
+    }
+
     pub fn expire(&mut self) {
         self.writes.expire();
+    }
+
+    fn home(&mut self) -> io::Result<&Home> {
+        let home = match self.home.take() {
+            Some(home) => home,
+            None => Home::from_env()?,
+        };
+        Ok(self.home.insert(home))
     }
 
     pub fn execute(&mut self, request: Request) -> io::Result<Reply> {
         match request {
             Request::Scan { root, skip, after } => {
-                let root = resolve(&root)?;
+                let root = match root {
+                    Root::Setup => Resolved::Setup,
+                    root => Resolved::Path(resolve(&root)?),
+                };
                 let manifest = match self.scanned.take() {
                     Some(kept) if after.is_some() && kept.root == root && kept.skip == skip => {
                         kept.manifest
                     }
-                    _ => match fs::symlink_metadata(&root) {
-                        Err(error) if error.kind() == io::ErrorKind::NotFound => Manifest::default(),
-                        _ => scan::sweeping(&root, &skip)?,
+                    _ => match &root {
+                        Resolved::Setup => self.home()?.scan(),
+                        Resolved::Path(path) => match fs::symlink_metadata(path) {
+                            Err(error) if error.kind() == io::ErrorKind::NotFound => Manifest::default(),
+                            _ => scan::sweeping(path, &skip)?,
+                        },
                     },
                 };
                 let (page, more) = manifest.page(after.as_deref(), PAGE_BYTES);
@@ -85,6 +123,18 @@ impl Session {
             }
             Request::Begin {
                 write,
+                root: Root::Setup,
+                path,
+                size,
+                mode,
+            } => {
+                let place = self.home()?.receive(&path, mode)?;
+                let (dir, made) = (place.dir.clone(), place.mode);
+                self.writes.begin(write, &dir, size, made, Target::Setup(place))?;
+                Ok(Reply::Done)
+            }
+            Request::Begin {
+                write,
                 root,
                 path,
                 size,
@@ -97,7 +147,7 @@ impl Session {
                 }
                 let mode = permissions(there.as_ref(), mode);
                 let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-                self.writes.begin(write, &dir, size, mode, Target { path, mode })?;
+                self.writes.begin(write, &dir, size, mode, Target::Path { path, mode })?;
                 Ok(Reply::Done)
             }
             Request::Chunk {
@@ -109,12 +159,30 @@ impl Session {
             }),
             Request::Finish { write, sha256 } => {
                 let received = self.writes.finish(write, &sha256)?;
-                let target = received.what();
-                if let Some(mode) = target.mode {
-                    set_mode(received.path(), mode)?;
+                match received.what() {
+                    Target::Path { path, mode } => {
+                        if let Some(mode) = mode {
+                            set_mode(received.path(), *mode)?;
+                        }
+                        fs::rename(received.path(), path).map_err(|error| at(path, error))?;
+                    }
+                    Target::Setup(place) => {
+                        received.sync()?;
+                        self.home()?.place(place, received.path())?;
+                    }
                 }
-                fs::rename(received.path(), &target.path).map_err(|error| at(&target.path, error))?;
                 Ok(Reply::Done)
+            }
+            Request::Read {
+                root: Root::Setup,
+                path,
+                offset,
+            } => {
+                let (bytes, size) = self.home()?.read(&path, offset)?;
+                Ok(Reply::Bytes {
+                    data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                    size,
+                })
             }
             Request::Read { root, path, offset } => {
                 let path = inside(&resolve(&root)?, &path)?;
@@ -131,6 +199,10 @@ impl Session {
                     size: meta.len(),
                 })
             }
+            Request::MakeDir {
+                root: Root::Setup,
+                path,
+            } => Ok(done(self.home()?.make_dir(&path)?)),
             Request::MakeDir { root, path } => {
                 let path = inside(&made(&root)?, &path)?;
                 match fs::create_dir(&path) {
@@ -144,19 +216,32 @@ impl Session {
                     Err(error) => Err(at(&path, error)),
                 }
             }
+            Request::Link { root: Root::Setup, .. } => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Setup sync makes no links",
+            )),
             Request::Link { root, path, target } => {
-                let made = link(&target, &inside(&made(&root)?, &path)?)?;
-                Ok(if made { Reply::Done } else { Reply::Unchanged })
+                Ok(done(link(&target, &inside(&made(&root)?, &path)?)?))
             }
-            Request::Remove { root, path } => {
-                let removed = remove(&resolve(&root)?, &path)?;
-                Ok(if removed { Reply::Done } else { Reply::Unchanged })
-            }
+            Request::Remove {
+                root: Root::Setup,
+                path,
+            } => Ok(done(self.home()?.remove(&path)?)),
+            Request::Remove { root, path } => Ok(done(remove(&resolve(&root)?, &path)?)),
             Request::Unknown => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "This server does not know that tree operation",
             )),
         }
+    }
+}
+
+/// `done` when it was done, `unchanged` when it was already so.
+fn done(changed: bool) -> Reply {
+    if changed {
+        Reply::Done
+    } else {
+        Reply::Unchanged
     }
 }
 
@@ -224,7 +309,7 @@ fn made(root: &Root) -> io::Result<PathBuf> {
 
 /// `path` in `root`, refused unless every directory on the way is a real
 /// one there.
-fn inside(root: &Path, path: &str) -> io::Result<PathBuf> {
+pub(crate) fn inside(root: &Path, path: &str) -> io::Result<PathBuf> {
     check_path(path)?;
     let mut at = root.to_path_buf();
     if let Some((dirs, _)) = path.rsplit_once('/') {
@@ -243,7 +328,7 @@ fn inside(root: &Path, path: &str) -> io::Result<PathBuf> {
 }
 
 /// Remove the entry at `path` and all under it: whether anything was there.
-fn remove(root: &Path, path: &str) -> io::Result<bool> {
+pub(crate) fn remove(root: &Path, path: &str) -> io::Result<bool> {
     let gone = |error: &io::Error| error.kind() == io::ErrorKind::NotFound;
     let path = match inside(root, path) {
         Err(error) if gone(&error) => return Ok(false),
@@ -291,7 +376,7 @@ fn link(_: &str, path: &Path) -> io::Result<bool> {
 /// sender's where the sender keeps them; a new one takes the sender's.
 /// `None`: as it is made, by the process's umask.
 #[cfg(unix)]
-fn permissions(there: Option<&fs::Metadata>, sent: Option<u32>) -> Option<u32> {
+pub(crate) fn permissions(there: Option<&fs::Metadata>, sent: Option<u32>) -> Option<u32> {
     use std::os::unix::fs::PermissionsExt;
     let kept = there
         .filter(|meta| meta.is_file())
@@ -304,18 +389,18 @@ fn permissions(there: Option<&fs::Metadata>, sent: Option<u32>) -> Option<u32> {
 }
 
 #[cfg(not(unix))]
-fn permissions(_: Option<&fs::Metadata>, _: Option<u32>) -> Option<u32> {
+pub(crate) fn permissions(_: Option<&fs::Metadata>, _: Option<u32>) -> Option<u32> {
     None
 }
 
 #[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
+pub(crate) fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(mode))
 }
 
 #[cfg(not(unix))]
-fn set_mode(_: &Path, _: u32) -> io::Result<()> {
+pub(crate) fn set_mode(_: &Path, _: u32) -> io::Result<()> {
     Ok(())
 }
 

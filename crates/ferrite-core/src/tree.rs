@@ -25,6 +25,8 @@ mod serve;
 mod tests;
 
 pub use scan::scan;
+pub(crate) use scan::{millis, mode, setup as scan_setup};
+pub(crate) use serve::{inside, permissions, remove as remove_entry, set_mode};
 pub use serve::Session;
 
 /// What a tree holds, by path: relative, `/`-separated, never absolute and
@@ -36,6 +38,10 @@ pub struct Manifest {
     /// each side has it, with all under it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub problems: BTreeMap<String, String>,
+    /// Each path this side reached through a symlink, which it read
+    /// through and never writes through (a Setup scan's).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub links: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +55,10 @@ pub enum Entry {
         /// not).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode: Option<u32>,
+        /// When it last changed, in milliseconds since the epoch (a Setup
+        /// scan's): the newer of two edits wins.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        modified: Option<u64>,
     },
     Symlink {
         target: String,
@@ -64,6 +74,9 @@ pub enum Entry {
 pub enum Root {
     /// A directory of the Server's computer, `~` its home.
     Path { path: PathBuf },
+    /// The operator's agent setup on that computer, by the paths
+    /// `setup_sync::ITEMS` lists (ADR 0048).
+    Setup,
     #[serde(other)]
     Unknown,
 }
@@ -188,6 +201,18 @@ pub struct Asked {
     patience: Duration,
 }
 
+#[cfg(test)]
+impl Asked {
+    /// The request numbered `id` of an Exchange that numbers its own.
+    pub(crate) fn numbered(id: u64) -> Self {
+        Self { id, patience: PATIENCE }
+    }
+
+    pub(crate) fn id(self) -> u64 {
+        self.id
+    }
+}
+
 /// Opens an [`Exchange`], off the window's thread: it may run ssh.
 pub type Connect = Box<dyn FnOnce() -> io::Result<Box<dyn Exchange>> + Send>;
 
@@ -298,10 +323,10 @@ pub fn plan(source: &Manifest, dest: &Manifest, skip: &[String]) -> Vec<Step> {
             .filter(|_| !removed.contains(path.as_str()) && !inside_any(path, &removed));
         match (here, there) {
             (Entry::Dir, None) => steps.push(Step::MakeDir(path.clone())),
-            (Entry::File { size, sha256, mode }, None | Some(Entry::File { .. })) => {
+            (Entry::File { size, sha256, mode, .. }, None | Some(Entry::File { .. })) => {
                 let same = matches!(
                     there,
-                    Some(Entry::File { size: s, sha256: h, mode: m })
+                    Some(Entry::File { size: s, sha256: h, mode: m, .. })
                         if s == size && h == sha256 && !executable_differs(*mode, *m)
                 );
                 if !same {
@@ -340,7 +365,7 @@ impl Held<'_> {
 }
 
 /// The executable bits differ, and both sides keep them.
-fn executable_differs(here: Option<u32>, there: Option<u32>) -> bool {
+pub(crate) fn executable_differs(here: Option<u32>, there: Option<u32>) -> bool {
     matches!((here, there), (Some(here), Some(there)) if here & 0o111 != there & 0o111)
 }
 
@@ -358,9 +383,9 @@ impl Manifest {
         let mut problems = self.problems.range::<str, _>(from).peekable();
         let mut page = Manifest::default();
         let mut used = 0;
-        loop {
+        let more = loop {
             let entry_next = match (entries.peek(), problems.peek()) {
-                (None, None) => return (page, false),
+                (None, None) => break false,
                 (Some((entry, _)), Some((problem, _))) => entry <= problem,
                 (entry, _) => entry.is_some(),
             };
@@ -370,7 +395,7 @@ impl Manifest {
                 serde_json::to_vec(&problems.peek()).map_or(0, |json| json.len())
             };
             if used > 0 && used + size > budget {
-                return (page, true);
+                break true;
             }
             used += size;
             if entry_next {
@@ -380,7 +405,14 @@ impl Manifest {
             } else if let Some((path, why)) = problems.next() {
                 page.problems.insert(path.clone(), why.clone());
             }
-        }
+        };
+        let last = page.entries.keys().chain(page.problems.keys()).max().cloned();
+        let to = match (more, &last) {
+            (true, Some(last)) => Bound::Included(last.as_str()),
+            _ => Bound::Unbounded,
+        };
+        page.links = self.links.range::<str, _>((from.0, to)).cloned().collect();
+        (page, more)
     }
 }
 
@@ -413,6 +445,15 @@ pub enum Side {
     There,
 }
 
+impl Side {
+    pub fn other(self) -> Side {
+        match self {
+            Side::Here => Side::There,
+            Side::There => Side::Here,
+        }
+    }
+}
+
 impl Sent {
     fn took(&mut self, step: &Step) {
         match step {
@@ -427,13 +468,25 @@ impl Sent {
     }
 }
 
+/// Where a [`send`] reads the files its steps write: a directory's, or
+/// the operator's setup as `setup_sync` spells it.
+pub trait Source {
+    fn open(&self, path: &str) -> io::Result<Box<dyn io::Read + '_>>;
+}
+
+impl<T: AsRef<Path> + ?Sized> Source for T {
+    fn open(&self, path: &str) -> io::Result<Box<dyn io::Read + '_>> {
+        Ok(Box::new(std::fs::File::open(local(self.as_ref(), path))?))
+    }
+}
+
 /// Take each of `steps` to `dest` through `exchange`, the files read from
-/// under `source`, asking ahead of the replies. `progress` hears how many
+/// `source`, asking ahead of the replies. `progress` hears how many
 /// bytes of all the steps' files the far side has. An error names the
 /// entry it was for; what was asked after it may still be taken there,
 /// since each step is whole on its own.
 pub fn send(
-    source: &Path,
+    source: &(impl Source + ?Sized),
     steps: &[Step],
     dest: &Root,
     exchange: &mut dyn Exchange,
@@ -480,8 +533,7 @@ pub fn send(
                 sha256,
                 mode,
             } => {
-                let file =
-                    std::fs::File::open(local(source, path)).map_err(|error| named(step, error))?;
+                let file = source.open(path).map_err(|error| named(step, error))?;
                 let write = WRITES.fetch_add(1, Ordering::Relaxed) + 1;
                 let finish = Request::Finish {
                     write,
@@ -611,27 +663,9 @@ pub fn mirror(
     progress: &mut dyn FnMut(Progress),
     cancel: &Cancellation,
 ) -> io::Result<Sent> {
-    let scan_there = |after| Request::Scan {
-        root: dest.clone(),
-        skip: skip.to_vec(),
-        after,
-    };
-    let mut asked = exchange.ask(scan_there(None))?;
+    let asked = exchange.ask(scan_request(dest, skip, None))?;
     let here = scan(source, skip)?;
-    let mut there = Manifest::default();
-    loop {
-        let Reply::Scanned { manifest, more } = exchange.answer(asked)? else {
-            return Err(unanswered());
-        };
-        let last = manifest.entries.keys().chain(manifest.problems.keys()).max().cloned();
-        there.entries.extend(manifest.entries);
-        there.problems.extend(manifest.problems);
-        match (more, last) {
-            (false, _) => break,
-            (true, Some(last)) => asked = exchange.ask(scan_there(Some(last)))?,
-            (true, None) => return Err(unanswered()),
-        }
-    }
+    let there = pages(exchange, dest, skip, asked)?;
     let mut sent = send(source, &plan(&here, &there, skip), dest, exchange, progress, cancel)?;
     for (side, manifest) in [(Side::Here, here), (Side::There, there)] {
         sent.problems.extend(manifest.problems.into_iter().map(|(path, error)| Problem {
@@ -641,6 +675,40 @@ pub fn mirror(
         }));
     }
     Ok(sent)
+}
+
+/// What the far side holds at `root`: its scan, every page of it.
+pub fn scan_far(exchange: &mut dyn Exchange, root: &Root, skip: &[String]) -> io::Result<Manifest> {
+    let asked = exchange.ask(scan_request(root, skip, None))?;
+    pages(exchange, root, skip, asked)
+}
+
+pub(crate) fn scan_request(root: &Root, skip: &[String], after: Option<String>) -> Request {
+    Request::Scan {
+        root: root.clone(),
+        skip: skip.to_vec(),
+        after,
+    }
+}
+
+/// The scan whose first page `asked` asked for, each later page asked in
+/// turn after the last path the one before held.
+pub(crate) fn pages(exchange: &mut dyn Exchange, root: &Root, skip: &[String], mut asked: Asked) -> io::Result<Manifest> {
+    let mut whole = Manifest::default();
+    loop {
+        let Reply::Scanned { manifest, more } = exchange.answer(asked)? else {
+            return Err(unanswered());
+        };
+        let last = manifest.entries.keys().chain(manifest.problems.keys()).max().cloned();
+        whole.entries.extend(manifest.entries);
+        whole.problems.extend(manifest.problems);
+        whole.links.extend(manifest.links);
+        match (more, last) {
+            (false, _) => return Ok(whole),
+            (true, Some(last)) => asked = exchange.ask(scan_request(root, skip, Some(last)))?,
+            (true, None) => return Err(unanswered()),
+        }
+    }
 }
 
 /// Refuse a path a manifest cannot hold: empty, absolute, through `.` or
@@ -717,7 +785,7 @@ fn named(step: &Step, error: io::Error) -> io::Error {
 }
 
 /// `error`, saying it was at `path`.
-fn at(path: &Path, error: io::Error) -> io::Error {
+pub(crate) fn at(path: &Path, error: io::Error) -> io::Error {
     io::Error::new(error.kind(), format!("{}: {error}", path.display()))
 }
 

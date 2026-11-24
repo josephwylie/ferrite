@@ -10,6 +10,7 @@ fn file(sha256: &str) -> Entry {
         size: sha256.len() as u64,
         sha256: sha256.into(),
         mode: Some(0o644),
+        modified: None,
     }
 }
 
@@ -19,12 +20,12 @@ fn manifest(entries: &[(&str, Entry)]) -> Manifest {
             .iter()
             .map(|(path, entry)| (path.to_string(), entry.clone()))
             .collect(),
-        problems: BTreeMap::new(),
+        ..Manifest::default()
     }
 }
 
 fn write(path: &str, entry: &Entry) -> Step {
-    let Entry::File { size, sha256, mode } = entry else {
+    let Entry::File { size, sha256, mode, .. } = entry else {
         unreachable!()
     };
     Step::Write {
@@ -135,6 +136,7 @@ fn an_executable_bit_differs_only_between_two_sides_that_keep_one() {
         size: 1,
         sha256: "r".into(),
         mode,
+        modified: None,
     };
     let source = manifest(&[("run", with(Some(0o755)))]);
     assert_eq!(
@@ -208,6 +210,7 @@ fn a_scan_lists_without_following_and_leaves_out_what_is_skipped() {
                 size: 12,
                 sha256: chunked::hex(&Sha256::digest(b"fn main() {}")),
                 mode: cfg!(unix).then_some(0o640),
+                modified: None,
             },
         ),
     ]
