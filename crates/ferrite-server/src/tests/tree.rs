@@ -682,3 +682,54 @@ fn a_rewrite_keeps_the_far_side_permission_bits_and_a_new_file_takes_the_senders
     assert_eq!(mode(&dest.join("run.sh")), 0o644);
     assert_eq!(mode(&dest.join("fresh")), 0o640);
 }
+
+/// A Project copied from this computer reads as unchanged to git there:
+/// its config takes this side's line-end rule and ignores file modes.
+#[test]
+fn a_project_copy_takes_a_git_config_that_reads_its_files_as_unchanged() {
+    let harness = start("tree-project-copy");
+    let sent = Arc::default();
+    let mut cockpit = machine(&harness, &sent);
+    let source = harness.dir.join("desktop-app");
+    let dest = harness.dir.join("box-app");
+    let git = |repo: &Path, args: &[&str]| ferrite_core::workspace::git_for_tests(repo, args);
+    std::fs::create_dir_all(&source).unwrap();
+    git(&source, &["init", "-q", "-b", "main"]);
+    write(&source.join("src/main.rs"), "fn main() {}\n");
+    write(&source.join(".gitignore"), "target/\n");
+    write(&source.join("target/app"), "built");
+    git(&source, &["add", "."]);
+    git(&source, &["-c", "user.email=test@example.invalid", "-c", "user.name=test", "commit", "-qm", "base"]);
+
+    let mut exchange = connect(&mut cockpit);
+    let copied = ferrite_core::placement::copy(
+        &source,
+        &dest,
+        &["target".into()],
+        &mut *exchange,
+        &mut |_| {},
+        &Cancellation::default(),
+    )
+    .unwrap();
+    assert_eq!(copied.problems, []);
+    assert!(!dest.join("target").exists());
+    ferrite_core::placement::align_git(
+        &source,
+        &Root::Path { path: dest.clone() },
+        &mut *exchange,
+        &Cancellation::default(),
+    )
+    .unwrap();
+
+    let here = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&source)
+        .args(["config", "--get", "core.autocrlf"])
+        .output()
+        .unwrap();
+    let autocrlf = String::from_utf8_lossy(&here.stdout).trim().to_string();
+    let expected = if autocrlf.is_empty() { "false" } else { &autocrlf };
+    assert_eq!(git(&dest, &["config", "--local", "--get", "core.autocrlf"]).trim(), expected);
+    assert_eq!(git(&dest, &["config", "--local", "--get", "core.filemode"]).trim(), "false");
+    assert_eq!(git(&dest, &["status", "--porcelain"]), "");
+}

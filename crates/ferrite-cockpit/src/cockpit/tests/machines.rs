@@ -261,9 +261,7 @@ fn reach(name: &str, bridge: fn(&Machine, &std::path::Path) -> Bridge) -> Reach 
 fn box_machine() -> Machine {
     Machine {
         name: "box".into(),
-        target: "me@box".into(),
-        enabled: true,
-        sync_setup: true,
+        ..Machine::new("me@box")
     }
 }
 
@@ -678,9 +676,7 @@ fn a_revoked_session_asks_to_sign_in_and_opens_its_pairing(cx: &mut TestAppConte
     fresh("revoked");
     let link = Machine {
         name: "box".into(),
-        target: "ferrite-link:00112233445566778899aabbccddeeff".into(),
-        enabled: true,
-        sync_setup: true,
+        ..Machine::new("ferrite-link:00112233445566778899aabbccddeeff")
     };
     let mut machines = Machines::new(reach("revoked", revoked), &[link], None, true);
     machines.beside(&mut core);

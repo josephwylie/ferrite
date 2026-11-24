@@ -43,6 +43,7 @@ pub mod machine;
 pub mod models;
 pub mod notifications;
 pub mod pane_update;
+pub mod placement;
 pub mod pr_watch;
 pub mod progress;
 pub mod project;
