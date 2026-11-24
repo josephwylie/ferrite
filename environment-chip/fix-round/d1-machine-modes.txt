@@ -1,0 +1,31 @@
+== where
+/home/joseph/ferrite-wsl-machine/home/work/repo
+== modes
+755 directory .
+755 directory src
+755 directory scripts
+755 directory data
+755 directory .git
+755 directory .git/objects
+755 regular file scripts/run.sh
+644 regular file src/main.rs
+644 regular file .gitignore
+644 regular file data/assets.bin
+600 regular file .env
+644 regular file .git/HEAD
+644 regular file .git/config
+== ./scripts/run.sh
+ran
+== git status --porcelain (empty = clean)
+[end]
+== the same with core.filemode=true (the bits agree with the index)
+[end]
+== git ls-files --stage scripts/run.sh
+100755 deead1da44bdf28388b43d8fe68a100eba7afbdb 0	scripts/run.sh
+== core.filemode / core.autocrlf in the copy
+false
+true
+== unticked
+ls: cannot access 'build': No such file or directory
+ls: cannot access 'node_modules': No such file or directory
+755 /home/joseph/ferrite-wsl-machine/home/work
