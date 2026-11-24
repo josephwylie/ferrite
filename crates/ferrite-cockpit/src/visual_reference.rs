@@ -371,7 +371,7 @@ impl Scene {
             .expect("open fixture Thread");
         if !title.is_empty() {
             self.core
-                .rename_thread(thread, title)
+                .rename_thread(thread, title).now()
                 .expect("name fixture Thread");
         }
         let feed = Feed(self.feeds.borrow().last().expect("spawned").clone());
@@ -1370,7 +1370,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 let wake =
                     ferrite_core::clock::system_time() + std::time::Duration::from_secs(3 * 3600);
                 view.cockpit
-                    .update(cx, |cockpit, _| cockpit.snooze_thread(copy, Some(wake)))
+                    .update(cx, |cockpit, _| cockpit.snooze_thread(copy, Some(wake)).now())
                     .expect("snooze the fixture Thread");
                 view.set_shelf_open(crate::nav::Shelf::Working, true, cx);
                 cx.notify();

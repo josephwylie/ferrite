@@ -2241,11 +2241,17 @@ impl Cockpit {
         }
     }
 
-    pub fn control(&mut self, thread: ThreadKey, action: crate::SessionControl) -> io::Result<()> {
-        done(self.act_on(thread, |thread| Op::Control {
+    /// Ask `thread`'s Session to do `action`: an `Err` answer says why
+    /// not. The window never waits for it.
+    pub fn control(&mut self, thread: ThreadKey, action: crate::SessionControl) -> Ask<()> {
+        self.ask_on(
             thread,
-            control: (&action).into(),
-        }))
+            |thread| Op::Control {
+                thread,
+                control: (&action).into(),
+            },
+            done,
+        )
     }
 
     /// The operator's Threads not open, each machine's in creation order,
@@ -2497,19 +2503,27 @@ impl Cockpit {
         machine.parked.prompt_title(thread).unwrap_or_else(numbered)
     }
 
+    /// Snooze `thread` until `until`, or wake it: an `Err` answer says
+    /// why not. The window never waits for it.
     pub fn snooze_thread(
         &mut self,
         thread: ThreadKey,
         until: Option<std::time::SystemTime>,
-    ) -> io::Result<()> {
-        done(self.act_on(thread, |thread| Op::Snooze { thread, until }))
+    ) -> Ask<()> {
+        self.ask_on(thread, |thread| Op::Snooze { thread, until }, done)
     }
 
-    pub fn rename_thread(&mut self, thread: ThreadKey, title: &str) -> io::Result<()> {
-        done(self.act_on(thread, |thread| Op::Rename {
+    /// Name `thread` `title`: an `Err` answer says why not. The window
+    /// never waits for it.
+    pub fn rename_thread(&mut self, thread: ThreadKey, title: &str) -> Ask<()> {
+        self.ask_on(
             thread,
-            title: title.to_string(),
-        }))
+            |thread| Op::Rename {
+                thread,
+                title: title.to_string(),
+            },
+            done,
+        )
     }
 
     /// Hold `text` behind `thread`'s running turn. Whether the queue took

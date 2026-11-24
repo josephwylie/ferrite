@@ -149,3 +149,24 @@ fn a_turns_presses_that_read_a_reply_do_not_wait_and_are_answered() {
         let _ = core.wait_for(ask);
     }
 }
+
+/// Naming a Thread, snoozing it and a Session control are asked, never
+/// waited for, and each is answered through its ask.
+#[test]
+fn a_threads_name_snooze_and_controls_do_not_wait_and_are_answered() {
+    let (mut core, thread, _) = super::machines::browser_core("thread-asks");
+    waits::start();
+    let renamed = core.rename_thread(thread, "Release notes");
+    let later = ferrite_core::clock::system_time() + std::time::Duration::from_secs(3600);
+    let snoozed = core.snooze_thread(thread, Some(later));
+    let control = core.control(thread, ferrite_core::SessionControl::RefreshContext);
+    let waits = waits::take();
+    let ops: Vec<_> = waits.iter().map(|wait| wait.op.as_str()).collect();
+    assert_eq!(ops, ["rename", "snooze", "control"]);
+    assert!(waits.iter().all(|wait| !wait.waited), "none waits for its reply: {waits:?}");
+    core.wait_for(renamed).expect("the Server names the Thread");
+    for ask in [snoozed, control] {
+        // The fixture Server may refuse either: its word came through the ask.
+        let _ = core.wait_for(ask);
+    }
+}

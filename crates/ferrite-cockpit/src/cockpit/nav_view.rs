@@ -663,16 +663,23 @@ impl CockpitView {
                 cx.notify();
             }
             NavEvent::Snooze(key, until) => {
-                let refused = match self.cockpit.update(cx, |cockpit, _| cockpit.snooze_thread(key, Some(until))) {
-                    Ok(()) => {
-                        self.nav_notice.clear();
-                        None
-                    }
-                    Err(error) => Some(error.to_string().into()),
-                };
-                self.nav_view
-                    .update(cx, |nav, cx| nav.snooze_answered(refused, cx));
-                cx.notify();
+                let snoozed = self.cockpit.update(cx, |cockpit, _| cockpit.snooze_thread(key, Some(until)));
+                self.when_answered(
+                    snoozed,
+                    |view, snoozed, cx| {
+                        let refused = match snoozed {
+                            Ok(()) => {
+                                view.nav_notice.clear();
+                                None
+                            }
+                            Err(error) => Some(error.to_string().into()),
+                        };
+                        view.nav_view
+                            .update(cx, |nav, cx| nav.snooze_answered(refused, cx));
+                        cx.notify();
+                    },
+                    cx,
+                );
             }
             NavEvent::AddProject => self.add_project(window, cx),
             NavEvent::Settings => self.toggle_settings(cx),

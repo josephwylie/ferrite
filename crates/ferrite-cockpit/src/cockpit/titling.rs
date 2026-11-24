@@ -98,10 +98,17 @@ impl CockpitView {
         {
             return;
         }
-        if self.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(thread, &title).is_ok()) {
-            self.facts.renamed(self.cockpit.read(cx), thread);
-            self.refresh_names();
-            cx.notify();
-        }
+        let renamed = self.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(thread, &title));
+        self.when_answered(
+            renamed,
+            move |view, renamed, cx| {
+                if renamed.is_ok() {
+                    view.facts.renamed(view.cockpit.read(cx), thread);
+                    view.refresh_names();
+                    cx.notify();
+                }
+            },
+            cx,
+        );
     }
 }

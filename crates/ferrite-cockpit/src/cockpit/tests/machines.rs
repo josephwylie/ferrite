@@ -1853,7 +1853,8 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
     let other = core
         .open(core.first_machine(), Provider::Codex, WorkspaceChoice::Main { checkout: here() })
         .unwrap();
-    core.rename_thread(named, "Release notes").unwrap();
+    let renamed = core.rename_thread(named, "Release notes");
+    core.wait_for(renamed).unwrap();
     core.park(named).unwrap();
     core.park(other).unwrap();
 
@@ -1930,7 +1931,8 @@ fn a_machines_decision_rings_once_and_opens_in_place(cx: &mut TestAppContext) {
     let mine = core.threads()[0];
     let on_box = machines.held(1).unwrap();
     let theirs = open_on(&mut core, on_box);
-    core.rename_thread(theirs, "Release").unwrap();
+    let renamed = core.rename_thread(theirs, "Release");
+    core.wait_for(renamed).unwrap();
     core.focus_thread(mine);
     agents.say(0, decision("first"));
     ferrite_core::doorbell::until("box's first Decision never came", || {

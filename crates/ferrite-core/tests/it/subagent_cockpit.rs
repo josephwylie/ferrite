@@ -1286,7 +1286,7 @@ fn header_rewrite_invalidates_old_history_read_and_a_fresh_selection_recovers() 
     let thread = h.thread;
     assert!(h.cockpit.ensure_subject_history(thread, &subject).unwrap());
     h.cockpit
-        .rename_thread(thread, "renamed during read")
+        .rename_thread(thread, "renamed during read").now()
         .unwrap();
     h.content(
         0,

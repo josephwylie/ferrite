@@ -248,7 +248,7 @@ fn the_solo_agent_strip_fits_its_tabs_with_room(cx: &mut TestAppContext) {
     };
     let (mut core, fake) = cockpit("head-title-floor", 1);
     let thread = core.threads()[0];
-    core.rename_thread(thread, "Audit every surface of the overhaul")
+    core.rename_thread(thread, "Audit every surface of the overhaul").now()
         .unwrap();
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     for name in [

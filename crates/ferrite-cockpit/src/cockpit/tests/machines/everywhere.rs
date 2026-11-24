@@ -117,9 +117,12 @@ fn search_and_the_parked_shelf_hold_every_machines_threads(cx: &mut TestAppConte
     let on_box = machines.held(1).unwrap();
     let open_there = open_on(&mut core, on_box);
     let parked_there = open_on(&mut core, on_box);
-    core.rename_thread(mine, "Needle here").unwrap();
-    core.rename_thread(open_there, "Needle open on box").unwrap();
-    core.rename_thread(parked_there, "Needle parked on box").unwrap();
+    let renamed = core.rename_thread(mine, "Needle here");
+    core.wait_for(renamed).unwrap();
+    let renamed = core.rename_thread(open_there, "Needle open on box");
+    core.wait_for(renamed).unwrap();
+    let renamed = core.rename_thread(parked_there, "Needle parked on box");
+    core.wait_for(renamed).unwrap();
     // A prompt gives its parked row an age.
     let _ = core.send(parked_there, "go".into());
     core.park(parked_there).unwrap();

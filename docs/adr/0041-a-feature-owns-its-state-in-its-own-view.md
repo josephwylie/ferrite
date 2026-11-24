@@ -1262,9 +1262,13 @@ never waits. The rest still do.
      chat's tab opens at once and says a refused fork when the refusal
      comes. A test or a scene on an Engine in this process reads an
      answer with `Ask::now`. Nothing of this family waits.
-  3. Thread lifecycle: 16 asks, 31 sites. What follows an open, a park or
-     a revive is the root's (the Panes, focus, the Project filter). Each
-     needs a continuation like the Browser's `Then`.
+  3. Thread lifecycle: naming a Thread, snoozing or waking it and a
+     Session control are asks now, each with what follows its answer in
+     `when_answered`: the nav's name and its notice, the undo a snooze
+     offers, the snooze field's refusal, and why a control was refused.
+     Open, park, revive, delete and import still wait. What follows them
+     is the root's (the Panes, focus, the Project filter). Each needs a
+     continuation like the Browser's `Then`.
   4. Queue: 5 asks, 15 sites. These are Composer presses, with the
      queue's rows answered by the Server's state.
   5. Projects: 7 asks, 11 sites. These are rare presses in the settings
