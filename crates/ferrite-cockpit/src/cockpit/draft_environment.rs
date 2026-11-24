@@ -285,18 +285,17 @@ impl CockpitView {
         let Some(project) = self.cockpit.read(cx).project(lookup.from) else {
             return;
         };
+        let Some(kept) = self.machine_dir(lookup.to, cx) else {
+            return;
+        };
         let placing = Placing {
             draft: lookup.draft,
             title: project.title.clone().into(),
             root: project.root.clone(),
-            repository: lookup
-                .here
-                .repositories()
-                .get(&lookup.from.project())
-                .cloned(),
             machine: lookup.to,
             machine_name: self.environment_name(lookup.to, cx),
             projects_dir: self.projects_dir(lookup.to),
+            kept,
         };
         let model = self.cockpit.clone();
         let band = self.band_of(lookup.draft);
@@ -327,7 +326,8 @@ impl CockpitView {
     /// The sheet's folder is on its machine: register it there as a
     /// Project, and the window carries on while its Server answers. A
     /// Project made now takes the name of the one it copies, so the two read
-    /// as one; one that was there keeps its own.
+    /// as one; one that was there, however its folder was spelled, keeps
+    /// its own.
     fn place_copy(
         &mut self,
         sheet: &Entity<PlacementView>,
@@ -335,14 +335,15 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         let placing = sheet.read(cx).placing.clone();
-        let made = !self
+        let there: std::collections::HashSet<_> = self
             .cockpit
             .read(cx)
             .registry(placing.machine)
             .reading()
             .projects()
             .iter()
-            .any(|project| project.root == dest);
+            .map(|project| project.id)
+            .collect();
         let registered = self.cockpit.update(cx, |cockpit, _| {
             cockpit.register_project(placing.machine, dest)
         });
@@ -350,7 +351,9 @@ impl CockpitView {
         self.when_answered(
             registered,
             move |view, registered, cx| match registered {
-                Ok(project) if made => view.name_copy(sheet, placing, dest, project, cx),
+                Ok(project) if !there.contains(&project.project()) => {
+                    view.name_copy(sheet, placing, dest, project, cx)
+                }
                 registered => view.copy_registered(sheet, placing, dest, registered, cx),
             },
             cx,
@@ -382,9 +385,9 @@ impl CockpitView {
         );
     }
 
-    /// The copy is a Project on its machine: keep where it came from when
-    /// no repository says, and choose it on the draft. The sheet stays up
-    /// only to list what it left.
+    /// The copy is a Project on its machine: keep where it came from, its
+    /// counterpart whatever git says of either, and choose it on the
+    /// draft. The sheet stays up only to list what it left.
     fn copy_registered(
         &mut self,
         sheet: Entity<PlacementView>,
@@ -402,27 +405,20 @@ impl CockpitView {
                 return;
             }
         };
-        if placing.repository.is_none() {
-            let remote_root = self
-                .cockpit
-                .read(cx)
-                .project(project)
-                .map_or(dest, |placed| placed.root.clone());
-            let kept = self.machine_dir(placing.machine, cx).map(|dir| {
-                placement::place(
-                    &dir,
-                    Placement {
-                        local_root: placing.root.clone(),
-                        remote_root,
-                    },
-                )
-            });
-            if let Some(Err(error)) = kept {
-                ferrite_core::log!(
-                    "the placement of {} was not kept: {error}",
-                    placing.root.display()
-                );
-            }
+        let remote_root = self
+            .cockpit
+            .read(cx)
+            .project(project)
+            .map_or(dest, |placed| placed.root.clone());
+        let placed = Placement {
+            local_root: placing.root.clone(),
+            remote_root,
+        };
+        if let Err(error) = placement::place(&placing.kept, placed) {
+            ferrite_core::log!(
+                "the placement of {} was not kept: {error}",
+                placing.root.display()
+            );
         }
         self.rebind_draft(placing.draft, project, cx);
         let stays = sheet.update(cx, |sheet, cx| sheet.placed(cx));

@@ -341,7 +341,12 @@ impl CockpitView {
         }
     }
 
+    /// A press outside the card closes the sheet, unless it is copying:
+    /// only its own Cancel stops a copy.
     pub(super) fn on_sheets_event(&mut self, _: Entity<Sheets>, _: &Dismissed, cx: &mut Context<Self>) {
+        if self.placement_sheet(cx).is_some_and(|sheet| sheet.read(cx).busy()) {
+            return;
+        }
         self.hide_sheet(cx);
     }
 }

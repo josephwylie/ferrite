@@ -4129,6 +4129,12 @@ impl CockpitView {
             connections.update(cx, |connections, cx| connections.cancel(cx));
             return;
         }
+        // The setup sheet's esc is its Cancel: a copy under way stops, and
+        // the sheet stays to say so.
+        if let Some(sheet) = self.placement_sheet(cx) {
+            sheet.update(cx, |sheet, cx| sheet.cancel(cx));
+            return;
+        }
         if self.hide_sheet(cx) {
             return;
         }

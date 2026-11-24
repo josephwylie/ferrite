@@ -3,20 +3,26 @@
 //! environment. It owns where the copy goes, a folder browsed on the
 //! Machine and the name of the copy in it, the entries git ignores and
 //! which of them go too, and the copy, which runs on a thread of its own
-//! over its own connection (`Cockpit::tree`). Once the folder is there it
-//! says so as a `PlacementEvent`, and the Cockpit registers it and chooses
-//! it on the draft.
+//! over its own connection (`Cockpit::tree`). A copy stopped part way is
+//! unfinished (`placement::unfinished`): the sheet opens on it, and only
+//! its Resume goes there. Once the folder is there it says so as a
+//! `PlacementEvent`, and the Cockpit registers it and chooses it on the
+//! draft.
 
 use super::draft_environment::Band;
 use super::folder_browser::{FolderBrowser, Moved};
 use super::*;
 use ferrite_core::chunked::{Cancellation, Progress};
-use ferrite_core::placement::{self, Ignored};
-use ferrite_core::tree::{Sent, Stopped};
+use ferrite_core::placement::{self, Copied, Copying, Ignored};
+use ferrite_core::tree::Stopped;
 use gpui::component::{checkbox::Checkbox, Disableable};
 use gpui::App;
+use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
+
+mod ignored;
+use ignored::Entry;
 
 /// What the sheet copies, and for whom.
 #[derive(Clone)]
@@ -25,11 +31,13 @@ pub(crate) struct Placing {
     pub(crate) draft: PaneIdentity,
     pub(crate) title: SharedString,
     pub(crate) root: PathBuf,
-    pub(crate) repository: Option<String>,
     pub(crate) machine: ferrite_core::MachineId,
     pub(crate) machine_name: SharedString,
     /// The Machine's projects folder, where the browser opens.
     pub(crate) projects_dir: String,
+    /// The Machine's own folder on this computer (`machine::dir`), which
+    /// keeps where its copies went and those unfinished.
+    pub(crate) kept: PathBuf,
 }
 
 /// What the sheet asks of the window.
@@ -46,13 +54,16 @@ impl EventEmitter<PlacementEvent> for PlacementView {}
 /// Where the sheet is. One at a time, so no two can disagree.
 enum Stage {
     Choosing,
-    /// Looking at the destination before anything is sent there.
-    Scanning,
-    /// `dest` holds something: it takes no copy.
+    /// The Project's files being listed, this many so far, and the
+    /// destination looked at, before anything is sent there.
+    Listing(usize),
+    /// `dest` holds what no copy of this Project put there: it takes none.
     Occupied {
         dest: String,
     },
     Copying(Progress),
+    /// The operator stopped the copy. What it sent stays, for its Resume.
+    Cancelled,
     /// Copied to `dest`; the window is registering it. What could not be
     /// read stays behind and is listed once it is in.
     Registering {
@@ -67,24 +78,26 @@ enum Stage {
     },
 }
 
-/// One entry git ignores, and whether it goes too.
-struct Entry {
-    ignored: Ignored,
-    size: Option<u64>,
-    ticked: bool,
-}
-
-/// What the thread listing the ignored entries hands back.
+/// What the thread reading the Project hands back.
 enum Listed {
-    Entries(Vec<Ignored>),
+    /// Where its unfinished copies go on the Machine, the last begun last.
+    Unfinished(Vec<PathBuf>),
+    /// Why it cannot be copied, what git ignores in it, and the worktrees
+    /// in it, which stay here.
+    Read {
+        unfit: Option<&'static str>,
+        ignored: Vec<Ignored>,
+        worktrees: Vec<String>,
+    },
     Size(usize, u64),
 }
 
 /// What the copy's thread hands back.
 enum Heard {
-    Occupied,
-    Progress(Progress),
-    Copied(Result<Sent, Stopped>),
+    /// No connection to the Machine could be made.
+    Unreached(io::Error),
+    Copying(Copying),
+    Copied(Result<Copied, Stopped>),
 }
 
 pub(crate) struct PlacementView {
@@ -94,23 +107,32 @@ pub(crate) struct PlacementView {
     pub(super) dest: Entity<FolderBrowser>,
     /// The copy's own folder in it: the Project's folder name until edited.
     pub(super) name: Entity<Composer>,
+    /// The card's own, which holds the keyboard while where the copy goes
+    /// is held: keys reach nothing under the sheet.
+    focus: FocusHandle,
     entries: Option<Vec<Entry>>,
+    /// Why the Project cannot be copied at all.
+    unfit: Option<&'static str>,
+    /// The worktrees in the Project, which stay here.
+    worktrees: Vec<String>,
     listing: Option<Receiver<Listed>>,
+    /// Where the Project's unfinished copies go on the Machine, as each
+    /// copy spelled it there.
+    unfinished: Vec<PathBuf>,
     stage: Stage,
     /// Why the destination takes no copy, once Copy was pressed.
     refusal: Option<&'static str>,
-    /// The destination a copy last went to: one into it again finishes
-    /// that copy rather than meets what it left.
-    copied_into: Option<String>,
     copy: Option<Running>,
     scroll: ScrollHandle,
     /// The draft's band, which the card keeps clear of.
     band: Option<Band>,
 }
 
-/// A copy under way: to `dest`, as it was chosen when it began.
+/// A copy under way: to `dest` as it was chosen when it began, `target`
+/// as the Machine spells it.
 struct Running {
     dest: String,
+    target: PathBuf,
     hear: Receiver<Heard>,
     cancel: Cancellation,
 }
@@ -122,11 +144,6 @@ impl PlacementView {
         band: Option<Band>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let leaf = placing
-            .root
-            .file_name()
-            .map(|leaf| leaf.to_string_lossy().into_owned())
-            .unwrap_or_else(|| placing.title.to_string());
         let dest = cx.new(|cx| {
             FolderBrowser::new(
                 model.clone(),
@@ -135,24 +152,37 @@ impl PlacementView {
                 format!("{}/", placing.projects_dir.trim_end_matches('/')),
                 cx,
             )
+            .making("The copy makes this folder")
         });
         cx.subscribe(&dest, |sheet: &mut Self, _, _: &Moved, cx| sheet.edited(cx))
             .detach();
         let name = cx.new(Composer::new);
         name.update(cx, |name, cx| {
             name.set_role(ferrite_pane::composer::Role::Field(None), cx);
-            name.set(leaf, cx);
+            name.set(leaf(&placing), cx);
         });
         cx.subscribe(&name, |sheet: &mut Self, _, _: &Edited, cx| {
             sheet.edited(cx)
         })
         .detach();
         let (found, listing) = ferrite_core::doorbell::channel();
-        let root = placing.root.clone();
+        let (root, kept) = (placing.root.clone(), placing.kept.clone());
         std::thread::spawn(move || {
-            let ignored = placement::ignored(&root);
+            if found
+                .send(Listed::Unfinished(placement::unfinished(&kept, &root)))
+                .is_err()
+            {
+                return;
+            }
+            let (ignored, worktrees) =
+                placement::without_worktrees(placement::ignored(&root), &placement::worktrees(&root));
             let paths: Vec<String> = ignored.iter().map(|entry| entry.path.clone()).collect();
-            if found.send(Listed::Entries(ignored)).is_err() {
+            let read = Listed::Read {
+                unfit: placement::refuse_source(&root),
+                ignored,
+                worktrees,
+            };
+            if found.send(read).is_err() {
                 return;
             }
             for (index, path) in paths.iter().enumerate() {
@@ -169,26 +199,36 @@ impl PlacementView {
             placing,
             dest,
             name,
+            focus: cx.focus_handle(),
             entries: None,
+            unfit: None,
+            worktrees: Vec::new(),
             listing: Some(listing),
+            unfinished: Vec::new(),
             stage: Stage::Choosing,
             refusal: None,
-            copied_into: None,
             copy: None,
             scroll: ScrollHandle::new(),
             band,
         }
     }
 
+    /// Where the keyboard goes while the sheet is up: the browser's line,
+    /// or the card itself while where the copy goes is held.
     pub(super) fn focus(&self, cx: &App) -> FocusHandle {
-        self.dest.read(cx).focus_handle(cx)
+        if self.held() {
+            self.focus.clone()
+        } else {
+            self.dest.read(cx).focus_handle(cx)
+        }
     }
 
-    /// Whether one of the sheet's fields holds the keyboard: the browser's,
-    /// or the copy's name.
+    /// Whether the sheet holds the keyboard: the browser's, the copy's
+    /// name, or the card.
     pub(super) fn holds_focus(&self, window: &Window, cx: &App) -> bool {
-        self.dest.read(cx).focused(window, cx)
-            || self.name.read(cx).focus_handle(cx).is_focused(window)
+        let field = self.dest.read(cx).focused(window, cx)
+            || self.name.read(cx).focus_handle(cx).is_focused(window);
+        (field && !self.held()) || self.focus.contains_focused(window, cx)
     }
 
     fn copy_name<'a>(&self, cx: &'a App) -> &'a str {
@@ -211,26 +251,59 @@ impl PlacementView {
         format!("{}{}", self.folder_prefix(cx), self.copy_name(cx))
     }
 
+    /// Where the copy goes, as the Machine spells it.
+    fn target(&self, cx: &App) -> PathBuf {
+        self.dest.read(cx).spelled_out(&self.destination(cx))
+    }
+
+    /// Whether the copy goes where an unfinished copy of the Project is:
+    /// it resumes that one.
+    fn resumes(&self, cx: &App) -> bool {
+        self.unfinished.contains(&self.target(cx))
+    }
+
     /// Where the copy goes moved: what it was found to hold no longer
     /// counts.
     fn edited(&mut self, cx: &mut Context<Self>) {
         self.refusal = None;
-        if matches!(self.stage, Stage::Occupied { .. } | Stage::Failed { .. }) {
+        if matches!(
+            self.stage,
+            Stage::Occupied { .. } | Stage::Failed { .. } | Stage::Cancelled
+        ) {
             self.enter(Stage::Choosing, cx);
         }
         cx.notify();
     }
 
-    fn busy(&self) -> bool {
+    /// The sheet opens on the copy of the Project begun last and left
+    /// unfinished, unless the operator has aimed it already.
+    fn open_on_unfinished(&mut self, cx: &mut Context<Self>) {
+        let Some(last) = self.unfinished.last() else {
+            return;
+        };
+        if !self.dest.read(cx).untouched() || self.copy_name(cx) != leaf(&self.placing) {
+            return;
+        }
+        let last = last.display().to_string();
+        let Some((folder, name)) = last.rsplit_once(['/', '\\']) else {
+            return;
+        };
+        let (folder, name) = (format!("{folder}/"), name.to_string());
+        self.dest.update(cx, |dest, cx| dest.open_at(folder, cx));
+        self.name.update(cx, |field, cx| field.set(name, cx));
+    }
+
+    /// While the copy is under way or being registered.
+    pub(super) fn busy(&self) -> bool {
         matches!(
             self.stage,
-            Stage::Scanning | Stage::Copying(_) | Stage::Registering { .. }
+            Stage::Listing(_) | Stage::Copying(_) | Stage::Registering { .. }
         )
     }
 
     /// From Copy on, where the copy goes is held: the browser, the copy's
     /// name and the ticks take nothing, unless it stops short (`Occupied`,
-    /// `Failed`).
+    /// `Cancelled`, `Failed`).
     fn held(&self) -> bool {
         self.busy() || matches!(self.stage, Stage::Done { .. })
     }
@@ -243,63 +316,68 @@ impl PlacementView {
         cx.notify();
     }
 
-    /// Copy to the destination chosen, unless it is no folder to copy into,
-    /// or holds something this sheet did not put there.
+    /// Copy to the destination chosen, unless the Project cannot be
+    /// copied or the destination is no folder to copy into. The copy finds
+    /// for itself whether it resumes one, or meets what it did not put
+    /// there.
     fn start(&mut self, cx: &mut Context<Self>) {
         if self.busy() || self.entries.is_none() {
             return;
         }
         let dest = self.destination(cx);
-        self.refusal = if self.copy_name(cx).is_empty() {
-            Some("Name the copy's folder")
-        } else {
-            placement::refuse_destination(&dest)
-        };
+        self.refusal = self.unfit.or_else(|| {
+            if self.copy_name(cx).is_empty() {
+                Some("Name the copy's folder")
+            } else {
+                placement::refuse_destination(&dest)
+            }
+        });
         if self.refusal.is_some() {
             cx.notify();
             return;
         }
         let machine = self.placing.machine;
-        let connect = match self.model.update(cx, |cockpit, _| cockpit.tree(machine)) {
-            Ok(connect) => connect,
-            Err(error) => return self.failed(format!("Not copied: {error}"), cx),
-        };
+        let connect = self.model.update(cx, |cockpit, _| cockpit.tree(machine));
         let skip: Vec<String> = self
             .entries
             .iter()
             .flatten()
             .filter(|entry| !entry.ticked)
             .map(|entry| entry.ignored.path.clone())
+            .chain(self.worktrees.iter().cloned())
             .collect();
-        let fresh = self.copied_into.as_deref() != Some(dest.as_str());
-        let (source, target) = (self.placing.root.clone(), PathBuf::from(&dest));
+        let target = self.target(cx);
+        let (source, kept, to) = (self.placing.root.clone(), self.placing.kept.clone(), target.clone());
         let (heard, hear) = ferrite_core::doorbell::channel();
         let cancel = Cancellation::default();
         let cancelled = cancel.clone();
         std::thread::spawn(move || {
-            let last = (|| {
-                let mut exchange = connect()?;
-                if fresh && placement::occupied(&target, &mut *exchange)? {
-                    return Ok(Heard::Occupied);
+            let mut exchange = match connect.and_then(|connect| connect()) {
+                Ok(exchange) => exchange,
+                Err(error) => {
+                    let _ = heard.send(Heard::Unreached(error));
+                    return;
                 }
-                let _ = heard.send(Heard::Progress(Progress { sent: 0, total: 0 }));
-                let mut progress = |progress| {
-                    let _ = heard.send(Heard::Progress(progress));
-                };
-                placement::copy(
-                    &source,
-                    &target,
-                    &skip,
-                    &mut *exchange,
-                    &mut progress,
-                    &cancelled,
-                )
-                .map(|sent| Heard::Copied(Ok(sent)))
-            })();
-            let _ = heard.send(last.unwrap_or_else(|stopped| Heard::Copied(Err(stopped))));
+            };
+            let job = placement::CopyJob {
+                source: &source,
+                dest: &to,
+                skip: &skip,
+                kept: &kept,
+            };
+            let mut progress = |copying| {
+                let _ = heard.send(Heard::Copying(copying));
+            };
+            let copied = placement::copy(&job, &mut *exchange, &mut progress, &cancelled);
+            let _ = heard.send(Heard::Copied(copied));
         });
-        self.copy = Some(Running { dest, hear, cancel });
-        self.enter(Stage::Scanning, cx);
+        self.copy = Some(Running {
+            dest,
+            target,
+            hear,
+            cancel,
+        });
+        self.enter(Stage::Listing(0), cx);
     }
 
     /// Register what is at the destination as it is, copying nothing.
@@ -319,22 +397,19 @@ impl PlacementView {
         cx.emit(PlacementEvent::Place { dest: spelled });
     }
 
-    /// Stop the copy under way; what it sent stays, for the next to finish.
+    /// Stop the copy under way; what it sent stays, for its Resume.
     pub(super) fn stop(&mut self) {
         if let Some(copy) = self.copy.take() {
             copy.cancel.cancel();
         }
     }
 
-    fn cancel(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.stage, Stage::Scanning | Stage::Copying(_)) {
+    /// The close button, Cancel and esc: a copy under way is cancelled,
+    /// the sheet staying up to say so; else the sheet closes.
+    pub(super) fn cancel(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.stage, Stage::Listing(_) | Stage::Copying(_)) {
             self.stop();
-            self.enter(
-                Stage::Failed {
-                    reason: "Cancelled".into(),
-                },
-                cx,
-            );
+            self.enter(Stage::Cancelled, cx);
         } else {
             cx.emit(PlacementEvent::Closed);
         }
@@ -343,14 +418,14 @@ impl PlacementView {
     /// ↵: the footer's own verb, where it has one.
     pub(super) fn confirm(&mut self, cx: &mut Context<Self>) {
         match self.stage {
-            Stage::Choosing | Stage::Failed { .. } => self.start(cx),
+            Stage::Choosing | Stage::Cancelled | Stage::Failed { .. } => self.start(cx),
             Stage::Done { .. } => cx.emit(PlacementEvent::Closed),
             _ => {}
         }
     }
 
-    /// Tab in the browser: go into the first folder its line fits. False
-    /// when it does not hold the keyboard.
+    /// Tab in the browser: go into the first folder its last name starts.
+    /// False when Tab moves on.
     pub(super) fn tab(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
         self.dest.update(cx, |dest, cx| dest.tab(window, cx))
     }
@@ -363,6 +438,30 @@ impl PlacementView {
             },
             cx,
         );
+    }
+
+    /// What the operator does about a copy that could not go on.
+    fn next_step(&self, cx: &App) -> &'static str {
+        if self.resumes(cx) {
+            "Resume finishes the copy once it is back."
+        } else {
+            "Try again once it is back."
+        }
+    }
+
+    /// Why the copy stopped on `error`, in the operator's words when it is
+    /// the Machine that went.
+    fn stopped(&self, error: &io::Error, cx: &App) -> String {
+        let machine = &self.placing.machine_name;
+        let attached = matches!(
+            self.model.read(cx).server(self.placing.machine),
+            Some(ferrite_core::cockpit::ServerState::Attached { .. })
+        );
+        if cut_off(error) || !attached {
+            format!("The connection to {machine} was lost. {}", self.next_step(cx))
+        } else {
+            format!("Not copied: {error}")
+        }
     }
 
     /// The window registered the copy and chose it on the draft. True when
@@ -379,21 +478,31 @@ impl PlacementView {
 
     pub(super) fn poll(&mut self, cx: &mut Context<Self>) {
         self.dest.update(cx, |dest, cx| dest.poll(cx));
-        let mut moved = self.poll_listing();
+        let mut moved = self.poll_listing(cx);
         moved |= self.poll_copy(cx);
         if moved {
             cx.notify();
         }
     }
 
-    fn poll_listing(&mut self) -> bool {
-        let Some(listing) = &self.listing else {
-            return false;
-        };
+    fn poll_listing(&mut self, cx: &mut Context<Self>) -> bool {
         let mut moved = false;
         loop {
+            let Some(listing) = &self.listing else {
+                return moved;
+            };
             match listing.try_recv() {
-                Ok(Listed::Entries(ignored)) => {
+                Ok(Listed::Unfinished(unfinished)) => {
+                    self.unfinished = unfinished;
+                    self.open_on_unfinished(cx);
+                }
+                Ok(Listed::Read {
+                    unfit,
+                    ignored,
+                    worktrees,
+                }) => {
+                    self.unfit = unfit;
+                    self.worktrees = worktrees;
                     self.entries = Some(
                         ignored
                             .into_iter()
@@ -442,51 +551,48 @@ impl PlacementView {
                     return true;
                 }
             };
-            let dest = copy.dest.clone();
+            let (dest, target) = (copy.dest.clone(), copy.target.clone());
             moved = true;
             match heard {
-                Heard::Progress(progress) => {
-                    if !matches!(self.stage, Stage::Copying(_)) {
-                        self.copied_into = Some(dest);
+                Heard::Copying(Copying::Listing(listed)) => self.enter(Stage::Listing(listed), cx),
+                Heard::Copying(Copying::Sending(progress)) => {
+                    if !self.unfinished.contains(&target) {
+                        self.unfinished.push(target);
                     }
                     self.enter(Stage::Copying(progress), cx);
                 }
-                Heard::Occupied => {
+                Heard::Unreached(error) => {
+                    ferrite_core::log!("a copy could not reach {}: {error}", self.placing.machine_name);
+                    let reason = format!("Can't reach {}. {}", self.placing.machine_name, self.next_step(cx));
+                    self.failed(reason, cx);
+                    return true;
+                }
+                Heard::Copied(Ok(Copied::Occupied)) => {
                     self.copy = None;
                     self.enter(Stage::Occupied { dest }, cx);
                     return true;
                 }
-                Heard::Copied(Ok(sent)) => {
-                    let spelled = self.dest.read(cx).spelled_out(&dest);
+                Heard::Copied(Ok(Copied::Sent(sent))) => {
                     self.copy = None;
+                    self.unfinished.retain(|unfinished| *unfinished != target);
                     let skipped = sent.problems.into_iter().map(|problem| problem.path).collect();
                     self.enter(Stage::Registering { dest, skipped }, cx);
-                    cx.emit(PlacementEvent::Place { dest: spelled });
+                    cx.emit(PlacementEvent::Place { dest: target });
                     return true;
                 }
                 Heard::Copied(Err(stopped)) => {
-                    self.failed(format!("Not copied: {}", stopped.error), cx);
+                    ferrite_core::log!("a copy to {} stopped: {}", target.display(), stopped.error);
+                    let reason = self.stopped(&stopped.error, cx);
+                    self.failed(reason, cx);
                     return true;
                 }
             }
         }
     }
 
-    fn tick(&mut self, index: usize, ticked: bool, cx: &mut Context<Self>) {
-        if let Some(entry) = self
-            .entries
-            .as_mut()
-            .and_then(|entries| entries.get_mut(index))
-        {
-            entry.ticked = ticked;
-        }
-        cx.notify();
-    }
-
-    /// How the copy stands, on a line the card keeps in every stage so it
-    /// holds its size as the copy moves: cut at its end, whole in its
-    /// tooltip.
-    fn stage_line(&self) -> gpui::Stateful<Div> {
+    /// How the copy stands, in a slot the card keeps in every stage so it
+    /// holds its size as the copy moves: two lines, whole in its tooltip.
+    fn stage_line(&self, cx: &App) -> gpui::Stateful<Div> {
         use ferrite_ui::theme::{BLOCKED, INK_SUBTLE, LH_UI};
         let machine = &self.placing.machine_name;
         let leaf = |dest: &str| {
@@ -495,8 +601,23 @@ impl PlacementView {
         };
         let (text, ink, selector): (String, u32, &'static str) = match (self.refusal, &self.stage) {
             (Some(refusal), _) => (refusal.into(), BLOCKED, "placement-refusal"),
-            (None, Stage::Choosing) => (String::new(), INK_SUBTLE, "placement-choosing"),
-            (None, Stage::Scanning) => ("Checking the folder".into(), INK_SUBTLE, "placement-checking"),
+            (None, Stage::Choosing) => match self.unfit {
+                Some(unfit) => (unfit.into(), BLOCKED, "placement-refusal"),
+                None if self.resumes(cx) => (
+                    format!("An unfinished copy of {} is here.", self.placing.title),
+                    INK_SUBTLE,
+                    "placement-unfinished",
+                ),
+                None => (String::new(), INK_SUBTLE, "placement-choosing"),
+            },
+            (None, &Stage::Listing(listed)) => (
+                match listed {
+                    0 => "Listing files".into(),
+                    listed => format!("Listing files \u{b7} {}", count(listed)),
+                },
+                INK_SUBTLE,
+                "placement-progress",
+            ),
             (None, Stage::Occupied { dest }) => (
                 format!("{} is not empty. Nothing there is changed.", leaf(dest)),
                 BLOCKED,
@@ -504,7 +625,7 @@ impl PlacementView {
             ),
             (None, &Stage::Copying(Progress { sent, total })) => (
                 match total {
-                    0 => "Listing files".into(),
+                    0 => "Copying".into(),
                     total => format!(
                         "Copying {}% \u{b7} {} of {}",
                         (sent.saturating_mul(100) / total).min(100),
@@ -514,6 +635,16 @@ impl PlacementView {
                 },
                 INK_SUBTLE,
                 "placement-progress",
+            ),
+            (None, Stage::Cancelled) => (
+                if self.resumes(cx) {
+                    "Copy cancelled. Resume finishes it from where it stopped."
+                } else {
+                    "Copy cancelled before anything was sent."
+                }
+                .into(),
+                INK_SUBTLE,
+                "placement-cancelled",
             ),
             (None, Stage::Registering { dest, .. }) => (
                 format!("Adding {} on {machine}", leaf(dest)),
@@ -529,13 +660,13 @@ impl PlacementView {
             .debug_selector(|| "placement-stage".into())
             .flex_shrink_0()
             .min_w_0()
-            .h(px(LH_UI))
+            .h(px(2.0 * LH_UI))
             .when(!text.is_empty(), |line| {
                 line.tooltip(ferrite_ui::menu::tooltip(text.clone()))
             })
             .child(
                 ferrite_ui::components::text_ui()
-                    .truncate()
+                    .line_clamp(2)
                     .text_color(gpui::rgb(ink))
                     .debug_selector(move || selector.into())
                     .child(text),
@@ -551,12 +682,13 @@ impl PlacementView {
         use ferrite_ui::theme::*;
         let machine = &self.placing.machine_name;
         let close = ferrite_ui::sheet::sheet_close("placement-close", "Close", cx).on_click(
-            cx.listener(|_, _: &ClickEvent, _, cx| {
+            cx.listener(|sheet: &mut Self, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                cx.emit(PlacementEvent::Closed);
+                sheet.cancel(cx);
             }),
         );
         let held = self.held();
+        let resumes = self.resumes(cx);
         let name: AnyElement = if held {
             ferrite_ui::components::text_ui()
                 .truncate()
@@ -567,6 +699,7 @@ impl PlacementView {
             self.name.clone().into_any_element()
         };
         let mut body = project_editor::body()
+            .debug_selector(|| "placement-body".into())
             .track_scroll(&self.scroll)
             .child(self.dest.clone())
             .child(
@@ -584,7 +717,7 @@ impl PlacementView {
                 )
                 .debug_selector(|| "placement-name".into()),
             )
-            .child(self.stage_line());
+            .child(self.stage_line(cx));
         if let Stage::Done { skipped } = &self.stage {
             if !skipped.is_empty() {
                 body = body
@@ -600,63 +733,25 @@ impl PlacementView {
                     );
             }
         }
-        match &self.entries {
-            None => {
-                body = body.child(
-                    note("Reading what git ignores").debug_selector(|| "placement-listing".into()),
-                )
-            }
-            Some(entries) if !entries.is_empty() => {
-                body = body.child(project_editor::section_label(
-                    "Ignored by git",
-                    "Copied only when ticked",
-                ));
-                body = body.child(project_editor::directory_list(
-                    entries.iter().enumerate().map(|(index, entry)| {
-                        let path = &entry.ignored.path;
-                        let shown = if entry.ignored.directory {
-                            format!("{path}/")
-                        } else {
-                            path.clone()
-                        };
-                        let selector = format!("placement-ignored:{path}");
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .h(px(ROW))
-                            .gap(px(2.0 * CH))
-                            .child(
-                                Checkbox::new(("placement-ignored", index))
-                                    .debug_selector(move || selector.clone())
-                                    .checked(entry.ticked)
-                                    .disabled(held)
-                                    .accessibility_label(shown.clone())
-                                    // A label is drawn one line high, which
-                                    // clips an underscore; a child is taller
-                                    // than the box, so it is centred on it.
-                                    .items_center()
-                                    .child(shown)
-                                    .on_click(cx.listener(
-                                        move |sheet: &mut Self, ticked: &bool, _, cx| {
-                                            sheet.tick(index, *ticked, cx)
-                                        },
-                                    )),
-                            )
-                            .child(note(entry.size.map(bytes).unwrap_or_default()))
-                    }),
-                ));
-            }
-            Some(_) => {}
-        }
+        body = match &self.entries {
+            None => body.child(
+                note("Reading what git ignores").debug_selector(|| "placement-listing".into()),
+            ),
+            Some(entries) => body.child(self.ignored_section(entries, cx)),
+        };
+        let unready = self.entries.is_none() || self.unfit.is_some();
         let (verb, selector, disabled): (&'static str, &'static str, bool) = match self.stage {
             Stage::Occupied { .. } => ("Use what is there", "placement-use", false),
-            Stage::Failed { .. } => ("Retry", "placement-retry", false),
             Stage::Done { .. } => ("Done", "placement-done", false),
-            Stage::Registering { .. } | Stage::Scanning | Stage::Copying(_) => {
+            Stage::Registering { .. } | Stage::Listing(_) | Stage::Copying(_) if resumes => {
+                ("Resume", "placement-resume", true)
+            }
+            Stage::Registering { .. } | Stage::Listing(_) | Stage::Copying(_) => {
                 ("Copy", "placement-copy", true)
             }
-            Stage::Choosing => ("Copy", "placement-copy", self.entries.is_none()),
+            _ if resumes => ("Resume", "placement-resume", unready),
+            Stage::Failed { .. } => ("Retry", "placement-retry", unready),
+            Stage::Choosing | Stage::Cancelled => ("Copy", "placement-copy", unready),
         };
         let primary = project_editor::primary_button("placement-confirm", verb, disabled, cx)
             .debug_selector(move || selector.into())
@@ -668,10 +763,15 @@ impl PlacementView {
                 }
             }));
         let done = matches!(self.stage, Stage::Done { .. } | Stage::Registering { .. });
+        let (aside, aside_selector) = if resumes {
+            ("Start over elsewhere", "placement-elsewhere")
+        } else {
+            ("New folder", "placement-new-folder")
+        };
         let footer_left = div().when(!held, |left| {
             left.child(
-                ferrite_ui::components::ghost_button("placement-new-folder", "New folder", cx)
-                    .debug_selector(|| "placement-new-folder".into())
+                ferrite_ui::components::ghost_button("placement-new-folder", aside, cx)
+                    .debug_selector(move || aside_selector.into())
                     .on_click(cx.listener(|sheet: &mut Self, _: &ClickEvent, window, cx| {
                         cx.stop_propagation();
                         sheet
@@ -696,9 +796,10 @@ impl PlacementView {
             })
             .child(primary);
         let band_top = self.band.as_ref().and_then(Band::top);
-        let card = project_editor::card_over(f32::from(window.viewport_size().height), band_top)
+        let card = project_editor::steady_card_over(f32::from(window.viewport_size().height), band_top)
             .id("placement-card")
             .debug_selector(|| "placement-card".into())
+            .track_focus(&self.focus)
             .occlude()
             .child(project_editor::head(
                 format!("Copy {} to {machine}", self.placing.title).into(),
@@ -709,6 +810,7 @@ impl PlacementView {
                     .relative()
                     .flex()
                     .flex_col()
+                    .flex_grow(1.)
                     .flex_shrink(1.)
                     .min_h_0()
                     .child(body)
@@ -722,12 +824,43 @@ impl PlacementView {
     }
 }
 
+/// The copy's name until the operator gives it one: the Project's folder's.
+fn leaf(placing: &Placing) -> String {
+    placing
+        .root
+        .file_name()
+        .map(|leaf| leaf.to_string_lossy().into_owned())
+        .unwrap_or_else(|| placing.title.to_string())
+}
+
+/// Whether `error` is the connection to the Machine ending under the copy.
+fn cut_off(error: &io::Error) -> bool {
+    use io::ErrorKind::*;
+    matches!(
+        error.kind(),
+        BrokenPipe | ConnectionReset | ConnectionAborted | NotConnected | UnexpectedEof | TimedOut
+    )
+}
+
 /// A quiet line on the card.
 fn note(text: impl Into<SharedString>) -> Div {
     ferrite_ui::components::text_ui()
         .flex_shrink_0()
         .text_color(gpui::rgb(ferrite_ui::theme::INK_SUBTLE))
         .child(text.into())
+}
+
+/// A count as the operator reads it: `12,500`.
+fn count(count: usize) -> String {
+    let digits = count.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (at, digit) in digits.chars().enumerate() {
+        if at > 0 && (digits.len() - at) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
 }
 
 /// A size as the operator reads it: `340 KB`, `1.2 GB`.
