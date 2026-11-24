@@ -22,8 +22,10 @@ use std::process::Command;
 pub mod follow;
 pub mod registry;
 mod repository;
+mod stamp;
 
 pub use repository::repository_key;
+pub use stamp::{checkout_stamp, head_of};
 
 /// The checkout a Thread works in. Persisted by the store (as its own
 /// schema), resolved to a Session's working directory by the cockpit.
@@ -488,27 +490,6 @@ pub fn checkout_branch(cwd: &Path) -> Option<String> {
     (!head.is_empty()).then(|| head.to_string())
 }
 
-/// What `HEAD` says for the checkout `cwd` is in, read from its file with
-/// no git process: the same words mean `checkout_branch` would answer the
-/// same, so a caller on a cadence runs git only when they change. `None`
-/// outside a checkout.
-pub fn head_of(cwd: &Path) -> Option<String> {
-    let root = cwd.ancestors().find(|dir| dir.join(".git").exists())?;
-    let dot_git = root.join(".git");
-    let admin = if dot_git.is_dir() {
-        dot_git
-    } else {
-        let pointer = fs::read_to_string(&dot_git).ok()?;
-        root.join(pointer.trim().strip_prefix("gitdir:")?.trim())
-    };
-    let mut said = fs::read_to_string(admin.join("HEAD")).ok()?.trim().to_string();
-    // A reftable repository's `HEAD` is a placeholder: its table list moves.
-    if let Ok(tables) = fs::read_to_string(admin.join("reftable").join("tables.list")) {
-        said.push_str(&tables);
-    }
-    Some(said)
-}
-
 /// The branch a repo calls its default: what `origin/HEAD` points at, else
 /// `main` when that branch exists, else `master` when it does, else `main`.
 /// Each probe is a `git` call, so the UI reads it once per Project into its
@@ -809,6 +790,18 @@ pub fn branch_status(cwd: &Path) -> Option<BranchStatus> {
     }
     status.changes = branch_diff(cwd, detached);
     Some(status)
+}
+
+/// The files git tracks in the checkout `cwd` is in though an ignore rule
+/// matches them (force-added, or committed into an ignored folder), from
+/// the checkout's top: `git status` reports on them, but a walk that
+/// honours the ignores never meets them, so `checkout_stamp` reads them by
+/// name. Empty outside a checkout, or when git cannot say.
+pub fn tracked_ignored(cwd: &Path) -> Vec<PathBuf> {
+    let Some((top, _)) = stamp::checkout_dirs(cwd) else {
+        return Vec::new();
+    };
+    ferrite_reviewr::git::tracked_ignored(top).into_iter().map(PathBuf::from).collect()
 }
 
 /// `+3` / `-0` as git writes them in porcelain v2.

@@ -765,6 +765,82 @@ fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
     );
 }
 
+/// Every file of `dir` dated an hour back, so no stamp of it is racy
+/// (`workspace::checkout_stamp`). Git's read-only objects keep their time.
+fn settle(dir: &std::path::Path) {
+    let then = std::time::SystemTime::now() - Duration::from_secs(3600);
+    for entry in std::fs::read_dir(dir).unwrap().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            settle(&path);
+        } else if let Ok(file) = std::fs::File::options().write(true).open(&path) {
+            file.set_modified(then).unwrap();
+        }
+    }
+}
+
+/// An idle window starts no git: each sweep reads every Thread's checkout
+/// from its files, and runs git only for one that moved, such as a file
+/// the operator wrote by hand, or one git tracks under an ignored folder.
+#[gpui::test]
+fn an_idle_window_runs_no_git_until_its_checkout_moves(cx: &mut TestAppContext) {
+    let spawned = ferrite_core::workspace::git_spawns_on_this_thread;
+    let base = scratch("idle-git");
+    let repo = repo_in(&base);
+    // Force-added under an ignored folder: no walk of the work tree meets it.
+    let forced = repo.join("target").join("forced.txt");
+    std::fs::create_dir_all(repo.join("target")).unwrap();
+    std::fs::write(repo.join(".gitignore"), "target/\n").unwrap();
+    std::fs::write(&forced, "built\n").unwrap();
+    git_in(&repo, &["add", "-f", ".gitignore", "target/forced.txt"]);
+    git_in(&repo, &["commit", "-q", "-m", "forced"]);
+    settle(&repo);
+    let store = Store::open(base.join("threads")).unwrap();
+    let mut core = Cockpit::new(store, Box::new(Fake::default()));
+    let thread = core
+        .open(
+            core.first_machine(),
+            Provider::Claude,
+            WorkspaceChoice::Main {
+                checkout: repo.clone(),
+            },
+        )
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let sweep = |cx: &mut gpui::VisualTestContext| {
+        cx.executor().advance_clock(SWEEP_INTERVAL);
+        cx.run_until_parked();
+    };
+    let dirty = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            view.facts
+                .get(thread)
+                .and_then(|facts| facts.status.as_ref())
+                .map(|status| status.dirty)
+        })
+    };
+    // The first sweep reads the checkout and lists the forced file; the
+    // next stamps that file too.
+    sweep(cx);
+    sweep(cx);
+    assert_eq!(dirty(&view, cx), Some(0), "the first sweeps read the checkout");
+
+    let before = spawned();
+    for _ in 0..3 {
+        sweep(cx);
+    }
+    assert_eq!(spawned() - before, 0, "a sweep ran git for a checkout that did not move");
+
+    std::fs::write(&forced, "built again\n").unwrap();
+    sweep(cx);
+    assert!(spawned() > before, "the moved checkout was read again");
+    assert_eq!(dirty(&view, cx), Some(1), "the forced file's edit shows");
+
+    std::fs::write(repo.join("by-hand.txt"), "edited\n").unwrap();
+    sweep(cx);
+    assert_eq!(dirty(&view, cx), Some(2), "the file written by hand shows");
+}
+
 /// A Main turn ending is a moment the checkout may have moved (#29) —
 /// but the pump that notices never waits on git. The label is re-read
 /// off the UI thread and follows the repo once the answer lands.

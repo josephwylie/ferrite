@@ -14,10 +14,21 @@ use super::*;
 /// A machine's answer to `list_repo`, on its way.
 type Reply = std::sync::mpsc::Receiver<std::io::Result<RepoListing>>;
 
+/// One Project's checkout as a lookup found it: what its `HEAD` said, and
+/// the branch git named, or none when that `HEAD` said what it said last.
+pub(super) struct Looked {
+    pub project: ProjectKey,
+    pub head: Option<String>,
+    pub branch: Option<Option<String>>,
+}
+
 #[derive(Default)]
 pub(super) struct Checkouts {
     /// The branch each Project's checkout is on, as last answered.
     branches: std::cell::RefCell<std::collections::HashMap<ProjectKey, SharedString>>,
+    /// What each Project's checkout `HEAD` said when git last named its
+    /// branch: the same words name the same branch.
+    heads: std::collections::HashMap<ProjectKey, Option<String>>,
     /// Projects whose checkout is being asked about: one lookup each at a
     /// time, however many frames name it meanwhile.
     asking: std::cell::RefCell<std::collections::HashSet<ProjectKey>>,
@@ -36,6 +47,12 @@ impl Checkouts {
         self.branches.borrow().get(&project).cloned()
     }
 
+    /// What `project`'s checkout `HEAD` said when git last named its
+    /// branch; `None` before it has.
+    pub(super) fn head(&self, project: ProjectKey) -> Option<Option<String>> {
+        self.heads.get(&project).cloned()
+    }
+
     /// Whether `project`'s checkout is being asked about.
     pub(super) fn asking(&self, project: ProjectKey) -> bool {
         self.asking.borrow().contains(&project)
@@ -52,15 +69,19 @@ impl Checkouts {
         self.asking.borrow_mut().extend(projects);
     }
 
-    /// Take git's answers, a branch or none for each Project asked about
-    /// (`main`, the branch a fresh clone would be sitting on); whether
-    /// any changed.
-    pub(super) fn listed(&mut self, answers: Vec<(ProjectKey, Option<String>)>) -> bool {
+    /// Take the lookups' answers, a branch or none for each Project git
+    /// was asked about (`main`, the branch a fresh clone would be sitting
+    /// on); whether any changed.
+    pub(super) fn listed(&mut self, answers: Vec<Looked>) -> bool {
         let mut changed = false;
         let asking = self.asking.get_mut();
         let known = self.branches.get_mut();
-        for (project, branch) in answers {
+        for Looked { project, head, branch } in answers {
             asking.remove(&project);
+            self.heads.insert(project, head);
+            let Some(branch) = branch else {
+                continue;
+            };
             let branch = branch.map_or_else(|| SharedString::from(MAIN_BRANCH), SharedString::from);
             if known.get(&project) != Some(&branch) {
                 known.insert(project, branch);
