@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -189,9 +189,6 @@ fn the_first_sync_lands_everything_and_nothing_outside_the_table() {
         ".claude/agents/helper.md",
         ".claude/rules/style.md",
         ".claude/CLAUDE.md",
-        ".claude/plugins/cache/market/tool/1.0/plugin.json",
-        ".claude/plugins/marketplaces/market/README.md",
-        ".claude/plugins/marketplaces/market/.git/HEAD",
         ".codex/AGENTS.md",
         ".codex/config.toml",
         ".codex/prompts/fix.md",
@@ -202,6 +199,10 @@ fn the_first_sync_lands_everything_and_nothing_outside_the_table() {
     for path in [
         ".claude/history.jsonl",
         ".claude/projects/x/session.jsonl",
+        ".claude/plugins/installed_plugins.json",
+        ".claude/plugins/cache/market/tool/1.0/plugin.json",
+        ".claude/plugins/marketplaces/market/README.md",
+        ".claude/plugins/marketplaces/market/.git/HEAD",
         ".codex/skills/.system/bundled/SKILL.md",
         ".codex/sessions/one.jsonl",
     ] {
@@ -209,10 +210,8 @@ fn the_first_sync_lands_everything_and_nothing_outside_the_table() {
     }
     assert_eq!(read(&far, ".claude/projects/y/session.jsonl").as_deref(), Some("far\n"));
 
-    let plugins: serde_json::Value = serde_json::from_str(&read(&far, ".claude/plugins/installed_plugins.json").unwrap()).unwrap();
-    let installed = far.root().join(".claude").join("plugins").join("cache").join("market").join("tool").join("1.0");
-    assert_eq!(plugins["plugins"]["tool@market"][0]["installPath"], *installed.to_string_lossy(), "in the Machine's home");
-    assert_eq!(read(&far, ".claude/settings.json"), read(&mine, ".claude/settings.json"));
+    let settings = |home: &Home| serde_json::from_str::<serde_json::Value>(&read(home, ".claude/settings.json").unwrap()).unwrap();
+    assert_eq!(settings(&far), settings(&mine));
     let claude: serde_json::Value = serde_json::from_str(&read(&far, ".claude.json").unwrap()).unwrap();
     assert_eq!(claude["mcpServers"]["docs"]["command"], "docs-mcp");
     assert_eq!(claude["userID"], "far", "the rest of it is the Machine's own");
@@ -312,7 +311,8 @@ fn a_sync_that_would_remove_most_of_a_side_stops_until_told_to_go_on() {
     assert!(read(&far, ".codex/auth.json").is_some(), "a sign-in is never removed");
     assert_eq!(read(&mine, ".codex/auth.json"), read(&far, ".codex/auth.json"), "and comes back here");
     assert_eq!(read(&far, ".claude/projects/y/session.jsonl").as_deref(), Some("the Machine's own\n"), "not the setup");
-    assert!(read(&far, ".claude.json").is_some_and(|json| !json.contains("mcpServers")), "the key goes, the file stays");
+    let claude: serde_json::Value = serde_json::from_str(&read(&far, ".claude.json").expect("the file stays")).unwrap();
+    assert!(claude["mcpServers"].get("docs").is_none(), "the key goes: {claude}");
 }
 
 #[test]
@@ -504,9 +504,9 @@ fn a_path_outside_the_table_is_refused_by_the_far_side() {
     put(&far, ".claude/history.jsonl", "private\n");
     let mut machine = Machine::new(&far);
     for path in [".claude/history.jsonl", ".claude/skills", ".codex/skills/.system/x", ".claude/plugins/m/.git/HEAD", ".ssh/id_rsa"] {
-        let read = machine.call(Request::Read { root: tree::Root::Setup, path: path.into(), offset: 0 });
+        let read = machine.call(Request::Read { root: tree::Root::SETUP, path: path.into(), offset: 0 });
         assert!(read.is_err(), "{path}");
-        let remove = machine.call(Request::Remove { root: tree::Root::Setup, path: path.into() });
+        let remove = machine.call(Request::Remove { root: tree::Root::SETUP, path: path.into() });
         assert!(remove.is_err(), "{path}");
     }
     assert_eq!(read(&far, ".claude/history.jsonl").as_deref(), Some("private\n"));
@@ -583,12 +583,12 @@ fn a_sync_a_change_here_started_carries_what_changed_there_too() {
 }
 
 #[test]
-fn losing_every_skill_stops_though_the_plugins_outnumber_them_and_what_goes_here_is_kept_in_the_trash() {
+fn losing_every_skill_stops_though_other_skills_outnumber_them_and_what_goes_here_is_kept_in_the_trash() {
     let world = World::new("valve-item");
     let (mine, far) = (world.home("here"), world.home("machine"));
     seed(&mine);
     for at in 0..60 {
-        put(&mine, &format!(".claude/plugins/cache/big/{at}.js"), "plugin\n");
+        put(&mine, &format!(".agents/skills/big/{at}.md"), "skill\n");
     }
     put(&mine, ".claude/commands/a.md", "a\n");
     put(&mine, ".claude/commands/b.md", "b\n");
@@ -619,8 +619,8 @@ fn losing_every_skill_stops_though_the_plugins_outnumber_them_and_what_goes_here
     let trashed = synced.trashed.expect("a trash folder");
     assert!(trashed.starts_with(&job.trash));
     let kept = |path: &str| fs::read_to_string(path.split('/').fold(trashed.clone(), |at, part| at.join(part))).ok();
-    assert_eq!(kept(".claude/commands/a.md").as_deref(), Some("a\n"));
-    assert_eq!(kept(".claude/commands/b.md").as_deref(), Some("b\n"));
+    assert_eq!(kept("claude/commands/a.md").as_deref(), Some("a\n"), "in a folder a file browser shows");
+    assert_eq!(kept("claude/commands/b.md").as_deref(), Some("b\n"));
     assert!(!old.exists(), "a sync's trash older than 14 days is pruned");
     #[cfg(unix)]
     {
@@ -804,7 +804,7 @@ fn no_sign_in_is_ever_put_in_the_trash_or_kept_as_a_conflict() {
     };
     sync(&job, &far);
     for path in [".claude/.credentials.json", ".codex/auth.json"] {
-        let removed = Machine::new(&far).call(Request::Remove { root: tree::Root::Setup, path: path.into() });
+        let removed = Machine::new(&far).call(Request::Remove { root: tree::Root::SETUP, path: path.into() });
         assert!(removed.is_err(), "the Machine refuses too: {path}");
     }
 
@@ -850,39 +850,6 @@ fn hooks_output_styles_and_the_status_line_sync_and_claude_config_dir_moves_clau
 }
 
 #[test]
-fn a_marketplace_is_seeded_whole_to_a_side_without_it_and_otherwise_left_alone() {
-    let world = World::new("seed");
-    let (mine, far) = (world.home("here"), world.home("machine"));
-    put(&mine, ".claude/plugins/marketplaces/shared/.git/HEAD", "ref: refs/heads/main\n");
-    put(&mine, ".claude/plugins/marketplaces/shared/README.md", "Shared.\r\n");
-    put(&mine, ".claude/plugins/marketplaces/shared/plugins/new.json", "{}\r\n");
-    for at in 0..40 {
-        put(&mine, &format!(".claude/plugins/marketplaces/mine/plugins/{at:02}.json"), "{}\n");
-    }
-    put(&mine, ".claude/plugins/store/here.lock", "1");
-    put(&far, ".claude/plugins/marketplaces/shared/.git/HEAD", "ref: refs/heads/old\n");
-    put(&far, ".claude/plugins/marketplaces/shared/README.md", "Shared.\n");
-    fs::create_dir_all(at(&far, ".claude/plugins/store/there.lock")).unwrap();
-    let job = world.job(&mine, "far");
-    let seeded = |home: &Home| files(home).keys().filter(|path| path.contains("/marketplaces/mine/")).count();
-
-    let cut = run(&job, &mut Machine::cut_after(&far, Some(12)), &mut |_| {}, &Cancellation::default());
-    assert!(cut.is_err(), "{cut:?}");
-    assert!((1..40).contains(&seeded(&far)), "cut short: {}", seeded(&far));
-    let synced = sync(&job, &far);
-    assert_eq!(synced.conflicts, [], "{synced:?}");
-    assert_eq!(seeded(&far), 40, "a seed cut short is finished");
-    assert_eq!(read(&far, ".claude/plugins/marketplaces/shared/README.md").as_deref(), Some("Shared.\n"), "its own clone is left alone");
-    assert_eq!(read(&far, ".claude/plugins/marketplaces/shared/plugins/new.json"), None);
-    assert_eq!(read(&mine, ".claude/plugins/marketplaces/shared/.git/HEAD").as_deref(), Some("ref: refs/heads/main\n"));
-    assert!(!at(&far, ".claude/plugins/store/here.lock").exists() && !at(&mine, ".claude/plugins/store/there.lock").exists());
-
-    put(&far, ".claude/plugins/marketplaces/mine/plugins/00.json", "{\"updated\": true}\n");
-    assert_eq!(sync(&job, &far), Synced::default(), "each side keeps its clone up itself");
-    assert_eq!(read(&mine, ".claude/plugins/marketplaces/mine/plugins/00.json").as_deref(), Some("{}\n"));
-}
-
-#[test]
 fn a_conflict_cut_short_keeps_one_copy() {
     let world = World::new("kept-once");
     let (mine, far) = (world.home("here"), world.home("machine"));
@@ -902,7 +869,7 @@ fn a_conflict_cut_short_keeps_one_copy() {
     let copies = fs::read_dir(&job.conflicts)
         .unwrap()
         .flatten()
-        .filter(|sync| sync.path().join(".claude").join("CLAUDE.md").exists())
+        .filter(|sync| sync.path().join("claude").join("CLAUDE.md").exists())
         .count();
     assert_eq!(copies, 1, "one kept copy");
     assert_eq!(fs::read_to_string(&synced.conflicts[0].kept).unwrap(), "Edited here, earlier.\n");
@@ -912,7 +879,7 @@ fn a_conflict_cut_short_keeps_one_copy() {
 fn codex_config_new_from_a_side_without_bits_is_owner_only() {
     let world = World::new("config-bits");
     let home = world.home("here");
-    assert_eq!(home.receive(".codex/config.toml", None).unwrap().mode, Some(0o600));
+    assert_eq!(home.receive(".codex/config.toml#model", None).unwrap().mode, Some(0o600));
     assert_eq!(home.receive(".codex/AGENTS.md", None).unwrap().mode, None, "instructions take the umask");
 }
 
@@ -930,7 +897,7 @@ fn a_name_this_computer_cannot_hold_is_held_alone() {
     let manifest = |paths: &[&str]| tree::Manifest {
         entries: paths
             .iter()
-            .map(|path| (path.to_string(), tree::Entry::File { size: 0, sha256: String::new(), mode: None, modified: None }))
+            .map(|path| (path.to_string(), tree::Entry::File { size: 0, sha256: String::new(), mode: None, modified: None, text: None }))
             .collect(),
         ..tree::Manifest::default()
     };
@@ -1073,6 +1040,178 @@ fn a_file_that_changes_while_it_crosses_is_left_to_the_next_sync() {
     }
 }
 
+/// `~/.claude/skills/<name>` as a skill installer leaves it: a link into
+/// `~/.agents/skills/<name>`, relative on Unix, a junction on Windows.
+fn link_skill(home: &Home, name: &str) {
+    let at = at(home, &format!(".claude/skills/{name}"));
+    #[cfg(unix)]
+    {
+        fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(format!("../../.agents/skills/{name}"), &at).unwrap();
+    }
+    #[cfg(windows)]
+    link_dir(&home.root().join(".agents").join("skills").join(name), &at);
+}
+
+/// Every file under `home/path`, by its path from there, with its bytes.
+fn bytes_under(home: &Home, path: &str) -> BTreeMap<String, Vec<u8>> {
+    fn walk(dir: &Path, prefix: &str, into: &mut BTreeMap<String, Vec<u8>>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = format!("{prefix}/{name}");
+            if entry.path().is_dir() {
+                walk(&entry.path(), &path, into);
+            } else {
+                into.insert(path, fs::read(entry.path()).unwrap());
+            }
+        }
+    }
+    let mut into = BTreeMap::new();
+    walk(&at(home, path), path, &mut into);
+    into
+}
+
+/// What a home's Claude and Codex have on: the keys of `enabledPlugins`
+/// set true, and each `[plugins.*]` table of Codex's config.
+fn plugins_on(home: &Home) -> (BTreeSet<String>, BTreeSet<String>) {
+    let settings: serde_json::Value = serde_json::from_str(&read(home, ".claude/settings.json").unwrap()).unwrap();
+    let claude = settings["enabledPlugins"]
+        .as_object()
+        .map(|on| on.iter().filter(|(_, on)| **on == true).map(|(id, _)| id.clone()).collect())
+        .unwrap_or_default();
+    let config = read(home, ".codex/config.toml").unwrap();
+    let codex = config
+        .lines()
+        .filter_map(|line| line.strip_prefix("[plugins.\"")?.strip_suffix("\"]"))
+        .map(str::to_string)
+        .collect();
+    (claude, codex)
+}
+
+/// A home shaped like the operator's Windows computer's (`windows`) or
+/// Linux Machine's: its agents' plugin downloads and bookkeeping with that
+/// side's line ends and paths, Codex's config holding that side's own
+/// places, Claude's account sync under `skills/synced`, and skills in
+/// `~/.agents/skills` linked from `~/.claude/skills`.
+fn shaped(home: &Home, windows: bool) {
+    let (end, user, model, own_skill, own_plugin) = match windows {
+        true => ("\r\n", r"C:\\Users\\win", "gpt-a", "made-on-windows", "pstack@cursor-plugins"),
+        false => ("\n", "/home/ubuntu", "gpt-b", "made-on-linux", "sentry@cursor-plugins"),
+    };
+    let sep = if windows { r"\\" } else { "/" };
+    let lines = |text: &[&str]| text.iter().map(|line| format!("{line}{end}")).collect::<String>();
+    put(home, ".claude/plugins/cache/cursor-plugins/pstack/0.15.48/README.md", &lines(&["# pstack", "", "Skills."]));
+    put(home, ".claude/plugins/cache/cursor-plugins/pstack/0.15.48/skills/a/SKILL.md", &lines(&["---", "name: a", "---"]));
+    put(home, ".claude/plugins/marketplaces/cursor-plugins/README.md", &lines(&["# Cursor plugins"]));
+    put(home, ".claude/plugins/marketplaces/cursor-plugins/.git/HEAD", "ref: refs/heads/main\n");
+    let cache = format!("{user}{sep}.claude{sep}plugins{sep}cache{sep}cursor-plugins{sep}pstack{sep}0.15.48");
+    put(home, ".claude/plugins/installed_plugins.json", &format!(r#"{{"version": 2, "plugins": {{"pstack@cursor-plugins": [{{"scope": "user", "installPath": "{cache}", "installedAt": "{model}"}}]}}}}"#));
+    put(home, ".claude/plugins/known_marketplaces.json", &format!(r#"{{"cursor-plugins": {{"installLocation": "{user}{sep}m", "lastUpdated": "{model}"}}}}"#));
+    put(home, ".claude/plugins/.last_inuse_sweep", model);
+    put(home, ".claude/plugins/plugin-directory-cache-v2.json", &format!(r#"{{"at": "{model}"}}"#));
+    put(home, ".claude/plugins/store/cc-plugin.json", &format!(r#"{{"at": "{model}"}}"#));
+    put(home, ".claude/plugins/data/pstack/state.json", &format!(r#"{{"at": "{model}"}}"#));
+    put(home, ".claude/plugins/synced/manifest.json", &format!(r#"{{"round": "{model}"}}"#));
+    put(home, ".claude/skills/synced/manifest.json", &format!(r#"{{"round": "{model}"}}"#));
+    put(home, ".claude/skills/synced/.last-complete-round", model);
+    put(home, ".claude/skills/synced/.bucket-7f", model);
+    put(
+        home,
+        ".claude/settings.json",
+        &format!(
+            r#"{{"model": "opus", "enabledPlugins": {{"{own_plugin}": true}}, "extraKnownMarketplaces": {{"cursor-plugins": {{"source": {{"source": "github", "repo": "cursor/plugins"}}}}}}}}"#
+        ),
+    );
+    let place = |at: &str| if windows { format!(r"C:\\Users\\win\\{at}") } else { format!("/home/ubuntu/{at}") };
+    put(
+        home,
+        ".codex/config.toml",
+        &format!(
+            "# Codex, set up by hand\nmodel = \"{model}\" # the one I like\nnotify = [\"{notify}\"]\n\n[projects.\"{project}\"]\ntrust_level = \"trusted\"\n\n[[skills.config]]\npath = \"{skill}\"\nenabled = true\n\n[plugins.\"{own_plugin}\"]\nenabled = true\n\n[marketplaces.cursor-plugins]\nsource_type = \"git\"\nsource = \"https://github.com/cursor/plugins.git\"\n",
+            notify = place("bin/notify"),
+            project = place("code"),
+            skill = place(".agents/skills/shared"),
+        ),
+    );
+    put(home, ".agents/skills/shared/SKILL.md", &lines(&["# Shared", "", "On both."]));
+    put(home, &format!(".agents/skills/{own_skill}/SKILL.md"), &lines(&[&format!("# Made on {model}")]));
+    put(home, ".agents/.skill-lock.json", &format!(r#"{{"at": "{model}"}}"#));
+    link_skill(home, "shared");
+    link_skill(home, own_skill);
+    put(home, ".claude/CLAUDE.md", &lines(&["Be careful."]));
+}
+
+/// The first real run of Setup sync, between a Windows computer and a
+/// Linux Machine, as a test: what each side's agents keep for themselves
+/// never moves or conflicts, Codex's own places stay each side's, what the
+/// operator authored and chose reaches both, and a third Machine gets only
+/// that.
+#[test]
+fn a_windows_home_and_a_linux_home_share_what_the_operator_chose_and_nothing_else() {
+    let world = World::new("acceptance");
+    let (windows, linux) = (world.home("windows"), world.home("linux"));
+    shaped(&windows, true);
+    shaped(&linux, false);
+    let kept_own = |home: &Home| {
+        let mut own = bytes_under(home, ".claude/plugins");
+        own.extend(bytes_under(home, ".claude/skills/synced"));
+        own.extend(bytes_under(home, ".agents/.skill-lock.json"));
+        own
+    };
+    let (windows_own, linux_own) = (kept_own(&windows), kept_own(&linux));
+    let config = |home: &Home| read(home, ".codex/config.toml").unwrap();
+    let job = world.job(&windows, "linux");
+
+    let first = sync(&job, &linux);
+    assert_eq!(first.conflicts, [], "{first:?}");
+    assert_eq!(kept_own(&windows), windows_own, "nothing of the agents' own moved here");
+    assert_eq!(kept_own(&linux), linux_own, "nor on the Machine");
+    for (home, theirs, own) in [(&windows, "/home/ubuntu", r"C:\\Users\\win"), (&linux, r"C:\\Users\\win", "/home/ubuntu")] {
+        let config = config(home);
+        assert!(!config.contains(theirs), "{config}");
+        for own in [format!("notify = [\"{own}"), format!("[projects.\"{own}"), format!("path = \"{own}")] {
+            assert!(config.contains(&own), "{own} is still in\n{config}");
+        }
+        assert!(config.starts_with("# Codex, set up by hand\nmodel = \"gpt-a\" # the one I like\n"), "this computer's model, the comments kept:\n{config}");
+    }
+    for home in [&windows, &linux] {
+        for skill in ["shared", "made-on-windows", "made-on-linux"] {
+            let text = read(home, &format!(".claude/skills/{skill}/SKILL.md")).unwrap_or_default();
+            assert!(text.starts_with("# "), "{skill} is usable on {}", home.root().display());
+            assert_eq!(read(home, &format!(".agents/skills/{skill}/SKILL.md")), Some(text));
+        }
+    }
+    let (claude, codex) = plugins_on(&windows);
+    assert_eq!((claude.len(), codex.len()), (2, 2), "{claude:?} {codex:?}");
+    assert_eq!(plugins_on(&linux), (claude, codex));
+    assert_eq!(sync(&job, &linux), Synced::default(), "a second sync moves nothing");
+
+    put(&windows, ".agents/skills/made-on-linux/SKILL.md", "# Edited on Windows\r\n");
+    put(&linux, ".agents/skills/made-on-windows/SKILL.md", "# Edited on Linux\n");
+    let edited = sync(&job, &linux);
+    assert_eq!((edited.pushed, edited.pulled, edited.conflicts.len()), (1, 1, 0), "{edited:?}");
+    assert_eq!(read(&linux, ".claude/skills/made-on-linux/SKILL.md").as_deref(), Some("# Edited on Windows\r\n"));
+    assert_eq!(read(&windows, ".claude/skills/made-on-windows/SKILL.md").as_deref(), Some("# Edited on Linux\n"));
+
+    let third = world.home("third");
+    sync(&world.job(&windows, "third"), &third);
+    let landed: Vec<String> = files(&third).into_keys().collect();
+    for path in &landed {
+        let derived = [".claude/plugins", ".claude/skills/synced", ".agents/.skill-lock.json", ".claude/projects"];
+        assert!(!derived.iter().any(|derived| path.starts_with(derived)), "{path} reached the third home");
+    }
+    assert!(landed.contains(&".agents/skills/made-on-linux/SKILL.md".to_string()), "{landed:?}");
+    let config = config(&third);
+    for own in ["notify", "projects", "skills", "/home/ubuntu", r"C:\\"] {
+        assert!(!config.contains(own), "{own} reached the third home:\n{config}");
+    }
+    assert!(config.contains("model = \"gpt-a\""), "{config}");
+    assert_eq!(plugins_on(&third), plugins_on(&windows));
+}
+
 #[cfg(unix)]
 #[test]
 fn every_folder_a_sync_makes_is_the_owners_alone_whatever_the_umask() {
@@ -1095,4 +1234,253 @@ fn every_folder_a_sync_makes_is_the_owners_alone_whatever_the_umask() {
         assert_eq!(bits(&far, path), 0o700, "{path} on the Machine");
     }
     assert_eq!(bits(&mine, ".codex/prompts/deep"), 0o700, "pulled here");
+}
+
+#[test]
+fn a_plugin_and_a_server_each_side_added_are_kept_on_both() {
+    let world = World::new("each");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    put(&mine, ".claude/settings.json", r#"{"enabledPlugins": {"pstack@cursor-plugins": true}}"#);
+    put(&far, ".claude/settings.json", r#"{"enabledPlugins": {"sentry@cursor-plugins": true}}"#);
+    put(&mine, ".claude.json", r#"{"mcpServers": {"docs": {"command": "docs-mcp"}}}"#);
+    put(&far, ".claude.json", r#"{"userID": "far", "mcpServers": {"search": {"command": "search-mcp"}}}"#);
+    put(&mine, ".codex/config.toml", "[plugins.\"pstack@cursor-plugins\"]\nenabled = true\n");
+    put(&far, ".codex/config.toml", "[plugins.\"sentry@cursor-plugins\"]\nenabled = true\n");
+    let job = world.job(&mine, "far");
+    let synced = sync(&job, &far);
+    assert_eq!((synced.conflicts.len(), synced.replaced.len()), (0, 0), "{synced:?}");
+    let both: BTreeSet<String> = ["pstack@cursor-plugins", "sentry@cursor-plugins"].map(String::from).into();
+    for home in [&mine, &far] {
+        assert_eq!(plugins_on(home), (both.clone(), both.clone()), "{}", home.root().display());
+        let claude: serde_json::Value = serde_json::from_str(&read(home, ".claude.json").unwrap()).unwrap();
+        let servers: Vec<&String> = claude["mcpServers"].as_object().unwrap().keys().collect();
+        assert_eq!(servers.len(), 2, "{claude}");
+    }
+    assert!(read(&far, ".claude.json").unwrap().starts_with(r#"{"userID": "far", "mcpServers": {"search""#), "the rest of it as it was");
+    assert_eq!(sync(&job, &far), Synced::default());
+}
+
+#[test]
+fn a_preference_the_sides_hold_differently_takes_this_computers_at_the_first_sync_and_the_newer_after() {
+    let world = World::new("whole");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    put(&mine, ".claude/settings.json", "{\n  \"model\": \"opus\"\n}\n");
+    aged(&mine, ".claude/settings.json", 60);
+    put(&far, ".claude/settings.json", "{\n  \"model\": \"sonnet\",\n  \"theme\": \"dark\"\n}\n");
+    put(&mine, ".codex/config.toml", "model = \"gpt-a\"\n");
+    put(&far, ".codex/config.toml", "# Set up by hand\nmodel = \"gpt-b\" # kept\n");
+    let job = world.job(&mine, "far");
+    let synced = sync(&job, &far);
+    assert_eq!(synced.conflicts, [], "no copy is kept of a key");
+    let replaced: Vec<_> = synced.replaced.iter().map(|key| (key.path.as_str(), key.winner, key.was.as_str())).collect();
+    assert_eq!(
+        replaced,
+        [(".claude/settings.json#model", Side::Here, "\"sonnet\""), (".codex/config.toml#model", Side::Here, "\"gpt-b\"")],
+        "this computer's, though the Machine's is newer"
+    );
+    assert!(!job.conflicts.exists());
+    assert_eq!(read(&far, ".claude/settings.json").as_deref(), Some("{\n  \"model\": \"opus\",\n  \"theme\": \"dark\"\n}\n"));
+    assert_eq!(read(&mine, ".claude/settings.json").as_deref(), Some("{\n  \"model\": \"opus\",\n  \"theme\": \"dark\"\n}\n"));
+    assert_eq!(read(&far, ".codex/config.toml").as_deref(), Some("# Set up by hand\nmodel = \"gpt-a\" # kept\n"));
+    assert_eq!(sync(&job, &far), Synced::default());
+
+    put(&mine, ".claude/settings.json", "{\n  \"model\": \"haiku\",\n  \"theme\": \"dark\"\n}\n");
+    aged(&mine, ".claude/settings.json", 60);
+    put(&far, ".claude/settings.json", "{\n  \"model\": \"sonnet\",\n  \"theme\": \"dark\"\n}\n");
+    let later = sync(&job, &far);
+    let replaced: Vec<_> = later.replaced.iter().map(|key| (key.path.as_str(), key.winner, key.was.as_str())).collect();
+    assert_eq!(replaced, [(".claude/settings.json#model", Side::There, "\"haiku\"")], "the newer, once there is a base");
+    assert!(read(&mine, ".claude/settings.json").unwrap().contains("\"sonnet\""));
+}
+
+#[test]
+fn a_file_whose_text_differs_only_in_line_ends_is_the_same_on_both_sides() {
+    let world = World::new("line-ends");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    put(&mine, ".claude/CLAUDE.md", "Be careful.\r\nBe kind.\r\n");
+    put(&far, ".claude/CLAUDE.md", "Be careful.\nBe kind.\n");
+    put(&mine, ".agents/skills/x/SKILL.md", "# X\r\n");
+    put(&far, ".agents/skills/x/SKILL.md", "# X\n");
+    let job = world.job(&mine, "far");
+    assert_eq!(sync(&job, &far), Synced::default(), "nothing to move, and no conflict");
+    assert_eq!(read(&mine, ".claude/CLAUDE.md").as_deref(), Some("Be careful.\r\nBe kind.\r\n"), "each side's bytes as they were");
+    assert_eq!(read(&far, ".claude/CLAUDE.md").as_deref(), Some("Be careful.\nBe kind.\n"));
+
+    put(&far, ".claude/CLAUDE.md", "Be careful.\nBe kinder.\n");
+    let synced = sync(&job, &far);
+    assert_eq!((synced.pulled, synced.conflicts.len()), (1, 0), "{synced:?}");
+    assert_eq!(read(&mine, ".claude/CLAUDE.md").as_deref(), Some("Be careful.\nBe kinder.\n"), "sent as it is");
+    assert_eq!(sync(&job, &far), Synced::default());
+}
+
+#[test]
+fn what_an_older_table_synced_is_never_removed_by_this_one() {
+    use sha2::Digest as _;
+    let world = World::new("old-base");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    put(&far, ".claude/plugins/installed_plugins.json", "{}\n");
+    put(&far, ".claude/plugins/cache/m/p/SKILL.md", "# P\n");
+    put(&far, ".claude/skills/synced/manifest.json", "{}\n");
+    for home in [&mine, &far] {
+        put(home, ".claude/settings.json", r#"{"model": "opus"}"#);
+        put(home, ".codex/config.toml", "model = \"gpt\"\n");
+    }
+    let job = world.job(&mine, "far");
+    let whole = |path: &str| {
+        let bytes = read(&far, path).unwrap();
+        let entry = tree::Entry::File {
+            size: bytes.len() as u64,
+            sha256: crate::chunked::hex(&sha2::Sha256::digest(bytes.as_bytes())),
+            mode: None,
+            modified: None,
+            text: None,
+        };
+        (path.to_string(), entry)
+    };
+    let first = tree::Manifest {
+        entries: [
+            ".claude/plugins/installed_plugins.json",
+            ".claude/plugins/cache/m/p/SKILL.md",
+            ".claude/skills/synced/manifest.json",
+            ".claude/settings.json",
+            ".codex/config.toml",
+        ]
+        .map(whole)
+        .into_iter()
+        .collect(),
+        ..tree::Manifest::default()
+    };
+    fs::create_dir_all(&job.dir).unwrap();
+    fs::write(job.dir.join(BASE), serde_json::to_vec(&first).unwrap()).unwrap();
+    let before = files(&far);
+
+    let synced = sync(&job, &far);
+    assert_eq!((synced.removed_here, synced.removed_there, synced.held.len()), (0, 0, 0), "{synced:?}");
+    assert_eq!(files(&far), before, "the Machine's own, as it was");
+    assert_eq!(read(&mine, ".claude/plugins/installed_plugins.json"), None, "and never brought here");
+}
+
+/// A Machine whose Ferrite syncs by another table: it refuses the Setup
+/// root, as 0.4.0's Server refuses a root it does not know.
+struct Refusing;
+
+impl Exchange for Refusing {
+    fn ask(&mut self, _: Request) -> io::Result<Asked> {
+        Ok(Asked::numbered(1))
+    }
+
+    fn answer(&mut self, _: Asked) -> io::Result<Reply> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "This server does not know that kind of root"))
+    }
+}
+
+#[test]
+fn two_ferrites_whose_tables_differ_move_nothing() {
+    let world = World::new("tables");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    seed(&mine);
+    put(&far, ".claude/CLAUDE.md", "The Machine's.\n");
+    let job = world.job(&mine, "far");
+    let (here, there) = (files(&mine), files(&far));
+    let refused = run(&job, &mut Refusing, &mut |_| {}, &Cancellation::default()).unwrap_err();
+    assert_eq!(refused.kind(), io::ErrorKind::Unsupported, "{refused}");
+    assert!(!job.dir.join(BASE).exists());
+
+    let scan = |root: tree::Root| Session::with_home(far.clone()).execute(Request::Scan { root, skip: Vec::new(), after: None });
+    let newer = scan(tree::Root::Setup { table: TABLE + 1 }).unwrap_err();
+    assert_eq!(newer.kind(), io::ErrorKind::Unsupported, "{newer}");
+    for older in [tree::Root::Setup { table: TABLE - 1 }, tree::Root::FirstSetup] {
+        let refused = scan(older).unwrap_err();
+        assert!(refused.to_string().starts_with("Update Ferrite on this computer to sync your setup"), "{refused}");
+    }
+    let write = Request::Begin { write: 1, root: tree::Root::FirstSetup, path: ".claude/CLAUDE.md".into(), size: 1, mode: None };
+    assert!(Session::with_home(far.clone()).execute(write).is_err());
+    assert_eq!((files(&mine), files(&far)), (here, there), "nothing moved");
+}
+
+/// A Server from before the table, main since #494, reads a Setup root by
+/// one as a root it does not know, refuses it as `unsupported`, and this
+/// window reads that as "Update Ferrite on <name>".
+#[test]
+fn a_server_from_before_the_table_reads_a_setup_root_by_one_as_a_root_it_does_not_know() {
+    #[derive(Debug, PartialEq, serde::Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    enum Shipped {
+        Path {
+            #[allow(dead_code)]
+            path: PathBuf,
+        },
+        Setup,
+        #[serde(other)]
+        Unknown,
+    }
+    let sent = serde_json::to_value(tree::Root::SETUP).unwrap();
+    assert_eq!(serde_json::from_value::<Shipped>(sent).unwrap(), Shipped::Unknown);
+    let first: tree::Root = serde_json::from_str(r#"{"kind":"setup"}"#).unwrap();
+    assert_eq!(first, tree::Root::FirstSetup, "and what that Server's hub sends is refused here");
+}
+
+/// Claude's installer as a test runs it: each run said in `calls`, a
+/// marketplace added and a plugin installed by writing Claude's own record
+/// of it, and the plugin `broken` not found.
+struct Claude {
+    dir: PathBuf,
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+impl Installer for Claude {
+    fn run(&self, words: &[&str]) -> io::Result<()> {
+        self.calls.lock().unwrap().push(words.join(" "));
+        let record = |name: &str, key: &str| {
+            let at = self.dir.join("plugins").join(name);
+            let mut record: serde_json::Value = fs::read(&at).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+            let into = if name == "installed_plugins.json" { &mut record["plugins"] } else { &mut record };
+            into[key] = serde_json::json!({});
+            fs::create_dir_all(at.parent().unwrap()).unwrap();
+            fs::write(at, record.to_string()).unwrap();
+        };
+        match words {
+            ["marketplace", "add", "cursor/plugins"] => record("known_marketplaces.json", "cursor-plugins"),
+            ["install", plugin, "--json"] if plugin.starts_with("broken@") => {
+                return Err(io::Error::other("Plugin \"broken\" not found in marketplace \"cursor-plugins\"."));
+            }
+            ["install", plugin, "--json"] => record("installed_plugins.json", plugin),
+            words => panic!("{words:?}"),
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_plugin_a_sync_turns_on_is_installed_once_and_one_that_will_not_install_is_said() {
+    let world = World::new("installs");
+    let mine = world.home("here");
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let far = world.home("machine");
+    let installs = Installs::new(Claude { dir: far.root().join(".claude"), calls: calls.clone() });
+    let far = far.with_installs(installs.clone());
+    put(
+        &mine,
+        ".claude/settings.json",
+        r#"{"enabledPlugins": {"pstack@cursor-plugins": true, "broken@cursor-plugins": true, "off@cursor-plugins": false},
+            "extraKnownMarketplaces": {"cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}}}}"#,
+    );
+    let job = world.job(&mine, "far");
+    let synced = sync(&job, &far);
+    let said: Vec<_> = synced.problems.iter().map(|problem| (problem.path.as_str(), problem.side, problem.error.as_str())).collect();
+    let broken = (".claude/plugins/broken@cursor-plugins", Side::There, "Plugin \"broken\" not found in marketplace \"cursor-plugins\".");
+    assert_eq!(said, [broken], "said by the sync that turned it on");
+    assert_eq!(installing(&synced.problems[0].path), Some("broken@cursor-plugins"));
+    let ran = |words: &str| calls.lock().unwrap().iter().filter(|call| *call == words).count();
+    assert_eq!((ran("marketplace add cursor/plugins"), ran("install pstack@cursor-plugins --json")), (1, 1));
+    assert_eq!(ran("install off@cursor-plugins --json"), 0, "a plugin turned off is not installed");
+
+    let before = calls.lock().unwrap().len();
+    installs.changed(&far.root().join(".claude"));
+    installs.wait(Duration::from_secs(10));
+    let again: Vec<String> = calls.lock().unwrap()[before..].to_vec();
+    assert_eq!(again, ["install broken@cursor-plugins --json"], "what is installed is not installed again");
+    let quiet = sync(&job, &far);
+    assert_eq!(quiet.changed(), 0, "{quiet:?}");
+    assert_eq!(quiet.problems.len(), 1, "said until a later write installs it");
 }

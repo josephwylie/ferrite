@@ -382,17 +382,24 @@ changed there as it is and lists it; it removes nothing (ADR 0048).
 _Avoid_: partial copy, interrupted sync, half copy.
 
 **Setup sync**
-The operator's agent setup (skills, commands, agents, instructions, rules,
-hooks, output styles, plugins, settings and sign-ins) kept the same on this
-computer and each Machine, both ways, with this computer as the hub. It runs
-on its own as a Machine connects, as the setup here changes and every minute,
-unless that Machine's "Sync my setup" is off. A file both sides changed goes
-to the newer, and the other copy is kept; two sign-ins that differ with none
-agreed wait for the operator to pick one, and a sign-in is never removed: a
-side signed out takes the other's. A sync that would remove most of
-an item, or all of one, waits for "Sync anyway", and what it removes here is
-kept in a trash folder for 14 days. Never the agents' transcripts, history
-or caches (ADR 0048).
+The operator's agent setup kept the same on this computer and each Machine,
+both ways, with this computer as the hub. What the operator wrote travels as
+files: skills (`~/.agents/skills` too), commands, agents, instructions,
+rules, hooks and output styles. What they chose travels as keys of the files
+their tools keep: preferences, plugins and marketplaces turned on, MCP
+servers. The rest of those files, and all a tool derives (plugin downloads,
+caches, install records), never moves; each side's tool installs what was
+turned on. It runs on its own as a Machine connects, as the setup here
+changes and every minute, unless that Machine's "Sync my setup" is off. A
+file both sides changed goes to the newer, and the other copy is kept; a key
+goes to this computer's at the first sync and to the newer after, and the
+toast says what it was. Text that differs only in line ends is the same. Two
+sign-ins that differ with none agreed wait for the operator to pick one, and
+a sign-in is never removed: a side signed out takes the other's. A sync that
+would remove most of an item, or all of one, waits for "Sync anyway", and
+what it removes here is kept in a trash folder for 14 days. Both sides must
+sync by the same table, or the row says which Ferrite to update (ADR 0048,
+ADR 0050).
 _Avoid_: dotfile sync, backup.
 
 **API**

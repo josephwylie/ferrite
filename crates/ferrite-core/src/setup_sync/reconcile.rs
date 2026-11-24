@@ -2,18 +2,19 @@
 //! sides last agreed on (the base), and what each side holds now. A side
 //! that changed a path since the base has its way; when both did, the
 //! same way is nothing, an edit beats a removal, and of two edits the
-//! newer wins, the other kept aside. The first sync, with no base, is the
-//! union of both sides and removes nothing, but two different sign-ins
-//! wait for the operator. A sign-in is never removed: a side without one
-//! takes the other's. A seed's folders are copied whole to a side that
-//! lacks them, and never otherwise touched.
+//! newer wins, the other kept aside. A file is the same as another whose
+//! text differs only in line ends. The first sync, with no base, is the
+//! union of both sides and removes nothing; a chosen key both sides hold
+//! differently takes this computer's, and two different sign-ins wait for
+//! the operator. A sign-in is never removed: a side without one takes the
+//! other's.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 
 use serde::Serialize;
 
-use super::{sign_in, Source, ITEMS};
+use super::{chosen, file_of, sign_in};
 use crate::tree::{executable_differs, Entry, Manifest, Side};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +74,7 @@ pub fn reconcile(base: &Manifest, here: &Manifest, there: &Manifest) -> Vec<Acti
     let mut held = Held::of(here, there);
     let mut actions = BTreeMap::new();
     for path in paths(base, here, there) {
-        if held.covers(path) || seeded(path) {
+        if held.covers(path) {
             continue;
         }
         let [b, h, t] = [base, here, there].map(|manifest| manifest.entries.get(path));
@@ -89,19 +90,17 @@ pub fn reconcile(base: &Manifest, here: &Manifest, there: &Manifest) -> Vec<Acti
         }
         actions.insert(path, action);
     }
-    actions.extend(seeds(&sides, &held));
     keep_what_survives(&mut actions, &held, &sides);
     let actions = outermost(actions, &sides);
     actions.into_iter().map(|action| through_links(action, &sides)).collect()
 }
 
 /// What both sides hold alike now, by path, and the base's entry where
-/// they differ or one of them could not list it: the next sync's base. A
-/// seed is never in it: each side keeps its own up.
+/// they differ or one of them could not list it: the next sync's base.
 pub fn agreed(base: &Manifest, here: &Manifest, there: &Manifest) -> Manifest {
     let held = Held::of(here, there);
     let mut agreed = Manifest::default();
-    for path in paths(base, here, there).into_iter().filter(|path| !seeded(path)) {
+    for path in paths(base, here, there) {
         let [b, h, t] = [base, here, there].map(|manifest| manifest.entries.get(path));
         let entry = if !held.covers(path) && same(h, t) { h } else { b };
         if let Some(entry) = entry {
@@ -142,6 +141,7 @@ fn decide(path: &str, b: Option<&Entry>, h: Option<&Entry>, t: Option<&Entry>, s
                 let winner = match (sides.linked(Side::Here, &path), sides.linked(Side::There, &path)) {
                     (true, false) => Side::Here,
                     (false, true) => Side::There,
+                    _ if b.is_none() && chosen(&path).is_some() => Side::Here,
                     _ if matches!((mh, mt), (Some(h), Some(t)) if t > h) => Side::There,
                     _ => Side::Here,
                 };
@@ -150,69 +150,6 @@ fn decide(path: &str, b: Option<&Entry>, h: Option<&Entry>, t: Option<&Entry>, s
             _ => Action::Hold { path, why: Hold::Kinds },
         },
     })
-}
-
-/// Whether `path` lies in a seed: its folders are seeded whole or left be.
-pub(super) fn seeded(path: &str) -> bool {
-    seed_of(path).is_some()
-}
-
-/// The seed folder `path` lies in, as `<seed>/<name>`.
-fn seed_of(path: &str) -> Option<&str> {
-    ITEMS.iter().filter(|item| item.source == Source::Seed).find_map(|item| {
-        let name = path.strip_prefix(item.path)?.strip_prefix('/')?.split('/').next()?;
-        Some(&path[..item.path.len() + 1 + name.len()])
-    })
-}
-
-/// Each seed folder one side lacks, taken there whole. A folder the other
-/// side holds only part of, each part as this side has it, is a copy cut
-/// short, and the rest of it goes too; any other folder both sides hold is
-/// left as each has it. Nothing is ever removed from one.
-fn seeds<'a>(sides: &Sides<'a>, held: &Held) -> Vec<(&'a str, Action)> {
-    let folders = |manifest: &'a Manifest| {
-        let mut folders: BTreeMap<&'a str, Vec<(&'a str, &'a Entry)>> = BTreeMap::new();
-        for (path, entry) in &manifest.entries {
-            if let Some(folder) = seed_of(path) {
-                folders.entry(folder).or_default().push((path.as_str(), entry));
-            }
-        }
-        folders
-    };
-    let (here, there) = (folders(sides.here), folders(sides.there));
-    let within = |part: &[(&str, &Entry)], whole: &Manifest| {
-        part.iter().all(|(path, entry)| same(Some(entry), whole.entries.get(*path)))
-    };
-    let names: BTreeSet<&str> = here.keys().chain(there.keys()).copied().collect();
-    let mut actions = Vec::new();
-    for folder in names {
-        let under = format!("{folder}/");
-        if held.covers(folder) || held.0.iter().any(|path| path.starts_with(&under)) {
-            continue;
-        }
-        let (mine, theirs) = (here.get(folder), there.get(folder));
-        let from = match (mine, theirs) {
-            (Some(_), None) => Side::Here,
-            (None, Some(_)) => Side::There,
-            (Some(mine), Some(theirs)) if mine.len() > theirs.len() && within(theirs, sides.here) => Side::Here,
-            (Some(mine), Some(theirs)) if theirs.len() > mine.len() && within(mine, sides.there) => Side::There,
-            _ => continue,
-        };
-        let (source, dest) = match from {
-            Side::Here => (mine, sides.there),
-            Side::There => (theirs, sides.here),
-        };
-        for (path, _) in source.into_iter().flatten() {
-            if !dest.entries.contains_key(*path) {
-                let action = match from {
-                    Side::Here => Action::Push(path.to_string()),
-                    Side::There => Action::Pull(path.to_string()),
-                };
-                actions.push((*path, action));
-            }
-        }
-    }
-    actions
 }
 
 /// A folder is removed from a side only when nothing under it stays
@@ -293,7 +230,8 @@ fn through_links(action: Action, sides: &Sides) -> Action {
     };
     let path = action.path();
     let blocked = if action.removes() {
-        sides.of(side).links.iter().any(|link| path.starts_with(&format!("{link}/")))
+        let links = &sides.of(side).links;
+        links.iter().any(|link| path.starts_with(&format!("{link}/"))) || (file_of(path) != path && links.contains(file_of(path)))
     } else {
         sides.linked(side, path)
     };
@@ -320,11 +258,11 @@ impl Sides<'_> {
         }
     }
 
-    /// Whether `side` reaches `path` through a link: it, or a folder it
-    /// lies in.
+    /// Whether `side` reaches `path` through a link: it, a folder it lies
+    /// in, or the file it is a key of.
     fn linked(&self, side: Side, path: &str) -> bool {
         let links = &self.of(side).links;
-        links.contains(path) || path.match_indices('/').any(|(at, _)| links.contains(&path[..at]))
+        within(path, |at| links.contains(at))
     }
 }
 
@@ -337,8 +275,15 @@ impl<'a> Held<'a> {
     }
 
     fn covers(&self, path: &str) -> bool {
-        self.0.contains(path) || path.match_indices('/').any(|(at, _)| self.0.contains(&path[..at]))
+        within(path, |at| self.0.contains(at))
     }
+}
+
+/// Whether `path`, a folder it lies in, or the file it is a key of, is
+/// one that `is`.
+fn within(path: &str, is: impl Fn(&str) -> bool) -> bool {
+    let file = file_of(path);
+    is(path) || is(file) || file.match_indices('/').any(|(at, _)| is(&path[..at]))
 }
 
 fn paths<'a>(base: &'a Manifest, here: &'a Manifest, there: &'a Manifest) -> BTreeSet<&'a str> {
@@ -349,20 +294,28 @@ fn paths<'a>(base: &'a Manifest, here: &'a Manifest, there: &'a Manifest) -> BTr
         .collect()
 }
 
-/// Whether two entries hold the same: a file by its bytes and, where both
-/// sides keep them, its executable bits.
+/// Whether two entries hold the same: a file by its text where both are
+/// text, else its bytes, and, where both sides keep them, its executable
+/// bits.
 fn same(one: Option<&Entry>, other: Option<&Entry>) -> bool {
     match (one, other) {
         (None, None) | (Some(Entry::Dir), Some(Entry::Dir)) => true,
         (
-            Some(Entry::File { size, sha256, mode, .. }),
+            Some(Entry::File { size, sha256, mode, text, .. }),
             Some(Entry::File {
                 size: other_size,
                 sha256: other_sha256,
                 mode: other_mode,
+                text: other_text,
                 ..
             }),
-        ) => size == other_size && sha256 == other_sha256 && !executable_differs(*mode, *other_mode),
+        ) => {
+            let alike = match (text, other_text) {
+                (Some(text), Some(other)) => text == other,
+                _ => size == other_size && sha256 == other_sha256,
+            };
+            alike && !executable_differs(*mode, *other_mode)
+        }
         (Some(Entry::Symlink { target }), Some(Entry::Symlink { target: other })) => target == other,
         _ => false,
     }
@@ -379,6 +332,7 @@ mod tests {
             sha256: bytes.into(),
             mode: None,
             modified: Some(modified),
+            text: None,
         }
     }
 
