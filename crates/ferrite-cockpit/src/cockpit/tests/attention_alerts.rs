@@ -988,7 +988,7 @@ fn snooze_hides_a_thread_until_woken_and_new_decisions_wake_it(cx: &mut TestAppC
             .update(cx, |cockpit, _| cockpit.snooze_thread(
                 threads[0],
                 Some(ferrite_core::clock::system_time() + Duration::from_secs(3600)),
-            ))
+            ).now())
             .unwrap()
     });
     tick(cx);
@@ -1057,7 +1057,7 @@ fn snooze_expiry_returns_threads_without_an_alert(cx: &mut TestAppContext) {
             .update(cx, |cockpit, _| cockpit.snooze_thread(
                 thread,
                 Some(ferrite_core::clock::system_time() + Duration::from_secs(3600)),
-            ))
+            ).now())
             .unwrap();
         cx.notify();
     });

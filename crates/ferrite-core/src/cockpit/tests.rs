@@ -1394,12 +1394,12 @@ fn thread_title_is_durable_and_blank_rename_is_refused() {
     let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
     let thread = cockpit.open(cockpit.first_machine(), Provider::Claude, main_choice()).unwrap();
 
-    cockpit.rename_thread(thread, "  Parser work  ").unwrap();
+    cockpit.rename_thread(thread, "  Parser work  ").now().unwrap();
     assert_eq!(
         cockpit.thread_title(thread).unwrap().as_deref(),
         Some("Parser work")
     );
-    assert!(cockpit.rename_thread(thread, "   ").is_err());
+    assert!(cockpit.rename_thread(thread, "   ").now().is_err());
     cockpit.park(thread).unwrap();
     assert_eq!(
         cockpit.thread_title(thread).unwrap().as_deref(),
@@ -4316,7 +4316,7 @@ fn a_thread_is_named_by_its_title_then_its_first_prompt_then_its_number() {
         "Fix the flaky",
         "parked: read off the log"
     );
-    cockpit.rename_thread(thread, "CI flake").unwrap();
+    cockpit.rename_thread(thread, "CI flake").now().unwrap();
     assert_eq!(cockpit.display_title(thread, true), "CI flake");
     cockpit.revive(thread).unwrap();
     assert_eq!(
@@ -4656,7 +4656,7 @@ fn a_thread_s_title_reaches_its_session_and_every_respawn() {
     let thread = cockpit.open(cockpit.first_machine(), Provider::Codex, main_choice()).unwrap();
     assert_eq!(fake.names.borrow().last().unwrap(), &None);
 
-    cockpit.rename_thread(thread, "CI flake").unwrap();
+    cockpit.rename_thread(thread, "CI flake").now().unwrap();
     assert_eq!(fake.named.borrow().as_slice(), ["CI flake"]);
 
     cockpit.park(thread).unwrap();
@@ -4676,7 +4676,7 @@ fn a_thread_s_title_reaches_its_session_and_every_respawn() {
     // A parked Thread's rename has no Session to tell; the next spawn
     // carries it.
     cockpit.park(thread).unwrap();
-    cockpit.rename_thread(thread, "CI flake, again").unwrap();
+    cockpit.rename_thread(thread, "CI flake, again").now().unwrap();
     assert_eq!(fake.named.borrow().len(), 1);
     revive_awake(&mut cockpit, thread);
     assert_eq!(

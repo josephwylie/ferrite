@@ -190,7 +190,7 @@ fn the_search_row_replaces_the_list_with_its_results(cx: &mut TestAppContext) {
     }
     let name = "Needle in the nav";
     view.update(cx, |view, cx| {
-        view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(threads[1], name).unwrap());
+        view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(threads[1], name).now().unwrap());
         view.facts.renamed(view.cockpit.read(cx), threads[1]);
         view.refresh_names();
         cx.notify();
@@ -238,7 +238,7 @@ fn the_search_highlight_follows_its_thread_through_live_updates(cx: &mut TestApp
     hide_panel(&view, cx);
     view.update(cx, |view, cx| {
         for (n, thread) in threads.iter().enumerate() {
-            view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(*thread, &format!("Needle {n}")).unwrap());
+            view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(*thread, &format!("Needle {n}")).now().unwrap());
             view.facts.renamed(view.cockpit.read(cx), *thread);
         }
         view.refresh_names();

@@ -167,7 +167,7 @@ impl Sessions {
         let thread = core
             .open(machine, provider, workspace)
             .expect("open a fixture Thread");
-        core.rename_thread(thread, title)
+        core.rename_thread(thread, title).now()
             .expect("name a fixture Thread");
         thread
     }

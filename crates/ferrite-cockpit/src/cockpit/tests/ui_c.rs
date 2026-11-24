@@ -223,7 +223,7 @@ fn a_card_title_takes_its_line_and_the_branch_its_own(cx: &mut TestAppContext) {
             "Switch the payment worker to the new settlement queue",
             "Fix",
         ]) {
-            view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(*thread, title).unwrap());
+            view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(*thread, title).now().unwrap());
             view.facts.renamed(view.cockpit.read(cx), *thread);
         }
         view.facts.set_branches(

@@ -186,7 +186,7 @@ fn shared_cockpit_routes_capability_controls_without_replacing_or_finishing_sess
         .unwrap()
         .supports_control(ferrite_core::ControlKind::RefreshContext));
     cockpit
-        .control(thread, ferrite_core::SessionControl::RefreshContext)
+        .control(thread, ferrite_core::SessionControl::RefreshContext).now()
         .unwrap();
     assert_eq!(
         native.0.lock().unwrap().controls,

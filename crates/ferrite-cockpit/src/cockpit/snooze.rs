@@ -27,18 +27,25 @@ impl CockpitView {
         until: Option<std::time::SystemTime>,
         cx: &mut Context<Self>,
     ) {
-        match self.cockpit.update(cx, |cockpit, _| cockpit.snooze_thread(thread, until)) {
-            Ok(()) => {
-                if until.is_some() {
-                    self.nav_view.update(cx, |nav, cx| {
-                        nav.offer_undo(super::nav_chrome::UndoAct::Snoozed(thread), cx)
-                    });
+        let snoozed = self.cockpit.update(cx, |cockpit, _| cockpit.snooze_thread(thread, until));
+        self.when_answered(
+            snoozed,
+            move |view, snoozed, cx| {
+                match snoozed {
+                    Ok(()) => {
+                        if until.is_some() {
+                            view.nav_view.update(cx, |nav, cx| {
+                                nav.offer_undo(super::nav_chrome::UndoAct::Snoozed(thread), cx)
+                            });
+                        }
+                        view.nav_notice.clear();
+                    }
+                    Err(error) => view.nav_notice.problem(error.to_string()),
                 }
-                self.nav_notice.clear();
-            }
-            Err(error) => self.nav_notice.problem(error.to_string()),
-        }
-        cx.notify();
+                cx.notify();
+            },
+            cx,
+        );
     }
 }
 

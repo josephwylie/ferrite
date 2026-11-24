@@ -2771,7 +2771,8 @@ fn a_window_on_this_computer_lists_its_parked_threads_off_the_published_rows() {
             },
         )
         .unwrap();
-    window.rename_thread(thread, "Release notes").unwrap();
+    let renamed = window.rename_thread(thread, "Release notes");
+    window.wait_for(renamed).unwrap();
     window.park_thread(thread).unwrap();
     pump_until(&mut window, |window| {
         window.parked().unwrap() == [thread]
@@ -6309,7 +6310,8 @@ fn snooze_is_shared_and_survives_server_restart_without_a_session() {
         .recv_timeout(PATIENCE)
         .unwrap();
     let until = ferrite_core::clock::system_time() + Duration::from_secs(3600);
-    first.snooze_thread(thread, Some(until)).unwrap();
+    let snoozed = first.snooze_thread(thread, Some(until));
+    first.wait_for(snoozed).unwrap();
     pump_until(&mut first, |window| {
         window
             .thread(thread)
@@ -6345,7 +6347,8 @@ fn snooze_is_shared_and_survives_server_restart_without_a_session() {
         successor.sessions.try_recv().is_err(),
         "listing Snooze starts no Session"
     );
-    reopened.snooze_thread(thread, None).unwrap();
+    let woken = reopened.snooze_thread(thread, None);
+    reopened.wait_for(woken).unwrap();
     pump_until(&mut reopened, |window| {
         window
             .thread(thread)

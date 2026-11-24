@@ -235,7 +235,7 @@ fn a_titlers_answer_names_only_an_untitled_thread(cx: &mut TestAppContext) {
         );
         assert_eq!(view.facts.name(first).as_ref(), "Wire the titler");
 
-        view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(second, "Mine").unwrap());
+        view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(second, "Mine").now().unwrap());
         view.adopt_title(second_key, Some("Model's idea".into()), cx);
         assert_eq!(view.cockpit.read(cx).thread(second).unwrap().title(), Some("Mine"));
     });

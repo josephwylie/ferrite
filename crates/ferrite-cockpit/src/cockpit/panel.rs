@@ -613,7 +613,7 @@ impl CockpitView {
     }
 
     /// Ask `thread`'s Session to report its context afresh, when it can.
-    pub(super) fn refresh_context(&mut self, thread: ThreadKey, cx: &mut gpui::App) {
+    pub(super) fn refresh_context(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         let Some(open) = self.cockpit.read(cx).thread(thread) else {
             return;
         };

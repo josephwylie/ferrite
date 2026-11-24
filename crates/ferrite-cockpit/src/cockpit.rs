@@ -3017,14 +3017,22 @@ impl CockpitView {
             None
         };
         if let Some((thread, title)) = asked {
-            match self.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(thread, &title)) {
-                Err(error) => self.nav_notice.problem(error.to_string()),
-                Ok(_) => {
-                    self.facts.renamed(self.cockpit.read(cx), thread);
-                    self.refresh_names();
-                    self.nav_notice.clear();
-                }
-            }
+            let renamed = self.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(thread, &title));
+            self.when_answered(
+                renamed,
+                move |view, renamed, cx| {
+                    match renamed {
+                        Err(error) => view.nav_notice.problem(error.to_string()),
+                        Ok(()) => {
+                            view.facts.renamed(view.cockpit.read(cx), thread);
+                            view.refresh_names();
+                            view.nav_notice.clear();
+                        }
+                    }
+                    cx.notify();
+                },
+                cx,
+            );
         }
         cx.notify();
     }

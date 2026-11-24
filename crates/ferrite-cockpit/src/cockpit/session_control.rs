@@ -32,7 +32,7 @@ impl CockpitView {
         thread: ThreadKey,
         generation: u64,
         action: ferrite_core::SessionControl,
-        cx: &mut gpui::App,
+        cx: &mut gpui::Context<Self>,
     ) {
         let current = self
             .cockpit
@@ -42,10 +42,17 @@ impl CockpitView {
         if !current {
             return;
         }
-        self.session_control_error.0 = self
-            .cockpit
-            .update(cx, |cockpit, _| cockpit.control(thread, action))
-            .err()
-            .map(|error| (thread, generation, error.to_string()));
+        self.session_control_error.0 = None;
+        let asked = self.cockpit.update(cx, |cockpit, _| cockpit.control(thread, action));
+        self.when_answered(
+            asked,
+            move |view, answered, cx| {
+                if let Err(error) = answered {
+                    view.session_control_error.0 = Some((thread, generation, error.to_string()));
+                    cx.notify();
+                }
+            },
+            cx,
+        );
     }
 }

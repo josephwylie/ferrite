@@ -145,7 +145,7 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
 fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("palette-par", 3);
     let threads = core.threads();
-    core.rename_thread(threads[2], "Release notes").unwrap();
+    core.rename_thread(threads[2], "Release notes").now().unwrap();
     // Used today, as a Thread parked within the day is: a log of Ferrite's
     // own marks alone has no known time (`Store::last_activity`).
     let _ = core.send(threads[2], "tidy the release notes".into());
@@ -192,7 +192,7 @@ fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
 fn palette_keys_wrap_and_land_on_a_thread(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("palette-keys", 2);
     let threads = core.threads();
-    core.rename_thread(threads[1], "Second thread").unwrap();
+    core.rename_thread(threads[1], "Second thread").now().unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));

@@ -186,14 +186,14 @@ fn lab_store_costs_on_a_real_log() {
         ms(started)
     );
     let started = Instant::now();
-    cockpit.rename_thread(thread, "lab parked title").unwrap();
+    cockpit.rename_thread(thread, "lab parked title").now().unwrap();
     eprintln!("LAB rename_parked_ms={:.1}", ms(started));
     for round in 0..2 {
         let started = Instant::now();
         cockpit.revive(thread).unwrap();
         eprintln!("LAB revive#{round}_ms={:.1}", ms(started));
         let started = Instant::now();
-        cockpit.rename_thread(thread, "lab live title").unwrap();
+        cockpit.rename_thread(thread, "lab live title").now().unwrap();
         eprintln!("LAB rename_live#{round}_ms={:.1}", ms(started));
         let started = Instant::now();
         cockpit.park(thread).unwrap();
