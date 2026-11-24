@@ -96,7 +96,7 @@ fn the_walk_steps_over_a_parked_thread(cx: &mut TestAppContext) {
     bind_production_keys(cx);
     let (mut core, _fake) = cockpit("thread-keys-parked", 3);
     let threads = core.threads();
-    core.park(threads[1]).unwrap();
+    core.park(threads[1]).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
     hide_panel(&view, cx);

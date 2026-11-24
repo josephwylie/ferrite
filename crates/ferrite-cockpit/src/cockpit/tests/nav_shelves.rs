@@ -22,8 +22,8 @@ fn card(thread: ThreadKey) -> &'static str {
 fn the_shelves_are_anchored_over_the_foot_and_keep_their_fold(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("nav-shelves", 4);
     let threads = sorted_threads(&core);
-    core.park(threads[0]).unwrap();
-    core.park(threads[1]).unwrap();
+    core.park(threads[0]).now().unwrap();
+    core.park(threads[1]).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -89,7 +89,7 @@ fn the_parked_shelf_shows_ten_then_twenty_five_more(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("nav-parked-pages", 13);
     let threads = sorted_threads(&core);
     for thread in &threads[1..] {
-        core.park(*thread).unwrap();
+        core.park(*thread).now().unwrap();
     }
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
@@ -321,7 +321,7 @@ fn the_keyboard_walks_the_list_and_follows_a_parked_thread(cx: &mut TestAppConte
     bind_production_keys(cx);
     let (mut core, _fake) = cockpit("nav-keys-list", 3);
     let threads = sorted_threads(&core);
-    core.park(threads[0]).unwrap();
+    core.park(threads[0]).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     tick(cx);
@@ -490,7 +490,7 @@ fn a_slim_row_fades_its_age_into_revive(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (mut core, _fake) = cockpit("nav-slim-hover", 2);
     let threads = sorted_threads(&core);
-    core.park(threads[0]).unwrap();
+    core.park(threads[0]).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     view.update(cx, |view, cx| {
@@ -541,7 +541,7 @@ fn a_resize_does_not_send_shelf_rows_travelling(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (mut core, _fake) = cockpit("nav-resize", 4);
     let threads = sorted_threads(&core);
-    core.park(threads[0]).unwrap();
+    core.park(threads[0]).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
@@ -573,7 +573,7 @@ fn rename_on_a_slim_row_draws_the_editor(cx: &mut TestAppContext) {
     cx.update(|cx| cx.bind_keys([KeyBinding::new("enter", Submit, None)]));
     let (mut core, _fake) = cockpit("nav-slim-rename", 3);
     let threads = sorted_threads(&core);
-    core.park(threads[0]).unwrap();
+    core.park(threads[0]).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -618,8 +618,8 @@ fn a_shelf_folds_and_turns_round_from_where_it_is(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (mut core, _fake) = cockpit("nav-shelf-fold", 4);
     let threads = sorted_threads(&core);
-    core.park(threads[0]).unwrap();
-    core.park(threads[1]).unwrap();
+    core.park(threads[0]).now().unwrap();
+    core.park(threads[1]).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -677,7 +677,7 @@ fn a_shelf_snaps_when_motion_is_reduced(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (mut core, _fake) = cockpit("nav-shelf-reduced", 4);
     let threads = sorted_threads(&core);
-    core.park(threads[0]).unwrap();
+    core.park(threads[0]).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));

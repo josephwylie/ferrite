@@ -193,7 +193,7 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
                 },
             ))
             .unwrap();
-        view.cockpit.update(cx, |cockpit, _| cockpit.park(thread).unwrap());
+        view.cockpit.update(cx, |cockpit, _| cockpit.park(thread).now().unwrap());
         cx.notify();
     });
     tick(cx);

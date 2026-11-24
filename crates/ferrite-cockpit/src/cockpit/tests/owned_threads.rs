@@ -27,7 +27,7 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
             ferrite_core::ThreadOwner::Factory(project.project()),
         )
         .unwrap();
-    core.park(coordinator).unwrap();
+    core.park(coordinator).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     // The operator looks at another Thread of theirs: a request from one

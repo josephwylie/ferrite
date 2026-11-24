@@ -91,7 +91,7 @@ fn two_machines_with_the_same_thread_id_are_kept_apart() {
 
     // Parking one leaves the other open, in the pump's roster too.
     assert_ne!(cockpit.roster.pane_of(mine), cockpit.roster.pane_of(theirs));
-    cockpit.park(theirs).unwrap();
+    cockpit.park(theirs).now().unwrap();
     assert_eq!(cockpit.threads(), vec![mine]);
     assert_eq!(cockpit.parked().unwrap(), vec![theirs]);
     assert_eq!(cockpit.known_threads(), [mine, theirs].into());

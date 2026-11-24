@@ -550,7 +550,7 @@ fn overlapping_tool_and_message_ids_keep_transcripts_usage_and_resume_isolated()
     assert_eq!(tool_state(alpha_view.transcript()), Some(ToolState::Ok));
     assert_eq!(tool_state(beta_view.transcript()), Some(ToolState::Running));
 
-    h.cockpit.park(h.thread).unwrap();
+    h.cockpit.park(h.thread).now().unwrap();
     let snapshot = Store::open(h.scratch.0.join("store"))
         .unwrap()
         .load(h.thread.thread())
@@ -919,7 +919,7 @@ fn stale_request_after_replacement(replacement: Replacement) {
         }
         Replacement::ParkAndRevive => {
             let _ = h.cockpit.queue(h.thread, "unpersisted queue".to_owned());
-            h.cockpit.park(h.thread).unwrap();
+            h.cockpit.park(h.thread).now().unwrap();
             assert_eq!(
                 h.cockpit.subagent_count(h.thread).unwrap(),
                 1,

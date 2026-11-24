@@ -59,7 +59,7 @@ fn world<'a>(
             ferrite_core::ThreadOwner::Task("t-1".into()),
         )
         .unwrap();
-    core.park(parked).unwrap();
+    core.park(parked).now().unwrap();
     core.fixture_factory(Board {
         tasks: vec![
             task(

@@ -268,7 +268,7 @@ fn discard_and_park_before_ready_cannot_deliver_even_without_another_pump() {
         if discard {
             cockpit.discard_draft(draft).unwrap();
         } else {
-            cockpit.park(cockpit.threads()[0]).unwrap();
+            cockpit.park(cockpit.threads()[0]).now().unwrap();
         }
         provider.ready();
         until(|| provider.dropped.load(Ordering::SeqCst) == 1);
@@ -349,7 +349,7 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
     let sent = replacement.sent();
     assert_eq!(sent.len(), 1);
     assert!(sent[0].contains("before") && sent[0].ends_with("after"));
-    cockpit.park(thread).unwrap();
+    cockpit.park(thread).now().unwrap();
     assert!(
         cockpit
             .engine()

@@ -74,6 +74,8 @@ pub struct Cockpit {
     pub(crate) roster: Roster,
     /// What the machines' Servers said for the window to take as it comes.
     said: Said,
+    /// What the model does of its own once a Server says an act was done.
+    follows: Follows,
     /// A fixture world's Factory, answering its Factory asks as a
     /// Server's would; a real window has none.
     factory_fixture: Option<factory_fixture::FactoryFixture>,
@@ -110,6 +112,32 @@ pub struct Cockpit {
     /// A fixture world's Server accepts every browser act
     /// (`fixture_browser_accepts`), answering an empty browser.
     browser_fixture: bool,
+}
+
+/// What the model does of its own once an act is answered (ADR 0041): the
+/// part of an act the window used to wait for that is the model's, not the
+/// window's.
+#[derive(Clone, Copy)]
+enum Follow {
+    /// A parked Thread leaves the roster, however its park went: its
+    /// Session is gone either way.
+    Parked(ThreadKey),
+    /// A deleted Thread's parked row goes.
+    Deleted(ThreadKey),
+}
+
+/// The acts a Server answered, each with whether it was done, for the
+/// model to follow on the beat that brought the answer.
+struct Follows {
+    done: std::sync::mpsc::Sender<(Follow, bool)>,
+    to_do: std::sync::mpsc::Receiver<(Follow, bool)>,
+}
+
+impl Default for Follows {
+    fn default() -> Self {
+        let (done, to_do) = std::sync::mpsc::channel();
+        Self { done, to_do }
+    }
 }
 
 /// What the machines' Servers said that the window takes as it comes, each
@@ -231,6 +259,7 @@ impl Cockpit {
             nothing: shared::Shared::new(Path::new("")),
             roster: Roster::default(),
             said: Said::default(),
+            follows: Follows::default(),
             factory_fixture: None,
             visible_subjects: BTreeMap::new(),
             window_active: true,
@@ -853,6 +882,61 @@ impl Cockpit {
         }
     }
 
+    /// `ask_on`, and the model does `follow` itself when the act was done:
+    /// before the window reads the answer, on the beat that brings it.
+    fn ask_on_then<T: Send + 'static>(
+        &mut self,
+        key: ThreadKey,
+        op: impl FnOnce(ThreadId) -> Op,
+        read: fn(Executed) -> io::Result<T>,
+        follow: Follow,
+    ) -> Ask<T> {
+        let (machine, op) = (key.machine(), op(key.thread()));
+        match self.machines.get_mut(&machine).map(|held| &mut held.link) {
+            Some(Link::Server(remote)) => {
+                let done = self.follows.done.clone();
+                let ask = remote.ask_act(op, move |reply| {
+                    let answer = read(reply);
+                    let _ = done.send((follow, answer.is_ok()));
+                    answer
+                });
+                crate::doorbell::ring();
+                ask
+            }
+            _ => {
+                let answer = read(self.act_at(machine, op));
+                self.follow(follow, answer.is_ok());
+                Ask::answered(answer)
+            }
+        }
+    }
+
+    /// Follow each act a Server has answered.
+    fn follow_answered(&mut self) {
+        while let Ok((follow, done)) = self.follows.to_do.try_recv() {
+            self.follow(follow, done);
+        }
+    }
+
+    fn follow(&mut self, follow: Follow, done: bool) {
+        match follow {
+            // A Thread still open is another window's to show.
+            Follow::Parked(thread) => {
+                if !self.is_open(thread) {
+                    self.roster.remove_thread(thread);
+                }
+            }
+            // Its parked row goes at once, not when the Server next
+            // publishes the rows.
+            Follow::Deleted(thread) if done => {
+                if let Some((machine, thread)) = self.at_mut(thread) {
+                    machine.parked.forget(thread);
+                }
+            }
+            Follow::Deleted(_) => {}
+        }
+    }
+
     /// A tell on one Thread, to its machine.
     fn tell_on(&mut self, key: ThreadKey, op: impl FnOnce(ThreadId) -> Op) {
         self.tell_at(key.machine(), op(key.thread()))
@@ -931,6 +1015,7 @@ impl Cockpit {
             self.said.bootstrap_results.push(result);
         }
         held.sync_roster(&mut self.roster);
+        self.follow_answered();
     }
 
     /// The window draws exactly these Threads at Transcript level now. It
@@ -1022,12 +1107,10 @@ impl Cockpit {
 
     /// Close a Pane: the Session ends, the log is flushed, and the Thread
     /// keeps nothing in memory until it is opened again.
-    pub fn park(&mut self, thread: ThreadKey) -> io::Result<()> {
-        let parked = done(self.act_on(thread, |thread| Op::Park { thread }));
-        if !self.is_open(thread) {
-            self.roster.remove_thread(thread);
-        }
-        parked
+    /// An `Err` answer says why it did not park cleanly. The window never
+    /// waits for it.
+    pub fn park(&mut self, thread: ThreadKey) -> Ask<()> {
+        self.ask_on_then(thread, |thread| Op::Park { thread }, done, Follow::Parked(thread))
     }
 
     pub fn ensure_subject_history(
@@ -1660,16 +1743,10 @@ impl Cockpit {
         Ok(project.map(|project| ProjectKey::new(thread.machine(), project)))
     }
 
-    /// Delete a Thread for good. Its parked row goes at once, not when the
-    /// Server next publishes the rows.
-    pub fn delete(&mut self, thread: ThreadKey) -> io::Result<()> {
-        let deleted = done(self.act_on(thread, |thread| Op::Delete { thread }));
-        if deleted.is_ok() {
-            if let Some((machine, thread)) = self.at_mut(thread) {
-                machine.parked.forget(thread);
-            }
-        }
-        deleted
+    /// Delete a Thread for good: an `Err` answer says why not. The window
+    /// never waits for it.
+    pub fn delete(&mut self, thread: ThreadKey) -> Ask<()> {
+        self.ask_on_then(thread, |thread| Op::Delete { thread }, done, Follow::Deleted(thread))
     }
 
     pub fn revive(&mut self, thread: ThreadKey) -> io::Result<()> {
@@ -3443,9 +3520,9 @@ impl Cockpit {
     }
 
     /// Close a Pane — cmd-w. A draft is discarded; a Thread is parked.
-    pub fn close(&mut self, identity: PaneIdentity) -> io::Result<()> {
+    pub fn close(&mut self, identity: PaneIdentity) -> Ask<()> {
         match identity {
-            PaneIdentity::Draft(draft) => self.discard_draft(draft),
+            PaneIdentity::Draft(draft) => Ask::answered(self.discard_draft(draft)),
             PaneIdentity::Thread(thread) => self.park_thread(thread),
         }
     }
@@ -3454,7 +3531,7 @@ impl Cockpit {
     /// log stays, and reopening revives it. Parked even on a flush error —
     /// the Session is gone either way, so cmd-o should still bring this
     /// Thread back first.
-    pub fn park_thread(&mut self, thread: ThreadKey) -> io::Result<()> {
+    pub fn park_thread(&mut self, thread: ThreadKey) -> Ask<()> {
         let parked = self.park(thread);
         self.roster.note_parked(thread);
         parked
@@ -3497,7 +3574,10 @@ impl Cockpit {
                             .thread(blank)
                             .is_some_and(|open| open.transcript().offers_import())
                         {
-                            adopted.blank_kept = self.delete(blank).err();
+                            // An import still waits for each of its acts.
+                            let deleted = done(self.act_on(blank, |thread| Op::Delete { thread }));
+                            self.follow(Follow::Deleted(blank), deleted.is_ok());
+                            adopted.blank_kept = deleted.err();
                         }
                     }
                 }

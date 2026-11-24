@@ -465,8 +465,8 @@ fn a_new_thread_in_a_project_opens_a_draft_there(cx: &mut TestAppContext) {
 fn the_parked_shelf_shows_its_rows_and_its_menu_deletes_them(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("parked-fold", 4);
     let threads = core.threads();
-    core.park(threads[0]).unwrap();
-    core.park(threads[1]).unwrap();
+    core.park(threads[0]).now().unwrap();
+    core.park(threads[1]).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -658,7 +658,7 @@ fn a_working_thread_moves_to_the_working_shelf_and_back(cx: &mut TestAppContext)
 fn deleting_every_parked_thread_always_asks_first(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("parked-confirm", 2);
     let threads = core.threads();
-    core.park(threads[0]).unwrap();
+    core.park(threads[0]).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
 

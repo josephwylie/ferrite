@@ -3113,25 +3113,28 @@ impl CockpitView {
     /// listed where the operator can deal with them one at a time.
     fn delete_parked_threads(&mut self, cx: &mut Context<Self>) {
         let parked = self.parked_threads(cx);
-        let mut refused = 0usize;
-        let mut reason = None;
-        for thread in parked {
-            if let Err(error) = self.delete_thread(thread, cx) {
-                refused += 1;
-                reason = Some(error.to_string());
-            }
-        }
-        match (refused, reason) {
-            (0, _) | (_, None) => self.nav_notice.clear(),
-            (1, Some(reason)) => self
-                .nav_notice
-                .problem(format!("1 parked thread not deleted: {reason}")),
-            (count, Some(reason)) => self
-                .nav_notice
-                .problem(format!("{count} parked threads not deleted, last: {reason}")),
-        }
-        self.sync_panes(cx);
-        self.parked_changed(cx);
+        self.delete_threads(
+            parked,
+            |view, deleted, cx| {
+                let refused: Vec<String> = deleted
+                    .into_iter()
+                    .filter_map(|(_, deleted)| deleted.err())
+                    .map(|error| error.to_string())
+                    .collect();
+                match (refused.len(), refused.last()) {
+                    (_, None) => view.nav_notice.clear(),
+                    (1, Some(reason)) => view
+                        .nav_notice
+                        .problem(format!("1 parked thread not deleted: {reason}")),
+                    (count, Some(reason)) => view
+                        .nav_notice
+                        .problem(format!("{count} parked threads not deleted, last: {reason}")),
+                }
+                view.sync_panes(cx);
+                view.parked_changed(cx);
+            },
+            cx,
+        );
     }
 
     /// A board: Panes and readers at their tree rects as this frame draws
@@ -6307,19 +6310,25 @@ impl CockpitView {
     /// refusal landing in the nav's notice — and a park that would not
     /// flush is logged, the Pane gone either way.
     fn close_pane(&mut self, identity: PaneIdentity, cx: &mut Context<Self>) {
-        let result = self.cockpit.update(cx, |cockpit, _| cockpit.close(identity));
-        let closed = result.is_ok();
-        if let Err(error) = result {
-            ferrite_core::log!("pane {identity:?} did not close cleanly: {error}");
-        }
+        let closing = self.cockpit.update(cx, |cockpit, _| cockpit.close(identity));
         // A menu on the closed Pane goes with it.
         if self.composer_menu.read(cx).pane() == Some(identity) {
             self.close_composer_menu(cx);
         }
-        self.sync_panes(cx);
-        if let (true, PaneIdentity::Draft(draft)) = (closed, identity) {
-            self.discard_draft(draft, cx);
-        }
+        self.when_answered(
+            closing,
+            move |view, closed, cx| {
+                if let Err(error) = &closed {
+                    ferrite_core::log!("pane {identity:?} did not close cleanly: {error}");
+                }
+                view.sync_panes(cx);
+                if let (true, PaneIdentity::Draft(draft)) = (closed.is_ok(), identity) {
+                    view.discard_draft(draft, cx);
+                }
+                cx.notify();
+            },
+            cx,
+        );
         cx.notify();
     }
 

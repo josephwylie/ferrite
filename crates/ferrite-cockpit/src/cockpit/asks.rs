@@ -40,6 +40,41 @@ impl CockpitView {
         }));
     }
 
+    /// Run `then` with the answers of all of `asks`, in their order, once
+    /// the last has come: a press on several Threads at once.
+    pub(super) fn when_all_answered<T: 'static>(
+        &mut self,
+        mut asks: Vec<Ask<T>>,
+        then: impl FnOnce(&mut Self, Vec<io::Result<T>>, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let mut answers: Vec<Option<io::Result<T>>> = asks.iter().map(|_| None).collect();
+        let mut all_came = move || {
+            for (ask, answer) in asks.iter_mut().zip(answers.iter_mut()) {
+                if answer.is_none() {
+                    *answer = ask.answer();
+                }
+            }
+            answers
+                .iter()
+                .all(Option::is_some)
+                .then(|| answers.drain(..).flatten().collect::<Vec<_>>())
+        };
+        if let Some(answers) = all_came() {
+            return then(self, answers, cx);
+        }
+        let mut then = Some(then);
+        self.awaited.0.push(Box::new(move |view, cx| {
+            let Some(answers) = all_came() else {
+                return false;
+            };
+            if let Some(then) = then.take() {
+                then(view, answers, cx);
+            }
+            true
+        }));
+    }
+
     /// Run what follows each answer that came, in the order asked. An ask
     /// made by one of them waits behind those already waiting.
     pub(super) fn settle_asks(&mut self, cx: &mut Context<Self>) {

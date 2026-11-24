@@ -1565,7 +1565,9 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     assert_eq!(harness.answers.lock().unwrap().len(), 1);
     pump_until(&mut second, |second| !pending(second, theirs));
 
-    window.park(thread).unwrap();
+    let asked = window.park(thread);
+
+    window.wait_for(asked).unwrap();
     assert!(window.thread(thread).is_none());
     // Its row arrives once the Server has read it.
     pump_until(&mut window, |window| window.parked().unwrap() == [thread]);
@@ -2773,7 +2775,8 @@ fn a_window_on_this_computer_lists_its_parked_threads_off_the_published_rows() {
         .unwrap();
     let renamed = window.rename_thread(thread, "Release notes");
     window.wait_for(renamed).unwrap();
-    window.park_thread(thread).unwrap();
+    let asked = window.park_thread(thread);
+    window.wait_for(asked).unwrap();
     pump_until(&mut window, |window| {
         window.parked().unwrap() == [thread]
             && window.display_title(thread, true) == "Release notes"
@@ -2795,7 +2798,9 @@ fn a_window_on_this_computer_lists_its_parked_threads_off_the_published_rows() {
     assert!(window.parked_turns(thread).is_some());
     std::fs::rename(&moved, &log).unwrap();
 
-    window.delete(thread).unwrap();
+    let asked = window.delete(thread);
+
+    window.wait_for(asked).unwrap();
     assert_eq!(window.parked().unwrap(), [], "the row drops at once");
 }
 

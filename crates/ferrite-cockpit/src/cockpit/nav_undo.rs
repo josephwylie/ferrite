@@ -15,23 +15,38 @@ impl CockpitView {
     /// and ⌘Z takes it back while the foot's notice stands). A Thread that
     /// would not park is named and stays picked; Undo holds only the rest.
     pub(super) fn park_listed(&mut self, keys: &[ThreadKey], cx: &mut Context<Self>) {
-        let mut parked = Vec::new();
-        let mut outcomes = Vec::new();
-        for &key in keys {
-            let result = self.cockpit.update(cx, |cockpit, _| cockpit.park_thread(key).map_err(|e| e.to_string()));
-            if result.is_ok() {
-                parked.push(key);
-            }
-            outcomes.push(Outcome { thread: key, result });
-        }
-        self.report_failures("park", &outcomes);
-        self.sync_panes(cx);
-        self.nav_view.update(cx, |nav, cx| {
-            nav.picked.retain(|picked| !parked.contains(picked));
-            if !parked.is_empty() {
-                nav.offer_undo(nav_chrome::UndoAct::Parked(parked), cx);
-            }
+        let keys = keys.to_vec();
+        let asked = self.cockpit.update(cx, |cockpit, _| {
+            keys.iter().map(|key| cockpit.park_thread(*key)).collect()
         });
+        self.when_all_answered(
+            asked,
+            move |view, answers, cx| {
+                let outcomes: Vec<Outcome> = keys
+                    .into_iter()
+                    .zip(answers)
+                    .map(|(thread, parked)| Outcome {
+                        thread,
+                        result: parked.map_err(|error| error.to_string()),
+                    })
+                    .collect();
+                let parked: Vec<ThreadKey> = outcomes
+                    .iter()
+                    .filter(|outcome| outcome.result.is_ok())
+                    .map(|outcome| outcome.thread)
+                    .collect();
+                view.report_failures("park", &outcomes);
+                view.sync_panes(cx);
+                view.nav_view.update(cx, |nav, cx| {
+                    nav.picked.retain(|picked| !parked.contains(picked));
+                    if !parked.is_empty() {
+                        nav.offer_undo(nav_chrome::UndoAct::Parked(parked), cx);
+                    }
+                });
+                cx.notify();
+            },
+            cx,
+        );
         cx.notify();
     }
 

@@ -154,7 +154,7 @@ fn reopening_falls_back_to_creation_order_for_threads_parked_before_launch(
         .unwrap();
     // Parked before the view exists — a previous launch, as far as the
     // view can know.
-    core.park(b).unwrap();
+    core.park(b).now().unwrap();
     cx.update(|cx| {
         cx.bind_keys([
             KeyBinding::new("cmd-w", CloseThread, None),

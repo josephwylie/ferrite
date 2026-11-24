@@ -19,7 +19,7 @@ fn composer_survives_background_thread_removal(cx: &mut TestAppContext) {
     // Exercise the core mutation seen from the Server, without the UI close
     // action (which already synchronizes its mirror).
     view.update(cx, |view, cx| {
-        view.cockpit.update(cx, |cockpit, _| cockpit.park_thread(threads[0]).unwrap());
+        view.cockpit.update(cx, |cockpit, _| cockpit.park_thread(threads[0]).now().unwrap());
         assert_eq!(
             view.panes[view.focused(cx)].thread(),
             Some(threads[2]),

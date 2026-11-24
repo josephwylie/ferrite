@@ -149,7 +149,7 @@ fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
     // Used today, as a Thread parked within the day is: a log of Ferrite's
     // own marks alone has no known time (`Store::last_activity`).
     let _ = core.send(threads[2], "tidy the release notes".into());
-    core.park(threads[2]).unwrap();
+    core.park(threads[2]).now().unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));

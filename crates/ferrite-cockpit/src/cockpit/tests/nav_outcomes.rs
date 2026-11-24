@@ -58,7 +58,7 @@ fn a_bulk_park_of_loose_threads_names_the_thread_that_failed(cx: &mut TestAppCon
 fn a_failed_reopen_is_reported(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("nav-reopen-fails", 3);
     let threads = sorted_threads(&core);
-    core.park(threads[0]).unwrap();
+    core.park(threads[0]).now().unwrap();
     std::fs::write(
         std::env::temp_dir()
             .join(format!("ferrite-view-{}-nav-reopen-fails", std::process::id()))
@@ -118,7 +118,7 @@ fn opening_a_thread_outside_the_scope_widens_it(cx: &mut TestAppContext) {
     bind_production_keys(cx);
     let (mut core, _fake) = cockpit("nav-scope-reveal", 2);
     let threads = sorted_threads(&core);
-    core.park(threads[1]).unwrap();
+    core.park(threads[1]).now().unwrap();
     let elsewhere = core
         .register_project(core.first_machine(), &std::env::temp_dir().canonicalize().unwrap())
         .unwrap();

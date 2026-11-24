@@ -349,19 +349,30 @@ impl CockpitView {
     /// Put a fork away with its tab. Deleted, so it leaves no Thread
     /// behind — but a fork that works in a legacy worktree would take the
     /// operator's checkout with it, so that one is only parked.
-    fn retire(&mut self, fork: ThreadKey, cx: &mut gpui::App) {
+    fn retire(&mut self, fork: ThreadKey, cx: &mut Context<Self>) {
         let thread = fork;
         let worktree = self.cockpit.read(cx).thread(thread).is_some_and(|open| {
             matches!(open.workspace(), Some(WorkspaceBinding::Worktree { .. }))
         });
         if worktree {
+            // Nothing follows it: the fork has no Pane to close.
             let _ = self.cockpit.update(cx, |cockpit, _| cockpit.park(thread));
-        } else if let Err(error) = self.delete_thread(thread, cx) {
-            ferrite_core::log!(
-                "side chat thread {} could not be deleted: {error:?}",
-                thread.thread()
-            );
+            return;
         }
+        self.delete_threads(
+            vec![thread],
+            |_, deleted, _| {
+                for (thread, deleted) in deleted {
+                    if let Err(error) = deleted {
+                        ferrite_core::log!(
+                            "side chat thread {} could not be deleted: {error:?}",
+                            thread.thread()
+                        );
+                    }
+                }
+            },
+            cx,
+        );
     }
 
     /// Its Surface's tab closed: the side chat and its fork go.

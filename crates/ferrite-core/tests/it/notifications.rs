@@ -314,7 +314,7 @@ fn notifications_discard_a_parked_deferral_but_keep_existing_notices() {
     h.control.emit(0, ended());
     h.cockpit.pump();
     assert_eq!(h.count(), 1, "the new finish is deferred");
-    h.cockpit.park(thread).unwrap();
+    h.cockpit.park(thread).now().unwrap();
     assert!(h.cockpit.notifications(h.here).get(notice).is_some());
     h.cockpit.reopen(thread).unwrap();
     for _ in 0..3 {
@@ -377,7 +377,7 @@ fn opening_a_notice_lands_on_its_thread_and_revives_a_parked_one() {
     let id = h.cockpit.notifications(h.here).newest().unwrap();
 
     // Parked after it finished: opening the Notice brings it back.
-    h.cockpit.park(second).unwrap();
+    h.cockpit.park(second).now().unwrap();
     assert!(h.cockpit.thread(second).is_none());
     assert_eq!(h.cockpit.open_notice(h.here, id), Some(second));
     assert_eq!(h.cockpit.roster().focused_thread(), Some(second));
@@ -496,7 +496,7 @@ fn a_subagents_own_end_never_notifies_and_a_deleted_thread_is_forgotten() {
     h.control.emit(1, ended());
     h.cockpit.pump();
     assert_eq!(h.count(), 1);
-    h.cockpit.delete(second).unwrap();
+    h.cockpit.delete(second).now().unwrap();
     assert_eq!(h.count(), 0, "nothing survives its Thread");
 }
 
