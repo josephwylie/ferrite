@@ -438,6 +438,127 @@ fn a_mirror_reads_every_page_of_the_far_side_before_it_plans() {
     assert!(far.pages.is_empty());
 }
 
+/// This computer's own Server, in this process, each reply heard in the
+/// order asked.
+#[derive(Default)]
+struct Here {
+    session: Session,
+    replies: VecDeque<(u64, io::Result<Reply>)>,
+    asked: u64,
+}
+
+impl Exchange for Here {
+    fn ask(&mut self, request: Request) -> io::Result<Asked> {
+        self.asked += 1;
+        self.replies.push_back((self.asked, self.session.execute(request)));
+        Ok(Asked::numbered(self.asked))
+    }
+
+    fn answer(&mut self, asked: Asked) -> io::Result<Reply> {
+        while let Some((id, reply)) = self.replies.pop_front() {
+            if id == asked.id() {
+                return reply;
+            }
+        }
+        Err(io::Error::other("never asked"))
+    }
+}
+
+/// `source` scanned, with each of `links` listed as a symlink to its
+/// target, as a Mac lists the tree: Windows makes none without privilege.
+fn with_links(source: &Path, links: &[(&str, &str)]) -> Manifest {
+    let mut listed = scan(source, &[]).unwrap();
+    for (path, target) in links {
+        listed.entries.insert(path.to_string(), Entry::Symlink { target: target.to_string() });
+    }
+    listed
+}
+
+/// What `listed` from `source` makes of `dest` on this computer's Server,
+/// planned against what is there now.
+fn sent_to(source: &Path, listed: &Manifest, dest: &Path, exchange: &mut Here) -> Sent {
+    let root = Root::Path { path: dest.to_path_buf() };
+    let there = scan_far(exchange, &root, &[]).unwrap();
+    let steps = plan(listed, &there, &[]);
+    send(source, &steps, &root, exchange, &mut |_| {}, &Cancellation::default()).expect("the send completes")
+}
+
+/// A tree from a side that keeps links, sent to this computer: each link
+/// that leads to a folder or a file in the tree reads as what it leads to,
+/// and sending it again moves nothing.
+#[test]
+fn a_tree_with_links_lands_with_each_one_that_leads_inside_it_usable() {
+    let dir = scratch("links");
+    let (source, dest) = (dir.join("source"), dir.join("dest"));
+    fs::create_dir_all(source.join("packages/web")).unwrap();
+    fs::create_dir_all(source.join("lib")).unwrap();
+    fs::create_dir_all(source.join("docs")).unwrap();
+    fs::write(source.join("lib/index.js"), "module.exports = 1;\n").unwrap();
+    fs::write(source.join("docs/guide.md"), "# Guide\n").unwrap();
+    let listed = with_links(
+        &source,
+        &[
+            ("packages/web/lib", "../../lib"),
+            ("GUIDE.md", "docs/guide.md"),
+            ("escape", "../../outside"),
+            ("broken", "lib/missing.js"),
+        ],
+    );
+    let mut exchange = Here::default();
+
+    let first = sent_to(&source, &listed, &dest, &mut exchange);
+    assert_eq!(fs::read(dest.join("packages/web/lib/index.js")).unwrap(), b"module.exports = 1;\n");
+    assert_eq!(fs::read(dest.join("GUIDE.md")).unwrap(), b"# Guide\n");
+    assert_eq!((first.made, first.written), (4, 2));
+
+    let again = sent_to(&source, &listed, &dest, &mut exchange);
+    assert_eq!((again.removed, again.made, again.written, again.linked), (0, 0, 0, 0), "{again:?}");
+}
+
+/// A pnpm install: a store of package folders under `node_modules/.pnpm`,
+/// each package's dependencies linked beside it in the store, and each
+/// package the project names linked from `node_modules/@scope`. Every
+/// link lands as a folder that reads as the package it leads to.
+#[test]
+fn a_pnpm_install_lands_with_each_package_readable_through_its_link() {
+    const PACKAGES: usize = 200;
+    let dir = scratch("pnpm");
+    let (source, dest) = (dir.join("source"), dir.join("dest"));
+    let store = |at: usize| format!("node_modules/.pnpm/@scope+name-{at}@1.0.0/node_modules");
+    let mut links = Vec::new();
+    for at in 0..PACKAGES {
+        let package = source.join(store(at)).join(format!("@scope/name-{at}"));
+        fs::create_dir_all(&package).unwrap();
+        fs::write(package.join("package.json"), format!("{{\"name\":\"@scope/name-{at}\",\"main\":\"index.js\"}}\n")).unwrap();
+        fs::write(package.join("index.js"), format!("module.exports = {at};\n")).unwrap();
+        let dependency = (at + 1) % PACKAGES;
+        links.push((
+            format!("{}/@scope/name-{dependency}", store(at)),
+            format!("../../../@scope+name-{dependency}@1.0.0/node_modules/@scope/name-{dependency}"),
+        ));
+        links.push((
+            format!("node_modules/@scope/name-{at}"),
+            format!("../.pnpm/@scope+name-{at}@1.0.0/node_modules/@scope/name-{at}"),
+        ));
+    }
+    fs::create_dir_all(source.join("node_modules/@scope")).unwrap();
+    let links: Vec<(&str, &str)> = links.iter().map(|(path, target)| (path.as_str(), target.as_str())).collect();
+    let listed = with_links(&source, &links);
+    let mut exchange = Here::default();
+
+    let first = sent_to(&source, &listed, &dest, &mut exchange);
+    assert_eq!(first.linked, 2 * PACKAGES);
+    for at in [0, 7, PACKAGES - 1] {
+        let through = dest.join(format!("node_modules/@scope/name-{at}/index.js"));
+        assert_eq!(fs::read_to_string(through).unwrap(), format!("module.exports = {at};\n"));
+        let dependency = dest.join(store(at)).join(format!("@scope/name-{}/index.js", (at + 1) % PACKAGES));
+        assert_eq!(fs::read_to_string(dependency).unwrap(), format!("module.exports = {};\n", (at + 1) % PACKAGES));
+    }
+
+    let again = sent_to(&source, &listed, &dest, &mut exchange);
+    assert_eq!(again, Sent::default());
+}
+
 /// The Server runs under umask 077; a directory a tree op makes, the root
 /// and those on the way to it too, is still readable by all.
 #[cfg(unix)]
