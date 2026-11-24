@@ -1,6 +1,6 @@
 use super::*;
 
-fn machine(harness: &Harness, sent: &Arc<Mutex<Vec<u8>>>) -> ferrite_core::cockpit::Cockpit {
+pub(super) fn machine(harness: &Harness, sent: &Arc<Mutex<Vec<u8>>>) -> ferrite_core::cockpit::Cockpit {
     let mut cockpit = ferrite_core::cockpit::Cockpit::attach(ferrite_core::cockpit::Attach {
         store: harness.dir.join("desktop"),
         server: ferrite_core::cockpit::Endpoint::Machine(bridge(harness, sent)),

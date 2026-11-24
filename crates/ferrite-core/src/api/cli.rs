@@ -24,6 +24,8 @@ use crate::link::{self, TryClone};
 use crate::machine::{self, Dial, Failure, Machine, Tunnel};
 use crate::settings::Settings;
 
+mod tree;
+
 /// The agent skill: how an agent in one Thread drives the others. Bundled,
 /// so the printed skill always matches this binary.
 pub const SKILL: &str = include_str!("../../../../skills/ferrite/SKILL.md");
@@ -61,6 +63,16 @@ pub fn run(args: &[String], store: &Path, settings_dir: &Path) -> Option<i32> {
         (None, ["help" | "--help"]) => {
             print!("{}", usage(None));
             0
+        }
+        (_, ["tree", rest @ ..]) => {
+            let machine = match machine.map(|name| saved(name, settings_dir)).transpose() {
+                Ok(machine) => machine,
+                Err((status, error)) => {
+                    eprintln!("ferrite: {error}");
+                    return Some(status);
+                }
+            };
+            tree::run(machine, rest, store, settings_dir)
         }
         (_, [group, rest @ ..]) if groups().any(|known| known == *group) => {
             let to = match machine {
@@ -426,6 +438,7 @@ pub fn usage(group: Option<&str>) -> String {
         ));
     }
     if group.is_none() {
+        out.push_str(tree::USAGE);
         out.push_str(
             "\n  ferrite --skill [install]\n      Print the agent skill, or install it for Claude and Codex.\n  \
              ferrite --schema\n      The API's JSON Schema.\n  \

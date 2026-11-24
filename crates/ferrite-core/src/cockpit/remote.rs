@@ -627,6 +627,18 @@ impl Remote {
         })
     }
 
+    pub(crate) fn tree(&self) -> io::Result<crate::tree::Connect> {
+        let connect = self.side_connection()?;
+        Ok(Box::new(move || {
+            let (attached, endpoint) = connect()?;
+            let mut exchange = crate::tree::exchange(attached.client);
+            Ok(Box::new(move |request| {
+                let _route = &endpoint;
+                exchange(request)
+            }) as crate::tree::Exchange)
+        }))
+    }
+
     pub(crate) fn upload_attachment(&self, path: PathBuf) -> io::Result<crate::attachment_transfer::Upload> {
         Ok(crate::attachment_transfer::upload(path, self.attachment_connection()?))
     }
