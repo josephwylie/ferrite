@@ -130,7 +130,7 @@ fn a_prompt_sent_again_does_not_wait_and_hears_where_it_went(cx: &mut gpui::Test
 /// never waited for, and each is answered through its ask.
 #[test]
 fn a_turns_presses_that_read_a_reply_do_not_wait_and_are_answered() {
-    use ferrite_core::store::Provider;
+    use ferrite_core::provider::Provider;
     let (mut core, thread, _) = super::machines::browser_core("turn-asks");
     waits::start();
     let model = core.set_model(thread, Some("sonnet".into()));

@@ -24,10 +24,11 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::activity::{ActivityEvent, ActivityInput, AgentKey, DecisionHandle, Subject};
-use crate::store::{LogRecord, Provider};
+use crate::checkout::{WorkspaceBinding, WorkspaceChoice};
+use crate::project::ProjectId;
+use crate::provider::Provider;
+use crate::store::LogRecord;
 use crate::transcript::Input;
-use crate::workspace::registry::ProjectId;
-use crate::workspace::{WorkspaceBinding, WorkspaceChoice};
 use crate::{SessionEvent, ThreadId};
 use ferrite_reviewr::ferrite::Read;
 use ferrite_reviewr::model::CommitPick;
@@ -1017,7 +1018,7 @@ pub enum WorkflowAction {
     Save {
         workflow: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        skills: Vec<(crate::store::Provider, Vec<String>)>,
+        skills: Vec<(crate::provider::Provider, Vec<String>)>,
     },
     /// Who approves the draft's results, and what follows (#222).
     EditApproval {
@@ -1794,8 +1795,8 @@ pub struct WireWorktree {
     pub branch: Option<String>,
 }
 
-impl From<crate::workspace::RepoListing> for Done {
-    fn from(listing: crate::workspace::RepoListing) -> Self {
+impl From<crate::checkout::RepoListing> for Done {
+    fn from(listing: crate::checkout::RepoListing) -> Self {
         Done::RepoListing {
             checked_out: listing.checked_out,
             worktrees: listing
@@ -1811,8 +1812,8 @@ impl From<crate::workspace::RepoListing> for Done {
     }
 }
 
-impl From<crate::workspace::Listing> for Done {
-    fn from(listing: crate::workspace::Listing) -> Self {
+impl From<crate::folder::Listing> for Done {
+    fn from(listing: crate::folder::Listing) -> Self {
         Done::Listing {
             path: listing.path,
             entries: listing
@@ -1870,7 +1871,7 @@ pub struct ThreadState {
     pub generation: u64,
     pub provider: Provider,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project: Option<crate::workspace::registry::ProjectId>,
+    pub project: Option<crate::project::ProjectId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

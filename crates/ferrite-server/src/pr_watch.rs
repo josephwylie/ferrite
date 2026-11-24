@@ -24,7 +24,7 @@ use ferrite_core::pr_watch::{
 use ferrite_core::server::github::GitHub;
 use ferrite_core::transcript::{tools, Body, ToolState};
 use ferrite_core::wake::Wake;
-use ferrite_core::workspace::PrState;
+use ferrite_core::pull_request::PrState;
 use ferrite_core::link::ClientId;
 use ferrite_core::protocol::{Done, ErrorCode, WireError};
 use ferrite_core::ThreadId;

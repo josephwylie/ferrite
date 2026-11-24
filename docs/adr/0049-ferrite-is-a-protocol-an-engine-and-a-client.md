@@ -34,14 +34,14 @@ of `ferrite-core` on the shared side or the engine's.
 `scripts/check_core_sides.py` counts each **crossing**: a path to an engine
 module from a shared module, or from one of the window's crates
 (`ferrite-client`, `ferrite-cockpit`, `ferrite-pane`, `ferrite-frame`,
-`ferrite-ui`, `ferrite-terminal`). There are 284:
+`ferrite-ui`, `ferrite-terminal`). There are 177:
 
 | From | Crossings | Mostly |
 | --- | --- | --- |
-| shared modules | 68 | `protocol` naming Factory, provider and workspace types |
-| `ferrite-client` | 52 | workspace types, and the Engine a Cockpit can run in itself |
-| `ferrite-cockpit` | 156 | workspace, provider, Factory and Store types |
-| `ferrite-pane`, `ferrite-ui` | 8 | |
+| shared modules | 40 | `protocol` naming Factory and provider types |
+| `ferrite-client` | 36 | the Engine a Cockpit can run in itself, provider and Factory types |
+| `ferrite-cockpit` | 97 | provider and Factory types, and `git` reads of a checkout |
+| `ferrite-pane`, `ferrite-ui` | 4 | |
 
 CI fails when a pair's count rises, a new pair appears, or a module is on
 no side. The baseline only goes down. Tests and fixtures are not counted.
@@ -78,13 +78,29 @@ The move has a cost. About thirty items the Cockpit used as `pub(crate)`
 are now `pub`: the roster's mutators, the `ThreadKey` and `ProjectKey`
 constructors, a few Engine and Store reads.
 
+## Built: the types a window shows of `workspace`, `store` and `pr_watch`
+
+What a window shows of those three modules moved to five new shared
+modules: `provider`, `project` (`ProjectId`, `Project`), `checkout` (the
+Workspace binding, the choice, `effective_cwd`, a branch's drift and a
+repo's listing), `pull_request` (a PR, its checks and `Watching`) and
+`folder` (a directory's `Listing` and `expand_home`). `replace_file` moved
+to `disk`. No serialized form changed. The crossings went from 284 to 177.
+Most of the 32 left into those three modules are work: `git` and `gh`
+reads, the Store, the registry, the Server's GitHub reads and its record
+of a PR watch. The rest name two types that stay in `store`: `ThreadMeta`
+holds a `RuntimeMode`, and `LogRecord` is the whole log schema. The
+registry still mints a `ProjectId` and numbers a `Project`'s new branches,
+and the Store still renames its files through `disk`. So four moved items
+are `pub(crate)`, and the split in step 3 has to make them public.
+
 ## What comes next, in order
 
 Each step is one PR and drives its pairs in the baseline to zero.
 
-1. **Types move to the shared side.** The 68 crossings from shared modules
+1. **Types move to the shared side.** The crossings from shared modules
    go first, then the window crates' crossings that are only a type. No
-   crate changes. This is most of the 284.
+   crate changes. `workspace`, `store` and `pr_watch` are done (above).
 2. **The Cockpit stops running an Engine in itself.** `Cockpit::new(store,
    spawner)` builds an Engine in the window's process. Production attaches
    to a Server (`Cockpit::attach`); the demo, fixtures and tests use the

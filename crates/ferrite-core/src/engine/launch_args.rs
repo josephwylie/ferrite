@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::AgentLaunch;
-use crate::store::Provider;
+use crate::provider::Provider;
 use crate::ThreadId;
 
 /// The arguments, environment and launcher, and the Provider they were
@@ -152,7 +152,7 @@ pub(super) fn path(dir: &Path, thread: ThreadId) -> PathBuf {
     dir.join(thread.to_string()).join("args.json")
 }
 
-/// Saved whole (`store::replace_file`); nothing saved is no file.
+/// Saved whole (`disk::replace_file`); nothing saved is no file.
 pub(super) fn save(path: &Path, saved: Option<&LaunchArgs>) -> io::Result<()> {
     let Some(saved) = saved else {
         return match std::fs::remove_file(path) {
@@ -160,7 +160,7 @@ pub(super) fn save(path: &Path, saved: Option<&LaunchArgs>) -> io::Result<()> {
             _ => Ok(()),
         };
     };
-    crate::store::replace_file(path, &serde_json::to_vec(saved)?)
+    crate::disk::replace_file(path, &serde_json::to_vec(saved)?)
 }
 
 /// The saved arguments; `Ok(None)` for a Thread started without any, and

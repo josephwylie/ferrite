@@ -28,7 +28,7 @@ pub use read::{fingerprint, reading, Ask, Fingerprint, ReadError};
 pub use crate::wake::{Outcome, Wake};
 pub use wake::{combine, wake_text};
 
-use crate::workspace::PrState;
+use crate::pull_request::{PrState, WatchedPr, Watching};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -54,6 +54,22 @@ impl WatchFact {
     /// No watch on, and none ended: what a Thread that never watched has.
     pub fn is_empty(&self) -> bool {
         self.on.is_empty() && self.ended.is_empty()
+    }
+
+    /// What a window reads of these watches (`Watching`).
+    pub fn watching(&self, wake_waiting: bool) -> Watching {
+        Watching {
+            prs: self
+                .on
+                .iter()
+                .map(|watch| WatchedPr {
+                    url: watch.url.clone(),
+                    number: watch.number,
+                    holds: watch.holds(),
+                })
+                .collect(),
+            wake_waiting,
+        }
     }
 
     /// The watch on `repository#number`, while it is on.
@@ -283,63 +299,6 @@ impl Watch {
     /// PR next.
     pub fn holds(&self) -> bool {
         self.until == Until::Merged || self.cursor.checks_pending
-    }
-}
-
-/// What the Server's watching holds of a Thread, as every window reads it
-/// (the details card's eye, the Working shelf, the Notice): each PR its
-/// agent watches, and whether a server wake waits to resume it.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Watching {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub prs: Vec<WatchedPr>,
-    /// A server wake (`crate::wake`) waits for the Thread: Main will be
-    /// resumed by it, as by a queued turn start in T3.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub wake_waiting: bool,
-}
-
-/// One watched PR, as a window draws it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WatchedPr {
-    pub url: String,
-    pub number: u64,
-    /// The watch holds its Thread working (`Watch::holds`).
-    pub holds: bool,
-}
-
-impl Watching {
-    pub fn of(fact: &WatchFact, wake_waiting: bool) -> Self {
-        Self {
-            prs: fact
-                .on
-                .iter()
-                .map(|watch| WatchedPr {
-                    url: watch.url.clone(),
-                    number: watch.number,
-                    holds: watch.holds(),
-                })
-                .collect(),
-            wake_waiting,
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
-
-    /// Whether it holds the Thread working: a watch holds, or a wake waits
-    /// to resume Main.
-    pub fn holds(&self) -> bool {
-        self.wake_waiting || self.prs.iter().any(|pr| pr.holds)
-    }
-
-    /// The watch on PR `number`, at `url` when the reading named one.
-    /// GitHub's URLs ignore case.
-    pub fn of_pr(&self, number: u64, url: Option<&str>) -> Option<&WatchedPr> {
-        self.prs.iter().find(|pr| {
-            pr.number == number && url.is_none_or(|url| pr.url.eq_ignore_ascii_case(url.trim()))
-        })
     }
 }
 

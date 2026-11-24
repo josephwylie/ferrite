@@ -290,7 +290,7 @@ impl Spawner for HungDiscovery {
     }
     fn discover_commands(
         &mut self,
-        _provider: ferrite_core::store::Provider,
+        _provider: ferrite_core::provider::Provider,
         _cwd: &Path,
     ) -> Option<ferrite_core::providers::commands::Discovery> {
         let (tx, rx) = mpsc::channel();

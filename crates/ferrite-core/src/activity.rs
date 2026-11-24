@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{mpsc::Receiver, Arc};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::store::Provider;
+use crate::provider::Provider;
 use crate::transcript::{self, BlockId, Input, Lexer, Transcript};
 use crate::{Decision, SessionEvent, ToolResult, TurnOutcome};
 
@@ -1090,7 +1090,7 @@ pub struct Activity {
     /// the provider's word, so no input carries it. Its owner sets it
     /// (`set_watching`): the Engine from the Thread's watches, a window
     /// from the digest.
-    watching: crate::pr_watch::Watching,
+    watching: crate::pull_request::Watching,
     /// What the Server holds of the Delegates the Thread started (ADR
     /// 0047), set as `watching` is (`set_delegating`).
     delegating: crate::delegate::Delegating,
@@ -1126,7 +1126,7 @@ impl Activity {
 
     /// Say what the Server's watching holds of the Thread. Answers whether
     /// it moved.
-    pub fn set_watching(&mut self, watching: crate::pr_watch::Watching) -> bool {
+    pub fn set_watching(&mut self, watching: crate::pull_request::Watching) -> bool {
         let moved = self.watching != watching;
         self.watching = watching;
         moved
@@ -2336,7 +2336,7 @@ impl<'a> ActivityView<'a> {
         self.activity.limited
     }
     /// What the Server's PR watching holds of the Thread (ADR 0046).
-    pub fn watching(self) -> &'a crate::pr_watch::Watching {
+    pub fn watching(self) -> &'a crate::pull_request::Watching {
         &self.activity.watching
     }
     /// What the Server holds of the Thread's Delegates (ADR 0047).

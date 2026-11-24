@@ -13,9 +13,10 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
+use ferrite_core::checkout::WorkspaceBinding;
+use ferrite_core::provider::Provider;
 use ferrite_core::providers::{ClaudeConfig, ClaudeSession};
-use ferrite_core::store::{Provider, Store};
-use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::store::Store;
 use ferrite_core::{
     activity::{Activity, ActivityInput},
     transcript::{Body, Input},

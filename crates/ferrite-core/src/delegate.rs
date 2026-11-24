@@ -16,8 +16,8 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{json, Value};
 
+use crate::provider::Provider;
 use crate::server::ServerId;
-use crate::store::Provider;
 use crate::wake::{Outcome, Source, Wake};
 use crate::ThreadId;
 

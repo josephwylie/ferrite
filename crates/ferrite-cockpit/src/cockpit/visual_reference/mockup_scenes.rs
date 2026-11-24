@@ -7,7 +7,7 @@
 //! then does only what the operator would have done on the way to that
 //! view: open the panel, or the palette with a query.
 
-use ferrite_core::workspace::BranchStatus;
+use ferrite_core::checkout::BranchStatus;
 use ferrite_core::ThreadKey;
 use gpui::{Context, Window};
 

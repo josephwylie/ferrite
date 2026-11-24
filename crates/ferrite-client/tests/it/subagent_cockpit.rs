@@ -13,9 +13,10 @@ use ferrite_core::activity::{
 };
 use ferrite_client::cockpit::{Cockpit, ProviderChoice, RssSampler, SpawnRequest, Spawner};
 use ferrite_core::providers::Session;
-use ferrite_core::store::{Provider, Store};
+use ferrite_core::checkout::WorkspaceChoice;
+use ferrite_core::provider::Provider;
 use ferrite_core::transcript::{Body, ToolState, Transcript};
-use ferrite_core::workspace::WorkspaceChoice;
+use ferrite_core::store::Store;
 use ferrite_core::{
     Decision, DecisionAnswer, SessionEvent, ThreadId, ThreadKey, ToolResult, TurnOutcome,
 };

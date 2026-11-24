@@ -26,7 +26,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::Provider;
+use crate::provider::Provider;
 use crate::transcript::RateLimits;
 use crate::RateLimitWindow;
 

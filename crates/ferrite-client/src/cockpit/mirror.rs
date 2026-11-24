@@ -12,12 +12,12 @@ use ferrite_core::activity::{
     Activity, ActivityInput, ActivityLimits, ActivityView, DecisionHandle, PendingDecision,
     Subject, ToolTiming,
 };
+use ferrite_core::checkout::WorkspaceBinding;
 use ferrite_core::digest::{Digest, Turn};
 use ferrite_core::engine::{event_changes_content, Delivery, PaneUpdate, QueueItem};
 use ferrite_core::protocol::{self, ServerMessage, ThreadState, WireInput};
-use ferrite_core::store::Provider;
+use ferrite_core::provider::Provider;
 use ferrite_core::transcript::{Input, Transcript};
-use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{ControlKind, Decision, ModelInfo, PermissionModeChoice, SessionCommand, ThreadId};
 
 pub(crate) struct Mirror {
@@ -48,7 +48,7 @@ pub(crate) struct Mirror {
 struct Facts {
     generation: u64,
     provider: Provider,
-    project: Option<ferrite_core::workspace::registry::ProjectId>,
+    project: Option<ferrite_core::project::ProjectId>,
     model: Option<String>,
     effort: Option<String>,
     title: Option<String>,
@@ -659,7 +659,7 @@ impl<'a> ThreadView<'a> {
         self.facts.provider
     }
 
-    pub fn project_id(&self) -> Option<ferrite_core::workspace::registry::ProjectId> {
+    pub fn project_id(&self) -> Option<ferrite_core::project::ProjectId> {
         self.facts.project
     }
 

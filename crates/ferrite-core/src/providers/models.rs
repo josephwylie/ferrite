@@ -11,7 +11,7 @@
 //! (`claude-fable-5-1`, `gpt-5.4-mini`) into the name a person would say
 //! (`Fable 5.1`, `GPT-5.4 Mini`), so no API spelling ever reaches a chip.
 
-use crate::store::Provider;
+use crate::provider::Provider;
 use crate::ModelInfo;
 
 mod cache;

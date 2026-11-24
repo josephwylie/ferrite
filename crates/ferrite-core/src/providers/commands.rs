@@ -9,7 +9,7 @@ use std::process::{ChildStdin, ChildStdout, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use crate::{store::Provider, ModelInfo, SessionCommand};
+use crate::{provider::Provider, ModelInfo, SessionCommand};
 use serde_json::{json, Value};
 
 pub type Discovery = mpsc::Receiver<io::Result<Vec<SessionCommand>>>;

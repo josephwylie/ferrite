@@ -10,7 +10,7 @@
 use super::hunks::Hunks;
 use super::*;
 use ferrite_core::docview::FileChange;
-use ferrite_core::workspace::PullRequest;
+use ferrite_core::pull_request::PullRequest;
 use std::collections::HashMap;
 
 /// What the Overview keeps, by Thread.

@@ -125,11 +125,11 @@ pub(crate) fn focus_thread_action(ordinal: usize) -> Option<&'static str> {
 
 pub(crate) use ferrite_core::Attention;
 
-use ferrite_core::store::Provider;
+use ferrite_core::checkout::RepoListing;
 use ferrite_core::transcript::plain_text;
-use ferrite_core::workspace::RepoListing;
+use ferrite_core::provider::Provider;
 #[cfg(test)]
-use ferrite_core::workspace::WorkspaceChoice;
+use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, MachineId, ProjectKey, ThreadId, ThreadKey};
 use gpui::prelude::*;
 use gpui::{
@@ -1678,7 +1678,7 @@ impl CockpitView {
                 .map(|decision| decision.tool_use_id.clone())
                 .filter(|call| !call.is_empty());
             let workspace =
-                ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
+                ferrite_core::checkout::effective_cwd(open.session_project_root(), open.workspace())
                     .map(std::path::Path::to_path_buf);
             // While the turn runs, its header under its prompt and its live
             // row at the tail (`pane::working_tail`), over a Decision that
@@ -2565,7 +2565,7 @@ impl CockpitView {
             .filter_map(|thread| {
                 let open = self.cockpit.read(cx).thread(thread)?;
                 let repo = open.workspace().map(|binding| binding.repo().to_path_buf());
-                let cwd = ferrite_core::workspace::effective_cwd(
+                let cwd = ferrite_core::checkout::effective_cwd(
                     open.session_project_root(),
                     open.workspace(),
                 )?;
@@ -3151,14 +3151,14 @@ impl CockpitView {
 
     fn thread_path(&self, thread: ThreadKey, cx: &gpui::App) -> Option<std::path::PathBuf> {
         if let Some(open) = self.cockpit.read(cx).thread(thread) {
-            return ferrite_core::workspace::effective_cwd(
+            return ferrite_core::checkout::effective_cwd(
                 open.session_project_root(),
                 open.workspace(),
             )
             .map(std::path::Path::to_path_buf);
         }
         let meta = self.cockpit.read(cx).peek(thread).ok()?;
-        ferrite_core::workspace::effective_cwd(
+        ferrite_core::checkout::effective_cwd(
             meta.session_project_root.as_deref(),
             meta.workspace.as_ref(),
         )

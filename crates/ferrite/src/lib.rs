@@ -24,8 +24,9 @@ use ::gpui::*;
 use ferrite_client::cockpit::Cockpit;
 use ferrite_core::server::{settings_dir, store_dir};
 use ferrite_core::settings::Settings;
-use ferrite_core::store::{Provider, Store};
-use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::checkout::WorkspaceBinding;
+use ferrite_core::provider::Provider;
+use ferrite_core::store::Store;
 use ferrite_core::window_frame;
 use ferrite_core::ThreadKey;
 
@@ -572,8 +573,9 @@ mod tests {
     // would capture the `#[test]` this macro expands to and recurse.
     use super::{adopt, demo, dock_launch_dir, keep_mouse_cursor_visible};
     use ferrite_client::cockpit::Cockpit;
-    use ferrite_core::store::{Provider, Store};
-    use ferrite_core::workspace::WorkspaceChoice;
+    use ferrite_core::checkout::WorkspaceChoice;
+    use ferrite_core::provider::Provider;
+    use ferrite_core::store::Store;
 
     #[gpui::test]
     fn typing_does_not_hide_the_mouse_cursor(cx: &mut gpui::TestAppContext) {

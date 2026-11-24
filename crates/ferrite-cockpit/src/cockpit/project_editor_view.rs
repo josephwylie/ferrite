@@ -9,7 +9,7 @@
 //! card's own update has ended.
 
 use super::*;
-use ferrite_core::workspace::Listing;
+use ferrite_core::folder::Listing;
 use gpui::{App, WeakEntity};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};

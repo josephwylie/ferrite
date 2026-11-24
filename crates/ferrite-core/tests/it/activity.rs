@@ -4,7 +4,7 @@ use ferrite_core::activity::{
     Activity, ActivityEvent, ActivityInput, ActivityLimits, AgentInfo, AgentKey, AgentStatus,
     ExecutionEvent, Subject, TranscriptCoverage,
 };
-use ferrite_core::store::Provider;
+use ferrite_core::provider::Provider;
 use ferrite_core::transcript::{Body, Input};
 use ferrite_core::{Decision, SessionEvent, ToolResult, TurnOutcome};
 

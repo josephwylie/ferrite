@@ -439,9 +439,9 @@ fn a_hovered_card_shows_its_detail_card(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     view.update(cx, |view, cx| {
-        let pr = ferrite_core::workspace::PullRequest {
+        let pr = ferrite_core::pull_request::PullRequest {
             number: 415,
-            state: ferrite_core::workspace::PrState::Open,
+            state: ferrite_core::pull_request::PrState::Open,
             draft: false,
             url: None,
             title: Some("Thread cards in the nav".into()),

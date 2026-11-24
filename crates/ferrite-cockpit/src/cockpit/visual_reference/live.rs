@@ -17,8 +17,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ferrite_client::cockpit::{Cockpit, ProviderChoice};
+use ferrite_core::provider::Provider;
 use ferrite_core::settings::Settings;
-use ferrite_core::store::{Provider, Store};
+use ferrite_core::store::Store;
 use ferrite_core::transcript::{Body, ToolState};
 use ferrite_core::ProjectKey;
 use ferrite_core::ThreadKey;

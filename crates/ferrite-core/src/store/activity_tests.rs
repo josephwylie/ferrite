@@ -19,7 +19,7 @@ fn store() -> (Store, ThreadId, ThreadWriter) {
         .create(
             Provider::Claude,
             None,
-            crate::workspace::WorkspaceBinding::Main {
+            crate::checkout::WorkspaceBinding::Main {
                 checkout: PathBuf::from("/fixture"),
             },
         )

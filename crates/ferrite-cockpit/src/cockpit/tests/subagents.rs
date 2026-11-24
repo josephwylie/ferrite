@@ -694,7 +694,7 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
             .activity();
-        let faces = crate::cockpit::transcript_glue::agent_faces(activity, ferrite_core::store::Provider::Claude);
+        let faces = crate::cockpit::transcript_glue::agent_faces(activity, ferrite_core::provider::Provider::Claude);
         let face = faces.get("Atlas").unwrap();
         assert_eq!(face.run, ferrite_pane::pane::AgentRun::Running);
         assert_eq!(face.summary.as_deref(), Some("Reading nav.rs"));
@@ -800,7 +800,7 @@ fn an_agents_face_reads_its_agents_state_as_t3s(cx: &mut TestAppContext) {
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
             .activity();
-        let faces = crate::cockpit::transcript_glue::agent_faces(activity, ferrite_core::store::Provider::Claude);
+        let faces = crate::cockpit::transcript_glue::agent_faces(activity, ferrite_core::provider::Provider::Claude);
         let read = |call: &str| {
             let face = faces.get(call).unwrap();
             (face.run, face.summary.clone(), face.result.clone())
@@ -849,7 +849,7 @@ fn a_finished_background_agent_keeps_its_own_time(cx: &mut TestAppContext) {
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
             .activity();
-        crate::cockpit::transcript_glue::agent_faces(activity, ferrite_core::store::Provider::Claude)
+        crate::cockpit::transcript_glue::agent_faces(activity, ferrite_core::provider::Provider::Claude)
             .get("Atlas")
             .unwrap()
             .clock

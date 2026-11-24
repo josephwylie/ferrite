@@ -7,7 +7,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::{import::Candidate, store::Provider};
+use crate::{import::Candidate, provider::Provider};
 
 use super::catalog;
 

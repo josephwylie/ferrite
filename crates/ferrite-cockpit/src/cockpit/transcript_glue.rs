@@ -63,7 +63,7 @@ pub(super) fn rewind_gate(
 /// faces: a subagent's own agent calls open its children.
 pub(super) fn agent_faces(
     activity: ActivityView<'_>,
-    provider: ferrite_core::store::Provider,
+    provider: ferrite_core::provider::Provider,
 ) -> AgentFaces {
     let mut faces = AgentFaces::default();
     for (call, agent) in activity.invocations() {

@@ -134,7 +134,7 @@ impl Drafts {
                 .collect(),
             fresh: self.fresh.values().cloned().collect(),
         };
-        crate::store::replace_file(
+        crate::disk::replace_file(
             &dir.join(Self::FILE),
             &serde_json::to_vec(&stored).map_err(io::Error::other)?,
         )
@@ -210,9 +210,9 @@ mod tests {
     use super::*;
     use crate::draft::{DraftBinding, DraftTarget};
     use crate::engine::ProviderChoice;
+    use crate::project::ProjectId;
+    use crate::provider::Provider;
     use crate::replies::Reply;
-    use crate::store::Provider;
-    use crate::workspace::registry::ProjectId;
 
     fn scratch(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("ferrite-drafts-{name}-{}", std::process::id()))

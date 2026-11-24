@@ -3,7 +3,7 @@
 //! through park and revive.
 
 use super::*;
-use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::checkout::WorkspaceBinding;
 use ferrite_core::SessionEvent;
 
 fn live(fake: &Fake) -> Sender<SessionEvent> {

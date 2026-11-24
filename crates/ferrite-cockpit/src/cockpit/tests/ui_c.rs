@@ -232,7 +232,7 @@ fn a_card_title_takes_its_line_and_the_branch_its_own(cx: &mut TestAppContext) {
                 .map(|thread| {
                     (
                         *thread,
-                        Some(ferrite_core::workspace::BranchStatus {
+                        Some(ferrite_core::checkout::BranchStatus {
                             branch: Some(long_branch.into()),
                             ..Default::default()
                         }),

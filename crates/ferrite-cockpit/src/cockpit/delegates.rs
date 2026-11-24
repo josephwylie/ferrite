@@ -413,7 +413,7 @@ impl CockpitView {
 fn delegate_face(
     delegated: &Delegated,
     reached: bool,
-    provider: ferrite_core::store::Provider,
+    provider: ferrite_core::provider::Provider,
 ) -> AgentFace {
     use ferrite_core::clock;
     use ferrite_core::delegate::Status;
@@ -450,7 +450,7 @@ fn delegate_face(
 mod tests {
     use super::*;
     use ferrite_core::delegate::Status;
-    use ferrite_core::store::Provider;
+    use ferrite_core::provider::Provider;
 
     /// A Delegate's avatar is the provider it was started on, else the
     /// delegating Thread's.

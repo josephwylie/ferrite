@@ -2,11 +2,12 @@ use ferrite_core::{
     activity::{
         Activity, ActivityEvent, ActivityInput, AgentInfo, AgentKey, ExecutionEvent, Subject,
     },
+    checkout::WorkspaceBinding,
     docview::Instruments,
     progress::{Phase, PlanStep, ProgressEvent, StepStatus},
-    store::{Provider, Store},
+    provider::Provider,
+    store::Store,
     transcript::{Body, Input, Transcript},
-    workspace::WorkspaceBinding,
     SessionEvent, ToolResult, TurnOutcome,
 };
 use serde_json::json;

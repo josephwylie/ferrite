@@ -2,12 +2,12 @@
 //! lists a Project's pull requests, reads one whole by number, and comes
 //! back to its list as it was left.
 use super::*;
+use ferrite_core::project::ProjectId;
 use ferrite_core::protocol::{
     ReviewPullRequest, ReviewPullRequests, WireCheck, WireCheckStatus, WirePr, WirePrComment,
     WirePrCommentKind, WirePrFilter, WirePrList, WirePrRow, WirePrState, WirePrUnread, WireReply,
     WireReviewState,
 };
-use ferrite_core::workspace::registry::ProjectId;
 
 fn shows(cx: &mut gpui::VisualTestContext, selector: &str) -> bool {
     debug_bounds(cx, selector.to_string()).is_some()

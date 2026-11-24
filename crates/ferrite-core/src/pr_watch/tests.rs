@@ -873,16 +873,16 @@ fn a_watch_holds_its_thread_while_checks_run_or_until_merged() {
     let target = Target::of("o/r", 48).unwrap();
     let mut fact = WatchFact::default();
     fact.watch(target.clone(), None, Some(true), 0);
-    let holds = |fact: &WatchFact| Watching::of(fact, false).holds();
+    let holds = |fact: &WatchFact| fact.watching(false).holds();
     assert!(holds(&fact), "checks run on the head");
     let mut cursor = fact.on[0].cursor.clone();
     cursor.checks_pending = false;
     fact.advance("o/r", 48, 0, cursor);
     assert!(!holds(&fact), "every check finished: a person moves the PR next");
-    assert!(Watching::of(&fact, true).holds(), "a waiting wake resumes Main");
+    assert!(fact.watching(true).holds(), "a waiting wake resumes Main");
     fact.watch(target, Some(Until::Merged), None, 0);
     assert!(holds(&fact), "until merged, checks or not");
-    let watching = Watching::of(&fact, false);
+    let watching = fact.watching(false);
     assert_eq!(
         watching.of_pr(48, Some("https://github.com/O/R/pull/48")).map(|pr| pr.number),
         Some(48)
@@ -890,5 +890,5 @@ fn a_watch_holds_its_thread_while_checks_run_or_until_merged() {
     assert!(watching.of_pr(48, Some("https://github.com/o/r/pull/49")).is_none());
     fact.end("o/r", 48, None, None);
     assert!(!holds(&fact), "an ended watch holds nothing");
-    assert!(Watching::of(&fact, false).is_empty());
+    assert!(fact.watching(false).is_empty());
 }

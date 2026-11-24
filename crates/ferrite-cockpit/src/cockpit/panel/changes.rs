@@ -12,7 +12,7 @@
 use super::overview::{OverviewEvent, OverviewInputs, OverviewView};
 use super::*;
 use ferrite_core::docview::FileChange;
-use ferrite_core::workspace::{CheckState, PrState, PullRequest};
+use ferrite_core::pull_request::{CheckState, PrState, PullRequest};
 
 impl OverviewView {
     /// The Changes section (see the module doc): none with no edits and no

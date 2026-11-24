@@ -78,8 +78,8 @@ pub struct Digest {
     /// The PRs its agent watches and whether a server wake waits for it
     /// (ADR 0046): the details card's eye reads it. A Server older than it
     /// sends none.
-    #[serde(default, skip_serializing_if = "crate::pr_watch::Watching::is_empty")]
-    pub watching: crate::pr_watch::Watching,
+    #[serde(default, skip_serializing_if = "crate::pull_request::Watching::is_empty")]
+    pub watching: crate::pull_request::Watching,
     /// The Delegates it started and whether it waits on them (ADR 0047):
     /// the details card's Lineage and the background line read it. A
     /// Server older than it sends none.

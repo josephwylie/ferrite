@@ -19,7 +19,7 @@ const TURN_TIMEOUT: Duration = Duration::from_secs(180);
 #[ignore = "queries the installed Codex CLI model catalog"]
 fn the_real_server_lists_models_without_a_session() {
     let program = std::env::var("FERRITE_CODEX_BIN").unwrap_or_else(|_| {
-        ferrite_core::providers::discover::program(ferrite_core::store::Provider::Codex)
+        ferrite_core::providers::discover::program(ferrite_core::provider::Provider::Codex)
     });
     let rows = ferrite_core::providers::codex_models(&program).unwrap();
     assert!(!rows.is_empty(), "the installed provider announces a menu");

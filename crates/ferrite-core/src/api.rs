@@ -23,14 +23,14 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::checkout::WorkspaceBinding;
 use crate::engine::Engine;
 use crate::link::{self, TryClone};
+use crate::project::ProjectId;
 use crate::protocol::{
     self, ClosedBy, ErrorCode, PendingEntry, ServerMessage, WireError, WireHandle,
 };
-use crate::store::Provider;
-use crate::workspace::registry::ProjectId;
-use crate::workspace::WorkspaceBinding;
+use crate::provider::Provider;
 use crate::{Attention, ThreadId};
 
 pub mod cli;

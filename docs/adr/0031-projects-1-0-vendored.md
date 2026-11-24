@@ -209,7 +209,7 @@ these pieces:
    has no decisions. This is about the size of `providers/codex.rs` and
    its wire module (around 1.5k lines), and it rests on a protocol
    nothing here pins: no pi is installed and 1.0 never uses that mode;
-2. a third `store::Provider` variant. It is persisted in every Thread
+2. a third `provider::Provider` variant. It is persisted in every Thread
    log, and Ferrite's code names `Provider::Codex` at about 180 places
    in 27 non-test files: spawner, settings, models and the model cache,
    CLI updates and version checks, limits, discovery, commands, import,

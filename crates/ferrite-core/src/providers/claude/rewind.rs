@@ -235,7 +235,7 @@ fn refusal(body: &Value) -> String {
 fn projects_root() -> PathBuf {
     crate::import::default_roots()
         .into_iter()
-        .find(|(provider, _)| *provider == crate::store::Provider::Claude)
+        .find(|(provider, _)| *provider == crate::provider::Provider::Claude)
         .map(|(_, root)| root)
         .unwrap_or_default()
 }

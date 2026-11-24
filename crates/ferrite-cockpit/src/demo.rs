@@ -16,10 +16,10 @@ use std::thread;
 use std::time::Duration;
 
 use ferrite_client::cockpit::{Cockpit, SpawnRequest, Spawner};
+use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::doorbell::Sender;
+use ferrite_core::provider::Provider;
 use ferrite_core::providers::{applied, Session, SettingAck};
-use ferrite_core::store::Provider;
-use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{
     ContextCategory, ContextDetails, ContextItem, ControlKind, Decision, DecisionAnswer, McpServer,
     McpStatus, PermissionModeChoice, SessionControl, SessionEvent, ThreadKey, TurnOutcome,
@@ -1341,7 +1341,7 @@ mod tests {
     #[test]
     fn a_revived_demo_thread_announces_its_mode_and_replays_nothing() {
         use ferrite_client::cockpit::Spawner;
-        use ferrite_core::store::Provider;
+        use ferrite_core::provider::Provider;
         let mut spawn = Spawn::new(false);
         let revived = spawn
             .spawn(SpawnRequest {

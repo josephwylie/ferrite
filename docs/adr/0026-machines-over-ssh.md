@@ -303,7 +303,7 @@ cannot, the window does without.
   both, so a window that runs its agents itself never shows the field.
 - **`~`.** A path goes to the Server as typed; the registry spells out
   `~` against its own computer's home before canonicalizing
-  (`workspace::expand_home`), so `path ~/src/x` on a draft's Project chip
+  (`folder::expand_home`), so `path ~/src/x` on a draft's Project chip
   and the card's field mean the machine's home. The window's own
   expansion is gone: it would have meant this computer's.
 - **Drafts.** The Project chip lists the machine's Projects (the

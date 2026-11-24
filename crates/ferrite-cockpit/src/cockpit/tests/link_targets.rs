@@ -6,8 +6,8 @@ use crate::cockpit::surfaces::SurfaceId;
 const REPO_A: &str = "https://github.com/o/repo-a/pull/101";
 const REPO_B: &str = "https://github.com/o/repo-b/pull/202";
 
-fn pr(number: u64, url: Option<&str>) -> ferrite_core::workspace::PullRequest {
-    ferrite_core::workspace::PullRequest {
+fn pr(number: u64, url: Option<&str>) -> ferrite_core::pull_request::PullRequest {
+    ferrite_core::pull_request::PullRequest {
         number,
         url: url.map(str::to_string),
         ..pr_with_checks()

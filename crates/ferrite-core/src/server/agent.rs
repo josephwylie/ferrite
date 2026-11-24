@@ -218,7 +218,7 @@ WantedBy=default.target
         let wanted = unit(executable);
         if std::fs::read_to_string(path).ok().as_deref() != Some(wanted.as_str()) {
             std::fs::create_dir_all(path.parent().expect("under systemd/user"))?;
-            crate::store::replace_file(path, wanted.as_bytes())?;
+            crate::disk::replace_file(path, wanted.as_bytes())?;
         }
         let outside =
             server_answers && run("systemctl", &["--user", "is-active", "--quiet", UNIT]).is_err();
@@ -314,7 +314,7 @@ mod platform {
         let wanted = plist(executable);
         if std::fs::read_to_string(&path).ok().as_deref() != Some(wanted.as_str()) {
             std::fs::create_dir_all(path.parent().expect("under LaunchAgents"))?;
-            crate::store::replace_file(&path, wanted.as_bytes())?;
+            crate::disk::replace_file(&path, wanted.as_bytes())?;
         }
         let service = format!("{}/{LABEL}", domain());
         if launchctl(&["print", &service])? {

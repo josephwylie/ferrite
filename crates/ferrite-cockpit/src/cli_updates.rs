@@ -10,8 +10,8 @@
 
 use std::time::{Duration, Instant};
 
+use ferrite_core::provider::Provider;
 use ferrite_core::providers::update::Status;
-use ferrite_core::store::Provider;
 use gpui::SharedString;
 
 /// How long after launch the first check waits: startup is busy enough.

@@ -98,7 +98,7 @@ impl HeldMachine {
         ThreadKey::new(self.id, thread)
     }
 
-    pub(super) fn project_key(&self, project: ferrite_core::workspace::registry::ProjectId) -> ProjectKey {
+    pub(super) fn project_key(&self, project: ferrite_core::project::ProjectId) -> ProjectKey {
         ProjectKey::new(self.id, project)
     }
 
@@ -483,8 +483,8 @@ impl HeldMachine {
             engine.notifications().to_wire()
         );
         for provider in [
-            ferrite_core::store::Provider::Claude,
-            ferrite_core::store::Provider::Codex,
+            ferrite_core::provider::Provider::Claude,
+            ferrite_core::provider::Provider::Codex,
         ] {
             assert_eq!(
                 self.shared.announced_models(provider),

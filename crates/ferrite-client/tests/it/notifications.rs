@@ -18,9 +18,10 @@ use ferrite_client::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::progress::{Phase, ProgressEvent};
 use ferrite_core::providers::{ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session};
 use ferrite_core::roster::PaneIdentity;
-use ferrite_core::store::{Provider, Store};
+use ferrite_core::checkout::WorkspaceChoice;
+use ferrite_core::provider::Provider;
 use ferrite_core::transcript::Body;
-use ferrite_core::workspace::WorkspaceChoice;
+use ferrite_core::store::Store;
 use ferrite_core::{DecisionAnswer, MachineId, SessionEvent, ThreadKey, TurnOutcome};
 
 struct Scratch(PathBuf);

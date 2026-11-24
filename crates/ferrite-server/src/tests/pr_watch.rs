@@ -9,9 +9,9 @@ use ferrite_core::factory::{GitHubQuery, GitHubRead};
 use ferrite_core::pr_watch::{
     Check, CheckStatus, Fingerprint, Mergeable, ReadError, Reading, Remark,
 };
+use ferrite_core::pull_request::PrState;
 use ferrite_core::server::github::GitHub;
 use ferrite_core::wake::WakeNote;
-use ferrite_core::workspace::PrState;
 
 const URL: &str = "https://github.com/acme/app/pull/7";
 const MINUTE: i64 = 60_000;

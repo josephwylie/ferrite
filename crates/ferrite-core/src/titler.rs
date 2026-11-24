@@ -22,7 +22,7 @@ use std::time::Duration;
 #[cfg(test)]
 use std::time::Instant;
 
-use crate::store::Provider;
+use crate::provider::Provider;
 
 /// Longest title kept; longer replies mean the model ignored the ask.
 const TITLE_CHARS: usize = 60;

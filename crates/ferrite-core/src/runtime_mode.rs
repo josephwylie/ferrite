@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::spawner::SessionDefaults;
-use crate::store::Provider;
+use crate::provider::Provider;
 
 /// Narrowest first: a cap is the lesser of two.
 #[derive(

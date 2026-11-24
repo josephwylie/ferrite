@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use super::{Answer, Board, Effect, Seen, State, Status, Task};
-use crate::workspace::registry::ProjectId;
+use crate::project::ProjectId;
 use crate::ThreadId;
 
 /// How long a Completed Task stays on the board.

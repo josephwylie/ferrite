@@ -1,9 +1,9 @@
 //! Workspace binding: the checkout a Thread works in — a per-Thread worktree
 //! Ferrite creates, or the main checkout — chosen at Thread creation and
 //! following the agent after it (CONTEXT.md; `follow`). This module holds
-//! the binding vocabulary and the `git worktree` operations behind the
-//! worktree half, spoken to the operator's own `git` via
-//! `std::process::Command`.
+//! the `git worktree` operations behind the worktree half, spoken to the
+//! operator's own `git` via `std::process::Command`. The binding's types
+//! are in the shared `checkout` module.
 //!
 //! Probed against real git in a scratch repo before anything here was
 //! written; every behavior a function leans on is named where it is used.
@@ -13,6 +13,9 @@
 //! until `git worktree prune` (which `ensure_worktree` runs before creating,
 //! so Ferrite's own paths self-heal). Documented, not built for.
 
+use crate::checkout::{BranchDiff, BranchStatus, DiffBase, ListedWorktree, RepoListing};
+use crate::folder::{expand_home, DirEntry, Listing};
+use crate::pull_request::{parse_pr_json, PullRequest};
 use crate::spawn::NoConsoleWindow;
 use std::fs;
 use std::io;
@@ -27,84 +30,6 @@ mod stamp;
 pub use repository::repository_key;
 pub use stamp::{checkout_stamp, head_of};
 
-/// The checkout a Thread works in. Persisted by the store (as its own
-/// schema), resolved to a Session's working directory by the cockpit.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WorkspaceBinding {
-    /// The repo's main checkout — the directory itself, shared with the
-    /// operator and any other Thread bound the same way.
-    Main { checkout: PathBuf },
-    /// A dedicated worktree of `repo` — created by Ferrite for this Thread,
-    /// or one the Thread's own agent made and moved into (`follow`).
-    Worktree { repo: PathBuf, path: PathBuf },
-}
-
-impl WorkspaceBinding {
-    /// Where this Thread's Session runs.
-    pub fn cwd(&self) -> &Path {
-        match self {
-            WorkspaceBinding::Main { checkout } => checkout,
-            WorkspaceBinding::Worktree { path, .. } => path,
-        }
-    }
-
-    /// The repository this binding is a checkout of — the main checkout
-    /// itself, or the repo a worktree was added from. What `git worktree
-    /// list` is asked about.
-    pub fn repo(&self) -> &Path {
-        match self {
-            WorkspaceBinding::Main { checkout } => checkout,
-            WorkspaceBinding::Worktree { repo, .. } => repo,
-        }
-    }
-}
-
-/// What the operator picks at Thread creation: work in the main checkout,
-/// in a fresh worktree Ferrite will create, or in a worktree it already
-/// registered (#29 — the adoptable row). A new worktree's path is not the
-/// operator's to choose — the registry places it, which is what turns a
-/// choice into a `WorkspaceBinding`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WorkspaceChoice {
-    Main {
-        checkout: PathBuf,
-    },
-    Branch {
-        checkout: PathBuf,
-        branch: String,
-    },
-    NewBranch {
-        checkout: PathBuf,
-    },
-    NewWorktree {
-        repo: PathBuf,
-    },
-    /// A fresh worktree on a new branch the caller names, made from `base`
-    /// (the repo's HEAD when none): the API's `thread.start --branch`.
-    NamedWorktree {
-        repo: PathBuf,
-        branch: String,
-        base: Option<String>,
-    },
-    ExistingWorktree {
-        repo: PathBuf,
-        path: PathBuf,
-    },
-}
-
-impl WorkspaceChoice {
-    /// The source files available before Thread creation. A new worktree
-    /// starts from its repo; an existing one exposes its own checkout.
-    pub fn source_root(&self) -> &Path {
-        match self {
-            Self::Main { checkout } => checkout,
-            Self::Branch { checkout, .. } | Self::NewBranch { checkout } => checkout,
-            Self::NewWorktree { repo } | Self::NamedWorktree { repo, .. } => repo,
-            Self::ExistingWorktree { path, .. } => path,
-        }
-    }
-}
-
 /// Move the shared project checkout to an existing branch selected before
 /// the Thread starts. Git owns validation and refuses dirty/conflicting moves.
 pub fn checkout_existing_branch(cwd: &Path, branch: &str) -> Result<(), GitError> {
@@ -114,18 +39,6 @@ pub fn checkout_existing_branch(cwd: &Path, branch: &str) -> Result<(), GitError
 /// Create and check out a fresh branch in the shared project checkout.
 pub fn checkout_new_branch(cwd: &Path, branch: &str) -> Result<(), GitError> {
     git(cwd, &["switch", "-c", branch]).map(|_| ())
-}
-
-/// The one cwd chain every spawn reads (#29): `session_project_root ??
-/// worktree_path ?? project_root` — the last two being what `cwd` already
-/// collapses a binding to. Open, revive, send-respawn, sweep and re-aim all
-/// answer their `SpawnRequest.cwd` here, so a new fact about where Sessions
-/// run travels to every path at once.
-pub fn effective_cwd<'a>(
-    session_project_root: Option<&'a Path>,
-    workspace: Option<&'a WorkspaceBinding>,
-) -> Option<&'a Path> {
-    session_project_root.or_else(|| workspace.map(WorkspaceBinding::cwd))
 }
 
 /// Directory names the repository scan never enters or reports: dependency
@@ -176,36 +89,6 @@ fn scan(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
         }
         scan(&entry.path(), depth + 1, found);
     }
-}
-
-/// `~` and `~/…` spelled out against this computer's home directory, so a
-/// path typed for a machine is read where it is meant; any other path as
-/// it is.
-pub fn expand_home(path: &Path) -> PathBuf {
-    let Ok(rest) = path.strip_prefix("~") else {
-        return path.to_path_buf();
-    };
-    // Windows spells the home directory USERPROFILE, not HOME.
-    match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-        Some(home) => PathBuf::from(home).join(rest),
-        None => path.to_path_buf(),
-    }
-}
-
-/// One entry `list_dir` read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DirEntry {
-    pub name: String,
-    /// A directory, or a link to one.
-    pub directory: bool,
-}
-
-/// A directory's entries, in name order, and the path they were read at
-/// with `~` spelled out.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Listing {
-    pub path: PathBuf,
-    pub entries: Vec<DirEntry>,
 }
 
 /// Read a directory on this computer: how a window holding a machine browses
@@ -528,49 +411,6 @@ pub fn pick_default_branch(origin_head: Option<&str>, has_branch: impl Fn(&str) 
         .to_string()
 }
 
-/// How far a checkout has drifted — the Pane header's second line (#29)
-/// and the nav row's details. Every field is `Option`-ish in spirit: a tree
-/// with no upstream reports no ahead/behind. Nothing here is invented. Its
-/// PR is read apart, on its own cadence (`pull_request`).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct BranchStatus {
-    /// The branch by name, or a short commit id on a detached HEAD.
-    pub branch: Option<String>,
-    /// The upstream this branch tracks, when it has one.
-    pub upstream: Option<String>,
-    /// Commits ahead of / behind the upstream. Both zero without one.
-    pub ahead: u32,
-    pub behind: u32,
-    /// Working-tree entries `git status --porcelain` lists — modified,
-    /// staged and untracked alike. Zero is a clean tree.
-    pub dirty: u32,
-    /// The lines the checkout's work moves against its base: the Changes
-    /// row's reading. `None` when git could not count them.
-    pub changes: Option<BranchDiff>,
-}
-
-/// What a checkout's work adds and removes, and what that is counted
-/// against: the same changeset the Panel's Changes Surface reads for the
-/// whole branch, so the two never disagree.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BranchDiff {
-    pub against: DiffBase,
-    pub added: u32,
-    pub removed: u32,
-}
-
-/// What a [`BranchDiff`] counts against.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DiffBase {
-    /// The base the branch was cut from, as the ref that was compared
-    /// (`origin/main`, or `main` with no remote): everything since the
-    /// merge base, committed or not, untracked files included.
-    Branch(String),
-    /// No base: a detached HEAD, or no base that resolves or shares
-    /// history. The uncommitted work against `HEAD` alone.
-    Uncommitted,
-}
-
 /// Count the checkout's work against its base, off the UI thread.
 /// `detached` is `git status`'s word: a detached HEAD has no branch to
 /// compare, only its uncommitted work.
@@ -607,153 +447,6 @@ pub fn branch_diff(cwd: &Path, detached: bool) -> Option<BranchDiff> {
         added: files.iter().map(|file| file.additions).sum(),
         removed: files.iter().map(|file| file.deletions).sum(),
     })
-}
-
-/// The branch's pull request, as the forge reports it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PullRequest {
-    pub number: u64,
-    pub state: PrState,
-    pub draft: bool,
-    /// Where the PR lives on the forge; `None` when `gh` did not say.
-    pub url: Option<String>,
-    /// Its title, which the nav card's PR popover reads; `None` when the
-    /// forge did not say.
-    pub title: Option<String>,
-    /// The rollup of the PR's checks. `None` when the PR has no checks at
-    /// all — an honest silence, not a pass.
-    pub checks: Option<CheckState>,
-    /// Every check behind that rollup, in the order the forge lists them:
-    /// what the checks card lists. Empty exactly when `checks`
-    /// is `None` — the rollup *is* this list, folded.
-    pub runs: Vec<Check>,
-    /// Whether it conflicts with its base branch; `false` while the
-    /// forge has not worked that out.
-    pub conflicting: bool,
-}
-
-impl PullRequest {
-    /// How the runs divide: the checks card's counts.
-    pub fn tally(&self) -> Tally {
-        let mut tally = Tally::default();
-        for run in &self.runs {
-            match run.state {
-                CheckState::Failing => tally.failing += 1,
-                CheckState::Pending => tally.pending += 1,
-                CheckState::Passing => tally.passing += 1,
-                CheckState::Skipped => tally.skipped += 1,
-            }
-        }
-        tally
-    }
-
-    /// The label's reading of a forge read's snapshot: what `gh pr view`
-    /// would have said of the same pull request. `None` without one.
-    pub fn of_view(view: &ferrite_reviewr::forge::PrView) -> Option<Self> {
-        let ferrite_reviewr::forge::PrView::Pr(pr) = view else {
-            return None;
-        };
-        Some(Self::of_wire(&(**pr).clone().into()))
-    }
-
-    /// The label's reading of the Review's whole snapshot: its number,
-    /// state and checks. The snapshot names no check's page, so no run has
-    /// a url.
-    fn of_wire(pr: &crate::protocol::WirePr) -> Self {
-        use crate::protocol::{WireCheckStatus as Status, WirePrState as Wire};
-        let runs: Vec<Check> = pr
-            .checks
-            .iter()
-            .map(|check| {
-                let (state, detail) = match check.status {
-                    Status::Success => (CheckState::Passing, "success"),
-                    Status::Failure => (CheckState::Failing, "failure"),
-                    Status::Running => (CheckState::Pending, "in_progress"),
-                    Status::Pending | Status::Unknown => (CheckState::Pending, "queued"),
-                    Status::Skipped => (CheckState::Skipped, "skipped"),
-                };
-                Check {
-                    name: check.name.clone(),
-                    workflow: None,
-                    state,
-                    detail: detail.into(),
-                    url: check.url.clone(),
-                }
-            })
-            .collect();
-        Self {
-            number: pr.number,
-            state: match pr.state {
-                Wire::Merged => PrState::Merged,
-                Wire::Closed => PrState::Closed,
-                Wire::Open | Wire::Unknown => PrState::Open,
-            },
-            draft: pr.draft,
-            url: (!pr.url.is_empty()).then(|| pr.url.clone()),
-            title: (!pr.title.is_empty()).then(|| pr.title.clone()),
-            checks: (!runs.is_empty()).then(|| rollup_state(&runs)),
-            runs,
-            conflicting: matches!(pr.merge, crate::protocol::WireMerge::Conflicting),
-        }
-    }
-}
-
-/// The run counts by state. A skipped run is neither a pass nor a failure
-/// and is counted only as itself.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Tally {
-    pub passing: u32,
-    pub failing: u32,
-    pub pending: u32,
-    pub skipped: u32,
-}
-
-impl Tally {
-    pub fn total(&self) -> u32 {
-        self.passing + self.failing + self.pending + self.skipped
-    }
-
-    /// The runs that have finished, however they finished.
-    pub fn settled(&self) -> u32 {
-        self.total() - self.pending
-    }
-}
-
-/// One check on the PR: an Actions job, or a commit status some other
-/// service posted. Both arrive in the same rollup and both are shown.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Check {
-    /// The job or context name — `test (windows-latest)`,
-    /// `codecov/patch`.
-    pub name: String,
-    /// The Actions workflow the job belongs to. `None` for a plain commit
-    /// status, which has no workflow above it.
-    pub workflow: Option<String>,
-    pub state: CheckState,
-    /// GitHub's own word for where the run stands, lowercased —
-    /// `success`, `in_progress`, `timed_out`, `skipped`. The state above
-    /// is this folded to four; this is what the forge actually said.
-    pub detail: String,
-    /// Where the run's log lives, for the row that opens it.
-    pub url: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrState {
-    Open,
-    Merged,
-    Closed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CheckState {
-    Passing,
-    Failing,
-    Pending,
-    /// Ran nothing and claims nothing — a skipped job or a neutral
-    /// status. Never the rollup's own reading: a PR whose every check
-    /// skipped is not a passing PR.
-    Skipped,
 }
 
 /// Read the checkout's drift, off the UI thread. One `git status
@@ -853,110 +546,6 @@ pub(crate) fn gh_output(cwd: &Path, args: &[&str]) -> io::Result<std::process::O
         .output()
 }
 
-/// Read `gh pr view`'s JSON. The rollup is a heterogeneous array —
-/// Actions jobs (`CheckRun`) and posted commit statuses (`StatusContext`)
-/// side by side, with different keys for the same three facts — so
-/// each element is read for whichever pair it carries. An element with no
-/// name at all is dropped rather than listed as a blank row.
-pub fn parse_pr_json(body: &str) -> Option<PullRequest> {
-    let value: serde_json::Value = serde_json::from_str(body).ok()?;
-    let number = value.get("number")?.as_u64()?;
-    let state = match value.get("state").and_then(serde_json::Value::as_str)? {
-        "MERGED" => PrState::Merged,
-        "CLOSED" => PrState::Closed,
-        _ => PrState::Open,
-    };
-    let draft = value
-        .get("isDraft")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    let url = value
-        .get("url")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
-    let title = value
-        .get("title")
-        .and_then(serde_json::Value::as_str)
-        .filter(|title| !title.is_empty())
-        .map(str::to_string);
-    let runs: Vec<Check> = value
-        .get("statusCheckRollup")
-        .and_then(serde_json::Value::as_array)
-        .map(|nodes| nodes.iter().filter_map(parse_check).collect())
-        .unwrap_or_default();
-    // No runs is no rollup: the silence stays a silence rather than
-    // becoming a pass.
-    let checks = (!runs.is_empty()).then(|| rollup_state(&runs));
-    Some(PullRequest {
-        number,
-        state,
-        draft,
-        url,
-        title,
-        checks,
-        runs,
-        conflicting: value.get("mergeable").and_then(serde_json::Value::as_str)
-            == Some("CONFLICTING"),
-    })
-}
-
-/// One rollup element, whichever shape it came in.
-fn parse_check(node: &serde_json::Value) -> Option<Check> {
-    let string = |key: &str| {
-        node.get(key)
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string)
-            .filter(|value| !value.is_empty())
-    };
-    // A job answers to `name`, a posted status to `context`.
-    let name = string("name").or_else(|| string("context"))?;
-    // A finished job reports its `conclusion` and an unfinished one only
-    // its `status`; a commit status puts both in one `state`.
-    let word = string("conclusion")
-        .or_else(|| string("status"))
-        .or_else(|| string("state"))?
-        .to_ascii_lowercase();
-    Some(Check {
-        state: check_state(&word),
-        detail: word,
-        workflow: string("workflowName"),
-        url: string("detailsUrl").or_else(|| string("targetUrl")),
-        name,
-    })
-}
-
-/// GitHub's vocabulary folded to the four states a dot can show. Anything
-/// unrecognised is pending, not passing: a word we do not know is not a
-/// word that clears CI.
-fn check_state(word: &str) -> CheckState {
-    match word {
-        "success" => CheckState::Passing,
-        // A cancelled run is a run that did not pass, and reads as one.
-        "failure" | "timed_out" | "startup_failure" | "action_required" | "error" | "cancelled" => {
-            CheckState::Failing
-        }
-        "skipped" | "neutral" | "stale" => CheckState::Skipped,
-        _ => CheckState::Pending,
-    }
-}
-
-/// A check rollup reads worst-first: any failure fails the PR, any
-/// unfinished run leaves it pending, and only runs that actually passed
-/// pass it. An all-skipped rollup is pending — nothing has vouched
-/// for it.
-fn rollup_state(runs: &[Check]) -> CheckState {
-    if runs.iter().any(|run| run.state == CheckState::Failing) {
-        return CheckState::Failing;
-    }
-    if runs.iter().any(|run| run.state == CheckState::Pending) {
-        return CheckState::Pending;
-    }
-    if runs.iter().any(|run| run.state == CheckState::Passing) {
-        return CheckState::Passing;
-    }
-    CheckState::Pending
-}
-
 /// The local branches of `repo`, in git's own ref order. The workspace
 /// chip's `existing branch` rows.
 pub fn branches(repo: &Path) -> Result<Vec<String>, GitError> {
@@ -965,15 +554,6 @@ pub fn branches(repo: &Path) -> Result<Vec<String>, GitError> {
         &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
     )?;
     Ok(listed.lines().map(str::to_string).collect())
-}
-
-/// One worktree as `git worktree list --porcelain` names it: the path git
-/// prints (symlinks resolved) and the branch it has checked out — none
-/// when its HEAD is detached, or for a bare repository's own stanza.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ListedWorktree {
-    pub path: PathBuf,
-    pub branch: Option<String>,
 }
 
 /// Every worktree git itself registers for `repo`, main checkout first as
@@ -1018,17 +598,6 @@ pub fn worktree_paths(repo: &Path) -> Result<Vec<PathBuf>, GitError> {
         .into_iter()
         .map(|worktree| worktree.path)
         .collect())
-}
-
-/// What a repo holds for the workspace chip: the branch its main checkout
-/// is on, its other worktrees, and its local branches — each in git's own
-/// order.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RepoListing {
-    /// None when the checkout's HEAD is detached.
-    pub checked_out: Option<String>,
-    pub worktrees: Vec<ListedWorktree>,
-    pub branches: Vec<String>,
 }
 
 /// Read `root`'s repo for the workspace chip — two git calls, never on a
@@ -1116,191 +685,6 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
 
 #[cfg(test)]
 mod tests {
-
-    /// A fixture forge's snapshot reads as `gh pr view` would label it:
-    /// running checks are pending, and the worst check is the rollup.
-    #[test]
-    fn a_snapshot_reads_as_the_label_would() {
-        use ferrite_reviewr::forge::{self, PrView};
-        let check = |name: &str, status| forge::Check {
-            name: name.into(),
-            status,
-            url: None,
-        };
-        let snapshot = forge::PrSnapshot {
-            number: 146,
-            title: "t".into(),
-            url: String::new(),
-            body: String::new(),
-            author: None,
-            author_avatar_url: None,
-            updated_at: None,
-            changed_files: None,
-            additions: None,
-            deletions: None,
-            state: forge::PrState::Open,
-            is_draft: false,
-            head_ref: "h".into(),
-            head_is_fork: false,
-            head_oid: String::new(),
-            base_ref: "main".into(),
-            merge: forge::Merge::Clean,
-            sync: forge::Sync::InSync,
-            checks: vec![
-                check("a", forge::CheckStatus::Running),
-                check("b", forge::CheckStatus::Success),
-            ],
-            comments: Vec::new(),
-            comments_truncated: false,
-            checks_truncated: false,
-        };
-        let pr = super::PullRequest::of_view(&PrView::Pr(Box::new(snapshot))).unwrap();
-        assert_eq!(
-            (pr.number, pr.state, pr.url),
-            (146, super::PrState::Open, None)
-        );
-        assert_eq!(pr.checks, Some(super::CheckState::Pending));
-        assert_eq!(pr.runs[0].detail, "in_progress");
-        assert!(!pr.conflicting, "the snapshot says it merges cleanly");
-        assert_eq!(super::PullRequest::of_view(&PrView::NoPr), None);
-    }
-
-    /// `gh`'s JSON is read for the PR's own facts, and a failing check
-    /// anywhere in the rollup is what the label must say.
-    #[test]
-    fn a_pr_reading_takes_the_worst_check_in_the_rollup() {
-        let body = r#"{"isDraft":false,"number":47,"state":"OPEN","url":"https://github.com/o/r/pull/47","statusCheckRollup":[
-            {"name":"build","status":"COMPLETED","conclusion":"SUCCESS"},
-            {"name":"test","status":"COMPLETED","conclusion":"FAILURE"}
-        ]}"#;
-        let pr = parse_pr_json(body).expect("a PR");
-        assert_eq!(pr.number, 47);
-        assert_eq!(pr.state, PrState::Open);
-        assert!(!pr.draft);
-        assert_eq!(pr.url.as_deref(), Some("https://github.com/o/r/pull/47"));
-        assert_eq!(pr.checks, Some(CheckState::Failing));
-        assert_eq!(pr.title, None, "gh said no title");
-    }
-
-    /// The nav card's PR popover names the PR by its title, which `gh`
-    /// is asked for.
-    #[test]
-    fn a_pr_reading_keeps_its_title() {
-        let body = r#"{"isDraft":false,"number":415,"state":"OPEN","title":"Thread cards in the nav","statusCheckRollup":[]}"#;
-        let pr = parse_pr_json(body).expect("a PR");
-        assert_eq!(pr.title.as_deref(), Some("Thread cards in the nav"));
-    }
-
-    /// A PR with no checks at all claims nothing — silence, never a pass.
-    #[test]
-    fn a_pr_without_checks_claims_no_ci() {
-        let body = r#"{"isDraft":true,"number":3,"state":"OPEN","statusCheckRollup":[]}"#;
-        let pr = parse_pr_json(body).expect("a PR");
-        assert!(pr.draft);
-        assert_eq!(pr.checks, None);
-        assert!(pr.runs.is_empty());
-    }
-
-    /// The card lists what the mark folds: every run, with the workflow
-    /// above it, the forge's own word for where it stands, and the link
-    /// to its log.
-    #[test]
-    fn every_run_behind_the_rollup_is_kept_in_order() {
-        let body = r#"{"isDraft":false,"number":9,"state":"OPEN","statusCheckRollup":[
-            {"name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS",
-             "detailsUrl":"https://github.com/o/r/actions/runs/1"},
-            {"name":"test (windows)","workflowName":"CI","status":"IN_PROGRESS",
-             "detailsUrl":"https://github.com/o/r/actions/runs/2"}
-        ]}"#;
-        let pr = parse_pr_json(body).expect("a PR");
-        assert_eq!(pr.checks, Some(CheckState::Pending));
-        let names: Vec<&str> = pr.runs.iter().map(|run| run.name.as_str()).collect();
-        assert_eq!(names, ["build", "test (windows)"]);
-        assert_eq!(pr.runs[0].workflow.as_deref(), Some("CI"));
-        assert_eq!(pr.runs[0].detail, "success");
-        assert_eq!(pr.runs[1].detail, "in_progress");
-        assert_eq!(pr.runs[1].state, CheckState::Pending);
-        assert_eq!(
-            pr.runs[0].url.as_deref(),
-            Some("https://github.com/o/r/actions/runs/1")
-        );
-    }
-
-    /// A posted commit status names itself `context` and links through
-    /// `targetUrl`, and belongs to no workflow — the same row, read from
-    /// different keys.
-    #[test]
-    fn a_posted_commit_status_is_listed_beside_the_actions_jobs() {
-        let body = r#"{"isDraft":false,"number":9,"state":"OPEN","statusCheckRollup":[
-            {"name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS"},
-            {"context":"codecov/patch","state":"SUCCESS","targetUrl":"https://codecov.io/x"}
-        ]}"#;
-        let pr = parse_pr_json(body).expect("a PR");
-        assert_eq!(pr.checks, Some(CheckState::Passing));
-        assert_eq!(pr.runs[1].name, "codecov/patch");
-        assert_eq!(pr.runs[1].workflow, None);
-        assert_eq!(pr.runs[1].url.as_deref(), Some("https://codecov.io/x"));
-    }
-
-    /// A skipped job is not a pass: it keeps its own state, and the mark
-    /// counts it as neither.
-    #[test]
-    fn skipped_runs_count_as_themselves() {
-        let body = r#"{"isDraft":false,"number":9,"state":"OPEN","statusCheckRollup":[
-            {"name":"build","status":"COMPLETED","conclusion":"SUCCESS"},
-            {"name":"deploy","status":"COMPLETED","conclusion":"SKIPPED"}
-        ]}"#;
-        let pr = parse_pr_json(body).expect("a PR");
-        assert_eq!(pr.checks, Some(CheckState::Passing));
-        let tally = pr.tally();
-        assert_eq!(tally.passing, 1);
-        assert_eq!(tally.skipped, 1);
-        assert_eq!(tally.failing, 0);
-        assert_eq!(tally.total(), 2);
-        assert_eq!(tally.settled(), 2);
-    }
-
-    /// A rollup where nothing ran and nothing passed has vouched for
-    /// nothing, and reads as pending rather than green.
-    #[test]
-    fn an_all_skipped_rollup_is_not_a_pass() {
-        let body = r#"{"isDraft":false,"number":9,"state":"OPEN","statusCheckRollup":[
-            {"name":"deploy","status":"COMPLETED","conclusion":"SKIPPED"}
-        ]}"#;
-        let pr = parse_pr_json(body).expect("a PR");
-        assert_eq!(pr.checks, Some(CheckState::Pending));
-    }
-
-    /// A conclusion we have never seen is not a word that clears CI.
-    #[test]
-    fn an_unknown_conclusion_stays_pending() {
-        assert_eq!(check_state("brand_new_word"), CheckState::Pending);
-        assert_eq!(check_state("cancelled"), CheckState::Failing);
-        assert_eq!(check_state("queued"), CheckState::Pending);
-    }
-
-    /// The card says when a pull request conflicts with its base: `gh`'s
-    /// `mergeable` reads `CONFLICTING`. Any other word, or none, is no
-    /// conflict.
-    #[test]
-    fn a_pr_reading_knows_when_it_conflicts() {
-        let read = |mergeable: &str| {
-            let body = format!(r#"{{"number":9,"state":"OPEN","mergeable":"{mergeable}"}}"#);
-            parse_pr_json(&body).expect("a PR").conflicting
-        };
-        assert!(read("CONFLICTING"));
-        assert!(!read("MERGEABLE"));
-        assert!(!read("UNKNOWN"));
-        let bare = parse_pr_json(r#"{"number":9,"state":"OPEN"}"#).expect("a PR");
-        assert!(!bare.conflicting);
-    }
-
-    /// Not JSON at all, or JSON without a number: no PR, not a panic.
-    #[test]
-    fn junk_from_gh_reads_as_no_pr() {
-        assert!(parse_pr_json("no such pr").is_none());
-        assert!(parse_pr_json("{}").is_none());
-    }
     use super::*;
     use std::fs;
 
@@ -1682,23 +1066,6 @@ mod tests {
         );
     }
 
-    /// A path typed for a machine leads with `~` only as a whole component;
-    /// it is spelled out against the home of the computer that reads it.
-    #[test]
-    fn expand_home_spells_out_a_leading_tilde_only() {
-        let home = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
-            .expect("a home");
-        assert_eq!(expand_home(Path::new("~")), home);
-        assert_eq!(expand_home(Path::new("~/src")), home.join("src"));
-        assert_eq!(
-            expand_home(Path::new("~other/src")),
-            Path::new("~other/src")
-        );
-        assert_eq!(expand_home(Path::new("/src/~")), Path::new("/src/~"));
-    }
-
     /// The Composer's `@` menu source (#23): files relative with `/`, the
     /// scan's skip list honoured, deterministic order, and the cap holding.
     #[test]
@@ -1879,34 +1246,6 @@ mod tests {
         git(&repo, &["branch", "feature"]).unwrap();
 
         assert_eq!(branches(&repo).unwrap(), ["feature", "main"]);
-    }
-
-    /// #29: the one cwd chain — session_project_root ?? worktree_path ??
-    /// project_root — pure and total over every binding shape.
-    #[test]
-    fn the_effective_cwd_chain_falls_back_in_order() {
-        let root = PathBuf::from("/repos/project/api");
-        let main = WorkspaceBinding::Main {
-            checkout: "/repos/project".into(),
-        };
-        let tree = WorkspaceBinding::Worktree {
-            repo: "/repos/project".into(),
-            path: "/store/worktrees/project-abc/wt".into(),
-        };
-        assert_eq!(
-            effective_cwd(Some(&root), Some(&main)),
-            Some(root.as_path()),
-            "a session project root outranks the binding"
-        );
-        assert_eq!(
-            effective_cwd(None, Some(&tree)).unwrap(),
-            Path::new("/store/worktrees/project-abc/wt")
-        );
-        assert_eq!(
-            effective_cwd(None, Some(&main)).unwrap(),
-            Path::new("/repos/project")
-        );
-        assert_eq!(effective_cwd(None, None), None);
     }
 
     #[test]

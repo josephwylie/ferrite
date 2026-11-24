@@ -672,7 +672,7 @@ impl Surfaces {
     pub(crate) fn save(&self, dir: &Path) -> io::Result<()> {
         let bytes = serde_json::to_vec_pretty(&self.persisted()).map_err(io::Error::other)?;
         std::fs::create_dir_all(dir)?;
-        ferrite_core::store::replace_file(&dir.join(FILE_NAME), &bytes)
+        ferrite_core::disk::replace_file(&dir.join(FILE_NAME), &bytes)
     }
 }
 

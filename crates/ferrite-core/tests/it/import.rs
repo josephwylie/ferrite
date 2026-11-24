@@ -12,7 +12,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use ferrite_core::import::{candidates, import, ImportError};
-use ferrite_core::store::{Provider, Store};
+use ferrite_core::provider::Provider;
+use ferrite_core::store::Store;
 use ferrite_core::transcript::{Input, Transcript};
 use ferrite_core::{SessionEvent, TurnOutcome};
 

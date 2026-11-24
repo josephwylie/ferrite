@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use ferrite_core::notifications::Notifications;
 use ferrite_core::protocol::{ProviderState, ServerMessage, Snapshot};
-use ferrite_core::store::Provider;
+use ferrite_core::provider::Provider;
 use ferrite_core::transcript::RateLimits;
 use ferrite_core::workspace::registry::Registry;
 use ferrite_core::{ModelInfo, ThreadId};

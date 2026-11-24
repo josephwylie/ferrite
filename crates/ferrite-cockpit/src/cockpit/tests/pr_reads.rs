@@ -32,8 +32,8 @@ fn unread(note: &str, why: Option<WirePrUnread>) -> ReviewPullRequest {
     }
 }
 
-fn reading_of(number: u64) -> ferrite_core::workspace::PullRequest {
-    ferrite_core::workspace::PullRequest {
+fn reading_of(number: u64) -> ferrite_core::pull_request::PullRequest {
+    ferrite_core::pull_request::PullRequest {
         number,
         ..pr_with_checks()
     }
@@ -162,8 +162,8 @@ fn an_older_answer_never_replaces_a_newer_one(cx: &mut TestAppContext) {
     let old = waiting(&view, cx).pop().unwrap();
 
     view.update(cx, |view, cx| {
-        let merged = ferrite_core::workspace::PullRequest {
-            state: ferrite_core::workspace::PrState::Merged,
+        let merged = ferrite_core::pull_request::PullRequest {
+            state: ferrite_core::pull_request::PrState::Merged,
             ..reading_of(48)
         };
         view.pr_landed(thread, Some(merged), cx);

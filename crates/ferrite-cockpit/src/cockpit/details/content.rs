@@ -526,9 +526,9 @@ struct ChangesTally {
     removed: (String, u32),
 }
 
-/// The row a [`ferrite_core::workspace::BranchDiff`] reads as.
-fn changes_tally(diff: &ferrite_core::workspace::BranchDiff) -> ChangesTally {
-    use ferrite_core::workspace::DiffBase;
+/// The row a [`ferrite_core::checkout::BranchDiff`] reads as.
+fn changes_tally(diff: &ferrite_core::checkout::BranchDiff) -> ChangesTally {
+    use ferrite_core::checkout::DiffBase;
     let count = |sign: char, lines: u32, hue: u32| {
         let digits = lines.to_string();
         let mut words = String::from(sign);
@@ -748,10 +748,10 @@ struct PrMark {
 /// shows none, a watch shows its eye while the PR is open, and a pull
 /// request with neither checks nor a watch has no quiet line.
 fn pr_block(
-    pr: &ferrite_core::workspace::PullRequest,
-    watch: Option<&ferrite_core::pr_watch::WatchedPr>,
+    pr: &ferrite_core::pull_request::PullRequest,
+    watch: Option<&ferrite_core::pull_request::WatchedPr>,
 ) -> PrBlock {
-    use ferrite_core::workspace::PrState;
+    use ferrite_core::pull_request::PrState;
     let title = pr
         .title
         .clone()
@@ -802,8 +802,8 @@ struct Checks {
 }
 
 impl Checks {
-    fn of(pr: &ferrite_core::workspace::PullRequest) -> Self {
-        use ferrite_core::workspace::CheckState;
+    fn of(pr: &ferrite_core::pull_request::PullRequest) -> Self {
+        use ferrite_core::pull_request::CheckState;
         let mut checks = Self::default();
         for run in &pr.runs {
             checks.total += 1;
@@ -895,7 +895,7 @@ mod tests {
     /// removed in red, grouped by thousands, and quiet at zero.
     #[test]
     fn the_changes_row_names_its_base_and_counts_the_lines() {
-        use ferrite_core::workspace::{BranchDiff, DiffBase};
+        use ferrite_core::checkout::{BranchDiff, DiffBase};
         let tally = |against, added, removed| {
             changes_tally(&BranchDiff {
                 against,
@@ -959,7 +959,7 @@ mod tests {
     #[test]
     fn details_card_draws_the_pull_request_as_one_block() {
         use CheckState::*;
-        use ferrite_core::workspace::{Check, CheckState, PrState, PullRequest};
+        use ferrite_core::pull_request::{Check, CheckState, PrState, PullRequest};
         let run = |(state, detail): (CheckState, &str)| Check {
             name: "ci".into(),
             workflow: None,
@@ -1108,8 +1108,7 @@ mod tests {
     /// merged or closed PR, or one nobody watches, shows none.
     #[test]
     fn a_watched_open_pr_shows_the_eye() {
-        use ferrite_core::pr_watch::WatchedPr;
-        use ferrite_core::workspace::{PrState, PullRequest};
+        use ferrite_core::pull_request::{PrState, PullRequest, WatchedPr};
         let url = "https://github.com/o/r/pull/7";
         let watch = WatchedPr {
             url: url.into(),

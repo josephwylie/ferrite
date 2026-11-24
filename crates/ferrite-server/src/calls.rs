@@ -18,13 +18,15 @@ use ferrite_core::api::{
     self, thread_info, thread_parked, thread_result, unknown_thread, ApiError, CallerId, Code,
     Method, Request, ThreadInfo, Until, Wait,
 };
+use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::drive::Action;
 use ferrite_core::engine::{Launch, ReadBack};
 use ferrite_core::protocol::{Done, Op, ProjectAction, ServerMessage, WireAnswer};
+use ferrite_core::provider::Provider;
 use ferrite_core::runtime_mode::RuntimeMode;
 use ferrite_core::settings::Settings;
-use ferrite_core::store::{LoadError, Provider};
-use ferrite_core::workspace::{self, WorkspaceChoice};
+use ferrite_core::store::LoadError;
+use ferrite_core::workspace;
 use ferrite_core::ThreadId;
 
 mod projects;

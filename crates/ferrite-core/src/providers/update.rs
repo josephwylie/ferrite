@@ -18,8 +18,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::discover::{self, Located};
+use crate::provider::Provider;
 use crate::spawn::{AgentEnvironment, NoConsoleWindow};
-use crate::store::Provider;
 
 /// Generous for one small JSON document; a check that overruns it is
 /// simply retried at the next interval.

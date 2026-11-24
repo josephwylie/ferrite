@@ -28,7 +28,7 @@ use super::{
     starts, Answer, Board, Command, Coordinator, Effect, Refusal, RefusalCode, Seen, State, Status,
     Task, TaskId, Workflow, WorkflowId, DEFAULT_LIMIT, FILE_NAME, SCHEMA_VERSION,
 };
-use crate::workspace::registry::ProjectId;
+use crate::project::ProjectId;
 use crate::ThreadId;
 
 /// The directory beside the Store that holds each Project's part.
@@ -205,7 +205,7 @@ fn ids_path(dir: &Path) -> PathBuf {
 fn write_file(dir: &Path, path: &Path, bytes: serde_json::Result<Vec<u8>>) -> Result<(), String> {
     let bytes = bytes.map_err(|error| error.to_string())?;
     std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
-    crate::store::replace_file(path, &bytes).map_err(|error| error.to_string())
+    crate::disk::replace_file(path, &bytes).map_err(|error| error.to_string())
 }
 
 /// The next ids, written when they moved: before any part that holds one.

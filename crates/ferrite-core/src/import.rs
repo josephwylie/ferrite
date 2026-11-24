@@ -24,8 +24,9 @@ use std::time::SystemTime;
 
 use serde_json::Value;
 
-use crate::store::{Provider, Store};
-use crate::workspace::WorkspaceBinding;
+use crate::checkout::WorkspaceBinding;
+use crate::provider::Provider;
+use crate::store::Store;
 use crate::{SessionEvent, ThreadId, ToolResult, TurnOutcome};
 
 /// Importing failed; no Thread was created.

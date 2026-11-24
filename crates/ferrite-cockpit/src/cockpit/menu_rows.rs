@@ -386,7 +386,7 @@ pub(super) fn band_row(label: SharedString, detail: SharedString, active: bool, 
 /// ticked, then, when the line `typed` reads `path <dir>`, a row that
 /// registers it, and last `Add project…`.
 pub(super) fn project_rows(
-    projects: &[(ProjectKey, &ferrite_core::workspace::registry::Project, Option<String>)],
+    projects: &[(ProjectKey, &ferrite_core::project::Project, Option<String>)],
     draft: &pane::DraftBinding,
     typed: &str,
 ) -> Vec<Row> {

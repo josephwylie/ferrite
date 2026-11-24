@@ -6,10 +6,11 @@ use std::io;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::checkout::WorkspaceChoice;
 use crate::engine::ProviderChoice;
+use crate::project::ProjectId;
 use crate::providers::models::efforts_for;
-use crate::workspace::registry::{ProjectId, Registry};
-use crate::workspace::WorkspaceChoice;
+use crate::workspace::registry::Registry;
 use crate::{MachineKey, ModelInfo, ProjectKey};
 
 /// The workspace choice within the selected Project: the checkout as it
@@ -197,7 +198,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::store::Provider;
+    use crate::provider::Provider;
     use crate::workspace::{ensure_worktree, git_for_tests, mention_files};
 
     struct Fixture {

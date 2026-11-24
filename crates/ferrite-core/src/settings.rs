@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::provider::Provider;
 use crate::sound::Sound;
-use crate::store::Provider;
 use crate::{MachineKey, SavedThread, ThreadId};
 
 /// The operator's preferences. Every field has a default, and the file is
@@ -448,10 +448,10 @@ impl Settings {
 
     /// Write `<dir>/settings.json` as pretty JSON, creating `dir` if
     /// needed, so that a crash at any moment leaves the old file or the
-    /// new one (`store::replace_file`); a symlinked file keeps its link.
+    /// new one (`disk::replace_file`); a symlinked file keeps its link.
     pub fn save(&self, dir: &Path) -> io::Result<()> {
         fs::create_dir_all(dir)?;
-        crate::store::replace_file(
+        crate::disk::replace_file(
             &dir.join(Self::FILE),
             &serde_json::to_vec_pretty(self).map_err(io::Error::other)?,
         )

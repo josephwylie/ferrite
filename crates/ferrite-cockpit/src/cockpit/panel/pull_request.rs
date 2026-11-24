@@ -42,7 +42,7 @@ use ferrite_ui::components::IconSize;
 use ferrite_core::protocol::{
     WireCheckStatus, WirePr, WirePrCommentKind, WirePrState, WirePrUnread,
 };
-use ferrite_core::workspace::PrState;
+use ferrite_core::pull_request::PrState;
 
 /// A pull request's state, as its pill and its tab's icon show it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

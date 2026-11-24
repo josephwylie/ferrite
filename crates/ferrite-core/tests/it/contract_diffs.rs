@@ -55,8 +55,9 @@ fn native_turn_diff_is_a_replacement_snapshot_not_an_invented_tool() {
 fn native_diff_updates_survive_store_replay() {
     use ferrite_core::{
         activity::Activity,
-        store::{Provider, Store},
-        workspace::WorkspaceBinding,
+        checkout::WorkspaceBinding,
+        provider::Provider,
+        store::Store,
     };
     let r = Replay::new(
         "codex",

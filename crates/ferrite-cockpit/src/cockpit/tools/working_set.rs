@@ -157,7 +157,7 @@ impl WorkingSets {
         })
         .map_err(io::Error::other)?;
         std::fs::create_dir_all(dir)?;
-        ferrite_core::store::replace_file(&dir.join(FILE_NAME), &bytes)
+        ferrite_core::disk::replace_file(&dir.join(FILE_NAME), &bytes)
     }
 }
 

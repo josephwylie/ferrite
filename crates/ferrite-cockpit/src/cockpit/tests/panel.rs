@@ -397,7 +397,7 @@ fn the_head_says_the_branch_while_the_panel_is_hidden(cx: &mut TestAppContext) {
         let thread = view.panes[0].thread().unwrap();
         view.facts.set_branches(vec![(
             thread,
-            Some(ferrite_core::workspace::BranchStatus {
+            Some(ferrite_core::checkout::BranchStatus {
                 branch: Some("lane-p".into()),
                 ..Default::default()
             }),

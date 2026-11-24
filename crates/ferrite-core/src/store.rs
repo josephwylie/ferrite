@@ -15,8 +15,10 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use crate::workspace::registry::ProjectId;
-use crate::workspace::WorkspaceBinding;
+use crate::checkout::WorkspaceBinding;
+use crate::disk::{rename_over, replace_file, sync_dir};
+use crate::project::ProjectId;
+use crate::provider::Provider;
 use crate::SessionEvent;
 use crate::{transcript::Input, ThreadId};
 
@@ -145,30 +147,6 @@ const READ_ONLY: &str = "another Ferrite has this store open, so this window can
 
 /// Why a window's handle may not write: its Server does (ADR 0025).
 const READER: &str = "this window reads its Threads; the Ferrite server writes them";
-
-/// Which agent backend serves this Thread — persisted so a restart knows
-/// which provider to revive the Thread on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum Provider {
-    Claude,
-    Codex,
-}
-
-impl Provider {
-    /// Every provider, in the order surfaces list them.
-    pub const ALL: [Provider; 2] = [Provider::Claude, Provider::Codex];
-}
-
-impl std::fmt::Display for Provider {
-    /// The provider's name as a Notice says it.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Provider::Claude => "Claude",
-            Provider::Codex => "Codex",
-        })
-    }
-}
 
 /// Loading one Thread failed. Errors are per-Thread by design: one damaged
 /// log must never take the rest of the store down with it.
@@ -450,7 +428,7 @@ pub struct ThreadSummary {
 }
 
 /// The persisted form of a Thread's workspace binding, mirroring
-/// `workspace::WorkspaceBinding` shape for shape — but the store's own type,
+/// `checkout::WorkspaceBinding` shape for shape — but the store's own type,
 /// so the live vocabulary can change without rewriting anyone's history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -1799,43 +1777,14 @@ enum SyncLevel {
     Full,
 }
 
-/// Sync a file behind a barrier: its writes reach the drive before any
-/// that follow (ADR 0009). For files beside the logs, like the queue.
-pub(crate) fn sync_ordered(file: &File) -> io::Result<()> {
-    sync_file(file, SyncLevel::Barrier)
-}
-
 /// Sync one file to `level`. Plain `fsync` is never used on macOS: it does
 /// not order writes, so a power cut could persist a later block without an
 /// earlier one.
 fn sync_file(file: &File, level: SyncLevel) -> io::Result<()> {
     match level {
         SyncLevel::Full => file.sync_data(),
-        SyncLevel::Barrier => barrier(file),
+        SyncLevel::Barrier => crate::disk::sync_ordered(file),
     }
-}
-
-#[cfg(target_os = "macos")]
-fn barrier(file: &File) -> io::Result<()> {
-    use std::os::fd::AsRawFd;
-    const F_BARRIERFSYNC: std::ffi::c_int = 85;
-    extern "C" {
-        fn fcntl(fd: std::ffi::c_int, cmd: std::ffi::c_int, ...) -> std::ffi::c_int;
-    }
-    // SAFETY: F_BARRIERFSYNC takes no argument and only reads the
-    // descriptor, which `file` keeps open for the call.
-    if unsafe { fcntl(file.as_raw_fd(), F_BARRIERFSYNC) } == -1 {
-        // A filesystem without barriers still gets its writes to disk.
-        return file.sync_data();
-    }
-    Ok(())
-}
-
-/// Elsewhere the data sync orders writes already (`fdatasync`,
-/// `FlushFileBuffers`).
-#[cfg(not(target_os = "macos"))]
-fn barrier(file: &File) -> io::Result<()> {
-    file.sync_data()
 }
 
 /// A directory of Thread logs.
@@ -2121,43 +2070,6 @@ fn log_stamp(path: &Path) -> Option<(u64, u128)> {
     Some((meta.len(), modified))
 }
 
-/// Put `bytes` in place of a small whole-file document (the settings, the
-/// registry) so that a crash or power cut at any moment leaves
-/// the old file or the new one, never a torn one: written beside, synced
-/// behind a barrier so the contents reach the drive before the rename can
-/// (ADR 0009), renamed over, the rename made durable by syncing the
-/// directory. A symlinked file is written through to its target, so the
-/// link the operator made survives.
-///
-/// Each document has one writer (the UI thread), so its temp file has one
-/// fixed name: one a crash left behind is simply written over next time.
-/// Once the rename is done the new file is the answer; a directory that
-/// will not sync is logged, not returned, so a caller never rolls back to
-/// a state the disk no longer holds.
-pub fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let path = if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
-        dunce::canonicalize(path)?
-    } else {
-        path.to_path_buf()
-    };
-    let mut tmp = path.clone().into_os_string();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    (|| {
-        let mut file = File::create(&tmp)?;
-        file.write_all(bytes)?;
-        sync_ordered(&file)?;
-        rename_over(&tmp, &path)
-    })()
-    .inspect_err(|_| {
-        let _ = fs::remove_file(&tmp);
-    })?;
-    if let Err(error) = sync_dir(path.parent().unwrap_or(Path::new("."))) {
-        crate::log!("{} replaced but not synced: {error}", path.display());
-    }
-    Ok(())
-}
-
 /// A name for a file written beside a log and renamed over it. Never a
 /// shared name: two writers must not truncate each other's temp file.
 fn temp_beside(path: &Path) -> PathBuf {
@@ -2168,65 +2080,6 @@ fn temp_beside(path: &Path) -> PathBuf {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     path.with_file_name(format!("{name}.tmp-{}-{n}", std::process::id()))
-}
-
-/// Rename `from` over `to`. The rename survives a crash once its
-/// directory is synced (`sync_dir`).
-#[cfg(not(windows))]
-fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
-    fs::rename(from, to)
-}
-
-/// Windows has no directory sync; the move itself is written through.
-#[cfg(windows)]
-fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
-    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
-    }
-    let wide = |path: &Path| {
-        path.as_os_str()
-            .encode_wide()
-            .chain(Some(0))
-            .collect::<Vec<u16>>()
-    };
-    let (from, to) = (wide(from), wide(to));
-    // SAFETY: both paths are NUL-terminated wide strings alive for the call.
-    if unsafe {
-        MoveFileExW(
-            from.as_ptr(),
-            to.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    } == 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-/// Make a rename inside `dir` durable: sync the directory itself.
-#[cfg(unix)]
-fn sync_dir(dir: &Path) -> io::Result<()> {
-    use std::os::fd::AsRawFd;
-    extern "C" {
-        fn fsync(fd: std::ffi::c_int) -> std::ffi::c_int;
-    }
-    let dir = File::open(dir)?;
-    // SAFETY: fsync only reads the descriptor, which `dir` keeps open.
-    if unsafe { fsync(dir.as_raw_fd()) } == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-/// Windows renames write through (`rename_over`); there is nothing to sync.
-#[cfg(not(unix))]
-fn sync_dir(_: &Path) -> io::Result<()> {
-    Ok(())
 }
 
 /// A Thread's log up to a checkpoint, opened and not yet read
