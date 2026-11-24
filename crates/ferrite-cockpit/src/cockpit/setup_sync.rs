@@ -179,12 +179,14 @@ fn files(count: usize) -> String {
 /// What a stopped sync would have done, as a sentence's end.
 fn stopped(valve: &Valve) -> String {
     if valve.vanished {
+        let (gone, removed) = match valve.side {
+            Side::Here => ("from the Machine", "here"),
+            Side::There => ("here", "on the Machine"),
+        };
         format!(
-            "~/{} is gone from {}, and syncing would remove its {} on {}",
+            "~/{} is gone {gone}, so syncing would remove its {} {removed}",
             valve.item,
-            side(valve.side.other()),
-            files(valve.holding),
-            side(valve.side)
+            files(valve.holding)
         )
     } else {
         format!(
@@ -842,8 +844,13 @@ mod tests {
             vanished: true,
         };
         assert_eq!(
-            Status::Stopped(gone).line(),
-            "Stopped: ~/.claude/skills is gone from the Machine, and syncing would remove its 4 files on this computer"
+            Status::Stopped(gone.clone()).line(),
+            "Stopped: ~/.claude/skills is gone from the Machine, so syncing would remove its 4 files here"
+        );
+        let gone_here = Valve { side: Side::There, ..gone };
+        assert_eq!(
+            Status::Stopped(gone_here).line(),
+            "Stopped: ~/.claude/skills is gone here, so syncing would remove its 4 files on the Machine"
         );
     }
 }
