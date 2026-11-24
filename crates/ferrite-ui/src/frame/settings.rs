@@ -99,6 +99,8 @@ pub struct ConnectionRow {
     pub removal: Option<(WindowAct, WindowAct)>,
     /// Its "Sync my setup" line; `None` for none.
     pub sync: Option<ConnectionSync>,
+    /// Its projects folder, while it is being changed in the row.
+    pub projects: Option<ProjectsFolder>,
 }
 
 /// A remote environment's setup sync (ADR 0048): its switch, and where its
@@ -113,6 +115,15 @@ pub struct ConnectionSync {
     /// What the operator may say to it: sync though it removes much, or
     /// whose sign-in to keep.
     pub actions: Vec<ConnectionAction>,
+}
+
+/// A saved environment's projects folder, changed in its row: where a
+/// Project copied there goes, unless the copy says otherwise.
+#[derive(Clone)]
+pub struct ProjectsFolder {
+    pub input: Entity<InputState>,
+    pub save: WindowAct,
+    pub cancel: WindowAct,
 }
 
 #[derive(Clone)]

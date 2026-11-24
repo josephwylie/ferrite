@@ -1613,6 +1613,16 @@ impl Cockpit {
             .list_repo(project.project())
     }
 
+    /// Which repository each of `machine`'s Projects is, read where its
+    /// Server runs, or here, off this thread, when this window runs its
+    /// agents itself. Answered later, as `list_dir`.
+    pub fn repositories(
+        &mut self,
+        machine: MachineId,
+    ) -> io::Result<Receiver<io::Result<ferrite_core::protocol::Repositories>>> {
+        self.held_mut(machine)?.link.repositories()
+    }
+
     /// A review's `read` of the checkout at `path`: its changed files with
     /// both sides, read by the vendored review core where the Server runs —
     /// on a machine, the machine's checkout (ADR 0021) — or here, off this

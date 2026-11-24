@@ -91,16 +91,29 @@ impl DraftFiles {
         self.uploads.clear();
     }
 
-    /// Hold exactly `paths`, `local` among them.
-    pub(crate) fn replace(&mut self, paths: Vec<PathBuf>, local: Vec<PathBuf>) {
+    /// Hold exactly `paths`, `local` among them, and `uploaded`'s copies of
+    /// them on the machine aimed at.
+    pub(crate) fn replace(
+        &mut self,
+        paths: Vec<PathBuf>,
+        local: Vec<PathBuf>,
+        uploaded: Vec<(PathBuf, PathBuf)>,
+    ) {
         self.uploads.clear();
         self.paths = paths;
         self.local = local;
+        self.copies_there(uploaded);
         self.inspect_all();
     }
 
     /// Hold `paths` too, ahead of those held when `prepend`.
-    pub(crate) fn merge(&mut self, mut paths: Vec<PathBuf>, local: Vec<PathBuf>, prepend: bool) {
+    pub(crate) fn merge(
+        &mut self,
+        mut paths: Vec<PathBuf>,
+        local: Vec<PathBuf>,
+        uploaded: Vec<(PathBuf, PathBuf)>,
+        prepend: bool,
+    ) {
         paths.retain(|path| !self.contains(path));
         self.local
             .extend(local.into_iter().filter(|path| paths.contains(path)));
@@ -109,7 +122,21 @@ impl DraftFiles {
         } else {
             self.paths.extend(paths);
         }
+        self.copies_there(uploaded);
         self.inspect_all();
+    }
+
+    /// The machine aimed at holds `uploaded`'s copies of files of this
+    /// computer: they are not sent again.
+    fn copies_there(&mut self, uploaded: Vec<(PathBuf, PathBuf)>) {
+        if self.destination != Destination::Remote {
+            return;
+        }
+        for (source, copy) in uploaded {
+            if self.source(&source) == Source::Local && !self.uploads.contains_key(&source) {
+                self.uploads.insert(source, UploadState::Ready(copy));
+            }
+        }
     }
 
     fn source(&self, path: &Path) -> Source {
@@ -121,11 +148,16 @@ impl DraftFiles {
     }
 
     /// Look at `path` again: a file restored, repaired or replaced since
-    /// it was added reads as it is now.
+    /// it was added reads as it is now. A file of this computer bound for a
+    /// machine is uploaded from here, unless it is no longer here and the
+    /// machine has no copy of it.
     pub(crate) fn inspect(&mut self, path: &Path) {
-        let readiness = if self.destination == Destination::Remote
-            && self.source(path) == Source::Local
-        {
+        let remote = self.destination == Destination::Remote && self.source(path) == Source::Local;
+        let uploaded = matches!(self.uploads.get(path), Some(UploadState::Ready(_)));
+        let readiness = if remote && !uploaded && !path.exists() {
+            self.uploads.remove(path);
+            Readiness::Failed(Failure::Gone)
+        } else if remote {
             match self
                 .uploads
                 .entry(path.to_path_buf())
@@ -232,22 +264,14 @@ impl DraftFiles {
             .collect()
     }
 
-    pub(crate) fn content_paths(&self) -> (Vec<PathBuf>, Vec<PathBuf>) {
-        let paths = self
-            .paths
-            .iter()
-            .map(|path| match self.uploads.get(path) {
-                Some(UploadState::Ready(remote)) => remote.clone(),
-                _ => path.clone(),
-            })
-            .collect();
-        let local = self
-            .local
-            .iter()
-            .filter(|path| !matches!(self.uploads.get(*path), Some(UploadState::Ready(_))))
-            .cloned()
-            .collect();
-        (paths, local)
+    /// What a saved draft keeps: each file as it was added, one of this
+    /// computer by its path here, never in its place the machine's copy,
+    /// which is kept beside it. Put away, put back or moved, the draft can
+    /// send it to either side.
+    pub(crate) fn content_paths(&self) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<(PathBuf, PathBuf)>) {
+        let mut uploaded: Vec<_> = self.uploaded_paths().into_iter().collect();
+        uploaded.sort();
+        (self.paths.clone(), self.local.clone(), uploaded)
     }
 
     pub(crate) fn wire_paths(&self) -> Vec<PathBuf> {
@@ -302,7 +326,7 @@ impl DraftFiles {
                 paths.push(kept);
             }
         }
-        self.replace(paths, local);
+        self.replace(paths, local, Vec::new());
         true
     }
 }
@@ -321,6 +345,15 @@ fn inside(path: &Path, root: &Path) -> bool {
 mod tests {
     use super::*;
 
+    /// A file of this computer, there to upload.
+    fn here(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("draft-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, name).unwrap();
+        path
+    }
+
     fn remote() -> DraftFiles {
         let mut files = DraftFiles::new();
         files.aim(Destination::Remote, std::env::temp_dir());
@@ -330,7 +363,7 @@ mod tests {
     #[test]
     fn remote_upload_failure_preserves_source_and_retry_sends_only_receipt() {
         let mut files = remote();
-        let source = PathBuf::from("/local-only/screenshot.png");
+        let source = here("screenshot.png");
         let receipt = PathBuf::from("/server-only/attachments/hash/screenshot.png");
         files.add(&source, Source::Local);
         assert!(matches!(files.blocked(), Some((_, Readiness::Pending))));
@@ -349,7 +382,7 @@ mod tests {
         ));
         assert_eq!(
             files.content_paths(),
-            (vec![source.clone()], vec![source.clone()])
+            (vec![source.clone()], vec![source.clone()], vec![])
         );
         assert!(files.pending_uploads().is_empty());
         files.retry(&source);
@@ -358,15 +391,67 @@ mod tests {
         assert!(!files.uploaded(&source, first, Ok(receipt.clone())));
         assert!(files.uploaded(&source, second, Ok(receipt.clone())));
         assert!(files.blocked().is_none());
-        assert_eq!(files.wire_paths(), [receipt.clone()]);
-        assert_eq!(files.content_paths(), (vec![receipt], vec![]));
+        assert_eq!(files.wire_paths(), [receipt]);
         assert_eq!(files.paths(), [source]);
+    }
+
+    /// A file of this computer, uploaded to a machine, is saved by its path
+    /// here, its copy there beside it: put back on that machine it is the
+    /// copy, gone from here or not, and on this computer it is sent from
+    /// here.
+    #[test]
+    fn a_saved_draft_keeps_its_files_of_this_computer_for_either_side() {
+        let source = here("notes.md");
+        let copy = PathBuf::from("/server-only/attachments/hash/notes.md");
+        let mut files = remote();
+        files.add(&source, Source::Local);
+        let [(_, attempt)] = files.pending_uploads().try_into().unwrap();
+        assert!(files.uploaded(&source, attempt, Ok(copy.clone())));
+        let (paths, local, uploaded) = files.content_paths();
+        assert_eq!(paths, [source.clone()]);
+        assert_eq!(local, [source.clone()]);
+        assert_eq!(uploaded, [(source.clone(), copy.clone())]);
+
+        let mut back = remote();
+        back.replace(paths.clone(), local.clone(), uploaded.clone());
+        assert!(back.pending_uploads().is_empty(), "the machine has it");
+        assert_eq!(back.wire_paths(), [copy]);
+        back.aim(Destination::Local, std::env::temp_dir());
+        assert_eq!(back.readiness().get(&source), Some(&Readiness::Ready), "sent from here");
+
+        std::fs::remove_file(&source).unwrap();
+        let mut gone = remote();
+        gone.replace(paths, local, uploaded);
+        assert!(gone.blocked().is_none(), "the machine's copy still goes");
+    }
+
+    /// A file of this computer no longer here says so on either side, and
+    /// asks for no upload; put back, its retry uploads it.
+    #[test]
+    fn a_file_gone_from_this_computer_says_so_on_either_side() {
+        let source = here("attach-note.txt");
+        std::fs::remove_file(&source).unwrap();
+        let mut files = DraftFiles::new();
+        files.replace(vec![source.clone()], vec![source.clone()], vec![]);
+        let gone = Some(&Readiness::Failed(Failure::Gone));
+        assert_eq!(files.readiness().get(&source), gone, "here");
+        files.aim(Destination::Remote, std::env::temp_dir());
+        assert_eq!(files.readiness().get(&source), gone, "on a machine");
+        assert!(files.pending_uploads().is_empty());
+        assert_eq!(
+            Readiness::Failed(Failure::Gone).label(),
+            Some("Gone from this computer")
+        );
+
+        std::fs::write(&source, "back").unwrap();
+        files.retry(&source);
+        assert_eq!(files.pending_uploads().len(), 1, "put back, it uploads");
     }
 
     #[test]
     fn remove_readd_and_draft_replacement_reject_old_uploads() {
         let mut files = remote();
-        let source = PathBuf::from("/local-only/file.txt");
+        let source = here("file.txt");
         files.add(&source, Source::Local);
         let [(_, removed)] = files.pending_uploads().try_into().unwrap();
         files.remove(&source);
@@ -374,7 +459,7 @@ mod tests {
         files.add(&source, Source::Local);
         let [(_, replaced)] = files.pending_uploads().try_into().unwrap();
         assert!(!files.uploaded(&source, removed, Ok("/server/stale.txt".into())));
-        files.replace(vec![source.clone()], vec![source.clone()]);
+        files.replace(vec![source.clone()], vec![source.clone()], vec![]);
         let [(_, current)] = files.pending_uploads().try_into().unwrap();
         assert!(!files.progress(&source, replaced, 100, 100));
         assert!(!files.uploaded(&source, replaced, Ok("/server/stale.txt".into())));
@@ -385,7 +470,7 @@ mod tests {
     #[test]
     fn changing_destination_discards_receipts_and_inflight_attempts() {
         let mut files = remote();
-        let source = PathBuf::from("/local-only/file.txt");
+        let source = here("file.txt");
         files.add(&source, Source::Local);
         let [(_, first)] = files.pending_uploads().try_into().unwrap();
         files.aim(Destination::Remote, std::env::temp_dir());

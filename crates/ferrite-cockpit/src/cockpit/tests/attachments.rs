@@ -365,6 +365,7 @@ fn upload_admission(name: &str, fresh: bool, cx: &mut TestAppContext) {
         tick(cx);
     }
     let local = dir.join("desktop-only.txt");
+    std::fs::write(&local, "on this computer").unwrap();
     let receipt = PathBuf::from("/server-only/attachments/receipt/desktop-only.txt");
     let composer = view.read_with(cx, |view, cx| view.panes[view.focused(cx)].composer.clone());
     let attempt = composer.update(cx, |composer, cx| {
@@ -396,8 +397,10 @@ fn upload_admission(name: &str, fresh: bool, cx: &mut TestAppContext) {
         let [(_, next)] = composer.pending_uploads(cx).try_into().unwrap();
         assert_ne!(next, attempt);
         assert!(composer.finish_upload(&local, next, Ok(receipt.clone()), cx));
-        assert_eq!(composer.content().files, [receipt.clone()]);
-        assert!(composer.content().local.is_empty());
+        let saved = composer.content();
+        assert_eq!(saved.files, [local.clone()], "the draft keeps the file by its path here");
+        assert_eq!(saved.local, [local.clone()]);
+        assert_eq!(saved.uploaded, [(local.clone(), receipt.clone())], "and the machine's copy beside it");
     });
     tick(cx);
     let editor = cx.debug_bounds("focused-prompt-editor").unwrap();

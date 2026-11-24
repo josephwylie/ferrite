@@ -59,7 +59,7 @@ and `agent.result`. Peers is the Server's client of a saved machine.
   Where it works there, when the start names no `checkout`, is T3's
   linked-environment project: the Project there named by `project`, else
   the one Project there whose repository is the parent's. A repository
-  is its primary remote as `host/owner/name` (`workspace::repository_key`,
+  is its primary remote as `host/owner/name` (`repository::repository_key`,
   T3's `normalizeGitRemoteUrl` and `pickPrimaryRemote`), so the two
   machines may spell the remote differently. `project.list` says each
   Project's `directory` and `repository`. None, several, or a parent with

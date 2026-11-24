@@ -209,8 +209,10 @@ Each lands green and proves something.
    which on more than one machine opens the palette over the machines the
    window reaches (T3's `choose-environment`, "Environments") and with
    none offers T3's "Connect an environment"; its fold nowhere. A draft
-   aimed at another machine names it first in the strip over its Composer
-   (T3's locked environment control). Ages and
+   names where it runs first in the strip over its Composer: while more
+   than one environment is on, an environment chip that chooses it until
+   the first send (ADR 0048), else the machine's name, when it is not
+   this computer. Ages and
    order read every machine's times on this computer's clock: a held
    machine keeps its Server's clock (`ServerClock`, from `welcome`) after
    its link goes, a Thread's digest carries its last activity

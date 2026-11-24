@@ -101,14 +101,57 @@ pub fn temporary_file(dir: &Path, mode: Option<u32>) -> io::Result<(PathBuf, Fil
     }
 }
 
-/// Whether a temporary file was left by a write that is over, in this
-/// process or one that stopped: nothing was written to it for [`EXPIRY`],
-/// and no write takes a chunk after that.
-pub fn stale(meta: &Metadata) -> bool {
-    meta.modified()
+/// Whether the temporary file `name` was left by a write that is over: the
+/// process it is named for is gone, or nothing was written to it for
+/// [`EXPIRY`], and no write takes a chunk after that.
+pub fn stale(name: &OsStr, meta: &Metadata) -> bool {
+    let quiet = meta
+        .modified()
         .ok()
         .and_then(|modified| modified.elapsed().ok())
-        .is_some_and(|age| age >= EXPIRY)
+        .is_some_and(|age| age >= EXPIRY);
+    let writer = name
+        .to_str()
+        .and_then(|name| name.strip_prefix(".ferrite-")?.split('-').next()?.parse().ok());
+    quiet || writer.is_some_and(gone)
+}
+
+/// Whether no process `pid` runs. This process is never gone, and one this
+/// side cannot ask about counts as running.
+fn gone(pid: u32) -> bool {
+    if pid == std::process::id() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
+            return false;
+        };
+        // SAFETY: signal 0 only asks whether the process exists.
+        pid > 0
+            && unsafe { libc::kill(pid, 0) } != 0
+            && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, STILL_ACTIVE,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // SAFETY: a query-only handle, closed below once its exit code is read.
+        unsafe {
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if process.is_null() {
+                return GetLastError() == ERROR_INVALID_PARAMETER;
+            }
+            let mut code = 0u32;
+            let exited = GetExitCodeProcess(process, &mut code) != 0 && code != STILL_ACTIVE as u32;
+            CloseHandle(process);
+            exited
+        }
+    }
 }
 
 /// The files one sender has under way, each by its number, and what the
@@ -349,6 +392,27 @@ mod tests {
         incoming.begin(4, &dir, 4, None, ()).unwrap();
         drop(incoming);
         assert_eq!(files(&dir), 0);
+    }
+
+    #[test]
+    fn a_temporary_file_is_stale_once_the_process_writing_it_is_gone() {
+        let dir = dir("writer");
+        let mut writer = std::process::Command::new("git")
+            .args(["hash-object", "--stdin"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let name = format!(".ferrite-{}-1-2.part", writer.id());
+        let path = dir.join(&name);
+        std::fs::write(&path, "half").unwrap();
+        let stale = |name: &str| super::stale(OsStr::new(name), &std::fs::metadata(&path).unwrap());
+        assert!(!stale(&name), "its writer still runs");
+        drop(writer.stdin.take());
+        writer.wait().unwrap();
+        drop(writer);
+        assert!(stale(&name), "its writer is gone");
+        assert!(!stale(&format!(".ferrite-{}-1-2.part", std::process::id())));
     }
 
     #[test]

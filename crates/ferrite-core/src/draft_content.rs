@@ -23,6 +23,11 @@ pub struct DraftContent {
     /// rather than the Thread's workspace: on a machine they are not there.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub local: Vec<PathBuf>,
+    /// The `local` files the machine the draft is on has a copy of, each
+    /// with that copy's path there: put back on that machine, the draft
+    /// sends the copy, and on any other side the file here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uploaded: Vec<(PathBuf, PathBuf)>,
     pub replies: Vec<Reply>,
     pub review: Vec<ReviewNote>,
     pub annotations: Vec<Annotation>,

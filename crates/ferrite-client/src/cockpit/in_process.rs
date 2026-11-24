@@ -343,6 +343,11 @@ impl Link for InProcess {
         }))
     }
 
+    fn repositories(&mut self) -> io::Result<Receiver<io::Result<ferrite_core::protocol::Repositories>>> {
+        let read = self.engine.repositories();
+        Ok(read_here(move || Ok(read())))
+    }
+
     fn review_diff(&mut self, path: &Path, read: &Read) -> io::Result<Receiver<io::Result<Vec<FileSides>>>> {
         let (path, read) = (path.to_path_buf(), read.clone());
         Ok(read_here(move || ferrite_reviewr::ferrite::review(&path, &read)))

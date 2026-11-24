@@ -1,18 +1,18 @@
 //! The Project card as a view of its own (ADR 0041), made when it opens and
 //! dropped once it has gone (ADR 0042), so the view is the card. It owns
 //! what only the card reads: its name line, a new Project's directories,
-//! its refusal, its focus, and on a machine its path field and the listings
-//! it completes from. It draws the Project it edits from what the Cockpit
-//! gives it (`ProjectEditorInputs`), asked for each frame, so the Cockpit's
-//! own notify still redraws it; and whatever would change the Projects it
-//! says as a `ProjectEditorEvent`, which the Cockpit answers once the
-//! card's own update has ended.
+//! its refusal, its focus, and on a machine the browser of its folders. It
+//! draws the Project it edits from what the Cockpit gives it
+//! (`ProjectEditorInputs`), asked for each frame, so the Cockpit's own
+//! notify still redraws it; and whatever would change the Projects it says
+//! as a `ProjectEditorEvent`, which the Cockpit answers once the card's
+//! own update has ended.
 
+use super::draft_environment::Band;
+use super::folder_browser::FolderBrowser;
 use super::*;
-use ferrite_core::folder::Listing;
 use gpui::{App, WeakEntity};
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, TryRecvError};
 
 /// The Project card. One surface serves both verbs: `target` names the
 /// Project being edited, or `None` while one is being created.
@@ -35,50 +35,20 @@ pub(crate) struct ProjectEditorView {
     pub(super) committing: bool,
     /// The body's scroll, for its overlay scrollbar.
     scroll: ScrollHandle,
-    /// On a machine, the path field that stands in for the folder dialog.
-    pub(super) remote: Option<RemotePath>,
+    /// On a machine, the browser of its folders that stands in for the
+    /// folder dialog.
+    pub(super) remote: Option<Entity<FolderBrowser>>,
+    /// The draft the card was opened for: the Project it creates is chosen
+    /// on it.
+    pub(super) draft: Option<PaneIdentity>,
+    /// That draft's band, which the card keeps clear of.
+    band: Option<Band>,
     pub(super) focus: FocusHandle,
 }
 
-/// The Project card's path field on a machine (ADR 0026), where no folder
-/// dialog can browse: what is typed completes against the directory it
-/// names there, listed by the machine's Server (`list_dir`).
-pub(super) struct RemotePath {
-    pub(super) field: Entity<Composer>,
-    /// The listing the completions come from, of the directory as typed:
-    /// empty when it could not be read, which is not asked again.
-    listed: Option<(String, Listing)>,
-    /// A listing asked for and not answered yet, of the directory as typed.
-    asking: Option<(String, Receiver<std::io::Result<Listing>>)>,
-}
-
-/// Where the field starts: the machine's home, which its Server spells out.
+/// Where the browser opens: the machine's home, which its Server spells
+/// out.
 const REMOTE_HOME: &str = "~/";
-
-/// How many completions the card lists under the field.
-const REMOTE_COMPLETIONS: usize = 8;
-
-/// `path` as the machine's Server spelled it out in the listing in hand —
-/// of it, or of the directory it is in — so `~` stages as the machine's
-/// home, named for its leaf, and one directory typed two ways stages
-/// once. As typed otherwise: the Server spells `~` out when it registers.
-fn spelled_out(remote: &RemotePath, path: &str) -> PathBuf {
-    let (directory, leaf) = split_typed(path);
-    match &remote.listed {
-        Some((listed, listing)) if listed.trim_end_matches('/') == path => listing.path.clone(),
-        Some((listed, listing)) if listed == directory => listing.path.join(leaf),
-        _ => path.into(),
-    }
-}
-
-/// A typed path's directory, to list, and the start of the name in it, to
-/// complete: `~/src/fe` is `~/src/` and `fe`.
-fn split_typed(typed: &str) -> (&str, &str) {
-    match typed.rfind('/') {
-        Some(at) => typed.split_at(at + 1),
-        None => ("", typed),
-    }
-}
 
 /// What the card draws from, as the Cockpit has it this frame.
 pub(crate) struct ProjectEditorInputs {
@@ -88,9 +58,6 @@ pub(crate) struct ProjectEditorInputs {
     project: Option<(String, Vec<PathBuf>)>,
     /// Some Thread, open or parked, records the Project being edited.
     in_use: bool,
-    /// The card's machine's name, for the path field's label; empty for
-    /// this computer.
-    machine: String,
 }
 
 /// What the card asks of the window.
@@ -103,8 +70,6 @@ pub(crate) enum ProjectEditorEvent {
     RemoveProject(ProjectKey),
     /// Create or Done, pressed while the card can commit.
     Confirm,
-    /// The path field moved: list the directory it names.
-    PathEdited,
     /// The close button closed it.
     Closed,
 }
@@ -113,14 +78,14 @@ impl EventEmitter<ProjectEditorEvent> for ProjectEditorView {}
 
 impl ProjectEditorView {
     /// A card on `target` (`None` creates on `machine`), its name line
-    /// seeded with `title`, and on another machine a path field for the
-    /// folder dialog.
+    /// seeded with `title`, and on another machine, `browse`, a browser of
+    /// its folders labelled for it in place of the folder dialog.
     pub(super) fn new(
         cockpit: WeakEntity<CockpitView>,
         machine: ferrite_core::MachineId,
         target: Option<ProjectKey>,
         title: Option<String>,
-        on_machine: bool,
+        browse: Option<(Entity<Cockpit>, SharedString)>,
         cx: &mut Context<Self>,
     ) -> Self {
         let name = cx.new(ferrite_pane::composer::Composer::new);
@@ -130,7 +95,9 @@ impl ProjectEditorView {
                 name.set(title, cx)
             }
         });
-        let remote = on_machine.then(|| Self::remote_path(cx));
+        let remote = browse.map(|(model, label)| {
+            cx.new(|cx| FolderBrowser::new(model, machine, label, REMOTE_HOME.into(), cx))
+        });
         Self {
             cockpit,
             machine,
@@ -141,25 +108,9 @@ impl ProjectEditorView {
             committing: false,
             scroll: ScrollHandle::new(),
             remote,
+            draft: None,
+            band: None,
             focus: cx.focus_handle(),
-        }
-    }
-
-    /// The path field a new card gets on a machine.
-    fn remote_path(cx: &mut Context<Self>) -> RemotePath {
-        let field = cx.new(Composer::new);
-        field.update(cx, |field, cx| {
-            field.set_role(ferrite_pane::composer::Role::Field(None), cx);
-            field.set(REMOTE_HOME.into(), cx);
-        });
-        cx.subscribe(&field, |_, _, _: &Edited, cx| {
-            cx.emit(ProjectEditorEvent::PathEdited)
-        })
-        .detach();
-        RemotePath {
-            field,
-            listed: None,
-            asking: None,
         }
     }
 
@@ -226,7 +177,7 @@ impl ProjectEditorView {
     }
 
     /// One directory of this computer, for the card (a machine's card
-    /// has a path field instead). The picker is single-select
+    /// has a browser of its folders instead). The picker is single-select
     /// deliberately: a Project's main directory is the first one added, and
     /// a multi-select would leave which-is-which to the file dialog.
     fn browse_for_project_directory(&mut self, cx: &mut Context<Self>) {
@@ -250,179 +201,38 @@ impl ProjectEditorView {
         .detach();
     }
 
-    /// The card's path field, on a machine.
-    fn remote(&self) -> Option<&RemotePath> {
-        self.remote.as_ref()
-    }
-
-    /// The directory the card's field names, unless its listing is in
-    /// hand or on its way.
-    pub(super) fn unlisted_directory(&self, cx: &App) -> Option<String> {
-        let remote = self.remote()?;
-        let typed = remote.field.read(cx).text();
-        let (directory, _) = split_typed(typed);
-        let known = |held: Option<&String>| held.is_some_and(|held| held == directory);
-        if known(remote.listed.as_ref().map(|(at, _)| at))
-            || known(remote.asking.as_ref().map(|(at, _)| at))
-        {
-            return None;
-        }
-        Some(directory.to_string())
-    }
-
-    /// The listing the Cockpit asked the machine for, on its way.
-    pub(super) fn ask(
-        &mut self,
-        asking: Option<(String, Receiver<std::io::Result<Listing>>)>,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(remote) = self.remote.as_mut() {
-            remote.asking = asking;
-        }
-        cx.notify();
-    }
-
-    /// Take the machine's answer to the field's listing, once it lands. A
-    /// directory that cannot be read lists nothing; one whose answer the
-    /// lost connection took is asked again at the next keystroke.
+    /// Take the machine's answers to the browser's listings, once they
+    /// land.
     pub(super) fn poll_remote_path(&mut self, cx: &mut Context<Self>) {
-        let Some(remote) = self.remote.as_mut() else {
-            return;
-        };
-        let Some((directory, answer)) = &remote.asking else {
-            return;
-        };
-        let listing = match answer.try_recv() {
-            Err(TryRecvError::Empty) => return,
-            Ok(Ok(listing)) => Some(listing),
-            Ok(Err(_)) => Some(Listing {
-                path: directory.into(),
-                entries: Vec::new(),
-            }),
-            Err(TryRecvError::Disconnected) => None,
-        };
-        if let Some(listing) = listing {
-            remote.listed = Some((directory.clone(), listing));
+        if let Some(remote) = &self.remote {
+            remote.update(cx, |remote, cx| remote.poll(cx));
         }
-        remote.asking = None;
-        cx.notify();
     }
 
-    /// The directories in the listing whose names start as the field's
-    /// last name does; a dot directory only once a dot is typed.
-    pub(super) fn remote_completions(&self, cx: &App) -> Vec<String> {
-        let Some(remote) = self.remote() else {
-            return Vec::new();
-        };
-        let typed = remote.field.read(cx).text();
-        let (directory, start) = split_typed(typed);
-        let Some((_, listing)) = remote
-            .listed
-            .as_ref()
-            .filter(|(listed, _)| listed == directory)
-        else {
-            return Vec::new();
-        };
-        listing
-            .entries
-            .iter()
-            .filter(|entry| {
-                entry.directory
-                    && entry.name.starts_with(start)
-                    && (start.starts_with('.') || !entry.name.starts_with('.'))
-            })
-            .take(REMOTE_COMPLETIONS)
-            .map(|entry| entry.name.clone())
-            .collect()
-    }
-
-    /// Complete the field's last name to `name`, a directory: the field
-    /// then lists what is in it.
-    fn complete_remote_path(&mut self, name: &str, cx: &mut Context<Self>) {
-        let Some(remote) = self.remote() else {
-            return;
-        };
-        let field = remote.field.clone();
-        let typed = field.read(cx).text().to_string();
-        let (directory, _) = split_typed(&typed);
-        let completed = format!("{directory}{name}/");
-        field.update(cx, |field, cx| field.set(completed, cx));
-    }
-
-    /// Tab in the path field: complete it to the first directory that
-    /// fits. False when the field does not hold the keyboard.
+    /// Tab in the browser: go into the first folder its line fits. False
+    /// when it does not hold the keyboard.
     pub(super) fn tab_remote_path(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
-        if !self.remote_path_focused(window, cx) {
-            return false;
-        }
-        if let Some(first) = self.remote_completions(cx).into_iter().next() {
-            self.complete_remote_path(&first, cx);
-        }
-        true
+        self.remote
+            .clone()
+            .is_some_and(|remote| remote.update(cx, |remote, cx| remote.tab(window, cx)))
     }
 
-    /// ↵ in the path field: the directory it names, for the card, and the
-    /// field empties, so the next ↵ confirms the card. None when the field
-    /// does not hold the keyboard or holds nothing.
+    /// ↵ in the browser: the folder it shows, for the card, and it goes
+    /// back to the folder that one is in, so the next ↵ confirms the card.
+    /// None when the browser does not hold the keyboard or has not been
+    /// moved since.
     pub(super) fn take_remote_path(
         &mut self,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<PathBuf> {
-        if !self.remote_path_focused(window, cx) {
-            return None;
-        }
-        let remote = self.remote()?;
-        let field = remote.field.clone();
-        let typed = field.read(cx).text().trim().to_string();
-        let path = match typed.trim_end_matches('/') {
-            "" if typed.starts_with('/') => "/",
-            "" => return None,
-            path => path,
-        };
-        let path = spelled_out(remote, path);
-        field.update(cx, |field, cx| field.set(String::new(), cx));
-        Some(path)
-    }
-
-    fn remote_path_focused(&self, window: &Window, cx: &App) -> bool {
-        self.remote()
-            .is_some_and(|remote| remote.field.read(cx).focus_handle(cx).is_focused(window))
-    }
-
-    /// The path field and, under it, the directories that complete it —
-    /// each a press away.
-    fn remote_path_element(
-        &self,
-        remote: &RemotePath,
-        machine: &str,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let focused = remote.field.read(cx).focus_handle(cx).is_focused(window);
-        let completions =
-            self.remote_completions(cx)
-                .into_iter()
-                .enumerate()
-                .map(|(index, name)| {
-                    project_editor::path_completion(index, &name).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.complete_remote_path(&name, cx);
-                        }),
-                    )
-                });
-        div()
-            .flex_shrink_0()
-            .flex()
-            .flex_col()
-            .child(project_editor::path_field(
-                machine,
-                remote.field.clone(),
-                focused,
-            ))
-            .child(project_editor::directory_list(completions.collect()))
+        self.remote
+            .clone()
+            .filter(|remote| {
+                let remote = remote.read(cx);
+                remote.focused(window, cx) && !remote.untouched()
+            })?
+            .update(cx, |remote, cx| remote.take(cx))
     }
 
     /// Project mutations stay visible together in one protected surface.
@@ -433,13 +243,9 @@ impl ProjectEditorView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<ferrite_ui::sheet::Drawn> {
-        let ProjectEditorInputs {
-            project,
-            in_use,
-            machine,
-        } = self
+        let ProjectEditorInputs { project, in_use } = self
             .cockpit
-            .read_with(cx, |cockpit, cx| cockpit.project_editor_inputs(self.machine, self.target, cx))
+            .read_with(cx, |cockpit, cx| cockpit.project_editor_inputs(self.target, cx))
             .ok()?;
         // An editing card whose Project was removed underneath it has
         // nothing left to edit.
@@ -507,29 +313,41 @@ impl ProjectEditorView {
             ));
         }
         body = body.child(project_editor::directory_list(rows));
-        // On a machine a path field stands in for the folder dialog, which
-        // could only browse this computer (ADR 0026).
+        // On a machine a browser of its folders stands in for the folder
+        // dialog, which could only browse this computer (ADR 0026), and the
+        // control under it adds the folder it shows.
+        let add = project_editor::add_directory(
+            if empty {
+                "+ Add main directory"
+            } else {
+                "+ Add directory"
+            },
+            cx,
+        );
         body = match &self.remote {
-            Some(remote) => body.child(self.remote_path_element(remote, &machine, window, cx)),
-            // Its own flex row, so the control hugs its label on the list's edge.
-            None => body.child(
-                div().flex().child(
-                    project_editor::add_directory(
-                        if empty {
-                            "+ Add main directory"
-                        } else {
-                            "+ Add directory"
-                        },
-                        cx,
-                    )
-                    .on_click(cx.listener(
-                        move |view, _: &ClickEvent, _, cx| {
+            Some(remote) => body.child(remote.clone()).child(
+                div()
+                    .flex()
+                    .child(add.debug_selector(|| "project-add-shown".into()).on_click(
+                        cx.listener(move |view, _: &ClickEvent, _, cx| {
                             cx.stop_propagation();
-                            view.browse_for_project_directory(cx);
-                        },
+                            let shown = view
+                                .remote
+                                .clone()
+                                .and_then(|remote| remote.update(cx, |remote, cx| remote.take(cx)));
+                            if let Some(path) = shown {
+                                cx.emit(ProjectEditorEvent::Adopt(path));
+                            }
+                        }),
                     )),
-                ),
             ),
+            // Its own flex row, so the control hugs its label on the list's edge.
+            None => body.child(div().flex().child(add.on_click(cx.listener(
+                move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.browse_for_project_directory(cx);
+                },
+            )))),
         };
         let mut left = div().flex().items_center();
         if let Some(project) = editing {
@@ -567,7 +385,14 @@ impl ProjectEditorView {
             body = body.child(project_editor::error_line(error));
         }
 
-        let card = project_editor::card(f32::from(window.viewport_size().height))
+        let band_top = self.band.as_ref().and_then(Band::top);
+        let viewport_h = f32::from(window.viewport_size().height);
+        let card = if self.remote.is_some() {
+            project_editor::steady_card_over(viewport_h, band_top)
+        } else {
+            project_editor::card_over(viewport_h, band_top)
+        };
+        let card = card
             .id("project-editor-card")
             .debug_selector(|| "project-editor-card".into())
             .track_focus(&self.focus)
@@ -582,6 +407,7 @@ impl ProjectEditorView {
                     .relative()
                     .flex()
                     .flex_col()
+                    .flex_grow(1.)
                     .flex_shrink(1.)
                     .min_h_0()
                     .child(body)
@@ -598,12 +424,7 @@ impl ProjectEditorView {
 impl CockpitView {
     /// Everything the card draws from, for the card on `target`. It never
     /// reads the card: the card calls it while its own update is running.
-    fn project_editor_inputs(
-        &self,
-        machine: ferrite_core::MachineId,
-        target: Option<ProjectKey>,
-        cx: &App,
-    ) -> ProjectEditorInputs {
+    fn project_editor_inputs(&self, target: Option<ProjectKey>, cx: &App) -> ProjectEditorInputs {
         let project = target
             .and_then(|project| self.cockpit.read(cx).project(project))
             .map(|project| {
@@ -617,7 +438,6 @@ impl CockpitView {
         ProjectEditorInputs {
             project,
             in_use: target.is_some_and(|project| self.project_in_use(project, cx)),
-            machine: self.machine_label(machine, cx).unwrap_or_default(),
         }
     }
 
@@ -667,7 +487,6 @@ impl CockpitView {
                 );
             }
             ProjectEditorEvent::Confirm => self.confirm_project_editor(cx),
-            ProjectEditorEvent::PathEdited => self.list_remote_path(cx),
             ProjectEditorEvent::Closed => {
                 self.hide_sheet(cx);
             }
@@ -711,6 +530,24 @@ impl CockpitView {
         self.show_project_editor(machine, None, None, cx);
     }
 
+    /// Open the card on a Project that does not exist yet on `machine`, for
+    /// the draft in Pane `draft`, which chooses it once it is created.
+    pub(super) fn open_project_creator_for(
+        &mut self,
+        machine: ferrite_core::MachineId,
+        draft: PaneIdentity,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_project_creator_on(machine, cx);
+        let band = self.band_of(draft);
+        if let Some(card) = self.project_card(cx) {
+            card.update(cx, |card, _| {
+                card.draft = Some(draft);
+                card.band = band;
+            });
+        }
+    }
+
     /// The card is modal: everything else floating goes down with it.
     fn show_project_editor(
         &mut self,
@@ -720,14 +557,16 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         let cockpit = cx.weak_entity();
-        let on_machine = self.elsewhere(machine, cx);
+        let browse = self.elsewhere(machine, cx).then(|| {
+            let name = self.machine_label(machine, cx).unwrap_or_default();
+            (self.cockpit.clone(), format!("Directory on {name}").into())
+        });
         let card = cx.new(|cx| {
-            ProjectEditorView::new(cockpit, machine, target, title, on_machine, cx)
+            ProjectEditorView::new(cockpit, machine, target, title, browse, cx)
         });
         cx.subscribe(&card, Self::on_project_editor_event).detach();
         self.show_sheet(sheets::Sheet::ProjectEditor(card), cx);
         self.close_composer_menu(cx);
-        self.list_remote_path(cx);
         cx.notify();
     }
 
@@ -801,7 +640,10 @@ impl CockpitView {
         outcome: std::io::Result<ProjectKey>,
         cx: &mut Context<Self>,
     ) {
-        card.update(cx, |card, _| card.committing = false);
+        let draft = card.update(cx, |card, _| {
+            card.committing = false;
+            card.draft
+        });
         match outcome {
             Ok(project) => {
                 if self.project_card(cx).as_ref() == Some(&card) {
@@ -817,6 +659,9 @@ impl CockpitView {
                         self.prefs.settings.default_provider,
                         cx,
                     );
+                }
+                if let Some(draft) = draft {
+                    self.rebind_draft(draft, project, cx);
                 }
                 self.nav_notice.clear();
                 self.refresh_names();
@@ -866,30 +711,6 @@ impl CockpitView {
             }
             None => card.update(cx, |card, cx| card.stage(path, cx)),
         }
-        cx.notify();
-    }
-
-    /// List the directory the card's field names — on opening, and each
-    /// time it moves — unless that listing is in hand or on its way.
-    fn list_remote_path(&mut self, cx: &mut Context<Self>) {
-        let Some(card) = self.project_card(cx) else {
-            return;
-        };
-        let Some(directory) = card.read(cx).unlisted_directory(cx) else {
-            return;
-        };
-        let machine = card.read(cx).machine;
-        let asking = if directory.is_empty() {
-            None
-        } else {
-            self.cockpit
-                .update(cx, |cockpit, _| {
-                    cockpit.list_dir(machine, std::path::Path::new(&directory))
-                })
-                .ok()
-                .map(|answer| (directory, answer))
-        };
-        card.update(cx, |card, cx| card.ask(asking, cx));
         cx.notify();
     }
 }

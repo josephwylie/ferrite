@@ -25,9 +25,8 @@ fn saved() -> Vec<Machine> {
         Machine::new("me@build"),
         Machine {
             name: "gpu".into(),
-            target: "me@gpu".into(),
             enabled: false,
-            sync_setup: true,
+            ..Machine::new("me@gpu")
         },
     ]
 }

@@ -920,6 +920,11 @@ impl Server {
                 }
                 None => Err(failed("no such Project")),
             },
+            Op::Repositories => {
+                let read = self.engine.repositories();
+                self.read_off_pump(id, request, move || Ok(Some(read().into())));
+                return;
+            }
             Op::Attachment { request: operation } => {
                 if !self.attachments.contains_key(&id) && self.attachments.len() >= 16 {
                     self.reply(id, request, Err(failed("Too many attachment transfers are active. Retry shortly.")));

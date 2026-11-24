@@ -283,6 +283,7 @@ impl Engine {
             | Op::Tree { .. }
             | Op::Changes { .. }
             | Op::ListRepo { .. }
+            | Op::Repositories
             | Op::ReviewDiff { .. }
             | Op::ReviewRead { .. }
             | Op::ReviewPullRequestDiff { .. }

@@ -89,6 +89,10 @@ pub(super) fn send_button(
         .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
             cx.stop_propagation();
             view.focus_pane(index, cx);
+            // A press on the circle sends, wherever tab left the ring.
+            if let Some(draft) = view.panes[index].draft_mut() {
+                draft.band_focus = None;
+            }
             let focus = view.panes[index].composer.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
             view.submit(&Submit, window, cx);

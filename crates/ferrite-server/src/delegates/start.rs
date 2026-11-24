@@ -29,7 +29,7 @@ pub(super) enum Place {
     /// The directory of the Project there with this id.
     Project(String),
     /// The directory of the one Project there with this repository
-    /// (`workspace::repository_key`).
+    /// (`repository::repository_key`).
     Repository(String),
 }
 

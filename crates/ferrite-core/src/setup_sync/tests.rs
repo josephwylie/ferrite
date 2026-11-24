@@ -984,7 +984,7 @@ fn a_temporary_file_a_crash_left_beside_the_settings_is_swept() {
         path
     };
     let stale = left(mine.root().join(".claude"), ".ferrite-1-2-3.part", 11);
-    let fresh = left(mine.root().join(".claude"), ".ferrite-4-5-6.part", 0);
+    let fresh = left(mine.root().join(".claude"), &format!(".ferrite-{}-5-6.part", std::process::id()), 0);
     let in_home = left(mine.root().to_path_buf(), ".ferrite-7-8-9.part", 11);
     sync(&world.job(&mine, "far"), &far);
     assert!(!stale.exists() && !in_home.exists());

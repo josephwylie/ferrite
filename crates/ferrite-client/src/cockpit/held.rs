@@ -509,6 +509,8 @@ pub(super) trait Link {
         request: ferrite_core::file_operations::Request,
     ) -> io::Result<Receiver<io::Result<ferrite_core::file_operations::Reply>>>;
 
+    fn repositories(&mut self) -> io::Result<Receiver<io::Result<ferrite_core::protocol::Repositories>>>;
+
     fn review_diff(&mut self, path: &Path, read: &Read) -> io::Result<Receiver<io::Result<Vec<FileSides>>>>;
 
     fn review_commits(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Vec<CommitRow>>>>;

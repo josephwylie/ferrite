@@ -390,7 +390,7 @@ pub struct ProjectCheckout {
     /// The directory is a linked worktree, not the main checkout.
     pub is_linked_worktree: bool,
     /// Which repository it is on every machine, `host/owner/name` of its
-    /// primary remote (`workspace::repository_key`, T3 Code's repository
+    /// primary remote (`repository::repository_key`, T3 Code's repository
     /// identity); absent with no remote on a host.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
@@ -423,7 +423,7 @@ pub fn project_infos(engine: &Engine) -> Vec<ProjectInfo> {
                     repo_key: checkout.repo,
                     checkout_path: project.root.clone(),
                     is_linked_worktree: checkout.linked,
-                    repository: crate::workspace::repository_key(&project.root),
+                    repository: crate::repository::repository_key(&project.root),
                 }
             }),
         })
