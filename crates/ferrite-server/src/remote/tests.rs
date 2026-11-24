@@ -476,7 +476,7 @@ mod network {
         }
 
         let fixture = Fixture::new();
-        let bytes: Vec<u8> = (0..attachment_transfer::CHUNK_SIZE * 3 + 17)
+        let bytes: Vec<u8> = (0..ferrite_core::chunked::CHUNK_SIZE * 3 + 17)
             .map(|index| (index % 251) as u8)
             .collect();
         let source = fixture.folder.join("fragmented.bin");

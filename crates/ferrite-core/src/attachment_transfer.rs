@@ -1,19 +1,16 @@
 //! Bounded attachment transfers and immutable server-owned retained content.
 
-use std::collections::HashMap;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc};
-use std::time::{Duration, Instant};
+use std::sync::mpsc;
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const CHUNK_SIZE: usize = 256 * 1024;
+use crate::chunked::{self, hex, Cancellation, Progress, CHUNK_SIZE, EXPIRY};
+
 pub const MAX_SIZE: u64 = crate::attachment::RETAIN_LIMIT;
-const EXPIRY: Duration = Duration::from_secs(600);
 const MAX_PENDING: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,32 +18,6 @@ pub struct Retained {
     pub path: PathBuf,
     pub sha256: String,
     pub size: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Progress {
-    pub sent: u64,
-    pub total: u64,
-}
-
-#[derive(Clone, Default)]
-pub struct Cancellation(Arc<AtomicBool>);
-
-impl Cancellation {
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
-    }
-
-    pub(crate) fn check(&self) -> io::Result<()> {
-        if self.0.load(Ordering::Acquire) {
-            Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "Attachment upload cancelled",
-            ))
-        } else {
-            Ok(())
-        }
-    }
 }
 
 pub struct Upload {
@@ -90,40 +61,22 @@ pub enum Reply {
     Bytes { data: String, size: u64 },
 }
 
-struct Pending {
-    path: PathBuf,
-    file: std::fs::File,
-    name: String,
-    size: u64,
-    received: u64,
-    hash: Sha256,
-    touched: Instant,
-}
-
-impl Drop for Pending {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
 pub struct Session {
     store: PathBuf,
-    next: u64,
-    pending: HashMap<u64, Pending>,
+    /// Each upload's file name.
+    incoming: chunked::Incoming<String>,
 }
 
 impl Session {
     pub fn new(store: PathBuf) -> Self {
         Self {
             store,
-            next: 0,
-            pending: HashMap::new(),
+            incoming: chunked::Incoming::new(MAX_PENDING),
         }
     }
 
     pub fn expire(&mut self) {
-        self.pending
-            .retain(|_, pending| pending.touched.elapsed() < EXPIRY);
+        self.incoming.expire();
     }
 
     pub fn execute(&mut self, request: Request) -> io::Result<Reply> {
@@ -133,9 +86,6 @@ impl Session {
                 validate_name(&name)?;
                 if size > MAX_SIZE {
                     return Err(invalid("Attachments must be 64 MiB or smaller"));
-                }
-                if self.pending.len() >= MAX_PENDING {
-                    return Err(invalid("Too many attachment uploads are pending"));
                 }
                 let dir = self.store.join("attachments").join(".uploads");
                 private_dir(&dir)?;
@@ -149,95 +99,23 @@ impl Session {
                         let _ = std::fs::remove_file(entry.path());
                     }
                 }
-                static NEXT: AtomicU64 = AtomicU64::new(0);
-                let (path, file) = loop {
-                    let nonce = NEXT.fetch_add(1, Ordering::Relaxed);
-                    let path = dir.join(format!(
-                        "{}-{}-{nonce}.part",
-                        std::process::id(),
-                        crate::clock::now().timestamp_micros()
-                    ));
-                    match std::fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(&path)
-                    {
-                        Ok(file) => break (path, file),
-                        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                        Err(error) => return Err(error),
-                    }
-                };
-                self.next += 1;
-                self.pending.insert(
-                    self.next,
-                    Pending {
-                        path,
-                        file,
-                        name,
-                        size,
-                        received: 0,
-                        hash: Sha256::new(),
-                        touched: Instant::now(),
-                    },
-                );
-                Ok(Reply::Begun { upload: self.next })
+                let upload = self.incoming.begin(&dir, size, name)?;
+                Ok(Reply::Begun { upload })
             }
             Request::Chunk {
                 upload,
                 offset,
                 data,
             } => {
-                if data.len() > CHUNK_SIZE.div_ceil(3) * 4 {
-                    self.pending.remove(&upload);
-                    return Err(invalid("Attachment chunk exceeds 256 KiB"));
-                }
-                let bytes = match base64::engine::general_purpose::STANDARD.decode(data) {
-                    Ok(bytes) => bytes,
-                    Err(_) => {
-                        self.pending.remove(&upload);
-                        return Err(invalid("Invalid attachment chunk"));
-                    }
-                };
-                let pending = self
-                    .pending
-                    .get_mut(&upload)
-                    .ok_or_else(|| invalid("Attachment upload expired"))?;
-                if bytes.is_empty()
-                    || bytes.len() > CHUNK_SIZE
-                    || offset != pending.received
-                    || pending.received.saturating_add(bytes.len() as u64) > pending.size
-                {
-                    self.pending.remove(&upload);
-                    return Err(invalid(
-                        "Attachment chunk is out of sequence or exceeds its declared size",
-                    ));
-                }
-                if let Err(error) = pending.file.write_all(&bytes) {
-                    self.pending.remove(&upload);
-                    return Err(error);
-                }
-                pending.hash.update(&bytes);
-                pending.received += bytes.len() as u64;
-                pending.touched = Instant::now();
-                Ok(Reply::Written {
-                    offset: pending.received,
-                })
+                let offset = self.incoming.chunk(upload, offset, &data)?;
+                Ok(Reply::Written { offset })
             }
             Request::Finish { upload, sha256 } => {
-                let mut pending = self
-                    .pending
-                    .remove(&upload)
-                    .ok_or_else(|| invalid("Attachment upload expired"))?;
-                let actual = hex(&pending.hash.clone().finalize());
-                if pending.received != pending.size || sha256 != actual {
-                    return Err(invalid("Attachment length or SHA-256 did not match"));
-                }
-                pending.file.flush()?;
-                pending.file.sync_all()?;
-                let dir = self.store.join("attachments").join(&actual);
+                let received = self.incoming.finish(upload, &sha256)?;
+                let dir = self.store.join("attachments").join(&received.sha256);
                 private_dir(&dir)?;
-                let path = std::path::absolute(dir.join(&pending.name))?;
-                match std::fs::hard_link(&pending.path, &path) {
+                let path = std::path::absolute(dir.join(received.what()))?;
+                match std::fs::hard_link(received.path(), &path) {
                     Ok(()) => {}
                     Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                         let mut existing = std::fs::File::open(&path)?;
@@ -255,7 +133,7 @@ impl Session {
                             }
                             hash.update(&buffer[..count]);
                         }
-                        if copied != pending.size || hex(&hash.finalize()) != actual {
+                        if copied != received.size() || hex(&hash.finalize()) != received.sha256 {
                             return Err(invalid("Retained attachment content does not match"));
                         }
                     }
@@ -263,12 +141,12 @@ impl Session {
                 }
                 Ok(Reply::Retained(Retained {
                     path,
-                    sha256: actual,
-                    size: pending.size,
+                    size: received.size(),
+                    sha256: received.sha256.clone(),
                 }))
             }
             Request::Cancel { upload } => {
-                self.pending.remove(&upload);
+                self.incoming.cancel(upload);
                 Ok(Reply::Cancelled)
             }
             Request::Read { path, offset } => {
@@ -352,10 +230,6 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 pub type Exchange = Box<dyn FnMut(Request) -> io::Result<Reply>>;
 
 pub fn upload(
@@ -369,7 +243,7 @@ pub fn upload(
     std::thread::spawn(move || {
         let result = (|| {
             cancelled.check()?;
-            let mut file = std::fs::File::open(&path)?;
+            let file = std::fs::File::open(&path)?;
             let meta = file.metadata()?;
             if !meta.is_file() || meta.len() > MAX_SIZE {
                 return Err(invalid("Choose a file of 64 MiB or smaller"));
@@ -390,42 +264,21 @@ pub fn upload(
                 return Err(invalid("The server did not begin the attachment upload"));
             };
             let result = (|| {
-                let mut hash = Sha256::new();
-                let mut buffer = vec![0; CHUNK_SIZE];
-                let mut sent = 0;
-                let _ = progress_send.send(Progress {
-                    sent,
-                    total: meta.len(),
-                });
-                loop {
-                    cancelled.check()?;
-                    let count = file.read(&mut buffer)?;
-                    if count == 0 {
-                        break;
-                    }
-                    let bytes = &buffer[..count];
-                    let Reply::Written { offset } = request(Request::Chunk {
-                        upload,
-                        offset: sent,
-                        data: base64::engine::general_purpose::STANDARD.encode(bytes),
-                    })?
-                    else {
-                        return Err(invalid("The server did not accept the attachment chunk"));
-                    };
-                    sent += count as u64;
-                    if offset != sent {
-                        return Err(invalid(
-                            "The server returned an incorrect attachment offset",
-                        ));
-                    }
-                    hash.update(bytes);
-                    let _ = progress_send.send(Progress {
-                        sent,
-                        total: meta.len(),
-                    });
-                }
+                let total = meta.len();
+                let _ = progress_send.send(Progress { sent: 0, total });
+                let sha256 = chunked::send(
+                    file,
+                    total,
+                    |offset, data| match request(Request::Chunk { upload, offset, data })? {
+                        Reply::Written { offset } => Ok(offset),
+                        _ => Err(invalid("The server did not accept the attachment chunk")),
+                    },
+                    |sent| {
+                        let _ = progress_send.send(Progress { sent, total });
+                    },
+                    &cancelled,
+                )?;
                 cancelled.check()?;
-                let sha256 = hex(&hash.finalize());
                 let Reply::Retained(retained) = request(Request::Finish {
                     upload,
                     sha256: sha256.clone(),
@@ -435,7 +288,7 @@ pub fn upload(
                 };
                 cancelled.check()?;
                 if retained.sha256 != sha256
-                    || retained.size != sent
+                    || retained.size != total
                     || !is_retained_path(&retained.path)
                     || retained
                         .path
@@ -569,7 +422,6 @@ mod tests {
                 bytes
             );
         }
-        assert!(session.pending.is_empty());
         assert_eq!(
             std::fs::read_dir(session.store.join("attachments/.uploads"))
                 .unwrap()
@@ -627,32 +479,12 @@ mod tests {
                 sha256: hex(&Sha256::digest(b"a"))
             })
             .is_err());
-        assert!(session.pending.is_empty());
         assert_eq!(
             std::fs::read_dir(session.store.join("attachments/.uploads"))
                 .unwrap()
                 .count(),
             0
         );
-    }
-
-    #[test]
-    fn cancellation_expiry_and_disconnect_remove_scratch_files() {
-        let mut session = session("cleanup");
-        let first = begin(&mut session, 4);
-        let second = begin(&mut session, 4);
-        let first_path = session.pending[&first].path.clone();
-        let second_path = session.pending[&second].path.clone();
-        assert_ne!(first_path, second_path);
-        session.execute(Request::Cancel { upload: first }).unwrap();
-        assert!(!first_path.exists());
-        session.pending.get_mut(&second).unwrap().touched = Instant::now() - EXPIRY;
-        session.expire();
-        assert!(!second_path.exists());
-        let final_upload = begin(&mut session, 4);
-        let final_path = session.pending[&final_upload].path.clone();
-        drop(session);
-        assert!(!final_path.exists());
     }
 
     #[test]

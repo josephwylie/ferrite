@@ -14,6 +14,7 @@ pub mod attachment_transfer;
 pub mod changes;
 mod attention;
 pub mod cadence;
+pub mod chunked;
 pub mod cited_sources;
 pub mod clock;
 pub mod cockpit;
