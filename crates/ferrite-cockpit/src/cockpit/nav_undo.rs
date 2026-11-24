@@ -70,15 +70,6 @@ impl CockpitView {
 
     /// ⌘Z on a Park: the Threads revive, last parked first.
     pub(super) fn undo_parked(&mut self, parked: Vec<ThreadKey>, cx: &mut Context<Self>) {
-        let outcomes: Vec<Outcome> = parked
-            .into_iter()
-            .rev()
-            .map(|key| Outcome {
-                thread: key,
-                result: self.try_revive(key, cx).map_err(|e| e.to_string()),
-            })
-            .collect();
-        self.report_failures("undo", &outcomes);
-        self.sync_panes(cx);
+        self.reopen_threads(parked.into_iter().rev().collect(), "undo", cx);
     }
 }

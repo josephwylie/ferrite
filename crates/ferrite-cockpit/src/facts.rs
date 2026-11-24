@@ -900,7 +900,7 @@ mod tests {
         drop(writer);
         let mut cockpit = Cockpit::new(store, Box::new(crate::demo::Spawn::new(false)));
         let thread = cockpit.key(thread);
-        cockpit.revive(thread).unwrap();
+        cockpit.revive(thread).now().unwrap();
         let mut facts = Facts::default();
 
         let lookups = facts.opened(&cockpit, thread);

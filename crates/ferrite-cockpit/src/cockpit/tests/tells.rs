@@ -207,3 +207,25 @@ fn deleting_a_thread_does_not_wait_and_is_answered(cx: &mut gpui::TestAppContext
     assert!(!heard.get(), "nothing is heard before the Server answers");
     until(cx, |_| heard.get());
 }
+
+/// A parked Thread asked back over a Server does not wait: its Pane is
+/// there, with the screen, once the Server answers.
+#[gpui::test]
+fn reopening_a_parked_thread_does_not_wait_and_takes_the_screen_when_answered(cx: &mut gpui::TestAppContext) {
+    use ferrite_core::roster::PaneIdentity;
+    let (_engine, view, thread, cx) = super::browser_chrome::browser_window(cx, "reopen-ask");
+    let shown = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.panes.iter().any(|pane| pane.thread() == Some(thread)))
+    };
+    view.update(cx, |view, cx| view.close_pane(PaneIdentity::Thread(thread), cx));
+    until(cx, |cx| !shown(cx));
+
+    waits::start();
+    view.update(cx, |view, cx| view.revive_thread(thread, cx));
+    let revives: Vec<_> = waits::take().into_iter().filter(|wait| wait.op == "revive").collect();
+    assert_eq!(revives.len(), 1, "{revives:?}");
+    assert!(!revives[0].waited, "the revive does not wait for its reply: {revives:?}");
+    until(cx, |cx| shown(cx));
+    let focused = view.read_with(cx, |view, cx| view.cockpit.read(cx).roster().focused_thread());
+    assert_eq!(focused, Some(thread), "the Thread asked back takes the screen");
+}

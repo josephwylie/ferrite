@@ -427,12 +427,11 @@ impl CockpitView {
 
     /// A Thread row's press, and ⏎ on it: an open Thread takes the screen;
     /// a parked one revives.
-    pub(super) fn open_nav_row(&mut self, key: ThreadKey, cx: &mut Context<Self>) -> bool {
+    pub(super) fn open_nav_row(&mut self, key: ThreadKey, cx: &mut Context<Self>) {
         if self.pane_for(key).is_some() {
             self.focus_thread(key, cx);
-            true
         } else {
-            self.revive_thread(key, cx)
+            self.revive_thread(key, cx);
         }
     }
 }

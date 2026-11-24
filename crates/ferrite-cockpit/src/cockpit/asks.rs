@@ -6,7 +6,7 @@
 
 use super::CockpitView;
 use ferrite_core::cockpit::Ask;
-use gpui::Context;
+use gpui::{Context, Window};
 use std::io;
 
 /// One answer to come: true once it came and what follows it ran.
@@ -38,6 +38,34 @@ impl CockpitView {
             }
             true
         }));
+    }
+
+    /// `when_answered` for what needs the window: now when the ask is
+    /// answered already, else once the answer is back in the window's
+    /// hands, a turn of the loop after the pump reads it.
+    pub(super) fn when_answered_in<T: 'static>(
+        &mut self,
+        mut ask: Ask<T>,
+        window: &mut Window,
+        then: impl FnOnce(&mut Self, io::Result<T>, &mut Window, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(answer) = ask.answer() {
+            return then(self, answer, window, cx);
+        }
+        let window = window.window_handle();
+        self.when_answered(
+            ask,
+            move |_, answer, cx| {
+                let view = cx.entity().downgrade();
+                cx.defer(move |cx| {
+                    let _ = window.update(cx, |_, window, cx| {
+                        let _ = view.update(cx, |view, cx| then(view, answer, window, cx));
+                    });
+                });
+            },
+            cx,
+        );
     }
 
     /// Run `then` with the answers of all of `asks`, in their order, once
