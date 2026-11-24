@@ -126,8 +126,8 @@ fn owned_threads_stay_owned_and_unlisted_across_a_restart_and_a_revive() {
     assert!(!window.operators(worker_key) && !window.operators(coordinator_key));
     assert!(window.operators(mine_key));
     assert_eq!(
-        window.owner(coordinator_key).as_ref().map(ferrite_core::api::owner),
-        Some(ferrite_core::api::schema::Owner::Factory(
+        window.owner(coordinator_key).as_ref().map(ferrite_engine::api::owner),
+        Some(ferrite_engine::api::schema::Owner::Factory(
             project.as_str().unwrap().into()
         ))
     );

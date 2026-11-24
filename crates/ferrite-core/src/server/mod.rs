@@ -1,8 +1,8 @@
 //! The Server (ADR 0025) as the rest of Ferrite sees it: where its Store
 //! and settings live, keeping one running (`agent`), and when a window asks
 //! it to restart. What a Server reads for its windows of its machine's
-//! GitHub and provider CLIs is the engine's (`crate::github`,
-//! `crate::providers::clis`). The process itself, `ferrite server` and
+//! GitHub and provider CLIs is the engine's (`ferrite_engine::github`,
+//! `ferrite_engine::providers::clis`). The process itself, `ferrite server` and
 //! `ferrited`, is the `ferrite-server` crate.
 
 use std::path::PathBuf;

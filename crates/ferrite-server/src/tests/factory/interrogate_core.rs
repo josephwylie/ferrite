@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 
 use super::*;
 use ferrite_core::factory_board::{GitHubItem, GitHubQuery, GitHubRead};
-use ferrite_core::github::GitHub;
+use ferrite_engine::github::GitHub;
 
 fn ok_call(harness: &Harness, method: &str, params: serde_json::Value) -> serde_json::Value {
     let (status, said, refused) = cli(&harness.api, method, params);
@@ -75,8 +75,8 @@ impl GitHub for Conditional {
         &self,
         _: &str,
         _: u64,
-    ) -> Result<ferrite_core::pr_watch::Fingerprint, ferrite_core::pr_watch::ReadError> {
-        Err(ferrite_core::pr_watch::ReadError::Failed("no PRs here".into()))
+    ) -> Result<ferrite_engine::pr_watch::Fingerprint, ferrite_engine::pr_watch::ReadError> {
+        Err(ferrite_engine::pr_watch::ReadError::Failed("no PRs here".into()))
     }
 
     fn pr_reading(
@@ -84,8 +84,8 @@ impl GitHub for Conditional {
         _: &str,
         _: u64,
         _: bool,
-    ) -> Result<ferrite_core::pr_watch::Reading, ferrite_core::pr_watch::ReadError> {
-        Err(ferrite_core::pr_watch::ReadError::Failed("no PRs here".into()))
+    ) -> Result<ferrite_engine::pr_watch::Reading, ferrite_engine::pr_watch::ReadError> {
+        Err(ferrite_engine::pr_watch::ReadError::Failed("no PRs here".into()))
     }
 }
 
@@ -202,7 +202,7 @@ fn interrogate_a_github_read_dropped_while_paused_loses_its_issue() {
         vec![gh_issue(3, "Old crash"), gh_issue(7, "Login fails")],
     );
     let t0 = clock.load(Ordering::SeqCst);
-    clock.store(t0 + ferrite_core::factory::POLL_MS, Ordering::SeqCst);
+    clock.store(t0 + ferrite_engine::factory::POLL_MS, Ordering::SeqCst);
     wait_for("the second read", || {
         github.reads.load(Ordering::SeqCst) == 2
     });
@@ -218,11 +218,11 @@ fn interrogate_a_github_read_dropped_while_paused_loses_its_issue() {
         "workflow.automation",
         serde_json::json!({ "workflow": workflow, "turn": "resume" }),
     );
-    clock.store(t0 + 3 * ferrite_core::factory::POLL_MS, Ordering::SeqCst);
+    clock.store(t0 + 3 * ferrite_engine::factory::POLL_MS, Ordering::SeqCst);
     wait_for("the read after resuming", || {
         github.reads.load(Ordering::SeqCst) == 3
     });
-    clock.store(t0 + 5 * ferrite_core::factory::POLL_MS, Ordering::SeqCst);
+    clock.store(t0 + 5 * ferrite_engine::factory::POLL_MS, Ordering::SeqCst);
     wait_for("another read", || github.reads.load(Ordering::SeqCst) == 4);
     std::thread::sleep(Duration::from_millis(500));
     let tasks = ok_call(
@@ -408,7 +408,7 @@ fn interrogate_an_unreadable_part_lets_another_project_reuse_its_ids() {
     let repo_b = harness.dir.join("other");
     std::fs::create_dir_all(&repo_b).unwrap();
     {
-        use ferrite_core::workspace::git_for_tests as git;
+        use ferrite_engine::workspace::git_for_tests as git;
         git(&repo_b, &["init", "-q", "-b", "main"]);
         std::fs::write(repo_b.join("b.txt"), "b\n").unwrap();
         git(&repo_b, &["add", "b.txt"]);
@@ -435,7 +435,7 @@ fn interrogate_an_unreadable_part_lets_another_project_reuse_its_ids() {
     let part = harness
         .dir
         .join("threads")
-        .join(ferrite_core::factory::DIR_NAME)
+        .join(ferrite_engine::factory::DIR_NAME)
         .join(format!("{project_a}.json"));
     let kept = std::fs::read(&part).unwrap();
     std::fs::write(&part, b"{ not json").unwrap();
@@ -494,7 +494,7 @@ fn a_worker_whose_start_was_never_written_is_kept_and_its_worktree_reused() {
     let harness = restart_with(harness, |dir| {
         let part = dir
             .join("threads")
-            .join(ferrite_core::factory::DIR_NAME)
+            .join(ferrite_engine::factory::DIR_NAME)
             .join("1.json");
         let mut state: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&part).unwrap()).unwrap();
@@ -544,7 +544,7 @@ fn deleting_a_task_whose_worker_start_was_never_written_deletes_that_worker() {
     let harness = restart_with(harness, |dir| {
         let part = dir
             .join("threads")
-            .join(ferrite_core::factory::DIR_NAME)
+            .join(ferrite_engine::factory::DIR_NAME)
             .join("1.json");
         let mut state: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&part).unwrap()).unwrap();

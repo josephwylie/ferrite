@@ -12,11 +12,11 @@ use ferrite_core::activity::{
     ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject, TranscriptCoverage,
 };
 use ferrite_client::cockpit::{Cockpit, ProviderChoice, RssSampler, SpawnRequest, Spawner};
-use ferrite_core::providers::Session;
+use ferrite_engine::providers::Session;
 use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::provider::Provider;
 use ferrite_core::transcript::{Body, ToolState, Transcript};
-use ferrite_core::store::Store;
+use ferrite_engine::store::Store;
 use ferrite_core::{
     Decision, DecisionAnswer, SessionEvent, ThreadId, ThreadKey, ToolResult, TurnOutcome,
 };

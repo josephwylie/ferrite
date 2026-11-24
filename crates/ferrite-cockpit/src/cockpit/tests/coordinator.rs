@@ -5,7 +5,7 @@
 #[allow(unused_imports)]
 use super::*;
 use crate::cockpit::workflows::Surface;
-use ferrite_core::factory::Command;
+use ferrite_engine::factory::Command;
 use ferrite_core::factory_board::{Act, Catalog, ProposalStatus};
 
 fn shows(cx: &mut gpui::VisualTestContext, selector: &str) -> bool {

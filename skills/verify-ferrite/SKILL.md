@@ -247,7 +247,7 @@ Proof standards:
   `agent read`, the spawned CLI's argv (the Server pid is `SERVER_PID` in
   `/tmp/fv-$FV_RUN/run.env`).
 - Agents are the real `claude`/`codex` CLIs. The fakes in
-  `crates/ferrite-core/tests/fixtures/` are for unit and visual tests.
+  `crates/ferrite-engine/tests/fixtures/` are for unit and visual tests.
 - Look at each screenshot before claiming it proves something: a toast or dialog can
   cover what you meant to show.
 

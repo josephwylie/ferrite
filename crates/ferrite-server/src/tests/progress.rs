@@ -32,16 +32,16 @@ fn a_conversation_progresses_before_incoming_traffic_is_drained() {
     let (heard, hear) = mpsc::channel();
     let (answer, answers) = mpsc::channel();
     heard
-        .send(Heard::Api(ferrite_core::api::Heard::Joined(1, answer)))
+        .send(Heard::Api(ferrite_engine::api::Heard::Joined(1, answer)))
         .unwrap();
     for index in 0..513 {
         let thread = if index == 256 { other } else { busy };
         heard
-            .send(Heard::Api(ferrite_core::api::Heard::Request(
+            .send(Heard::Api(ferrite_engine::api::Heard::Request(
                 1,
-                ferrite_core::api::Request {
+                ferrite_engine::api::Request {
                     id: index.to_string(),
-                    method: ferrite_core::api::Method::AgentRead(ferrite_core::api::schema::AgentReadParams {
+                    method: ferrite_engine::api::Method::AgentRead(ferrite_engine::api::schema::AgentReadParams {
                         thread,
                         lines: None,
                     }),
@@ -111,19 +111,19 @@ impl Spawner for OffLoop {
         self.spawn.spawn(request)
     }
 
-    fn start(&mut self, request: SpawnRequest) -> io::Result<ferrite_core::session::SessionLifecycle> {
+    fn start(&mut self, request: SpawnRequest) -> io::Result<ferrite_engine::session::SessionLifecycle> {
         self.start_after(Box::new(|| Ok(())), request)
     }
 
     fn start_after(
         &mut self,
-        prepare: ferrite_core::engine::Preparation,
+        prepare: ferrite_engine::engine::Preparation,
         request: SpawnRequest,
-    ) -> io::Result<ferrite_core::session::SessionLifecycle> {
+    ) -> io::Result<ferrite_engine::session::SessionLifecycle> {
         self.spawn.launched(&request);
         let session = self.spawn.scripted();
         let gate = self.gate.clone();
-        ferrite_core::session::SessionLifecycle::background(move || {
+        ferrite_engine::session::SessionLifecycle::background(move || {
             let _ = gate.lock().unwrap().recv();
             prepare()?;
             Ok(Box::new(session) as Box<dyn Session + Send>)
@@ -175,7 +175,7 @@ fn a_new_worktree_is_made_off_the_loop_while_other_threads_progress() {
         "the loop asked git while making the worktree"
     );
     assert!(
-        !repo.join(ferrite_core::workspace::WORKTREES).exists(),
+        !repo.join(ferrite_engine::workspace::WORKTREES).exists(),
         "the worktree was made before its start ran"
     );
     assert!(
@@ -198,7 +198,7 @@ fn a_new_worktree_is_made_off_the_loop_while_other_threads_progress() {
 fn a_worktree_that_cannot_be_made_rolls_the_first_send_back() {
     let dir = scratch("worktree-refused");
     let repo = repo_in(&dir);
-    ferrite_core::workspace::git_for_tests(&repo, &["branch", "taken"]);
+    ferrite_engine::workspace::git_for_tests(&repo, &["branch", "taken"]);
     let store = dir.join("threads");
     let (spawner, _providers, gate) = off_loop();
     let mut engine = engine(&store, spawner);
@@ -241,7 +241,7 @@ fn a_worktree_that_cannot_be_made_rolls_the_first_send_back() {
 fn a_squatted_worktree_path_rolls_the_first_send_back() {
     let dir = scratch("worktree-squatted");
     let repo = repo_in(&dir);
-    let squatted = repo.join(ferrite_core::workspace::WORKTREES).join("squat");
+    let squatted = repo.join(ferrite_engine::workspace::WORKTREES).join("squat");
     std::fs::create_dir_all(squatted.join("kept")).unwrap();
     let (spawner, _providers, gate) = off_loop();
     let mut engine = engine(&dir.join("threads"), spawner);
@@ -292,7 +292,7 @@ fn settle_first_send(engine: &mut Engine) -> io::Result<ferrite_core::roster::Bo
 fn an_opened_thread_whose_worktree_is_refused_is_refused_in_the_reply() {
     let dir = scratch("worktree-refused-open");
     let repo = repo_in(&dir);
-    ferrite_core::workspace::git_for_tests(&repo, &["branch", "taken"]);
+    ferrite_engine::workspace::git_for_tests(&repo, &["branch", "taken"]);
     let (spawner, _providers, _gate) = off_loop();
     let mut engine = engine(&dir.join("threads"), spawner);
 

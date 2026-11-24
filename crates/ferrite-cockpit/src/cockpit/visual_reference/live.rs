@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use ferrite_client::cockpit::{Cockpit, ProviderChoice};
 use ferrite_core::provider::Provider;
 use ferrite_core::settings::Settings;
-use ferrite_core::store::Store;
+use ferrite_engine::store::Store;
 use ferrite_core::transcript::{Body, ToolState};
 use ferrite_core::ProjectKey;
 use ferrite_core::ThreadKey;
@@ -286,7 +286,7 @@ pub fn capture(output: String) {
     ));
     let mut core = Cockpit::try_new(
         Store::open(store_dir.clone()).expect("open the throwaway store"),
-        Box::new(ferrite_core::spawner::Spawn::new(defaults.clone(), None)),
+        Box::new(ferrite_engine::spawner::Spawn::new(defaults.clone(), None)),
     )
     .expect("open the throwaway registry");
     core.set_suggestions_enabled(false);

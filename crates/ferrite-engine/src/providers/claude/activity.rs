@@ -1,0 +1,2521 @@
+//! Attribution for one Claude connection, before any Main event is emitted.
+//!
+//! Claude forwards completed child blocks rather than child token deltas.
+//! Invocation, task, and agent IDs are separate aliases; a resumed task can
+//! name a new SendMessage invocation while its text still names the first Agent.
+
+use std::collections::{HashMap, HashSet, VecDeque};
+
+use serde_json::Value;
+
+use ferrite_core::activity::{
+    ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject, TranscriptCoverage,
+};
+use ferrite_core::provider::Provider;
+use ferrite_core::SessionEvent;
+
+use super::wire;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Alias {
+    Invocation(String),
+    Task(String),
+    Agent(String),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MainStreamKind {
+    Text,
+    Thinking,
+}
+
+struct MainStreamBlock {
+    message: String,
+    index: u64,
+    kind: MainStreamKind,
+    delivery: Option<String>,
+}
+
+#[derive(Default)]
+pub(super) struct Decoder {
+    root: String,
+    aliases: HashMap<Alias, AgentKey>,
+    agents: HashMap<AgentKey, AgentInfo>,
+    originals: HashSet<AgentKey>,
+    states: HashMap<AgentKey, AgentStatus>,
+    /// Only unsettled tool calls are retained. Permission requests can precede
+    /// execution but never need an already completed tool's live owner.
+    tools: HashMap<String, Vec<Subject>>,
+    requests: HashMap<String, (Option<Subject>, String)>,
+    seen_child_frames: HashSet<String>,
+    frame_order: VecDeque<String>,
+    excluded_tasks: HashSet<String>,
+    /// The newest run of each task this connection has seen (`run_id`).
+    /// One task's runs sort, by plain string comparison, in the order they
+    /// opened, so a frame naming an earlier run than this is late.
+    runs: HashMap<String, String>,
+    /// Shell tasks serving a foreground Bash call: the call's own row shows
+    /// it running (`shell_output` streams its output there), so it is no
+    /// background task. A task the CLI backgrounds later leaves the set.
+    foreground_shells: HashSet<String>,
+    /// Calls whose result only launched background work, by call id: who
+    /// made the call, and whether the work is an agent. The task's
+    /// notification names the call, and settles it (`handback`).
+    backgrounded: HashMap<String, (Subject, bool)>,
+    main_stream_message: Option<String>,
+    /// Main's newest thought in the message streaming now, until a block
+    /// that is not a thought follows it (`say_update`).
+    main_thought: Option<MainThought>,
+    /// Main's streaming `show_visual` inputs, drawn as they arrive.
+    visual_drafts: super::drafts::Drafts,
+    main_stream_blocks: HashMap<(String, u64), MainStreamBlock>,
+    main_stream_order: VecDeque<(String, u64)>,
+    seen_main_frames: HashSet<String>,
+    main_frame_order: VecDeque<String>,
+    deliveries: HashMap<(Subject, String), Vec<String>>,
+    delivery_order: VecDeque<(Subject, String)>,
+    pending_retractions: HashSet<(Subject, String)>,
+    /// Main's last provider-reported occupancy. Result aggregates account for
+    /// a turn but do not always carry a new occupancy snapshot.
+    usage: Usage,
+    rate_limits: (
+        Option<ferrite_core::RateLimitWindow>,
+        Option<ferrite_core::RateLimitWindow>,
+    ),
+}
+
+#[derive(Default)]
+struct Usage {
+    occupancy: Option<u64>,
+    context_window: Option<u64>,
+    message_outputs: HashMap<Subject, HashMap<String, u64>>,
+    retired_outputs: HashMap<Subject, u64>,
+    message_order: VecDeque<(Subject, String)>,
+}
+
+impl Usage {
+    fn message_output(&mut self, subject: Subject, message: String, output: u64) -> u64 {
+        if !self
+            .message_outputs
+            .get(&subject)
+            .is_some_and(|outputs| outputs.contains_key(&message))
+        {
+            self.message_order
+                .push_back((subject.clone(), message.clone()));
+            if self.message_order.len() > 8192 {
+                if let Some((old_subject, old_message)) = self.message_order.pop_front() {
+                    let mut empty = false;
+                    if let Some(outputs) = self.message_outputs.get_mut(&old_subject) {
+                        if let Some(old_output) = outputs.remove(&old_message) {
+                            let retired =
+                                self.retired_outputs.entry(old_subject.clone()).or_default();
+                            *retired = retired.saturating_add(old_output);
+                        }
+                        empty = outputs.is_empty();
+                    }
+                    if empty {
+                        self.message_outputs.remove(&old_subject);
+                    }
+                }
+            }
+        }
+        let outputs = self.message_outputs.entry(subject.clone()).or_default();
+        outputs.insert(message, output);
+        let live = outputs
+            .values()
+            .fold(0u64, |total, output| total.saturating_add(*output));
+        self.retired_outputs
+            .get(&subject)
+            .copied()
+            .unwrap_or_default()
+            .saturating_add(live)
+    }
+
+    fn clear_message_outputs(&mut self, subject: &Subject) {
+        self.message_outputs.remove(subject);
+        self.retired_outputs.remove(subject);
+        self.message_order.retain(|(owner, _)| owner != subject);
+    }
+}
+
+impl Decoder {
+    /// The CLI's task id for `key`, which `stop_task` takes: a Subagent is
+    /// known by several aliases, and only its task one can stop it.
+    pub(super) fn task_of(&self, key: &AgentKey) -> Option<String> {
+        self.aliases.iter().find_map(|(alias, target)| match alias {
+            Alias::Task(id) if target == key => Some(id.clone()),
+            _ => None,
+        })
+    }
+
+    /// The host successfully answered this request. Actual execution state
+    /// still comes from the provider; a sent answer is not proof of progress.
+    pub(super) fn decision_resolved(&mut self, id: &str) {
+        self.requests.remove(id);
+    }
+
+    pub(super) fn decode(&mut self, line: &str) -> Vec<SessionEvent> {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            return Vec::new();
+        };
+        let mut events = Vec::new();
+        // The CLI announces `init` at the head of every turn, the first one
+        // at Session start. A repeat is therefore the head of a turn — an
+        // operator's, or an autonomous one a task notification started —
+        // and the earliest fact that Main is at work, well before the API
+        // has answered. It is what keeps a Main between its own result
+        // and its resume from reading as finished.
+        let turn_head = value["type"] == "system"
+            && value["subtype"] == "init"
+            && !self.root.is_empty()
+            && string(&value, "session_id") == Some(self.root.as_str());
+        if turn_head {
+            self.usage.clear_message_outputs(&Subject::Main);
+        }
+        if let Some(root) = string(&value, "session_id") {
+            if value["type"] == "system"
+                && value["subtype"] == "init"
+                && !self.root.is_empty()
+                && self.root != root
+            {
+                for key in self.agents.keys() {
+                    push(
+                        &mut events,
+                        ActivityEvent::Status {
+                            key: key.clone(),
+                            state: AgentStatus::Unknown,
+                        },
+                    );
+                }
+                for id in self.requests.keys() {
+                    push(
+                        &mut events,
+                        ActivityEvent::DecisionCancelled { id: id.clone() },
+                    );
+                }
+                *self = Self::default();
+            } else if !self.root.is_empty() && self.root != root {
+                // Another conversation's frame cannot mutate this connection's
+                // Main or join aliases that happen to use the same native ID.
+                return events;
+            }
+            if self.root.is_empty() {
+                self.root = root.to_owned();
+            }
+        }
+        if let Some(SessionEvent::RateLimits { five_hour, weekly }) = wire::parse_rate_limits(line)
+        {
+            if value["rate_limit_info"]["unifiedWindows"].is_object() {
+                self.rate_limits = (five_hour, weekly);
+            } else {
+                if five_hour.is_some() {
+                    self.rate_limits.0 = five_hour;
+                }
+                if weekly.is_some() {
+                    self.rate_limits.1 = weekly;
+                }
+            }
+            events.push(SessionEvent::RateLimits {
+                five_hour: self.rate_limits.0,
+                weekly: self.rate_limits.1,
+            });
+        }
+        if wire::schedules_work(&value) {
+            events.push(SessionEvent::ScheduledWork { pending: true });
+        }
+        match string(&value, "type") {
+            Some("system") if string(&value, "subtype") == Some("init") => {
+                if let Some(mode) = string(&value, "permissionMode") {
+                    events.push(SessionEvent::PermissionMode { mode: mode.into() });
+                }
+                if let Some(version) = string(&value, "claude_code_version") {
+                    events.push(SessionEvent::Handshake {
+                        version: version.into(),
+                        tools: value["tools"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect(),
+                    });
+                }
+                if let Some(event) = wire::parse_value(&value) {
+                    events.push(event);
+                }
+                if turn_head {
+                    events.push(SessionEvent::Progress {
+                        event: ferrite_core::progress::ProgressEvent::Phase {
+                            phase: ferrite_core::progress::Phase::Working,
+                            detail: String::new(),
+                        },
+                    });
+                }
+            }
+            Some("system") if string(&value, "subtype") != Some("init") => {
+                if string(&value, "subtype") == Some("informational") {
+                    self.notice(&value, string(&value, "content"), &mut events);
+                }
+                if string(&value, "subtype") == Some("model_refusal_fallback") {
+                    let subject = self.scope(&value, &mut events).unwrap_or(Subject::Main);
+                    self.retract_uuids(
+                        &subject,
+                        value["retracted_message_uuids"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str),
+                        &mut events,
+                    );
+                }
+                if string(&value, "subtype") == Some("local_command_output")
+                    && !self.seen_main_frame(&value)
+                {
+                    if let Some(text) = string(&value, "content") {
+                        self.main_content(
+                            &value,
+                            delivery_id(&value, "0"),
+                            ExecutionEvent::Text {
+                                text: text.to_owned(),
+                            },
+                            &mut events,
+                        );
+                    }
+                }
+                if string(&value, "subtype") == Some("background_tasks_changed") {
+                    // The runs the snapshot shows are the newest yet too.
+                    for task in value["tasks"].as_array().into_iter().flatten() {
+                        if let Some(id) = string(task, "task_id") {
+                            self.late_run(id, string(task, "run_id"));
+                        }
+                    }
+                }
+                self.task(&value, &mut events);
+                if let Some(event) = wire::parse_value(&value) {
+                    events.push(event);
+                }
+                if !matches!(
+                    string(&value, "subtype"),
+                    Some("task_started" | "task_progress" | "task_updated" | "task_notification")
+                ) {
+                    self.progress(&value, &mut events);
+                }
+            }
+            Some("conversation_reset") => {
+                if let Some(next) = string(&value, "new_conversation_id") {
+                    *self = Self::default();
+                    self.root = next.into();
+                    events.push(SessionEvent::ConversationReset {
+                        session_id: next.into(),
+                    });
+                }
+            }
+            Some("auth_status") => {
+                let output = value["output"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let error = value["error"].as_str().unwrap_or("");
+                let text = [output.as_str(), error]
+                    .into_iter()
+                    .filter(|text| !text.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.notice(&value, (!text.is_empty()).then_some(&text), &mut events);
+            }
+            Some("control_request") => self.decision(&value, &mut events),
+            Some("control_cancel_request") => {
+                if let Some(id) = string(&value, "request_id") {
+                    if let Some((Some(Subject::Subagent(key)), _)) = self.requests.remove(id) {
+                        if !self.waiting(&key) {
+                            self.status(&key, AgentStatus::Unknown, &mut events);
+                        }
+                    }
+                    push(
+                        &mut events,
+                        ActivityEvent::DecisionCancelled { id: id.to_owned() },
+                    );
+                }
+            }
+            Some("assistant" | "user") => self.message(&value, &mut events),
+            Some("stream_event") => {
+                // Only the null/absent Main stream is part of Claude's current
+                // contract. An unexpected child stream must never become Main.
+                if matches!(value.get("parent_tool_use_id"), None | Some(Value::Null)) {
+                    self.main_stream(&value, &mut events);
+                }
+            }
+            Some("result") => {
+                // Claude's result envelope is Main-only. Explicit child or
+                // malformed attribution must never retire Main's queue.
+                if !matches!(value.get("parent_tool_use_id"), None | Some(Value::Null)) {
+                    return events;
+                }
+                if let Some(usage) = self.main_usage(&value) {
+                    events.push(usage);
+                }
+                if let Some(details) = wire::parse_usage_details_value(&value) {
+                    events.push(details);
+                }
+                if let Some(event) = wire::parse_value(&value) {
+                    // The published SDK names only `human` as operator
+                    // origin. Peer/observer/coordinator and future origins
+                    // cannot acknowledge Ferrite's pending operator prompt.
+                    // Absent/null keeps compatibility with older Main frames.
+                    let main_origin = matches!(value.get("origin"), None | Some(Value::Null))
+                        || value["origin"]["kind"] == "human";
+                    if !main_origin {
+                        if let SessionEvent::TurnEnded { outcome, cost_usd } = event {
+                            push(
+                                &mut events,
+                                ActivityEvent::BackgroundTurnEnded { outcome, cost_usd },
+                            );
+                        }
+                    } else {
+                        events.push(event);
+                    }
+                }
+            }
+            _ => {
+                if let Some(event) = wire::parse_value(&value) {
+                    events.push(event);
+                }
+                if turn_head {
+                    events.push(SessionEvent::Progress {
+                        event: ferrite_core::progress::ProgressEvent::Phase {
+                            phase: ferrite_core::progress::Phase::Working,
+                            detail: String::new(),
+                        },
+                    });
+                }
+                self.progress(&value, &mut events);
+            }
+        }
+        events
+    }
+
+    /// Extra SDK observations share the execution path and attribution used
+    /// for tools. Completed message snapshots are already decoded by message().
+    fn progress(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+        if self.foreground_shell(value) {
+            return;
+        }
+        let extras: Vec<_> = wire::parse_events_value(value)
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    SessionEvent::Progress { .. } | SessionEvent::ContentBoundary
+                )
+            })
+            .collect();
+        if extras.is_empty() {
+            return;
+        }
+        let owner = string(value, "tool_use_id").and_then(|id| self.tool_owner(id));
+        if value["owned_by_subagent"] == true
+            && owner.is_none()
+            && matches!(value.get("parent_tool_use_id"), None | Some(Value::Null))
+        {
+            return;
+        }
+
+        let Some(subject) = owner.or_else(|| self.scope(value, events)) else {
+            return;
+        };
+        for event in extras {
+            match &subject {
+                Subject::Main => events.push(event),
+                Subject::Subagent(key) => {
+                    if let Some(event) = ExecutionEvent::from_session(&event) {
+                        self.content(key, None, event, events);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether `value` is a task event of a foreground Bash call's shell
+    /// (`task_type` `local_bash`, not backgrounded), which no background
+    /// chip shows: the call's row is already running.
+    fn foreground_shell(&mut self, value: &Value) -> bool {
+        if value["type"] != "system" {
+            return false;
+        }
+        let Some(task) = value["task_id"].as_str() else {
+            return false;
+        };
+        let backgrounded = |value: &Value| {
+            value["is_backgrounded"] == true
+                || value["patch"]["is_backgrounded"] == true
+                || value["patch"]["isBackgrounded"] == true
+        };
+        match value["subtype"].as_str() {
+            Some("task_started") => {
+                let foreground = value["task_type"] == "local_bash"
+                    && !backgrounded(value)
+                    && value["tool_use_id"].is_string();
+                if foreground {
+                    self.foreground_shells.insert(task.to_owned());
+                }
+                foreground
+            }
+            Some("task_progress" | "task_notification" | "task_updated")
+                if self.foreground_shells.contains(task) =>
+            {
+                if backgrounded(value) {
+                    // Sent to the background mid-run: from now on it is one.
+                    self.foreground_shells.remove(task);
+                    return false;
+                }
+                if value["subtype"] == "task_notification" {
+                    self.foreground_shells.remove(task);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn native_key(&self, native: &str) -> AgentKey {
+        AgentKey::new(Provider::Claude, &self.root, native)
+    }
+
+    fn scope(&mut self, value: &Value, events: &mut Vec<SessionEvent>) -> Option<Subject> {
+        match value.get("parent_tool_use_id") {
+            None | Some(Value::Null) => Some(Subject::Main),
+            Some(Value::String(id)) if !id.is_empty() => {
+                let alias = Alias::Invocation(id.clone());
+                let key = self
+                    .aliases
+                    .get(&alias)
+                    .cloned()
+                    .unwrap_or_else(|| self.native_key(id));
+                self.link(alias, &key, events);
+                let mut info = self.info(&key);
+                info.kind = string(value, "subagent_type")
+                    .map(str::to_owned)
+                    .or(info.kind);
+                info.description = string(value, "task_description")
+                    .map(str::to_owned)
+                    .or(info.description);
+                self.discover(info, events);
+                Some(Subject::Subagent(key))
+            }
+            // A malformed attribution is not proof that Main owns a frame.
+            _ => None,
+        }
+    }
+
+    fn info(&self, key: &AgentKey) -> AgentInfo {
+        self.agents
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| AgentInfo::new(key.clone()))
+    }
+
+    fn discover(&mut self, info: AgentInfo, events: &mut Vec<SessionEvent>) {
+        if self.agents.get(&info.key) != Some(&info) {
+            self.agents.insert(info.key.clone(), info.clone());
+            push(events, ActivityEvent::Discovered(info));
+        }
+    }
+
+    fn link(&mut self, alias: Alias, key: &AgentKey, events: &mut Vec<SessionEvent>) {
+        let native = match &alias {
+            Alias::Invocation(id) => self.native_key(id),
+            Alias::Task(id) => self.native_key(&format!("task:{id}")),
+            Alias::Agent(id) => self.native_key(&format!("agent:{id}")),
+        };
+        if let Some(previous) = self.aliases.insert(alias, key.clone()) {
+            if previous != *key {
+                for target in self.aliases.values_mut() {
+                    if *target == previous {
+                        *target = key.clone();
+                    }
+                }
+                for owners in self.tools.values_mut() {
+                    for owner in owners {
+                        if *owner == Subject::Subagent(previous.clone()) {
+                            *owner = Subject::Subagent(key.clone());
+                        }
+                    }
+                }
+                for (owner, _) in self.requests.values_mut() {
+                    if *owner == Some(Subject::Subagent(previous.clone())) {
+                        *owner = Some(Subject::Subagent(key.clone()));
+                    }
+                }
+                if let Some(old) = self.agents.remove(&previous) {
+                    let mut info = self.info(key);
+                    info.name = info.name.or(old.name);
+                    info.parent = info.parent.or(old.parent);
+                    info.kind = info.kind.or(old.kind);
+                    info.description = info.description.or(old.description);
+                    if info.coverage == TranscriptCoverage::Unavailable {
+                        info.coverage = old.coverage;
+                    }
+                    self.agents.insert(key.clone(), info);
+                }
+                if let Some(state) = self.states.remove(&previous) {
+                    self.states.entry(key.clone()).or_insert(state);
+                }
+                push(
+                    events,
+                    ActivityEvent::Alias {
+                        from: previous,
+                        to: key.clone(),
+                    },
+                );
+            }
+        } else if native != *key {
+            // Persist explicit native aliases even if no provisional tab was
+            // needed. A fresh decoder can emit the same task/agent reference
+            // after reconnect, and restored Activity still resolves it to the
+            // original spawning-tool key.
+            push(
+                events,
+                ActivityEvent::Alias {
+                    from: native,
+                    to: key.clone(),
+                },
+            );
+        }
+    }
+
+    fn status(&mut self, key: &AgentKey, state: AgentStatus, events: &mut Vec<SessionEvent>) {
+        if matches!(
+            state,
+            AgentStatus::Idle
+                | AgentStatus::Failed
+                | AgentStatus::Interrupted
+                | AgentStatus::Shutdown
+        ) {
+            self.requests
+                .retain(|_, (owner, _)| owner.as_ref() != Some(&Subject::Subagent(key.clone())));
+        }
+        if self.states.insert(key.clone(), state) != Some(state) {
+            push(
+                events,
+                ActivityEvent::Status {
+                    key: key.clone(),
+                    state,
+                },
+            );
+        }
+    }
+
+    fn waiting(&self, key: &AgentKey) -> bool {
+        self.requests
+            .values()
+            .any(|(subject, _)| subject.as_ref() == Some(&Subject::Subagent(key.clone())))
+    }
+
+    fn tool_owner(&self, id: &str) -> Option<Subject> {
+        let owners = self.tools.get(id)?;
+        (owners.len() == 1).then(|| owners[0].clone())
+    }
+
+    fn working(&mut self, key: &AgentKey, events: &mut Vec<SessionEvent>) {
+        if !self.waiting(key) && !self.cut_short(key) {
+            self.status(key, AgentStatus::Working, events);
+        }
+    }
+
+    /// Whether the provider ended `key`'s run before it finished. The CLI
+    /// still flushes what that run had in flight (a killed tool's refusal,
+    /// `[Request interrupted…]`): its tail, never the agent at work again.
+    /// Only a new run (`task_started`, a resume) reopens it.
+    fn cut_short(&self, key: &AgentKey) -> bool {
+        matches!(
+            self.states.get(key),
+            Some(AgentStatus::Interrupted | AgentStatus::Failed | AgentStatus::Shutdown)
+        )
+    }
+
+    fn content(
+        &mut self,
+        key: &AgentKey,
+        id: Option<String>,
+        event: ExecutionEvent,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        let key = key.clone();
+        push(
+            events,
+            if self.cut_short(&key) {
+                ActivityEvent::HistoryContent { key, id, event }
+            } else {
+                ActivityEvent::Content { key, id, event }
+            },
+        );
+    }
+
+    fn content_message(
+        &mut self,
+        key: &AgentKey,
+        value: &Value,
+        id: Option<String>,
+        event: ExecutionEvent,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        if let Some(id) = &id {
+            self.record_delivery(&Subject::Subagent(key.clone()), value, id, events);
+        }
+        self.content(key, id, event, events);
+    }
+
+    fn seen(&mut self, value: &Value) -> bool {
+        let Some(uuid) = string(value, "uuid") else {
+            return false;
+        };
+        let identity = format!("{}:{uuid}", self.root);
+        if !self.seen_child_frames.insert(identity.clone()) {
+            return true;
+        }
+        self.frame_order.push_back(identity);
+        if self.frame_order.len() > 8192 {
+            if let Some(old) = self.frame_order.pop_front() {
+                self.seen_child_frames.remove(&old);
+            }
+        }
+        false
+    }
+
+    fn message(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+        if string(value, "parent_tool_use_id").is_some() && self.seen(value) {
+            return;
+        }
+        let Some(subject) = self.scope(value, events) else {
+            return;
+        };
+        if subject == Subject::Main && self.seen_main_frame(value) {
+            return;
+        }
+        self.retract_subject(&subject, value, events);
+        self.progress(value, events);
+        let child = match &subject {
+            Subject::Main => None,
+            Subject::Subagent(key) => Some(key.clone()),
+        };
+        let assistant = value["type"] == "assistant";
+        if let Some(usage) = wire::parse_usage_value(value) {
+            match &child {
+                Some(key) => {
+                    let usage = self.record_usage(&Subject::Subagent(key.clone()), value, usage);
+                    if let Some(event) = ExecutionEvent::from_session(&usage) {
+                        self.content_message(
+                            key,
+                            value,
+                            delivery_id(value, "usage"),
+                            event,
+                            events,
+                        );
+                    }
+                }
+                None => events.push(self.record_main_usage(value, usage)),
+            }
+        }
+        if let Some(details) = wire::parse_usage_details_value(value) {
+            match &child {
+                Some(key) => {
+                    if let Some(event) = ExecutionEvent::from_session(&details) {
+                        self.content_message(
+                            key,
+                            value,
+                            delivery_id(value, "usage-details"),
+                            event,
+                            events,
+                        );
+                    }
+                }
+                None => events.push(details),
+            }
+        }
+        if let Some(text) = value["message"]["content"].as_str() {
+            if child.is_none() && !assistant {
+                return;
+            }
+            let event = if assistant {
+                ExecutionEvent::Text {
+                    text: text.to_owned(),
+                }
+            } else {
+                ExecutionEvent::Prompt {
+                    text: text.to_owned(),
+                }
+            };
+            if let Some(key) = &child {
+                let mut info = self.info(key);
+                info.coverage = TranscriptCoverage::Live;
+                self.discover(info, events);
+                self.working(key, events);
+                self.content_message(key, value, delivery_id(value, "0"), event, events);
+            } else {
+                self.main_content(value, delivery_id(value, "0"), event, events);
+            }
+            return;
+        }
+        let Some(blocks) = value["message"]["content"].as_array() else {
+            return;
+        };
+        // A structured envelope accompanies one result in current Claude. Do
+        // not copy it onto unrelated results if a future frame batches them.
+        let structured_result = (blocks.iter().filter(|b| b["type"] == "tool_result").count() == 1)
+            .then(|| value.get("tool_use_result"))
+            .flatten();
+        for (ordinal, block) in blocks.iter().enumerate() {
+            if child.is_none() && assistant && block["type"] != "thinking" {
+                if let Some(thought) = self.main_thought.take() {
+                    if block["type"] == "tool_use" && thought.is_update(value) {
+                        self.say_update(thought, value, events);
+                    }
+                }
+            }
+            let kind = match string(block, "type") {
+                Some("text") => Some(MainStreamKind::Text),
+                Some("thinking") => Some(MainStreamKind::Thinking),
+                _ => None,
+            };
+            let streamed = child
+                .is_none()
+                .then(|| kind.and_then(|kind| self.bind_main_stream_block(value, kind)))
+                .flatten();
+            let id = streamed
+                .clone()
+                .or_else(|| delivery_id(value, &ordinal.to_string()));
+            match string(block, "type") {
+                Some("text" | "thinking") => {
+                    if child.is_none() && !assistant {
+                        continue;
+                    }
+                    let thinking = block["type"] == "thinking";
+                    let Some(text) = block
+                        .get(if thinking { "thinking" } else { "text" })
+                        .and_then(Value::as_str)
+                    else {
+                        continue;
+                    };
+                    let event = if !assistant {
+                        ExecutionEvent::Prompt {
+                            text: text.to_owned(),
+                        }
+                    } else if thinking {
+                        match streamed {
+                            Some(_) => ExecutionEvent::ThinkingSnapshot {
+                                text: text.to_owned(),
+                            },
+                            None => ExecutionEvent::Thinking {
+                                text: text.to_owned(),
+                            },
+                        }
+                    } else {
+                        match streamed {
+                            Some(_) => ExecutionEvent::TextSnapshot {
+                                text: text.to_owned(),
+                            },
+                            None => ExecutionEvent::Text {
+                                text: text.to_owned(),
+                            },
+                        }
+                    };
+                    if let Some(key) = &child {
+                        let mut info = self.info(key);
+                        info.coverage = TranscriptCoverage::Live;
+                        self.discover(info, events);
+                        self.working(key, events);
+                        self.content_message(key, value, id, event, events);
+                    } else {
+                        if assistant && thinking {
+                            let message = value["message"]["id"].as_str().unwrap_or_default();
+                            let follows_thought = self
+                                .main_thought
+                                .take()
+                                .is_some_and(|previous| previous.message == message);
+                            self.main_thought = id
+                                .clone()
+                                .filter(|_| !text.trim().is_empty())
+                                .map(|id| MainThought {
+                                    message: message.to_owned(),
+                                    id,
+                                    text: text.to_owned(),
+                                    follows_thought,
+                                });
+                        }
+                        self.main_content(value, id, event, events);
+                    }
+                }
+                Some("tool_use") if assistant => {
+                    let (Some(tool_id), Some(name)) = (string(block, "id"), string(block, "name"))
+                    else {
+                        continue;
+                    };
+                    let owners = self.tools.entry(tool_id.to_owned()).or_default();
+                    if !owners.contains(&subject) {
+                        owners.push(subject.clone());
+                    }
+                    let input = block.get("input").cloned().unwrap_or(Value::Null);
+                    if let Some(key) = &child {
+                        self.working(key, events);
+                        self.content_message(
+                            key,
+                            value,
+                            id,
+                            ExecutionEvent::ToolStarted {
+                                id: tool_id.to_owned(),
+                                name: name.to_owned(),
+                                input: input.clone(),
+                            },
+                            events,
+                        );
+                    } else {
+                        self.main_content(
+                            value,
+                            id,
+                            ExecutionEvent::ToolStarted {
+                                id: tool_id.to_owned(),
+                                name: name.to_owned(),
+                                input: input.clone(),
+                            },
+                            events,
+                        );
+                    }
+                    self.invocation(tool_id, name, &input, &subject, events);
+                }
+                Some("tool_result") if !assistant => {
+                    let Some(tool_id) = string(block, "tool_use_id") else {
+                        continue;
+                    };
+                    let output = wire::tool_result_text(block.get("content"));
+                    let is_error = block["is_error"].as_bool().unwrap_or(false);
+                    let structured = structured_result;
+                    let result = wire::parse_tool_result(structured);
+                    if matches!(result, ferrite_core::ToolResult::Background { .. }) {
+                        let agent = structured.is_some_and(|value| value["status"] == "async_launched");
+                        self.backgrounded
+                            .insert(tool_id.to_owned(), (subject.clone(), agent));
+                    }
+                    self.requests.retain(|_, (owner, gated)| {
+                        gated != tool_id || owner.as_ref() != Some(&subject)
+                    });
+                    if let Some(key) = &child {
+                        self.working(key, events);
+                        self.content_message(
+                            key,
+                            value,
+                            id,
+                            ExecutionEvent::ToolCompleted {
+                                id: tool_id.to_owned(),
+                                output,
+                                is_error,
+                                result,
+                            },
+                            events,
+                        );
+                    } else {
+                        self.main_content(
+                            value,
+                            id,
+                            ExecutionEvent::ToolCompleted {
+                                id: tool_id.to_owned(),
+                                output,
+                                is_error,
+                                result,
+                            },
+                            events,
+                        );
+                    }
+                    self.completed_invocation(tool_id, structured, is_error, events);
+                    if let Some(owners) = self.tools.get_mut(tool_id) {
+                        owners.retain(|owner| *owner != subject);
+                        if owners.is_empty() {
+                            self.tools.remove(tool_id);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn main_usage(&mut self, value: &Value) -> Option<SessionEvent> {
+        wire::parse_usage_value(value).map(|usage| self.record_main_usage(value, usage))
+    }
+
+    fn record_main_usage(&mut self, value: &Value, usage: SessionEvent) -> SessionEvent {
+        self.record_usage(&Subject::Main, value, usage)
+    }
+
+    fn record_usage(
+        &mut self,
+        subject: &Subject,
+        value: &Value,
+        usage: SessionEvent,
+    ) -> SessionEvent {
+        let SessionEvent::TokenUsage {
+            mut total_tokens,
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            reasoning_output_tokens,
+            context_window,
+        } = usage
+        else {
+            return usage;
+        };
+        let main = *subject == Subject::Main;
+        if main {
+            let has_occupancy = value["type"] == "assistant"
+                || value["usage"]["iterations"]
+                    .as_array()
+                    .is_some_and(|iterations| !iterations.is_empty());
+            if has_occupancy {
+                self.usage.occupancy = Some(total_tokens);
+            } else if let Some(occupancy) = self.usage.occupancy {
+                total_tokens = occupancy;
+            }
+            if let Some(window) = context_window {
+                self.usage.context_window = Some(window);
+            }
+        }
+        let output_tokens = if value["type"] == "assistant" {
+            string(&value["message"], "id")
+                .map(|message| {
+                    self.usage
+                        .message_output(subject.clone(), message.into(), output_tokens)
+                })
+                .unwrap_or(output_tokens)
+        } else {
+            self.usage.clear_message_outputs(subject);
+            output_tokens
+        };
+        SessionEvent::TokenUsage {
+            total_tokens,
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            reasoning_output_tokens,
+            context_window: if main {
+                self.usage.context_window
+            } else {
+                context_window
+            },
+        }
+    }
+
+    /// Claude stream frames name a message once, then each delta carries only
+    /// its native block index. Retain that proven pair so the later completed
+    /// block can replace the live stream. A full frame with no observed stream
+    /// still keeps its outer delivery UUID.
+    fn main_stream(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+        if let Some(draft) = self.visual_drafts.observe(value) {
+            events.push(draft);
+        }
+        match value["event"]["type"].as_str() {
+            Some("message_start") => {
+                self.main_stream_message = value["event"]["message"]["id"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned);
+            }
+            Some("content_block_start") => {
+                let Some((id, kind)) = self.register_main_stream_block(value) else {
+                    events.extend(wire::parse_events_value(value));
+                    return;
+                };
+                let block = &value["event"]["content_block"];
+                let text = match kind {
+                    MainStreamKind::Text => block["text"].as_str(),
+                    MainStreamKind::Thinking => block["thinking"].as_str(),
+                };
+                if let Some(text) = text.filter(|text| !text.is_empty()) {
+                    push(
+                        events,
+                        ActivityEvent::MainContent {
+                            id: Some(id),
+                            event: match kind {
+                                MainStreamKind::Text => {
+                                    ExecutionEvent::TextDelta { text: text.into() }
+                                }
+                                MainStreamKind::Thinking => {
+                                    ExecutionEvent::ThinkingDelta { text: text.into() }
+                                }
+                            },
+                        },
+                    );
+                }
+            }
+            Some("content_block_stop") => {}
+            Some("message_stop") => self.main_stream_message = None,
+            Some("content_block_delta") => {
+                let Some(id) = self.main_stream_block_id(value) else {
+                    events.extend(wire::parse_events_value(value));
+                    return;
+                };
+                for event in wire::parse_events_value(value) {
+                    match event {
+                        SessionEvent::TextDelta { text } => push(
+                            events,
+                            ActivityEvent::MainContent {
+                                id: Some(id.clone()),
+                                event: ExecutionEvent::TextDelta { text },
+                            },
+                        ),
+                        SessionEvent::ThinkingDelta { text } => push(
+                            events,
+                            ActivityEvent::MainContent {
+                                id: Some(id.clone()),
+                                event: ExecutionEvent::ThinkingDelta { text },
+                            },
+                        ),
+                        event => events.push(event),
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+        events.extend(wire::parse_events_value(value));
+    }
+
+    fn main_content(
+        &mut self,
+        value: &Value,
+        id: Option<String>,
+        event: ExecutionEvent,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        if let Some(id) = &id {
+            self.record_delivery(&Subject::Main, value, id, events);
+        }
+        push(events, ActivityEvent::MainContent { id, event });
+    }
+
+    fn retract_subject(
+        &mut self,
+        subject: &Subject,
+        value: &Value,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        let retracted = value["supersedes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str);
+        self.retract_uuids(subject, retracted, events);
+    }
+
+    fn retract_uuids<'a>(
+        &mut self,
+        subject: &Subject,
+        retracted: impl Iterator<Item = &'a str>,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        let mut ids = Vec::new();
+        for uuid in retracted {
+            let delivery = (subject.clone(), uuid.into());
+            if let Some(known) = self.deliveries.get(&delivery) {
+                ids.extend(known.iter().cloned());
+            } else if self.pending_retractions.len() < 8192 {
+                self.pending_retractions.insert(delivery);
+            }
+        }
+        if !ids.is_empty() {
+            self.retract_content(subject, ids, events);
+        }
+    }
+
+    fn record_delivery(
+        &mut self,
+        subject: &Subject,
+        value: &Value,
+        id: &str,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        let Some(uuid) = string(value, "uuid") else {
+            return;
+        };
+        let key = (subject.clone(), uuid.into());
+        let delivery = self.deliveries.entry(key.clone()).or_default();
+        if !delivery.iter().any(|known| known == id) {
+            delivery.push(id.into());
+        }
+        if delivery.len() == 1 {
+            self.delivery_order.push_back(key.clone());
+            if self.delivery_order.len() > 8192 {
+                if let Some(old) = self.delivery_order.pop_front() {
+                    self.deliveries.remove(&old);
+                }
+            }
+        }
+        if self.pending_retractions.contains(&key) {
+            self.retract_content(subject, vec![id.into()], events);
+        }
+    }
+
+    /// Says a thought that was the model's update (`MainThought::is_update`):
+    /// the thought leaves the transcript and its text stands in its place,
+    /// as T3 Code shows it.
+    fn say_update(&mut self, thought: MainThought, value: &Value, events: &mut Vec<SessionEvent>) {
+        self.retract_content(&Subject::Main, vec![thought.id.clone()], events);
+        self.main_content(
+            value,
+            Some(format!("{}:said", thought.id)),
+            ExecutionEvent::Text { text: thought.text },
+            events,
+        );
+    }
+
+    fn retract_content(&self, subject: &Subject, ids: Vec<String>, events: &mut Vec<SessionEvent>) {
+        let event = ExecutionEvent::Retract { ids };
+        match subject {
+            Subject::Main => push(events, ActivityEvent::MainContent { id: None, event }),
+            Subject::Subagent(key) => push(
+                events,
+                ActivityEvent::Content {
+                    key: key.clone(),
+                    id: None,
+                    event,
+                },
+            ),
+        }
+    }
+
+    fn register_main_stream_block(&mut self, value: &Value) -> Option<(String, MainStreamKind)> {
+        let message = self.main_stream_message.as_deref()?;
+        let index = value["event"]["index"].as_u64()?;
+        let kind = match value["event"]["content_block"]["type"].as_str()? {
+            "text" => MainStreamKind::Text,
+            "thinking" => MainStreamKind::Thinking,
+            _ => return None,
+        };
+        let key = (message.to_owned(), index);
+        if !self.main_stream_blocks.contains_key(&key) {
+            self.main_stream_blocks.insert(
+                key.clone(),
+                MainStreamBlock {
+                    message: message.into(),
+                    index,
+                    kind,
+                    delivery: None,
+                },
+            );
+            self.main_stream_order.push_back(key);
+            if self.main_stream_order.len() > 8192 {
+                if let Some(old) = self.main_stream_order.pop_front() {
+                    self.main_stream_blocks.remove(&old);
+                }
+            }
+        }
+        Some((main_block_id(message, index), kind))
+    }
+
+    fn main_stream_block_id(&self, value: &Value) -> Option<String> {
+        let message = self.main_stream_message.as_deref()?;
+        let index = value["event"]["index"].as_u64()?;
+        self.main_stream_blocks
+            .contains_key(&(message.to_owned(), index))
+            .then(|| main_block_id(message, index))
+    }
+
+    fn bind_main_stream_block(&mut self, value: &Value, kind: MainStreamKind) -> Option<String> {
+        let message = value["message"]["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())?;
+        let candidates: Vec<_> = self
+            .main_stream_blocks
+            .values()
+            .filter(|block| {
+                block.message == message && block.kind == kind && block.delivery.is_none()
+            })
+            .map(|block| (block.message.clone(), block.index))
+            .collect();
+        let [key] = candidates.as_slice() else {
+            return None;
+        };
+        let block = self.main_stream_blocks.get_mut(key)?;
+        block.delivery = string(value, "uuid").map(str::to_owned);
+        Some(main_block_id(&block.message, block.index))
+    }
+
+    fn seen_main_frame(&mut self, value: &Value) -> bool {
+        let Some(uuid) = string(value, "uuid") else {
+            return false;
+        };
+        if !self.seen_main_frames.insert(uuid.into()) {
+            return true;
+        }
+        self.main_frame_order.push_back(uuid.into());
+        if self.main_frame_order.len() > 8192 {
+            if let Some(old) = self.main_frame_order.pop_front() {
+                self.seen_main_frames.remove(&old);
+            }
+        }
+        false
+    }
+
+    fn invocation(
+        &mut self,
+        tool: &str,
+        name: &str,
+        input: &Value,
+        owner: &Subject,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        if matches!(name, "Agent" | "Task") {
+            let resumed = string(input, "resume");
+            let key = if let Some(id) = resumed {
+                self.aliases
+                    .get(&Alias::Agent(id.to_owned()))
+                    .cloned()
+                    .unwrap_or_else(|| self.native_key(&format!("agent:{id}")))
+            } else {
+                self.native_key(tool)
+            };
+            self.link(Alias::Invocation(tool.to_owned()), &key, events);
+            if let Some(id) = resumed {
+                self.link(Alias::Agent(id.to_owned()), &key, events);
+            }
+            if resumed.is_none() {
+                self.originals.insert(key.clone());
+            }
+            let mut info = self.info(&key);
+            if resumed.is_none() {
+                info.parent = Some(owner.clone());
+            }
+            info.name = string(input, "name").map(str::to_owned).or(info.name);
+            info.kind = string(input, "subagent_type")
+                .map(str::to_owned)
+                .or(info.kind);
+            info.description = string(input, "description")
+                .map(str::to_owned)
+                .or(info.description);
+            if info.coverage == TranscriptCoverage::Unavailable {
+                info.coverage = TranscriptCoverage::ToolActivity;
+            }
+            self.discover(info, events);
+            self.status(&key, AgentStatus::Pending, events);
+        } else if name == "SendMessage" {
+            if let Some(target) = string(input, "to") {
+                // SendMessage also addresses named teammates. Only an agent ID
+                // already joined by provider evidence identifies a child here.
+                if let Some(key) = self.aliases.get(&Alias::Agent(target.to_owned())).cloned() {
+                    self.link(Alias::Invocation(tool.to_owned()), &key, events);
+                }
+            }
+        }
+    }
+
+    fn completed_invocation(
+        &mut self,
+        tool: &str,
+        result: Option<&Value>,
+        failed: bool,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        let mut key = self
+            .aliases
+            .get(&Alias::Invocation(tool.to_owned()))
+            .cloned();
+        if let Some(result) = result {
+            if let Some(agent) =
+                string(result, "agentId").or_else(|| string(result, "resumedAgentId"))
+            {
+                let known = self.aliases.get(&Alias::Agent(agent.to_owned())).cloned();
+                let canonical = key
+                    .as_ref()
+                    .filter(|key| self.originals.contains(*key))
+                    .cloned()
+                    .or_else(|| {
+                        known
+                            .as_ref()
+                            .filter(|key| self.originals.contains(*key))
+                            .cloned()
+                    })
+                    .or(known)
+                    .unwrap_or_else(|| self.native_key(&format!("agent:{agent}")));
+                self.link(Alias::Invocation(tool.to_owned()), &canonical, events);
+                self.link(Alias::Agent(agent.to_owned()), &canonical, events);
+                key = Some(canonical);
+            }
+        }
+        let Some(key) = key else {
+            return;
+        };
+        let mut info = self.info(&key);
+        if let Some(result) = result {
+            info.kind = string(result, "agentType").map(str::to_owned).or(info.kind);
+            info.description = string(result, "description")
+                .map(str::to_owned)
+                .or(info.description);
+        }
+        self.discover(info, events);
+        if failed {
+            // The error result of a run already stopped says nothing new.
+            if !self.cut_short(&key) {
+                let ended = if rejected(result) {
+                    AgentStatus::Interrupted
+                } else {
+                    AgentStatus::Failed
+                };
+                self.status(&key, ended, events);
+            }
+        } else if let Some(state) = result.and_then(|r| string(r, "status")).map(status) {
+            self.status(&key, state, events);
+        }
+    }
+
+    fn notice(&mut self, value: &Value, text: Option<&str>, events: &mut Vec<SessionEvent>) {
+        let Some(text) = text.filter(|text| !text.is_empty()) else {
+            return;
+        };
+        match self.scope(value, events) {
+            Some(Subject::Main) => push(
+                events,
+                ActivityEvent::MainContent {
+                    id: delivery_id(value, "notice"),
+                    event: ExecutionEvent::Notice { text: text.into() },
+                },
+            ),
+            Some(Subject::Subagent(key)) => self.content(
+                &key,
+                delivery_id(value, "notice"),
+                ExecutionEvent::Notice { text: text.into() },
+                events,
+            ),
+            None => {}
+        }
+    }
+
+    /// Whether `run` of `task` is older than its newest run seen, which a
+    /// newer `run` becomes. A frame naming no run (an older CLI, a task this
+    /// process did not register) is never late.
+    fn late_run(&mut self, task: &str, run: Option<&str>) -> bool {
+        let Some(run) = run else {
+            return false;
+        };
+        if self
+            .runs
+            .get(task)
+            .is_some_and(|newest| run < newest.as_str())
+        {
+            return true;
+        }
+        self.runs.insert(task.to_owned(), run.to_owned());
+        false
+    }
+
+    fn task(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+        let subtype = string(value, "subtype").unwrap_or("");
+        if !matches!(
+            subtype,
+            "task_started" | "task_progress" | "task_updated" | "task_notification"
+        ) {
+            return;
+        }
+        if self.seen(value) {
+            return;
+        }
+        let Some(task_id) = string(value, "task_id") else {
+            return;
+        };
+        // A resumed task's earlier run cannot overwrite the one now running.
+        if self.late_run(task_id, string(value, "run_id")) {
+            return;
+        }
+        if subtype == "task_notification" {
+            self.handback(value, events);
+        }
+        if wire::hidden_task(value) {
+            self.excluded_tasks.insert(task_id.into());
+            return;
+        }
+        if self.excluded_tasks.contains(task_id) {
+            return;
+        }
+        // Bash jobs have task IDs too. Classification or an existing agent
+        // alias is necessary; owned_by_subagent means a child tool, not a child.
+        if string(value, "task_type").is_some() && !wire::agent_task(value) {
+            self.progress(value, events);
+            return;
+        }
+        let invocation = string(value, "tool_use_id");
+        let known_task = self.aliases.get(&Alias::Task(task_id.to_owned())).cloned();
+        let known_invocation =
+            invocation.and_then(|id| self.aliases.get(&Alias::Invocation(id.to_owned())).cloned());
+        let key = match known_task.or(known_invocation) {
+            Some(key) => key,
+            None if wire::agent_task(value) => invocation
+                .and_then(|id| self.aliases.get(&Alias::Invocation(id.to_owned())).cloned())
+                .unwrap_or_else(|| self.native_key(&format!("task:{task_id}"))),
+            None => {
+                self.progress(value, events);
+                return;
+            }
+        };
+        self.link(Alias::Task(task_id.to_owned()), &key, events);
+        if let Some(id) = invocation {
+            self.link(Alias::Invocation(id.to_owned()), &key, events);
+        }
+        let mut info = self.info(&key);
+        // A task names the task that started it (`parent_task_id`, HD8): the
+        // agent nests under it. A parent not seen yet leaves the child
+        // visible on its own; a later frame names it again and places it.
+        if info.parent.is_none() {
+            let parent = string(value, "parent_task_id")
+                .and_then(|id| self.aliases.get(&Alias::Task(id.to_owned())).cloned())
+                .filter(|parent| *parent != key);
+            info.parent = parent.map(Subject::Subagent);
+        }
+        info.kind = string(value, "subagent_type")
+            .map(str::to_owned)
+            .or(info.kind);
+        // Progress descriptions describe the current tool; they must not rename
+        // the tab's durable task description on every tool call.
+        if subtype == "task_started" {
+            self.usage
+                .clear_message_outputs(&Subject::Subagent(key.clone()));
+            info.description = string(value, "description")
+                .map(str::to_owned)
+                .or(info.description);
+        }
+        self.discover(info, events);
+        if subtype == "task_started" && self.cut_short(&key) {
+            self.states.remove(&key);
+        }
+        if matches!(subtype, "task_started" | "task_progress")
+            && !self.waiting(&key)
+            && !self.cut_short(&key)
+        {
+            let detail = string(value, "summary")
+                .or_else(|| string(value, "description"))
+                .or_else(|| string(value, "last_tool_name"))
+                .unwrap_or("");
+            self.content(
+                &key,
+                None,
+                ExecutionEvent::Progress {
+                    event: ferrite_core::progress::ProgressEvent::Phase {
+                        phase: ferrite_core::progress::Phase::Working,
+                        detail: detail.into(),
+                    },
+                },
+                events,
+            );
+        }
+        let state = match subtype {
+            "task_started" => Some(AgentStatus::Working),
+            "task_progress" => {
+                (!self.waiting(&key) && !self.cut_short(&key)).then_some(AgentStatus::Working)
+            }
+            "task_updated" => string(&value["patch"], "status").map(status),
+            "task_notification" => string(value, "status").map(status),
+            _ => None,
+        };
+        if let Some(state) = state {
+            self.status(&key, state, events);
+            if subtype == "task_notification"
+                && matches!(state, AgentStatus::Failed | AgentStatus::Interrupted)
+            {
+                if let Some(summary) = string(value, "summary") {
+                    self.content(
+                        &key,
+                        delivery_id(value, "outcome"),
+                        ExecutionEvent::Notice {
+                            text: summary.to_owned(),
+                        },
+                        events,
+                    );
+                }
+            }
+        }
+    }
+
+    /// A background launch's outcome, joined to the call that launched it
+    /// (HD64) as that call's own result: a command's output (read from the
+    /// task's output file, which the notification names and the CLI keeps)
+    /// and the exit code its summary reports; an agent's final report, and
+    /// its usage. Only a call this connection saw launched: any other
+    /// notification is a task's alone.
+    fn handback(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+        let Some(call) = string(value, "tool_use_id") else {
+            return;
+        };
+        let Some((subject, agent)) = self.backgrounded.remove(call) else {
+            return;
+        };
+        let summary = string(value, "summary").unwrap_or_default().to_owned();
+        let is_error = string(value, "status").is_some_and(|status| status != "completed");
+        let (output, result) = if agent {
+            let usage = &value["usage"];
+            let result = if usage.is_object() {
+                ferrite_core::ToolResult::Structured {
+                    value: usage.clone(),
+                    duration_ms: usage["duration_ms"].as_u64(),
+                }
+            } else {
+                ferrite_core::ToolResult::Opaque
+            };
+            (summary, result)
+        } else {
+            let stdout = string(value, "output_file")
+                .filter(|path| !path.is_empty())
+                .and_then(super::shell_output::read_output)
+                .unwrap_or_default();
+            let exit_code = exit_code(&summary);
+            // A failure with nothing printed says why in the CLI's words.
+            let output = if stdout.is_empty() && is_error {
+                summary
+            } else {
+                stdout.clone()
+            };
+            (
+                output,
+                ferrite_core::ToolResult::Command {
+                    stdout,
+                    stderr: String::new(),
+                    exit_code,
+                    duration_ms: None,
+                },
+            )
+        };
+        let event = ExecutionEvent::ToolCompleted {
+            id: call.to_owned(),
+            output,
+            is_error,
+            result,
+        };
+        let id = delivery_id(value, "handback");
+        match subject {
+            Subject::Main => {
+                // Stopped is the operator's side of the call, never a failure.
+                if matches!(string(value, "status"), Some("stopped" | "killed")) {
+                    events.push(SessionEvent::ToolDenied { id: call.to_owned() });
+                }
+                self.main_content(value, id, event, events)
+            }
+            Subject::Subagent(key) => self.content(&key, id, event, events),
+        }
+    }
+
+    fn decision(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+        let Some(SessionEvent::DecisionRequested { decision }) = wire::parse_value(value) else {
+            return;
+        };
+        let request = &value["request"];
+        let malformed_agent = !matches!(request.get("agent_id"), None | Some(Value::Null))
+            && string(request, "agent_id").is_none();
+        let subject = if self.root.is_empty() || malformed_agent {
+            None
+        } else if let Some(agent) = string(request, "agent_id") {
+            if let Some(key) = self.aliases.get(&Alias::Agent(agent.to_owned())).cloned() {
+                Some(Subject::Subagent(key))
+            } else if let Some(Subject::Subagent(key)) = self.tool_owner(&decision.tool_use_id) {
+                self.link(Alias::Agent(agent.to_owned()), &key, events);
+                Some(Subject::Subagent(key))
+            } else {
+                // An explicit agent ID is useful identity even when discovery
+                // is late. A later join redirects this provisional key.
+                let key = self.native_key(&format!("agent:{agent}"));
+                self.link(Alias::Agent(agent.to_owned()), &key, events);
+                self.discover(self.info(&key), events);
+                Some(Subject::Subagent(key))
+            }
+        } else {
+            self.tool_owner(&decision.tool_use_id)
+        };
+        self.requests.insert(
+            decision.id.clone(),
+            (subject.clone(), decision.tool_use_id.clone()),
+        );
+        if let Some(Subject::Subagent(key)) = &subject {
+            self.status(key, AgentStatus::Waiting, events);
+        }
+        if subject == Some(Subject::Main) {
+            events.push(SessionEvent::DecisionRequested { decision });
+        } else {
+            push(events, ActivityEvent::Decision { subject, decision });
+        }
+    }
+}
+
+fn string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+}
+
+/// The exit code a background command's summary reports: `Background
+/// command "…" completed (exit code 0)`.
+fn exit_code(summary: &str) -> Option<i64> {
+    let (_, after) = summary.rsplit_once("exit code ")?;
+    let digits: String = after
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit() || *ch == '-')
+        .collect();
+    digits.parse().ok()
+}
+
+/// The identity of one part of a frame: its `uuid`. A frame with none gets
+/// a deterministic key from what pins it down (HD44): its type and
+/// `timestamp` and a hash of its message, so a replay of the same frame is
+/// recognised while two frames that merely say the same thing, at different
+/// times, are two. A frame with neither has no identity and is never
+/// deduped.
+fn delivery_id(value: &Value, part: &str) -> Option<String> {
+    if let Some(uuid) = string(value, "uuid") {
+        return Some(format!("{uuid}:{part}"));
+    }
+    use std::hash::{Hash, Hasher};
+    let (kind, at) = (string(value, "type")?, string(value, "timestamp")?);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value["message"].to_string().hash(&mut hasher);
+    Some(format!("{kind}@{at}:{:x}:{part}", hasher.finish()))
+}
+
+/// A thought of main's, kept until the block after it shows what it was.
+struct MainThought {
+    /// The API message it is a block of.
+    message: String,
+    id: String,
+    text: String,
+    /// The block before it in its message was a thought too.
+    follows_thought: bool,
+}
+
+impl MainThought {
+    /// Claude 5.1 and later write the update they would say before a call
+    /// as a thinking block, at most one such block before each call: a
+    /// second thought in a row, directly before a call in the same message,
+    /// is that update (T3 Code's `claudeWritesUpdatesAsThinking`).
+    fn is_update(&self, call: &Value) -> bool {
+        self.follows_thought
+            && call["message"]["id"].as_str() == Some(self.message.as_str())
+            && call["message"]["model"]
+                .as_str()
+                .and_then(claude_version)
+                .is_some_and(|version| version >= (5, 1))
+    }
+}
+
+/// The version a Claude model id names: `claude-opus-5-5` is 5.5,
+/// `claude-sonnet-4-5-20250929` 4.5, `claude-opus-5-20261001` 5.0.
+fn claude_version(model: &str) -> Option<(u32, u32)> {
+    let digits = |text: &str| text.bytes().take_while(u8::is_ascii_digit).count();
+    model.match_indices("claude-").find_map(|(at, prefix)| {
+        let rest = &model[at + prefix.len()..];
+        let family = rest.bytes().take_while(u8::is_ascii_lowercase).count();
+        let rest = rest[family..].strip_prefix('-').filter(|_| family > 0)?;
+        let major = digits(rest);
+        let version = rest[..major].parse().ok()?;
+        let minor = rest[major..]
+            .strip_prefix('-')
+            .and_then(|rest| (1..=2).contains(&digits(rest)).then(|| &rest[..digits(rest)]))
+            .map_or(Some(0), |minor| minor.parse().ok())?;
+        Some((version, minor))
+    })
+}
+
+fn main_block_id(message: &str, index: u64) -> String {
+    format!("stream:{message}:{index}")
+}
+
+fn push(events: &mut Vec<SessionEvent>, event: ActivityEvent) {
+    events.push(SessionEvent::Activity(event));
+}
+
+/// Whether a call's error result is the operator stopping it (Escape during
+/// a foreground agent), which `claude` 2.1.318 marks in `tool_use_result`.
+fn rejected(result: Option<&Value>) -> bool {
+    result.and_then(Value::as_str) == Some("User rejected tool use")
+}
+
+fn status(value: &str) -> AgentStatus {
+    match value {
+        "pending" => AgentStatus::Pending,
+        "running" | "async_launched" => AgentStatus::Working,
+        "completed" => AgentStatus::Idle,
+        "failed" => AgentStatus::Failed,
+        "stopped" | "killed" => AgentStatus::Interrupted,
+        "paused" => AgentStatus::Paused,
+        _ => AgentStatus::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferrite_core::activity::{Activity, ActivityInput, ActivityLimits};
+    use serde_json::json;
+    use std::time::Instant;
+
+    const OVERLAP: &str =
+        include_str!("../../../tests/fixtures/subagents/claude-overlap-2.1.261.jsonl");
+    const NESTED: &str =
+        include_str!("../../../tests/fixtures/subagents/claude-nested-2.1.261.jsonl");
+    const REUSED: &str =
+        include_str!("../../../tests/fixtures/subagents/claude-reuse-2.1.261.jsonl");
+    const DECISIONS: &str =
+        include_str!("../../../tests/fixtures/subagents/claude-decisions-2.1.261.jsonl");
+
+    fn replay(fixture: &str) -> (Decoder, Vec<SessionEvent>) {
+        let mut decoder = Decoder::default();
+        let events = fixture
+            .lines()
+            .flat_map(|line| decoder.decode(line))
+            .collect();
+        (decoder, events)
+    }
+
+    /// One API message as the CLI streams it: two thinking blocks, then a
+    /// Bash call (shape captured from 2.1.330 with `--include-partial-messages`).
+    fn two_thoughts_then_a_call(model: &str) -> Vec<String> {
+        let frame = |event: Value| {
+            json!({"type":"stream_event","event":event,"session_id":"s1","parent_tool_use_id":null,
+                "uuid":format!("{}-{}", event["type"], event["index"]),"api_message_id":"msg_1"})
+            .to_string()
+        };
+        let snapshot = |uuid: &str, block: Value| {
+            json!({"type":"assistant","session_id":"s1","parent_tool_use_id":null,"uuid":uuid,
+                "message":{"model":model,"id":"msg_1","type":"message","role":"assistant","content":[block]}})
+            .to_string()
+        };
+        let thought = |index: u64, text: &str| {
+            vec![
+                frame(json!({"type":"content_block_start","index":index,
+                    "content_block":{"type":"thinking","thinking":"","signature":""}})),
+                frame(json!({"type":"content_block_delta","index":index,
+                    "delta":{"type":"thinking_delta","thinking":text}})),
+                snapshot(
+                    &format!("snap{index}"),
+                    json!({"type":"thinking","thinking":text,"signature":"sig"}),
+                ),
+                frame(json!({"type":"content_block_stop","index":index})),
+            ]
+        };
+        let mut lines = vec![frame(json!({"type":"message_start","message":{
+            "model":model,"id":"msg_1","type":"message","role":"assistant","content":[]}}))];
+        lines.extend(thought(
+            0,
+            "I'll finish with wrap_up after the last command.\n\n",
+        ));
+        lines.extend(thought(
+            1,
+            "The repo has only a seed commit, so I'm planning from scratch.\n\n",
+        ));
+        let call = json!({"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}});
+        lines.push(frame(
+            json!({"type":"content_block_start","index":2,"content_block":call}),
+        ));
+        lines.push(snapshot("snap2", call));
+        lines.push(frame(json!({"type":"content_block_stop","index":2})));
+        lines.push(frame(json!({"type":"message_stop"})));
+        lines
+    }
+
+    /// The main transcript's blocks in order, as `thought:`, `said:` or
+    /// `call:` lines.
+    fn main_shape(lines: &[String]) -> Vec<String> {
+        let mut decoder = Decoder::default();
+        let mut activity = Activity::default();
+        activity.apply(ActivityInput::Connect { generation: 1 });
+        for event in lines.iter().flat_map(|line| decoder.decode(line)) {
+            activity.apply(match event {
+                SessionEvent::Activity(event) => ActivityInput::Observe {
+                    generation: 1,
+                    event,
+                    at: Instant::now(),
+                },
+                event => ActivityInput::Main {
+                    input: ferrite_core::transcript::Input::Event(event),
+                    at: Instant::now(),
+                },
+            });
+        }
+        use ferrite_core::transcript::Body;
+        activity
+            .view()
+            .main()
+            .transcript()
+            .blocks()
+            .iter()
+            .filter_map(|block| match &block.body {
+                Body::Thinking(text) => Some(format!("thought: {}", text.trim())),
+                Body::Paragraph { spans } => Some(format!(
+                    "said: {}",
+                    spans
+                        .iter()
+                        .map(|span| span.text.as_str())
+                        .collect::<String>()
+                        .trim()
+                )),
+                Body::Tool(tool) => Some(format!("call: {}", tool.name)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Claude 5.1 and later write the update they would say before a call
+    /// as a thinking block: a second thought in a row before a call is
+    /// that update, said to the operator as T3 Code shows it (its
+    /// `claudeWritesUpdatesAsThinking`). The first stays a thought.
+    #[test]
+    fn a_second_thought_before_a_call_is_said_on_claude_5_1_and_later() {
+        assert_eq!(
+            main_shape(&two_thoughts_then_a_call("claude-opus-5-5")),
+            [
+                "thought: I'll finish with wrap_up after the last command.",
+                "said: The repo has only a seed commit, so I'm planning from scratch.",
+                "call: Bash",
+            ]
+        );
+        assert_eq!(
+            main_shape(&two_thoughts_then_a_call("claude-sonnet-4-5-20250929")),
+            [
+                "thought: I'll finish with wrap_up after the last command.",
+                "thought: The repo has only a seed commit, so I'm planning from scratch.",
+                "call: Bash",
+            ]
+        );
+    }
+
+    /// Work the CLI will start itself, which Ferrite cannot watch: a
+    /// wakeup, cron or monitor the agent scheduled, or an ambient task.
+    #[test]
+    fn scheduling_tools_and_ambient_tasks_are_scheduled_work() {
+        let tool = |name: &str| {
+            json!({"type":"assistant","session_id":"s1","parent_tool_use_id":null,
+                "message":{"id":"msg_1","role":"assistant","content":[
+                    {"type":"tool_use","id":format!("toolu_{name}"),"name":name,"input":{}}]}})
+            .to_string()
+        };
+        let task = |ambient: bool| {
+            json!({"type":"system","subtype":"task_started","session_id":"s1",
+                "task_id":format!("task_{ambient}"),"description":"watch","ambient":ambient})
+            .to_string()
+        };
+        let scheduled = |line: String| {
+            Decoder::default()
+                .decode(&line)
+                .contains(&SessionEvent::ScheduledWork { pending: true })
+        };
+        for name in ["ScheduleWakeup", "CronCreate", "Monitor"] {
+            assert!(scheduled(tool(name)), "{name}");
+        }
+        assert!(scheduled(task(true)), "an ambient task");
+        assert!(!scheduled(tool("Bash")), "an ordinary tool");
+        assert!(!scheduled(task(false)), "a task Ferrite shows");
+    }
+
+    #[test]
+    fn existing_main_captures_keep_their_event_and_usage_projection() {
+        for fixture in [
+            include_str!("../../../tests/fixtures/claude-hello-2.1.243.jsonl"),
+            include_str!("../../../tests/fixtures/claude-tool-2.1.243.jsonl"),
+            include_str!("../../../tests/fixtures/claude-permission-allow-2.1.243.jsonl"),
+            include_str!("../../../tests/fixtures/claude-permission-deny-2.1.243.jsonl"),
+            include_str!("../../../tests/fixtures/claude-edit-2.1.243.jsonl"),
+            include_str!("../../../tests/fixtures/claude-todo-2.1.243.jsonl"),
+        ] {
+            let old: Vec<_> = fixture
+                .lines()
+                .flat_map(|line| {
+                    wire::parse_usage(line)
+                        .into_iter()
+                        .chain(wire::parse_rate_limits(line))
+                        .chain(wire::parse_line(line))
+                })
+                .collect();
+            let (_, new) = replay(fixture);
+            let fold = |events: Vec<SessionEvent>| {
+                let mut activity = Activity::default();
+                activity.apply(ActivityInput::Connect { generation: 1 });
+                for event in events {
+                    activity.apply(match event {
+                        SessionEvent::Activity(event) => ActivityInput::Observe {
+                            generation: 1,
+                            event,
+                            at: Instant::now(),
+                        },
+                        event => ActivityInput::Main {
+                            input: ferrite_core::transcript::Input::Event(event),
+                            at: Instant::now(),
+                        },
+                    });
+                }
+                activity
+            };
+            let old = fold(old);
+            let new = fold(new);
+            let projection = |activity: &Activity| {
+                let mut prose = String::new();
+                let mut thinking = String::new();
+                let mut tools = Vec::new();
+                for block in activity.view().main().transcript().blocks() {
+                    use ferrite_core::transcript::Body;
+                    match &block.body {
+                        Body::Paragraph { spans }
+                        | Body::Heading { spans, .. }
+                        | Body::Bullet { spans, .. } => {
+                            for span in spans {
+                                prose.push_str(&span.text);
+                            }
+                        }
+                        Body::Thinking(text) => thinking.push_str(text),
+                        Body::Tool(tool) => {
+                            tools.push((tool.call.clone(), tool.name.clone(), tool.output.clone()))
+                        }
+                        _ => {}
+                    }
+                }
+                (prose, thinking, tools)
+            };
+            assert_eq!(projection(&new), projection(&old));
+            assert_eq!(
+                new.view().main().transcript().turn_completed(),
+                old.view().main().transcript().turn_completed()
+            );
+            assert_eq!(
+                new.view().main().transcript().usage(),
+                old.view().main().transcript().usage()
+            );
+        }
+    }
+
+    #[test]
+    fn every_child_frame_is_scoped_before_tools_or_usage_can_reach_main() {
+        let mut decoder = Decoder::default();
+        let mut child_frames = 0;
+        for line in OVERLAP.lines() {
+            let value: Value = serde_json::from_str(line).unwrap();
+            let events = decoder.decode(line);
+            if string(&value, "parent_tool_use_id").is_some() {
+                child_frames += 1;
+                assert!(!events.is_empty(), "child frame was discarded: {line}");
+                assert!(
+                    events
+                        .iter()
+                        .all(|event| matches!(event, SessionEvent::Activity(_))),
+                    "unscoped child events: {events:?}"
+                );
+            }
+        }
+        assert!(child_frames >= 8);
+        assert_eq!(decoder.agents.len(), 2, "Bash tasks are not children");
+        assert!(decoder
+            .states
+            .values()
+            .all(|state| *state == AgentStatus::Idle));
+        assert!(decoder.tools.is_empty());
+    }
+
+    #[test]
+    fn nested_tool_invocation_preserves_the_direct_parent() {
+        let (decoder, _) = replay(NESTED);
+        let branch = decoder.native_key("toolu_01Gr7QcnKEMTUUZn1JABxzq1");
+        let leaf = decoder.native_key("toolu_01Xta8pMN844BJKVcx3W5CLG");
+        assert_eq!(decoder.agents[&branch].parent, Some(Subject::Main));
+        assert_eq!(
+            decoder.agents[&leaf].parent,
+            Some(Subject::Subagent(branch))
+        );
+        assert_eq!(decoder.agents[&leaf].coverage, TranscriptCoverage::Live);
+    }
+
+    #[test]
+    fn resumed_content_and_new_task_invocation_keep_the_original_key() {
+        let (decoder, events) = replay(REUSED);
+        let original = decoder.native_key("toolu_01KaThct3sAoj92tCAJPZsDV");
+        assert_eq!(decoder.agents.len(), 1);
+        for alias in [
+            Alias::Invocation("toolu_01KaThct3sAoj92tCAJPZsDV".into()),
+            Alias::Invocation("toolu_01WWmgV4yDDVfNmxECCq6ow3".into()),
+            Alias::Task("a5b6de4f9ee3a5060".into()),
+            Alias::Agent("a5b6de4f9ee3a5060".into()),
+        ] {
+            assert_eq!(decoder.aliases[&alias], original);
+        }
+        let content: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::Activity(ActivityEvent::Content {
+                    key,
+                    event: ExecutionEvent::Text { text },
+                    ..
+                }) => Some((key, text.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            content,
+            [(&original, "REUSE_FIRST"), (&original, "REUSE_SECOND")]
+        );
+        let states: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::Activity(ActivityEvent::Status { state, .. }) => Some(*state),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            states,
+            [
+                AgentStatus::Pending,
+                AgentStatus::Working,
+                AgentStatus::Idle,
+                AgentStatus::Working,
+                AgentStatus::Idle
+            ]
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    SessionEvent::Activity(ActivityEvent::BackgroundTurnEnded { .. })
+                ))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn persisted_native_aliases_resolve_a_fresh_decoder_back_to_the_original_tab() {
+        // Replay through the first completed Main turn, then reconnect. Keep
+        // the boundary semantic so trimming unrelated wire chatter is harmless.
+        let first_turn_end = REUSED
+            .lines()
+            .position(|line| serde_json::from_str::<Value>(line).unwrap()["type"] == "result")
+            .expect("fixture contains the first Main result")
+            + 1;
+        let initial = REUSED
+            .lines()
+            .take(first_turn_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (first_decoder, initial_events) = replay(&initial);
+        let original = first_decoder.native_key("toolu_01KaThct3sAoj92tCAJPZsDV");
+        let mut restored = Activity::new(ActivityLimits::default());
+        for event in initial_events {
+            if let SessionEvent::Activity(event) = event {
+                restored.apply(ActivityInput::ReplayEvent(event));
+            }
+        }
+        restored.apply(ActivityInput::Connect { generation: 2 });
+        let mut resumed_decoder = Decoder::default();
+        for line in REUSED.lines().skip(first_turn_end) {
+            for event in resumed_decoder.decode(line) {
+                if let SessionEvent::Activity(event) = event {
+                    restored.apply(ActivityInput::Observe {
+                        generation: 2,
+                        event,
+                        at: Instant::now(),
+                    });
+                }
+            }
+        }
+        let children = restored.view().children();
+        assert_eq!(children.len(), 1, "reconnect created a duplicate tab");
+        assert_eq!(children[0].key(), &original);
+        assert_eq!(children[0].status(), AgentStatus::Idle);
+        assert_eq!(children[0].info().parent, Some(Subject::Main));
+    }
+
+    /// A stop as the CLI sends it: the kill and the handback, then what the
+    /// run still had in flight (its killed tool's refusal, the interrupt
+    /// line). The agent stays stopped through all of it, live and replayed,
+    /// its call reads stopped, and only a new run opens it again.
+    /// Escape during a foreground agent: the CLI refuses its call, then
+    /// reports the task stopped. It never reads Failed on the way.
+    #[test]
+    fn a_foreground_agent_stopped_by_escape_never_reads_failed() {
+        let frames = [
+            json!({"type":"assistant","session_id":"s1","parent_tool_use_id":null,"uuid":"m1",
+                "message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"spawn",
+                "name":"Agent","input":{"description":"Stop me"}}]}}),
+            json!({"type":"system","subtype":"task_started","session_id":"s1","uuid":"t1",
+                "task_id":"task","tool_use_id":"spawn","task_type":"local_agent",
+                "description":"Stop me"}),
+            json!({"type":"user","session_id":"s1","parent_tool_use_id":null,"uuid":"m2",
+                "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"spawn",
+                "content":"The user doesn't want to proceed with this tool use.","is_error":true}]},
+                "tool_use_result":"User rejected tool use"}),
+            json!({"type":"system","subtype":"task_notification","session_id":"s1","uuid":"t2",
+                "task_id":"task","tool_use_id":"spawn","status":"stopped","summary":"Stop me"}),
+        ];
+        let mut decoder = Decoder::default();
+        let states: Vec<AgentStatus> = frames
+            .iter()
+            .flat_map(|frame| decoder.decode(&frame.to_string()))
+            .filter_map(|event| match event {
+                SessionEvent::Activity(ActivityEvent::Status { state, .. }) => Some(state),
+                _ => None,
+            })
+            .collect();
+        assert!(!states.contains(&AgentStatus::Failed), "{states:?}");
+        assert_eq!(states.last(), Some(&AgentStatus::Interrupted));
+    }
+
+    #[test]
+    fn a_stopped_agents_flushed_frames_leave_it_stopped() {
+        use ferrite_core::transcript::{Body, ToolState};
+        let child = |uuid: &str, role: &str, content: Value| {
+            json!({"type":role,"session_id":"s1","parent_tool_use_id":"spawn","uuid":uuid,
+                "message":{"id":uuid,"role":role,"content":content}})
+            .to_string()
+        };
+        let frames = [
+            json!({"type":"assistant","session_id":"s1","parent_tool_use_id":null,"uuid":"m1",
+                "message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"spawn",
+                "name":"Agent","input":{"description":"Stop me","run_in_background":true}}]}})
+            .to_string(),
+            json!({"type":"system","subtype":"task_started","session_id":"s1","uuid":"t1",
+                "task_id":"task","tool_use_id":"spawn","task_type":"local_agent",
+                "description":"Stop me","is_backgrounded":true})
+            .to_string(),
+            json!({"type":"user","session_id":"s1","parent_tool_use_id":null,"uuid":"m2",
+                "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"spawn",
+                "content":"launched"}]},
+                "tool_use_result":{"status":"async_launched","agentId":"agent"}})
+            .to_string(),
+            child("c1", "assistant", json!([{"type":"tool_use","id":"bash","name":"Bash",
+                "input":{"command":"ping"}}])),
+            json!({"type":"system","subtype":"task_updated","session_id":"s1","uuid":"t2",
+                "task_id":"task","patch":{"status":"killed"}})
+            .to_string(),
+            json!({"type":"system","subtype":"task_notification","session_id":"s1","uuid":"t3",
+                "task_id":"task","tool_use_id":"spawn","status":"stopped","summary":"Stop me"})
+            .to_string(),
+            child("c2", "user", json!([{"type":"tool_result","tool_use_id":"bash",
+                "content":"rejected","is_error":true}])),
+            child("c3", "user", json!([{"type":"text",
+                "text":"[Request interrupted by user for tool use]"}])),
+        ];
+        let mut decoder = Decoder::default();
+        let events: Vec<_> = frames.iter().flat_map(|line| decoder.decode(line)).collect();
+        let mut live = Activity::default();
+        live.apply(ActivityInput::Connect { generation: 1 });
+        let mut replayed = Activity::new(ActivityLimits::default());
+        for event in events {
+            if let SessionEvent::Activity(event) = &event {
+                replayed.apply(ActivityInput::ReplayEvent(event.clone()));
+            }
+            live.apply(match event {
+                SessionEvent::Activity(event) => ActivityInput::Observe {
+                    generation: 1,
+                    event,
+                    at: Instant::now(),
+                },
+                event => ActivityInput::Main {
+                    input: ferrite_core::transcript::Input::Event(event),
+                    at: Instant::now(),
+                },
+            });
+        }
+        assert_eq!(live.view().children()[0].status(), AgentStatus::Interrupted);
+        assert!(!live.view().children()[0].running());
+        assert_eq!(live.view().working_descendants(), 0);
+        assert_eq!(replayed.view().children()[0].status(), AgentStatus::Interrupted);
+        let main = live.view().main();
+        let transcript = main.transcript();
+        assert_eq!(transcript.tool("spawn").unwrap().state, ToolState::Stopped);
+        assert!(transcript.blocks().iter().any(|block| matches!(
+            &block.body,
+            Body::Notice(text) if text == "Background task stopped \u{b7} Agent \"Stop me\""
+        )));
+
+        let again = json!({"type":"system","subtype":"task_started","session_id":"s1",
+            "uuid":"t4","task_id":"task","tool_use_id":"spawn","task_type":"local_agent",
+            "description":"Stop me"})
+        .to_string();
+        for event in decoder.decode(&again) {
+            if let SessionEvent::Activity(event) = event {
+                live.apply(ActivityInput::Observe {
+                    generation: 1,
+                    event,
+                    at: Instant::now(),
+                });
+            }
+        }
+        assert_eq!(live.view().children()[0].status(), AgentStatus::Working);
+    }
+
+    #[test]
+    fn complete_block_identity_and_duplicates_do_not_restart_settled_children() {
+        let (mut decoder, _) = replay(OVERLAP);
+        let child_line = OVERLAP
+            .lines()
+            .find(|line| {
+                let value: Value = serde_json::from_str(line).unwrap();
+                value["type"] == "assistant"
+                    && string(&value, "parent_tool_use_id").is_some()
+                    && value["message"]["content"][0]["text"] == "ALPHA_START"
+            })
+            .unwrap();
+        assert!(decoder.decode(child_line).is_empty());
+        assert!(decoder
+            .states
+            .values()
+            .all(|state| *state == AgentStatus::Idle));
+        let events = decoder.decode(&json!({
+            "type":"assistant", "session_id":decoder.root, "parent_tool_use_id":"toolu_01E3tZojsnhrYd88HXfBMon9", "uuid":"multi-block",
+            "message":{"id":"same-message", "content":[{"type":"text","text":"first"},{"type":"thinking","thinking":"second"},{"type":"tool_use","id":"third","name":"Read","input":{}}]}
+        }).to_string());
+        let ids: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::Activity(ActivityEvent::Content { id, .. }) => id.clone(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, ["multi-block:0", "multi-block:1", "multi-block:2"]);
+    }
+
+    #[test]
+    fn captured_decisions_are_two_independent_child_routes() {
+        let (_, events) = replay(DECISIONS);
+        let decisions: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::Activity(ActivityEvent::Decision {
+                    subject: Some(Subject::Subagent(key)),
+                    decision,
+                }) => Some((key, decision)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(decisions.len(), 2);
+        assert_ne!(decisions[0].0, decisions[1].0);
+        assert_ne!(decisions[0].1.id, decisions[1].1.id);
+        assert!(events
+            .iter()
+            .all(|event| !matches!(event, SessionEvent::DecisionRequested { .. })));
+    }
+
+    #[test]
+    fn unknown_decision_and_its_cancellation_remain_connection_scoped() {
+        let mut decoder = Decoder::default();
+        let events = decoder.decode(r#"{"type":"control_request","request_id":"unknown","request":{"subtype":"can_use_tool","tool_use_id":"missing"}}"#);
+        assert!(
+            matches!(events.as_slice(), [SessionEvent::Activity(ActivityEvent::Decision { subject: None, decision })] if decision.id == "unknown")
+        );
+        let cancelled =
+            decoder.decode(r#"{"type":"control_cancel_request","request_id":"unknown"}"#);
+        assert_eq!(
+            cancelled,
+            [SessionEvent::Activity(ActivityEvent::DecisionCancelled {
+                id: "unknown".into()
+            })]
+        );
+        assert!(decoder.requests.is_empty());
+    }
+
+    #[test]
+    fn answered_request_does_not_keep_a_child_waiting_after_its_other_request_is_cancelled() {
+        let mut decoder = Decoder::default();
+        decoder.decode(
+            &json!({"type":"assistant", "session_id":"root", "parent_tool_use_id":"child",
+            "message":{"content":[{"type":"tool_use","id":"tool-a","name":"Read","input":{}},
+                {"type":"tool_use","id":"tool-b","name":"Read","input":{}}]}})
+            .to_string(),
+        );
+        decoder.decode(r#"{"type":"system","subtype":"task_started","task_id":"task","tool_use_id":"child","task_type":"local_agent"}"#);
+        for suffix in ["a", "b"] {
+            decoder.decode(&json!({"type":"control_request", "request_id":suffix, "request":{
+                "subtype":"can_use_tool", "tool_use_id":format!("tool-{suffix}"), "tool_name":"Read"}}).to_string());
+        }
+        decoder.decision_resolved("a");
+        let cancelled = decoder.decode(r#"{"type":"control_cancel_request","request_id":"b"}"#);
+        assert!(cancelled.iter().any(|event| matches!(
+            event,
+            SessionEvent::Activity(ActivityEvent::Status {
+                state: AgentStatus::Unknown,
+                ..
+            })
+        )));
+        // No tool result has arrived. The next actual progress still resumes it.
+        let progress =
+            decoder.decode(r#"{"type":"system","subtype":"task_progress","task_id":"task"}"#);
+        assert!(progress.iter().any(|event| matches!(
+            event,
+            SessionEvent::Activity(ActivityEvent::Status {
+                state: AgentStatus::Working,
+                ..
+            })
+        )));
+        assert!(decoder.requests.is_empty());
+    }
+
+    #[test]
+    fn ambiguous_tool_ids_do_not_guess_a_decision_owner_or_complete_another_childs_tool() {
+        let mut decoder = Decoder::default();
+        for child in ["alpha", "beta"] {
+            decoder.decode(&json!({"type":"assistant", "session_id":"root", "parent_tool_use_id":child,
+                "message":{"content":[{"type":"tool_use","id":"shared-tool","name":"Read","input":{}}]}}).to_string());
+        }
+        let request = json!({"type":"control_request", "request_id":"ambiguous", "request":{
+            "subtype":"can_use_tool", "tool_use_id":"shared-tool"}});
+        assert!(matches!(
+            decoder.decode(&request.to_string()).as_slice(),
+            [SessionEvent::Activity(ActivityEvent::Decision {
+                subject: None,
+                ..
+            })]
+        ));
+        decoder.decode(&json!({"type":"user", "session_id":"root", "parent_tool_use_id":"alpha",
+            "message":{"content":[{"type":"tool_result","tool_use_id":"shared-tool","content":"done"}]}}).to_string());
+        assert_eq!(
+            decoder.tool_owner("shared-tool"),
+            Some(Subject::Subagent(decoder.native_key("beta")))
+        );
+        assert!(decoder.requests.contains_key("ambiguous"));
+    }
+
+    #[test]
+    fn child_string_prompt_is_preserved_without_becoming_main_input() {
+        let mut decoder = Decoder::default();
+        let events = decoder.decode(r#"{"type":"user","session_id":"root","parent_tool_use_id":"child","uuid":"prompt-frame","message":{"content":"child prompt"}}"#);
+        assert!(events.iter().any(|event| matches!(event,
+            SessionEvent::Activity(ActivityEvent::Content { id: Some(id), event: ExecutionEvent::Prompt { text }, .. })
+            if id == "prompt-frame:0" && text == "child prompt")));
+        assert!(events
+            .iter()
+            .all(|event| matches!(event, SessionEvent::Activity(_))));
+    }
+
+    /// A task that names its parent task nests under it (HD8); one whose
+    /// parent is not known yet stays top level, then is placed when a later
+    /// frame names the parent again.
+    #[test]
+    fn a_task_nests_under_the_task_that_started_it() {
+        let discovered = |events: &[SessionEvent]| {
+            events
+                .iter()
+                .filter_map(|event| match event {
+                    SessionEvent::Activity(ActivityEvent::Discovered(info)) => Some(info.clone()),
+                    _ => None,
+                })
+                .last()
+        };
+        let mut decoder = Decoder::default();
+        decoder.decode(r#"{"type":"system","subtype":"init","session_id":"root","model":"model"}"#);
+        let early = decoder.decode(r#"{"type":"system","subtype":"task_started","task_id":"child","parent_task_id":"parent","task_type":"local_agent","description":"child"}"#);
+        assert_eq!(discovered(&early).unwrap().parent, None, "its parent is unknown");
+        let parent = decoder.decode(r#"{"type":"system","subtype":"task_started","task_id":"parent","task_type":"local_agent","description":"parent"}"#);
+        let parent_key = discovered(&parent).unwrap().key;
+        let later = decoder.decode(r#"{"type":"system","subtype":"task_progress","task_id":"child","parent_task_id":"parent","task_type":"local_agent","description":"child"}"#);
+        assert_eq!(discovered(&later).unwrap().parent, Some(Subject::Subagent(parent_key)));
+    }
+
+    /// A frame with no `uuid` still has a key (HD44): the same frame replayed
+    /// is one delivery; the same words a moment later are another; and a
+    /// frame with no timestamp either has none.
+    #[test]
+    fn a_frame_without_a_uuid_is_keyed_by_its_time_and_content() {
+        let frame = |at: &str, text: &str| {
+            json!({"type":"assistant","timestamp":at,"message":{"content":[{"type":"text","text":text}]}})
+        };
+        let key = |frame: &Value| delivery_id(frame, "0");
+        let first = key(&frame("2026-11-04T13:00:00Z", "ok"));
+        assert!(first.is_some());
+        assert_eq!(first, key(&frame("2026-11-04T13:00:00Z", "ok")), "a replay is the same");
+        assert_ne!(first, key(&frame("2026-11-04T13:00:05Z", "ok")), "later is another");
+        assert_ne!(first, key(&frame("2026-11-04T13:00:00Z", "no")), "other words are another");
+        assert_eq!(key(&json!({"type":"assistant","message":{}})), None);
+        assert_eq!(
+            delivery_id(&json!({"uuid":"u","type":"assistant"}), "0").as_deref(),
+            Some("u:0"),
+            "a uuid still wins"
+        );
+    }
+
+    /// `system/init` names the CLI's own version (2.1.318's captures all do).
+    #[test]
+    fn init_records_the_cli_version_and_its_tools() {
+        let init = include_str!("../../../tests/fixtures/claude-background-2.1.318.jsonl")
+            .lines()
+            .find(|line| line.contains(r#""subtype":"init""#))
+            .expect("the capture has an init frame");
+        let events = Decoder::default().decode(init);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            SessionEvent::Handshake { version, tools }
+                if version == "2.1.318" && tools.iter().any(|tool| tool == "ReportFindings")
+        )));
+    }
+
+    #[test]
+    fn unknown_task_status_is_not_false_completion_and_bash_is_not_an_agent() {
+        let mut decoder = Decoder::default();
+        decoder.decode(r#"{"type":"system","subtype":"init","session_id":"root","model":"model"}"#);
+        decoder.decode(r#"{"type":"system","subtype":"task_started","task_id":"agent","tool_use_id":"spawn","task_type":"local_agent"}"#);
+        let events = decoder.decode(r#"{"type":"system","subtype":"task_updated","task_id":"agent","patch":{"status":"future-status"}}"#);
+        assert!(matches!(
+            events.as_slice(),
+            [SessionEvent::Activity(ActivityEvent::Status {
+                state: AgentStatus::Unknown,
+                ..
+            })]
+        ));
+        assert!(decoder.decode(r#"{"type":"system","subtype":"task_started","task_id":"bash","task_type":"local_bash","owned_by_subagent":true}"#).is_empty());
+        assert_eq!(decoder.agents.len(), 1);
+    }
+
+    #[test]
+    fn attributed_or_malformed_result_cannot_end_main_or_report_main_usage() {
+        let mut decoder = Decoder::default();
+        for attribution in [json!("child-spawn"), json!(""), json!(false), json!({})] {
+            let frame = json!({"type":"result", "parent_tool_use_id":attribution,
+                "session_id":"root", "result":"done", "usage":{"input_tokens":10}});
+            assert!(decoder.decode(&frame.to_string()).is_empty());
+        }
+    }
+
+    #[test]
+    fn schema_non_human_and_unknown_origins_cannot_acknowledge_an_operator_turn() {
+        // Published SDK 0.3.224/.243/.261 origin union, plus unknown/malformed
+        // future producers. Only task-notification is in our live captures.
+        for origin in [
+            json!({"kind":"channel"}),
+            json!({"kind":"peer","senderTaskId":"child"}),
+            json!({"kind":"task-notification"}),
+            json!({"kind":"coordinator"}),
+            json!({"kind":"unclassified"}),
+            json!({"kind":"observer"}),
+            json!({"kind":"auto-continuation"}),
+            json!({"kind":"observer-activity"}),
+            json!({"kind":"future-origin"}),
+            json!({}),
+            json!(false),
+        ] {
+            let mut decoder = Decoder::default();
+            let events = decoder.decode(
+                &json!({"type":"result", "subtype":"success",
+                "session_id":"root", "origin":origin})
+                .to_string(),
+            );
+            assert!(events.iter().any(|event| matches!(
+                event,
+                SessionEvent::Activity(ActivityEvent::BackgroundTurnEnded { .. })
+            )));
+            assert!(events
+                .iter()
+                .all(|event| !matches!(event, SessionEvent::TurnEnded { .. })));
+        }
+        for origin in [json!(null), json!({"kind":"human"})] {
+            let mut decoder = Decoder::default();
+            let events = decoder.decode(
+                &json!({"type":"result", "subtype":"success",
+                "session_id":"root", "origin":origin})
+                .to_string(),
+            );
+            assert!(events
+                .iter()
+                .any(|event| matches!(event, SessionEvent::TurnEnded { .. })));
+        }
+    }
+}

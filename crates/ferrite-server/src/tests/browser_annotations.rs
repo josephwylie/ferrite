@@ -57,7 +57,7 @@ fn browser_annotation_receipt_survives_navigation_and_fetches_only_retained_imag
     .unwrap() else {
         panic!("capture protection was not granted")
     };
-    let png = include_bytes!("../../../ferrite-core/tests/fixtures/browser-original.png");
+    let png = include_bytes!("../../../ferrite-engine/tests/fixtures/browser-original.png");
     let capture = Capture {
         document,
         native_generation: 6,

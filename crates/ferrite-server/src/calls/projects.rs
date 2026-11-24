@@ -9,12 +9,12 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use super::super::Server;
-use ferrite_core::api::schema::{ProjectOpenParams, WorktreeCreateParams};
-use ferrite_core::api::{self, ApiError, Code};
+use ferrite_engine::api::schema::{ProjectOpenParams, WorktreeCreateParams};
+use ferrite_engine::api::{self, ApiError, Code};
 use ferrite_core::project::ProjectId;
 use ferrite_core::protocol::{Done, Op, ProjectAction};
 use ferrite_core::settings::Settings;
-use ferrite_core::workspace;
+use ferrite_engine::workspace;
 use ferrite_core::ThreadId;
 
 fn failed(error: impl ToString) -> ApiError {

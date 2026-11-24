@@ -1,6 +1,6 @@
 //! Real provider protocol adapters into the public Conversation browser channel.
 use super::*;
-use ferrite_core::providers::{ClaudeConfig, ClaudeSession};
+use ferrite_engine::providers::{ClaudeConfig, ClaudeSession};
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 
@@ -78,7 +78,7 @@ fn claude_browser_opens_the_bound_threads_tab_with_visuals_off() {
 
 #[test]
 fn codex_browser_opens_the_bound_threads_tab_with_visuals_off() {
-    use ferrite_core::providers::{CodexConfig, CodexSession};
+    use ferrite_engine::providers::{CodexConfig, CodexSession};
     let harness = start("codex-browser-provider");
     let mut window = attach(&harness.address);
     let (thread, _provider) = open(&mut window, &harness);
@@ -140,7 +140,7 @@ fn provider_call(
     codex: bool,
     operation: Value,
     resume: bool,
-) -> (Box<dyn ferrite_core::providers::Session>, PathBuf) {
+) -> (Box<dyn ferrite_engine::providers::Session>, PathBuf) {
     let host = harness.dir.join("provider-host.jsonl");
     let (version, handshake, call) = if codex {
         (
@@ -185,9 +185,9 @@ fn provider_call(
         level: ferrite_core::visual::Level::WhenAsked,
         renderer: Arc::new(renderer),
     });
-    let session: Box<dyn ferrite_core::providers::Session> = if codex {
+    let session: Box<dyn ferrite_engine::providers::Session> = if codex {
         Box::new(
-            ferrite_core::providers::CodexSession::spawn(ferrite_core::providers::CodexConfig {
+            ferrite_engine::providers::CodexSession::spawn(ferrite_engine::providers::CodexConfig {
                 program,
                 browser,
                 visuals,

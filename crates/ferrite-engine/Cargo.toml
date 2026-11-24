@@ -1,0 +1,46 @@
+[package]
+name = "ferrite-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ferrite's Engine: the Store, the providers and their Sessions, the Factory and the API. A Server's side, no UI."
+
+[features]
+# What other crates' tests drive the engine with: the Store's fault
+# switches and what the Server's tests read of the Engine
+# (`engine/probe.rs`).
+test-support = ["ferrite-core/test-support"]
+
+[dependencies]
+ferrite-core = { path = "../ferrite-core" }
+# herdr-reviewr's review core, vendored: the Review slot's reads (ADR 0021).
+ferrite-reviewr = { path = "../ferrite-reviewr" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = "0.22"
+chrono = "0.4.45"
+ureq = { version = "3", features = ["platform-verifier"] }
+# The API's JSON Schema, generated from its one declaration of each
+# operation (`api::schema`).
+schemars = "1"
+# Canonical paths without Windows' `\\?\` verbatim prefix, which git
+# rejects: project roots, worktree placement and cwd identity.
+dunce = "1"
+
+# An npm-installed provider CLI on Windows is a `.cmd` shim: the Session's
+# child is cmd.exe with the real CLI beneath it, and only a Job Object can
+# kill or meter that whole tree (`providers::job`).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+# The test programs' own temporary folder (ferrite-core/src/test_temp.rs).
+ctor = "1"
+libc = "0.2"
+ferrite-core = { path = "../ferrite-core", features = ["test-support"] }

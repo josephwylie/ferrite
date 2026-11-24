@@ -12,7 +12,7 @@ fn browser_annotation_history_keeps_a_distinct_reviewable_capture(cx: &mut TestA
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1500.), px(900.)));
     let root = std::env::temp_dir().join(format!("ferrite-history-image-{}", std::process::id()));
-    let png = include_bytes!("../../../../ferrite-core/tests/fixtures/browser-original.png");
+    let png = include_bytes!("../../../../ferrite-engine/tests/fixtures/browser-original.png");
     let annotation = browser_annotations::retain(
         &root,
         Capture {
@@ -125,7 +125,7 @@ fn restarted<'a>(
                 height: 1.,
             },
         },
-        include_bytes!("../../../../ferrite-core/tests/fixtures/browser-original.png"),
+        include_bytes!("../../../../ferrite-engine/tests/fixtures/browser-original.png"),
         "Still here".into(),
         vec![],
     )
@@ -272,7 +272,7 @@ fn browser_annotation_retained_editor_adds_original_evidence_without_a_live_page
         view.read_with(cx, |view, _| view.panes[0].thread().is_some())
     });
     let root = std::env::temp_dir().join(format!("ferrite-retained-editor-{}", std::process::id()));
-    let png = include_bytes!("../../../../ferrite-core/tests/fixtures/browser-original.png");
+    let png = include_bytes!("../../../../ferrite-engine/tests/fixtures/browser-original.png");
     let original = browser_annotations::retain(
         &root,
         Capture {

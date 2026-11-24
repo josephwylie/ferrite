@@ -67,7 +67,7 @@ fn a_pending_decision_is_named_as_waiting(cx: &mut TestAppContext) {
 /// change in flight is nothing to ask about.
 #[gpui::test]
 fn a_starting_session_is_not_working(cx: &mut TestAppContext) {
-    use ferrite_core::session::SessionLifecycle;
+    use ferrite_engine::session::SessionLifecycle;
     struct Starting(Vec<ferrite_core::doorbell::Sender<()>>);
     impl Spawner for Starting {
         fn spawn(

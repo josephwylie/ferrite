@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use ferrite_core::providers::{applied, Session, SettingAck};
+use ferrite_engine::providers::{applied, Session, SettingAck};
 use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::provider::Provider;
-use ferrite_core::store::Store;
+use ferrite_engine::store::Store;
 
 use super::{Cockpit, SpawnRequest, Spawner};
 

@@ -126,11 +126,11 @@ struct Quiet {
     events: mpsc::Receiver<SessionEvent>,
 }
 
-impl ferrite_core::engine::Spawner for OnBox {
+impl ferrite_engine::engine::Spawner for OnBox {
     fn spawn(
         &mut self,
-        request: ferrite_core::engine::SpawnRequest,
-    ) -> std::io::Result<Box<dyn ferrite_core::providers::Session>> {
+        request: ferrite_engine::engine::SpawnRequest,
+    ) -> std::io::Result<Box<dyn ferrite_engine::providers::Session>> {
         self.0
             .lock()
             .unwrap()
@@ -143,7 +143,7 @@ impl ferrite_core::engine::Spawner for OnBox {
     }
 }
 
-impl ferrite_core::providers::Session for Quiet {
+impl ferrite_engine::providers::Session for Quiet {
     fn events(&self) -> &mpsc::Receiver<SessionEvent> {
         &self.events
     }
@@ -186,11 +186,11 @@ struct Agent {
     interrupts: Arc<AtomicUsize>,
 }
 
-impl ferrite_core::engine::Spawner for Agents {
+impl ferrite_engine::engine::Spawner for Agents {
     fn spawn(
         &mut self,
-        _: ferrite_core::engine::SpawnRequest,
-    ) -> std::io::Result<Box<dyn ferrite_core::providers::Session>> {
+        _: ferrite_engine::engine::SpawnRequest,
+    ) -> std::io::Result<Box<dyn ferrite_engine::providers::Session>> {
         let (line, events) = ferrite_core::doorbell::channel();
         self.lines.lock().unwrap().push(line.clone());
         Ok(Box::new(Agent {
@@ -202,7 +202,7 @@ impl ferrite_core::engine::Spawner for Agents {
     }
 }
 
-impl ferrite_core::providers::Session for Agent {
+impl ferrite_engine::providers::Session for Agent {
     fn events(&self) -> &mpsc::Receiver<SessionEvent> {
         &self.events
     }
@@ -228,10 +228,10 @@ impl ferrite_core::providers::Session for Agent {
     /// Forks afresh, at once: the fork's agent is the next Session.
     fn fork(
         &mut self,
-        _: ferrite_core::providers::ForkRequest,
-    ) -> std::io::Result<ferrite_core::providers::ForkAck> {
+        _: ferrite_engine::providers::ForkRequest,
+    ) -> std::io::Result<ferrite_engine::providers::ForkAck> {
         let (answer, ack) = ferrite_core::doorbell::sync_channel(1);
-        answer.send(Ok(ferrite_core::providers::Forked::Fresh)).unwrap();
+        answer.send(Ok(ferrite_engine::providers::Forked::Fresh)).unwrap();
         Ok(ack)
     }
 }
@@ -326,7 +326,7 @@ fn beside_serving(
     name: &str,
     panes: usize,
     saved: Machine,
-    spawner: Box<dyn ferrite_core::engine::Spawner + Send>,
+    spawner: Box<dyn ferrite_engine::engine::Spawner + Send>,
 ) -> (Cockpit, Fake, Machines) {
     let (mut core, fake) = cockpit(&format!("machines-{name}"), panes);
     fresh(name);

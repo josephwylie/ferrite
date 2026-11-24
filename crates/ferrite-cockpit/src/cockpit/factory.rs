@@ -3,7 +3,7 @@
 //! and the alerts a Task raises. Its Workflows surface is `workflows.rs`
 //! (#221), and its New task sheet `new_task_view.rs`.
 //!
-//! The Factory runs in the Server (`ferrite_core::factory`): the window
+//! The Factory runs in the Server (`ferrite_engine::factory`): the window
 //! draws the board the Server publishes and sends commands through
 //! `Cockpit::task`. Opening a Task's panel starts nothing; its Worker
 //! tab draws the Worker's ordinary Pane, which this window already holds.

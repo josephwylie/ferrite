@@ -6,11 +6,11 @@ use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 
 use super::*;
 use ferrite_core::factory_board::{GitHubQuery, GitHubRead};
-use ferrite_core::pr_watch::{
+use ferrite_engine::pr_watch::{
     Check, CheckStatus, Fingerprint, Mergeable, ReadError, Reading, Remark,
 };
 use ferrite_core::pull_request::PrState;
-use ferrite_core::github::GitHub;
+use ferrite_engine::github::GitHub;
 use ferrite_core::wake::WakeNote;
 
 const URL: &str = "https://github.com/acme/app/pull/7";
@@ -545,7 +545,7 @@ fn the_agents_own_tool_watches_its_pr() {
     };
     assert_eq!(
         watch(false),
-        (ferrite_core::api::tools::SUBAGENT_WATCH.to_string(), true)
+        (ferrite_engine::api::tools::SUBAGENT_WATCH.to_string(), true)
     );
     let (text, is_error) = watch(true);
     assert!(!is_error, "{text}");

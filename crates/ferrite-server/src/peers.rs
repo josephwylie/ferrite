@@ -20,8 +20,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use ferrite_core::api::schema::{AgentWaitParams, Empty};
-use ferrite_core::api::{ApiError, Code, Method, Request};
+use ferrite_engine::api::schema::{AgentWaitParams, Empty};
+use ferrite_engine::api::{ApiError, Code, Method, Request};
 use ferrite_core::link;
 use ferrite_core::machine::{self, Dial, Machine, Tunnel};
 use ferrite_core::server::ServerId;

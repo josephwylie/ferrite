@@ -3,7 +3,7 @@
 use super::*;
 use std::sync::mpsc;
 
-use ferrite_core::connection::{Connection, Heard};
+use ferrite_engine::connection::{Connection, Heard};
 use ferrite_core::protocol::{SharedRoster, WireChoice};
 use ferrite_core::provider::Provider;
 

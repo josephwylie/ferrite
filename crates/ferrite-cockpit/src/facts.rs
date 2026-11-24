@@ -785,7 +785,7 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        let store = ferrite_core::store::Store::open(&dir).unwrap();
+        let store = ferrite_engine::store::Store::open(&dir).unwrap();
         let checkout = std::env::current_dir().unwrap();
         let (thread, writer) = store
             .create(
@@ -829,7 +829,7 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        let store = ferrite_core::store::Store::open(&dir).unwrap();
+        let store = ferrite_engine::store::Store::open(&dir).unwrap();
         let project: ferrite_core::project::ProjectId = serde_json::from_str("7").unwrap();
         let binding = WorkspaceBinding::Main {
             checkout: dir.clone(),
@@ -881,7 +881,7 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        let store = ferrite_core::store::Store::open(&dir).unwrap();
+        let store = ferrite_engine::store::Store::open(&dir).unwrap();
         let checkout = std::env::current_dir().unwrap();
         let project: ferrite_core::project::ProjectId = serde_json::from_str("7").unwrap();
         let (thread, writer) = store

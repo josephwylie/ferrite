@@ -1,0 +1,761 @@
+//! How Ferrite starts Sessions: the production `Spawner` adapter over the
+//! two provider CLIs, and the process-memory sampler the watchdog reads.
+//! The app's scripted demo Sessions are their own adapter, in its `demo` —
+//! both hand the pump the same `Receiver<SessionEvent>`.
+
+use std::collections::{HashMap, HashSet};
+use std::io;
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+
+use crate::engine::{Preparation, RssSampler, SpawnRequest, Spawner};
+use ferrite_core::memory::rss_bytes;
+use ferrite_core::provider::Provider;
+use crate::providers::{
+    ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, ResumeRefused, Session,
+};
+use crate::session::SessionLifecycle;
+use ferrite_core::settings::SessionDefaults;
+use ferrite_core::ThreadId;
+
+/// One Session may hold this much before the watchdog replaces it. Generous:
+/// a busy agent legitimately grows, and a restart costs the operator context.
+pub const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
+
+/// How the app starts Sessions: the Thread's stored choice becomes a
+/// provider CLI process working in its binding.
+pub struct Spawn {
+    /// Thread-bound browser channel; provider adaptation is installed by #194.
+    pub browser: Option<ferrite_core::browser::Client>,
+    pub defaults: Arc<Mutex<SessionDefaults>>,
+    /// What answers an agent's `show_visual` with a screenshot (the app's
+    /// off-screen browser, `visual::renderer`). `None`: the tool isn't offered.
+    pub renderer: Option<Arc<dyn ferrite_core::visual::Renderer>>,
+    /// The Server's API socket, told to each agent (`FERRITE_SOCKET`) so it
+    /// can drive other Threads (ADR 0027). `None` where there is no API.
+    pub api: Option<PathBuf>,
+    /// Where a Thread's own tools are answered (`api::tools`): every
+    /// Thread's PR watch, and an owned one's Factory tools. `None`: they are
+    /// not offered, and its agent uses the CLI.
+    pub api_tools: Option<crate::api::tools::Tools>,
+}
+
+impl Spawn {
+    pub fn new(
+        defaults: Arc<Mutex<SessionDefaults>>,
+        renderer: Option<Arc<dyn ferrite_core::visual::Renderer>>,
+    ) -> Self {
+        Self {
+            defaults,
+            renderer,
+            browser: None,
+            api: None,
+            api_tools: None,
+        }
+    }
+
+    /// The tool as this spawn offers it: the operator's level and the
+    /// renderer (none without one).
+    fn visuals(&self, level: ferrite_core::visual::Level) -> Option<ferrite_core::visual::Visuals> {
+        self.renderer
+            .clone()
+            .map(|renderer| ferrite_core::visual::Visuals { level, renderer })
+    }
+}
+
+impl Spawner for Spawn {
+    fn discover_sessions(
+        &mut self,
+        roots: Vec<(Provider, std::path::PathBuf)>,
+        cap: usize,
+    ) -> Option<Receiver<io::Result<ferrite_core::session_file::Found>>> {
+        let (tx, rx) = ferrite_core::doorbell::channel();
+        std::thread::Builder::new()
+            .name("ferrite-session-discovery".into())
+            .spawn(move || {
+                let looked = roots.iter().map(|(_, root)| root.clone()).collect();
+                let mut rows = Vec::new();
+                for (provider, root) in roots {
+                    let discovered = match provider {
+                        Provider::Claude => crate::providers::claude_sessions(&root, cap),
+                        Provider::Codex => {
+                            let program = crate::providers::discover::program(provider);
+                            crate::providers::codex_sessions(&program, cap)
+                        }
+                    };
+                    match discovered {
+                        Ok(found) => rows.extend(found),
+                        Err(error) => {
+                            ferrite_core::log!("native session discovery failed: {error}");
+                            rows.extend(ferrite_core::session_file::candidates(&[(provider, root)], cap));
+                        }
+                    }
+                }
+                rows.sort_by_key(|row| std::cmp::Reverse(row.modified));
+                rows.truncate(cap);
+                let _ = tx.send(Ok(ferrite_core::session_file::Found {
+                    sessions: rows,
+                    roots: looked,
+                }));
+            })
+            .ok()?;
+        Some(rx)
+    }
+
+    fn suggest(
+        &mut self,
+        request: crate::suggest::Request,
+        replies: ferrite_core::doorbell::Sender<crate::suggest::Suggestion>,
+    ) {
+        crate::suggest::spawn(request, replies);
+    }
+
+    fn title(
+        &mut self,
+        job: crate::titler::Job,
+        replies: ferrite_core::doorbell::Sender<crate::titler::Titled>,
+    ) {
+        crate::titler::write(job, replies);
+    }
+
+    fn discover_commands(
+        &mut self,
+        provider: Provider,
+        cwd: &std::path::Path,
+    ) -> Option<ferrite_core::Discovery> {
+        let (tx, rx) = ferrite_core::doorbell::channel();
+        let failures = tx.clone();
+        let cwd = cwd.to_path_buf();
+        if let Err(error) = std::thread::Builder::new()
+            .name("ferrite-command-discovery".into())
+            .spawn(move || {
+                let program = crate::providers::discover::program(provider);
+                let _ = tx.send(crate::providers::commands::list(&program, provider, &cwd));
+            })
+        {
+            let _ = failures.send(Err(error));
+        }
+        Some(rx)
+    }
+
+    fn discover_models(
+        &mut self,
+    ) -> Option<std::sync::mpsc::Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>> {
+        let (tx, rx) = ferrite_core::doorbell::channel();
+        // Claude announces its menu only at initialize, so without this a
+        // new Claude model reached the pickers only once some Thread's
+        // Session had started on the CLI that knows it.
+        let claude = tx.clone();
+        std::thread::Builder::new()
+            .name("ferrite-claude-model-discovery".into())
+            .spawn(move || {
+                let program = crate::providers::discover::program(Provider::Claude);
+                let cwd = std::env::var_os("HOME")
+                    .or_else(|| std::env::var_os("USERPROFILE"))
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(std::env::temp_dir);
+                match crate::providers::commands::claude_models(&program, &cwd) {
+                    Ok(models) => {
+                        let _ = claude.send((Provider::Claude, models));
+                    }
+                    Err(error) => ferrite_core::log!("could not discover Claude models: {error}"),
+                }
+            })
+            .ok()?;
+        std::thread::Builder::new()
+            .name("ferrite-model-discovery".into())
+            .spawn(move || {
+                let program = crate::providers::discover::program(Provider::Codex);
+                match crate::providers::codex_models(&program) {
+                    Ok(models) => {
+                        let _ = tx.send((Provider::Codex, models));
+                    }
+                    Err(error) => ferrite_core::log!("could not discover Codex models: {error}"),
+                }
+            })
+            .ok()?;
+        Some(rx)
+    }
+
+    fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
+        self.config(request)
+            .spawn()
+            .map(|session| session as Box<dyn Session>)
+    }
+
+    fn default_effort(&self, provider: Provider) -> Option<String> {
+        self.defaults.lock().ok()?.effort_for(provider)
+    }
+
+    fn start(&mut self, request: SpawnRequest) -> io::Result<SessionLifecycle> {
+        self.start_after(Box::new(|| Ok(())), request)
+    }
+
+    /// The preparation runs on the spawning thread, ahead of the CLI: a
+    /// revived Thread's stagger and git calls never hold the window.
+    fn start_after(
+        &mut self,
+        prepare: Preparation,
+        request: SpawnRequest,
+    ) -> io::Result<SessionLifecycle> {
+        let config = self.config(request);
+        SessionLifecycle::background(move || {
+            prepare()?;
+            config.spawn()
+        })
+    }
+}
+
+/// Everything a spawn needs, resolved on the UI thread (the defaults are
+/// read at the moment of the request, as before) and carried to the
+/// spawning thread.
+enum SessionConfig {
+    Claude(ClaudeConfig),
+    Codex(CodexConfig),
+}
+
+impl SessionConfig {
+    fn spawn(self) -> io::Result<Box<dyn Session + Send>> {
+        match self {
+            SessionConfig::Claude(config) => {
+                let resuming = config.resume.is_some();
+                let mut session = ClaudeSession::spawn(config)
+                    .map_err(|e| ResumeRefused::error(resuming, e.to_string()))?;
+                // Before the operator can type `@`: a fresh CLI answers its
+                // first file search from no index.
+                session.warm_file_index();
+                Ok(Box::new(session))
+            }
+            SessionConfig::Codex(config) => {
+                let resuming = config.resume.is_some();
+                let session = CodexSession::spawn(config)
+                    .map_err(|e| ResumeRefused::error(resuming, e.to_string()))?;
+                Ok(Box::new(session))
+            }
+        }
+    }
+}
+
+impl Spawn {
+    fn config(&self, request: SpawnRequest) -> SessionConfig {
+        // The Thread's workspace binding decides where the Session works; a
+        // Thread from before bindings falls back to where Ferrite started.
+        let cwd = request
+            .cwd
+            .map(|dir| dir.to_path_buf())
+            .or_else(|| std::env::current_dir().ok());
+        let model = request.model.map(|model| model.to_string());
+        let resume = request.resume.map(|target| target.to_string());
+        let name = request.name.map(|name| name.to_string());
+        let additional_directories = request.additional_directories;
+        let args = request.launch.args.to_vec();
+        let launcher = request.launch.launcher.to_vec();
+        // The Thread's own environment, then Ferrite's over it.
+        let env: Vec<(String, std::ffi::OsString)> = request
+            .launch
+            .env
+            .iter()
+            .map(|(name, value)| (name.clone(), value.into()))
+            .chain(
+                crate::api::caller_environment(request.thread, self.api.as_deref())
+                    .into_iter()
+                    .map(|(name, value)| (name.to_string(), value)),
+            )
+            .collect();
+        let defaults = self
+            .defaults
+            .lock()
+            .map(|defaults| defaults.clone())
+            .unwrap_or_default();
+        // The Thread's own effort, which its launch arguments may have
+        // made, else the operator's default for the provider, else
+        // nothing — the provider's own.
+        let own_effort = request.effort.map(|effort| effort.to_string());
+        let default_effort = || defaults.effort_for(request.provider);
+        // The newest installed copy of the CLI, wherever it is — not
+        // whichever a bare name happens to hit on this launch's PATH.
+        let program = crate::providers::discover::program(request.provider);
+        let api_tools = self
+            .api_tools
+            .as_ref()
+            .map(|tools| tools.for_thread(request.thread, request.owner, defaults.linked_machines));
+        // A Coordinator's briefing, then what the agent is told of its
+        // tools, as T3 Code tells its agents.
+        let briefing = match request.owner {
+            Some(ferrite_core::ThreadOwner::Factory(project)) => Some(crate::factory::briefing(*project)),
+            _ => None,
+        };
+        let told: Vec<String> = briefing
+            .into_iter()
+            .chain(api_tools.as_ref().map(crate::api::tools::ThreadTools::instructions))
+            .collect();
+        let instructions = (!told.is_empty()).then(|| told.join("\n\n"));
+        match request.provider {
+            Provider::Claude => SessionConfig::Claude(ClaudeConfig {
+                program: program.clone(),
+                cwd,
+                model,
+                effort: own_effort.or_else(default_effort),
+                name,
+                permission_mode: {
+                    let mode = request
+                        .permission_mode
+                        .map(str::to_string)
+                        .or(defaults.claude_permission_mode);
+                    match request.cap {
+                        Some(cap) => Some(cap.hold_claude(mode)),
+                        None => mode,
+                    }
+                },
+                prompt_suggestions: defaults.placeholder_suggestions,
+                resume,
+                resume_at: request.resume_at.and_then(|point| point.at.clone()),
+                resume_drops: request.resume_at.and_then(|point| point.drops.clone()),
+                fork: request.resume_at.is_some_and(|point| point.fork),
+                additional_directories,
+                visuals: self.visuals(defaults.visuals),
+                browser: self
+                    .browser
+                    .as_ref()
+                    .map(|browser| browser.for_thread(request.thread)),
+                api_tools,
+                instructions,
+                env,
+                launcher,
+                args,
+                ..ClaudeConfig::default()
+            }),
+            Provider::Codex => {
+                // Written for Codex's terminal UI (ADR 0030).
+                let launch = crate::providers::codex_launch::from_tui_args(&args);
+                let approval_policy = request
+                    .permission_mode
+                    .map(str::to_string)
+                    .or(launch.approval_policy)
+                    .or(defaults.codex_approval_policy.clone())
+                    .unwrap_or_else(|| "on-request".into());
+                let sandbox = launch.sandbox.or(defaults.codex_sandbox.clone());
+                let (approval_policy, sandbox) = match request.cap {
+                    Some(cap) => cap.hold_codex(approval_policy, sandbox),
+                    None => (approval_policy, sandbox),
+                };
+                SessionConfig::Codex(CodexConfig {
+                    program: program.clone(),
+                    cwd,
+                    model,
+                    effort: own_effort.or_else(default_effort),
+                    approval_policy: Some(approval_policy),
+                    sandbox,
+                    resume,
+                    additional_directories,
+                    visuals: self.visuals(defaults.visuals),
+                    browser: self
+                        .browser
+                        .as_ref()
+                        .map(|browser| browser.for_thread(request.thread)),
+                    api_tools,
+                    instructions,
+                    env,
+                    launcher,
+                    args: launch.args,
+                    ..CodexConfig::default()
+                })
+            }
+        }
+    }
+}
+
+/// Resident memory per Session, read the way the panes24 spike reads it.
+pub struct ProcessRss {
+    requests: Sender<u32>,
+    samples: Receiver<(u32, Option<u64>)>,
+    cached: HashMap<u32, u64>,
+    pending: HashSet<u32>,
+}
+
+impl Default for ProcessRss {
+    fn default() -> Self {
+        Self::with_sampler(rss_bytes)
+    }
+}
+
+impl ProcessRss {
+    fn with_sampler(sample: impl Fn(u32) -> Option<u64> + Send + 'static) -> Self {
+        let (request_tx, request_rx) = mpsc::channel();
+        let (sample_tx, sample_rx) = ferrite_core::doorbell::channel();
+        std::thread::Builder::new()
+            .name("ferrite-rss".into())
+            .spawn(move || {
+                while let Ok(pid) = request_rx.recv() {
+                    if sample_tx.send((pid, sample(pid))).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("RSS sampler thread starts");
+        Self {
+            requests: request_tx,
+            samples: sample_rx,
+            cached: HashMap::new(),
+            pending: HashSet::new(),
+        }
+    }
+}
+
+impl RssSampler for ProcessRss {
+    fn sample(&mut self, _thread: ThreadId, pid: Option<u32>) -> Option<u64> {
+        while let Ok((pid, rss)) = self.samples.try_recv() {
+            self.pending.remove(&pid);
+            if let Some(rss) = rss {
+                self.cached.insert(pid, rss);
+            }
+        }
+        let pid = pid?;
+        if self.pending.insert(pid) && self.requests.send(pid).is_err() {
+            self.pending.remove(&pid);
+        }
+        self.cached.get(&pid).copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferrite_core::settings::Settings;
+
+    /// A Worker's and a Coordinator's Session are bound to their Factory
+    /// tools; an ordinary Thread's is offered the PR watch, and the
+    /// Delegate tools while Linked machines is on.
+    #[test]
+    fn an_owned_threads_session_gets_its_factory_tools() {
+        let (heard, _hear) = mpsc::channel();
+        let served = Spawn {
+            api_tools: Some(crate::api::tools::Tools::new(heard)),
+            ..Spawn::new(Arc::default(), None)
+        };
+        let worker = ferrite_core::ThreadOwner::Task("t-1".into());
+        let request = |provider, owner| SpawnRequest {
+            thread: ThreadId::new(12),
+            provider,
+            model: None,
+            effort: None,
+            resume: None,
+            resume_at: None,
+            permission_mode: None,
+            name: None,
+            cwd: None,
+            additional_directories: Vec::new(),
+            launch: Default::default(),
+            owner,
+            cap: None,
+        };
+        let SessionConfig::Claude(claude) = served.config(request(Provider::Claude, Some(&worker)))
+        else {
+            panic!("a Claude config");
+        };
+        assert!(claude
+            .api_tools
+            .is_some_and(|tools| tools.offers("report_outcome")));
+        let SessionConfig::Codex(codex) = served.config(request(Provider::Codex, Some(&worker)))
+        else {
+            panic!("a Codex config");
+        };
+        assert!(codex.api_tools.is_some());
+        let SessionConfig::Claude(ordinary) = served.config(request(Provider::Claude, None)) else {
+            panic!("a Claude config");
+        };
+        let told = ordinary.instructions.expect("told of its PR tools");
+        assert!(told.starts_with("<pull_request_linking>"), "{told}");
+        assert!(!told.contains("delegate_task"), "{told}");
+        let ordinary = ordinary.api_tools.expect("every Thread watches PRs");
+        assert!(ordinary.offers("watch_pull_request"));
+        assert!(!ordinary.offers("report_outcome"));
+        assert!(!ordinary.offers("delegate_task"), "Linked machines is off");
+
+        // Turned on, a Session started after offers the Delegate tools,
+        // and is told of them and of the linked machines.
+        served.defaults.lock().unwrap().linked_machines = true;
+        let SessionConfig::Codex(linked) = served.config(request(Provider::Codex, None)) else {
+            panic!("a Codex config");
+        };
+        let told = linked.instructions.expect("told of its tools");
+        assert!(told.contains("## Ferrite orchestration") && told.contains("`machine_list`"));
+        let linked = linked.api_tools.unwrap();
+        assert!(linked.offers("delegate_task") && linked.offers("machine_list"));
+        assert!(linked.offers("project_list"));
+    }
+
+    /// A Coordinator's Session is told its briefing as its own
+    /// instructions, so the operator's words are all its transcript shows
+    /// as theirs; a Worker's and an ordinary Thread's are told none.
+    #[test]
+    fn a_coordinators_session_carries_its_briefing_as_instructions() {
+        let served = Spawn::new(Arc::default(), None);
+        let coordinator = ferrite_core::ThreadOwner::Factory(serde_json::from_value(3.into()).unwrap());
+        let worker = ferrite_core::ThreadOwner::Task("t-1".into());
+        let request = |provider, owner| SpawnRequest {
+            thread: ThreadId::new(12),
+            provider,
+            model: None,
+            effort: None,
+            resume: None,
+            resume_at: None,
+            permission_mode: None,
+            name: None,
+            cwd: None,
+            additional_directories: Vec::new(),
+            launch: Default::default(),
+            owner,
+            cap: None,
+        };
+        let SessionConfig::Claude(claude) =
+            served.config(request(Provider::Claude, Some(&coordinator)))
+        else {
+            panic!("a Claude config");
+        };
+        let SessionConfig::Codex(codex) =
+            served.config(request(Provider::Codex, Some(&coordinator)))
+        else {
+            panic!("a Codex config");
+        };
+        for instructions in [claude.instructions, codex.instructions] {
+            let told = instructions.expect("a Coordinator is briefed");
+            assert!(told.contains("You are the Coordinator"), "{told}");
+            assert!(told.contains("`proposal_raise`"), "{told}");
+        }
+        for owner in [Some(&worker), None] {
+            let SessionConfig::Claude(claude) = served.config(request(Provider::Claude, owner))
+            else {
+                panic!("a Claude config");
+            };
+            assert_eq!(claude.instructions, None);
+        }
+    }
+
+    /// Every agent knows its own Thread; one the Server runs also knows
+    /// how to reach the API, and with which binary (ADR 0027).
+    #[test]
+    fn every_agent_is_told_its_thread_and_where_the_api_listens() {
+        let request = |provider| SpawnRequest {
+            thread: ThreadId::new(12),
+            provider,
+            model: None,
+            effort: None,
+            resume: None,
+            resume_at: None,
+            permission_mode: None,
+            name: None,
+            cwd: None,
+            additional_directories: Vec::new(),
+            launch: Default::default(),
+            owner: None,
+            cap: None,
+        };
+        let served = Spawn {
+            api: Some(PathBuf::from("/store/api.sock")),
+            ..Spawn::new(Arc::default(), None)
+        };
+        let SessionConfig::Codex(codex) = served.config(request(Provider::Codex)) else {
+            panic!("a Codex request makes a Codex config");
+        };
+        let names: Vec<&str> = codex.env.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["FERRITE_THREAD_ID", "FERRITE_SOCKET", "FERRITE_BIN"]
+        );
+        assert_eq!(codex.env[0].1, "12");
+        assert_eq!(codex.env[1].1, "/store/api.sock");
+
+        let alone = Spawn::new(Arc::default(), None);
+        let SessionConfig::Claude(claude) = alone.config(request(Provider::Claude)) else {
+            panic!("a Claude request makes a Claude config");
+        };
+        assert_eq!(claude.env, [("FERRITE_THREAD_ID".to_string(), "12".into())]);
+    }
+
+    /// A Thread's own environment goes under Ferrite's, and its launcher
+    /// to the CLI's command (`thread.start --env --launcher`, ADR 0031).
+    #[test]
+    fn a_threads_env_and_launcher_reach_its_cli() {
+        let env = [
+            ("TOOL_DATA_DIR".to_string(), "/data".to_string()),
+            ("FERRITE_THREAD_ID".to_string(), "99".to_string()),
+        ];
+        let launcher = ["bwrap".to_string(), "--".to_string()];
+        let request = SpawnRequest {
+            thread: ThreadId::new(12),
+            provider: Provider::Claude,
+            model: None,
+            effort: None,
+            resume: None,
+            resume_at: None,
+            permission_mode: None,
+            name: None,
+            cwd: None,
+            additional_directories: Vec::new(),
+            launch: crate::engine::AgentLaunch {
+                args: &[],
+                env: &env,
+                launcher: &launcher,
+            },
+            owner: None,
+            cap: None,
+        };
+        let SessionConfig::Claude(claude) = Spawn::new(Arc::default(), None).config(request) else {
+            panic!("a Claude request makes a Claude config");
+        };
+        assert_eq!(
+            claude.env,
+            [
+                ("TOOL_DATA_DIR".to_string(), "/data".into()),
+                ("FERRITE_THREAD_ID".to_string(), "99".into()),
+                ("FERRITE_THREAD_ID".to_string(), "12".into()),
+            ],
+            "Ferrite's own is set last, over the Thread's"
+        );
+        assert_eq!(claude.launcher, launcher);
+    }
+
+    /// A capped Thread's every Session starts at the narrower of its cap
+    /// and the mode it would otherwise start in, however broad the
+    /// machine's defaults or the mode its last agent ran in; an uncapped
+    /// one is left to them.
+    #[test]
+    fn a_capped_session_starts_within_its_cap() {
+        use ferrite_core::runtime_mode::RuntimeMode;
+        let defaults = Arc::new(Mutex::new(SessionDefaults {
+            claude_permission_mode: Some("bypassPermissions".into()),
+            codex_approval_policy: Some("never".into()),
+            codex_sandbox: Some("danger-full-access".into()),
+            ..SessionDefaults::default()
+        }));
+        let spawn = Spawn::new(defaults, None);
+        let request = |provider, permission_mode, cap| SpawnRequest {
+            thread: ThreadId::new(12),
+            provider,
+            model: None,
+            effort: None,
+            resume: None,
+            resume_at: None,
+            permission_mode,
+            name: None,
+            cwd: None,
+            additional_directories: Vec::new(),
+            launch: Default::default(),
+            owner: None,
+            cap,
+        };
+        let claude = |permission_mode, cap| match spawn.config(request(
+            Provider::Claude,
+            permission_mode,
+            cap,
+        )) {
+            SessionConfig::Claude(config) => config.permission_mode,
+            SessionConfig::Codex(_) => unreachable!(),
+        };
+        let codex = |cap| match spawn.config(request(Provider::Codex, None, cap)) {
+            SessionConfig::Codex(config) => (config.approval_policy, config.sandbox),
+            SessionConfig::Claude(_) => unreachable!(),
+        };
+        let approval = Some(RuntimeMode::ApprovalRequired);
+        assert_eq!(claude(None, approval).as_deref(), Some("default"));
+        assert_eq!(
+            claude(Some("acceptEdits"), approval).as_deref(),
+            Some("default"),
+            "a mode widened in an earlier Session"
+        );
+        assert_eq!(
+            claude(Some("plan"), Some(RuntimeMode::FullAccess)).as_deref(),
+            Some("plan")
+        );
+        assert_eq!(claude(None, None).as_deref(), Some("bypassPermissions"));
+        let words = |policy: &str, sandbox: &str| (Some(policy.into()), Some(sandbox.into()));
+        assert_eq!(codex(approval), words("untrusted", "read-only"));
+        assert_eq!(
+            codex(Some(RuntimeMode::Auto)),
+            words("never", "workspace-write")
+        );
+        assert_eq!(codex(None), words("never", "danger-full-access"));
+    }
+
+    /// The spawner's default effort is each provider's in Settings as they
+    /// are when it is asked, not when it was made.
+    #[test]
+    fn the_default_effort_reads_current_settings() {
+        let defaults = Arc::new(Mutex::new(SessionDefaults {
+            claude_effort: Some("high".into()),
+            codex_effort: Some("low".into()),
+            ..Default::default()
+        }));
+        let spawn = Spawn::new(defaults.clone(), None);
+        assert_eq!(
+            spawn.default_effort(Provider::Claude).as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            spawn.default_effort(Provider::Codex).as_deref(),
+            Some("low")
+        );
+        *defaults.lock().unwrap() = SessionDefaults::default();
+        assert_eq!(spawn.default_effort(Provider::Claude), None);
+    }
+
+    /// The Thread's effort wins; the Settings default fills in only when
+    /// the Thread chose none; and each provider reads its own.
+    #[test]
+    fn the_settings_effort_is_the_default_when_the_thread_chose_none() {
+        let mut settings = Settings::default();
+        settings.claude_effort = Some("high".into());
+        let defaults = SessionDefaults::from_settings(&settings);
+        assert_eq!(
+            defaults.effort_for(Provider::Claude).as_deref(),
+            Some("high")
+        );
+        assert_eq!(defaults.effort_for(Provider::Codex), None);
+        assert_eq!(
+            Some("max".to_string()).or_else(|| defaults.effort_for(Provider::Claude)),
+            Some("max".into())
+        );
+        assert_eq!(
+            None.or_else(|| defaults.effort_for(Provider::Claude)),
+            Some("high".into())
+        );
+    }
+
+    /// Runs against whichever process table this platform has — `ps` here,
+    /// `tasklist` when the suite runs on Windows.
+    #[test]
+    fn the_rss_sampler_reads_this_very_process() {
+        let rss = rss_bytes(std::process::id()).expect("own pid must sample");
+        assert!(rss > 1024 * 1024, "resident bytes were {rss}");
+    }
+
+    #[test]
+    fn the_watchdog_never_waits_for_process_measurement() {
+        use std::time::{Duration, Instant};
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let mut sampler = ProcessRss::with_sampler(move |_| {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+            Some(42)
+        });
+
+        let before = Instant::now();
+        assert_eq!(sampler.sample(ThreadId::new(1), Some(7)), None);
+        assert!(before.elapsed() < Duration::from_millis(50));
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        release_tx.send(()).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            if sampler.sample(ThreadId::new(1), Some(7)) == Some(42) {
+                return;
+            }
+            std::thread::yield_now();
+        }
+        panic!("background sample was not adopted");
+    }
+}

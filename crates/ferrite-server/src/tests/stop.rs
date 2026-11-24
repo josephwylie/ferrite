@@ -114,7 +114,7 @@ fn peer(name: &str) -> Peer {
         mpsc::channel().0,
     );
     let (answer, answers) = mpsc::channel();
-    server.api_heard(ferrite_core::api::Heard::Joined(1, answer));
+    server.api_heard(ferrite_engine::api::Heard::Joined(1, answer));
     Peer {
         server,
         answers,
@@ -129,7 +129,7 @@ impl Peer {
     fn stop(&mut self, thread: ThreadId) -> serde_json::Value {
         let request = request("thread.stop", serde_json::json!({ "thread": thread }));
         self.server
-            .api_heard(ferrite_core::api::Heard::Request(1, request));
+            .api_heard(ferrite_engine::api::Heard::Request(1, request));
         serde_json::from_slice(&self.answers.try_recv().expect("answered at once")).unwrap()
     }
 

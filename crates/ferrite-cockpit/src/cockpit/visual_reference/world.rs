@@ -20,7 +20,7 @@ use ferrite_client::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::progress::{Phase, ProgressEvent};
 use ferrite_core::provider::Provider;
-use ferrite_core::providers::{applied, Session, SettingAck};
+use ferrite_engine::providers::{applied, Session, SettingAck};
 use ferrite_core::{
     Decision, DecisionAnswer, DecisionChoice, DecisionKind, Hunk, ModelInfo, PermissionModeChoice,
     QueueEvent, QueuedPrompt, RateLimitWindow, SessionEvent, ThreadId, ThreadKey, ToolResult, TurnOutcome,

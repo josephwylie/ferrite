@@ -28,13 +28,27 @@ use ferrite_core::{
     activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject},
     checkout::WorkspaceChoice,
     provider::Provider,
-    providers::Session,
     pull_request::PrState,
     settings::ReadingSize,
+    ControlKind,
+    Decision,
+    DecisionAnswer,
+    DecisionKind,
+    Hunk,
+    McpServer,
+    McpStatus,
+    PermissionModeChoice,
+    QueueEvent,
+    QueuedPrompt,
+    SessionCommand,
+    SessionEvent,
+    ThreadKey,
+    ToolResult,
+    TurnOutcome,
+};
+use ferrite_engine::{
+    providers::Session,
     store::Store,
-    ControlKind, Decision, DecisionAnswer, DecisionKind, Hunk, McpServer, McpStatus,
-    PermissionModeChoice, QueueEvent, QueuedPrompt, SessionCommand, SessionEvent, ThreadKey,
-    ToolResult, TurnOutcome,
 };
 use gpui::{AppContext, Context, HeadlessAppContext, Window};
 use std::{

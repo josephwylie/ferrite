@@ -32,7 +32,7 @@ pub(super) enum Refusal {
 
 pub(super) fn annotation(name: &str) -> Annotation {
     let root = scratch(name);
-    let png = include_bytes!("../../../../ferrite-core/tests/fixtures/browser-original.png");
+    let png = include_bytes!("../../../../ferrite-engine/tests/fixtures/browser-original.png");
     browser_annotations::retain(
         &root,
         Capture {

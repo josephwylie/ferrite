@@ -2319,6 +2319,7 @@ dependencies = [
  "ferrite-client",
  "ferrite-cockpit",
  "ferrite-core",
+ "ferrite-engine",
  "ferrite-frame",
  "ferrite-pane",
  "ferrite-server",
@@ -2339,6 +2340,7 @@ dependencies = [
  "dunce",
  "ferrite-client",
  "ferrite-core",
+ "ferrite-engine",
  "ferrite-reviewr",
  "libc",
  "serde",
@@ -2353,6 +2355,7 @@ dependencies = [
  "dunce",
  "ferrite-client",
  "ferrite-core",
+ "ferrite-engine",
  "ferrite-focus-notify",
  "ferrite-frame",
  "ferrite-pane",
@@ -2400,6 +2403,24 @@ dependencies = [
  "tokio-tungstenite 0.28.0",
  "ureq",
  "url",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ferrite-engine"
+version = "0.4.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "ctor",
+ "dunce",
+ "ferrite-core",
+ "ferrite-reviewr",
+ "libc",
+ "schemars",
+ "serde",
+ "serde_json",
+ "ureq",
  "windows-sys 0.61.2",
 ]
 
@@ -2479,6 +2500,7 @@ dependencies = [
  "dunce",
  "ferrite-client",
  "ferrite-core",
+ "ferrite-engine",
  "ferrite-reviewr",
  "futures-util",
  "libc",

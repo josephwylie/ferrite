@@ -113,7 +113,7 @@ pub fn launch() {
     });
     // A panic must not take accepted history with it: whatever a writer
     // holds goes into its log before the process unwinds (ADR 0009).
-    ferrite_core::store::install_panic_rescue();
+    ferrite_engine::store::install_panic_rescue();
     // Before the first glyph is rasterised (gpui caches the answer once):
     // the product draws text as macOS does; only the parity captures turn
     // smoothing off to match the browser-drawn prototype pixel for pixel.
@@ -596,7 +596,7 @@ mod tests {
     use ferrite_cockpit::demo;
     use ferrite_core::checkout::WorkspaceChoice;
     use ferrite_core::provider::Provider;
-    use ferrite_core::store::Store;
+    use ferrite_engine::store::Store;
 
     #[gpui::test]
     fn typing_does_not_hide_the_mouse_cursor(cx: &mut gpui::TestAppContext) {

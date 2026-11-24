@@ -29,7 +29,7 @@ fn the_api_bridge_carries_a_cli_call_to_the_server() {
     std::fs::create_dir_all(&store).unwrap();
     let mut server = ferrited(&store, "server").spawn().expect("ferrited starts");
     let deadline = Instant::now() + Duration::from_secs(20);
-    while ferrite_core::link::connect(&ferrite_core::api::address(&store)).is_err() {
+    while ferrite_core::link::connect(&ferrite_engine::api::address(&store)).is_err() {
         assert!(Instant::now() < deadline, "the API never listened");
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -54,7 +54,7 @@ fn the_api_bridge_carries_a_cli_call_to_the_server() {
     }))
     .unwrap();
     let (mut out, mut err) = (Vec::new(), Vec::new());
-    let status = ferrite_core::api::cli::call_machine(&request, "box", &dial, &mut out, &mut err);
+    let status = ferrite_engine::api::cli::call_machine(&request, "box", &dial, &mut out, &mut err);
     let said = String::from_utf8_lossy(&out);
     assert_eq!(status, 0, "{}", String::from_utf8_lossy(&err));
     let answer: serde_json::Value = serde_json::from_str(said.trim()).unwrap();

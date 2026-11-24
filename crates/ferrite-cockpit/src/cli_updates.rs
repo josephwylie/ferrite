@@ -5,7 +5,7 @@
 //! no Session of that provider is running (or, with automatic updates off,
 //! offers it in a toast and in Settings), and asks the provider menus again
 //! when an upgrade lands. The checking and installing are
-//! `ferrite_core::providers::update`; this is only the state each provider
+//! `ferrite_engine::providers::update`; this is only the state each provider
 //! is in and the words the window says about it.
 
 use std::time::{Duration, Instant};

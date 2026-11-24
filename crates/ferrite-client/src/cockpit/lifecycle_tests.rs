@@ -1,13 +1,13 @@
 //! Delayed provider adapters cross the same startup seam as production.
 //! Gates decide readiness; no CLI, timing assumptions, or worker-side sends.
 use super::*;
-use ferrite_core::providers::{Session, SettingAck};
-use ferrite_core::session::SessionLifecycle;
-use ferrite_core::store::Store;
+use ferrite_engine::providers::{Session, SettingAck};
+use ferrite_engine::session::SessionLifecycle;
+use ferrite_engine::store::Store;
 use ferrite_core::SessionEvent;
-use ferrite_core::engine::*;
+use ferrite_engine::engine::*;
 use crate::cockpit::{BootstrapResult, Cockpit};
-use ferrite_core::providers::applied;
+use ferrite_engine::providers::applied;
 use ferrite_core::roster::PaneIdentity;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

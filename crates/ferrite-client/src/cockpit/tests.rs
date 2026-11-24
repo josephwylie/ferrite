@@ -8,13 +8,13 @@ mod keys;
 #[path = "tests/rewind.rs"]
 mod rewind;
 use super::*;
-use ferrite_core::providers::SettingAck;
-use ferrite_core::session::SessionLifecycle;
-use ferrite_core::suggest::Suggestion;
+use ferrite_engine::providers::SettingAck;
+use ferrite_engine::session::SessionLifecycle;
+use ferrite_engine::suggest::Suggestion;
 use ferrite_core::checkout::WorkspaceBinding;
 use ferrite_core::SessionEvent;
 use ferrite_core::transcript::Input;
-use ferrite_core::engine::*;
+use ferrite_engine::engine::*;
 use crate::cockpit::Cockpit;
 use ferrite_core::roster::PaneIdentity;
 use ferrite_core::ThreadKey;
@@ -23,7 +23,7 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Sender};
 
 use ferrite_core::provider::Provider;
-use ferrite_core::store::Store;
+use ferrite_engine::store::Store;
 use ferrite_core::transcript::{Body, Class};
 use ferrite_core::TurnOutcome;
 
@@ -48,15 +48,15 @@ struct Scripted {
     answer_later: Rc<RefCell<bool>>,
     answers: Rc<RefCell<Vec<mpsc::SyncSender<io::Result<()>>>>>,
     native_suggestion: Rc<RefCell<Option<String>>>,
-    rewinds: Rc<RefCell<Vec<ferrite_core::providers::RewindRequest>>>,
-    forks: Rc<RefCell<Vec<ferrite_core::providers::ForkRequest>>>,
+    rewinds: Rc<RefCell<Vec<ferrite_engine::providers::RewindRequest>>>,
+    forks: Rc<RefCell<Vec<ferrite_engine::providers::ForkRequest>>>,
     rewindable: Rc<RefCell<bool>>,
     steers: Rc<RefCell<bool>>,
     folds: Rc<RefCell<bool>>,
     interrupts: Rc<RefCell<usize>>,
 }
 
-impl ferrite_core::providers::Session for Scripted {
+impl ferrite_engine::providers::Session for Scripted {
     fn steers(&self) -> bool {
         *self.steers.borrow()
     }
@@ -69,9 +69,9 @@ impl ferrite_core::providers::Session for Scripted {
     /// Cuts in place at once, restoring one file when asked to.
     fn rewind(
         &mut self,
-        request: ferrite_core::providers::RewindRequest,
-    ) -> io::Result<ferrite_core::providers::RewindAck> {
-        let files = request.files.then(|| ferrite_core::providers::FilesRestored {
+        request: ferrite_engine::providers::RewindRequest,
+    ) -> io::Result<ferrite_engine::providers::RewindAck> {
+        let files = request.files.then(|| ferrite_engine::providers::FilesRestored {
             files: 1,
             insertions: 2,
             deletions: 3,
@@ -79,8 +79,8 @@ impl ferrite_core::providers::Session for Scripted {
         self.rewinds.borrow_mut().push(request);
         let (answer, ack) = mpsc::sync_channel(1);
         answer
-            .send(Ok(ferrite_core::providers::Rewound {
-                cut: ferrite_core::providers::Cut::InPlace,
+            .send(Ok(ferrite_engine::providers::Rewound {
+                cut: ferrite_engine::providers::Cut::InPlace,
                 files,
             }))
             .unwrap();
@@ -89,11 +89,11 @@ impl ferrite_core::providers::Session for Scripted {
     /// Forks afresh: the new Thread's agent starts a conversation of its own.
     fn fork(
         &mut self,
-        request: ferrite_core::providers::ForkRequest,
-    ) -> io::Result<ferrite_core::providers::ForkAck> {
+        request: ferrite_engine::providers::ForkRequest,
+    ) -> io::Result<ferrite_engine::providers::ForkAck> {
         self.forks.borrow_mut().push(request);
         let (answer, ack) = mpsc::sync_channel(1);
-        answer.send(Ok(ferrite_core::providers::Forked::Fresh)).unwrap();
+        answer.send(Ok(ferrite_engine::providers::Forked::Fresh)).unwrap();
         Ok(ack)
     }
 
@@ -137,7 +137,7 @@ impl ferrite_core::providers::Session for Scripted {
             self.answers.borrow_mut().push(answer);
             return Ok(ack);
         }
-        Ok(ferrite_core::providers::applied())
+        Ok(ferrite_engine::providers::applied())
     }
     fn events(&self) -> &Receiver<SessionEvent> {
         &self.rx
@@ -203,11 +203,11 @@ struct Fake {
     fail: Rc<RefCell<bool>>,
     fail_at: Rc<RefCell<Option<usize>>>,
     fail_send: Rc<RefCell<bool>>,
-    suggestions: Rc<RefCell<Vec<ferrite_core::suggest::Request>>>,
+    suggestions: Rc<RefCell<Vec<ferrite_engine::suggest::Request>>>,
     native_suggestion: Rc<RefCell<Option<String>>>,
     /// Every rewind and fork a Session was asked for.
-    rewinds: Rc<RefCell<Vec<ferrite_core::providers::RewindRequest>>>,
-    forks: Rc<RefCell<Vec<ferrite_core::providers::ForkRequest>>>,
+    rewinds: Rc<RefCell<Vec<ferrite_engine::providers::RewindRequest>>>,
+    forks: Rc<RefCell<Vec<ferrite_engine::providers::ForkRequest>>>,
     /// While set, Sessions offer rewind (`ControlKind::Rewind`): off, the
     /// controls they announce stay what other tests pin.
     rewindable: Rc<RefCell<bool>>,
@@ -222,7 +222,7 @@ struct Fake {
 }
 
 impl Fake {
-    fn suggest_calls(&self) -> Vec<ferrite_core::suggest::Request> {
+    fn suggest_calls(&self) -> Vec<ferrite_engine::suggest::Request> {
         self.suggestions.borrow().clone()
     }
     /// Every spawn's choice, in call order.
@@ -240,13 +240,13 @@ impl Fake {
 }
 
 impl Spawner for Fake {
-    fn suggest(&mut self, request: ferrite_core::suggest::Request, _: ferrite_core::doorbell::Sender<Suggestion>) {
+    fn suggest(&mut self, request: ferrite_engine::suggest::Request, _: ferrite_core::doorbell::Sender<Suggestion>) {
         self.suggestions.borrow_mut().push(request);
     }
     fn spawn(
         &mut self,
         request: SpawnRequest,
-    ) -> std::io::Result<Box<dyn ferrite_core::providers::Session>> {
+    ) -> std::io::Result<Box<dyn ferrite_engine::providers::Session>> {
         *self.attempts.borrow_mut() += 1;
         let attempt = *self.attempts.borrow();
         if *self.fail.borrow() || *self.fail_at.borrow() == Some(attempt) {
@@ -401,7 +401,7 @@ fn the_last_worked_project_is_a_registered_one_or_nothing() {
 fn init_repo(root: &Path) -> std::path::PathBuf {
     let repo = root.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
-    let git = |args: &[&str]| ferrite_core::workspace::git_for_tests(&repo, args);
+    let git = |args: &[&str]| ferrite_engine::workspace::git_for_tests(&repo, args);
     git(&["init", "-q", "-b", "main"]);
     git(&["config", "core.autocrlf", "false"]);
     std::fs::write(repo.join("file.txt"), "base\n").unwrap();
@@ -446,7 +446,7 @@ fn follow_into(
         })
         .unwrap();
     cockpit.pump();
-    ferrite_core::workspace::git_for_tests(
+    ferrite_engine::workspace::git_for_tests(
         repo,
         &["worktree", "add", "-b", leaf, worktree.to_str().unwrap()],
     );
@@ -577,7 +577,7 @@ fn a_followed_worktree_that_vanishes_returns_the_thread_to_main() {
     let main = Some(WorkspaceBinding::Main {
         checkout: repo.clone(),
     });
-    let git = |args: &[&str]| ferrite_core::workspace::git_for_tests(&repo, args);
+    let git = |args: &[&str]| ferrite_engine::workspace::git_for_tests(&repo, args);
 
     // Live: gone from git's list, gone from the binding.
     let live = follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-live"));
@@ -665,7 +665,7 @@ fn only_mains_own_work_moves_the_thread() {
     let (mut cockpit, fake) = cockpit("follow-evidence-store");
     let repo = init_repo(&root);
     let worktree = root.join("wt-standing");
-    ferrite_core::workspace::git_for_tests(
+    ferrite_engine::workspace::git_for_tests(
         &repo,
         &[
             "worktree",
@@ -697,7 +697,7 @@ fn only_mains_own_work_moves_the_thread() {
     };
 
     let child = AgentKey::new(Provider::Claude, "root", "child");
-    for n in 0..ferrite_core::workspace::follow::EVIDENCE_CALLS as usize + 2 {
+    for n in 0..ferrite_engine::workspace::follow::EVIDENCE_CALLS as usize + 2 {
         stream
             .send(SessionEvent::Activity(ActivityEvent::Content {
                 key: child.clone(),
@@ -715,7 +715,7 @@ fn only_mains_own_work_moves_the_thread() {
         "a Subagent's work never moves the Thread"
     );
 
-    for n in 0..ferrite_core::workspace::follow::EVIDENCE_CALLS as usize {
+    for n in 0..ferrite_engine::workspace::follow::EVIDENCE_CALLS as usize {
         stream
             .send(SessionEvent::Activity(ActivityEvent::MainContent {
                 id: Some(format!("m{n}")),
@@ -741,7 +741,7 @@ fn opening_on_an_existing_branch_switches_the_project_checkout() {
     let root = scratch("branch-open");
     let (mut cockpit, _fake) = cockpit("branch-open-store");
     let repo = init_repo(&root);
-    ferrite_core::workspace::git_for_tests(&repo, &["switch", "-q", "-c", "feature/side"]);
+    ferrite_engine::workspace::git_for_tests(&repo, &["switch", "-q", "-c", "feature/side"]);
 
     let thread = cockpit
         .open(
@@ -959,7 +959,7 @@ fn opening_with_an_existing_worktree_adopts_the_standing_tree() {
     // Adoption minted nothing: one worktree entry, one branch.
     let project = cockpit.registry(cockpit.first_machine()).projects()[0].id;
     assert_eq!(cockpit.registry(cockpit.first_machine()).worktrees(project).len(), 1);
-    let branches = ferrite_core::workspace::git_for_tests(&repo, &["branch", "--list", "ferrite/*"]);
+    let branches = ferrite_engine::workspace::git_for_tests(&repo, &["branch", "--list", "ferrite/*"]);
     assert_eq!(branches.matches("ferrite/").count(), 1, "{branches:?}");
 }
 
@@ -997,7 +997,7 @@ fn a_hand_made_worktree_is_adopted_without_minting_or_registering() {
     let (mut cockpit, fake) = cockpit("adopt-hand-made-store");
     let repo = init_repo(&root);
     let hand_made = root.join("hand-made");
-    ferrite_core::workspace::ensure_worktree(&repo, &hand_made, "feature/hand-made").unwrap();
+    ferrite_engine::workspace::ensure_worktree(&repo, &hand_made, "feature/hand-made").unwrap();
 
     let thread = cockpit
         .open(
@@ -1192,7 +1192,7 @@ fn waking_leaves_the_worktree_to_the_spawners_preparation() {
         fn spawn(
             &mut self,
             request: SpawnRequest,
-        ) -> io::Result<Box<dyn ferrite_core::providers::Session>> {
+        ) -> io::Result<Box<dyn ferrite_engine::providers::Session>> {
             self.fake.spawn(request)
         }
         fn start_after(
@@ -1328,7 +1328,7 @@ fn deleting_a_legacy_worktree_thread_removes_its_tree() {
     let root = scratch("delete-legacy-worktree");
     let repo = init_repo(&root);
     let path = root.join("legacy-tree");
-    ferrite_core::workspace::git_for_tests(
+    ferrite_engine::workspace::git_for_tests(
         &repo,
         &[
             "worktree",
@@ -1448,8 +1448,8 @@ fn two_threads_on_one_repo_work_in_isolated_worktrees() {
     // Each "agent" writes in its own workspace; neither sees the other.
     std::fs::write(cwd_one.join("only-one.txt"), "one\n").unwrap();
     std::fs::write(cwd_two.join("file.txt"), "two edited\n").unwrap();
-    let status_one = ferrite_core::workspace::git_for_tests(&cwd_one, &["status", "--porcelain"]);
-    let status_two = ferrite_core::workspace::git_for_tests(&cwd_two, &["status", "--porcelain"]);
+    let status_one = ferrite_engine::workspace::git_for_tests(&cwd_one, &["status", "--porcelain"]);
+    let status_two = ferrite_engine::workspace::git_for_tests(&cwd_two, &["status", "--porcelain"]);
     assert!(status_one.contains("only-one.txt"), "one: {status_one}");
     assert!(!status_one.contains("file.txt"), "one: {status_one}");
     assert!(status_two.contains("file.txt"), "two: {status_two}");
@@ -4927,7 +4927,7 @@ fn a_closed_thread_takes_no_draft() {
 fn a_thread_started_with_args_is_revived_with_them() {
     let (mut core, fake) = cockpit("launch-args");
     let args = vec!["--permission-mode".to_string(), "plan".to_string()];
-    let launch = ferrite_core::engine::Launch {
+    let launch = ferrite_engine::engine::Launch {
         args: args.clone(),
         ..Default::default()
     };
@@ -4993,7 +4993,7 @@ fn stale_board_launch_after_handover_resumes_the_current_provider() {
         core.engine_mut()
             .revive_with(
                 thread.thread(),
-                ferrite_core::engine::Launch {
+                ferrite_engine::engine::Launch {
                     launch_provider: Some(from),
                     args: args.into_iter().map(String::from).collect(),
                     resume: Some("old-conversation".into()),
@@ -5039,7 +5039,7 @@ fn stale_board_launch_after_handover_resumes_the_current_provider() {
 #[test]
 fn only_the_first_session_names_the_conversation_it_begins() {
     let (mut core, fake) = cockpit("launch-session-id");
-    let launch = ferrite_core::engine::Launch {
+    let launch = ferrite_engine::engine::Launch {
         args: vec![
             "--session-id".into(),
             "4a76".into(),
@@ -5108,7 +5108,7 @@ fn a_thread_started_with_env_and_a_launcher_is_revived_with_them() {
     let launcher: Vec<String> = ["bwrap", "--ro-bind", "/r", "/r", "--"]
         .map(String::from)
         .into();
-    let launch = ferrite_core::engine::Launch {
+    let launch = ferrite_engine::engine::Launch {
         env: env.clone(),
         launcher: launcher.clone(),
         ..Default::default()
@@ -5129,7 +5129,7 @@ fn a_thread_started_with_env_and_a_launcher_is_revived_with_them() {
 #[test]
 fn a_thread_revived_with_a_new_launch_keeps_its_id() {
     let (mut core, fake) = cockpit("launch-revive");
-    let launch = ferrite_core::engine::Launch {
+    let launch = ferrite_engine::engine::Launch {
         args: vec!["--permission-mode".into(), "plan".into()],
         resume: Some("sess-1".into()),
         ..Default::default()
@@ -5140,7 +5140,7 @@ fn a_thread_revived_with_a_new_launch_keeps_its_id() {
         .unwrap();
     let thread = core.key(thread);
     core.park(thread).now().unwrap();
-    let again = ferrite_core::engine::Launch {
+    let again = ferrite_engine::engine::Launch {
         args: vec!["--model".into(), "opus".into()],
         ..Default::default()
     };
@@ -5156,7 +5156,7 @@ fn a_thread_revived_with_a_new_launch_keeps_its_id() {
         "a new conversation"
     );
     core.park(thread).now().unwrap();
-    let resumed = ferrite_core::engine::Launch {
+    let resumed = ferrite_engine::engine::Launch {
         resume: Some("sess-1".into()),
         ..Default::default()
     };
@@ -5184,7 +5184,7 @@ fn a_thread_revived_with_a_new_launch_keeps_its_id() {
 #[test]
 fn a_launchs_model_and_effort_are_the_threads_from_its_start() {
     let (mut core, fake) = cockpit("launch-pinned");
-    let launch = ferrite_core::engine::Launch {
+    let launch = ferrite_engine::engine::Launch {
         args: ["--model", "haiku", "--verbose", "--effort=high"].map(String::from).to_vec(),
         ..Default::default()
     };
@@ -5225,7 +5225,7 @@ fn a_launchs_model_and_effort_are_the_threads_from_its_start() {
 #[test]
 fn a_thread_started_on_a_provider_conversation_resumes_it() {
     let (mut core, fake) = cockpit("launch-resume");
-    let launch = ferrite_core::engine::Launch {
+    let launch = ferrite_engine::engine::Launch {
         resume: Some("sess-9".into()),
         ..Default::default()
     };

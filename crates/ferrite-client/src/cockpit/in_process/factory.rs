@@ -5,7 +5,7 @@
 
 use std::io;
 
-use ferrite_core::factory::Factory;
+use ferrite_engine::factory::Factory;
 use ferrite_core::factory_board::Board;
 use ferrite_core::protocol::{Done, GitHubAsk, Op, TaskAction};
 use ferrite_core::provider::Provider;
@@ -48,11 +48,11 @@ impl FactoryFixture {
             }
             Op::Workflow { action } => {
                 self.factory.as_ref()?;
-                ferrite_core::factory::workflow_command(action, &agent, Vec::new())
+                ferrite_engine::factory::workflow_command(action, &agent, Vec::new())
             }
             Op::Coordinator { action } => {
                 self.factory.as_ref()?;
-                ferrite_core::factory::coordinator_command(action, &agent, Default::default())
+                ferrite_engine::factory::coordinator_command(action, &agent, Default::default())
             }
             _ => return None,
         };
@@ -65,14 +65,14 @@ impl FactoryFixture {
         };
         let answer = factory
             .command(command, 0)
-            .map(|answer| Some(ferrite_core::factory::done(answer)))
+            .map(|answer| Some(ferrite_engine::factory::done(answer)))
             .map_err(|refusal| io::Error::other(refusal.message));
         Some((answer, Some(factory.board())))
     }
 
     /// A command its Factory hears as a Server's would (a GitHub read's
     /// answer, say), and the board the window is to be told.
-    pub(crate) fn hear(&mut self, command: ferrite_core::factory::Command) -> Option<Board> {
+    pub(crate) fn hear(&mut self, command: ferrite_engine::factory::Command) -> Option<Board> {
         let factory = self.factory.as_mut()?;
         if let Err(refusal) = factory.command(command, 0) {
             ferrite_core::log!("fixture: the Factory refused: {refusal}");

@@ -48,6 +48,8 @@ browser-smoke = ["cef", "ferrite-cockpit/browser-smoke"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
+# The API's command line, the Store's panic rescue and the demo's Engine.
+ferrite-engine = { path = "../ferrite-engine" }
 ferrite-client = { path = "../ferrite-client" }
 # The Server process `ferrite server` runs (ADR 0025).
 ferrite-server = { path = "../ferrite-server" }

@@ -8,13 +8,13 @@ use serde_json::{json, Value};
 
 use super::factory::done;
 use super::Server;
-use ferrite_core::api::schema::{
+use ferrite_engine::api::schema::{
     CoordinatorSayParams, CoordinatorSetParams, ProposalRaiseParams, ProposedAct, TaskListParams,
 };
-use ferrite_core::api::{ApiError, Code};
+use ferrite_engine::api::{ApiError, Code};
 use ferrite_core::checkout::WorkspaceChoice;
-use ferrite_core::engine::Launch;
-use ferrite_core::factory::{Answer, Command};
+use ferrite_engine::engine::Launch;
+use ferrite_engine::factory::{Answer, Command};
 use ferrite_core::factory_board::{Act, Agent, Override};
 use ferrite_core::project::ProjectId;
 use ferrite_core::protocol::{CoordinatorAction, Done, Op, WireError};
@@ -167,7 +167,7 @@ impl Server {
     ) -> Result<Option<Done>, WireError> {
         let catalog = ferrite_core::factory_board::Catalog::default();
         let Some(mut command) =
-            ferrite_core::factory::coordinator_command(action.clone(), &self.factory_agent, catalog)
+            ferrite_engine::factory::coordinator_command(action.clone(), &self.factory_agent, catalog)
         else {
             return Err(WireError {
                 code: ferrite_core::protocol::ErrorCode::Unsupported,

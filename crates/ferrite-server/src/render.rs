@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 use base64::Engine as _;
 
-use ferrite_core::connection::ClientId;
+use ferrite_engine::connection::ClientId;
 use ferrite_core::protocol::{ServerMessage, WirePng};
 use ferrite_core::visual::{RenderRequest, Rendered, Renderer, Reply};
 

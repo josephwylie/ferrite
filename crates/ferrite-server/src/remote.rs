@@ -367,7 +367,7 @@ fn serve(args: &[String], store: &Path, executable: &Path) -> io::Result<()> {
     let gateway = Gateway {
         access: Arc::new(Mutex::new(Access::open(store)?)),
         socket: link::address(store),
-        api_socket: ferrite_core::api::address(store),
+        api_socket: ferrite_engine::api::address(store),
         slots: Arc::new(Semaphore::new(32)),
         shell: None,
     };

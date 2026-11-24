@@ -492,22 +492,22 @@ fn cli_from(
     method: &str,
     params: serde_json::Value,
 ) -> (i32, Vec<serde_json::Value>, Vec<serde_json::Value>) {
-    let list = ferrite_core::api::Method::OPERATIONS
+    let list = ferrite_engine::api::Method::OPERATIONS
         .iter()
         .find(|op| op.name == "task.list")
         .unwrap();
-    let context = ferrite_core::api::cli::Context {
+    let context = ferrite_engine::api::cli::Context {
         thread: Some(thread.to_string()),
         cwd: None,
     };
-    let parsed = ferrite_core::api::cli::parse(list, &[], &context).unwrap();
+    let parsed = ferrite_engine::api::cli::parse(list, &[], &context).unwrap();
     assert_eq!(parsed.caller, Some(thread), "the CLI names where it runs");
-    let request: ferrite_core::api::Request = serde_json::from_value(serde_json::json!({
+    let request: ferrite_engine::api::Request = serde_json::from_value(serde_json::json!({
         "id": "1", "method": method, "params": params, "caller": thread,
     }))
     .unwrap();
     let ((mut out, said), (mut err, refused)) = (printed(), printed());
-    let status = ferrite_core::api::cli::call(&request, &harness.api, &mut out, &mut err);
+    let status = ferrite_engine::api::cli::call(&request, &harness.api, &mut out, &mut err);
     drop((out, err));
     let lines = |told: Receiver<String>| told.iter().map(|text| line(&text)).collect();
     (status, lines(said), lines(refused))

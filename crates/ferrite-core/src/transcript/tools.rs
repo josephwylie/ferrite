@@ -512,7 +512,7 @@ mod findings_tests {
 
     #[test]
     fn findings_read_from_a_real_report_findings_input() {
-        let line = include_str!("../../tests/fixtures/claude-report-findings-2.1.318.jsonl")
+        let line = include_str!("../../../ferrite-engine/tests/fixtures/claude-report-findings-2.1.318.jsonl")
             .lines()
             .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
             .find_map(|frame| {
