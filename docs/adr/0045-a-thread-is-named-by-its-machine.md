@@ -216,8 +216,10 @@ Each lands green and proves something.
    order read every machine's times on this computer's clock: a held
    machine keeps its Server's clock (`ServerClock`, from `welcome`) after
    its link goes, a Thread's digest carries its last activity
-   (`Digest.active_ms`), and `Cockpit::last_used` reads a parked or
-   digest-only Thread's through that clock. Where Projects are listed by
+   (`Digest.active_ms`) and when its log was last written
+   (`Digest.written_ms`), and `Cockpit::last_used` reads a parked or open
+   Thread's through that clock, this computer's as well (ADR 0049). Where
+   Projects are listed by
    name (the Filter menu), another machine's wears T3's icon, its tooltip
    "On box". The machine pick goes back a step on its arrow and on
    backspace in an empty line, and esc closes the palette, as T3's view

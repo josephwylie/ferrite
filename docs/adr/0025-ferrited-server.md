@@ -352,11 +352,12 @@ still pending means the operator answers again.
 - What a parked Thread says (titles, its Project, last use, the parked
   list, turn and Subagent counts) the window lists off the Server's
   `parked` rows (ADR 0026): reading every parked log itself held the UI
-  thread for hundreds of milliseconds per change. What an open Thread's
-  header and last write say (its Project, its age) it still reads
-  itself, through a Store handle that never takes the claim
-  (`Store::reader`), so a Server started after the window still finds it
-  free. A Draft's commands and the import picker's sessions are the
+  thread for hundreds of milliseconds per change. An open Thread's
+  header is its mirror's, its age its digest's (`active_ms`, and
+  `written_ms` for when its log was last written), and Copy conversation
+  asks `read_transcript` for a history its view no longer holds: the
+  window opens no Store (ADR 0049). A Draft's commands and the import
+  picker's sessions are the
   Server's machine's: the window asks `list_commands` and `list_sessions`,
   and the Server runs its own CLI and reads its own disk. Titles are
   written by the Server too, from a Thread's first prompt, and reach every
