@@ -5,7 +5,7 @@
 use super::*;
 use ferrite_core::cli_update::Status;
 use ferrite_core::protocol::{CliAction, CliBinary, CliStatus, Done};
-use ferrite_core::server::clis::Clis;
+use ferrite_core::providers::clis::Clis;
 use ferrite_core::settings::{ServerDefaults, Settings};
 
 /// A machine whose CLIs the test scripts: the version each answers and

@@ -2357,8 +2357,8 @@ impl Cockpit {
         match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.github_names(ask),
             Link::InProcess(_) => Ok(read_here(move || {
-                use ferrite_core::server::github::GitHub;
-                let gh = ferrite_core::server::github::Gh;
+                use ferrite_core::github::GitHub;
+                let gh = ferrite_core::github::Gh;
                 match ask {
                     GitHubAsk::Repositories => gh.repositories(),
                     GitHubAsk::Labels { repository } => gh.labels(&repository),
@@ -2792,7 +2792,7 @@ impl Cockpit {
         match &mut self.held_mut(machine)?.link {
             Link::Server(server) => server.cli(action),
             Link::InProcess(_) => Ok(read_here(move || {
-                ferrite_core::server::clis::perform(&ferrite_core::server::clis::Host, &action)
+                ferrite_core::providers::clis::perform(&ferrite_core::providers::clis::Host, &action)
                     .map_err(|error| error.message)
             })),
         }

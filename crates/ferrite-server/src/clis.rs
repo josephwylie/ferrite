@@ -2,7 +2,7 @@
 //! core's `Clis` seam.
 
 use ferrite_core::protocol::CliAction;
-use ferrite_core::server::clis::perform;
+use ferrite_core::providers::clis::perform;
 
 use super::{ClientId, Server};
 

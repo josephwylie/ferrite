@@ -1,8 +1,8 @@
 //! The Server (ADR 0025) as the rest of Ferrite sees it: where its Store
-//! and settings live, keeping one running (`agent`), when a window asks it
-//! to restart, and the machine's GitHub and provider CLIs, which a Server
-//! reads for its windows and a window that runs its own agents reads
-//! itself (`github`, `clis`). The process itself, `ferrite server` and
+//! and settings live, keeping one running (`agent`), and when a window asks
+//! it to restart. What a Server reads for its windows of its machine's
+//! GitHub and provider CLIs is the engine's (`crate::github`,
+//! `crate::providers::clis`). The process itself, `ferrite server` and
 //! `ferrited`, is the `ferrite-server` crate.
 
 use std::path::PathBuf;
@@ -12,8 +12,6 @@ use serde::{Deserialize, Serialize};
 use crate::protocol::ServerInfo;
 
 pub mod agent;
-pub mod clis;
-pub mod github;
 
 /// A Server's own stable id: made once, the first time a Server starts on
 /// its Store, and kept there, so every boot and every route to it (ssh, a

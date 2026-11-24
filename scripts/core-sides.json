@@ -78,6 +78,7 @@
   "connection",
   "engine",
   "factory",
+  "github",
   "import",
   "pr_watch",
   "providers",
@@ -102,14 +103,13 @@
  "crossings": {
   "ferrite-client -> engine": 10,
   "ferrite-client -> factory": 7,
+  "ferrite-client -> github": 2,
+  "ferrite-client -> providers": 2,
   "ferrite-client -> store": 2,
   "ferrite-client -> workspace": 1,
   "ferrite-cockpit -> providers": 3,
   "ferrite-cockpit -> spawner": 1,
   "ferrite-cockpit -> store": 1,
-  "ferrite-cockpit -> titler": 3,
-  "server -> pr_watch": 3,
-  "server -> providers": 1,
-  "server -> workspace": 1
+  "ferrite-cockpit -> titler": 3
  }
 }

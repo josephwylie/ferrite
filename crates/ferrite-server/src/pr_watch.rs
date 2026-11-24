@@ -21,7 +21,7 @@ use ferrite_core::pr_watch::{
     self, Change, CheckStatus, Closes, End, Fingerprint, Mergeable, ReadError, Reading, Report,
 };
 use ferrite_core::pull_request::{self, Cursor, PrState, Stamp, Target, Until, Watch};
-use ferrite_core::server::github::GitHub;
+use ferrite_core::github::GitHub;
 use ferrite_core::transcript::{tools, Body, ToolState};
 use ferrite_core::wake::Wake;
 use ferrite_core::connection::ClientId;
