@@ -6,6 +6,43 @@
 #[path = "../../ferrite-core/src/test_temp.rs"]
 mod test_temp;
 
+/// The demo's flags, when this build has the demo (`demo`), else their
+/// refusal.
+#[cfg(feature = "demo")]
+mod demo;
+#[cfg(not(feature = "demo"))]
+mod demo {
+    use ferrite_client::cockpit::Cockpit;
+    use ferrite_core::provider::Provider;
+
+    /// The demo a build without it never runs.
+    pub(crate) enum Demo {}
+
+    impl Demo {
+        /// None: asked for, the demo is refused as a wrong command line is.
+        pub(crate) fn from_args(args: &[String]) -> Option<Self> {
+            if let Some(flag) = super::demo_flag(args) {
+                eprintln!("ferrite: {}", refusal(flag));
+                std::process::exit(2);
+            }
+            None
+        }
+
+        pub(crate) fn cockpit(&self, _: std::path::PathBuf) -> Cockpit {
+            match *self {}
+        }
+
+        pub(crate) fn seed(&self, _: &mut Cockpit, _: Provider) {
+            match *self {}
+        }
+    }
+
+    /// Why `flag` is refused: the demo's Engine is a fixture, which a
+    /// released app never compiles (ADR 0049).
+    pub(crate) fn refusal(flag: &str) -> String {
+        format!("{flag} is the demo's, and this build has no demo: run `cargo run -p ferrite --features demo -- {flag}`")
+    }
+}
 mod entry;
 mod github_images;
 mod menus;
@@ -14,7 +51,7 @@ mod windows_bootstrap;
 
 pub use entry::run;
 
-use ferrite_cockpit::{cockpit, cockpit_window, demo, ferrite_update, machines};
+use ferrite_cockpit::{cockpit, cockpit_window, ferrite_update, machines};
 use ferrite_pane::visual;
 use ferrite_ui::keymap::{Hide, HideOthers, Minimize, Quit, ShowAll, Zoom};
 use ferrite_ui::{frame, icons, keymap, motion, platform_text, register_fonts, theme};
@@ -26,13 +63,11 @@ use ferrite_core::server::{settings_dir, store_dir};
 use ferrite_core::settings::Settings;
 use ferrite_core::checkout::WorkspaceBinding;
 use ferrite_core::provider::Provider;
-use ferrite_core::store::Store;
 use ferrite_core::window_frame;
 use ferrite_core::ThreadKey;
 
 use cockpit::CockpitView;
 use ferrite_core::settings::SessionDefaults;
-use ferrite_core::spawner::{self, ProcessRss};
 
 /// Transcript Markdown can show remote images (`![alt](https://…)`); GPUI
 /// loads them through the application's HTTP client, whose default refuses
@@ -166,23 +201,20 @@ pub fn launch() {
     if browser_smoke {
         ferrite_core::log!("browser window smoke: launch pid {}", std::process::id());
     }
-    let load = args.iter().any(|arg| arg == "--load");
-    let demo = load || args.iter().any(|arg| arg == "--demo");
+    let demo = demo::Demo::from_args(&args);
     // One Ferrite updates itself: the first window, which holds the update
     // claim for as long as it runs (ADR 0023, 0025). A Ferrite update the
     // last run downloaded installs now, before this window starts a Server
     // from the old executable. A successful install does not return here:
     // the new Ferrite takes this process's place.
     let ferrite_updates =
-        ferrite_update::enabled() && !demo && ferrite_update::claim(&settings_dir);
+        ferrite_update::enabled() && demo.is_none() && ferrite_update::claim(&settings_dir);
     let whats_new = ferrite_updates
         .then(|| ferrite_update::at_launch(&settings_dir))
         .flatten();
     // Before the args, the store, or any spawn: a Dock launch has no PATH
     // worth the name until the login shell is asked (crate::shell).
     let dock = ferrite_core::login_shell::adopt_login_environment();
-    // `--demo parity`: the UI refresh mockups' world, on its own store.
-    let parity = flag(&args, "--demo") == Some("parity");
     let (settings, unreadable) = match Settings::load(&settings_dir) {
         Ok(settings) => (settings, None),
         Err(e) => {
@@ -221,11 +253,6 @@ pub fn launch() {
         eprintln!("ferrite: --remote: {e}");
         std::process::exit(2);
     }
-    // How many Panes to open. The perf run uses 24.
-    let panes: usize = flag(&args, "--panes")
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(1);
-
     // The icons are registered on the application, before `run`:
     // `with_assets` replaces both the asset source and the SVG renderer,
     // and `svg()` finds neither afterwards.
@@ -251,23 +278,11 @@ pub fn launch() {
             let defaults = std::sync::Arc::new(std::sync::Mutex::new(
                 SessionDefaults::from_settings(&settings),
             ));
-            // The fixture adapter serves `--demo` and `--load`, in this
-            // process. Every other launch is a window on the Server, which
-            // spawns the real provider CLIs and keeps them when it goes
-            // (ADR 0025).
-            let (mut core, machines) = if parity {
-                (demo::mockup_world(), None)
-            } else if demo {
-                let store = Store::open(store_dir()).unwrap_or_else(|e| {
-                    ferrite_core::log!("cannot open the Thread store: {e}");
-                    std::process::exit(1);
-                });
-                let core = Cockpit::try_new(store, Box::new(demo::Spawn::new(load)))
-                    .unwrap_or_else(|e| {
-                        ferrite_core::log!("cannot open the workspace registry: {e}");
-                        std::process::exit(1);
-                    });
-                (core, None)
+            // The demo runs its scripted Sessions in this process. Every
+            // other launch is a window on the Server, which spawns the real
+            // provider CLIs and keeps them when it goes (ADR 0025).
+            let (mut core, machines) = if let Some(demo) = &demo {
+                (demo.cockpit(store_dir()), None)
             } else {
                 // A released app's Server is launchd's (the Run key's) from
                 // its first launch, so the agents' Threads resume at login;
@@ -322,9 +337,6 @@ pub fn launch() {
                     ferrite_core::log!("cannot stand in the launch directory: {e}");
                 }
             }
-            if demo {
-                core.watch_memory(Box::new(ProcessRss::default()), spawner::RSS_LIMIT);
-            }
             for thread in adopted {
                 if let Err(e) = core.revive_and_wait(thread) {
                     ferrite_core::log!("imported thread {} would not open: {e}", thread.thread());
@@ -332,9 +344,10 @@ pub fn launch() {
             }
             // The Server restores the Threads that were open; an empty
             // store starts as a draft Pane (#29).
-            if core.threads().is_empty() && (demo || panes > 1) {
-                demo::seed_panes(&mut core, panes, provider);
+            if let Some(demo) = &demo {
+                demo.seed(&mut core, provider);
             }
+            let demo = demo.is_some();
 
             // Who posts the system notifications (ADR 0017): the bundle's
             // identifier, and on Windows the AppUserModelID.
@@ -572,12 +585,20 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.get(at + 1).map(String::as_str)
 }
 
+/// The first of the demo's flags `args` names (`demo`).
+fn demo_flag(args: &[String]) -> Option<&str> {
+    args.iter()
+        .map(String::as_str)
+        .find(|arg| ["--demo", "--load", "--panes"].contains(arg))
+}
+
 #[cfg(test)]
 mod tests {
     // No `use super::*`: the crate root globs `gpui::*`, whose `test` macro
     // would capture the `#[test]` this macro expands to and recurse.
-    use super::{adopt, demo, dock_launch_dir, keep_mouse_cursor_visible};
+    use super::{adopt, demo_flag, dock_launch_dir, keep_mouse_cursor_visible};
     use ferrite_client::cockpit::Cockpit;
+    use ferrite_cockpit::demo;
     use ferrite_core::checkout::WorkspaceChoice;
     use ferrite_core::provider::Provider;
     use ferrite_core::store::Store;
@@ -665,6 +686,37 @@ mod tests {
         );
         // Nothing half-made was left in the store either.
         assert!(store.thread_ids().unwrap().is_empty());
+    }
+
+    /// The demo's flags are the demo's, wherever they stand, and nothing
+    /// else is.
+    #[test]
+    fn the_demos_flags_are_its_own() {
+        let args = |words: &[&str]| -> Vec<String> {
+            std::iter::once("ferrite").chain(words.iter().copied()).map(String::from).collect()
+        };
+        for (words, flag) in [
+            (&["--demo"][..], "--demo"),
+            (&["--demo", "parity"][..], "--demo"),
+            (&["--provider", "codex", "--load"][..], "--load"),
+            (&["--panes", "24", "--load"][..], "--panes"),
+        ] {
+            assert_eq!(demo_flag(&args(words)), Some(flag), "{words:?}");
+        }
+        for words in [&[][..], &["--provider", "codex"][..], &["--import", "a.jsonl"][..]] {
+            assert_eq!(demo_flag(&args(words)), None, "{words:?}");
+        }
+    }
+
+    /// A build without the demo refuses its flags in so many words, naming
+    /// the build that has it.
+    #[cfg(not(feature = "demo"))]
+    #[test]
+    fn a_build_without_the_demo_says_so() {
+        assert_eq!(
+            super::demo::refusal("--load"),
+            "--load is the demo's, and this build has no demo: run `cargo run -p ferrite --features demo -- --load`"
+        );
     }
 
     /// Rule 10 over the app's render code (`ferrite_ui::face`).

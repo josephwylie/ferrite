@@ -10,6 +10,7 @@ use crate::prompt_files::FileSuggestion;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
 mod claude;
+pub mod clis;
 mod codex;
 pub mod commands;
 pub mod discover;

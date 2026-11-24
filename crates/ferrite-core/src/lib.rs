@@ -37,6 +37,7 @@ pub mod factory_board;
 pub mod folder;
 pub mod followup;
 pub mod git_read;
+pub mod github;
 pub mod header;
 pub mod import;
 pub mod layout;

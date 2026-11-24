@@ -15,6 +15,8 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 
+use super::held::Link;
+
 use ferrite_core::ThreadId;
 use ferrite_core::clock::ServerClock;
 // A Remote's answers ring as the pump routes them (ADR 0041).
@@ -43,7 +45,7 @@ use ferrite_reviewr::git::{CommitRow, WorktreeEntry};
 use ferrite_reviewr::search::SearchResults;
 
 /// Where a later-answered command's reply goes (`Remote::ask`).
-type Answer = Box<dyn FnOnce(Result<Option<Done>, WireError>) + Send>;
+pub(super) type Answer = Box<dyn FnOnce(Result<Option<Done>, WireError>) + Send>;
 
 /// A command whose reply the window takes later: where it goes, and when
 /// it is answered that the Server did not answer, if ever.
@@ -265,44 +267,11 @@ impl Remote {
         }
     }
 
-    /// Whether the Server attached now names a fork's owner in its focus
-    /// (`Capability::ForkOf`); false while detached.
-    pub(crate) fn names_fork_owners(&self) -> bool {
-        self.attachment
-            .as_ref()
-            .is_some_and(|attachment| attachment.names_fork_owners)
-    }
-
-    /// How the Server's wall clock reads on this side's, as last measured.
-    pub(crate) fn clock(&self) -> ServerClock {
-        self.clock
-    }
-
-    /// Where this boot's `at_ms` count from.
-    pub(crate) fn boot(&self) -> Instant {
-        self.attachment
-            .as_ref()
-            .map_or_else(ferrite_core::clock::instant, |attachment| attachment.boot)
-    }
-
     /// Attach again now rather than at the next retry.
     pub(crate) fn retry(&mut self) {
         self.retry_at = Instant::now();
         self.backoff = RETRY_FIRST;
         self.attention = None;
-    }
-
-    /// Whether a command sent now reaches a Server.
-    pub(crate) fn reaches_server(&self) -> bool {
-        self.attachment.is_some()
-    }
-
-    /// The machine's bridge, when it is not this computer.
-    pub(crate) fn bridge(&self) -> Option<&Arc<Bridge>> {
-        match &self.attach.server {
-            Endpoint::Local { .. } => None,
-            Endpoint::Machine(bridge) => Some(bridge),
-        }
     }
 
     /// Whether attaching waits for the operator: a machine that needs a
@@ -317,154 +286,6 @@ impl Remote {
             return false;
         }
         true
-    }
-
-    /// Everything that arrived since the last call, attaching again first
-    /// when the Server is gone and it is time.
-    pub(crate) fn poll(&mut self) -> Vec<Arrival> {
-        self.time_out_restart();
-        let mut arrivals = Vec::new();
-        if self.time_out_asks() {
-            arrivals.push(Arrival::Answered);
-        }
-        if let Some(attaching) = &self.attaching {
-            match attaching.try_recv() {
-                Ok(attached) => {
-                    self.attaching = None;
-                    arrivals.extend(self.attached(attached));
-                }
-                Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => self.attaching = None,
-            }
-        }
-        if self.attachment.is_none()
-            && self.attaching.is_none()
-            && Instant::now() >= self.retry_at
-            && !self.waits_for_operator()
-        {
-            let (done, attaching) = ferrite_core::doorbell::channel();
-            let store = self.attach.store.clone();
-            let server = self.attach.server.clone();
-            let hello = hello(&self.attach);
-            let started = std::thread::Builder::new()
-                .name("ferrite-attach".into())
-                .spawn(move || {
-                    let _ = done.send(attach_to(&store, &server, hello));
-                });
-            if started.is_ok() {
-                self.attaching = Some(attaching);
-            }
-        }
-        while let Ok(answer) = self.rendered.1.try_recv() {
-            self.say(&answer);
-        }
-        let mut heard: Vec<ServerMessage> = self.inbox.drain(..).collect();
-        let mut gone = false;
-        if let Some(attachment) = &self.attachment {
-            loop {
-                match attachment.client.messages.try_recv() {
-                    Ok(message) => heard.push(message),
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        gone = true;
-                        break;
-                    }
-                }
-            }
-        }
-        for message in heard {
-            arrivals.extend(self.heard(message));
-        }
-        if gone {
-            self.detach("the Ferrite server went away");
-        }
-        arrivals.append(&mut self.abandoned);
-        arrivals
-    }
-
-    /// One act: sent, and its reply waited for. What the Server said
-    /// before the reply waits in the inbox for the next `poll`.
-    pub(crate) fn execute(&mut self, op: Op) -> Result<Option<Done>, WireError> {
-        #[cfg(any(test, feature = "test-support"))]
-        let _waited = waits::Timing::of(&op, true);
-        let deadline = Instant::now() + REPLY_WAIT;
-        let id = self.send_command(op)?;
-        loop {
-            let Some(attachment) = &self.attachment else {
-                return Err(gone(&self.detached));
-            };
-            let left = deadline.saturating_duration_since(Instant::now());
-            let received = if left.is_zero() {
-                Err(RecvTimeoutError::Timeout)
-            } else {
-                attachment.client.messages.recv_timeout(left)
-            };
-            match received {
-                Ok(ServerMessage::Reply {
-                    id: replied,
-                    ok,
-                    error,
-                }) if replied == id => {
-                    return match error {
-                        Some(error) => Err(error),
-                        None => Ok(ok),
-                    };
-                }
-                Ok(message) => self.inbox.push_back(message),
-                Err(RecvTimeoutError::Timeout) => {
-                    return Err(WireError {
-                        code: ErrorCode::Unconfirmed,
-                        message: "the Ferrite server did not answer in time".into(),
-                    });
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    self.detach("the Ferrite server went away");
-                    return Err(gone(&self.detached));
-                }
-            }
-        }
-    }
-
-    /// One act whose reply nobody waits for: `poll` passes it over. Not
-    /// sent while detached; the caller tells it again once attached.
-    pub(crate) fn tell(&mut self, op: Op) {
-        let _ = self.send_command(op);
-    }
-
-    /// One ask (ADR 0041): sent now, and answered through its `Ask` as
-    /// `read` makes of the Server's reply, or, without one in
-    /// `REPLY_WAIT`, that the Server did not answer in time. It never
-    /// waits: a send that cannot go is answered at once.
-    pub(crate) fn ask_in_time<T: Send + 'static>(
-        &mut self,
-        op: Op,
-        read: fn(Option<Done>) -> io::Result<T>,
-    ) -> super::Ask<T> {
-        self.ask_act(op, move |reply| reply.map_err(io::Error::from).and_then(read))
-    }
-
-    /// An ask whose answer is all of the Server's reply as `read` makes of
-    /// it, a refusal's code included: an act the window used to wait for.
-    pub(crate) fn ask_act<T: Send + 'static>(
-        &mut self,
-        op: Op,
-        read: impl FnOnce(Result<Option<Done>, WireError>) -> io::Result<T> + Send + 'static,
-    ) -> super::Ask<T> {
-        let id = match self.send_command(op) {
-            Ok(id) => id,
-            Err(error) => return super::Ask::answered(read(Err(error))),
-        };
-        let (answer, answered) = ferrite_core::doorbell::channel();
-        self.answers.insert(
-            id,
-            Waiting {
-                answer: Box::new(move |reply| {
-                    let _ = answer.send(read(reply));
-                }),
-                by: Some(ferrite_core::clock::instant() + REPLY_WAIT),
-            },
-        );
-        super::Ask::of(answered)
     }
 
     /// Each ask whose time is up is answered so; true when one was.
@@ -523,70 +344,6 @@ impl Remote {
         }
     }
 
-    /// A Draft's first send: answered when the Thread starts, in `poll`.
-    pub(crate) fn bootstrap(&mut self, draft: DraftId, prompt: &str, op: Op) -> io::Result<()> {
-        let id = self.send_command(op).map_err(io::Error::from)?;
-        self.starting.insert(id, (draft, prompt.to_string()));
-        Ok(())
-    }
-
-    pub(crate) fn discovery(&mut self) -> &mut dyn ferrite_core::engine::Spawner {
-        self.attach.discovery.as_mut()
-    }
-
-    pub(crate) fn draft_starting(&self, draft: DraftId) -> bool {
-        self.starting
-            .values()
-            .any(|(starting, _)| *starting == draft)
-    }
-
-    /// Take back a first send still starting. True when one was.
-    pub(crate) fn cancel_bootstrap(&mut self, draft: DraftId) -> io::Result<bool> {
-        let Some(request) = self
-            .starting
-            .iter()
-            .find(|(_, (starting, _))| *starting == draft)
-            .map(|(request, _)| *request)
-        else {
-            return Ok(false);
-        };
-        self.starting.remove(&request);
-        match self.execute(Op::CancelBootstrap { request })? {
-            Some(Done::Changed { changed }) => Ok(changed),
-            _ => Ok(false),
-        }
-    }
-
-    pub(crate) fn search_files(
-        &mut self,
-        thread: ThreadId,
-        query: &str,
-    ) -> io::Result<Receiver<io::Result<Vec<FileSuggestion>>>> {
-        let id = self
-            .send_command(Op::SearchFiles {
-                thread,
-                query: query.to_string(),
-            })
-            .map_err(io::Error::from)?;
-        let (answer, answered) = ferrite_core::doorbell::channel();
-        self.searches.insert(id, answer);
-        Ok(answered)
-    }
-
-    pub(crate) fn changes(&mut self, request: ferrite_core::changes::Request) -> io::Result<Receiver<io::Result<ferrite_core::changes::Snapshot>>> {
-        self.ask(Op::Changes { request }, |done| match done {
-            Done::Changes { reply } => reply.snapshot(),
-            _ => None,
-        })
-    }
-
-    pub(crate) fn set_file_staged(&mut self, request: ferrite_core::changes::Request) -> io::Result<Receiver<io::Result<()>>> {
-        self.ask(Op::Changes { request }, |done| match done {
-            Done::Changes { reply: ferrite_core::changes::Reply::Staged } => Some(()),
-            _ => None,
-        })
-    }
-
     /// A connection of its own to this Server, attached when the returned
     /// function runs, for a transfer that must neither wait behind the
     /// window's acts nor hold them up. Its endpoint goes with it: a
@@ -637,27 +394,6 @@ impl Remote {
         }))
     }
 
-    pub(crate) fn upload_attachment(&self, path: PathBuf) -> io::Result<ferrite_core::attachment_transfer::Upload> {
-        Ok(ferrite_core::attachment_transfer::upload(path, self.attachment_connection()?))
-    }
-
-    pub(crate) fn read_attachment(&self, path: PathBuf) -> io::Result<Receiver<io::Result<Vec<u8>>>> {
-        let connect = self.attachment_connection()?;
-        Ok(super::read_here(move || {
-            ferrite_core::attachment_transfer::read(path, connect().map_err(|error| error.to_string())?).map_err(|error| error.to_string())
-        }))
-    }
-
-    pub(crate) fn file_operation(
-        &mut self,
-        request: ferrite_core::file_operations::Request,
-    ) -> io::Result<Receiver<io::Result<ferrite_core::file_operations::Reply>>> {
-        self.ask(Op::FileOperation { request }, |done| match done {
-            Done::FileOperation { reply } => Some(reply),
-            _ => None,
-        })
-    }
-
     pub(crate) fn list_dir(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Listing>>> {
         let op = Op::ListDir {
             path: path.to_path_buf(),
@@ -701,32 +437,6 @@ impl Remote {
         })
     }
 
-    pub(crate) fn repositories(&mut self) -> io::Result<Receiver<io::Result<ferrite_core::protocol::Repositories>>> {
-        self.ask(Op::Repositories, |done| match done {
-            Done::Repositories { projects } => Some(
-                projects
-                    .into_iter()
-                    .map(|known| (known.project, known.repository))
-                    .collect(),
-            ),
-            _ => None,
-        })
-    }
-
-    pub(crate) fn review_diff(
-        &mut self,
-        path: &Path,
-        read: &Read,
-    ) -> io::Result<Receiver<io::Result<Vec<FileSides>>>> {
-        let id = self
-            .send_command(Op::review_read(path, read))
-            .map_err(io::Error::from)?;
-        let (answer, answered) = ferrite_core::doorbell::channel();
-        self.reviews
-            .insert(id, (path.to_path_buf(), read.clone(), answer));
-        Ok(answered)
-    }
-
     /// A `review_read`'s reply: its files, or — from a Server that does
     /// not know the command — what its `review_diff` answers.
     fn reviewed(&mut self, (path, read, answer): Review, reply: Result<Option<Done>, WireError>) {
@@ -765,41 +475,6 @@ impl Remote {
                 let _ = answer.send(Err(error.into()));
             }
         }
-    }
-
-    pub(crate) fn review_commits(
-        &mut self,
-        path: &Path,
-    ) -> io::Result<Receiver<io::Result<Vec<CommitRow>>>> {
-        let op = Op::ListCommits {
-            path: path.to_path_buf(),
-        };
-        self.ask(op, |done| match done {
-            Done::Commits { commits } => Some(commits.into_iter().map(Into::into).collect()),
-            _ => None,
-        })
-    }
-
-    pub(crate) fn search_repo(
-        &mut self,
-        path: &Path,
-        query: &str,
-    ) -> io::Result<Receiver<io::Result<SearchResults>>> {
-        let op = Op::SearchRepo {
-            path: path.to_path_buf(),
-            query: query.to_string(),
-        };
-        self.ask(op, |done| match done {
-            Done::Found {
-                files,
-                code,
-                file_total,
-                code_more,
-            } => Some(ferrite_core::protocol::search_results(
-                files, code, file_total, code_more,
-            )),
-            _ => None,
-        })
     }
 
     pub(crate) fn browser_dispatch(
@@ -874,163 +549,6 @@ impl Remote {
         )
     }
 
-    pub(crate) fn read_review_file(
-        &mut self,
-        path: &Path,
-        file: &str,
-    ) -> io::Result<Receiver<io::Result<String>>> {
-        let op = Op::ReadFile {
-            path: path.to_path_buf(),
-            file: file.to_string(),
-        };
-        self.ask(op, |done| match done {
-            Done::Text { text } => Some(text),
-            _ => None,
-        })
-    }
-
-    pub(crate) fn review_pull_request_diff(
-        &mut self,
-        path: &Path,
-        number: u64,
-    ) -> io::Result<Receiver<io::Result<Vec<FileSides>>>> {
-        self.ask(
-            Op::ReviewPullRequestDiff {
-                path: path.to_path_buf(),
-                number,
-            },
-            |done| match done {
-                Done::Review { files } => Some(files.into_iter().map(Into::into).collect()),
-                _ => None,
-            },
-        )
-    }
-
-    pub(crate) fn review_pull_request(
-        &mut self,
-        path: &Path,
-        number: Option<u64>,
-    ) -> io::Result<Receiver<io::Result<ReviewPullRequest>>> {
-        let op = Op::ReviewPullRequest {
-            path: path.to_path_buf(),
-            number,
-        };
-        self.ask(op, |done| match done {
-            Done::ReviewPullRequest {
-                noun,
-                pr,
-                note,
-                unread,
-            } => Some(ReviewPullRequest {
-                noun,
-                pr: pr.ok_or_else(|| note.unwrap_or_default()),
-                unread,
-            }),
-            _ => None,
-        })
-    }
-
-    pub(crate) fn list_pull_requests(
-        &mut self,
-        path: &Path,
-        filter: WirePrFilter,
-    ) -> io::Result<Receiver<io::Result<ReviewPullRequests>>> {
-        let op = Op::ListPullRequests {
-            path: path.to_path_buf(),
-            filter,
-        };
-        self.ask(op, |done| match done {
-            Done::ReviewPullRequests {
-                rows,
-                more,
-                note,
-                unread,
-            } => Some(ReviewPullRequests {
-                list: match note {
-                    Some(note) => Err(note),
-                    None => Ok(WirePrList { rows, more }),
-                },
-                unread,
-            }),
-            _ => None,
-        })
-    }
-
-    pub(crate) fn review_files(
-        &mut self,
-        path: &Path,
-    ) -> io::Result<Receiver<io::Result<Vec<WorktreeEntry>>>> {
-        let op = Op::ListFiles {
-            path: path.to_path_buf(),
-        };
-        self.ask(op, |done| match done {
-            Done::AllFiles { entries } => Some(entries.into_iter().map(Into::into).collect()),
-            _ => None,
-        })
-    }
-
-    pub(crate) fn review_bases(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Bases>>> {
-        let op = Op::ListBases {
-            path: path.to_path_buf(),
-        };
-        self.ask(op, |done| match done {
-            Done::Bases { bases, picked } => Some(ferrite_core::protocol::bases(bases, picked)),
-            _ => None,
-        })
-    }
-
-    pub(crate) fn pick_review_base(
-        &mut self,
-        path: &Path,
-        base: &str,
-    ) -> io::Result<Receiver<io::Result<()>>> {
-        let op = Op::PickBase {
-            path: path.to_path_buf(),
-            base: base.to_string(),
-        };
-        self.ask(op, |done| match done {
-            Done::Changed { .. } => Some(()),
-            _ => None,
-        })
-    }
-
-    pub(crate) fn pull_request(
-        &mut self,
-        path: &Path,
-    ) -> io::Result<Receiver<io::Result<Option<PullRequest>>>> {
-        let op = Op::PullRequest {
-            path: path.to_path_buf(),
-        };
-        self.ask(op, |done| match done {
-            Done::PullRequest { json } => Some(json.as_deref().and_then(parse_pr_json)),
-            _ => None,
-        })
-    }
-
-    /// A `watch_pr`: whether the PR is watched once the Server has it.
-    pub(crate) fn watch_pr(&mut self, op: Op) -> io::Result<Receiver<io::Result<bool>>> {
-        self.ask(op, |done| match done {
-            Done::PrWatch { watching } => Some(watching),
-            _ => None,
-        })
-    }
-
-    /// A `cancel_delegate`: answered once the Server has cancelled it.
-    pub(crate) fn cancel_delegate(&mut self, op: Op) -> io::Result<Receiver<io::Result<()>>> {
-        self.ask(op, |done| matches!(done, Done::Changed { .. }).then_some(()))
-    }
-
-    /// What a GitHub start's picker lists (#225).
-    pub(crate) fn github_names(
-        &mut self,
-        ask: ferrite_core::protocol::GitHubAsk,
-    ) -> io::Result<Receiver<io::Result<Vec<String>>>> {
-        self.ask(Op::GitHub { ask }, |done| match done {
-            Done::Names { names } => Some(names),
-            _ => None,
-        })
-    }
-
     /// The Server's defaults as its own file says, or, with `set`, after
     /// writing them there.
     pub(crate) fn server_defaults(
@@ -1041,15 +559,6 @@ impl Remote {
             Done::ServerDefaults { defaults } => Some(defaults),
             _ => None,
         })
-    }
-
-    /// What the Server's machine has of the provider CLIs, or the update it
-    /// ran: the Server's `Done`, for the caller to read.
-    pub(crate) fn cli(
-        &mut self,
-        action: ferrite_core::protocol::CliAction,
-    ) -> io::Result<Receiver<io::Result<Done>>> {
-        self.ask(Op::Cli { action }, Some)
     }
 
     /// Send `op` and answer its reply later, as `read` makes of it.
@@ -1430,6 +939,547 @@ impl Remote {
         if let Err(error) = waiter {
             ferrite_core::log!("a visual could not be answered: {error}");
         }
+    }
+}
+
+/// A Server's link: every act a command over its socket.
+impl Link for Remote {
+    /// Everything that arrived since the last call, attaching again first
+    /// when the Server is gone and it is time.
+    fn poll(&mut self) -> Vec<Arrival> {
+        self.time_out_restart();
+        let mut arrivals = Vec::new();
+        if self.time_out_asks() {
+            arrivals.push(Arrival::Answered);
+        }
+        if let Some(attaching) = &self.attaching {
+            match attaching.try_recv() {
+                Ok(attached) => {
+                    self.attaching = None;
+                    arrivals.extend(self.attached(attached));
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => self.attaching = None,
+            }
+        }
+        if self.attachment.is_none()
+            && self.attaching.is_none()
+            && Instant::now() >= self.retry_at
+            && !self.waits_for_operator()
+        {
+            let (done, attaching) = ferrite_core::doorbell::channel();
+            let store = self.attach.store.clone();
+            let server = self.attach.server.clone();
+            let hello = hello(&self.attach);
+            let started = std::thread::Builder::new()
+                .name("ferrite-attach".into())
+                .spawn(move || {
+                    let _ = done.send(attach_to(&store, &server, hello));
+                });
+            if started.is_ok() {
+                self.attaching = Some(attaching);
+            }
+        }
+        while let Ok(answer) = self.rendered.1.try_recv() {
+            self.say(&answer);
+        }
+        let mut heard: Vec<ServerMessage> = self.inbox.drain(..).collect();
+        let mut gone = false;
+        if let Some(attachment) = &self.attachment {
+            loop {
+                match attachment.client.messages.try_recv() {
+                    Ok(message) => heard.push(message),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        gone = true;
+                        break;
+                    }
+                }
+            }
+        }
+        for message in heard {
+            arrivals.extend(self.heard(message));
+        }
+        if gone {
+            self.detach("the Ferrite server went away");
+        }
+        arrivals.append(&mut self.abandoned);
+        arrivals
+    }
+
+    /// Where this boot's `at_ms` count from.
+    fn boot(&self) -> Instant {
+        self.attachment
+            .as_ref()
+            .map_or_else(ferrite_core::clock::instant, |attachment| attachment.boot)
+    }
+
+    /// How the Server's wall clock reads on this side's, as last measured.
+    fn clock(&self) -> ServerClock {
+        self.clock
+    }
+
+    /// The machine's bridge, when it is not this computer.
+    fn bridge(&self) -> Option<&Arc<Bridge>> {
+        match &self.attach.server {
+            Endpoint::Local { .. } => None,
+            Endpoint::Machine(bridge) => Some(bridge),
+        }
+    }
+
+    /// Whether a command sent now reaches a Server.
+    fn reaches_server(&self) -> bool {
+        self.attachment.is_some()
+    }
+
+    /// Whether the Server attached now names a fork's owner in its focus
+    /// (`Capability::ForkOf`); false while detached.
+    fn names_fork_owners(&self) -> bool {
+        self.attachment
+            .as_ref()
+            .is_some_and(|attachment| attachment.names_fork_owners)
+    }
+
+    /// One act: sent, and its reply waited for. What the Server said
+    /// before the reply waits in the inbox for the next `poll`.
+    fn execute(&mut self, op: Op) -> Result<Option<Done>, WireError> {
+        #[cfg(any(test, feature = "test-support"))]
+        let _waited = waits::Timing::of(&op, true);
+        let deadline = Instant::now() + REPLY_WAIT;
+        let id = self.send_command(op)?;
+        loop {
+            let Some(attachment) = &self.attachment else {
+                return Err(gone(&self.detached));
+            };
+            let left = deadline.saturating_duration_since(Instant::now());
+            let received = if left.is_zero() {
+                Err(RecvTimeoutError::Timeout)
+            } else {
+                attachment.client.messages.recv_timeout(left)
+            };
+            match received {
+                Ok(ServerMessage::Reply {
+                    id: replied,
+                    ok,
+                    error,
+                }) if replied == id => {
+                    return match error {
+                        Some(error) => Err(error),
+                        None => Ok(ok),
+                    };
+                }
+                Ok(message) => self.inbox.push_back(message),
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(WireError {
+                        code: ErrorCode::Unconfirmed,
+                        message: "the Ferrite server did not answer in time".into(),
+                    });
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    self.detach("the Ferrite server went away");
+                    return Err(gone(&self.detached));
+                }
+            }
+        }
+    }
+
+    /// One act whose reply nobody waits for: `poll` passes it over. Not
+    /// sent while detached; the caller tells it again once attached.
+    fn tell(&mut self, op: Op) {
+        let _ = self.send_command(op);
+    }
+
+    /// An ask whose answer is all of the Server's reply, a refusal's code
+    /// included (ADR 0041): sent now, and answered as it comes or, without
+    /// a reply in `REPLY_WAIT`, that the Server did not answer in time. It
+    /// never waits: a send that cannot go is answered at once.
+    fn ask_act(&mut self, op: Op, answer: Answer) {
+        match self.send_command(op) {
+            Ok(id) => {
+                self.answers.insert(
+                    id,
+                    Waiting {
+                        answer,
+                        by: Some(ferrite_core::clock::instant() + REPLY_WAIT),
+                    },
+                );
+            }
+            Err(error) => answer(Err(error)),
+        }
+    }
+
+    fn stream(&mut self, watched: &[ThreadId], mirrors: &mut super::mirror::Mirrors) {
+        self.watch(watched, |thread| mirrors.seq(thread));
+        mirrors.watch_only(watched);
+    }
+
+    /// A Draft's first send: answered when the Thread starts, in `poll`.
+    fn bootstrap(&mut self, draft: DraftId, prompt: &str, op: Op) -> io::Result<Option<ThreadId>> {
+        let id = self.send_command(op).map_err(io::Error::from)?;
+        self.starting.insert(id, (draft, prompt.to_string()));
+        Ok(None)
+    }
+
+    fn draft_starting(&self, draft: DraftId) -> bool {
+        self.starting
+            .values()
+            .any(|(starting, _)| *starting == draft)
+    }
+
+    /// Take back a first send still starting. True when one was.
+    fn cancel_bootstrap(&mut self, draft: DraftId) -> io::Result<bool> {
+        let Some(request) = self
+            .starting
+            .iter()
+            .find(|(_, (starting, _))| *starting == draft)
+            .map(|(request, _)| *request)
+        else {
+            return Ok(false);
+        };
+        self.starting.remove(&request);
+        match self.execute(Op::CancelBootstrap { request })? {
+            Some(Done::Changed { changed }) => Ok(changed),
+            _ => Ok(false),
+        }
+    }
+
+    /// The Server reads its own settings again.
+    fn settings_changed(&mut self, _: &ferrite_core::settings::Settings) {
+        self.tell(Op::SettingsChanged);
+    }
+
+    fn factory(&mut self, op: Op) -> io::Result<Option<Done>> {
+        self.execute(op).map_err(io::Error::from)
+    }
+
+    /// Discovery reads the operator's own files: a window does it,
+    /// wherever its Engine runs.
+    fn discover_sessions(
+        &mut self,
+        roots: Vec<(ferrite_core::provider::Provider, PathBuf)>,
+        cap: usize,
+    ) -> Option<Receiver<io::Result<Vec<ferrite_core::session_file::Candidate>>>> {
+        self.attach.discovery.discover_sessions(roots, cap)
+    }
+
+    fn discover_commands(
+        &mut self,
+        provider: ferrite_core::provider::Provider,
+        cwd: &Path,
+    ) -> Option<ferrite_core::Discovery> {
+        self.attach.discovery.discover_commands(provider, cwd)
+    }
+
+    fn search_files(
+        &mut self,
+        thread: ThreadId,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<Vec<FileSuggestion>>>> {
+        let id = self
+            .send_command(Op::SearchFiles {
+                thread,
+                query: query.to_string(),
+            })
+            .map_err(io::Error::from)?;
+        let (answer, answered) = ferrite_core::doorbell::channel();
+        self.searches.insert(id, answer);
+        Ok(answered)
+    }
+
+    fn upload_attachment(&self, path: PathBuf) -> io::Result<ferrite_core::attachment_transfer::Upload> {
+        Ok(ferrite_core::attachment_transfer::upload(path, self.attachment_connection()?))
+    }
+
+    fn read_attachment(&self, path: PathBuf) -> io::Result<Receiver<io::Result<Vec<u8>>>> {
+        let connect = self.attachment_connection()?;
+        Ok(super::read_here(move || {
+            ferrite_core::attachment_transfer::read(path, connect().map_err(|error| error.to_string())?).map_err(|error| error.to_string())
+        }))
+    }
+
+    /// Read as the Server's image of it, the asynchronous Server read
+    /// path. The display cache never replaces the Server-owned provider
+    /// path.
+    fn annotation_image(
+        &mut self,
+        thread: ThreadId,
+        annotation: ferrite_core::browser_annotations::Annotation,
+    ) -> super::Ask<PathBuf> {
+        let Some(hash) = annotation.original_hash() else {
+            return super::Ask::answered(Err(io::Error::other("This annotation has no screenshot")));
+        };
+        let image = match self.browser_capture_image(thread, hash.to_owned()) {
+            Ok(image) => image,
+            Err(error) => return super::Ask::answered(Err(error)),
+        };
+        super::Ask::of(super::read_here(move || {
+            let png = image
+                .recv_timeout(Duration::from_secs(30))
+                .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())?;
+            annotation
+                .cache_wire_image(&png)
+                .map_err(|error| error.to_string())
+        }))
+    }
+
+    fn changes(&mut self, request: ferrite_core::changes::Request) -> io::Result<Receiver<io::Result<ferrite_core::changes::Snapshot>>> {
+        self.ask(Op::Changes { request }, |done| match done {
+            Done::Changes { reply } => reply.snapshot(),
+            _ => None,
+        })
+    }
+
+    fn set_file_staged(&mut self, request: ferrite_core::changes::Request) -> io::Result<Receiver<io::Result<()>>> {
+        self.ask(Op::Changes { request }, |done| match done {
+            Done::Changes { reply: ferrite_core::changes::Reply::Staged } => Some(()),
+            _ => None,
+        })
+    }
+
+    fn file_operation(
+        &mut self,
+        request: ferrite_core::file_operations::Request,
+    ) -> io::Result<Receiver<io::Result<ferrite_core::file_operations::Reply>>> {
+        self.ask(Op::FileOperation { request }, |done| match done {
+            Done::FileOperation { reply } => Some(reply),
+            _ => None,
+        })
+    }
+
+    fn repositories(&mut self) -> io::Result<Receiver<io::Result<ferrite_core::protocol::Repositories>>> {
+        self.ask(Op::Repositories, |done| match done {
+            Done::Repositories { projects } => Some(
+                projects
+                    .into_iter()
+                    .map(|known| (known.project, known.repository))
+                    .collect(),
+            ),
+            _ => None,
+        })
+    }
+
+    fn review_diff(
+        &mut self,
+        path: &Path,
+        read: &Read,
+    ) -> io::Result<Receiver<io::Result<Vec<FileSides>>>> {
+        let id = self
+            .send_command(Op::review_read(path, read))
+            .map_err(io::Error::from)?;
+        let (answer, answered) = ferrite_core::doorbell::channel();
+        self.reviews
+            .insert(id, (path.to_path_buf(), read.clone(), answer));
+        Ok(answered)
+    }
+
+    fn review_commits(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Vec<CommitRow>>>> {
+        let op = Op::ListCommits {
+            path: path.to_path_buf(),
+        };
+        self.ask(op, |done| match done {
+            Done::Commits { commits } => Some(commits.into_iter().map(Into::into).collect()),
+            _ => None,
+        })
+    }
+
+    fn search_repo(
+        &mut self,
+        path: &Path,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<SearchResults>>> {
+        let op = Op::SearchRepo {
+            path: path.to_path_buf(),
+            query: query.to_string(),
+        };
+        self.ask(op, |done| match done {
+            Done::Found {
+                files,
+                code,
+                file_total,
+                code_more,
+            } => Some(ferrite_core::protocol::search_results(
+                files, code, file_total, code_more,
+            )),
+            _ => None,
+        })
+    }
+
+    fn read_review_file(
+        &mut self,
+        path: &Path,
+        file: &str,
+    ) -> io::Result<Receiver<io::Result<String>>> {
+        let op = Op::ReadFile {
+            path: path.to_path_buf(),
+            file: file.to_string(),
+        };
+        self.ask(op, |done| match done {
+            Done::Text { text } => Some(text),
+            _ => None,
+        })
+    }
+
+    fn review_pull_request_diff(
+        &mut self,
+        path: &Path,
+        number: u64,
+    ) -> io::Result<Receiver<io::Result<Vec<FileSides>>>> {
+        self.ask(
+            Op::ReviewPullRequestDiff {
+                path: path.to_path_buf(),
+                number,
+            },
+            |done| match done {
+                Done::Review { files } => Some(files.into_iter().map(Into::into).collect()),
+                _ => None,
+            },
+        )
+    }
+
+    fn review_pull_request(
+        &mut self,
+        path: &Path,
+        number: Option<u64>,
+    ) -> io::Result<Receiver<io::Result<ReviewPullRequest>>> {
+        let op = Op::ReviewPullRequest {
+            path: path.to_path_buf(),
+            number,
+        };
+        self.ask(op, |done| match done {
+            Done::ReviewPullRequest {
+                noun,
+                pr,
+                note,
+                unread,
+            } => Some(ReviewPullRequest {
+                noun,
+                pr: pr.ok_or_else(|| note.unwrap_or_default()),
+                unread,
+            }),
+            _ => None,
+        })
+    }
+
+    fn list_pull_requests(
+        &mut self,
+        path: &Path,
+        filter: WirePrFilter,
+    ) -> io::Result<Receiver<io::Result<ReviewPullRequests>>> {
+        let op = Op::ListPullRequests {
+            path: path.to_path_buf(),
+            filter,
+        };
+        self.ask(op, |done| match done {
+            Done::ReviewPullRequests {
+                rows,
+                more,
+                note,
+                unread,
+            } => Some(ReviewPullRequests {
+                list: match note {
+                    Some(note) => Err(note),
+                    None => Ok(WirePrList { rows, more }),
+                },
+                unread,
+            }),
+            _ => None,
+        })
+    }
+
+    fn review_files(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Vec<WorktreeEntry>>>> {
+        let op = Op::ListFiles {
+            path: path.to_path_buf(),
+        };
+        self.ask(op, |done| match done {
+            Done::AllFiles { entries } => Some(entries.into_iter().map(Into::into).collect()),
+            _ => None,
+        })
+    }
+
+    fn review_bases(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Bases>>> {
+        let op = Op::ListBases {
+            path: path.to_path_buf(),
+        };
+        self.ask(op, |done| match done {
+            Done::Bases { bases, picked } => Some(ferrite_core::protocol::bases(bases, picked)),
+            _ => None,
+        })
+    }
+
+    fn pick_review_base(
+        &mut self,
+        path: &Path,
+        base: &str,
+    ) -> io::Result<Receiver<io::Result<()>>> {
+        let op = Op::PickBase {
+            path: path.to_path_buf(),
+            base: base.to_string(),
+        };
+        self.ask(op, |done| match done {
+            Done::Changed { .. } => Some(()),
+            _ => None,
+        })
+    }
+
+    fn pull_request(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Option<PullRequest>>>> {
+        let op = Op::PullRequest {
+            path: path.to_path_buf(),
+        };
+        self.ask(op, |done| match done {
+            Done::PullRequest { json } => Some(json.as_deref().and_then(parse_pr_json)),
+            _ => None,
+        })
+    }
+
+    /// A `watch_pr`: whether the PR is watched once the Server has it.
+    fn watch_pr(&mut self, op: Op) -> io::Result<Receiver<io::Result<bool>>> {
+        self.ask(op, |done| match done {
+            Done::PrWatch { watching } => Some(watching),
+            _ => None,
+        })
+    }
+
+    /// A `cancel_delegate`: answered once the Server has cancelled it.
+    fn cancel_delegate(&mut self, op: Op) -> io::Result<Receiver<io::Result<()>>> {
+        self.ask(op, |done| matches!(done, Done::Changed { .. }).then_some(()))
+    }
+
+    /// What a GitHub start's picker lists (#225).
+    fn github_names(
+        &mut self,
+        ask: ferrite_core::protocol::GitHubAsk,
+    ) -> io::Result<Receiver<io::Result<Vec<String>>>> {
+        self.ask(Op::GitHub { ask }, |done| match done {
+            Done::Names { names } => Some(names),
+            _ => None,
+        })
+    }
+
+    /// What the Server's machine has of the provider CLIs, or the update it
+    /// ran: the Server's `Done`, for the caller to read.
+    fn cli(
+        &mut self,
+        action: ferrite_core::protocol::CliAction,
+    ) -> io::Result<Receiver<io::Result<Done>>> {
+        self.ask(Op::Cli { action }, Some)
+    }
+
+    fn remote(&mut self) -> Option<&mut Remote> {
+        Some(self)
+    }
+
+    fn remote_ref(&self) -> Option<&Remote> {
+        Some(self)
     }
 }
 

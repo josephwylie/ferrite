@@ -34,18 +34,24 @@ of `ferrite-core` on the shared side or the engine's.
 `scripts/check_core_sides.py` counts each **crossing**: a path to an engine
 module from a shared module, or from one of the window's crates
 (`ferrite-client`, `ferrite-cockpit`, `ferrite-pane`, `ferrite-frame`,
-`ferrite-ui`, `ferrite-terminal`). There are 30:
+`ferrite-ui`, `ferrite-terminal`). There are 8:
 
 | From | Crossings | Mostly |
 | --- | --- | --- |
-| shared modules | 5 | the `server` module's GitHub reads and CLI checks |
-| `ferrite-client` | 10 | the Engine a Cockpit can run in itself, its Spawner and its Store |
-| `ferrite-cockpit` | 15 | the Store, Spawner and Sessions of the demo and fixture worlds, and the titler |
+| shared modules | 0 | |
+| `ferrite-client` | 3 | the Store a window on this computer reads logs from, and the Spawner a window discovers sessions and commands with |
+| `ferrite-cockpit` | 5 | the titler, and the Spawner it hands each `Attach` |
 | `ferrite-pane`, `ferrite-ui` | 0 | |
 
 CI fails when a pair's count rises, a new pair appears, or a module is on
-no side. The baseline only goes down. Tests and fixtures are not counted.
-The `ferrite` crate is not counted: it is the program that starts both.
+no side. The baseline only goes down. What a released app cannot compile
+is not counted: a module whose `mod` line, or an ancestor's, has a `cfg`
+that fails with `test` off and only the `shipped` features of
+`core-sides.json` on (`cef`), and an inline `#[cfg(test)] mod` block. A
+file's name skips nothing. A `pub use` counts once for each engine item it
+hands on, since every crate above can then name it without naming the
+engine. The `ferrite` crate is not counted: it is the program that starts
+both.
 
 A crossing is a type living on the wrong side, or work. `store::Provider`,
 `workspace::WorkspaceChoice` and the Factory's board were facts a window
@@ -218,6 +224,62 @@ checkout's PR through `workspace::pull_request` (`gh`), and builds the
 Engine, Store, Spawner and Sessions of its in-process, demo and fixture
 worlds.
 
+## Built: a released window runs no Engine
+
+A Cockpit reached each machine's Engine through `held::Link`, an enum of an
+Engine in the window's process and a Server, matched at about fifty sites.
+The Engine in the window's process is a test fixture now:
+`cockpit::in_process`, compiled only under `cfg(any(test, feature =
+"test-support"))` of `ferrite-client`. A build without that feature names
+nothing on the engine's side. The tests keep what they had: `Ask::now`,
+`engine()`, `engine/probe.rs`, mirror parity and every fixture. They do not
+move to a Server in the same process, which step 2 had planned: a socket
+between a test and its Engine buys a test nothing the encoded crossing of
+each command, reply and message does not.
+
+Two shapes were sketched:
+
+- **A. One interface, two links.** `Link` is a trait: everything a window
+  does with a machine's Engine. `remote::Remote` implements it over the
+  socket and `in_process::InProcess` in the fixture. The window holds a
+  `Box<dyn Link>` and calls it, so its functions have no in-process branch
+  to gate. What only a Server does stays on `Remote`, reached through
+  `Link::remote`.
+- **B. One fixture module behind a gated variant.** `Link` stays an enum,
+  its `InProcess` variant gated, and each match's in-process arm calls the
+  fixture module. Every match then needs a `#[cfg]` on that arm, about
+  fifty of them, or a macro that hides them.
+
+A was built. The `cfg` stands at the module, its re-exports, the trait's
+two `in_process` accessors, `Mirrors::watched` and the parity check in
+`receive_from`. B would have left the seam in every function that acts.
+A's cost is a trait of forty-odd methods with two implementations, and one
+indirection: an act an Engine in this process carries out at once is taken
+in through `Link::answers_now`, not a branch of its own. The fixture link
+also holds what a fixture world's Server has besides its Engine, which
+were fields of every Cockpit: the forge, the GitHub login, the Factory,
+the free disk, the browser's answers.
+
+- The demo is behind a `demo` feature, of `ferrite-cockpit` (on with
+  `headless` and `visual-reference`) and of `ferrite` (on with `headless`):
+  `cargo run -p ferrite --features demo -- --demo`. Release packaging turns
+  on `cef` alone, so the shipped app has no `--demo`, `--load`, `--panes`
+  or `--demo parity`. Asked for one, it says the build has no demo and
+  exits 2, as for a wrong command line. `--panes` seeds the demo's Panes;
+  on a Server it panicked at `Ask::now`.
+- `server::clis` is `providers::clis` and `server::github` is `github`, on
+  the engine's side: they are a Server's work, and no shared module names
+  them now.
+- The checker reads `cfg`s and `pub use`s, as above. Under its old rules,
+  which skipped a file by its name and counted a `pub use` once, the base
+  counted 30. Under the new rules it counted 33, and counts 8 now.
+
+What is left is work, all of it reachable from a released window:
+`Store::reader` in `Cockpit::hold`, which reads this computer's logs for a
+Thread's header (`HeldMachine::logs`); the Spawner in `Attach::discovery`,
+which discovers sessions and commands; and the titler, with the provider
+program it runs (`cockpit::titling`).
+
 ## What comes next, in order
 
 Each step is one PR and drives its pairs in the baseline to zero.
@@ -225,15 +287,14 @@ Each step is one PR and drives its pairs in the baseline to zero.
 1. **Types move to the shared side.** Every crossing that is only a type
    or a pure function goes, from shared modules and the window crates
    alike. No crate changes. Done (above): what is left is work.
-2. **The Cockpit stops running an Engine in itself.** `Cockpit::new(store,
-   spawner)` builds an Engine in the window's process. Production attaches
-   to a Server (`Cockpit::attach`); the demo, fixtures and tests use the
-   in-process one. They move to a Server in the same process, reached the
-   way a real one is.
-3. **`ferrite-core` splits in two.** With no crossings left, the shared
-   modules become one crate and the engine modules another. The window's
-   crates drop the engine crate, and `ferrite-server` is the one crate that
-   depends on it.
+2. **A released window runs no Engine.** Done (above): the Engine in a
+   window's process is a fixture, and the demo is a development build's.
+3. **`ferrite-core` splits in two.** First the window's last work goes
+   to its Server: the titler, session and command discovery, and the logs
+   a window reads itself become questions over the protocol. With no
+   crossings left, the shared modules become one crate and the engine
+   modules another. The window's crates drop the engine crate, and
+   `ferrite-server` is the one crate that depends on it.
 
 ## Considered
 

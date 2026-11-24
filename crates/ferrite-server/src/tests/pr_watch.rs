@@ -10,7 +10,7 @@ use ferrite_core::pr_watch::{
     Check, CheckStatus, Fingerprint, Mergeable, ReadError, Reading, Remark,
 };
 use ferrite_core::pull_request::PrState;
-use ferrite_core::server::github::GitHub;
+use ferrite_core::github::GitHub;
 use ferrite_core::wake::WakeNote;
 
 const URL: &str = "https://github.com/acme/app/pull/7";

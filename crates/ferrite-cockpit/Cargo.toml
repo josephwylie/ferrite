@@ -10,6 +10,11 @@ doctest = false
 
 [features]
 cef = ["ferrite-pane/cef"]
+# The demo (`demo`): scripted Sessions in an Engine in this process, behind
+# the app's `--demo`, `--load`, `--panes` and `--demo parity`. The Engine is
+# ferrite-client's fixture (ADR 0049), so a released app has neither. The
+# app's `demo` feature and `headless` turn this on.
+demo = ["ferrite-client/test-support"]
 # The Cockpit window drawn off-screen and driven by keys, clicks and shots
 # (`headless`, ADR 0038): gpui's test support carries its input and
 # capture, so release builds never have it. The app's `headless` feature
@@ -18,6 +23,7 @@ cef = ["ferrite-pane/cef"]
 # one build of every crate (an edit to core compiles it once, not twice);
 # the app's `launch` keeps the motion kit moving as on screen.
 headless = [
+    "demo",
     "gpui/test-support",
     "dep:gpui-reference-platform",
     "ferrite-core/test-support",

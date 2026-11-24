@@ -431,7 +431,7 @@ impl CockpitView {
         let Some(path) = self.pr_source_path(target.source, cx) else {
             return;
         };
-        if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.read(cx).has_forge_fixture(&path) {
+        if !crate::cockpit::reads_forge(self.cockpit.read(cx), &path) {
             return;
         }
         let Some(request) = self

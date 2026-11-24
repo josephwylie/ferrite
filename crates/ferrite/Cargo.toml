@@ -26,7 +26,13 @@ test = false
 # Excluded from release builds: it rests on gpui's test support. It builds
 # the Server as the Cockpit's tests do, fixture and all, so the two share one
 # build of it.
-headless = ["ferrite-cockpit/headless", "ferrite-server/test-support"]
+headless = ["demo", "ferrite-cockpit/headless", "ferrite-server/test-support"]
+# The demo (`--demo`, `--load`, `--panes N`, `--demo parity`): scripted
+# Sessions in an Engine in this process, never the operator's Server. That
+# Engine is ferrite-client's fixture (ADR 0049), so release packaging, which
+# turns on `cef` alone, has no demo, and refuses its flags. Development:
+# `cargo run -p ferrite --features demo -- --demo`.
+demo = ["ferrite-cockpit/demo"]
 # Opt-in native framebuffer artifacts; excluded from normal application builds.
 # The captures are the Cockpit's (`cockpit::visual_reference`).
 visual-reference = ["headless", "ferrite-cockpit/visual-reference"]
@@ -65,6 +71,8 @@ reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.3" }
 winresource = { version = "0.1", default-features = false }
 
 [dev-dependencies]
+# The launch's tests drive the demo's scripted Sessions (`ferrite_cockpit::demo`).
+ferrite-cockpit = { path = "../ferrite-cockpit", features = ["demo"] }
 # The test programs' own temporary folder (ferrite-core/src/test_temp.rs).
 ctor = "1"
 libc = "0.2"

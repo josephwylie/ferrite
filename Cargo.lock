@@ -2337,6 +2337,7 @@ dependencies = [
  "chrono",
  "ctor",
  "dunce",
+ "ferrite-client",
  "ferrite-core",
  "ferrite-reviewr",
  "libc",

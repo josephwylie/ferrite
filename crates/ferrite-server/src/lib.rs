@@ -28,8 +28,8 @@ use ferrite_core::protocol::{
 };
 use ferrite_core::provider::Provider;
 use ferrite_core::roster::DraftId;
-use ferrite_core::server::clis::{Clis, Host};
-use ferrite_core::server::github::{GitHub, Gh};
+use ferrite_core::providers::clis::{Clis, Host};
+use ferrite_core::github::{GitHub, Gh};
 use ferrite_core::server::{settings_dir, store_dir, ServerId};
 use ferrite_core::settings::{ServerDefaults, SessionDefaults, Settings};
 use ferrite_core::spawner::{ProcessRss, Spawn, RSS_LIMIT};

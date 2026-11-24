@@ -13,6 +13,7 @@ use ferrite_core::session::SessionLifecycle;
 use ferrite_core::suggest::Suggestion;
 use ferrite_core::checkout::WorkspaceBinding;
 use ferrite_core::SessionEvent;
+use ferrite_core::transcript::Input;
 use ferrite_core::engine::*;
 use crate::cockpit::Cockpit;
 use ferrite_core::roster::PaneIdentity;

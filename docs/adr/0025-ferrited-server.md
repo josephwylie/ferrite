@@ -70,7 +70,9 @@ All new code is in `ferrite-core` (ADR 0001: no GPUI there).
 The production `Spawner` (`ferrite/src/session.rs`) and the login-shell
 environment (`ferrite/src/shell.rs`) move to core, since the Server spawns.
 The scripted demo spawner stays in the app; `--demo`, `--load` and every
-app test run `Engine` in-process over the in-process link.
+app test run `Engine` in-process over the in-process link. Since ADR 0049
+that Engine is a fixture, and the demo is a development build's: `cargo run
+-p ferrite --features demo -- --demo`.
 
 ### Process lifecycle
 
@@ -582,11 +584,13 @@ its dev-dependencies, and `scripts/ci_scope.py` checks it.
 
 What both sides run stays in core. `ferrite_core::server` is the Server as
 the rest of Ferrite sees it: `store_dir` and `settings_dir`, `agent`
-(`ensure_running`, the LaunchAgent, the Run key, the systemd unit),
-`wants_restart`, and the `github` and `clis` seams, which a Server reads
-for its windows and an in-process window reads itself. The Engine stays in
-core too: `--demo`, `--load` and the window's tests run it in-process over
-`Link::InProcess`. Splitting core itself by side of the wire is later work.
+(`ensure_running`, the LaunchAgent, the Run key, the systemd unit) and
+`wants_restart`. The `github` and `clis` seams a Server reads for its
+windows are the engine's (`ferrite_core::github`,
+`ferrite_core::providers::clis`, ADR 0049). The Engine stays in core too:
+`--demo`, `--load` and the window's tests run it in-process, a fixture
+behind `ferrite-client`'s `test-support` (ADR 0049). Splitting core itself
+by side of the wire is later work.
 
 The Layout table's `server` row is this crate's; `Options` and `run` are
 `ferrite_server::Options` and `ferrite_server::run`.

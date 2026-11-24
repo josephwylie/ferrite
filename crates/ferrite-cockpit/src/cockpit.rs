@@ -7843,6 +7843,7 @@ impl CockpitView {
     /// world's figure. Never another machine's, whose checkouts are its
     /// own; tests and captures never read the real disk.
     fn read_free_disk(&mut self, cx: &mut Context<Self>) {
+        #[cfg(any(test, feature = "demo"))]
         if let Some(bytes) = self.cockpit.read(cx).free_disk_fixture() {
             self.free_disk_landed(Some(bytes), cx);
             return;
@@ -8950,8 +8951,22 @@ fn head_drag(leaf: Leaf, face: GhostFace) -> impl FnOnce(Div) -> AnyElement {
 
 /// Where Ferrite was started. Demo fixtures use this as their checkout;
 /// production startup must not register it as a Project implicitly.
+#[cfg(any(test, feature = "demo"))]
 pub(crate) fn here() -> std::path::PathBuf {
     std::env::current_dir().unwrap_or_else(|_| ".".into())
+}
+
+/// Whether a PR read of the checkout at `path` goes to its forge. Tests
+/// and captures never run `gh`: only a fixture world's forge answers them
+/// (`Cockpit::fixture_forge`).
+#[cfg(any(test, feature = "visual-reference"))]
+pub(crate) fn reads_forge(cockpit: &Cockpit, path: &std::path::Path) -> bool {
+    cockpit.has_forge_fixture(path)
+}
+
+#[cfg(not(any(test, feature = "visual-reference")))]
+pub(crate) fn reads_forge(_: &Cockpit, _: &std::path::Path) -> bool {
+    true
 }
 
 /// The Project a launch's draft starts on: where the operator left off.

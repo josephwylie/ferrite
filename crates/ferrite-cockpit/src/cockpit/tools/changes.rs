@@ -512,9 +512,7 @@ impl CockpitView {
                 });
             }
             Diff::PullRequest(target) => {
-                let answer = if cfg!(any(test, feature = "visual-reference"))
-                    && !self.cockpit.read(cx).has_forge_fixture(&origin.root)
-                {
+                let answer = if !crate::cockpit::reads_forge(self.cockpit.read(cx), &origin.root) {
                     Err(std::io::Error::other(
                         "No published diff fixture for this pull request",
                     ))

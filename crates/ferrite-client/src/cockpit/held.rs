@@ -6,30 +6,39 @@
 //! carries its id, so two machines' Threads of the same number never meet.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use super::{mirror, parked, remote, shared, Asked, Said, Unread};
-use ferrite_core::engine::Engine;
+use super::{mirror, parked, remote, shared, Ask, Asked, Said, Unread};
+use ferrite_core::clock::ServerClock;
+use ferrite_core::machine::Bridge;
 use ferrite_core::pane_update::PaneUpdate;
-use ferrite_core::protocol::{ClientMessage, Command, Done, Op, ServerMessage, WireError};
-use ferrite_core::roster::{BootstrapResult, Bootstrapped, Roster};
+use ferrite_core::protocol::{
+    CliAction, Done, GitHubAsk, Op, ReviewPullRequest, ReviewPullRequests, ServerMessage, WireError,
+    WirePrFilter,
+};
+use ferrite_core::provider::Provider;
+use ferrite_core::roster::{BootstrapResult, Bootstrapped, DraftId, Roster};
 use ferrite_core::store::Store;
 use ferrite_core::{MachineId, MachineKey, ProjectKey, ThreadId, ThreadKey};
+use ferrite_reviewr::ferrite::{Bases, FileSides, Read};
+use ferrite_reviewr::git::{CommitRow, WorktreeEntry};
+use ferrite_reviewr::search::SearchResults;
 
 /// How long a Thread off screen and at rest stays streamed whole: as long
 /// as the Server keeps its Session (ADR 0032). One at work stays however
 /// long it works, drawn here or not.
 const UNWATCH_AFTER: Duration = ferrite_core::digest::HELD_AT_REST;
 
-/// The window number an Engine in this process knows its one window by.
-const IN_PROCESS_WINDOW: u64 = 0;
-
 pub(super) struct HeldMachine {
     /// What every key of this machine's Threads carries.
     pub(super) id: MachineId,
     /// What saved files name this machine.
     pub(super) saved_as: MachineKey,
-    pub(super) link: Link,
+    pub(super) link: Box<dyn Link>,
     /// The Server said something since the window last asked
     /// (`take_arrived`).
     pub(super) arrived: bool,
@@ -60,14 +69,11 @@ pub(super) struct HeldMachine {
     /// The `window.*` actions this machine's Server handed the window and
     /// it has not done: only a `ferrite --headless` one is (ADR 0038).
     pub(super) drives: Vec<(u64, ferrite_core::drive::Action)>,
-    /// A fixture world's Server is one from before `Capability::ForkOf`
-    /// (`fixture_server_before_fork_of`).
-    pub(super) before_fork_of: bool,
 }
 
 impl HeldMachine {
     pub(super) fn new(
-        link: Link,
+        link: Box<dyn Link>,
         logs: Option<Store>,
         saved_as: MachineKey,
     ) -> Self {
@@ -89,7 +95,6 @@ impl HeldMachine {
             seen_told: BTreeMap::new(),
             drawn: None,
             drives: Vec::new(),
-            before_fork_of: false,
         }
     }
 
@@ -105,50 +110,21 @@ impl HeldMachine {
     /// `server_ms`, milliseconds since the epoch on this machine's clock, as
     /// a time on this computer's (F-A4, T3 Code's `toServerClock`): two
     /// machines' times compare as they happened, however far apart their
-    /// clocks are. An Engine in this process reads this computer's clock.
+    /// clocks are.
     pub(super) fn wall(&self, server_ms: i64) -> SystemTime {
-        let local_ms = match &self.link {
-            Link::InProcess(_) => server_ms,
-            Link::Server(server) => server.clock().local_ms(server_ms),
-        };
+        let local_ms = self.link.clock().local_ms(server_ms);
         SystemTime::UNIX_EPOCH + Duration::from_millis(local_ms.max(0) as u64)
     }
 
     /// Whether this machine is this computer, reached: a path it names is
     /// a path on this disk. A machine's is not (ADR 0026).
     pub(super) fn local(&self) -> bool {
-        match &self.link {
-            Link::InProcess(_) => true,
-            Link::Server(server) => server.bridge().is_none(),
-        }
+        self.link.bridge().is_none()
     }
 
-    /// What its Engine said since the last take, each in-process message
-    /// crossing as its encoded line in debug builds, so nothing escapes
-    /// the contract.
+    /// What its Engine said since the last take.
     pub(super) fn take_arrivals(&mut self) -> Vec<remote::Arrival> {
-        let before_fork_of = self.before_fork_of;
-        match &mut self.link {
-            Link::InProcess(engine) => engine
-                .take_messages()
-                .into_iter()
-                .map(|message| match message {
-                    ServerMessage::Focus { thread, .. } if before_fork_of => ServerMessage::Focus {
-                        thread,
-                        fork_of: None,
-                    },
-                    message => message,
-                })
-                .map(|message| remote::Arrival::Message(crossed(message)))
-                .chain(
-                    engine
-                        .take_bootstrap_results()
-                        .into_iter()
-                        .map(remote::Arrival::Started),
-                )
-                .collect(),
-            Link::Server(server) => server.poll(),
-        }
+        self.link.poll()
     }
 
     /// Take in what arrived: the mirrors, the copies, what the window is
@@ -211,10 +187,7 @@ impl HeldMachine {
 
     /// The Engine's clock zero on this side.
     fn boot(&self) -> Instant {
-        match &self.link {
-            Link::InProcess(engine) => engine.boot(),
-            Link::Server(server) => server.boot(),
-        }
+        self.link.boot()
     }
 
     fn message(&mut self, message: ServerMessage, boot: Instant, said: &mut Said) {
@@ -353,33 +326,7 @@ impl HeldMachine {
         if let Some(drawn) = &mut self.drawn {
             drawn.retain(&self.shared.open);
         }
-        match &mut self.link {
-            Link::Server(server) => {
-                let mirrors = &self.mirrors;
-                server.watch(&watched, |thread| mirrors.seq(thread));
-                self.mirrors.watch_only(&watched);
-            }
-            Link::InProcess(engine) => {
-                // As the Server streams a watch: what the Engine published
-                // was taken this pump, so the history meets it exactly.
-                let fresh: Vec<ThreadId> = watched
-                    .iter()
-                    .filter(|thread| !self.mirrors.watched(**thread))
-                    .copied()
-                    .collect();
-                self.mirrors.watch_only(&watched);
-                let boot = engine.boot();
-                for thread in fresh {
-                    if let Some(history) = engine.history(thread) {
-                        let mirrors = &mut self.mirrors;
-                        let _ = history.send(&mut |message| {
-                            mirrors.receive(message, boot);
-                            Ok(())
-                        });
-                    }
-                }
-            }
-        }
+        self.link.stream(&watched, &mut self.mirrors);
     }
 
     /// Tell the Engine what changed of what only this window knows of this
@@ -413,10 +360,7 @@ impl HeldMachine {
             }));
         }
         for op in said {
-            match &mut self.link {
-                Link::InProcess(engine) => engine.window_says(IN_PROCESS_WINDOW, &op),
-                Link::Server(server) => server.tell(op),
-            }
+            self.link.tell(op);
         }
     }
 
@@ -435,24 +379,11 @@ impl HeldMachine {
             .filter(|_| self.mirrors.view(thread).is_some())
     }
 
-    pub(super) fn remote(&mut self) -> std::io::Result<&mut remote::Remote> {
-        match &mut self.link {
-            Link::Server(server) => Ok(server),
-            Link::InProcess(_) => Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "this window runs its agents itself",
-            )),
-        }
-    }
-
-    /// The Engine in this process: what only `--demo`, `--load` and the
-    /// tests drive. It rings the bell, as an act does.
-    pub(super) fn in_process(&mut self) -> &mut Engine {
-        ferrite_core::doorbell::ring();
-        match &mut self.link {
-            Link::InProcess(engine) => engine,
-            Link::Server(_) => panic!("only an Engine in this process takes this act"),
-        }
+    /// Its Server, for what only a Server does.
+    pub(super) fn remote(&mut self) -> io::Result<&mut remote::Remote> {
+        self.link.remote().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Unsupported, "this window runs its agents itself")
+        })
     }
 
     /// A first send that settled, as the window names its Thread.
@@ -467,114 +398,192 @@ impl HeldMachine {
     }
 }
 
-/// Mirror parity (ADR 0025): after every message, each open Thread's
-/// mirror reads exactly as the Engine's own Thread does. Every Cockpit
-/// test checks it as it runs.
-#[cfg(test)]
-impl HeldMachine {
-    pub(super) fn assert_mirrors_match(&self) {
-        let Link::InProcess(engine) = &self.link else {
-            return;
-        };
-        let engine: &Engine = engine;
-        assert_eq!(self.shared.registry.to_wire(), engine.registry().to_wire());
-        assert_eq!(
-            self.shared.notifications.to_wire(),
-            engine.notifications().to_wire()
-        );
-        for provider in [
-            ferrite_core::provider::Provider::Claude,
-            ferrite_core::provider::Provider::Codex,
-        ] {
-            assert_eq!(
-                self.shared.announced_models(provider),
-                engine.announced_models(provider)
-            );
-            assert_eq!(
-                self.shared.live_sessions(provider),
-                engine.live_sessions(provider)
-            );
-            assert_eq!(
-                self.shared.account_limits(provider),
-                engine.account_limits(provider)
-            );
-        }
-        for &thread in engine.open_threads() {
-            // A Thread this window does not stream reads from its digest.
-            if !self.mirrors.watched(thread) {
-                continue;
-            }
-            let engine = engine.thread(thread).expect("open in the Engine");
-            let mirror = self
-                .mirrors
-                .view(thread)
-                .unwrap_or_else(|| panic!("thread {thread} has no mirror"));
-            assert_eq!(
-                super::parity::seen!(mirror),
-                super::parity::seen!(engine),
-                "thread {thread}: the mirror drifted from the Engine"
-            );
-        }
+/// Where a machine's Engine runs, as its window reaches it (ADR 0049): in
+/// its Server, over the socket (`remote::Remote`); or, for the tests and
+/// the demo only, in this process (`in_process`). Every act the window
+/// takes of a machine goes through it, so the window's code is the same
+/// for both; what only a Server does is its `remote`.
+pub(super) trait Link {
+    /// What its Engine said since the last take.
+    fn poll(&mut self) -> Vec<remote::Arrival>;
+
+    /// The Engine's clock zero on this side.
+    fn boot(&self) -> Instant;
+
+    /// Its machine's clock, as this computer's reads it.
+    fn clock(&self) -> ServerClock;
+
+    /// The bridge its machine is reached through; `None` for this computer.
+    fn bridge(&self) -> Option<&Arc<Bridge>>;
+
+    /// Whether what it is told reaches its Engine now.
+    fn reaches_server(&self) -> bool;
+
+    /// Whether its Engine names the Thread a fork that opened was made
+    /// from (`Capability::ForkOf`).
+    fn names_fork_owners(&self) -> bool;
+
+    /// Whether an act is carried out by the time it returns, so what it
+    /// changed is the window's to take in at once (`Cockpit::settle`). A
+    /// Server's arrives as its messages do.
+    fn answers_now(&self) -> bool {
+        false
     }
-}
 
-/// Where a machine's Engine runs.
-pub(super) enum Link {
-    /// In this process, pumped by the window.
-    InProcess(Box<Engine>),
-    /// In the Server, over its socket.
-    Server(Box<remote::Remote>),
-}
+    /// One act, its reply waited for.
+    fn execute(&mut self, op: Op) -> Executed;
 
-impl Link {
-    /// One command, carried out where the Engine runs and answered as the
-    /// Server answers it. In debug builds an in-process command and its
-    /// reply cross as their encoded lines, so nothing escapes the contract.
-    pub(super) fn execute(&mut self, op: Op) -> Executed {
-        match self {
-            Link::InProcess(engine) => replied(engine.execute(&commanded(op))),
-            Link::Server(server) => server.execute(op),
-        }
+    /// One act whose reply nobody reads.
+    fn tell(&mut self, op: Op);
+
+    /// One act whose reply goes to `answer` once it comes, or that it did
+    /// not come in time; at once when it cannot go.
+    fn ask_act(&mut self, op: Op, answer: remote::Answer);
+
+    /// Stream exactly `watched` into `mirrors`, each from where its mirror
+    /// left off; the rest stop.
+    fn stream(&mut self, watched: &[ThreadId], mirrors: &mut mirror::Mirrors);
+
+    /// A Draft's first send: the Thread it became when it started at once,
+    /// else `None`, and it settles in `poll`.
+    fn bootstrap(&mut self, draft: DraftId, prompt: &str, op: Op) -> io::Result<Option<ThreadId>>;
+
+    fn draft_starting(&self, draft: DraftId) -> bool;
+
+    /// Take back a first send still starting. True when one was.
+    fn cancel_bootstrap(&mut self, draft: DraftId) -> io::Result<bool>;
+
+    /// Settings changed on disk.
+    fn settings_changed(&mut self, settings: &ferrite_core::settings::Settings);
+
+    /// One frame of an Engine the window pumps. A Server pumps its own.
+    fn pump(&mut self) {}
+
+    /// Replace each Session grown past the memory limit, in an Engine the
+    /// window sweeps. A Server sweeps its own.
+    fn sweep(&mut self) -> Vec<ferrite_core::memory::Restart> {
+        Vec::new()
     }
-}
 
-/// An Op as the Server reads it off the socket.
-pub(super) fn commanded(op: Op) -> Op {
-    let ClientMessage::Command(Command { op, .. }) =
-        crossed(ClientMessage::Command(Command { id: 0, op }))
-    else {
-        unreachable!("a command decodes as a command")
-    };
-    op
-}
+    /// The window is going: Sessions that would go with it end. A
+    /// Server's keep running.
+    fn halt_sessions(&mut self) {}
 
-/// A command's outcome as the window reads the Server's reply.
-pub(super) fn replied(executed: Executed) -> Executed {
-    let (ok, error) = match executed {
-        Ok(ok) => (ok, None),
-        Err(error) => (None, Some(error)),
-    };
-    let ServerMessage::Reply { ok, error, .. } = crossed(ServerMessage::Reply { id: 0, ok, error })
-    else {
-        unreachable!("a reply decodes as a reply")
-    };
-    error.map_or(Ok(ok), Err)
+    /// One Factory ask (ADR 0037).
+    fn factory(&mut self, op: Op) -> io::Result<Option<Done>>;
+
+    fn discover_sessions(
+        &mut self,
+        roots: Vec<(Provider, PathBuf)>,
+        cap: usize,
+    ) -> Option<Receiver<io::Result<Vec<ferrite_core::session_file::Candidate>>>>;
+
+    fn discover_commands(&mut self, provider: Provider, cwd: &Path) -> Option<ferrite_core::Discovery>;
+
+    fn search_files(
+        &mut self,
+        thread: ThreadId,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<Vec<ferrite_core::prompt_files::FileSuggestion>>>>;
+
+    fn upload_attachment(&self, path: PathBuf) -> io::Result<ferrite_core::attachment_transfer::Upload>;
+
+    fn read_attachment(&self, path: PathBuf) -> io::Result<Receiver<io::Result<Vec<u8>>>>;
+
+    /// A browser annotation's screenshot, cached here for display.
+    fn annotation_image(
+        &mut self,
+        thread: ThreadId,
+        annotation: ferrite_core::browser_annotations::Annotation,
+    ) -> Ask<PathBuf>;
+
+    fn changes(
+        &mut self,
+        request: ferrite_core::changes::Request,
+    ) -> io::Result<Receiver<io::Result<ferrite_core::changes::Snapshot>>>;
+
+    fn set_file_staged(&mut self, request: ferrite_core::changes::Request) -> io::Result<Receiver<io::Result<()>>>;
+
+    fn file_operation(
+        &mut self,
+        request: ferrite_core::file_operations::Request,
+    ) -> io::Result<Receiver<io::Result<ferrite_core::file_operations::Reply>>>;
+
+    fn repositories(&mut self) -> io::Result<Receiver<io::Result<ferrite_core::protocol::Repositories>>>;
+
+    fn review_diff(&mut self, path: &Path, read: &Read) -> io::Result<Receiver<io::Result<Vec<FileSides>>>>;
+
+    fn review_commits(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Vec<CommitRow>>>>;
+
+    fn search_repo(&mut self, path: &Path, query: &str) -> io::Result<Receiver<io::Result<SearchResults>>>;
+
+    fn read_review_file(&mut self, path: &Path, file: &str) -> io::Result<Receiver<io::Result<String>>>;
+
+    fn review_pull_request_diff(
+        &mut self,
+        path: &Path,
+        number: u64,
+    ) -> io::Result<Receiver<io::Result<Vec<FileSides>>>>;
+
+    fn review_pull_request(
+        &mut self,
+        path: &Path,
+        number: Option<u64>,
+    ) -> io::Result<Receiver<io::Result<ReviewPullRequest>>>;
+
+    fn list_pull_requests(
+        &mut self,
+        path: &Path,
+        filter: WirePrFilter,
+    ) -> io::Result<Receiver<io::Result<ReviewPullRequests>>>;
+
+    fn review_files(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Vec<WorktreeEntry>>>>;
+
+    fn review_bases(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Bases>>>;
+
+    fn pick_review_base(&mut self, path: &Path, base: &str) -> io::Result<Receiver<io::Result<()>>>;
+
+    fn pull_request(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Option<ferrite_core::pull_request::PullRequest>>>>;
+
+    /// A `watch_pr`: whether the PR is watched once its Engine has it.
+    fn watch_pr(&mut self, op: Op) -> io::Result<Receiver<io::Result<bool>>>;
+
+    /// A `cancel_delegate`: answered once it is cancelled.
+    fn cancel_delegate(&mut self, op: Op) -> io::Result<Receiver<io::Result<()>>>;
+
+    /// What a GitHub start's picker lists (#225).
+    fn github_names(&mut self, ask: GitHubAsk) -> io::Result<Receiver<io::Result<Vec<String>>>>;
+
+    /// What its machine has of the provider CLIs, or the update it ran.
+    fn cli(&mut self, action: CliAction) -> io::Result<Receiver<io::Result<Done>>>;
+
+    /// Its Server, when it is one.
+    fn remote(&mut self) -> Option<&mut remote::Remote> {
+        None
+    }
+
+    fn remote_ref(&self) -> Option<&remote::Remote> {
+        None
+    }
+
+    /// Its Engine in this process, when it is one: what the tests and the
+    /// demo reach into.
+    #[cfg(any(test, feature = "test-support"))]
+    fn in_process(&mut self) -> Option<&mut super::in_process::InProcess> {
+        None
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn in_process_ref(&self) -> Option<&super::in_process::InProcess> {
+        None
+    }
 }
 
 /// What a command came to, as its reply says.
 pub(super) type Executed = Result<Option<Done>, WireError>;
-
-/// A message as the other end of a socket reads it: in debug builds, its
-/// encoded line decoded again.
-pub(super) fn crossed<T: serde::Serialize + serde::de::DeserializeOwned>(message: T) -> T {
-    #[cfg(debug_assertions)]
-    let message = {
-        let line = ferrite_core::protocol::encode(&message);
-        ferrite_core::protocol::decode(&line[..line.len() - 1])
-            .expect("every message decodes as it encoded")
-    };
-    message
-}
 
 /// The Threads a window draws of one machine at Transcript level, and
 /// since when each other it holds has been off screen and at rest.

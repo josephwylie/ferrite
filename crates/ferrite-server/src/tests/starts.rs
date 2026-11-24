@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::*;
 use ferrite_core::factory_board::{GitHubItem, GitHubQuery, GitHubRead};
-use ferrite_core::server::github::GitHub;
+use ferrite_core::github::GitHub;
 
 /// GitHub as the test scripts it: each read takes the next answer (an
 /// unchanged poll once they run out) and is recorded.

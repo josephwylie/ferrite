@@ -221,7 +221,7 @@ impl CockpitView {
         else {
             return;
         };
-        if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.read(cx).has_forge_fixture(&path) {
+        if !super::reads_forge(self.cockpit.read(cx), &path) {
             return;
         }
         let answer = self.cockpit.update(cx, |cockpit, _| {
