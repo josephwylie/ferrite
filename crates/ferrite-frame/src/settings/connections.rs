@@ -742,9 +742,10 @@ fn switch(toggle: ConnectionAction, on: bool, label: String, cx: &App) -> Div {
     )
 }
 
-/// A remote environment's "Sync my setup": its switch, and where its last
-/// sync stands, under the environment's name.
-fn sync_line(sync: ConnectionSync, cx: &App) -> Div {
+/// A remote environment's "Sync my setup": its switch, under the
+/// environment's own and past the room of its menu (`menu`), and where its
+/// last sync stands, under the environment's name.
+fn sync_line(sync: ConnectionSync, menu: bool, cx: &App) -> Div {
     let selector = format!("{}-status", sync.toggle.id);
     div()
         .flex()
@@ -759,14 +760,19 @@ fn sync_line(sync: ConnectionSync, cx: &App) -> Div {
                 .truncate()
                 .debug_selector(move || selector.clone()),
         )
-        .children(sync.anyway.map(|anyway| {
-            button(anyway.id.clone(), anyway.label.clone(), anyway.enabled, anyway.act.clone(), cx)
+        .children(sync.actions.into_iter().map(|action| {
+            button(action.id.clone(), action.label.clone(), action.enabled, action.act.clone(), cx)
                 .h(px(24.))
                 .px(px(8.))
-                .child(text(anyway.label, 12., ink(cx)))
+                .flex_shrink_0()
+                .child(text(action.label, 12., ink(cx)))
         }))
         .child(switch(sync.toggle, sync.on, "Sync my setup".into(), cx))
+        .when(menu, |line| line.child(div().w(px(MENU_W)).flex_shrink_0()))
 }
+
+/// The side of a row's square menu button.
+const MENU_W: f32 = 28.;
 
 pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
     let enabled = row.enabled;
@@ -790,17 +796,18 @@ pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
         .map(|index| format!("connection-menu-{index}"))
         .unwrap_or_else(|| "connection-menu-local".into())
         .into();
+    let menu = !menu_actions.is_empty();
     let mut actions = div().flex().items_center().flex_shrink_0().gap(px(8.));
     if let Some(toggle) = toggle {
         actions = actions.child(switch(toggle, enabled, format!("Enable {}", row.name), cx));
     }
-    if !menu_actions.is_empty() {
+    if menu {
         let selector = menu_id.clone();
         actions = actions.child(
             components::form_button(menu_id, cx)
                 .debug_selector(move || selector.to_string())
                 .accessibility_label("Environment actions")
-                .size(px(28.))
+                .size(px(MENU_W))
                 .p_0()
                 .child(icon(icons::ELLIPSIS, 16., muted(cx)))
                 .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu, _, _| {
@@ -863,7 +870,7 @@ pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
                 )
                 .child(actions),
         )
-        .children(row.sync.map(|sync| sync_line(sync, cx)))
+        .children(row.sync.map(|sync| sync_line(sync, menu, cx)))
         .children(row.removal.map(|(confirm, cancel)| {
             div()
                 .flex()

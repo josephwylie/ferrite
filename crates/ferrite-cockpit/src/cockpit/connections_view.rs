@@ -46,6 +46,9 @@ pub(crate) enum ConnectionsEvent {
     ToggleSync(String),
     /// Sync the environment with this target though it removes much.
     SyncAnyway(String),
+    /// Sync the environment with this target, each sign-in that differs
+    /// taken from this side.
+    UseSignIns(String, ferrite_core::tree::Side),
     /// Remove a saved environment, as confirmed.
     Remove { machine: Machine, unsaved: bool },
     /// A setup or pairing finished: save `machine` in place of the
@@ -1210,8 +1213,23 @@ impl ConnectionsView {
                 _ => ("Connecting…", None),
             };
             let sync = sync.map(|status| {
+                use super::setup_sync::Status;
+                use ferrite_core::tree::Side;
                 let toggled = target.clone();
-                let anyway = target.clone();
+                let press = |name: &str, label: &str, event: ConnectionsEvent| settings::ConnectionAction {
+                    id: format!("connection-sync-{name}-{index}").into(),
+                    label: label.to_string().into(),
+                    enabled: true,
+                    act: action(cx, move |_, _, cx| cx.emit(event.clone())),
+                };
+                let actions = match &status {
+                    Status::Stopped(_) => vec![press("anyway", "Sync anyway", ConnectionsEvent::SyncAnyway(target.clone()))],
+                    Status::InSync { sign_ins: true, .. } => vec![
+                        press("here", "Use this computer's", ConnectionsEvent::UseSignIns(target.clone(), Side::Here)),
+                        press("there", "Use the Machine's", ConnectionsEvent::UseSignIns(target.clone(), Side::There)),
+                    ],
+                    _ => Vec::new(),
+                };
                 settings::ConnectionSync {
                     on: machine.sync_setup,
                     toggle: settings::ConnectionAction {
@@ -1220,12 +1238,7 @@ impl ConnectionsView {
                         enabled: !unsaved,
                         act: action(cx, move |_, _, cx| cx.emit(ConnectionsEvent::ToggleSync(toggled.clone()))),
                     },
-                    anyway: matches!(status, super::setup_sync::Status::Stopped(_)).then(|| settings::ConnectionAction {
-                        id: format!("connection-sync-anyway-{index}").into(),
-                        label: "Sync anyway".into(),
-                        enabled: true,
-                        act: action(cx, move |_, _, cx| cx.emit(ConnectionsEvent::SyncAnyway(anyway.clone()))),
-                    }),
+                    actions,
                     failed: status.failed(),
                     status: status.line().into(),
                 }
@@ -1340,6 +1353,7 @@ impl CockpitView {
                 view.update(cx, |view, cx| view.answered(saved.err(), cx));
             }
             ConnectionsEvent::SyncAnyway(target) => self.sync_setup_anyway(&target, cx),
+            ConnectionsEvent::UseSignIns(target, side) => self.sync_setup_sign_ins(&target, side, cx),
             ConnectionsEvent::Remove { machine, unsaved } => {
                 self.remove_connection(&view, machine, unsaved, cx)
             }

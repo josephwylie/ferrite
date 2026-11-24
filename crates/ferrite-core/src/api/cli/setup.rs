@@ -15,7 +15,7 @@ use crate::setup_sync::{self, Home, Job, Outcome};
 
 pub(super) const USAGE: &str = "  ferrite --machine <name> setup sync [--allow-removals]\n      \
     Sync this computer's Claude and Codex setup with the Machine's, both ways.\n      \
-    --allow-removals goes on when it would remove more than half of a side.\n";
+    --allow-removals goes on when it would remove more than half of an item, or all of one the other side lost.\n";
 
 pub(super) fn run(machine: Option<Machine>, words: &[&str], store: &Path, settings_dir: &Path) -> i32 {
     let allow_removals = match words {

@@ -1,10 +1,11 @@
 //! Setup sync (ADR 0048): the operator's agent setup kept the same on this
 //! computer and each Machine, both ways, this computer the hub. What is
-//! synced is [`ITEMS`], and nothing outside it is ever read or written.
-//! Each side resolves the table against its own home directory as the
-//! tree root `Root::Setup`, so a sync is tree ops over the protocol:
-//! [`run`] scans both sides, [`reconcile`]s them with the state they last
-//! agreed on, and moves what changed.
+//! synced is [`ITEMS`]; nothing outside it is written, and nothing outside
+//! it is read but what a link inside it points at. Each side resolves the
+//! table against its own home directory as the tree root `Root::Setup`, so
+//! a sync is tree ops over the protocol: [`run`] scans both sides,
+//! [`reconcile`]s them with the state they last agreed on, and moves what
+//! changed.
 
 use crate::store::Provider;
 
@@ -17,12 +18,13 @@ mod tests;
 
 pub use portable::Spelling;
 pub use reconcile::{agreed, reconcile, Action, Hold};
-pub use run::{run, Job, Kept, Outcome, Synced, Valve, BASE, CONFLICTS};
+pub use run::{run, Job, Kept, Names, Outcome, Synced, Valve, BASE, CONFLICTS, TRASH};
 pub use store::{Home, Keychain};
 pub(crate) use store::Place;
 
 /// One part of the operator's setup, by its path from the home directory;
-/// `.codex/…` is from `$CODEX_HOME` when that is set.
+/// `.claude/…` is from `$CLAUDE_CONFIG_DIR` and `.codex/…` from
+/// `$CODEX_HOME` when those are set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Item {
     pub path: &'static str,
@@ -31,10 +33,16 @@ pub struct Item {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
-    /// A folder and all it holds but the paths in `except`, from it, and
-    /// any folder named in [`LEFT_OUT`].
+    /// A folder and all it holds but the paths in `except`, from it (a
+    /// last name of `*.lock` is any name ending so), and any folder named
+    /// in [`LEFT_OUT`].
     Tree { except: &'static [&'static str] },
-    File,
+    /// A folder whose folders are each copied whole, `.git` with it, to a
+    /// side that has none, and otherwise left as each side has them: a
+    /// plugin marketplace is a clone each side's agent keeps up itself.
+    Seed,
+    /// A file; an `owner_only` one is made owner-only when it is new.
+    File { owner_only: bool },
     /// A JSON file whose strings that name a place in the home directory
     /// are carried as `<home>/…`.
     PortableJson,
@@ -46,17 +54,25 @@ pub enum Source {
     Credential(Provider),
 }
 
+const FILE: Source = Source::File { owner_only: false };
+
 pub const ITEMS: &[Item] = &[
     Item { path: ".claude/skills", source: Source::Tree { except: &[] } },
     Item { path: ".claude/commands", source: Source::Tree { except: &[] } },
     Item { path: ".claude/agents", source: Source::Tree { except: &[] } },
     Item { path: ".claude/rules", source: Source::Tree { except: &[] } },
+    Item { path: ".claude/hooks", source: Source::Tree { except: &[] } },
+    Item { path: ".claude/output-styles", source: Source::Tree { except: &[] } },
     Item {
         path: ".claude/plugins",
-        source: Source::Tree { except: &["installed_plugins.json", "known_marketplaces.json"] },
+        source: Source::Tree {
+            except: &["installed_plugins.json", "known_marketplaces.json", "marketplaces", "store/*.lock"],
+        },
     },
-    Item { path: ".claude/CLAUDE.md", source: Source::File },
-    Item { path: ".claude/keybindings.json", source: Source::File },
+    Item { path: ".claude/plugins/marketplaces", source: Source::Seed },
+    Item { path: ".claude/CLAUDE.md", source: FILE },
+    Item { path: ".claude/keybindings.json", source: FILE },
+    Item { path: ".claude/statusline.sh", source: FILE },
     Item { path: ".claude/settings.json", source: Source::PortableJson },
     Item { path: ".claude/plugins/installed_plugins.json", source: Source::PortableJson },
     Item { path: ".claude/plugins/known_marketplaces.json", source: Source::PortableJson },
@@ -66,15 +82,30 @@ pub const ITEMS: &[Item] = &[
     // its own version.
     Item { path: ".codex/skills", source: Source::Tree { except: &[".system"] } },
     Item { path: ".codex/prompts", source: Source::Tree { except: &[] } },
-    Item { path: ".codex/AGENTS.md", source: Source::File },
-    Item { path: ".codex/config.toml", source: Source::File },
+    Item { path: ".codex/rules", source: Source::Tree { except: &[] } },
+    Item { path: ".codex/AGENTS.md", source: FILE },
+    Item { path: ".codex/config.toml", source: Source::File { owner_only: true } },
     Item { path: ".codex/auth.json", source: Source::Credential(Provider::Codex) },
 ];
 
 /// Never synced inside a tree, at any depth: a clone's git state, which
-/// each side's agent fetches into on its own (a plugin marketplace is a
-/// clone). Its files are synced.
+/// each side's agent fetches into on its own. Its files are synced.
 pub const LEFT_OUT: &[&str] = &[".git"];
 
-/// Where macOS keeps Claude's sign-in: its Keychain item's service.
+/// Where macOS keeps Claude's sign-in: its Keychain item's service, with
+/// `-<8 hex of the folder's SHA-256>` after it when `CLAUDE_CONFIG_DIR`
+/// moves Claude's folder.
 pub const CLAUDE_KEYCHAIN: &str = "Claude Code-credentials";
+
+/// Claude's sign-in, the one sign-in a Keychain may keep.
+pub(crate) const CLAUDE_SIGN_IN: &str = ".claude/.credentials.json";
+
+/// The table's item at `path`, when `path` is one, not a path in one.
+pub(crate) fn item_at(path: &str) -> Option<&'static Item> {
+    ITEMS.iter().find(|item| item.path == path)
+}
+
+/// Whether `path` is a sign-in.
+pub(crate) fn sign_in(path: &str) -> bool {
+    item_at(path).is_some_and(|item| matches!(item.source, Source::Credential(_)))
+}

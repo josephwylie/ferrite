@@ -693,9 +693,10 @@ pub struct Preferences {
     /// (`keymap::with_user_keys`): the window says them once.
     pub keys_refused: Vec<String>,
     /// This computer's agent setup, which the window keeps in sync with
-    /// each Machine's (ADR 0048). `None` in the test and demo
-    /// constructors, so no suite reads or writes the operator's setup.
-    pub setup_home: Option<ferrite_core::setup_sync::Home>,
+    /// each Machine's (ADR 0048), or why it keeps none. `None` in the test
+    /// and demo constructors, so no suite reads or writes the operator's
+    /// setup.
+    pub setup_home: Option<Result<ferrite_core::setup_sync::Home, String>>,
 }
 
 impl Preferences {

@@ -1,10 +1,11 @@
 //! Setup sync (ADR 0048) as the window runs it: this computer's agent
 //! setup kept the same as each connected Machine's, both ways, with no
 //! step of the operator's. A Machine syncs as it connects, as a Thread
-//! starts on it, a few seconds after the setup here changes, and every
-//! five minutes while it stays connected; one sync at a time each, off
-//! the window's thread. Each Machine's last sync is its line in Settings ›
-//! Connections, and a file both sides changed is a toast that names it.
+//! starts on it, a few seconds after the setup here changes, and once a
+//! minute while it stays connected, on a clock of its own that no other
+//! sync moves; one sync at a time each, off the window's thread. Each
+//! Machine's last sync is its line in Settings › Connections, and what
+//! needs the operator's eye is one toast for them all.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -15,19 +16,21 @@ use std::time::{Duration, Instant};
 use super::*;
 use ferrite_core::chunked::Cancellation;
 use ferrite_core::cockpit::ServerState;
-use ferrite_core::setup_sync::{self, Home, Job, Outcome, Valve};
+use ferrite_core::setup_sync::{self, Hold, Home, Job, Kept, Outcome, Synced, Valve};
 use ferrite_core::tree::Side;
 use gpui::App;
 
-/// How often a connected Machine syncs with nothing seen to change.
-const EVERY: Duration = Duration::from_secs(5 * 60);
+/// How often a connected Machine is looked at for what changed there.
+const CHECK: Duration = Duration::from_secs(60);
 /// How long the setup here is left to settle after a change before it
-/// syncs: an edit is often several writes.
+/// syncs: an edit is often several writes. A sync that found another
+/// under way tries again after as long.
 const SETTLE: Duration = Duration::from_secs(3);
 
 pub(crate) struct SetupSync {
-    /// This computer's setup; `None` syncs nothing (tests, the demo).
-    home: Option<Home>,
+    /// This computer's setup, or why this window syncs none of it; `None`
+    /// syncs nothing and says nothing (tests, the demo).
+    home: Option<Result<Home, String>>,
     settings_dir: PathBuf,
     cockpit: Entity<Cockpit>,
     /// Each Machine's, by its saved target.
@@ -35,7 +38,10 @@ pub(crate) struct SetupSync {
     /// When the setup here last changed, as the watcher saw it.
     changed: Arc<Mutex<Option<Instant>>>,
     _watcher: Option<notify::RecommendedWatcher>,
-    toasts: Vec<Toast>,
+    /// What the toast says, each Machine's by its name.
+    news: BTreeMap<String, News>,
+    /// The news moved since the toast was last put up.
+    untold: bool,
 }
 
 /// A Machine as the window holds it now.
@@ -53,33 +59,56 @@ struct Track {
     name: String,
     attached: bool,
     running: Option<Running>,
-    /// Asked while a sync ran: run once it ends.
+    /// Asked while a sync ran, or when one found another under way: run
+    /// once it may.
     again: Option<Ask>,
-    next: Option<Instant>,
+    /// When the clock next looks at the Machine.
+    check: Option<Instant>,
+    /// Before this, `again` waits: another sync held the Machine.
+    retry: Option<Instant>,
     status: Status,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Ask {
     only_if_changed_here: bool,
+    read_sign_ins: bool,
     allow_removals: bool,
+    sign_ins: Option<Side>,
 }
 
 impl Ask {
-    const WHOLE: Ask = Ask {
+    /// As it connects and on the clock: all of it, Claude's sign-in with
+    /// it, which macOS asks the Keychain for.
+    const CHECK: Ask = Ask {
         only_if_changed_here: false,
+        read_sign_ins: true,
         allow_removals: false,
+        sign_ins: None,
     };
+    /// The setup here settled after a change: what changed, if anything
+    /// did, and what changed there with it.
     const HERE: Ask = Ask {
         only_if_changed_here: true,
+        read_sign_ins: false,
         allow_removals: false,
+        sign_ins: None,
+    };
+    /// A Thread starts there, or the operator said to go on.
+    const WHOLE: Ask = Ask {
+        only_if_changed_here: false,
+        read_sign_ins: false,
+        allow_removals: false,
+        sign_ins: None,
     };
 
     /// One sync that does what both would.
     fn and(self, other: Ask) -> Ask {
         Ask {
             only_if_changed_here: self.only_if_changed_here && other.only_if_changed_here,
+            read_sign_ins: self.read_sign_ins || other.read_sign_ins,
             allow_removals: self.allow_removals || other.allow_removals,
+            sign_ins: other.sign_ins.or(self.sign_ins),
         }
     }
 }
@@ -99,10 +128,13 @@ enum Heard {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Status {
     Off,
+    /// Why this window syncs no setup.
+    Refused(String),
     Waiting,
     Syncing(Option<usize>),
-    /// Synced, but for this many files left as each side has them.
-    InSync(usize),
+    /// Synced, but for each path left as each side has it, with why, and
+    /// two sign-ins for the operator to choose between.
+    InSync { held: Vec<(String, String)>, sign_ins: bool },
     Stopped(Valve),
     Failed(String),
     /// The Machine's Ferrite is older and syncs no setup.
@@ -111,21 +143,22 @@ pub(crate) enum Status {
 
 impl Status {
     pub(crate) fn line(&self) -> String {
-        let files = |count: usize| if count == 1 { "1 file".to_string() } else { format!("{count} files") };
         match self {
             Status::Off => "Off".into(),
+            Status::Refused(why) => why.clone(),
             Status::Waiting => "Not synced yet".into(),
             Status::Syncing(None) => "Syncing…".into(),
             Status::Syncing(Some(count)) => format!("Syncing {}", files(*count)),
-            Status::InSync(0) => "In sync".into(),
-            Status::InSync(held) => format!("In sync except {}", files(*held)),
-            Status::Stopped(valve) => format!(
-                "Stopped: it would remove {} of {} on {}",
-                valve.removing,
-                files(valve.holding),
-                side(valve.side)
-            ),
-            Status::Failed(error) => error.lines().next().unwrap_or_default().to_string(),
+            Status::InSync { sign_ins: true, .. } => {
+                "Signed in differently here and on the Machine: choose which sign-in to keep".into()
+            }
+            Status::InSync { held, .. } => match held.as_slice() {
+                [] => "In sync".into(),
+                [(path, why)] => format!("In sync except ~/{path}: {why}"),
+                [(path, why), ..] => format!("In sync except {} paths. ~/{path}: {why}", held.len()),
+            },
+            Status::Stopped(valve) => format!("Stopped: {}", stopped(valve)),
+            Status::Failed(error) => error.clone(),
             Status::Older => "Update Ferrite there to sync".into(),
         }
     }
@@ -135,21 +168,34 @@ impl Status {
     }
 }
 
-pub(crate) enum Toast {
-    /// Both sides changed `path`: the `winner`'s is on both now, and the
-    /// other is `kept`.
-    Kept {
-        machine: String,
-        path: String,
-        winner: Side,
-        kept: PathBuf,
-    },
-    Stopped { machine: String, valve: Valve },
+fn files(count: usize) -> String {
+    if count == 1 {
+        "1 file".to_string()
+    } else {
+        format!("{count} files")
+    }
 }
 
-/// A toast's kind: each file's and each Machine's is its own, so one
-/// never takes another's place.
-struct SetupSyncToast;
+/// What a stopped sync would have done, as a sentence's end.
+fn stopped(valve: &Valve) -> String {
+    if valve.vanished {
+        format!(
+            "~/{} is gone from {}, and syncing would remove its {} on {}",
+            valve.item,
+            side(valve.side.other()),
+            files(valve.holding),
+            side(valve.side)
+        )
+    } else {
+        format!(
+            "syncing would remove {} of the {} in ~/{} on {}",
+            valve.removing,
+            files(valve.holding),
+            valve.item,
+            side(valve.side)
+        )
+    }
+}
 
 fn side(side: Side) -> &'static str {
     match side {
@@ -158,10 +204,101 @@ fn side(side: Side) -> &'static str {
     }
 }
 
+/// What the toast says of one Machine.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct News {
+    /// Each file both sides changed: the newer of each is on both, and
+    /// the other is kept in `kept`.
+    conflicts: Vec<String>,
+    kept: Option<PathBuf>,
+    stopped: Option<Valve>,
+    failed: Option<String>,
+}
+
+impl News {
+    /// Note a sync's conflicts: the folder its losing copies are in, or
+    /// the folder of every sync's when they are in more than one.
+    fn conflicted(&mut self, kept: &[Kept]) {
+        for kept in kept {
+            if !self.conflicts.contains(&kept.path) {
+                self.conflicts.push(kept.path.clone());
+            }
+            let Some(sync) = kept.kept.ancestors().nth(kept.path.split('/').count()) else {
+                continue;
+            };
+            self.kept = match &self.kept {
+                Some(folder) if folder != sync => sync.parent().map(Path::to_path_buf),
+                _ => Some(sync.to_path_buf()),
+            };
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.conflicts.is_empty() && self.stopped.is_none() && self.failed.is_none()
+    }
+}
+
+/// The toast for `news`: its title, its message, and the folder its press
+/// opens. `None` when there is nothing to say.
+fn toast(news: &BTreeMap<String, News>, settings_dir: &Path) -> Option<(String, String, Option<PathBuf>)> {
+    let shown = |folder: &Path| {
+        let inside = folder.strip_prefix(settings_dir).unwrap_or(folder);
+        format!("{}, in Ferrite's settings folder", inside.to_string_lossy().replace('\\', "/"))
+    };
+    let mut said: Vec<(String, String, String)> = Vec::new();
+    let mut folder = None;
+    for (machine, news) in news {
+        if let [path, ..] = news.conflicts.as_slice() {
+            let title = match news.conflicts.len() {
+                1 => format!("~/{path} changed on both sides"),
+                count => format!("{count} files changed on both sides"),
+            };
+            let kept = news.kept.as_deref().map(shown).unwrap_or_default();
+            let message = match news.conflicts.len() {
+                1 => format!("Here and on {machine}. The newer copy is on both now; the other is kept in {kept}."),
+                _ => format!("Here and on {machine}. The newer copy of each is on both now; the others are kept in {kept}."),
+            };
+            said.push((title.clone(), message, format!("{machine}: {}", title)));
+            folder = news.kept.clone();
+        }
+        if let Some(valve) = &news.stopped {
+            said.push((
+                format!("Setup sync with {machine} stopped"),
+                format!("{}. Sync anyway in Settings › Connections, or put it back.", capitalised(&stopped(valve))),
+                format!("{machine}: stopped, {}", stopped(valve)),
+            ));
+        }
+        if let Some(error) = &news.failed {
+            said.push((format!("Setup sync with {machine} failed"), error.clone(), format!("{machine}: failed, {error}")));
+        }
+    }
+    match said.as_slice() {
+        [] => None,
+        [(title, message, _)] => Some((title.clone(), message.clone(), folder)),
+        _ => Some((
+            format!("Setup sync: {} things to look at", said.len()),
+            said.iter().map(|(_, _, line)| line.as_str()).collect::<Vec<_>>().join("\n"),
+            folder,
+        )),
+    }
+}
+
+fn capitalised(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| first.to_uppercase().chain(chars).collect())
+}
+
+/// The toast's kind: one for every Machine's news, so one never hides
+/// another.
+struct SetupSyncToast;
+
 impl SetupSync {
-    pub(crate) fn new(home: Option<Home>, settings_dir: PathBuf, cockpit: Entity<Cockpit>) -> Self {
+    pub(crate) fn new(home: Option<Result<Home, String>>, settings_dir: PathBuf, cockpit: Entity<Cockpit>) -> Self {
         let changed = Arc::default();
-        let watcher = home.as_ref().and_then(|home| watch(home, &changed));
+        let watcher = match &home {
+            Some(Ok(home)) => watch(home, &changed),
+            _ => None,
+        };
         Self {
             home,
             settings_dir,
@@ -169,30 +306,36 @@ impl SetupSync {
             machines: HashMap::new(),
             changed,
             _watcher: watcher,
-            toasts: Vec::new(),
+            news: BTreeMap::new(),
+            untold: false,
         }
     }
 
     /// What the Machine `target` names' line says; `None` when this window
     /// syncs no setup.
     pub(crate) fn status(&self, target: &str) -> Option<Status> {
-        self.home.as_ref()?;
-        Some(self.machines.get(target).map_or(Status::Waiting, |track| track.status.clone()))
+        Some(match self.home.as_ref()? {
+            Err(why) => Status::Refused(why.clone()),
+            Ok(_) => self.machines.get(target).map_or(Status::Waiting, |track| track.status.clone()),
+        })
     }
 
-    pub(crate) fn take_toasts(&mut self) -> Vec<Toast> {
-        std::mem::take(&mut self.toasts)
+    /// The toast, when what it says moved since it was put up.
+    fn untold(&mut self) -> Option<Option<(String, String, Option<PathBuf>)>> {
+        std::mem::take(&mut self.untold).then(|| toast(&self.news, &self.settings_dir))
     }
 
-    pub(crate) fn has_toasts(&self) -> bool {
-        !self.toasts.is_empty()
+    /// The operator closed the toast: what it said is heard.
+    fn heard(&mut self) {
+        self.news.clear();
+        self.untold = false;
     }
 
     /// Hear each sync under way, and start each that is due: a Machine
-    /// that connected, one due its five minutes, and every connected one
+    /// that connected, one whose clock came round, and every connected one
     /// once the setup here settles after a change. Whether a line moved.
     pub(crate) fn tick(&mut self, wanted: Vec<Wanted>, cx: &mut Context<Self>) -> bool {
-        let Some(home) = self.home.clone() else {
+        let Some(Ok(home)) = self.home.clone() else {
             return false;
         };
         let now = Instant::now();
@@ -207,24 +350,23 @@ impl SetupSync {
         let before = self.statuses();
         self.machines.retain(|target, _| wanted.iter().any(|want| want.target == *target));
         for want in wanted {
-            let track = self.machines.entry(want.target.clone()).or_insert_with(|| Track {
-                machine: want.machine,
-                name: want.name.clone(),
-                attached: false,
-                running: None,
-                again: None,
-                next: None,
-                status: Status::Waiting,
-            });
+            let track = self.machines.entry(want.target.clone()).or_insert_with(|| Track::new(want.machine, &want.name));
             track.machine = want.machine;
             track.name = want.name;
-            track.hear(&mut self.toasts, now);
+            if let Some((done, ask)) = track.hear() {
+                let news = self.news.entry(track.name.clone()).or_default();
+                self.untold |= track.finished(done, ask, now, news);
+                if news.is_empty() {
+                    self.news.remove(&track.name);
+                }
+            }
             if !want.on {
                 if let Some(running) = track.running.take() {
                     running.cancel.cancel();
                 }
                 track.again = None;
-                track.next = None;
+                track.check = None;
+                track.retry = None;
                 track.attached = want.attached;
                 track.status = Status::Off;
                 continue;
@@ -237,23 +379,14 @@ impl SetupSync {
             let connected = want.attached && !track.attached;
             track.attached = want.attached;
             if !want.attached {
-                track.next = None;
+                track.check = None;
                 continue;
             }
-            let ask = if connected || track.next.is_some_and(|next| now >= next) {
-                Some(Ask::WHOLE)
-            } else if settled {
-                Some(Ask::HERE)
-            } else if track.running.is_none() {
-                track.again.take()
-            } else {
-                None
-            };
-            if let Some(ask) = ask {
+            if let Some(ask) = track.due(now, connected, settled) {
                 track.start(ask, &home, &self.settings_dir, &want.target, &self.cockpit, cx);
             }
         }
-        self.statuses() != before
+        self.statuses() != before || self.untold
     }
 
     /// Sync the Machine the Cockpit holds as `machine` now: a Thread starts
@@ -271,8 +404,18 @@ impl SetupSync {
         self.ask(|named, _| named == target, ask, cx);
     }
 
+    /// Sync the Machine `target` names, each sign-in that differs with
+    /// none agreed taken from `side`.
+    pub(crate) fn use_sign_ins(&mut self, target: &str, side: Side, cx: &mut Context<Self>) {
+        let ask = Ask {
+            sign_ins: Some(side),
+            ..Ask::CHECK
+        };
+        self.ask(|named, _| named == target, ask, cx);
+    }
+
     fn ask(&mut self, which: impl Fn(&str, &Track) -> bool, ask: Ask, cx: &mut Context<Self>) {
-        let Some(home) = self.home.clone() else {
+        let Some(Ok(home)) = self.home.clone() else {
             return;
         };
         for (target, track) in &mut self.machines {
@@ -288,11 +431,37 @@ impl SetupSync {
 }
 
 impl Track {
-    /// What the sync under way said since the last look.
-    fn hear(&mut self, toasts: &mut Vec<Toast>, now: Instant) {
-        let Some(running) = &self.running else {
-            return;
-        };
+    fn new(machine: MachineId, name: &str) -> Self {
+        Self {
+            machine,
+            name: name.to_string(),
+            attached: false,
+            running: None,
+            again: None,
+            check: None,
+            retry: None,
+            status: Status::Waiting,
+        }
+    }
+
+    /// The sync due `now`, if any: all of it as the Machine connects and
+    /// each time the clock comes round, what changed here once that
+    /// settles, and else what waited. Nothing but the clock moves it.
+    fn due(&mut self, now: Instant, connected: bool, settled: bool) -> Option<Ask> {
+        if connected || self.check.is_some_and(|check| now >= check) {
+            self.check = Some(now + CHECK);
+            return Some(Ask::CHECK);
+        }
+        if settled {
+            return Some(Ask::HERE);
+        }
+        let free = self.running.is_none() && self.retry.is_none_or(|retry| now >= retry);
+        free.then(|| self.again.take()).flatten()
+    }
+
+    /// What the sync under way came to, once it is done.
+    fn hear(&mut self) -> Option<(std::io::Result<Outcome>, Ask)> {
+        let running = self.running.as_ref()?;
         loop {
             match running.heard.try_recv() {
                 Ok(Heard::Planned(0)) => {}
@@ -300,49 +469,55 @@ impl Track {
                 Ok(Heard::Done(done)) => {
                     let ask = running.ask;
                     self.running = None;
-                    self.next = Some(now + EVERY);
-                    self.finished(done, ask, toasts);
-                    return;
+                    return Some((done, ask));
                 }
-                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Empty) => return None,
                 Err(TryRecvError::Disconnected) => {
+                    let ask = running.ask;
                     self.running = None;
-                    self.status = Status::Failed("The sync stopped before it finished".into());
-                    return;
+                    return Some((Err(std::io::Error::other("The sync stopped before it finished")), ask));
                 }
             }
         }
     }
 
-    fn finished(&mut self, done: std::io::Result<Outcome>, ask: Ask, toasts: &mut Vec<Toast>) {
+    /// Take in what a sync came to: the line it leaves, and what `news`
+    /// says of it. Whether the news moved.
+    fn finished(&mut self, done: std::io::Result<Outcome>, ask: Ask, now: Instant, news: &mut News) -> bool {
+        let before = news.clone();
         self.status = match done {
             Ok(Outcome::Synced(synced)) => {
-                for kept in synced.conflicts.iter() {
-                    toasts.push(Toast::Kept {
-                        machine: self.name.clone(),
-                        path: kept.path.clone(),
-                        winner: kept.winner,
-                        kept: kept.kept.clone(),
-                    });
-                }
-                let quiet = ask.only_if_changed_here && synced == Default::default();
+                news.stopped = None;
+                news.failed = None;
+                news.conflicted(&synced.conflicts);
+                let quiet = ask.only_if_changed_here && synced == Synced::default();
                 match &self.status {
-                    Status::InSync(_) if quiet => self.status.clone(),
-                    _ => Status::InSync(synced.held.len() + synced.problems.len()),
+                    Status::InSync { .. } if quiet => self.status.clone(),
+                    _ => in_sync(&synced),
                 }
             }
             Ok(Outcome::Stopped(valve)) => {
-                if self.status != Status::Stopped(valve) {
-                    toasts.push(Toast::Stopped {
-                        machine: self.name.clone(),
-                        valve,
-                    });
+                news.failed = None;
+                if self.status != Status::Stopped(valve.clone()) {
+                    news.stopped = Some(valve.clone());
                 }
                 Status::Stopped(valve)
             }
+            Ok(Outcome::Busy) => {
+                self.again = Some(self.again.map_or(ask, |again| again.and(ask)));
+                self.retry = Some(now + SETTLE);
+                Status::Syncing(None)
+            }
             Err(error) if error.kind() == std::io::ErrorKind::Unsupported => Status::Older,
-            Err(error) => Status::Failed(error.to_string()),
+            Err(error) => {
+                let error = error.to_string().lines().next().unwrap_or_default().to_string();
+                if !matches!(self.status, Status::Failed(_)) {
+                    news.failed = Some(error.clone());
+                }
+                Status::Failed(error)
+            }
         };
+        *news != before
     }
 
     /// Start a sync of `target`, or ask for one after the sync under way.
@@ -351,6 +526,8 @@ impl Track {
             self.again = Some(self.again.map_or(ask, |again| again.and(ask)));
             return;
         }
+        let ask = self.again.take().map_or(ask, |again| again.and(ask));
+        self.retry = None;
         let machine = self.machine;
         let connect = match cockpit.update(cx, |cockpit, _| cockpit.tree(machine)) {
             Ok(connect) => connect,
@@ -362,6 +539,8 @@ impl Track {
         let job = Job {
             allow_removals: ask.allow_removals,
             only_if_changed_here: ask.only_if_changed_here,
+            read_sign_ins: ask.read_sign_ins,
+            sign_ins: ask.sign_ins,
             ..Job::for_machine(home.clone(), settings_dir, target)
         };
         let (said, heard) = ferrite_core::doorbell::channel();
@@ -385,6 +564,31 @@ impl Track {
     }
 }
 
+/// The line a sync that finished leaves.
+fn in_sync(synced: &Synced) -> Status {
+    let mut held: Vec<(String, String)> = synced
+        .problems
+        .iter()
+        .map(|problem| {
+            let error = problem.error.lines().next().unwrap_or_default();
+            (problem.path.clone(), format!("{error} ({})", side(problem.side)))
+        })
+        .collect();
+    let mut sign_ins = false;
+    for (path, why) in &synced.held {
+        let why = match why {
+            Hold::SignIn => {
+                sign_ins = true;
+                continue;
+            }
+            Hold::Linked(on) => format!("it lies through a link on {}, and Setup sync never writes through one", side(*on)),
+            Hold::Kinds => "it is a file on one side and a folder on the other".to_string(),
+        };
+        held.push((path.clone(), why));
+    }
+    Status::InSync { held, sign_ins }
+}
+
 /// A watcher that notes when anything the table names changes here.
 fn watch(home: &Home, changed: &Arc<Mutex<Option<Instant>>>) -> Option<notify::RecommendedWatcher> {
     use notify::Watcher as _;
@@ -404,7 +608,7 @@ fn watch(home: &Home, changed: &Arc<Mutex<Option<Instant>>>) -> Option<notify::R
         };
         // A folder not there yet is not watched: its making is seen from
         // the folder holding it, and what is written in it after waits for
-        // the five-minute sync.
+        // the clock.
         let _ = watcher.watch(&dir, mode);
     }
     Some(watcher)
@@ -441,13 +645,13 @@ impl CockpitView {
         }
     }
 
-    /// A line moved: Settings › Connections draws it, and a toast is
-    /// presented as the window draws.
+    /// A line or the news moved: Settings › Connections draws it, and the
+    /// toast is put up as the window draws.
     fn setup_sync_moved(&mut self, cx: &mut Context<Self>) {
         if let Some(settings) = self.settings_sheet(cx) {
             settings.update(cx, |_, cx| cx.notify());
         }
-        if self.setup_sync.read(cx).has_toasts() {
+        if self.setup_sync.read(cx).untold {
             cx.notify();
         }
     }
@@ -457,53 +661,164 @@ impl CockpitView {
         self.setup_sync_moved(cx);
     }
 
+    pub(super) fn sync_setup_sign_ins(&mut self, target: &str, side: Side, cx: &mut Context<Self>) {
+        self.setup_sync.update(cx, |sync, cx| sync.use_sign_ins(target, side, cx));
+        self.setup_sync_moved(cx);
+    }
+
     pub(super) fn sync_setup_before_start(&mut self, machine: MachineId, cx: &mut Context<Self>) {
         self.setup_sync.update(cx, |sync, cx| sync.before_start(machine, cx));
         self.setup_sync_moved(cx);
     }
 
-    /// Say what the syncs had to say.
+    /// Put up what the syncs have to say, in place of what it said before,
+    /// or take it down once there is nothing.
     pub(super) fn present_setup_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui::component::button::Button;
         use gpui::component::notification::{Notification, NotificationType};
         use gpui::component::WindowExt as _;
-        let toasts = self.setup_sync.update(cx, |sync, _| sync.take_toasts());
-        if toasts.is_empty() {
+        let Some(toast) = self.setup_sync.update(cx, |sync, _| sync.untold()) else {
             return;
-        }
-        for toast in toasts {
-            let notification = match toast {
-                Toast::Kept {
-                    machine,
-                    path,
-                    winner,
-                    kept,
-                } => Notification::new()
-                    .id1::<SetupSyncToast>(SharedString::from(format!("kept:{machine}:{path}")))
-                    .title(format!("~/{path} changed here and on {machine}"))
-                    .message(format!(
-                        "The newer copy, from {}, is on both now. The other is kept at {}.",
-                        match winner {
-                            Side::Here => "this computer".to_string(),
-                            Side::There => machine.clone(),
-                        },
-                        kept.display()
-                    ))
-                    .with_type(NotificationType::Warning)
-                    .autohide(false),
-                Toast::Stopped { machine, valve } => Notification::new()
-                    .id1::<SetupSyncToast>(SharedString::from(format!("stopped:{machine}")))
-                    .title(format!("Setup sync with {machine} stopped"))
-                    .message(format!(
-                        "It would remove {} of {} files on {}. Sync anyway from Settings › Connections.",
-                        valve.removing,
-                        valve.holding,
-                        side(valve.side)
-                    ))
-                    .with_type(NotificationType::Warning)
-                    .autohide(false),
-            };
-            window.push_notification(notification, cx);
-        }
+        };
+        let Some((title, message, folder)) = toast else {
+            window.remove_notification::<SetupSyncToast>(cx);
+            return;
+        };
+        let sync = self.setup_sync.downgrade();
+        let notification = Notification::new()
+            .id::<SetupSyncToast>()
+            .title(title)
+            .message(message)
+            .with_type(NotificationType::Warning)
+            .autohide(false)
+            .on_close(move |_, cx| {
+                sync.update(cx, |sync, _| sync.heard()).ok();
+            });
+        let notification = match folder {
+            Some(folder) => notification.action(move |_, _, _| {
+                let folder = folder.clone();
+                Button::new("setup-sync-open-kept")
+                    .label("Open folder")
+                    .on_click(move |_, _, cx| cx.open_with_system(&folder))
+            }),
+            None => notification,
+        };
+        window.push_notification(notification, cx);
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track() -> Track {
+        Track::new(MachineId::unheld(), "box")
+    }
+
+    fn kept(path: &str, sync: &str) -> Kept {
+        let kept = path.split('/').fold(PathBuf::from("/settings/sync-conflicts").join(sync), |at, part| at.join(part));
+        Kept {
+            path: path.into(),
+            winner: Side::There,
+            kept,
+        }
+    }
+
+    #[test]
+    fn the_clock_comes_round_every_minute_whatever_else_syncs() {
+        let mut track = track();
+        let start = Instant::now();
+        assert_eq!(track.due(start, true, false), Some(Ask::CHECK), "as it connects");
+        for second in [3, 23, 43] {
+            assert_eq!(track.due(start + Duration::from_secs(second), false, true), Some(Ask::HERE), "a change here at {second}s");
+        }
+        assert_eq!(track.due(start + Duration::from_secs(59), false, false), None);
+        assert_eq!(track.due(start + CHECK, false, false), Some(Ask::CHECK), "not moved by the syncs a change here started");
+        assert_eq!(track.due(start + CHECK + Duration::from_secs(1), false, false), None);
+        assert_eq!(track.due(start + 2 * CHECK, false, true), Some(Ask::CHECK), "the clock's sync carries a change here too");
+    }
+
+    #[test]
+    fn only_the_connection_and_the_clock_read_the_sign_ins() {
+        assert!(Ask::CHECK.read_sign_ins);
+        assert!(!Ask::HERE.read_sign_ins && !Ask::WHOLE.read_sign_ins);
+        assert!(Ask::HERE.and(Ask::CHECK).read_sign_ins);
+        assert!(!Ask::HERE.and(Ask::CHECK).only_if_changed_here);
+    }
+
+    #[test]
+    fn a_sync_that_finds_another_under_way_shows_syncing_and_tries_again() {
+        let mut track = track();
+        let mut news = News::default();
+        let now = Instant::now();
+        track.status = Status::InSync { held: Vec::new(), sign_ins: false };
+        assert!(!track.finished(Ok(Outcome::Busy), Ask::HERE, now, &mut news));
+        assert_eq!(track.status, Status::Syncing(None));
+        assert!(!track.status.failed());
+        assert_eq!(track.due(now + Duration::from_secs(1), false, false), None, "it waits a moment");
+        assert_eq!(track.due(now + SETTLE, false, false), Some(Ask::HERE));
+    }
+
+    #[test]
+    fn one_toast_says_a_syncs_conflicts_and_a_failure_raises_one() {
+        let mut track = track();
+        let mut news = News::default();
+        let now = Instant::now();
+        let synced = Synced {
+            conflicts: vec![kept(".claude/CLAUDE.md", "1"), kept(".claude/agents/a.md", "1"), kept(".codex/AGENTS.md", "1")],
+            ..Synced::default()
+        };
+        assert!(track.finished(Ok(Outcome::Synced(synced)), Ask::CHECK, now, &mut news));
+        let all = BTreeMap::from([("box".to_string(), news.clone())]);
+        let (title, message, folder) = toast(&all, Path::new("/settings")).unwrap();
+        assert_eq!(title, "3 files changed on both sides");
+        assert!(message.contains("kept in sync-conflicts/1, in Ferrite's settings folder"), "{message}");
+        assert_eq!(folder, Some(PathBuf::from("/settings/sync-conflicts/1")));
+
+        let failed = || Err(std::io::Error::other("connection reset\nmore"));
+        assert!(track.finished(failed(), Ask::CHECK, now, &mut news));
+        assert_eq!(track.status.line(), "connection reset");
+        assert!(!track.finished(failed(), Ask::CHECK, now, &mut news), "still failing: no second toast");
+        let all = BTreeMap::from([("box".to_string(), news.clone())]);
+        let (title, message, _) = toast(&all, Path::new("/settings")).unwrap();
+        assert_eq!(title, "Setup sync: 2 things to look at", "one toast, the first not hidden");
+        assert_eq!(message, "box: 3 files changed on both sides\nbox: failed, connection reset");
+
+        assert!(track.finished(Ok(Outcome::Synced(Synced::default())), Ask::CHECK, now, &mut news));
+        assert_eq!(news.failed, None, "it synced again");
+        assert_eq!(news.conflicts.len(), 3);
+    }
+
+    #[test]
+    fn a_line_says_what_was_held_and_where_a_sync_stopped() {
+        let synced = Synced {
+            problems: vec![ferrite_core::tree::Problem {
+                path: ".claude/skills".into(),
+                side: Side::There,
+                error: "/home/me/.claude/skills is a link to something not there".into(),
+            }],
+            ..Synced::default()
+        };
+        assert_eq!(
+            in_sync(&synced).line(),
+            "In sync except ~/.claude/skills: /home/me/.claude/skills is a link to something not there (the Machine)"
+        );
+        let signed_in = Synced {
+            held: BTreeMap::from([(".claude/.credentials.json".to_string(), Hold::SignIn)]),
+            ..Synced::default()
+        };
+        assert!(matches!(in_sync(&signed_in), Status::InSync { sign_ins: true, .. }));
+        let gone = Valve {
+            side: Side::Here,
+            item: ".claude/skills".into(),
+            removing: 4,
+            holding: 4,
+            vanished: true,
+        };
+        assert_eq!(
+            Status::Stopped(gone).line(),
+            "Stopped: ~/.claude/skills is gone from the Machine, and syncing would remove its 4 files on this computer"
+        );
     }
 }

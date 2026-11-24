@@ -17,7 +17,7 @@ fn write(path: &Path, text: &str) {
 fn sync(job: &Job, exchange: &mut dyn Exchange) -> setup_sync::Synced {
     match setup_sync::run(job, exchange, &mut |_| {}, &Cancellation::default()).unwrap() {
         Outcome::Synced(synced) => synced,
-        Outcome::Stopped(valve) => panic!("stopped: {valve:?}"),
+        outcome => panic!("{outcome:?}"),
     }
 }
 

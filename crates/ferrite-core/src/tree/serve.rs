@@ -20,7 +20,7 @@ use crate::chunked::{self, CHUNK_SIZE};
 use crate::setup_sync::{Home, Place};
 
 /// At most this many files are written at once on one connection.
-const MOST_WRITES: usize = 4;
+pub(crate) const MOST_WRITES: usize = 4;
 
 /// A scan's reply goes in pages of at most about this many bytes, far
 /// below what a connection may fall behind by (`link::LAGGED_BYTES`).
@@ -101,7 +101,7 @@ impl Session {
                         kept.manifest
                     }
                     _ => match &root {
-                        Resolved::Setup => self.home()?.scan(),
+                        Resolved::Setup => self.home()?.scan(&skip),
                         Resolved::Path(path) => match fs::symlink_metadata(path) {
                             Err(error) if error.kind() == io::ErrorKind::NotFound => Manifest::default(),
                             _ => scan::sweeping(path, &skip)?,

@@ -26,7 +26,7 @@ mod tests;
 
 pub use scan::scan;
 pub(crate) use scan::{millis, mode, setup as scan_setup};
-pub(crate) use serve::{inside, permissions, remove as remove_entry, set_mode};
+pub(crate) use serve::{inside, permissions, remove as remove_entry, set_mode, MOST_WRITES};
 pub use serve::Session;
 
 /// What a tree holds, by path: relative, `/`-separated, never absolute and
@@ -800,5 +800,14 @@ fn unanswered() -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         "The server did not answer the tree operation",
+    )
+}
+
+/// The exchange itself failed, rather than the far side refusing a step.
+pub(crate) fn line_down(error: &io::Error) -> bool {
+    use io::ErrorKind::*;
+    matches!(
+        error.kind(),
+        TimedOut | NotConnected | BrokenPipe | ConnectionReset | ConnectionAborted | UnexpectedEof
     )
 }
