@@ -202,6 +202,14 @@ impl<T> Clone for OnMachine<'_, T> {
 
 impl<T> Copy for OnMachine<'_, T> {}
 
+/// An act's reply as the text it carried, if it carried one.
+fn text_of(done: Executed) -> io::Result<Option<String>> {
+    Ok(match done {
+        Ok(Some(Done::Text { text })) => Some(text),
+        _ => None,
+    })
+}
+
 /// An act on a machine the window no longer holds.
 /// What became of a send, as its reply says.
 fn admission(sent: Executed) -> Admission {
@@ -2629,11 +2637,10 @@ impl Cockpit {
         self.ask_on(thread, |thread| Op::Queue { thread, text }, |queued| Ok(queued.is_ok()))
     }
 
-    pub fn unqueue(&mut self, thread: ThreadKey) -> Option<String> {
-        match self.act_on(thread, |thread| Op::Unqueue { thread }) {
-            Ok(Some(Done::Text { text })) => Some(text),
-            _ => None,
-        }
+    /// Take `thread`'s held prompt back: the answer is its text, or
+    /// `None` when it held none. The window never waits for it.
+    pub fn unqueue(&mut self, thread: ThreadKey) -> Ask<Option<String>> {
+        self.ask_on(thread, |thread| Op::Unqueue { thread }, text_of)
     }
 
     /// Remove the queued prompt `id` names (`QueueItem::id`), back to the
@@ -2667,35 +2674,45 @@ impl Cockpit {
         });
     }
 
-    /// A prompt the provider handed back, for the Composer, and whether it
-    /// goes ahead of the draft.
-    pub fn take_retrieved_prompt(&mut self, thread: ThreadKey) -> Option<(String, bool)> {
-        // Asked every frame: only a Thread holding one is asked.
+    /// Ask for a prompt the provider handed back, for the Composer, and
+    /// whether it goes ahead of the draft. `None` when `thread` holds
+    /// none to ask for. The window never waits for the answer.
+    pub fn take_retrieved_prompt(&mut self, thread: ThreadKey) -> Option<Ask<Option<(String, bool)>>> {
         self.thread(thread)?.recovered()?;
-        match self.act_on(thread, |thread| Op::TakeRecovered { thread }) {
-            Ok(Some(Done::Recovered { text, prepend })) => Some((text, prepend)),
-            _ => None,
-        }
+        Some(self.ask_on(
+            thread,
+            |thread| Op::TakeRecovered { thread },
+            |taken| {
+                Ok(match taken {
+                    Ok(Some(Done::Recovered { text, prepend })) => Some((text, prepend)),
+                    _ => None,
+                })
+            },
+        ))
     }
 
+    /// Step through `thread`'s prompt history from `current_draft`: the
+    /// answer is the prompt stepped to, or `None` at an end. The window
+    /// never waits for it.
     pub fn recall_prompt(
         &mut self,
         thread: ThreadKey,
         direction: HistoryDirection,
         current_draft: &str,
-    ) -> Option<String> {
+    ) -> Ask<Option<String>> {
         let direction = match direction {
             HistoryDirection::Older => crate::protocol::WireDirection::Older,
             HistoryDirection::Newer => crate::protocol::WireDirection::Newer,
         };
-        match self.act_on(thread, |thread| Op::Recall {
+        self.ask_on(
             thread,
-            direction,
-            draft: current_draft.to_string(),
-        }) {
-            Ok(Some(Done::Text { text })) => Some(text),
-            _ => None,
-        }
+            |thread| Op::Recall {
+                thread,
+                direction,
+                draft: current_draft.to_string(),
+            },
+            text_of,
+        )
     }
 
     pub fn answer(&mut self, thread: ThreadKey, id: &str) -> bool {

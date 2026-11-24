@@ -65,6 +65,7 @@ mod settings_view;
 mod sheets;
 mod side_chat_view;
 mod rename;
+mod returns;
 use rename::{rename_field, RenameTarget};
 mod snooze;
 pub(crate) mod starts;
@@ -422,6 +423,9 @@ pub struct CockpitView {
     outbox: sends::Outbox,
     /// What follows each Server answer the window waits for (`asks`).
     awaited: asks::Awaited,
+    /// The prompts asked back to a Composer and not yet answered
+    /// (`returns`).
+    returning: returns::Returning,
     tools: tools::Tools,
     /// Every Thread's Files: its tree, editor tabs and their unsaved edits.
     files: Entity<tools::FilesView>,
@@ -1295,6 +1299,7 @@ impl CockpitView {
             held_sends: Default::default(),
             outbox: Default::default(),
             awaited: Default::default(),
+            returning: Default::default(),
             tools: Default::default(),
             files,
             terminals,
@@ -2224,15 +2229,9 @@ impl CockpitView {
                 for draft in self.lost_sends(thread) {
                     self.put_back_send(index, draft, true, cx);
                 }
-                while let Some((held, prepend)) = self.cockpit.update(cx, |cockpit, _| cockpit.take_retrieved_prompt(thread)) {
-                    let content = self.recovered_content(thread, held);
-                    self.panes[index].composer.update(cx, |composer, cx| {
-                        composer.restore_content(content, prepend, cx)
-                    });
-                    cx.notify();
-                }
             }
         }
+        self.take_handed_back_prompts(cx);
         let models_changed = self.cockpit.update(cx, |cockpit, _| cockpit.take_models_changed());
         let tuning_availability_changed = self.model_picker().is_some_and(|open| {
             open.pane.thread().is_some_and(|thread| {
@@ -3981,13 +3980,7 @@ impl CockpitView {
         }
         if text.is_empty() {
             // Enter on an empty line takes a held prompt back to edit it.
-            if let Some(held) = self.cockpit.update(cx, |cockpit, _| cockpit.unqueue(thread)) {
-                let content = self.recovered_content(thread, held);
-                composer.update(cx, |composer, cx| {
-                    composer.restore_content(content, true, cx)
-                });
-                cx.notify();
-            }
+            self.take_back_held(thread, cx);
             return;
         }
         // Typing does not wait for the agent; sending does.
@@ -4568,17 +4561,7 @@ impl CockpitView {
             }
             return;
         }
-        let composer = self.panes[index].composer.clone();
-        let draft = composer.read(cx).editable();
-        self.unsent
-            .step_from(thread, draft.clone(), composer.read(cx).content());
-        let Some(text) = self.cockpit.update(cx, |cockpit, _| cockpit.recall_prompt(thread, direction, &draft)) else {
-            return;
-        };
-        self.composer_menu.update(cx, |menu, cx| menu.recalled(cx));
-        let content = self.unsent.stepped_to(text);
-        composer.update(cx, |composer, cx| composer.put(content, cx));
-        cx.notify();
+        self.step_history_of(thread, direction, cx);
     }
 
     fn history_available(&self, index: usize, cx: &gpui::App) -> bool {

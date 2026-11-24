@@ -1282,8 +1282,14 @@ never waits. The rest still do.
      `when_answered_in`, a turn of the loop after the answer. Open and
      import still wait, and a launch waits for the Threads it imported
      (`revive_and_wait`): it has no window yet.
-  4. Queue: 5 asks, 15 sites. These are Composer presses, with the
-     queue's rows answered by the Server's state.
+  4. Queue: done. Sending a queued prompt now and taking one back were
+     tells already. The three whose reply the window reads are asks now,
+     and each puts its prompt in the Composer when the answer comes
+     (`returns`): a held prompt taken back to edit, a prompt the agent
+     handed back (the pump asks a Thread once at a time), and a step
+     through prompt history. A Thread's history steps go one at a time,
+     in the order pressed, since each starts from what the one before
+     it put in the Composer.
   5. Projects: 7 asks, 11 sites. These are rare presses in the settings
      and the add flow.
   6. Factory: 3 asks, 5 sites, all on the Server only (`factory_ask`).

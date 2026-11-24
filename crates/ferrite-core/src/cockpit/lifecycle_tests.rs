@@ -341,7 +341,7 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
     );
     assert!(replacement.sent().is_empty());
     let (prompt, _) = cockpit
-        .take_retrieved_prompt(thread)
+        .take_retrieved_prompt(thread).and_then(|ask| ask.now().unwrap())
         .expect("the failed prompt is back in the Composer");
     assert_eq!(prompt, "after");
     replacement.fail_send.store(false, Ordering::SeqCst);
@@ -463,7 +463,7 @@ fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
             .map(|item| item.text.as_str()),
         Some("after")
     );
-    let prompt = cockpit.unqueue(thread).unwrap();
+    let prompt = cockpit.unqueue(thread).now().unwrap().unwrap();
     replacement.ready();
     until(|| {
         cockpit.pump();
