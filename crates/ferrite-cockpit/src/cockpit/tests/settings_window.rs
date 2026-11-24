@@ -1031,3 +1031,37 @@ fn connection_pairing_url_paste_fills_host_and_code_after_replacing_text(cx: &mu
         );
     });
 }
+
+/// A toast stands over Settings: it draws over the sheet's veil, and a
+/// press on it is the toast's, not the veil's, which would close Settings.
+#[gpui::test]
+fn a_toast_stands_over_the_settings_sheet(cx: &mut TestAppContext) {
+    use gpui::component::notification::Notification;
+    use gpui::component::WindowExt as _;
+    let (core, _fake) = cockpit("toast-over-settings", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    let pressed = std::rc::Rc::new(std::cell::Cell::new(0));
+    cx.update(|window, cx| {
+        let pressed = pressed.clone();
+        let toast = Notification::new()
+            .title("Over Settings")
+            .autohide(false)
+            .on_click(move |_, _, _| pressed.set(pressed.get() + 1));
+        window.push_notification(toast, cx);
+    });
+    for _ in 0..40 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
+    let card = bounds(cx, "notification-card".into());
+    cx.simulate_click(card.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(pressed.get(), 1, "the press reached the toast");
+    view.read_with(cx, |view, cx| assert!(view.settings_sheet(cx).is_some(), "Settings stays up"));
+}

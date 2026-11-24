@@ -7556,7 +7556,10 @@ impl CockpitView {
             .children(self.sheet_floats(window, cx))
             .children(self.lightbox_element(cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
-            .children(gpui::component::Root::render_notification_layer(window, cx))
+            .children(
+                gpui::component::Root::render_notification_layer(window, cx)
+                    .map(|layer| deferred(layer).with_priority(crate::float::FLOAT_PRIORITY)),
+            )
     }
 }
 

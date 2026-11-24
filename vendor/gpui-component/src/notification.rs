@@ -468,8 +468,17 @@ impl Render for Notification {
                     .flex_1()
                     .overflow_hidden()
                     .when(has_icon, |this| this.pl_6())
+                    // Ferrite's patch: a title ends short of the close
+                    // button that shows over its end on hover.
                     .when_some(self.title.clone(), |this, title| {
-                        this.child(div().text_sm().font_semibold().child(title))
+                        this.child(
+                            div()
+                                .debug_selector(|| "notification-title".into())
+                                .mr_4()
+                                .text_sm()
+                                .font_semibold()
+                                .child(title),
+                        )
                     })
                     .when_some(self.message.clone(), |this, message| {
                         this.child(div().text_sm().child(message))
@@ -479,6 +488,7 @@ impl Render for Notification {
             .when_some(action, |this, action| this.child(action))
             .child(
                 div()
+                    .debug_selector(|| "notification-close".into())
                     .absolute()
                     .top_1()
                     .right_1()
@@ -1158,6 +1168,34 @@ mod tests {
             Notification::new().id.system_tag(),
             Notification::new().id.system_tag()
         );
+    }
+
+    /// Ferrite's patch: a long title wraps short of the close button, which
+    /// shows over the card's top right on hover.
+    #[gpui::test]
+    fn a_title_ends_short_of_the_close_button(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_global(Theme::default()));
+        let (root, cx) = cx.add_window_view(|window, cx| TestRoot {
+            list: cx.new(|cx| NotificationList::new(window, cx)),
+            other_focus: cx.focus_handle(),
+        });
+        let list = root.read_with(cx, |root, _| root.list.clone());
+        list.update_in(cx, |list, window, cx| {
+            list.push(
+                Notification::new()
+                    .title("~/.claude/skills/deploy/scripts/run.sh changed on both sides")
+                    .message("The newer copy is on both now.")
+                    .autohide(false),
+                window,
+                cx,
+            );
+        });
+        cx.background_executor
+            .advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        let title = cx.debug_bounds("notification-title").expect("a title");
+        let close = cx.debug_bounds("notification-close").expect("a close button");
+        assert!(title.right() <= close.left(), "{title:?} runs under {close:?}");
     }
 
     /// A stack's element id must not depend on how many other placements are
