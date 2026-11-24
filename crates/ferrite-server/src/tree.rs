@@ -6,7 +6,7 @@ use std::io;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 
 use ferrite_core::chunked::{Cancellation, EXPIRY};
-use ferrite_core::link::{ClientId, Heard};
+use ferrite_core::connection::{ClientId, Heard};
 use ferrite_core::protocol::{Done, ErrorCode, WireError};
 use ferrite_core::tree::{Request, Session};
 

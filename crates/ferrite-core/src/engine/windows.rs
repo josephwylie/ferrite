@@ -7,7 +7,7 @@ use super::*;
 use crate::protocol::Op;
 use crate::Attention;
 
-/// A window, by the number its Server knows it by (`link::ClientId`).
+/// A window, by the number its Server knows it by (`connection::ClientId`).
 pub type WindowId = u64;
 
 /// What the windows said of themselves.

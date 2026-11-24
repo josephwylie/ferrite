@@ -20,8 +20,8 @@ Three parts, and the crates they become:
 
 | Part | Holds | Who needs it |
 | --- | --- | --- |
-| **shared** | the protocol's messages and the types they carry: Thread, Activity, transcript, Settings, the roster | both |
-| **engine** | the Store, the providers and their Sessions, the Engine, the Factory, workspaces, the API | a Server |
+| **shared** | the protocol's messages and the types they carry: Thread, Activity, transcript, the log's schema, Settings, the roster | both |
+| **engine** | the Store, the providers and their Sessions, the Engine, the Factory, workspaces, the API, the Server's end of each connection | a Server |
 | **client** | the Cockpit: what a window holds of its Machines' Servers and how it asks them | a window |
 
 The engine and the client each build on the shared part and never on each
@@ -34,11 +34,11 @@ of `ferrite-core` on the shared side or the engine's.
 `scripts/check_core_sides.py` counts each **crossing**: a path to an engine
 module from a shared module, or from one of the window's crates
 (`ferrite-client`, `ferrite-cockpit`, `ferrite-pane`, `ferrite-frame`,
-`ferrite-ui`, `ferrite-terminal`). There are 32:
+`ferrite-ui`, `ferrite-terminal`). There are 30:
 
 | From | Crossings | Mostly |
 | --- | --- | --- |
-| shared modules | 7 | the `server` module's GitHub reads and CLI checks |
+| shared modules | 5 | the `server` module's GitHub reads and CLI checks |
 | `ferrite-client` | 10 | the Engine a Cockpit can run in itself, its Spawner and its Store |
 | `ferrite-cockpit` | 15 | the Store, Spawner and Sessions of the demo and fixture worlds, and the titler |
 | `ferrite-pane`, `ferrite-ui` | 0 | |
@@ -177,9 +177,42 @@ The engine side still reaches into seven moved items, so they are
 fields of `Projects` with its `parse` and `to_bytes`, which the registry's
 verbs and file use. Step 3 has to make them public.
 
-What is left is work, and two types. `store::LogRecord` is the whole log
-schema, and `protocol` carries it. `api::Heard` holds the API's `Request`,
-and `link` carries it. The `server` module's GitHub reads and CLI checks
+Two types stayed on the engine's side. `store::LogRecord` is the whole
+log schema, and `protocol` carries it. `api::Heard` holds the API's
+`Request`, and `link` carries it.
+
+## Built: the log's schema and the Server's end of the link
+
+`protocol` and `link` are the two modules both programs must share. They
+no longer name the engine's side. The crossings went from 32 to 30.
+
+- `thread_log`, new: the schema every Thread's log is written in, which
+  is also what a Server sends a window as history (`WireRecord::Known`).
+  It holds `SCHEMA_VERSION`, the `Header`, the `Facts`, a mark's `Summary`
+  and `Base`, every persisted type, `Record` with its conversions from a
+  live event and back to an input, `LogRecord`, `handover_notice`, and
+  schema 9's Activity (`thread_log::activity`). No serialized byte
+  changed. Each item moved whole, with its serde attributes.
+- The Store keeps every read and write of a log's file: opening,
+  appending, syncing, the worker, replacing a log and the fault switches.
+  It also keeps the replay bases it tracks (`store::base`), the prompt ids
+  a rewind cuts at, and a Subagent's history read back off its log
+  (`store::activity`).
+- `connection`, new, on the engine's side: the Server's end of each
+  connection. It holds the `Outbox`, the `Ring`, `ClientId`, `Heard`,
+  `Connection` and `accept_all`, with their tests. `link` keeps what both
+  programs use: the address, the framing (`Lines`, `send`, `relay`), the
+  socket (`listen`, `connect`, `Listener`, `Stream`, `TryClone`), the two
+  limits a window plans for (`MAX_LINE`, `LAGGED_BYTES`) and a window's end
+  (`Client`, `Attached`).
+
+The Store still reads and writes the schema's types itself, so 82 moved
+items are `pub(crate)`: 24 types, 34 fields, 22 functions,
+`SCHEMA_VERSION` and the `activity` module. `engine` also calls
+`handover_notice`, which was `pub(crate)` before the move. Step 3 has to
+make them public.
+
+What is left is work. The `server` module's GitHub reads and CLI checks
 run `gh` and the providers' CLIs. A window still runs the titler, reads a
 checkout's PR through `workspace::pull_request` (`gh`), and builds the
 Engine, Store, Spawner and Sessions of its in-process, demo and fixture
@@ -191,8 +224,7 @@ Each step is one PR and drives its pairs in the baseline to zero.
 
 1. **Types move to the shared side.** Every crossing that is only a type
    or a pure function goes, from shared modules and the window crates
-   alike. No crate changes. Done (above): what is left is work, and the
-   two types named there.
+   alike. No crate changes. Done (above): what is left is work.
 2. **The Cockpit stops running an Engine in itself.** `Cockpit::new(store,
    spawner)` builds an Engine in the window's process. Production attaches
    to a Server (`Cockpit::attach`); the demo, fixtures and tests use the
@@ -217,3 +249,6 @@ Each step is one PR and drives its pairs in the baseline to zero.
 - **Leave the Engine-and-Cockpit tests in core.** Core cannot depend on the
   crate that holds the Cockpit, so they would need a second, test-only
   Cockpit.
+- **Name the schema's module `log`.** `crate::log!` is already the
+  diagnostics log, and `log::Record` reads as the `log` crate's type.
+  `thread_log` names the Thread's log.

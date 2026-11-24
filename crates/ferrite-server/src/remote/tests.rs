@@ -3,6 +3,7 @@ use super::*;
 #[cfg(all(unix, feature = "test-support"))]
 mod network {
     use super::*;
+    use ferrite_core::connection;
     use ferrite_core::machine::remote::{self, Profile};
     use tokio_tungstenite::tungstenite::Message as ClientFrame;
 
@@ -32,7 +33,7 @@ mod network {
             let folder = std::env::temp_dir().join(format!("ferrite-link-{}", random_secret(8)));
             let store = folder.join("remote-store");
             let (heard, hear) = std::sync::mpsc::channel();
-            link::accept_all(
+            connection::accept_all(
                 link::listen(&link::address(&store)).unwrap(),
                 heard.clone(),
                 link::LAGGED_BYTES,

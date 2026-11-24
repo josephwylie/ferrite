@@ -4,7 +4,7 @@ use super::*;
 use std::sync::mpsc;
 
 use ferrite_core::engine::{SpawnRequest, Spawner};
-use ferrite_core::link::{Connection, Heard};
+use ferrite_core::connection::{Connection, Heard};
 use ferrite_core::protocol::{SharedRoster, WireChoice};
 use ferrite_core::provider::Provider;
 

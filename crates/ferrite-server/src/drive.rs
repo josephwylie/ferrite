@@ -8,7 +8,7 @@ use std::collections::btree_map::{BTreeMap, Entry};
 use super::Server;
 use ferrite_core::api::{ApiError, CallerId, Code};
 use ferrite_core::drive::{Action, Answer};
-use ferrite_core::link::ClientId;
+use ferrite_core::connection::ClientId;
 use ferrite_core::protocol::ServerMessage;
 
 /// The actions handed to a window, and whose request each answers.

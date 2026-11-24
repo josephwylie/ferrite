@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::checkout::WorkspaceBinding;
+use crate::connection;
 use crate::engine::Engine;
 use crate::link::{self, TryClone};
 use crate::project::ProjectId;
@@ -657,7 +658,7 @@ pub enum Heard {
 
 /// Serve every API connection `listener` accepts, for as long as the pump
 /// listens.
-pub fn accept_all(listener: link::Listener, heard: Sender<link::Heard>) -> io::Result<()> {
+pub fn accept_all(listener: link::Listener, heard: Sender<connection::Heard>) -> io::Result<()> {
     std::thread::Builder::new()
         .name("ferrite-api-accept".into())
         .spawn(move || {
@@ -681,7 +682,7 @@ pub fn accept_all(listener: link::Listener, heard: Sender<link::Heard>) -> io::R
 /// A reader thread that hands each request to the pump (and answers a line
 /// that is not one itself), and a writer thread that sends each answer
 /// until neither the pump nor the reader holds its channel.
-fn serve(caller: CallerId, stream: link::Stream, heard: Sender<link::Heard>) -> io::Result<()> {
+fn serve(caller: CallerId, stream: link::Stream, heard: Sender<connection::Heard>) -> io::Result<()> {
     let (answers, outgoing) = mpsc::channel::<Vec<u8>>();
     let mut writer = stream.try_clone()?;
     std::thread::Builder::new()
@@ -699,7 +700,7 @@ fn serve(caller: CallerId, stream: link::Stream, heard: Sender<link::Heard>) -> 
             let _ = writer.shutdown();
         })?;
     if heard
-        .send(link::Heard::Api(Heard::Joined(caller, answers.clone())))
+        .send(connection::Heard::Api(Heard::Joined(caller, answers.clone())))
         .is_err()
     {
         return Ok(());
@@ -712,7 +713,7 @@ fn serve(caller: CallerId, stream: link::Stream, heard: Sender<link::Heard>) -> 
                 match decode(&line) {
                     Ok(request) => {
                         if heard
-                            .send(link::Heard::Api(Heard::Request(caller, request)))
+                            .send(connection::Heard::Api(Heard::Request(caller, request)))
                             .is_err()
                         {
                             return;
@@ -723,7 +724,7 @@ fn serve(caller: CallerId, stream: link::Stream, heard: Sender<link::Heard>) -> 
                     }
                 }
             }
-            let _ = heard.send(link::Heard::Api(Heard::Hungup(caller)));
+            let _ = heard.send(connection::Heard::Api(Heard::Hungup(caller)));
         })?;
     Ok(())
 }
