@@ -65,7 +65,7 @@ fn cmd_t_from_a_thread_starts_in_its_project(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("cmd-t-project", 1);
     let elsewhere = core
         .register_project(core.first_machine(), &std::env::temp_dir().canonicalize().unwrap())
-        .unwrap();
+        .now().unwrap();
     let here = core.project_of(core.threads()[0]).expect("a bound Thread");
     assert_ne!(here, elsewhere);
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
@@ -90,7 +90,7 @@ fn cmd_t_from_a_thread_outranks_the_nav_filter(cx: &mut TestAppContext) {
     let here = core.project_of(core.threads()[0]).expect("a bound Thread");
     let filtered = core
         .register_project(core.first_machine(), &std::env::temp_dir().canonicalize().unwrap())
-        .unwrap();
+        .now().unwrap();
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     view.update(cx, |view, _| view.nav_filter = Some(filtered));
@@ -115,7 +115,7 @@ fn cmd_t_from_a_thread_brings_the_standing_draft_to_its_project(cx: &mut TestApp
     let here = core.project_of(thread).expect("a bound Thread");
     let elsewhere = core
         .register_project(core.first_machine(), &std::env::temp_dir().canonicalize().unwrap())
-        .unwrap();
+        .now().unwrap();
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     view.update(cx, |view, cx| view.open_draft_in_project(elsewhere, cx));

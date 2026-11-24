@@ -78,7 +78,7 @@ fn the_popover_keeps_its_keyboard_cursor_in_view(cx: &mut TestAppContext) {
     for n in 0..24 {
         let dir = base.join(format!("project-{n:02}"));
         std::fs::create_dir_all(&dir).unwrap();
-        core.register_project(core.first_machine(), &dir).unwrap();
+        core.register_project(core.first_machine(), &dir).now().unwrap();
     }
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -292,7 +292,7 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
     let (mut core, _fake) = cockpit("narrow-draft-controls", 1);
     let dir = scratch("narrow-draft-controls-a-rather-long-project-directory-name");
     std::fs::create_dir_all(&dir).unwrap();
-    core.register_project(core.first_machine(), &dir).unwrap();
+    core.register_project(core.first_machine(), &dir).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(720.), px(900.)));
     view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));

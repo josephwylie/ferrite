@@ -429,7 +429,7 @@ fn a_new_thread_in_a_project_opens_a_draft_there(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("project-heading-plus", 1);
     let elsewhere = core
         .register_project(core.first_machine(), &std::env::temp_dir().canonicalize().unwrap())
-        .unwrap();
+        .now().unwrap();
     let heading = core.project_of(core.threads()[0]).expect("a bound Thread");
     assert_ne!(heading, elsewhere);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));

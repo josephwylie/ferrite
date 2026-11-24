@@ -1153,7 +1153,7 @@ pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> 
     let Some(machine) = cockpit.this_computer() else {
         return Vec::new();
     };
-    let project = cockpit.register_project(machine, &here()).ok();
+    let project = cockpit.register_project(machine, &here()).now().ok();
     let mut parked = cockpit.parked().unwrap_or_default();
     parked.reverse();
     // Only this Project's parked Threads come back into the fixture.

@@ -30,6 +30,9 @@ pub(crate) struct ProjectEditorView {
     pub(super) staged: Vec<PathBuf>,
     /// A refusal, shown on the card that caused it.
     pub(super) error: Option<SharedString>,
+    /// The card was committed and its Server has not answered: a second
+    /// press commits nothing.
+    pub(super) committing: bool,
     /// The body's scroll, for its overlay scrollbar.
     scroll: ScrollHandle,
     /// On a machine, the path field that stands in for the folder dialog.
@@ -135,6 +138,7 @@ impl ProjectEditorView {
             name,
             staged: Vec::new(),
             error: None,
+            committing: false,
             scroll: ScrollHandle::new(),
             remote,
             focus: cx.focus_handle(),
@@ -626,13 +630,10 @@ impl CockpitView {
         match event.clone() {
             ProjectEditorEvent::Adopt(path) => self.adopt_editor_directory(path, cx),
             ProjectEditorEvent::RemoveDirectory(project, index) => {
-                let refusal = self
+                let removed = self
                     .cockpit
-                    .update(cx, |cockpit, _| cockpit.remove_project_directory(project, index))
-                    .err()
-                    .map(|error| SharedString::from(format!("directory unchanged · {error}")));
-                card.update(cx, |card, cx| card.set_error(refusal, cx));
-                cx.notify();
+                    .update(cx, |cockpit, _| cockpit.remove_project_directory(project, index));
+                self.directory_changed(card, removed, cx);
             }
             ProjectEditorEvent::RemoveProject(project) => {
                 if self.project_in_use(project, cx) {
@@ -641,20 +642,29 @@ impl CockpitView {
                 let removed = self
                     .cockpit
                     .update(cx, |cockpit, _| cockpit.remove_project(project));
-                match removed {
-                    Err(error) => {
-                        let error = Some(format!("not removed · {error}").into());
-                        card.update(cx, |card, cx| card.set_error(error, cx));
-                    }
-                    Ok(()) => {
-                        if self.nav_filter == Some(project) {
-                            self.nav_filter = None;
+                self.when_answered(
+                    removed,
+                    move |view, removed, cx| {
+                        match removed {
+                            Err(error) => {
+                                let error = Some(format!("not removed · {error}").into());
+                                card.update(cx, |card, cx| card.set_error(error, cx));
+                            }
+                            // Only the card that asked is closed.
+                            Ok(()) => {
+                                if view.nav_filter == Some(project) {
+                                    view.nav_filter = None;
+                                }
+                                view.nav_notice.clear();
+                                if view.project_card(cx).as_ref() == Some(&card) {
+                                    view.hide_sheet(cx);
+                                }
+                            }
                         }
-                        self.nav_notice.clear();
-                        self.hide_sheet(cx);
-                    }
-                }
-                cx.notify();
+                        cx.notify();
+                    },
+                    cx,
+                );
             }
             ProjectEditorEvent::Confirm => self.confirm_project_editor(cx),
             ProjectEditorEvent::PathEdited => self.list_remote_path(cx),
@@ -730,37 +740,73 @@ impl CockpitView {
             return;
         };
         let editor = card.read(cx);
+        if editor.committing {
+            return;
+        }
         let machine = editor.machine;
         let target = editor.target;
         let typed = editor.name.read(cx).text().to_string();
         let name = editor.resolved_name(&typed);
         let staged = editor.staged.clone();
-        let outcome = match target {
+        card.update(cx, |card, _| card.committing = true);
+        match target {
             Some(project) => {
                 let typed = typed.trim();
                 if typed.is_empty() {
-                    Ok(project)
+                    self.project_committed(card, Ok(project), cx);
                 } else {
-                    self.cockpit
-                        .update(cx, |cockpit, _| cockpit.rename_project(project, typed))
-                        .map(|()| project)
+                    self.name_project(card, project, typed, cx);
                 }
             }
-            None => self.cockpit.update(cx, |cockpit, _| {
-                cockpit
-                    .register_project_directories(machine, &staged)
-                    .and_then(|project| {
-                        match name {
-                            Some(name) => cockpit.rename_project(project, &name),
-                            None => Ok(()),
-                        }
-                        .map(|()| project)
-                    })
-            }),
-        };
+            None => {
+                let registered = self
+                    .cockpit
+                    .update(cx, |cockpit, _| cockpit.register_project_directories(machine, &staged));
+                self.when_answered(
+                    registered,
+                    move |view, registered, cx| match (registered, name) {
+                        (Ok(project), Some(name)) => view.name_project(card, project, &name, cx),
+                        (registered, _) => view.project_committed(card, registered, cx),
+                    },
+                    cx,
+                );
+            }
+        }
+        cx.notify();
+    }
+
+    /// Name `project` as the card has it, the last act of committing it.
+    fn name_project(
+        &mut self,
+        card: Entity<ProjectEditorView>,
+        project: ProjectKey,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let named = self
+            .cockpit
+            .update(cx, |cockpit, _| cockpit.rename_project(project, name));
+        self.when_answered(
+            named,
+            move |view, named, cx| view.project_committed(card, named.map(|()| project), cx),
+            cx,
+        );
+    }
+
+    /// The Server answered the card's commit: the Project it describes
+    /// is shown, or the card says why it is unchanged.
+    fn project_committed(
+        &mut self,
+        card: Entity<ProjectEditorView>,
+        outcome: std::io::Result<ProjectKey>,
+        cx: &mut Context<Self>,
+    ) {
+        card.update(cx, |card, _| card.committing = false);
         match outcome {
             Ok(project) => {
-                self.hide_sheet(cx);
+                if self.project_card(cx).as_ref() == Some(&card) {
+                    self.hide_sheet(cx);
+                }
                 // The Project the operator just described is the one they
                 // want to look at, and to work in.
                 self.launch_project = Some(project);
@@ -783,6 +829,27 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// A directory of the card's Project was asked added or removed: the
+    /// card says a refusal when the answer comes.
+    fn directory_changed(
+        &mut self,
+        card: Entity<ProjectEditorView>,
+        changed: ferrite_core::cockpit::Ask<()>,
+        cx: &mut Context<Self>,
+    ) {
+        self.when_answered(
+            changed,
+            move |_, changed, cx| {
+                let refusal = changed
+                    .err()
+                    .map(|error| SharedString::from(format!("directory unchanged · {error}")));
+                card.update(cx, |card, cx| card.set_error(refusal, cx));
+                cx.notify();
+            },
+            cx,
+        );
+    }
+
     /// Land a picked directory on the card. On a new Project it is staged;
     /// on an existing one it is attached at once, so the card always shows
     /// the registry's own list.
@@ -792,12 +859,10 @@ impl CockpitView {
         };
         match card.read(cx).target {
             Some(project) => {
-                let refusal = self
+                let added = self
                     .cockpit
-                    .update(cx, |cockpit, _| cockpit.add_project_directories(project, &[path]))
-                    .err()
-                    .map(|error| format!("directory unchanged · {error}").into());
-                card.update(cx, |card, cx| card.set_error(refusal, cx));
+                    .update(cx, |cockpit, _| cockpit.add_project_directories(project, &[path]));
+                self.directory_changed(card, added, cx);
             }
             None => card.update(cx, |card, cx| card.stage(path, cx)),
         }

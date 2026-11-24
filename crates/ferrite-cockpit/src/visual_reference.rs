@@ -2550,7 +2550,7 @@ fn projecteditor() -> (Scene, Setup) {
     scene
         .core
         .add_project_directories(key, &[extra])
-        .expect("add fixture directory");
+        .now().expect("add fixture directory");
     let setup: Setup = Box::new(move |view, _, cx| view.open_project_editor(key, cx));
     (scene, setup)
 }

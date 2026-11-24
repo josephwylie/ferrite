@@ -882,7 +882,16 @@ impl Cockpit {
         op: impl FnOnce(ThreadId) -> Op,
         read: fn(Executed) -> io::Result<T>,
     ) -> Ask<T> {
-        let (machine, op) = (key.machine(), op(key.thread()));
+        self.ask_at(key.machine(), op(key.thread()), read)
+    }
+
+    /// `ask_on` for an act of `machine`'s that is on no one Thread.
+    fn ask_at<T: Send + 'static>(
+        &mut self,
+        machine: MachineId,
+        op: Op,
+        read: impl FnOnce(Executed) -> io::Result<T> + Send + 'static,
+    ) -> Ask<T> {
         match self.machines.get_mut(&machine).map(|held| &mut held.link) {
             Some(Link::Server(remote)) => {
                 let ask = remote.ask_act(op, read);
@@ -1585,46 +1594,47 @@ impl Cockpit {
         self.shared(key.machine()).registry.project(key.project())
     }
 
-    /// Register `root` as a Project of `machine`.
-    pub fn register_project(&mut self, machine: MachineId, root: &Path) -> io::Result<ProjectKey> {
+    /// Register `root` as a Project of `machine`: the answer is the
+    /// Project, or why not. The window never waits for it.
+    pub fn register_project(&mut self, machine: MachineId, root: &Path) -> Ask<ProjectKey> {
         self.register_project_directories(machine, &[root.to_path_buf()])
     }
 
-    pub fn register_project_directories(
-        &mut self,
-        machine: MachineId,
-        roots: &[PathBuf],
-    ) -> io::Result<ProjectKey> {
-        let project = registered(self.act_at(
+    /// Register `roots` as one Project of `machine`, the first its
+    /// primary directory.
+    pub fn register_project_directories(&mut self, machine: MachineId, roots: &[PathBuf]) -> Ask<ProjectKey> {
+        self.ask_at(
             machine,
             Op::Project {
                 action: ProjectAction::Register {
                     roots: roots.to_vec(),
                 },
             },
-        ))?;
-        Ok(ProjectKey::new(machine, project))
+            move |reply| Ok(ProjectKey::new(machine, registered(reply)?)),
+        )
     }
 
-    /// One act on a Project, where its machine's Engine runs.
+    /// One act on a Project, where its machine's Engine runs: an `Err`
+    /// answer says why not. The window never waits for it.
     fn act_on_project(
         &mut self,
         key: ProjectKey,
         action: impl FnOnce(ProjectId) -> ProjectAction,
-    ) -> io::Result<()> {
-        done(self.act_at(
+    ) -> Ask<()> {
+        self.ask_at(
             key.machine(),
             Op::Project {
                 action: action(key.project()),
             },
-        ))
+            done,
+        )
     }
 
     pub fn add_project_directories(
         &mut self,
         project: ProjectKey,
         roots: &[PathBuf],
-    ) -> io::Result<()> {
+    ) -> Ask<()> {
         self.act_on_project(project, |project| ProjectAction::AddDirectories {
             project,
             roots: roots.to_vec(),
@@ -1636,7 +1646,7 @@ impl Cockpit {
         project: ProjectKey,
         index: usize,
         root: &Path,
-    ) -> io::Result<()> {
+    ) -> Ask<()> {
         self.act_on_project(project, |project| ProjectAction::ReplaceDirectory {
             project,
             index,
@@ -1648,18 +1658,18 @@ impl Cockpit {
         &mut self,
         project: ProjectKey,
         index: usize,
-    ) -> io::Result<()> {
+    ) -> Ask<()> {
         self.act_on_project(project, |project| ProjectAction::RemoveDirectory {
             project,
             index,
         })
     }
 
-    pub fn remove_project(&mut self, project: ProjectKey) -> io::Result<()> {
+    pub fn remove_project(&mut self, project: ProjectKey) -> Ask<()> {
         self.act_on_project(project, |project| ProjectAction::Remove { project })
     }
 
-    pub fn rename_project(&mut self, project: ProjectKey, title: &str) -> io::Result<()> {
+    pub fn rename_project(&mut self, project: ProjectKey, title: &str) -> Ask<()> {
         self.act_on_project(project, |project| ProjectAction::Rename {
             project,
             title: title.to_string(),
@@ -1693,12 +1703,16 @@ impl Cockpit {
     /// end as they settle, so the next start runs the new release, and its
     /// models are asked for again.
     pub fn cli_replaced(&mut self, machine: MachineId, provider: Provider) {
-        if let Err(error) = self.act_at(machine, Op::CliReplaced { provider }) {
-            crate::log!(
-                "the server did not hear of the new {provider} CLI: {}",
-                error.message
-            );
-        }
+        // Nothing follows the answer but its log line.
+        let _ = self.ask_at(machine, Op::CliReplaced { provider }, move |reply| {
+            if let Err(error) = &reply {
+                crate::log!(
+                    "the server did not hear of the new {provider} CLI: {}",
+                    error.message
+                );
+            }
+            done(reply)
+        });
     }
 
     /// Open a Thread on `machine`, which the window holds.
