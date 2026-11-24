@@ -18,13 +18,15 @@
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::protocol::{self, ClientMessage, ErrorCode, ServerMessage, WireInput, WireRecord};
+use crate::protocol::{
+    self, ClientMessage, Command, Done, ErrorCode, Op, ServerMessage, WireInput, WireRecord,
+};
 use crate::ThreadId;
 
 #[cfg(unix)]
@@ -848,6 +850,40 @@ impl Client {
             return self.enqueue_capture_stream(message.clone());
         }
         send(&mut self.writer, message)
+    }
+
+    /// Send `op` as command `id` and wait up to `patience` for its reply,
+    /// passing over whatever else the Server says: for a connection of its
+    /// own that carries one kind of act, such as a transfer's.
+    pub fn ask(&mut self, id: u64, op: Op, patience: Duration) -> io::Result<Option<Done>> {
+        self.send(&ClientMessage::Command(Command { id, op }))?;
+        let deadline = Instant::now() + patience;
+        loop {
+            match self
+                .messages
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
+                Ok(ServerMessage::Reply { id: answered, ok, error }) if answered == id => {
+                    return match error {
+                        Some(error) => Err(error.into()),
+                        None => Ok(ok),
+                    };
+                }
+                Ok(_) => {}
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "The server did not answer in time",
+                    ))
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotConnected,
+                        "The connection to the server closed",
+                    ))
+                }
+            }
+        }
     }
 
     /// Start an ordered writer for large captures. Once started, all later

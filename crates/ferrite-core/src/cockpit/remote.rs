@@ -588,8 +588,14 @@ impl Remote {
         })
     }
 
-    fn attachment_connection(&self) -> io::Result<impl FnOnce() -> io::Result<crate::attachment_transfer::Exchange> + Send + 'static> {
-        let expected_boot = self.attachment.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, &*self.detached))?.boot_id.clone();
+    /// A connection of its own to this Server, attached when the returned
+    /// function runs, for a transfer that must neither wait behind the
+    /// window's acts nor hold them up. Its endpoint goes with it: a
+    /// machine's bridge carries it.
+    fn side_connection(&self) -> io::Result<impl FnOnce() -> io::Result<(link::Attached, Endpoint)> + Send + 'static> {
+        if self.attachment.is_none() {
+            return Err(io::Error::new(io::ErrorKind::NotConnected, &*self.detached));
+        }
         let endpoint = self.attach.server.clone();
         let store = self.attach.store.clone();
         let hello = ClientMessage::Hello {
@@ -597,8 +603,14 @@ impl Remote {
             client: self.attach.client.clone(),
             capabilities: Vec::new(),
         };
+        Ok(move || Ok((attach_to(&store, &endpoint, hello)?, endpoint)))
+    }
+
+    fn attachment_connection(&self) -> io::Result<impl FnOnce() -> io::Result<crate::attachment_transfer::Exchange> + Send + 'static> {
+        let expected_boot = self.attachment.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, &*self.detached))?.boot_id.clone();
+        let connect = self.side_connection()?;
         Ok(move || {
-            let attached = attach_to(&store, &endpoint, hello)?;
+            let (attached, endpoint) = connect()?;
             if attached.snapshot.boot_id != expected_boot {
                 return Err(io::Error::new(io::ErrorKind::NotConnected, "The attachment server changed. Reconnect and retry."));
             }
@@ -607,22 +619,9 @@ impl Remote {
             Ok(Box::new(move |request| {
                 let _route = &endpoint;
                 next += 1;
-                client.send(&ClientMessage::Command(Command { id: next, op: Op::Attachment { request } }))?;
-                let deadline = Instant::now() + Duration::from_secs(30);
-                loop {
-                    let remaining = deadline.saturating_duration_since(Instant::now());
-                    match client.messages.recv_timeout(remaining) {
-                        Ok(ServerMessage::Reply { id, ok, error }) if id == next => {
-                            if let Some(error) = error { return Err(error.into()); }
-                            return match ok {
-                                Some(Done::Attachment { reply }) => Ok(reply),
-                                _ => Err(io::Error::new(io::ErrorKind::InvalidData, "The server did not answer the attachment operation")),
-                            };
-                        }
-                        Ok(_) => {},
-                        Err(RecvTimeoutError::Timeout) => return Err(io::Error::new(io::ErrorKind::TimedOut, "Attachment transfer timed out")),
-                        Err(RecvTimeoutError::Disconnected) => return Err(io::Error::new(io::ErrorKind::NotConnected, "Attachment connection closed")),
-                    }
+                match client.ask(next, Op::Attachment { request }, Duration::from_secs(30))? {
+                    Some(Done::Attachment { reply }) => Ok(reply),
+                    _ => Err(io::Error::new(io::ErrorKind::InvalidData, "The server did not answer the attachment operation")),
                 }
             }) as crate::attachment_transfer::Exchange)
         })
