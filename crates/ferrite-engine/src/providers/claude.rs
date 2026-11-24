@@ -1,0 +1,1507 @@
+//! Claude provider: the pinned `claude` CLI spoken over stdio stream-json.
+//!
+//! Spawn checks the CLI version pin before any process serves a Thread;
+//! a reader thread parses stdout lines into SessionEvents on a bounded
+//! channel. Backpressure is stated and simple: when the channel is full the
+//! reader thread blocks, the pipe fills, and the CLI stalls — nothing is
+//! dropped.
+
+mod activity;
+pub(super) mod discovery;
+mod drafts;
+mod file_search;
+mod mcp;
+mod menu;
+mod queue;
+mod rewind;
+mod shell_output;
+mod skill_mentions;
+mod suggestions;
+pub(super) mod wire;
+
+use ferrite_core::spawn::{AgentEnvironment, NoConsoleWindow};
+use std::collections::HashMap;
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::PathBuf;
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use ferrite_core::activity::AgentKey;
+use ferrite_core::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
+
+use super::{FileSearchReply, ForkAck, ForkRequest, RewindAck, RewindRequest, SettingAck};
+
+/// Minimum `claude` CLI version for stable stream-json + stdio control
+/// protocol. Vendor releases below this break loudly at spawn, not weirdly
+/// mid-turn.
+pub const CLAUDE_CLI_MIN_VERSION: [u64; 3] = [2, 1, 224];
+
+/// Soft ceiling: Ferrite is proven against the 2.x wire, and a new major may
+/// be a new protocol until someone re-runs the fixture captures against it.
+/// A 3.x CLI still spawns — refusing it would strand the operator on old
+/// models until Ferrite ships — but spawn says it is untested, and Settings
+/// marks it, so a turn that fails oddly has a named suspect.
+pub const CLAUDE_CLI_TESTED_BELOW: [u64; 3] = [3, 0, 0];
+
+/// The window as it is shown to operators.
+const MIN_VERSION_DISPLAY: &str = "2.1.224";
+const TESTED_BELOW_DISPLAY: &str = "3.0.0";
+
+/// One frame of UI drains far less than this; the depth exists so a stalled
+/// frame throttles the CLI instead of losing its output.
+const EVENT_CHANNEL_CAPACITY: usize = 1024;
+
+/// Enough stderr to explain a crash, bounded so a chatty CLI cannot grow
+/// memory for the life of a Session.
+const STDERR_TAIL_LINES: usize = 20;
+
+/// How long spawn waits for the initialize control response. Measured against
+/// `claude` 2.1.243, which answers in well under a second from a cold start;
+/// the budget is generous because overrunning it costs only unknown
+/// capabilities, never a failed spawn.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The request id spawn uses for the handshake, before any operator traffic.
+const HANDSHAKE_REQUEST_ID: &str = "req_1";
+/// The request that builds the CLI's file index (`warm_file_index`).
+const FILE_INDEX_REQUEST_ID: &str = "ferrite_file_index";
+
+/// How to spawn a Claude Session.
+#[derive(Debug, Clone)]
+pub struct ClaudeConfig {
+    /// Program to exec. Tests point this at a stub binary.
+    pub program: String,
+    /// Working directory for the CLI process (the Thread's workspace binding).
+    pub cwd: Option<PathBuf>,
+    /// Project roots exposed in addition to the process working directory.
+    pub additional_directories: Vec<PathBuf>,
+    /// Model override passed through to the CLI.
+    pub model: Option<String>,
+    /// Reasoning effort (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`),
+    /// passed as `--effort` (`thinking_args`). `None` leaves the CLI's own
+    /// default.
+    pub effort: Option<String>,
+    /// Native generation is configured at process start.
+    pub prompt_suggestions: bool,
+    /// The Thread's title, handed to the CLI as the session's display name
+    /// (`--name`) so its own session list reads like Ferrite's. Later title
+    /// changes use the native rename control request.
+    pub name: Option<String>,
+    /// Permission posture for this Thread (`"default"`, `"acceptEdits"`,
+    /// `"plan"`, …). `None` leaves the CLI's own configuration alone — which
+    /// on a machine configured to bypass permissions means no Decision will
+    /// ever arrive. `capabilities().permission_mode` reports what took effect.
+    pub permission_mode: Option<String>,
+    /// Resume this provider-native session id (from a previous Session's
+    /// `Init`) instead of starting fresh: the CLI reloads the conversation
+    /// from its own session files. Probed on 2.1.243: the resumed process
+    /// announces the *same* session id in its init line, so the target stays
+    /// stable across any number of resumes.
+    pub resume: Option<String>,
+    /// With `resume`: keep the conversation only up to and including its
+    /// entry with this uuid (`--resume-session-at`), the way a rewind or a
+    /// fork is resumed when the CLI cannot cut in place.
+    pub resume_at: Option<String>,
+    /// With `resume_at`, a rewind's: the prompt whose turn the cut means
+    /// to drop (`--resume-drops-turn`, HD79). The CLI refuses the resume
+    /// when the dropped entries hold anything else — a message the turn
+    /// absorbed mid-way, a task's notification — so nothing goes silently.
+    pub resume_drops: Option<String>,
+    /// With `resume`: continue it as a new session of its own
+    /// (`--fork-session`), leaving the original as it was.
+    pub fork: bool,
+    /// Ferrite's own `show_visual` tool (`ferrite_core::visual`): the operator's
+    /// level and the app's renderer. `None`, or a level of Off, offers
+    /// nothing. Fixed for the Session: the CLI lists its tools once.
+    pub visuals: Option<ferrite_core::visual::Visuals>,
+    /// Trusted browser capability bound to this Session's Thread.
+    pub browser: Option<ferrite_core::browser::ThreadClient>,
+    /// A Worker's or Coordinator's Factory tools, bound to its Thread.
+    pub api_tools: Option<crate::api::tools::ThreadTools>,
+    /// What Ferrite tells this Session beyond the operator's words, as the
+    /// CLI's appended system prompt: never a message in its transcript. It
+    /// rides the handshake, so it may hold any text.
+    pub instructions: Option<String>,
+    /// Ferrite's caller context for the agent (`api::caller_environment`):
+    /// set over whatever the CLI inherited, after the Thread's own
+    /// (`thread.start --env`).
+    pub env: Vec<(String, std::ffi::OsString)>,
+    /// The program the CLI is run through, and its arguments
+    /// (`thread.start --launcher`); empty runs it directly.
+    pub launcher: Vec<String>,
+    /// Extra arguments, after Ferrite's own (`thread.start --args`).
+    pub args: Vec<String>,
+    /// How long spawn waits for the initialize answer: five seconds,
+    /// shorter in a test.
+    pub handshake_timeout: Duration,
+}
+
+impl Default for ClaudeConfig {
+    fn default() -> Self {
+        Self {
+            program: "claude".into(),
+            cwd: None,
+            additional_directories: Vec::new(),
+            model: None,
+            effort: None,
+            prompt_suggestions: false,
+            name: None,
+            permission_mode: None,
+            resume: None,
+            resume_at: None,
+            resume_drops: None,
+            fork: false,
+            visuals: None,
+            browser: None,
+            api_tools: None,
+            instructions: None,
+            env: Vec::new(),
+            launcher: Vec::new(),
+            args: Vec::new(),
+            handshake_timeout: HANDSHAKE_TIMEOUT,
+        }
+    }
+}
+
+/// Spawn failed before a Session existed.
+#[derive(Debug)]
+pub enum ClaudeSpawnError {
+    /// The CLI program was not found on this machine.
+    CliNotFound {
+        program: String,
+    },
+    /// The CLI is older than the pin. The operator upgrades the CLI.
+    CliVersionUnmet {
+        found: String,
+        required: &'static str,
+    },
+    /// `--version` ran but produced nothing parseable.
+    VersionCheckFailed {
+        detail: String,
+    },
+    /// The CLI exited before it was up, and why, as its stderr said
+    /// ("Session ID … is already in use").
+    Exited {
+        reason: String,
+    },
+    Io(io::Error),
+}
+
+impl std::fmt::Display for ClaudeSpawnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClaudeSpawnError::CliNotFound { program } => {
+                write!(f, "claude CLI not found: `{program}`")
+            }
+            ClaudeSpawnError::CliVersionUnmet { found, required } => {
+                write!(
+                    f,
+                    "claude CLI {found} is older than the pinned minimum {required}; \
+                     upgrade the CLI"
+                )
+            }
+            ClaudeSpawnError::VersionCheckFailed { detail } => {
+                write!(f, "claude CLI version check failed: {detail}")
+            }
+            ClaudeSpawnError::Exited { reason } => write!(f, "{reason}"),
+            ClaudeSpawnError::Io(e) => write!(f, "io error spawning claude CLI: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ClaudeSpawnError {}
+
+/// What the CLI answered at initialize: feature detection, so a Pane never
+/// offers what this install cannot do.
+///
+/// Only what Ferrite acts on is kept; the response also carries the CLI's
+/// slash commands, subagents and output styles, which nothing reads yet.
+/// Note what is *not* here: the `interrupt_receipt_v1` family of capability
+/// tokens is announced on the `system:init` line at the head of a turn, not in
+/// this handshake, so it cannot be known before the first prompt.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ClaudeCapabilities {
+    /// The permission mode the CLI started in. `"bypassPermissions"` means no
+    /// Decision will ever arrive; every other mode means they can.
+    pub permission_mode: String,
+    /// Model values this install offers (`"haiku"`, `"opus[1m]"`, …) — the
+    /// menu an operator may pick from, not what Ferrite hardcodes.
+    pub models: Vec<ferrite_core::ModelInfo>,
+    /// The CLI's effective slash-command menu — built-ins, skills, project
+    /// commands and plugins in one list, disabled overrides already honoured
+    /// (#23). The reader announces it as `SessionEvent::Commands`; submitting
+    /// `/name args` as plain prompt text is how one is invoked. MCP prompts
+    /// are missing here — their servers have not connected this early —
+    /// and join by a later `Commands` once they have (see `menu`).
+    pub commands: Vec<ferrite_core::SessionCommand>,
+    /// The account's plan (`account.subscriptionType`, `Claude Max` read
+    /// as `Max`), for the usage popover's head.
+    pub plan: Option<String>,
+}
+
+type SettingReply = Arc<Mutex<Option<(String, SyncSender<io::Result<()>>)>>>;
+type ControlReplies = Arc<Mutex<HashMap<String, SessionControl>>>;
+
+/// A live Claude Session: one CLI process serving one Thread.
+pub struct ClaudeSession {
+    child: Arc<Mutex<Child>>,
+    /// The Session's whole process tree. An npm `.cmd` install makes `child`
+    /// cmd.exe with the real CLI beneath it; the job is how kill reaches the
+    /// CLI and how the watchdog learns which pid to meter.
+    #[cfg(windows)]
+    job: super::job::SessionJob,
+    /// Held open for the life of the Session: closing it ends the Session,
+    /// so multi-turn depends on this staying alive.
+    stdin: Arc<Mutex<ChildStdin>>,
+    cwd: Option<PathBuf>,
+    events: Receiver<SessionEvent>,
+    capabilities: ClaudeCapabilities,
+    setting_reply: SettingReply,
+    control_replies: ControlReplies,
+    decoder: Arc<Mutex<activity::Decoder>>,
+    requests: Arc<Mutex<wire::Requests>>,
+    queue: Arc<Mutex<queue::Queue>>,
+    next_request_id: u64,
+    suggestions: Arc<Mutex<suggestions::Inbox>>,
+    skills: Arc<Mutex<skill_mentions::Skills>>,
+    file_search: Arc<Mutex<file_search::Requests>>,
+    rewinds: Arc<Mutex<rewind::Rewinds>>,
+}
+
+impl ClaudeSession {
+    /// Version-check the CLI, then spawn it in stream-json mode.
+    pub fn spawn(config: ClaudeConfig) -> Result<Self, ClaudeSpawnError> {
+        // On Windows an npm install is a `claude.cmd` shim a bare name
+        // cannot exec; everything spawns through the resolved answer.
+        let program = ferrite_core::spawn::spawnable_program(&config.program);
+        check_version(&program)?;
+
+        let mut command = super::launched(&config.launcher, &program);
+        // Print mode emits these only when asked; the SDK sets them for its
+        // hosts. Set first so a
+        // Thread's own env can override them.
+        // The CLI's own checklist tools stay as the CLI decides (off for
+        // current models in print mode, verified on 2.1.318): the plan is
+        // Ferrite's `update_plan`, as in Claude's app, and one plan at a time.
+        command.envs([
+            ("CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES", "1"),
+            ("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1"),
+            // File checkpoints for rewind:
+            // on from now so later rewinds can restore files.
+            ("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "1"),
+        ]);
+        command.envs(config.env.iter().cloned());
+        command.args([
+            "-p",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+            "--forward-subagent-text",
+            "--verbose",
+            // Route tool permissions to Ferrite over the control protocol
+            // instead of letting the CLI answer them alone. A cockpit whose
+            // whole job is surfacing Decisions cannot leave this to config.
+            // Undocumented in `--help` on 2.1.243; `stdio` is the magic value
+            // that means "ask the host on stdin", verified by capture.
+            "--permission-prompt-tool",
+            "stdio",
+        ]);
+        command.args(thinking_args(config.effort.as_deref()));
+        command.args([
+            "--prompt-suggestions",
+            if config.prompt_suggestions {
+                "true"
+            } else {
+                "false"
+            },
+        ]);
+        if let Some(session_id) = &config.resume {
+            // Continue the named conversation instead of starting one. The
+            // CLI reloads history from its own session files; probed on
+            // 2.1.243, the resumed process keeps the same session id.
+            command.args(["--resume", session_id.as_str()]);
+            if let Some(at) = &config.resume_at {
+                command.args(["--resume-session-at", at.as_str()]);
+                if let Some(prompt) = &config.resume_drops {
+                    command.args(["--resume-drops-turn", prompt.as_str()]);
+                }
+            }
+            if config.fork {
+                command.arg("--fork-session");
+            }
+        }
+        if let Some(model) = &config.model {
+            command.args(["--model", model.as_str()]);
+        }
+        if let Some(mode) = &config.permission_mode {
+            command.args(["--permission-mode", mode.as_str()]);
+        }
+        if let Some(name) = config
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
+            command.args(["--name", name]);
+        }
+        if let Some(cwd) = &config.cwd {
+            command.current_dir(cwd);
+        }
+        for directory in &config.additional_directories {
+            command.arg("--add-dir").arg(directory);
+        }
+        // Ferrite's own tools are never a Decision: pre-allowed, so no
+        // permission mode asks for them (verified on 2.1.292 in `default`).
+        command.args(["--allowedTools", ferrite_core::wrap_up::CLAUDE_NAME]);
+        command.args(["--allowedTools", ferrite_core::update_plan::CLAUDE_NAME]);
+        if mcp::Server::offered(config.visuals.as_ref()) {
+            command.args(["--allowedTools", ferrite_core::visual::CLAUDE_NAME]);
+        }
+        if config.browser.is_some() {
+            command.args(["--allowedTools", ferrite_core::browser::tools::CLAUDE_NAME]);
+        }
+        for definition in config
+            .api_tools
+            .iter()
+            .flat_map(|tools| tools.definitions())
+        {
+            command.args(["--allowedTools", &mcp::claude_name(&definition.name)]);
+        }
+        command.args(&config.args);
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| spawn_error(&program, e))?;
+
+        // Into the job as CreateProcess returns — in practice before a
+        // `.cmd` shim's cmd.exe has executed a line, though nothing suspends
+        // the child, so a CLI it somehow started first would sit outside the
+        // job (accepted residual risk; airtight needs CREATE_SUSPENDED,
+        // which std does not expose). A Session whose kill cannot work is
+        // refused.
+        #[cfg(windows)]
+        let job =
+            super::job::SessionJob::assign_or_reap(&mut child).map_err(ClaudeSpawnError::Io)?;
+
+        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("stdin was piped")));
+        let stdout = child.stdout.take().expect("stdout was piped");
+        let stderr = child.stderr.take().expect("stderr was piped");
+
+        let stderr_tail = Arc::new(Mutex::new(StderrTail::default()));
+        drain_stderr(stderr, Arc::clone(&stderr_tail));
+
+        let (sender, events) = ferrite_core::doorbell::sync_channel(EVENT_CHANNEL_CAPACITY);
+        let child = Arc::new(Mutex::new(child));
+        let setting_reply = Arc::new(Mutex::new(None));
+        let control_replies = Arc::new(Mutex::new(HashMap::new()));
+        let decoder = Arc::new(Mutex::new(activity::Decoder::default()));
+        let requests = Arc::new(Mutex::new(wire::Requests::default()));
+        let queue = Arc::new(Mutex::new(queue::Queue::default()));
+        let mut inbox = suggestions::Inbox::default();
+        inbox.configure(config.prompt_suggestions);
+        let suggestions = Arc::new(Mutex::new(inbox));
+        let skills = Arc::new(Mutex::new(skill_mentions::Skills::default()));
+        let file_search = Arc::new(Mutex::new(file_search::Requests::default()));
+        let rewinds = Arc::new(Mutex::new(rewind::Rewinds::default()));
+        let server = mcp::Server::new(
+            config.visuals.clone(),
+            config.browser.clone(),
+            config.api_tools.clone(),
+            Arc::clone(&stdin),
+        );
+        let capabilities = read_stdout(
+            stdout,
+            sender,
+            Arc::clone(&child),
+            Arc::clone(&stderr_tail),
+            setting_reply.clone(),
+            control_replies.clone(),
+            Arc::clone(&stdin),
+            decoder.clone(),
+            requests.clone(),
+            queue.clone(),
+            suggestions.clone(),
+            skills.clone(),
+            file_search.clone(),
+            rewinds.clone(),
+            server,
+        );
+
+        let mut session = Self {
+            child,
+            #[cfg(windows)]
+            job,
+            stdin,
+            cwd: config.cwd.clone(),
+            events,
+            capabilities: ClaudeCapabilities::default(),
+            setting_reply,
+            control_replies,
+            decoder,
+            requests,
+            queue,
+            next_request_id: 1,
+            suggestions,
+            skills,
+            file_search,
+            rewinds,
+        };
+        // Before the operator is offered anything: ask the CLI what it can do.
+        // A write failure here is a CLI that died on startup, which the reader
+        // thread is already turning into a Closed event — spawn still hands
+        // back a Session so that reason reaches the Pane.
+        let id = session.take_request_id();
+        debug_assert_eq!(id, HANDSHAKE_REQUEST_ID);
+        // `perTaskStopAffordance` says this host stops a background task by
+        // `stop_task` (the shelf's ×, a Subagent tab's escape). Without it the
+        // CLI fails closed: an interrupt also kills every background agent and
+        // workflow (2.1.299, `per_task_stop_sparing`, confirmed by capture).
+        // With it, an interrupt aborts only Main's turn.
+        // `agentProgressSummaries`: a periodic model-written line per running
+        // agent (~30 s), shown as the task's progress summary.
+        let mut initialize = serde_json::json!({
+            "subtype": "initialize",
+            "perTaskStopAffordance": true,
+            "agentProgressSummaries": true,
+        });
+        // The in-band server (`mcp`): the CLI tunnels its MCP traffic back
+        // over this pipe, starting before it answers this request.
+        initialize["sdkMcpServers"] = serde_json::json!([ferrite_core::visual::SERVER]);
+        // Over the pipe, never as an argument: Windows refuses to start a
+        // `.cmd` shim, which an npm install of the CLI is, with a line break
+        // in an argument ("batch file arguments are invalid"). Verified by
+        // capture on 2.1.329.
+        if let Some(instructions) = &config.instructions {
+            initialize["appendSystemPrompt"] = instructions.as_str().into();
+        }
+        let _ = session.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": id,
+            "request": initialize,
+        }));
+        // A CLI that closes its output before answering exited at start
+        // ("Session ID … is already in use"): the start fails with what it
+        // said. One that is only slow is not dead, and starts unknowing.
+        session.capabilities = match capabilities.recv_timeout(config.handshake_timeout) {
+            Ok(capabilities) => capabilities,
+            Err(RecvTimeoutError::Timeout) => ClaudeCapabilities::default(),
+            Err(RecvTimeoutError::Disconnected) => {
+                let error = io::Error::other("the CLI closed before its handshake");
+                return Err(exited_at_start(&session.child, &stderr_tail, error));
+            }
+        };
+        Ok(session)
+    }
+
+    /// A later effort, as T3 Code changes one: the SDK's applyFlagSettings
+    /// control, effective from the next turn. It holds once the CLI accepts
+    /// it, so a rejected setting cannot look successful. `None` clears the
+    /// override, and the CLI goes back to the effort it starts at without
+    /// `--effort` (measured on 2.1.330; T3 restarts the process instead).
+    pub fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
+        self.set_setting(serde_json::json!({
+            "subtype": "apply_flag_settings",
+            "settings": {"effortLevel": effort},
+        }))
+    }
+
+    /// Select a model through Claude's native control protocol; it holds
+    /// once the CLI acknowledges it.
+    pub fn set_model(&mut self, model: Option<&str>) -> io::Result<SettingAck> {
+        self.set_setting(serde_json::json!({"subtype": "set_model", "model": model}))
+    }
+
+    pub fn permission_modes(&self) -> Vec<PermissionModeChoice> {
+        // The CLI enters bypass only when it was launched in it (2.1.289
+        // refuses `set_permission_mode` to it otherwise: "Cannot set
+        // permission mode to bypassPermissions…"), so a Session that began
+        // elsewhere never offers it — ⇧⇥ would step onto a refusal.
+        let bypass = self.capabilities.permission_mode == "bypassPermissions";
+        [
+            ("default", "Default"),
+            ("acceptEdits", "Accept edits"),
+            ("plan", "Plan"),
+            ("dontAsk", "Don't ask"),
+            ("bypassPermissions", "Bypass permissions"),
+            ("auto", "Auto"),
+        ]
+        .into_iter()
+        .filter(|(value, _)| bypass || *value != "bypassPermissions")
+        .map(|(value, label)| PermissionModeChoice {
+            value: value.into(),
+            label: label.into(),
+        })
+        .collect()
+    }
+
+    pub fn supports_control(&self, kind: ControlKind) -> bool {
+        matches!(
+            kind,
+            ControlKind::RefreshContext
+                | ControlKind::RefreshMcp
+                | ControlKind::ReconnectMcp
+                | ControlKind::StopTask
+                | ControlKind::BackgroundTasks
+                | ControlKind::SetPermissionMode
+                | ControlKind::Rewind
+                | ControlKind::RewindFiles
+        )
+    }
+
+    pub fn control(&mut self, action: SessionControl) -> io::Result<()> {
+        let (request, pending) = match action {
+            SessionControl::LoginMcp { .. } | SessionControl::ReloadMcp => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "Claude does not support this control",
+                ));
+            }
+            SessionControl::RefreshContext => (
+                serde_json::json!({"subtype": "get_context_usage", "detail": "summary"}),
+                SessionControl::RefreshContext,
+            ),
+            SessionControl::RefreshMcp => (
+                serde_json::json!({"subtype": "mcp_status"}),
+                SessionControl::RefreshMcp,
+            ),
+            SessionControl::ReconnectMcp { server } => (
+                serde_json::json!({"subtype": "mcp_reconnect", "serverName": server}),
+                SessionControl::ReconnectMcp { server },
+            ),
+            SessionControl::StopTask { id } => (
+                serde_json::json!({"subtype": "stop_task", "task_id": id}),
+                SessionControl::StopTask { id },
+            ),
+            SessionControl::BackgroundTasks => (
+                serde_json::json!({"subtype": "background_tasks"}),
+                SessionControl::BackgroundTasks,
+            ),
+            SessionControl::SetPermissionMode { mode } => (
+                serde_json::json!({"subtype": "set_permission_mode", "mode": mode}),
+                SessionControl::SetPermissionMode { mode },
+            ),
+        };
+        let id = self.take_request_id();
+        let mut replies = lock(&self.control_replies);
+        if replies.len() >= 128 {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "too many native controls are pending",
+            ));
+        }
+        replies.insert(id.clone(), pending);
+        drop(replies);
+        if let Err(error) = self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": id.clone(),
+            "request": request,
+        })) {
+            lock(&self.control_replies).remove(&id);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Ask the CLI for a setting change; the reader thread answers the
+    /// ack with the CLI's reply. A newer change takes the reply slot, and
+    /// the older ack then reads as never answered.
+    fn set_setting(&mut self, request: serde_json::Value) -> io::Result<SettingAck> {
+        let request_id = self.take_request_id();
+        let (tx, rx) = sync_channel(1);
+        *lock(&self.setting_reply) = Some((request_id.clone(), tx));
+        if let Err(error) = self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": request_id,
+            "request": request,
+        })) {
+            *lock(&self.setting_reply) = None;
+            return Err(error);
+        }
+        Ok(rx)
+    }
+
+    /// Rename the live native session so the CLI's own session list carries
+    /// the Thread's title.
+    pub fn set_name(&mut self, name: &str) -> io::Result<()> {
+        let request_id = self.take_request_id();
+        self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": request_id,
+            "request": {"subtype": "rename_session", "title": name},
+        }))
+    }
+
+    /// Visibility changes immediately. The CLI's generation opt-in is
+    /// spawn-time only; reopening the Session applies the new setting.
+    pub fn set_suggestions_enabled(&mut self, enabled: bool) -> io::Result<()> {
+        let mut inbox = lock(&self.suggestions);
+        if inbox.enabled != enabled {
+            inbox.configure(enabled);
+        }
+        Ok(())
+    }
+
+    pub fn take_suggestion(&mut self) -> Option<String> {
+        lock(&self.suggestions).take()
+    }
+
+    /// Ask the live CLI for ranked paths. A newer query cancels the previous
+    /// receiver locally; the control response is consumed by the reader.
+    pub fn search_files(&mut self, query: &str, reply: FileSearchReply) -> io::Result<()> {
+        let id = self.take_request_id();
+        lock(&self.file_search).begin(id.clone(), reply);
+        if let Err(error) = self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": id.clone(),
+            "request": {"subtype": "file_suggestions", "query": query},
+        })) {
+            lock(&self.file_search).discard(&id);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// The CLI starts building its file index at the first file search and
+    /// answers that one from the index as it stands, so a fresh process
+    /// finds nothing (2.1.329). The app's spawner asks once as the Session
+    /// starts, so the operator's first `@` finds the index built. The answer
+    /// is dropped; a write that fails is a CLI that died, which the reader
+    /// reports. Its own request id leaves the numbered ones as they were.
+    pub fn warm_file_index(&mut self) {
+        let id = FILE_INDEX_REQUEST_ID.to_string();
+        lock(&self.file_search).warm(id.clone());
+        let _ = self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": id,
+            "request": {"subtype": "file_suggestions", "query": ""},
+        }));
+    }
+
+    /// Send one user prompt; the CLI starts (or queues) a turn.
+    pub fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
+        {
+            let mut queue = lock(&self.queue);
+            if !queue.supported {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "Claude has not announced native queue lifecycle support",
+                ));
+            }
+            queue.submitted.insert(client_id.into(), text.into());
+        }
+        lock(&self.suggestions).sent();
+        self.write_line(&serde_json::json!({
+            "type":"user", "uuid":client_id, "isAsync":true,
+            "message":{"role":"user","content":wire::input_content(text,&lock(&self.skills),self.cwd.as_deref())}
+        }))
+    }
+
+    pub fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+        let request_id = self.take_request_id();
+        lock(&self.queue)
+            .cancellations
+            .insert(request_id.clone(), id.into());
+        self.write_line(&serde_json::json!({
+            "type":"control_request", "request_id":request_id,
+            "request":{"subtype":"cancel_async_message","message_uuid":id}
+        }))
+    }
+
+    pub fn send(&mut self, text: &str) -> io::Result<()> {
+        lock(&self.suggestions).sent();
+        self.write_line(&serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": wire::input_content(text, &lock(&self.skills), self.cwd.as_deref()),
+            },
+        }))
+    }
+
+    /// Send one prompt under `uuid`, which the CLI keeps as its message's
+    /// own: what a rewind or a fork names the prompt by.
+    pub fn send_as(&mut self, uuid: &str, text: &str) -> io::Result<()> {
+        lock(&self.suggestions).sent();
+        self.write_line(&serde_json::json!({
+            "type": "user",
+            "uuid": uuid,
+            "message": {
+                "role": "user",
+                "content": wire::input_content(text, &lock(&self.skills), self.cwd.as_deref()),
+            },
+        }))
+    }
+
+    /// Cut the conversation back to before the prompt `request` names,
+    /// its files first when asked (`rewind`); answered on the ack.
+    pub fn rewind(&mut self, request: RewindRequest) -> io::Result<RewindAck> {
+        let request_id = self.take_request_id();
+        let (reply, ack) = sync_channel(1);
+        let line = lock(&self.rewinds).begin(request_id, request, reply);
+        self.write_line(&line)?;
+        Ok(ack)
+    }
+
+    /// Where a fork starts: its session resumed at the entry before the
+    /// prompt `request` names, or at its end, forked; answered at once.
+    pub fn fork(&mut self, request: ForkRequest) -> io::Result<ForkAck> {
+        let forked = rewind::fork(&request)?;
+        let (reply, ack) = sync_channel(1);
+        let _ = reply.send(Ok(forked));
+        Ok(ack)
+    }
+
+    /// Stop one Subagent and nothing else: `stop_task` with its task id.
+    pub fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
+        let id = lock(&self.decoder).task_of(key).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "this subagent has no task to stop")
+        })?;
+        self.control(SessionControl::StopTask { id })
+    }
+
+    /// Interrupt Main's running turn over the stdio control protocol.
+    /// Background agents, workflows and tasks survive it: the handshake
+    /// declared `perTaskStopAffordance`.
+    pub fn interrupt(&mut self) -> io::Result<()> {
+        let request_id = self.take_request_id();
+        self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": request_id,
+            "request": {"subtype": "interrupt"},
+        }))
+    }
+
+    /// What the CLI said it can do, answered at spawn. Empty when this install
+    /// did not answer the handshake — unknown, never assumed.
+    pub fn capabilities(&self) -> &ClaudeCapabilities {
+        &self.capabilities
+    }
+
+    /// Answer a `DecisionRequested`, quoting the id it arrived with.
+    ///
+    /// The CLI blocks the turn until this lands: `Allow` runs the tool,
+    /// `Deny` feeds the message back as the tool's error and the turn carries
+    /// on. Unlike `interrupt`, the request id is the CLI's, not Ferrite's —
+    /// this is a response to its question, so it must not be renumbered.
+    pub fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
+        let body = lock(&self.requests).response(id, &answer).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "Decision is not pending")
+        })??;
+        // Serialize response bookkeeping with stdout decoding: a progress or
+        // cancellation frame can arrive as soon as this write reaches the CLI.
+        let decoder = self.decoder.clone();
+        let mut decoder = lock(&decoder);
+        self.write_line(&serde_json::json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": id,
+                "response": body,
+            },
+        }))?;
+        lock(&self.requests).resolved(id);
+        decoder.decision_resolved(id);
+        Ok(())
+    }
+
+    /// The process this Session runs, for a watchdog counting its memory.
+    #[cfg(not(windows))]
+    pub fn pid(&self) -> Option<u32> {
+        self.child.lock().ok().map(|child| child.id())
+    }
+
+    /// The process the watchdog should meter. Under an npm `.cmd` shim the
+    /// child is a ~5MB cmd.exe and the CLI leaks beneath it, so the job
+    /// answers with the wrapper's child instead.
+    #[cfg(windows)]
+    pub fn pid(&self) -> Option<u32> {
+        let wrapper = self.child.lock().ok().map(|child| child.id())?;
+        Some(self.job.watchdog_pid(wrapper))
+    }
+
+    /// The bounded event stream. Poll with `try_recv`/`try_iter`; the UI
+    /// drains this per frame.
+    pub fn events(&self) -> &Receiver<SessionEvent> {
+        &self.events
+    }
+
+    /// Ferrite numbers its own control requests; the CLI's ids are its own and
+    /// are echoed back untouched (see `respond_to_decision`).
+    fn take_request_id(&mut self) -> String {
+        let id = format!("req_{}", self.next_request_id);
+        self.next_request_id += 1;
+        id
+    }
+
+    fn write_line(&mut self, value: &serde_json::Value) -> io::Result<()> {
+        write_stdin_line(&self.stdin, value)
+    }
+}
+
+impl Drop for ClaudeSession {
+    fn drop(&mut self) {
+        // A `.cmd` shim's Session is a tree; killing only the wrapper would
+        // orphan the CLI. The job takes all of it down, wrapper included.
+        #[cfg(windows)]
+        self.job.terminate();
+        let mut child = lock(&self.child);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+/// Returns the channel the initialize answer will arrive on. It is a channel
+/// rather than a return value because only this thread ever reads stdout:
+/// letting spawn read it directly would race the reader for lines.
+fn read_stdout(
+    stdout: ChildStdout,
+    sender: ferrite_core::doorbell::SyncSender<SessionEvent>,
+    child: Arc<Mutex<Child>>,
+    stderr_tail: Arc<Mutex<StderrTail>>,
+    setting_reply: SettingReply,
+    control_replies: ControlReplies,
+    stdin: Arc<Mutex<ChildStdin>>,
+    decoder: Arc<Mutex<activity::Decoder>>,
+    requests: Arc<Mutex<wire::Requests>>,
+    queue: Arc<Mutex<queue::Queue>>,
+    suggestions: Arc<Mutex<suggestions::Inbox>>,
+    skills: Arc<Mutex<skill_mentions::Skills>>,
+    file_search: Arc<Mutex<file_search::Requests>>,
+    rewinds: Arc<Mutex<rewind::Rewinds>>,
+    server: mcp::Server,
+) -> Receiver<ClaudeCapabilities> {
+    let (handshake, capabilities) = sync_channel(1);
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::new();
+        let mut handshake = Some(handshake);
+        let mut menu = menu::McpMenu::default();
+        let mut shells = shell_output::ShellOutputs::default();
+        loop {
+            match super::read_line(&mut reader, &mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            // Lossy rather than strict: a byte the CLI mangles must not end a
+            // Session.
+            let text = String::from_utf8_lossy(&line);
+            let text = text.trim_end();
+            let mut plan = Vec::new();
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+                // Read before the line is handed on; sent after its own
+                // events, so the plan moves once the call has settled.
+                plan = server.receipt(&value);
+                shells.observe(&value, &sender);
+                if lock(&file_search).observe(&value) {
+                    continue;
+                }
+                if lock(&rewinds).observe(&value, &stdin) {
+                    continue;
+                }
+                if server.observe(&value) {
+                    continue;
+                }
+                if let Some(refusal) = wire::refusal(&value) {
+                    // A failed write means the CLI is gone, which EOF reports.
+                    let _ = write_stdin_line(&stdin, &refusal);
+                    continue;
+                }
+                let queue_events = lock(&queue).observe(&value);
+                for event in queue_events {
+                    if sender.send(event).is_err() {
+                        return;
+                    }
+                }
+                lock(&suggestions).observe(&value);
+                lock(&skills).observe(&value);
+                lock(&requests).observe(&value);
+                let response = &value["response"];
+                // Released before any event is sent: `set_setting` takes this
+                // lock on the UI thread, the thread that drains the channel,
+                // so holding it while parked on a full channel would wait
+                // out a frame that can never come.
+                let setting = if value["type"] == "control_response" {
+                    let mut pending = lock(&setting_reply);
+                    let answers = pending.as_ref().is_some_and(|(id, _)| {
+                        response["request_id"].as_str() == Some(id.as_str())
+                    });
+                    answers.then(|| pending.take().expect("matched above").1)
+                } else {
+                    None
+                };
+                if let Some(reply) = setting {
+                    let result = if response["subtype"] == "success" {
+                        Ok(())
+                    } else {
+                        Err(io::Error::other(
+                            response["error"]
+                                .as_str()
+                                .unwrap_or("setting change refused"),
+                        ))
+                    };
+                    let _ = reply.send(result);
+                    continue;
+                }
+                if value["type"] == "system" && value["subtype"] == "init" {
+                    menu.init_line(&value, &stdin);
+                }
+                if value["type"] == "control_response" {
+                    if let Some(step) =
+                        menu.take(response["request_id"].as_str().unwrap_or_default())
+                    {
+                        if let Some(event) = menu.answered(step, text, &value, &stdin) {
+                            if sender.send(event).is_err() {
+                                return;
+                            }
+                        }
+                        continue;
+                    }
+                }
+                let control = lock(&control_replies)
+                    .remove(response["request_id"].as_str().unwrap_or_default());
+                if let Some(action) = control {
+                    if response["subtype"] != "success" {
+                        let message = response["error"].as_str().unwrap_or("control refused");
+                        let refused = [
+                            SessionEvent::ControlRefused {
+                                control: action,
+                                message: message.to_owned(),
+                            },
+                            SessionEvent::Activity(ferrite_core::activity::ActivityEvent::MainContent {
+                                id: None,
+                                event: ferrite_core::activity::ExecutionEvent::Notice {
+                                    text: format!("control failed: {message}"),
+                                },
+                            }),
+                        ];
+                        if refused.into_iter().any(|event| sender.send(event).is_err()) {
+                            return;
+                        }
+                        continue;
+                    }
+                    if matches!(action, SessionControl::ReconnectMcp { .. }) {
+                        let id = format!(
+                            "{}_mcp",
+                            response["request_id"].as_str().unwrap_or("req_unknown")
+                        );
+                        lock(&control_replies).insert(id.clone(), SessionControl::RefreshMcp);
+                        let request = serde_json::json!({
+                            "type": "control_request",
+                            "request_id": id,
+                            "request": {"subtype": "mcp_status"},
+                        });
+                        if let Err(error) = write_stdin_line(&stdin, &request) {
+                            lock(&control_replies)
+                                .remove(request["request_id"].as_str().unwrap_or_default());
+                            let _ = sender.send(SessionEvent::Activity(
+                                ferrite_core::activity::ActivityEvent::MainContent {
+                                    id: None,
+                                    event: ferrite_core::activity::ExecutionEvent::Notice {
+                                        text: format!("control failed: {error}"),
+                                    },
+                                },
+                            ));
+                        }
+                    }
+                    for event in control_events(&action, &response["response"]) {
+                        if sender.send(event).is_err() {
+                            return;
+                        }
+                    }
+                    continue;
+                }
+            }
+            if handshake.is_some() {
+                if let Some(capabilities) = wire::parse_capabilities(text, HANDSHAKE_REQUEST_ID) {
+                    // The MCP prompts are not in this menu yet; the settle
+                    // that fetches them starts now, before spawn returns.
+                    menu.begin(&capabilities.commands, &stdin);
+                    // The command menu rides the same handshake line; announce
+                    // it on the event stream so the cockpit can fold it (#23).
+                    // An install that lists none announces nothing.
+                    if !capabilities.commands.is_empty() {
+                        let announced = SessionEvent::Commands {
+                            commands: capabilities.commands.clone(),
+                        };
+                        if sender.send(announced).is_err() {
+                            return;
+                        }
+                    }
+                    // So does the permission mode — the meta row's chip.
+                    // Display-only; a CLI that named none shows none.
+                    if !capabilities.permission_mode.is_empty() {
+                        let announced = SessionEvent::PermissionMode {
+                            mode: capabilities.permission_mode.clone(),
+                        };
+                        if sender.send(announced).is_err() {
+                            return;
+                        }
+                    }
+                    // And the model menu — the provider picker's rows (#25).
+                    // An install that lists none announces nothing.
+                    if !capabilities.models.is_empty() {
+                        let announced = SessionEvent::Models {
+                            models: capabilities.models.clone(),
+                        };
+                        if sender.send(announced).is_err() {
+                            return;
+                        }
+                    }
+                    // And the plan, for the usage popover's head.
+                    if let Some(name) = capabilities.plan.clone() {
+                        if sender.send(SessionEvent::AccountPlan { name }).is_err() {
+                            return;
+                        }
+                    }
+                    // Unblocks spawn. Dropping the sender afterwards is what
+                    // stops a second control response being mistaken for it.
+                    let _ = handshake.take().expect("just checked").send(capabilities);
+                    continue;
+                }
+            }
+            // The token count a line carries goes first, so the context
+            // ring has moved by the time the line's own event lands — and
+            // the result's count is in before the turn is over.
+            let events = lock(&decoder).decode(text);
+            for event in events {
+                if let SessionEvent::Commands { commands } = &event {
+                    menu.announced(commands);
+                }
+                // A full channel parks this thread, the OS pipe fills, and the
+                // CLI blocks on its own write. Backpressure, never loss.
+                if sender.send(event).is_err() {
+                    return;
+                }
+            }
+            for event in plan {
+                if sender.send(event).is_err() {
+                    return;
+                }
+            }
+        }
+        shells.stop_all();
+        lock(&file_search).disconnect();
+        lock(&control_replies).clear();
+        // A setting still waiting on its answer learns the CLI is gone.
+        lock(&setting_reply).take();
+        let _ = sender.send(closed_event(&child, &stderr_tail));
+    });
+    capabilities
+}
+
+/// The items `get_context_usage` lists behind a category (`mcpTools`,
+/// `skills.skillFrontmatter`, `memoryFiles`): each one's `key` and tokens.
+fn context_items(list: &serde_json::Value, key: &str) -> Vec<ferrite_core::ContextItem> {
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some(ferrite_core::ContextItem {
+                name: item[key].as_str()?.to_owned(),
+                tokens: item["tokens"].as_u64().unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+fn control_events(action: &SessionControl, response: &serde_json::Value) -> Vec<SessionEvent> {
+    match action {
+        SessionControl::RefreshContext => {
+            let total = response["totalTokens"].as_u64().unwrap_or(0);
+            let raw_max = response["rawMaxTokens"].as_u64();
+            let details = ferrite_core::ContextDetails {
+                is_auto_compact_enabled: response["isAutoCompactEnabled"].as_bool(),
+                categories: response["categories"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|category| {
+                        Some(ferrite_core::ContextCategory {
+                            name: category["name"].as_str()?.to_owned(),
+                            tokens: category["tokens"].as_u64().unwrap_or(0),
+                        })
+                    })
+                    .collect(),
+                mcp_tools: context_items(&response["mcpTools"], "name"),
+                skills: context_items(&response["skills"]["skillFrontmatter"], "name"),
+                memory_files: context_items(&response["memoryFiles"], "path"),
+            };
+            vec![
+                SessionEvent::ContextUsage {
+                    total_tokens: total,
+                    context_window: raw_max,
+                },
+                SessionEvent::ContextDetails { details },
+            ]
+        }
+        SessionControl::RefreshMcp => vec![SessionEvent::McpServers {
+            servers: response["mcpServers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|server| {
+                    let name = server["name"].as_str()?.to_owned();
+                    Some(ferrite_core::McpServer {
+                        name,
+                        status: match server["status"].as_str() {
+                            Some("connected") => ferrite_core::McpStatus::Connected,
+                            Some("connecting" | "pending") => ferrite_core::McpStatus::Connecting,
+                            Some("needs-auth") => ferrite_core::McpStatus::NeedsAuth,
+                            Some("failed") => ferrite_core::McpStatus::Failed,
+                            Some("disabled") => ferrite_core::McpStatus::Disabled,
+                            _ => ferrite_core::McpStatus::Unknown,
+                        },
+                        error: server["error"].as_str().map(str::to_owned),
+                    })
+                })
+                .collect(),
+        }],
+        SessionControl::SetPermissionMode { mode } => {
+            vec![SessionEvent::PermissionMode { mode: mode.clone() }]
+        }
+        SessionControl::ReconnectMcp { .. }
+        | SessionControl::LoginMcp { .. }
+        | SessionControl::ReloadMcp
+        | SessionControl::StopTask { .. }
+        | SessionControl::BackgroundTasks => Vec::new(),
+    }
+}
+
+fn write_stdin_line(stdin: &Mutex<ChildStdin>, value: &serde_json::Value) -> io::Result<()> {
+    let mut line = serde_json::to_string(value).map_err(io::Error::other)?;
+    line.push('\n');
+    let mut stdin = lock(stdin);
+    stdin.write_all(line.as_bytes())?;
+    stdin.flush()
+}
+
+/// The last of the CLI's stderr, and whether there is any more coming.
+#[derive(Default)]
+struct StderrTail {
+    lines: Vec<String>,
+    finished: bool,
+}
+
+fn drain_stderr(stderr: ChildStderr, tail: Arc<Mutex<StderrTail>>) {
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let mut tail = lock(&tail);
+            if tail.lines.len() == STDERR_TAIL_LINES {
+                tail.lines.remove(0);
+            }
+            tail.lines.push(line);
+        }
+        lock(&tail).finished = true;
+    });
+}
+
+fn closed_event(child: &Mutex<Child>, stderr_tail: &Mutex<StderrTail>) -> SessionEvent {
+    SessionEvent::Closed {
+        reason: exit_reason(child, stderr_tail),
+    }
+}
+
+/// A CLI that exited while starting says why on stderr: that, rather than
+/// the broken pipe or the silence its exit left behind.
+fn exited_at_start(
+    child: &Mutex<Child>,
+    stderr_tail: &Mutex<StderrTail>,
+    error: io::Error,
+) -> ClaudeSpawnError {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        if matches!(lock(child).try_wait(), Ok(Some(_))) {
+            return ClaudeSpawnError::Exited {
+                reason: exit_reason(child, stderr_tail),
+            };
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    ClaudeSpawnError::Io(error)
+}
+
+fn exit_reason(child: &Mutex<Child>, stderr_tail: &Mutex<StderrTail>) -> String {
+    let status = reap(child);
+    let mut reason = match &status {
+        Ok(status) => format!("claude CLI exited: {status}"),
+        Err(e) => format!("claude CLI exit status unknown: {e}"),
+    };
+    if !matches!(&status, Ok(status) if status.success()) {
+        let lines = settled_stderr(stderr_tail);
+        if !lines.is_empty() {
+            reason.push_str("\nstderr: ");
+            reason.push_str(&lines.join("\n"));
+        }
+    }
+    reason
+}
+
+/// The drain thread reaches EOF just after the child exits; wait for it rather
+/// than explaining a crash with the reason cut off. Bounded, because a
+/// surviving grandchild can hold the inherited stderr open indefinitely.
+fn settled_stderr(stderr_tail: &Mutex<StderrTail>) -> Vec<String> {
+    let deadline = Instant::now() + Duration::from_millis(250);
+    loop {
+        let tail = lock(stderr_tail);
+        if tail.finished || Instant::now() >= deadline {
+            return tail.lines.clone();
+        }
+        drop(tail);
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Polled, never blocking, so `Drop` can always take this lock and kill a CLI
+/// that closed stdout without exiting.
+fn reap(child: &Mutex<Child>) -> io::Result<ExitStatus> {
+    loop {
+        if let Some(status) = lock(child).try_wait()? {
+            return Ok(status);
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A panicking thread must not take the Session down with it: the data behind
+/// this lock is a process handle and a stderr tail, both still usable.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn spawn_error(program: &str, e: io::Error) -> ClaudeSpawnError {
+    if e.kind() == io::ErrorKind::NotFound {
+        ClaudeSpawnError::CliNotFound {
+            program: program.to_string(),
+        }
+    } else {
+        ClaudeSpawnError::Io(e)
+    }
+}
+
+fn check_version(program: &str) -> Result<(), ClaudeSpawnError> {
+    let output = Command::new(program)
+        .arg("--version")
+        .no_console_window()
+        .agent_environment()
+        .output()
+        .map_err(|e| spawn_error(program, e))?;
+    if !output.status.success() {
+        return Err(ClaudeSpawnError::VersionCheckFailed {
+            detail: format!("`{program} --version` {}", output.status),
+        });
+    }
+
+    let reported = String::from_utf8_lossy(&output.stdout);
+    let Some((found, version)) = parse_version(&reported) else {
+        return Err(ClaudeSpawnError::VersionCheckFailed {
+            detail: format!(
+                "unrecognised `{program} --version` output: {:?}",
+                reported.trim()
+            ),
+        });
+    };
+    if version < CLAUDE_CLI_MIN_VERSION {
+        return Err(ClaudeSpawnError::CliVersionUnmet {
+            found,
+            required: MIN_VERSION_DISPLAY,
+        });
+    }
+    if version >= CLAUDE_CLI_TESTED_BELOW {
+        ferrite_core::log!(
+            "claude CLI {found} is newer than Ferrite is tested against \
+             (below {TESTED_BELOW_DISPLAY}); running it anyway"
+        );
+    }
+    Ok(())
+}
+
+/// What the CLI is told at spawn about thinking and effort, as T3 Code
+/// tells it (`ClaudeAdapterV2.ts` at 0fd48228, through the Agent SDK's
+/// argv): adaptive thinking with summaries, by flag and by setting, for
+/// every model, and the Thread's effort when it has one. A Thread's own
+/// `--settings` comes later and replaces these, as a settings file
+/// replaces them in T3.
+fn thinking_args(effort: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "--thinking=adaptive".to_string(),
+        "--thinking-display=summarized".to_string(),
+    ];
+    args.extend(effort.map(|effort| format!("--effort={effort}")));
+    args.extend([
+        "--settings".to_string(),
+        r#"{"showThinkingSummaries":true}"#.to_string(),
+    ]);
+    args
+}
+
+/// `--version` prints `2.1.243 (Claude Code)`; only the leading semver is
+/// meaningful, and a pre-release suffix on any component is ignored.
+pub(crate) fn parse_version(reported: &str) -> Option<(String, [u64; 3])> {
+    let token = reported.split_whitespace().next()?;
+    let mut components = token.split('.');
+    let mut version = [0u64; 3];
+    for component in version.iter_mut() {
+        let digits: String = components
+            .next()?
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        *component = digits.parse().ok()?;
+    }
+    Some((token.to_string(), version))
+}
+
+/// Claude Code's way of titling a Thread: `claude -p` in print mode.
+pub mod title {
+    use crate::providers::oneshot::Form as TitleForm;
+
+    /// The cheapest alias, so a Thread's name costs nothing an operator
+    /// would notice.
+    pub const MODEL: &str = "haiku";
+    pub const EFFORT: &str = "low";
+
+    /// Print mode, the cheap model, text output, no tools (the title must
+    /// not be a Bash call), no saved session (a title turn is not a
+    /// conversation to resume), no settings sources (so no project or user
+    /// hooks run in the throwaway directory), and nobody to answer prompts
+    /// (`--tools ""` should leave none, but one that did appear must be
+    /// denied rather than hang). Each flag verified against `claude --help`
+    /// of 2.1.259; `--max-turns` does not exist there, and the tool-less
+    /// turn is single anyway. The prompt is the positional argument.
+    pub fn fill(program: &str, prompt: &str) -> TitleForm {
+        TitleForm {
+            program: program.to_string(),
+            args: [
+                "-p",
+                "--model",
+                MODEL,
+                "--effort",
+                EFFORT,
+                "--output-format",
+                "text",
+                "--tools",
+                "",
+                "--no-session-persistence",
+                "--setting-sources",
+                "",
+                "--permission-prompts",
+                "none",
+                prompt,
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            model: MODEL,
+            effort: EFFORT,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// T3 Code's spawn (`ClaudeAdapterV2.ts` at 0fd48228, through the
+    /// Agent SDK 0.3.321's argv), for every effort. The model changes
+    /// none of it: T3 asks every model for adaptive thinking, and CLI
+    /// 2.1.330 announces one ladder for every model that takes an effort.
+    #[test]
+    fn the_spawn_asks_for_thinking_and_effort_as_t3_code_does() {
+        const ON: &str = "--thinking=adaptive";
+        const SHOWN: &str = "--thinking-display=summarized";
+        const SETTINGS: &str = "--settings";
+        const SUMMARIES: &str = r#"{"showThinkingSummaries":true}"#;
+        let t3: [(Option<&str>, &[&str]); 6] = [
+            (None, &[ON, SHOWN, SETTINGS, SUMMARIES]),
+            (Some("low"), &[ON, SHOWN, "--effort=low", SETTINGS, SUMMARIES]),
+            (Some("medium"), &[ON, SHOWN, "--effort=medium", SETTINGS, SUMMARIES]),
+            (Some("high"), &[ON, SHOWN, "--effort=high", SETTINGS, SUMMARIES]),
+            (Some("xhigh"), &[ON, SHOWN, "--effort=xhigh", SETTINGS, SUMMARIES]),
+            (Some("max"), &[ON, SHOWN, "--effort=max", SETTINGS, SUMMARIES]),
+        ];
+        for (effort, args) in t3 {
+            assert_eq!(thinking_args(effort), args, "{effort:?}");
+        }
+    }
+
+    #[test]
+    fn the_displayed_window_matches_the_pins() {
+        assert_eq!(
+            parse_version(MIN_VERSION_DISPLAY).map(|(_, v)| v),
+            Some(CLAUDE_CLI_MIN_VERSION)
+        );
+        assert_eq!(
+            parse_version(TESTED_BELOW_DISPLAY).map(|(_, v)| v),
+            Some(CLAUDE_CLI_TESTED_BELOW)
+        );
+        assert!(CLAUDE_CLI_MIN_VERSION < CLAUDE_CLI_TESTED_BELOW);
+    }
+
+    /// The tested window is closed at the bottom and open at the top.
+    #[test]
+    fn the_next_major_is_untested_and_the_release_before_it_is_tested() {
+        let last_tested = parse_version("2.99.99").unwrap().1;
+        let next_major = parse_version("3.0.0").unwrap().1;
+        assert!(last_tested < CLAUDE_CLI_TESTED_BELOW);
+        assert!(next_major >= CLAUDE_CLI_TESTED_BELOW);
+    }
+
+    /// The version Ferrite is developed against has to sit inside its own pins.
+    #[test]
+    fn the_captured_fixture_version_is_supported() {
+        let captured = parse_version("2.1.243").unwrap().1;
+        assert!(captured >= CLAUDE_CLI_MIN_VERSION);
+        assert!(captured < CLAUDE_CLI_TESTED_BELOW);
+    }
+
+    #[test]
+    fn parses_the_real_version_banner() {
+        assert_eq!(
+            parse_version("2.1.243 (Claude Code)\n"),
+            Some(("2.1.243".to_string(), [2, 1, 243]))
+        );
+    }
+
+    #[test]
+    fn the_pinned_boundary_is_met_and_one_below_is_not() {
+        let at_pin = parse_version("2.1.224").unwrap().1;
+        let below_pin = parse_version("2.1.223").unwrap().1;
+        assert!(at_pin >= CLAUDE_CLI_MIN_VERSION);
+        assert!(below_pin < CLAUDE_CLI_MIN_VERSION);
+    }
+
+    #[test]
+    fn older_major_and_minor_lines_are_below_the_pin() {
+        for older in ["1.9.999", "2.0.999"] {
+            assert!(parse_version(older).unwrap().1 < CLAUDE_CLI_MIN_VERSION);
+        }
+    }
+
+    #[test]
+    fn a_prerelease_suffix_still_parses() {
+        assert_eq!(
+            parse_version("2.2.0-beta.3 (Claude Code)"),
+            Some(("2.2.0-beta.3".to_string(), [2, 2, 0]))
+        );
+    }
+
+    #[test]
+    fn unparseable_banners_yield_nothing() {
+        for garbage in ["", "\n", "Claude Code", "2.1", "v2.1.243", "x.y.z", "..."] {
+            assert_eq!(
+                parse_version(garbage),
+                None,
+                "should not parse: {garbage:?}"
+            );
+        }
+    }
+}

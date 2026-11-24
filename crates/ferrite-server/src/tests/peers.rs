@@ -4,8 +4,8 @@
 
 use super::*;
 use crate::peers::{Peer, PeerFailure, Peers, WAIT_PIECE};
-use ferrite_core::api::schema::{AgentWaitParams, Empty, ProjectParams, ThreadParams};
-use ferrite_core::api::{Code, Method};
+use ferrite_engine::api::schema::{AgentWaitParams, Empty, ProjectParams, ThreadParams};
+use ferrite_engine::api::{Code, Method};
 use ferrite_core::machine::{Dial, Failure, Machine, Tunnel};
 use ferrite_core::server::ServerId;
 

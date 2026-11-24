@@ -17,7 +17,7 @@
 
 use std::time::Duration;
 
-use ferrite_core::api::Outcome;
+use ferrite_engine::api::Outcome;
 use ferrite_core::delegate::Status;
 use ferrite_core::Attention;
 

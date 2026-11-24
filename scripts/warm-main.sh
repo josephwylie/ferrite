@@ -23,6 +23,7 @@ MAIN="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
 cargo build --locked -p ferrite
 cargo test --locked --no-run -p ferrite-cockpit --lib
 cargo test --locked --no-run -p ferrite-core
+cargo test --locked --no-run -p ferrite-engine
 cargo test --locked --no-run -p ferrite-server
 cargo check --locked -p ferrite
 cargo check --locked -p ferrite-cockpit --tests

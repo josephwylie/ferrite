@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted, complete 2026-11-24 (the engine is the crate ferrite-engine)
 date: 2026-11-24
 ---
 
@@ -29,37 +29,35 @@ other. When that holds, an edit to a provider rebuilds no window code, an
 edit to the window rebuilds no Server code, and each side's tests run
 without the other.
 
-It holds between modules, not yet between crates: the three parts are
-still one crate. `scripts/core-sides.json` puts every top-level module of
-`ferrite-core` on the shared side or the engine's.
-`scripts/check_core_sides.py` counts each **crossing**: a path to an engine
-module from a shared module, or from one of the window's crates
-(`ferrite-client`, `ferrite-cockpit`, `ferrite-pane`, `ferrite-frame`,
-`ferrite-ui`, `ferrite-terminal`). There are none:
+It holds between crates: `ferrite-core` is the shared part,
+`ferrite-engine` the engine and `ferrite-client` the client (the last
+Built section below). Cargo refuses a path to a crate that is not a
+dependency, and `scripts/ci_scope.py` refuses a window crate that links
+the engine.
 
-| From | Crossings |
-| --- | --- |
-| shared modules | 0 |
-| `ferrite-client` | 0 |
-| `ferrite-cockpit` | 0 |
-| `ferrite-pane`, `ferrite-ui` | 0 |
-
-CI fails when a pair's count rises, a new pair appears, or a module is on
-no side. The baseline only goes down. What a released app cannot compile
-is not counted: a module whose `mod` line, or an ancestor's, has a `cfg`
-that fails with `test` off and only the `shipped` features of
+Until that cut the shared part and the engine were one crate,
+`ferrite-core`, and a checker held the line between its modules.
+`scripts/core-sides.json` put every top-level module of `ferrite-core` on
+the shared side or the engine's. `scripts/check_core_sides.py` counted
+each **crossing**: a path to an engine module from a shared module, or
+from one of the window's crates (`ferrite-client`, `ferrite-cockpit`,
+`ferrite-pane`, `ferrite-frame`, `ferrite-ui`, `ferrite-terminal`). CI
+failed when a pair's count rose, a new pair appeared, or a module was on
+no side, so the baseline only went down. What a released app could not
+compile was not counted: a module whose `mod` line, or an ancestor's, had
+a `cfg` that failed with `test` off and only the `shipped` features of
 `core-sides.json` on (`cef`), and an inline `#[cfg(test)] mod` block. A
-file's name skips nothing. A `pub use` counts once for each engine item it
-hands on, since every crate above can then name it without naming the
-engine. The `ferrite` crate is not counted: it is the program that starts
-both.
+file's name skipped nothing. A `pub use` counted once for each engine item
+it handed on, since every crate above could then name it without naming
+the engine. The `ferrite` crate was not counted: it is the program that
+starts both.
 
-A crossing is a type living on the wrong side, or work. `store::Provider`,
+A crossing was a type living on the wrong side, or work. `store::Provider`,
 `workspace::WorkspaceChoice` and the Factory's board were facts a window
 shows, kept in the module that happened to produce them. The fix for those
-is a move: the type goes to a shared module and the engine module uses it
-from there. The rest are work: a window crate calling the engine's code.
-Those become a question to the Server over the protocol.
+was a move: the type went to a shared module and the engine module used it
+from there. The rest were work: a window crate calling the engine's code.
+Those became a question to the Server over the protocol.
 
 ## Built: `ferrite-client`
 
@@ -407,21 +405,87 @@ What changes:
 `Store::reader`, `HeldMachine::logs`, `Cockpit::history_log` and the
 window's log reads are gone. The crossings went from 2 to 0.
 
-## What comes next, in order
+## Built: the engine is a crate
 
-Each step is one PR and drives its pairs in the baseline to zero.
+The 14 engine modules are the crate `ferrite-engine`, moved whole: every
+moved file keeps its lines but its imports and crate roots. `ferrite-core`
+keeps its name, its directory and the shared modules.
+
+| Crate | Holds | Depends on the engine |
+| --- | --- | --- |
+| `ferrite-core` | the shared part | never: Cargo refuses the cycle |
+| `ferrite-engine` | the Store, the providers and their Sessions, the Engine, the Factory, workspaces, the API, `connection`, `github` | itself |
+| `ferrite-server`, `ferrite` | the Server, and the app that runs it as `ferrite server`, the API's command line and the Store's panic rescue | yes |
+| `ferrite-client` | the window model | only under `test-support` (`cockpit::in_process`), an optional dependency |
+| `ferrite-cockpit` | the window | only under `demo` (on with `headless` and `visual-reference`), an optional dependency |
+| `ferrite-pane`, `ferrite-frame` | the window's parts | in their tests only, through `ferrite-client`'s fixture |
+| `ferrite-ui`, `ferrite-terminal` | the window's parts | never |
+
+- No re-export shim: each path names the crate that owns its item. In the
+  engine, `crate::<shared module>` is `ferrite_core::`. Elsewhere,
+  `ferrite_core::<engine module>` is `ferrite_engine::`. `ferrite-engine`'s
+  root re-exports nothing, and neither crate re-exports the other.
+- What the steps above left `pub(crate)` for this cut is `pub`: 123 items
+  and the `file_change` module. 83 of them are the log's schema, which the
+  Store builds and matches. `ProjectId`'s field, `Project::minted`,
+  `Projects`' fields with `parse` and `to_bytes`, and the five Factory
+  board mutators say in their doc comment that they are public for the
+  engine alone. `engine::probe` names `ThreadId` at core's root, so
+  `thread` stays private.
+- An inherent impl must live in its type's crate, and `Task` is
+  `factory_board`'s. The Factory's two `impl Task` blocks are the traits
+  `factory::Transitions` (`note`, `to_work`, `complete`, `enter`) and
+  `factory::direct::Runs` (`asker`, `running`, `supersede`, `retire`,
+  `label`, `decides_in_own_run`, `decides`). Their call sites read as
+  before.
+- The 38 integration tests of `ferrite-core/tests/it` that drive a
+  provider's Session, the Store or the Engine moved with `support.rs` to
+  `ferrite-engine/tests/it`. Six stayed. The provider captures in
+  `tests/fixtures` moved with them, and the seven test files elsewhere that
+  read one read the engine's copy. draft.rs's tests resolve a Draft against
+  the registry, so they are `workspace::draft_tests`. The placement tests
+  number their Projects as a new registry does.
+- Each crate has its own `test-support`. `ferrite-engine`'s turns on
+  `ferrite-core`'s, and a crate that turned on `ferrite-core/test-support`
+  turns on `ferrite-engine/test-support` too.
+
+Cargo replaces the checker. `scripts/ci_scope.py`'s `check_boundaries`
+adds two rules. First, no window crate reaches `ferrite-engine` in what a
+release build links. That is its normal and build edges, with an optional
+one only when its default features or `cef` turn it on, following the
+features each edge asks of the crate it names. Second, `ferrite-engine`
+reaches no `gpui`. `check_core_sides.py`, `core-sides.json` and their
+tests are gone.
+
+An edit to the engine now rebuilds the engine, `ferrite-server` and the
+app, and no window crate. Timed as `cargo check -j 3 -p ferrite --locked`
+after a blank line is added to one file, warm, 6 runs on each side:
+
+| Edit | Before | After | Rechecked after |
+| --- | --- | --- | --- |
+| `engine.rs` | 14.1 s (13.2 to 14.4) | 3.2 s (3.1 to 3.3) | `ferrite-engine`, `ferrite-server`, `ferrite` |
+| `providers/claude.rs` | 12.9 s (12.4 to 13.3) | 3.3 s (3.1 to 3.5) | the same |
+
+Before, Cargo rechecked `ferrite-core` (8.4 s), then the window's crates
+one after another (`ferrite-ui`, `ferrite-pane` and `ferrite-cockpit`,
+5.0 s), then the app. After, the engine's own check (2.0 s) is most of the
+time, then `ferrite-server` (0.4 s) and the app (0.3 s). An edit to a
+shared module still rebuilds every crate above `ferrite-core`, the engine
+included.
+
+## The steps
+
+Each step was one PR and drove its pairs in the baseline to zero.
 
 1. **Types move to the shared side.** Every crossing that is only a type
    or a pure function goes, from shared modules and the window crates
    alike. No crate changes. Done (above): what is left is work.
 2. **A released window runs no Engine.** Done (above): the Engine in a
    window's process is a fixture, and the demo is a development build's.
-3. **`ferrite-core` splits in two.** The window's last work went to its
-   Server (above): the titler, session and command discovery, and the
-   logs it read itself. No crossings are left, so this is the only step
-   left: the shared modules become one crate and the engine modules
-   another. The window's crates drop the engine crate, and
-   `ferrite-server` is the one crate that depends on it.
+3. **`ferrite-core` splits in two.** Done (above): the window's last work
+   went to its Server, then the engine modules became `ferrite-engine`.
+   The window's crates link it only in their tests and fixtures;
+   `ferrite-server` and the app depend on it.
 
 ## Considered
 
@@ -437,6 +501,13 @@ Each step is one PR and drives its pairs in the baseline to zero.
 - **Leave the Engine-and-Cockpit tests in core.** Core cannot depend on the
   crate that holds the Cockpit, so they would need a second, test-only
   Cockpit.
+- **A re-export shim for the cut.** `ferrite-engine` re-exporting
+  `ferrite_core::*`, or core re-exporting the engine, would have kept every
+  path as it was and hidden which crate owns an item. Every path names its
+  crate instead.
+- **Free functions for the Factory's Task methods.** Each call site would
+  have changed from `task.note(...)` to `note(task, ...)`, and each body
+  from `self` to `task`. The two traits keep both as they were.
 - **Name the schema's module `log`.** `crate::log!` is already the
   diagnostics log, and `log::Record` reads as the `log` crate's type.
   `thread_log` names the Thread's log.

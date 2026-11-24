@@ -3,11 +3,11 @@ name = "ferrite-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Ferrite headless core: providers, transcript, store, workspace. No UI."
+description = "Ferrite's shared side: the protocol and the types a window and a Server both hold. No UI."
 
 [features]
-# What other crates' tests drive core with: the doorbell's rings,
-# `Cockpit::refuse_park`, and what the Server's tests read of the Engine.
+# What other crates' tests drive core with: the doorbell's rings, a
+# finished sign-in, and the keys a test makes with no Cockpit behind it.
 test-support = []
 
 [dependencies]

@@ -98,7 +98,7 @@ pub fn paths(text: &str, cwd: Option<&Path>) -> Vec<PathBuf> {
 
 /// Formats both Providers accept as native image input. Other file types
 /// remain references the agent can inspect with its own tools.
-pub(crate) fn image_type(path: &Path) -> Option<&'static str> {
+pub fn image_type(path: &Path) -> Option<&'static str> {
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
@@ -110,7 +110,7 @@ pub(crate) fn image_type(path: &Path) -> Option<&'static str> {
 
 /// Claude's stream-json input accepts PDF documents as a distinct native
 /// content block.
-pub(crate) fn pdf_type(path: &Path) -> Option<&'static str> {
+pub fn pdf_type(path: &Path) -> Option<&'static str> {
     path.extension()?
         .to_str()?
         .eq_ignore_ascii_case("pdf")
@@ -118,7 +118,7 @@ pub(crate) fn pdf_type(path: &Path) -> Option<&'static str> {
 }
 
 /// Formats Codex snapshots into local audio input items.
-pub(crate) fn audio_type(path: &Path) -> Option<&'static str> {
+pub fn audio_type(path: &Path) -> Option<&'static str> {
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
         "wav" => Some("audio/wav"),
         "mp3" => Some("audio/mpeg"),

@@ -1778,7 +1778,7 @@ mod tests {
     #[test]
     fn a_captured_codex_request_reads_as_its_command() {
         let capture =
-            include_str!("../../ferrite-core/tests/fixtures/codex-approval-allow-0.149.1.jsonl");
+            include_str!("../../ferrite-engine/tests/fixtures/codex-approval-allow-0.149.1.jsonl");
         let request: serde_json::Value = capture
             .lines()
             .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())

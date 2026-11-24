@@ -21,7 +21,7 @@ struct BoxCli {
 struct Titler {
     asked: usize,
     holding: bool,
-    owed: Vec<(ThreadId, ferrite_core::doorbell::Sender<ferrite_core::titler::Titled>)>,
+    owed: Vec<(ThreadId, ferrite_core::doorbell::Sender<ferrite_engine::titler::Titled>)>,
 }
 
 const BOX_TITLE: &str = "Titled on box";
@@ -39,7 +39,7 @@ impl BoxCli {
     /// The titles it held, written.
     fn write_held(&self) {
         for (thread, replies) in self.titles.lock().unwrap().owed.drain(..) {
-            let _ = replies.send(ferrite_core::titler::Titled {
+            let _ = replies.send(ferrite_engine::titler::Titled {
                 thread,
                 title: Some(BOX_TITLE.into()),
             });
@@ -47,11 +47,11 @@ impl BoxCli {
     }
 }
 
-impl ferrite_core::engine::Spawner for BoxCli {
+impl ferrite_engine::engine::Spawner for BoxCli {
     fn spawn(
         &mut self,
-        _: ferrite_core::engine::SpawnRequest,
-    ) -> std::io::Result<Box<dyn ferrite_core::providers::Session>> {
+        _: ferrite_engine::engine::SpawnRequest,
+    ) -> std::io::Result<Box<dyn ferrite_engine::providers::Session>> {
         let (alive, events) = ferrite_core::doorbell::channel();
         Ok(Box::new(Quiet {
             _alive: alive,
@@ -97,8 +97,8 @@ impl ferrite_core::engine::Spawner for BoxCli {
 
     fn title(
         &mut self,
-        job: ferrite_core::titler::Job,
-        replies: ferrite_core::doorbell::Sender<ferrite_core::titler::Titled>,
+        job: ferrite_engine::titler::Job,
+        replies: ferrite_core::doorbell::Sender<ferrite_engine::titler::Titled>,
     ) {
         let mut titler = self.titles.lock().unwrap();
         titler.asked += 1;
@@ -106,7 +106,7 @@ impl ferrite_core::engine::Spawner for BoxCli {
             titler.owed.push((job.thread, replies));
             return;
         }
-        let _ = replies.send(ferrite_core::titler::Titled {
+        let _ = replies.send(ferrite_engine::titler::Titled {
             thread: job.thread,
             title: Some(BOX_TITLE.into()),
         });

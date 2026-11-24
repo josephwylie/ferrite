@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::*;
 use ferrite_core::factory_board::{GitHubItem, GitHubQuery, GitHubRead};
-use ferrite_core::github::GitHub;
+use ferrite_engine::github::GitHub;
 
 /// GitHub as the test scripts it: each read takes the next answer (an
 /// unchanged poll once they run out) and is recorded.
@@ -63,8 +63,8 @@ impl GitHub for Scripted {
         &self,
         _: &str,
         _: u64,
-    ) -> Result<ferrite_core::pr_watch::Fingerprint, ferrite_core::pr_watch::ReadError> {
-        Err(ferrite_core::pr_watch::ReadError::Failed("no PRs here".into()))
+    ) -> Result<ferrite_engine::pr_watch::Fingerprint, ferrite_engine::pr_watch::ReadError> {
+        Err(ferrite_engine::pr_watch::ReadError::Failed("no PRs here".into()))
     }
 
     fn pr_reading(
@@ -72,8 +72,8 @@ impl GitHub for Scripted {
         _: &str,
         _: u64,
         _: bool,
-    ) -> Result<ferrite_core::pr_watch::Reading, ferrite_core::pr_watch::ReadError> {
-        Err(ferrite_core::pr_watch::ReadError::Failed("no PRs here".into()))
+    ) -> Result<ferrite_engine::pr_watch::Reading, ferrite_engine::pr_watch::ReadError> {
+        Err(ferrite_engine::pr_watch::ReadError::Failed("no PRs here".into()))
     }
 }
 
@@ -387,7 +387,7 @@ fn github_issues_start_one_task_each_and_a_failed_read_is_reported() {
     );
 }
 
-const POLL: i64 = ferrite_core::factory::POLL_MS;
+const POLL: i64 = ferrite_engine::factory::POLL_MS;
 
 /// AC: the pickers list what the operator's login reaches, through the
 /// Server's reader, never typed.

@@ -307,7 +307,7 @@ impl Task {
     }
 
     /// Keep `text` as evidence of `kind`, about the current revision.
-    pub(crate) fn evidence(
+    pub fn evidence(
         &mut self,
         kind: EvidenceKind,
         by: impl Into<String>,

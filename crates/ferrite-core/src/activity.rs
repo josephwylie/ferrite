@@ -76,7 +76,7 @@ pub enum AgentStatus {
 impl AgentStatus {
     /// How a turn ends when its agent comes to stand this way; `None` for a
     /// standing that ends no turn.
-    pub(crate) fn turn_outcome(self) -> Option<TurnOutcome> {
+    pub fn turn_outcome(self) -> Option<TurnOutcome> {
         match self {
             Self::Idle => Some(TurnOutcome::Completed),
             Self::Interrupted | Self::Shutdown => Some(TurnOutcome::Interrupted),
@@ -2456,7 +2456,7 @@ impl<'a> SubjectView<'a> {
             self.state.timings_revision,
         )
     }
-    pub(crate) fn alias_needs_history(self) -> bool {
+    pub fn alias_needs_history(self) -> bool {
         !self.state.retained || self.state.rehydrated
     }
     pub fn retained(self) -> bool {
@@ -2613,7 +2613,7 @@ impl ExecutionEvent {
         })
     }
 
-    pub(crate) fn into_input(self) -> Input {
+    pub fn into_input(self) -> Input {
         Input::Event(match self {
             Self::Progress { event } => SessionEvent::Progress { event },
             Self::ContentBoundary => SessionEvent::ContentBoundary,
@@ -2868,7 +2868,7 @@ fn append_delta(previous: &mut Input, next: &Input) -> bool {
     }
 }
 
-pub(crate) fn input_bytes(input: &Input) -> usize {
+pub fn input_bytes(input: &Input) -> usize {
     match input {
         Input::Prompt(text) | Input::Notice(text) => text.len(),
         Input::Wake(wake) => wake.text.len() + wake.summary.len(),

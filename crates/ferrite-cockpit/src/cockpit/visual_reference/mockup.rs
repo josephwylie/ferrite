@@ -27,7 +27,7 @@ use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Su
 use ferrite_client::cockpit::Cockpit;
 use ferrite_core::checkout::{BranchStatus, WorkspaceChoice};
 use ferrite_core::provider::Provider;
-use ferrite_core::store::Store;
+use ferrite_engine::store::Store;
 use ferrite_core::{Hunk, RunState, SessionEvent, ThreadKey, ToolResult, TurnOutcome};
 use ferrite_reviewr::forge::{
     Check, CheckStatus, Comment, CommentKind, FindingPlace, Merge, PrSnapshot, PrState, PrView,

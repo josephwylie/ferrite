@@ -30,7 +30,7 @@ pub fn run() {
     }
     // `ferrite thread list`, `ferrite agent prompt …`, `ferrite --skill`:
     // the automation API's CLI (ADR 0027), which never starts a window.
-    if let Some(code) = ferrite_core::api::cli::run(&args, &store_dir(), &settings_dir()) {
+    if let Some(code) = ferrite_engine::api::cli::run(&args, &store_dir(), &settings_dir()) {
         std::process::exit(code);
     }
     crate::launch();

@@ -11,10 +11,11 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// An opaque handle to a registered project. Minted by `register`, carried
-/// by Thread headers and the selector's rows — never a path.
+/// by Thread headers and the selector's rows — never a path. Its field is
+/// public for the registry (ferrite-engine), which alone mints one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ProjectId(pub(crate) u64);
+pub struct ProjectId(pub u64);
 
 impl ProjectId {
     pub fn get(self) -> u64 {
@@ -36,8 +37,9 @@ pub struct Project {
     pub additional_roots: Vec<PathBuf>,
     /// The high-water mark `mint_branch` counts from. Never decremented —
     /// a removed worktree's branch survives removal, so its number must
-    /// never be dealt to a "new worktree" again.
-    pub(crate) minted: u64,
+    /// never be dealt to a "new worktree" again. Public for the registry,
+    /// which alone advances it.
+    pub minted: u64,
 }
 
 impl Project {
@@ -61,12 +63,13 @@ pub struct WorktreeEntry {
 
 /// A machine's registered Projects and the worktrees Ferrite made for them:
 /// what the registry holds, and a window's read-only copy of the Server's
-/// (ADR 0025). Only the registry's verbs change it.
+/// (ADR 0025). Only the registry's verbs change it: its fields, `parse` and
+/// `to_bytes` are public for them (ferrite-engine), not for a window.
 #[derive(Clone)]
 pub struct Projects {
-    pub(crate) projects: Vec<Project>,
-    pub(crate) worktrees: BTreeMap<ProjectId, Vec<WorktreeEntry>>,
-    pub(crate) next_project: u64,
+    pub projects: Vec<Project>,
+    pub worktrees: BTreeMap<ProjectId, Vec<WorktreeEntry>>,
+    pub next_project: u64,
 }
 
 /// The registry file's schema, versioned from day one like the Thread log's.
@@ -124,14 +127,14 @@ impl Projects {
     }
 
     /// The registry file's bytes, read: what `workspace::registry` opens.
-    pub(crate) fn parse(bytes: &[u8]) -> io::Result<Projects> {
+    pub fn parse(bytes: &[u8]) -> io::Result<Projects> {
         let persisted = serde_json::from_slice::<PersistedRegistry>(bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         Projects::from_persisted(persisted)
     }
 
     /// The registry file's bytes, as `workspace::registry` writes them.
-    pub(crate) fn to_bytes(&self) -> io::Result<Vec<u8>> {
+    pub fn to_bytes(&self) -> io::Result<Vec<u8>> {
         serde_json::to_vec(&self.persisted()).map_err(io::Error::other)
     }
 

@@ -11,22 +11,22 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 
 use super::Server;
-use ferrite_core::api::schema::{
+use ferrite_engine::api::schema::{
     AgentPromptParams, ReportOutcomeParams, ReportQuestionParams, ReportedOutcome, TaskClearParams,
     TaskListParams, TaskParams, TaskRedirectParams, TaskReworkParams, TaskStartParams,
     TaskSubmitParams, WorkflowCreateParams,
 };
-use ferrite_core::api::{ApiError, Code};
+use ferrite_engine::api::{ApiError, Code};
 use ferrite_core::checkout::{WorkspaceBinding, WorkspaceChoice};
-use ferrite_core::engine::Launch;
-use ferrite_core::factory::{self, Answer, Command, Effect, Seen};
+use ferrite_engine::engine::Launch;
+use ferrite_engine::factory::{self, Answer, Command, Effect, Seen};
 use ferrite_core::factory_board::{self, Agent, Outcome};
 use ferrite_core::git_read;
 use ferrite_core::project::ProjectId;
 use ferrite_core::protocol::{Done, ServerMessage, TaskAction, WireError, WorkflowAction};
 use ferrite_core::provider::ProviderChoice;
 use ferrite_core::settings::Settings;
-use ferrite_core::workspace;
+use ferrite_engine::workspace;
 use ferrite_core::{Attention, ThreadId, ThreadOwner};
 
 /// How long a Project's listing of skills is reused before it is asked
@@ -66,7 +66,7 @@ pub(super) fn wire_error(error: ApiError) -> WireError {
     }
 }
 
-pub(super) use ferrite_core::factory::done;
+pub(super) use ferrite_engine::factory::done;
 
 /// A Provider Decision as a Task says it: the Provider's own summary,
 /// else the tool it gates.
@@ -415,7 +415,7 @@ impl Server {
                 workspace,
                 agent.effort,
                 launch,
-                ferrite_core::engine::MakeCheckout::BeforeReply,
+                ferrite_engine::engine::MakeCheckout::BeforeReply,
             )
             .map_err(|error| error.to_string())?;
         if let Some(title) = title {

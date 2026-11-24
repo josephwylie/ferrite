@@ -18,9 +18,9 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ferrite_core::api::Api;
-use ferrite_core::engine::Engine;
-use ferrite_core::connection::{self, ClientId, Connection, Heard, Ring};
+use ferrite_engine::api::Api;
+use ferrite_engine::engine::Engine;
+use ferrite_engine::connection::{self, ClientId, Connection, Heard, Ring};
 use ferrite_core::link;
 use ferrite_core::protocol::{
     self, Capability, ClientMessage, ClosedBy, Command, Done, ErrorCode, Op, ServerInfo,
@@ -28,12 +28,12 @@ use ferrite_core::protocol::{
 };
 use ferrite_core::provider::Provider;
 use ferrite_core::roster::DraftId;
-use ferrite_core::providers::clis::{Clis, Host};
-use ferrite_core::github::{GitHub, Gh};
+use ferrite_engine::providers::clis::{Clis, Host};
+use ferrite_engine::github::{GitHub, Gh};
 use ferrite_core::server::{settings_dir, store_dir, ServerId};
 use ferrite_core::settings::{ServerDefaults, SessionDefaults, Settings};
-use ferrite_core::spawner::{ProcessRss, Spawn, RSS_LIMIT};
-use ferrite_core::store::Store;
+use ferrite_engine::spawner::{ProcessRss, Spawn, RSS_LIMIT};
+use ferrite_engine::store::Store;
 use ferrite_core::ThreadId;
 
 mod bridge;
@@ -161,7 +161,7 @@ pub fn run(options: Options) -> i32 {
         }
     };
     // The API is the agents' (ADR 0027): without it they still run.
-    let api_address = ferrite_core::api::address(&options.store);
+    let api_address = ferrite_engine::api::address(&options.store);
     let api = match link::listen(&api_address) {
         Ok(listener) => Some(listener),
         Err(error) => {
@@ -180,7 +180,7 @@ pub fn run(options: Options) -> i32 {
     let spawner = Spawn {
         browser: Some(browser_client),
         api: api.is_some().then_some(api_address),
-        api_tools: Some(ferrite_core::api::tools::Tools::new(heard.clone())),
+        api_tools: Some(ferrite_engine::api::tools::Tools::new(heard.clone())),
         ..Spawn::new(defaults.clone(), Some(Arc::new(renderer)))
     };
     let mut engine = match Engine::try_new(store, Box::new(spawner)) {
@@ -192,7 +192,7 @@ pub fn run(options: Options) -> i32 {
     };
     engine.watch_memory(Box::new(ProcessRss::default()), RSS_LIMIT);
     if let Some(api) = api {
-        if let Err(error) = ferrite_core::api::accept_all(api, heard.clone()) {
+        if let Err(error) = ferrite_engine::api::accept_all(api, heard.clone()) {
             ferrite_core::log!("server: cannot accept API connections: {error}");
         }
     }
@@ -224,7 +224,7 @@ pub fn run(options: Options) -> i32 {
 #[cfg(feature = "test-support")]
 pub fn fixture_machine(
     store: PathBuf,
-    spawner: Box<dyn ferrite_core::engine::Spawner + Send>,
+    spawner: Box<dyn ferrite_engine::engine::Spawner + Send>,
 ) -> io::Result<ferrite_core::machine::Dial> {
     fixture_browser_machine(store, |_| spawner)
 }
@@ -235,7 +235,7 @@ pub fn fixture_machine(
 #[cfg(feature = "test-support")]
 pub fn fixture_browser_machine(
     store: PathBuf,
-    spawner_factory: impl FnOnce(ferrite_core::browser::Client) -> Box<dyn ferrite_core::engine::Spawner + Send>,
+    spawner_factory: impl FnOnce(ferrite_core::browser::Client) -> Box<dyn ferrite_engine::engine::Spawner + Send>,
 ) -> io::Result<ferrite_core::machine::Dial> {
     let (browser, browser_requests) = ferrite_core::browser::channel();
     let spawner = spawner_factory(browser);
@@ -358,11 +358,11 @@ type Read = (ClientId, u64, Receiver<Result<Option<Done>, WireError>>);
 /// An API request answered off the pump: who asked, under which id, and
 /// the reply with the Activity it read back, for the Engine to hold.
 type ApiRead = (
-    ferrite_core::api::CallerId,
+    ferrite_engine::api::CallerId,
     String,
     Receiver<(
-        Result<serde_json::Value, ferrite_core::api::ApiError>,
-        Option<ferrite_core::engine::ReadThread>,
+        Result<serde_json::Value, ferrite_engine::api::ApiError>,
+        Option<ferrite_engine::engine::ReadThread>,
     )>,
 );
 
@@ -425,7 +425,7 @@ struct Server {
     /// The self-hosted forges a review's pull request is read from.
     forge: ferrite_reviewr::config::PluginConfig,
     /// Every Project's Factory (ADR 0037), stepped once a pass.
-    factory: ferrite_core::factory::Factory,
+    factory: ferrite_engine::factory::Factory,
     /// The board revision the windows were last told.
     told_factory: Option<u64>,
     /// Task alerts held until the board that shows them goes, so a window
@@ -999,7 +999,7 @@ impl Server {
             Op::ListDir { path } => {
                 let path = path.clone();
                 self.read_off_pump(id, request, move || {
-                    ferrite_core::workspace::list_dir(&path)
+                    ferrite_engine::workspace::list_dir(&path)
                         .map(|listing| Some(listing.into()))
                         .map_err(failed)
                 });
@@ -1156,7 +1156,7 @@ impl Server {
                 let path = path.clone();
                 self.read_off_pump(id, request, move || {
                     Ok(Some(Done::PullRequest {
-                        json: ferrite_core::workspace::pr_view(&path),
+                        json: ferrite_engine::workspace::pr_view(&path),
                     }))
                 });
                 return;
@@ -1173,8 +1173,8 @@ impl Server {
             Op::CancelDelegate { thread, delegate } => self
                 .api_delegate_cancel(
                     None,
-                    &ferrite_core::api::schema::DelegateCancelParams {
-                        delegate: ferrite_core::api::schema::DelegateParams {
+                    &ferrite_engine::api::schema::DelegateCancelParams {
+                        delegate: ferrite_engine::api::schema::DelegateParams {
                             thread: Some(*thread),
                             delegate: *delegate,
                         },

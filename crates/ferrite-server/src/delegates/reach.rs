@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use ferrite_core::api::schema::MachineListParams;
-use ferrite_core::api::{ApiError, CallerId, Code, Method};
+use ferrite_engine::api::schema::MachineListParams;
+use ferrite_engine::api::{ApiError, CallerId, Code, Method};
 
 use super::{refusal, words, PeerFailure, Peers, Server};
 

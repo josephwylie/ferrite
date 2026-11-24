@@ -14,8 +14,8 @@ use std::time::Instant;
 use ferrite_client::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::provider::Provider;
-use ferrite_core::providers::Session;
-use ferrite_core::store::Store;
+use ferrite_engine::providers::Session;
+use ferrite_engine::store::Store;
 
 use super::panel::Opener;
 use super::tools::Diff;

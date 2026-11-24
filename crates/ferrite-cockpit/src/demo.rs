@@ -19,7 +19,7 @@ use ferrite_client::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::doorbell::Sender;
 use ferrite_core::provider::Provider;
-use ferrite_core::providers::{applied, Session, SettingAck};
+use ferrite_engine::providers::{applied, Session, SettingAck};
 use ferrite_core::{
     ContextCategory, ContextDetails, ContextItem, ControlKind, Decision, DecisionAnswer, McpServer,
     McpStatus, PermissionModeChoice, SessionControl, SessionEvent, ThreadKey, TurnOutcome,

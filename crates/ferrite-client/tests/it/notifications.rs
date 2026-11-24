@@ -16,12 +16,12 @@ use ferrite_core::activity::{
 };
 use ferrite_client::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::progress::{Phase, ProgressEvent};
-use ferrite_core::providers::{ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session};
+use ferrite_engine::providers::{ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session};
 use ferrite_core::roster::PaneIdentity;
 use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::provider::Provider;
 use ferrite_core::transcript::Body;
-use ferrite_core::store::Store;
+use ferrite_engine::store::Store;
 use ferrite_core::{DecisionAnswer, MachineId, SessionEvent, ThreadKey, TurnOutcome};
 
 struct Scratch(PathBuf);
@@ -600,7 +600,7 @@ impl Replay {
 
 fn fixture_path(name: &str) -> PathBuf {
     // Cargo runs a crate's tests in the crate's own directory.
-    std::path::absolute("../ferrite-core/tests/fixtures/subagents")
+    std::path::absolute("../ferrite-engine/tests/fixtures/subagents")
         .unwrap()
         .join(name)
 }

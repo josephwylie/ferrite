@@ -16,19 +16,19 @@ fn cli_line(
     i32,
     Vec<serde_json::Value>,
     Vec<serde_json::Value>,
-    ferrite_core::api::Request,
+    ferrite_engine::api::Request,
 ) {
-    let operation = ferrite_core::api::Method::OPERATIONS
+    let operation = ferrite_engine::api::Method::OPERATIONS
         .iter()
         .find(|each| each.name == op)
         .unwrap();
-    let context = ferrite_core::api::cli::Context {
+    let context = ferrite_engine::api::cli::Context {
         thread: thread.map(|thread| thread.to_string()),
         cwd: cwd.map(Path::to_path_buf),
     };
-    let request = ferrite_core::api::cli::parse(operation, args, &context).unwrap();
+    let request = ferrite_engine::api::cli::parse(operation, args, &context).unwrap();
     let ((mut out, said), (mut err, refused)) = (printed(), printed());
-    let status = ferrite_core::api::cli::call(&request, &harness.api, &mut out, &mut err);
+    let status = ferrite_engine::api::cli::call(&request, &harness.api, &mut out, &mut err);
     drop((out, err));
     let lines = |told: Receiver<String>| told.iter().map(|text| line(&text)).collect();
     (status, lines(said), lines(refused), request)
@@ -86,12 +86,12 @@ fn from_thread(
     method: &str,
     params: serde_json::Value,
 ) -> (i32, Vec<serde_json::Value>, Vec<serde_json::Value>) {
-    let request: ferrite_core::api::Request = serde_json::from_value(serde_json::json!({
+    let request: ferrite_engine::api::Request = serde_json::from_value(serde_json::json!({
         "id": "1", "method": method, "params": params, "caller": thread,
     }))
     .unwrap();
     let ((mut out, said), (mut err, refused)) = (printed(), printed());
-    let status = ferrite_core::api::cli::call(&request, &harness.api, &mut out, &mut err);
+    let status = ferrite_engine::api::cli::call(&request, &harness.api, &mut out, &mut err);
     drop((out, err));
     let lines = |told: Receiver<String>| told.iter().map(|text| line(&text)).collect();
     (status, lines(said), lines(refused))
@@ -137,7 +137,7 @@ fn interrogate_the_coordinator_parks_and_prompts_a_worker() {
     let worker_arg = worker.to_string();
     agent.send(decision()).unwrap();
     task_until(&mut caller, &task, |task| task["status"] == "needs_human");
-    let request: ferrite_core::api::Request = serde_json::from_value(serde_json::json!({
+    let request: ferrite_engine::api::Request = serde_json::from_value(serde_json::json!({
         "id": "1", "method": "decision.answer", "caller": coordinator,
         "params": {
             "thread": worker, "decision": "perm_01",
@@ -146,7 +146,7 @@ fn interrogate_the_coordinator_parks_and_prompts_a_worker() {
     }))
     .unwrap();
     let ((mut out, _said), (mut err, refused_lines)) = (printed(), printed());
-    let answered = ferrite_core::api::cli::call(&request, &harness.api, &mut out, &mut err);
+    let answered = ferrite_engine::api::cli::call(&request, &harness.api, &mut out, &mut err);
     drop((out, err));
     let answer_refused: Vec<String> = refused_lines.iter().collect();
     let back = task_until(&mut caller, &task, |_| true);
@@ -255,16 +255,16 @@ fn interrogate_a_worker_reports_another_tasks_outcome() {
     );
     assert_eq!(after["status"], "working", "{after}");
 
-    let operation = ferrite_core::api::Method::OPERATIONS
+    let operation = ferrite_engine::api::Method::OPERATIONS
         .iter()
         .find(|each| each.name == "report.outcome")
         .unwrap();
-    let context = ferrite_core::api::cli::Context {
+    let context = ferrite_engine::api::cli::Context {
         thread: Some(worker_a.to_string()),
         cwd: None,
     };
     let b_arg = worker_b.to_string();
-    let parsed = ferrite_core::api::cli::parse(
+    let parsed = ferrite_engine::api::cli::parse(
         operation,
         &["finished", "B is done", "--worker", &b_arg],
         &context,
@@ -282,10 +282,10 @@ struct HungDiscovery {
 }
 
 impl Spawner for HungDiscovery {
-    fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn ferrite_core::providers::Session>> {
+    fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn ferrite_engine::providers::Session>> {
         self.inner.spawn(request)
     }
-    fn start(&mut self, request: SpawnRequest) -> io::Result<ferrite_core::session::SessionLifecycle> {
+    fn start(&mut self, request: SpawnRequest) -> io::Result<ferrite_engine::session::SessionLifecycle> {
         self.inner.start(request)
     }
     fn discover_commands(
@@ -311,7 +311,7 @@ fn interrogate_a_workflow_read_blocks_the_pump_on_skills_discovery() {
     let store = dir.join("threads");
     let address = link::address(&store);
     let listener = link::listen(&address).unwrap();
-    let api = ferrite_core::api::address(&store);
+    let api = ferrite_engine::api::address(&store);
     let api_listener = link::listen(&api).unwrap();
     let (sessions, started) = mpsc::channel();
     let spawn = HungDiscovery {
@@ -341,7 +341,7 @@ fn interrogate_a_workflow_read_blocks_the_pump_on_skills_discovery() {
         let defaults = Arc::new(Mutex::new(SessionDefaults::default()));
         let (heard, hear) = mpsc::channel();
         let server = Server::new(engine, info, id, renders, defaults, settings_dir, heard.clone());
-        ferrite_core::api::accept_all(api_listener, heard.clone()).unwrap();
+        ferrite_engine::api::accept_all(api_listener, heard.clone()).unwrap();
         connection::accept_all(listener, heard, link::LAGGED_BYTES).unwrap();
         server.serve(hear)
     });
@@ -405,7 +405,7 @@ fn interrogate_one_unreadable_part_keeps_every_window_from_attaching() {
     drop(caller);
     let harness_dir = harness.dir.clone();
     let harness = restart_with(harness, |dir| {
-        let parts = dir.join("threads").join(ferrite_core::factory::DIR_NAME);
+        let parts = dir.join("threads").join(ferrite_engine::factory::DIR_NAME);
         for entry in std::fs::read_dir(parts).unwrap().flatten() {
             if entry.path().extension().is_some_and(|ext| ext == "json") {
                 std::fs::write(entry.path(), b"{ torn").unwrap();
@@ -448,7 +448,7 @@ fn interrogate_a_failed_save_cuts_off_an_attached_window() {
     let mut caller = call(&harness);
     let mut window = attach(&harness.address);
     let (task, _worker, agent) = one_off(&harness, &mut caller, &repo, "Fix the flaky test");
-    let parts = harness.dir.join("threads").join(ferrite_core::factory::DIR_NAME);
+    let parts = harness.dir.join("threads").join(ferrite_engine::factory::DIR_NAME);
     std::fs::set_permissions(&parts, std::fs::Permissions::from_mode(0o555)).unwrap();
     // The Worker rests without a report: the step decides a nudge, and
     // cannot write it.

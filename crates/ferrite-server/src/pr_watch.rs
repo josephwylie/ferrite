@@ -15,16 +15,16 @@ use std::sync::{mpsc, Arc};
 
 use serde_json::{json, Value};
 
-use ferrite_core::api::schema::{PrParams, PrWatchParams};
-use ferrite_core::api::{unknown_thread, ApiError, CallerId, Code};
-use ferrite_core::pr_watch::{
+use ferrite_engine::api::schema::{PrParams, PrWatchParams};
+use ferrite_engine::api::{unknown_thread, ApiError, CallerId, Code};
+use ferrite_engine::pr_watch::{
     self, Change, CheckStatus, Closes, End, Fingerprint, Mergeable, ReadError, Reading, Report,
 };
 use ferrite_core::pull_request::{self, Cursor, PrState, Stamp, Target, Until, Watch};
-use ferrite_core::github::GitHub;
+use ferrite_engine::github::GitHub;
 use ferrite_core::transcript::{tools, Body, ToolState};
 use ferrite_core::wake::Wake;
-use ferrite_core::connection::ClientId;
+use ferrite_engine::connection::ClientId;
 use ferrite_core::protocol::{Done, ErrorCode, WireError};
 use ferrite_core::ThreadId;
 

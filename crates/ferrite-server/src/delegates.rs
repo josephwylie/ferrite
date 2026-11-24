@@ -27,12 +27,12 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use ferrite_core::api::schema::{
+use ferrite_engine::api::schema::{
     AgentWaitParams, DelegateCancelParams, DelegateListParams, DelegateParams,
     DelegateStartParams, ThreadParams, ThreadStartParams,
 };
 use ferrite_core::settings::Settings;
-use ferrite_core::api::{ApiError, CallerId, Code, Method, Outcome};
+use ferrite_engine::api::{ApiError, CallerId, Code, Method, Outcome};
 use ferrite_core::delegate::{self, Cancel, Delegate, DelegateId, Delegates, Started};
 use ferrite_core::runtime_mode::RuntimeMode;
 use ferrite_core::wake::Wake;

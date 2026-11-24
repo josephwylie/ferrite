@@ -20,7 +20,7 @@ pub fn run(store: &Path, executable: &Path) -> i32 {
 
 /// Bridge one CLI call to the API, or say there is no Server to answer it.
 pub fn api(store: &Path) -> i32 {
-    let address = ferrite_core::api::address(store);
+    let address = ferrite_engine::api::address(store);
     carry(link::connect(&address).map_err(|error| {
         io::Error::new(
             error.kind(),

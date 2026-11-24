@@ -2808,7 +2808,7 @@ mod tests {
                 height: 1.0,
             },
         };
-        let png = include_bytes!("../../ferrite-core/tests/fixtures/browser-original.png");
+        let png = include_bytes!("../../ferrite-engine/tests/fixtures/browser-original.png");
         let first =
             browser_annotations::retain(&root, capture.clone(), png, "First".into(), vec![])
                 .unwrap();

@@ -656,7 +656,7 @@ impl SessionDefaults {
     }
 
     /// The effort a spawn on `provider` gets when the Thread chose none.
-    pub(crate) fn effort_for(&self, provider: Provider) -> Option<String> {
+    pub fn effort_for(&self, provider: Provider) -> Option<String> {
         match provider {
             Provider::Claude => self.claude_effort.clone(),
             Provider::Codex => self.codex_effort.clone(),

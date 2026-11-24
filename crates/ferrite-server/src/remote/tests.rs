@@ -3,16 +3,16 @@ use super::*;
 #[cfg(all(unix, feature = "test-support"))]
 mod network {
     use super::*;
-    use ferrite_core::connection;
+    use ferrite_engine::connection;
     use ferrite_core::machine::remote::{self, Profile};
     use tokio_tungstenite::tungstenite::Message as ClientFrame;
 
     struct NoSessions;
-    impl ferrite_core::engine::Spawner for NoSessions {
+    impl ferrite_engine::engine::Spawner for NoSessions {
         fn spawn(
             &mut self,
-            _: ferrite_core::engine::SpawnRequest,
-        ) -> io::Result<Box<dyn ferrite_core::providers::Session>> {
+            _: ferrite_engine::engine::SpawnRequest,
+        ) -> io::Result<Box<dyn ferrite_engine::providers::Session>> {
             Err(io::Error::other("This fixture does not spawn agents."))
         }
     }
@@ -39,15 +39,15 @@ mod network {
                 link::LAGGED_BYTES,
             )
             .unwrap();
-            ferrite_core::api::accept_all(
-                link::listen(&ferrite_core::api::address(&store)).unwrap(),
+            ferrite_engine::api::accept_all(
+                link::listen(&ferrite_engine::api::address(&store)).unwrap(),
                 heard.clone(),
             )
             .unwrap();
             let server_store = store.clone();
             std::thread::spawn(move || {
-                let engine = ferrite_core::engine::Engine::try_new(
-                    ferrite_core::store::Store::open(&server_store).unwrap(),
+                let engine = ferrite_engine::engine::Engine::try_new(
+                    ferrite_engine::store::Store::open(&server_store).unwrap(),
                     Box::new(NoSessions),
                 )
                 .unwrap();
@@ -73,7 +73,7 @@ mod network {
             let gateway = Gateway {
                 access: Arc::new(Mutex::new(access)),
                 socket: link::address(&store),
-                api_socket: ferrite_core::api::address(&store),
+                api_socket: ferrite_engine::api::address(&store),
                 slots: Arc::new(Semaphore::new(32)),
                 // Not the operator's login shell: its startup files take
                 // seconds, longer under load than the waits below.

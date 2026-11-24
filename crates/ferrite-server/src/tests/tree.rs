@@ -598,7 +598,7 @@ fn a_send_into_or_around_its_own_source_on_this_computer_is_refused() {
             .chain([from.to_string_lossy().into(), to.to_string_lossy().into()])
             .collect();
         assert_eq!(
-            ferrite_core::api::cli::run(&args, &harness.dir.join("threads"), &harness.dir),
+            ferrite_engine::api::cli::run(&args, &harness.dir.join("threads"), &harness.dir),
             Some(1),
             "{} into {}",
             from.display(),
@@ -622,7 +622,7 @@ fn the_cli_sends_a_tree_to_its_server_leaving_what_it_skips() {
         .chain(["--skip".into(), "target".into()])
         .collect();
     assert_eq!(
-        ferrite_core::api::cli::run(&args, &harness.dir.join("threads"), &harness.dir),
+        ferrite_engine::api::cli::run(&args, &harness.dir.join("threads"), &harness.dir),
         Some(0)
     );
     assert_eq!(std::fs::read(dest.join("src/main.rs")).unwrap(), b"fn main() {}\n");
@@ -693,7 +693,7 @@ fn a_project_copy_reads_as_unchanged_to_git_there() {
     let mut cockpit = machine(&harness, &sent);
     let source = harness.dir.join("desktop-app");
     let dest = harness.dir.join("box-app");
-    let git = |repo: &Path, args: &[&str]| ferrite_core::workspace::git_for_tests(repo, args);
+    let git = |repo: &Path, args: &[&str]| ferrite_engine::workspace::git_for_tests(repo, args);
     std::fs::create_dir_all(&source).unwrap();
     git(&source, &["init", "-q", "-b", "main"]);
     write(&source.join("src/main.rs"), "fn main() {}

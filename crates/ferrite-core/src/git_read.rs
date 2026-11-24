@@ -289,7 +289,7 @@ pub fn git_spawns_on_this_thread() -> u64 {
 /// Never with git's optional locks: the checkouts Ferrite reads are the
 /// ones its agents are writing, and a read that refreshed the index on the
 /// side would take `index.lock` from under the agent's own `git`.
-pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
+pub fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
     GIT_SPAWNS.with(|spawns| spawns.set(spawns.get() + 1));
     let output = Command::new("git")
         .arg("-C")

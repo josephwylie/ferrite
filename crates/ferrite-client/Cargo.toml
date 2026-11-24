@@ -9,10 +9,12 @@ description = "Ferrite's window model: the Cockpit a window holds of its machine
 # The Engine in this process the tests, the demo and the visual reference
 # run in place of a Server (`cockpit::in_process`, ADR 0049). A released
 # window never turns it on, so it holds no Engine.
-test-support = ["ferrite-core/test-support"]
+test-support = ["dep:ferrite-engine", "ferrite-core/test-support", "ferrite-engine/test-support"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
+# Only `in_process`'s: a released window holds no Engine.
+ferrite-engine = { path = "../ferrite-engine", optional = true }
 ferrite-reviewr = { path = "../ferrite-reviewr" }
 base64 = "0.22"
 serde = { workspace = true }
@@ -20,6 +22,7 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
+ferrite-engine = { path = "../ferrite-engine", features = ["test-support"] }
 # The integration tests drive an Engine in their own process (`in_process`).
 ferrite-client = { path = ".", features = ["test-support"] }
 chrono = "0.4.45"

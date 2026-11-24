@@ -13,8 +13,8 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use ferrite_core::api::schema::{MachineParams, ThreadStartParams};
-use ferrite_core::api::{ApiError, Code, Method};
+use ferrite_engine::api::schema::{MachineParams, ThreadStartParams};
+use ferrite_engine::api::{ApiError, Code, Method};
 use ferrite_core::provider::Provider;
 use ferrite_core::runtime_mode::RuntimeMode;
 use ferrite_core::ThreadId;

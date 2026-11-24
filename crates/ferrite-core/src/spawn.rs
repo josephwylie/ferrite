@@ -180,7 +180,7 @@ impl AgentEnvironment for Command {
 /// which std (1.77+) runs through cmd.exe with escaped arguments. Anything
 /// with a separator or an extension — the test harness's stub paths
 /// included — passes through untouched, as does every name off Windows.
-pub(crate) fn spawnable_program(program: &str) -> String {
+pub fn spawnable_program(program: &str) -> String {
     if cfg!(windows) {
         if let Some(shim) = cmd_shim(program, std::env::var_os("PATH").as_deref()) {
             return shim.to_string_lossy().into_owned();

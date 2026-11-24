@@ -124,9 +124,9 @@ use ferrite_client::cockpit::Spawner;
 
 use ferrite_core::doorbell::Sender;
 
-use ferrite_core::providers::Session;
+use ferrite_engine::providers::Session;
 
-use ferrite_core::store::Store;
+use ferrite_engine::store::Store;
 
 use ferrite_core::transcript::Body;
 
@@ -144,7 +144,7 @@ struct Scripted {
     rx: Receiver<SessionEvent>,
     interrupts: Rc<RefCell<usize>>,
     stopped: Rc<RefCell<Vec<ferrite_core::activity::AgentKey>>>,
-    forks: Rc<RefCell<Vec<ferrite_core::providers::ForkRequest>>>,
+    forks: Rc<RefCell<Vec<ferrite_engine::providers::ForkRequest>>>,
     fail_fork: Rc<RefCell<bool>>,
     fail_send: Rc<RefCell<bool>>,
     sent: Rc<RefCell<Vec<String>>>,
@@ -156,7 +156,7 @@ struct Scripted {
     withheld: Rc<RefCell<Vec<ferrite_core::ControlKind>>>,
     modes: Rc<RefCell<Option<Vec<ferrite_core::PermissionModeChoice>>>>,
     sandbox: Rc<RefCell<Option<String>>>,
-    file_searches: Rc<RefCell<Vec<(String, ferrite_core::providers::FileSearchReply)>>>,
+    file_searches: Rc<RefCell<Vec<(String, ferrite_engine::providers::FileSearchReply)>>>,
     native_files: Rc<RefCell<bool>>,
     effort_answers: EffortAnswers,
 }
@@ -169,7 +169,7 @@ impl Session for Scripted {
     fn search_files(
         &mut self,
         query: &str,
-        reply: ferrite_core::providers::FileSearchReply,
+        reply: ferrite_engine::providers::FileSearchReply,
     ) -> std::io::Result<()> {
         if !*self.native_files.borrow() {
             return Err(std::io::ErrorKind::Unsupported.into());
@@ -230,14 +230,14 @@ impl Session for Scripted {
     fn set_effort(
         &mut self,
         _effort: Option<&str>,
-    ) -> std::io::Result<ferrite_core::providers::SettingAck> {
+    ) -> std::io::Result<ferrite_engine::providers::SettingAck> {
         match self.effort_answers.borrow_mut().as_mut() {
             Some(answers) => {
                 let (answer, ack) = ferrite_core::doorbell::sync_channel(1);
                 answers.push(answer);
                 Ok(ack)
             }
-            None => Ok(ferrite_core::providers::applied()),
+            None => Ok(ferrite_engine::providers::applied()),
         }
     }
     fn events(&self) -> &Receiver<SessionEvent> {
@@ -261,15 +261,15 @@ impl Session for Scripted {
     /// Forks afresh, at once: the new Thread's agent starts its own.
     fn fork(
         &mut self,
-        request: ferrite_core::providers::ForkRequest,
-    ) -> std::io::Result<ferrite_core::providers::ForkAck> {
+        request: ferrite_engine::providers::ForkRequest,
+    ) -> std::io::Result<ferrite_engine::providers::ForkAck> {
         self.forks.borrow_mut().push(request);
         if *self.fail_fork.borrow() {
             return Err(std::io::Error::other("Claude has not named its session yet"));
         }
         let (answer, ack) = ferrite_core::doorbell::sync_channel(1);
         answer
-            .send(Ok(ferrite_core::providers::Forked::Fresh))
+            .send(Ok(ferrite_engine::providers::Forked::Fresh))
             .unwrap();
         Ok(ack)
     }
@@ -284,7 +284,7 @@ struct Fake {
     interrupts: Rc<RefCell<usize>>,
     stopped: Rc<RefCell<Vec<ferrite_core::activity::AgentKey>>>,
     /// Every fork a Session was asked for.
-    forks: Rc<RefCell<Vec<ferrite_core::providers::ForkRequest>>>,
+    forks: Rc<RefCell<Vec<ferrite_engine::providers::ForkRequest>>>,
     /// Set, a Session's fork fails as Claude's does before it has named
     /// its session.
     fail_fork: Rc<RefCell<bool>>,
@@ -319,7 +319,7 @@ struct Fake {
     modes: Rc<RefCell<Option<Vec<ferrite_core::PermissionModeChoice>>>>,
     /// When set, the sandbox every Session says it runs in.
     sandbox: Rc<RefCell<Option<String>>>,
-    file_searches: Rc<RefCell<Vec<(String, ferrite_core::providers::FileSearchReply)>>>,
+    file_searches: Rc<RefCell<Vec<(String, ferrite_engine::providers::FileSearchReply)>>>,
     native_files: Rc<RefCell<bool>>,
     effort_answers: EffortAnswers,
 }
@@ -350,22 +350,22 @@ impl Spawner for Fake {
     fn start(
         &mut self,
         request: ferrite_client::cockpit::SpawnRequest,
-    ) -> std::io::Result<ferrite_core::session::SessionLifecycle> {
+    ) -> std::io::Result<ferrite_engine::session::SessionLifecycle> {
         self.resumed
             .borrow_mut()
             .push(request.resume.map(str::to_string));
         let refused = self.refused_resume.borrow().clone();
         if let Some((_, words)) = refused.filter(|(id, _)| request.resume == Some(id.as_str())) {
-            return ferrite_core::session::SessionLifecycle::background(move || {
-                Err(ferrite_core::providers::ResumeRefused::error(true, words))
+            return ferrite_engine::session::SessionLifecycle::background(move || {
+                Err(ferrite_engine::providers::ResumeRefused::error(true, words))
             });
         }
         let Some(gate) = self.start_gate.borrow_mut().take() else {
             return self
                 .spawn(request)
-                .map(ferrite_core::session::SessionLifecycle::ready);
+                .map(ferrite_engine::session::SessionLifecycle::ready);
         };
-        ferrite_core::session::SessionLifecycle::background(move || {
+        ferrite_engine::session::SessionLifecycle::background(move || {
             let words = gate.recv().unwrap_or_else(|_| "the gate closed".into());
             Err(std::io::Error::other(words))
         })

@@ -125,12 +125,12 @@ fn an_open_threads_project_is_answered_without_reading_its_log() {
     std::fs::remove_file(store.join(thread.to_string()).join("log.jsonl")).unwrap();
 
     assert_eq!(engine.project_id(thread), Some(project));
-    let info = ferrite_core::api::thread_info(&engine, thread).unwrap();
-    assert_eq!(info.project, Some(ferrite_core::api::project_id(project)));
-    let listed = ferrite_core::api::project_infos(&engine);
+    let info = ferrite_engine::api::thread_info(&engine, thread).unwrap();
+    assert_eq!(info.project, Some(ferrite_engine::api::project_id(project)));
+    let listed = ferrite_engine::api::project_infos(&engine);
     let row = listed
         .iter()
-        .find(|row| row.id == ferrite_core::api::project_id(project))
+        .find(|row| row.id == ferrite_engine::api::project_id(project))
         .unwrap();
     assert_eq!(row.thread_count, 1);
 }

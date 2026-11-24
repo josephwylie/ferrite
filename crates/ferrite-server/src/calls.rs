@@ -9,24 +9,24 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use super::Server;
-use ferrite_core::api::schema::Callers;
-use ferrite_core::api::schema::{
+use ferrite_engine::api::schema::Callers;
+use ferrite_engine::api::schema::{
     AgentPromptParams, AgentReadParams, AgentWaitParams, DecisionAnswerParams, MachineParams,
     ThreadReviveParams, ThreadStartParams,
 };
-use ferrite_core::api::{
+use ferrite_engine::api::{
     self, thread_info, thread_parked, thread_result, unknown_thread, ApiError, CallerId, Code,
     Method, Request, ThreadInfo, Until, Wait,
 };
 use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::drive::Action;
-use ferrite_core::engine::{Launch, ReadBack};
+use ferrite_engine::engine::{Launch, ReadBack};
 use ferrite_core::header::LoadError;
 use ferrite_core::protocol::{Done, Op, ProjectAction, ServerMessage, WireAnswer};
 use ferrite_core::provider::Provider;
 use ferrite_core::runtime_mode::RuntimeMode;
 use ferrite_core::settings::Settings;
-use ferrite_core::workspace;
+use ferrite_engine::workspace;
 use ferrite_core::ThreadId;
 
 mod projects;
@@ -276,11 +276,11 @@ impl Server {
             Method::TaskGet(params) => self.api_task_get(params),
             Method::TaskStop(params) => self.api_task_command(
                 &params.task.clone(),
-                ferrite_core::factory::Command::Stop { task: params.task },
+                ferrite_engine::factory::Command::Stop { task: params.task },
             ),
             Method::TaskResume(params) => self.api_task_command(
                 &params.task.clone(),
-                ferrite_core::factory::Command::Resume { task: params.task },
+                ferrite_engine::factory::Command::Resume { task: params.task },
             ),
             Method::TaskDelete(params) => self.api_task_delete(params),
             Method::ReportOutcome(params) => caller
@@ -291,7 +291,7 @@ impl Server {
             Method::WorkflowGet(params) => self.api_workflow_answer(&params.workflow, None),
             Method::WorkflowRename(params) => self.api_author(
                 params.workflow.clone(),
-                ferrite_core::factory::Command::RenameWorkflow {
+                ferrite_engine::factory::Command::RenameWorkflow {
                     workflow: params.workflow,
                     name: params.name,
                 },
@@ -299,7 +299,7 @@ impl Server {
             Method::WorkflowSave(params) => self.api_workflow_save(params.workflow),
             Method::StepAdd(params) => self.api_author(
                 params.workflow.clone(),
-                ferrite_core::factory::Command::AddStep {
+                ferrite_engine::factory::Command::AddStep {
                     workflow: params.workflow,
                     after: params.after,
                     agent: self.factory_agent.clone(),
@@ -307,7 +307,7 @@ impl Server {
             ),
             Method::StepEdit(params) => self.api_author(
                 params.workflow.clone(),
-                ferrite_core::factory::Command::EditStep {
+                ferrite_engine::factory::Command::EditStep {
                     workflow: params.workflow,
                     step: params.step,
                     change: params.change,
@@ -315,7 +315,7 @@ impl Server {
             ),
             Method::StepMove(params) => self.api_author(
                 params.workflow.clone(),
-                ferrite_core::factory::Command::MoveStep {
+                ferrite_engine::factory::Command::MoveStep {
                     workflow: params.workflow,
                     step: params.step,
                     to: params.to,
@@ -323,7 +323,7 @@ impl Server {
             ),
             Method::StepDelete(params) => self.api_author(
                 params.workflow.clone(),
-                ferrite_core::factory::Command::DeleteStep {
+                ferrite_engine::factory::Command::DeleteStep {
                     workflow: params.workflow,
                     step: params.step,
                 },
@@ -334,7 +334,7 @@ impl Server {
             Method::ReportRevision(params) => caller.worker().and_then(|worker| {
                 self.api_worker_said(
                     worker,
-                    ferrite_core::factory::Command::ReportRevision {
+                    ferrite_engine::factory::Command::ReportRevision {
                         worker,
                         head: params.head,
                         pr: params.pr,
@@ -345,7 +345,7 @@ impl Server {
             Method::ReportEvidence(params) => caller.worker().and_then(|worker| {
                 self.api_worker_said(
                     worker,
-                    ferrite_core::factory::Command::ReportEvidence {
+                    ferrite_engine::factory::Command::ReportEvidence {
                         worker,
                         text: params.text,
                     },
@@ -355,7 +355,7 @@ impl Server {
                 let task = params.task.clone();
                 self.api_task_command(
                     &task,
-                    ferrite_core::factory::Command::AnswerQuestion {
+                    ferrite_engine::factory::Command::AnswerQuestion {
                         task: params.task,
                         text: params.text,
                         question: params.question,
@@ -366,35 +366,35 @@ impl Server {
                 let task = params.task.clone();
                 self.api_task_command(
                     &task,
-                    ferrite_core::factory::Command::Approve { task: params.task },
+                    ferrite_engine::factory::Command::Approve { task: params.task },
                 )
             }
             Method::TaskRework(params) => self.api_task_rework(params),
             Method::TaskRedirect(params) => self.api_task_redirect(params),
             Method::WorkflowApproval(params) => self.api_author(
                 params.workflow.clone(),
-                ferrite_core::factory::Command::EditApproval {
+                ferrite_engine::factory::Command::EditApproval {
                     workflow: params.workflow,
                     change: params.change,
                 },
             ),
             Method::WorkflowStart(params) => self.api_automate(
                 params.workflow.clone(),
-                ferrite_core::factory::Command::EditStart {
+                ferrite_engine::factory::Command::EditStart {
                     workflow: params.workflow,
                     start: params.start,
                 },
             ),
             Method::WorkflowAutomation(params) => self.api_automate(
                 params.workflow.clone(),
-                ferrite_core::factory::Command::Automation {
+                ferrite_engine::factory::Command::Automation {
                     workflow: params.workflow,
                     turn: params.turn,
                 },
             ),
             Method::WorkflowBacklog(params) => self.api_automate(
                 params.workflow.clone(),
-                ferrite_core::factory::Command::Backlog {
+                ferrite_engine::factory::Command::Backlog {
                     workflow: params.workflow,
                     take: params.take,
                 },

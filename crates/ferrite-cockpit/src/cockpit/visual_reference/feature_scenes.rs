@@ -1339,7 +1339,7 @@ fn factory_start(kind: ferrite_core::factory_board::StartKind) -> (Scene, Setup)
 /// Task), saving a version, turning automatic starts on and redirecting a
 /// Task (waiting), and a dismissed one.
 fn factory_coordinator() -> (Scene, Setup) {
-    use ferrite_core::factory::Command;
+    use ferrite_engine::factory::Command;
     use ferrite_core::factory_board::{
         Act, Agent, Catalog, Override, Start, StartKind, Template, ThenReturn,
     };

@@ -433,7 +433,7 @@ impl Visuals {
 
 /// How a call is answered, before any provider shapes it for its wire.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Answer {
+pub struct Answer {
     pub text: String,
     pub png: Option<Vec<u8>>,
     pub is_error: bool,
@@ -450,7 +450,7 @@ impl Answer {
 
     /// A call that arrived with no renderer to answer it (a resumed Codex
     /// thread whose Session now offers no visuals).
-    pub(crate) fn unavailable() -> Self {
+    pub fn unavailable() -> Self {
         Self::error("Ferrite cannot show visuals in this session.")
     }
 
@@ -466,7 +466,7 @@ impl Answer {
 /// Answer one call of the tool: hand its input to the renderer and call
 /// `respond` exactly once with the answer, from another thread. Never blocks
 /// the caller (a provider's reader thread).
-pub(crate) fn answer(
+pub fn answer(
     visuals: &Visuals,
     id: &str,
     input: &Value,

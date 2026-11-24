@@ -1,6 +1,6 @@
 //! What the Composer's idle line should offer.
 //!
-//! The suggestion itself is predicted by [`crate::suggest`] and arrives
+//! The suggestion itself is predicted by [`ferrite_engine::suggest`] and arrives
 //! asynchronously; this decides *whether* it is the right thing to show. A
 //! Decision outranks it — that is what the Thread is actually waiting on — and
 //! so does a closed Session, where the only follow-up there is is reviving.

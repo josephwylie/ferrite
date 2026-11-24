@@ -9,7 +9,7 @@ use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum PersistedActivity {
+pub enum PersistedActivity {
     Discovered {
         key: String,
         parent: Option<PersistedSubject>,
@@ -71,14 +71,14 @@ pub(crate) enum PersistedActivity {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum PersistedSubject {
+pub enum PersistedSubject {
     Main,
     Subagent { key: String },
 }
 
 impl PersistedSubject {
     /// The child's stored key, or `None` for Main.
-    pub(crate) fn key(&self) -> Option<&str> {
+    pub fn key(&self) -> Option<&str> {
         match self {
             Self::Main => None,
             Self::Subagent { key } => Some(key),
@@ -88,7 +88,7 @@ impl PersistedSubject {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Coverage {
+pub enum Coverage {
     Unavailable,
     ToolActivity,
     Live,
@@ -98,7 +98,7 @@ pub(crate) enum Coverage {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Status {
+pub enum Status {
     Unknown,
     Pending,
     Working,
@@ -114,7 +114,7 @@ pub(crate) enum Status {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum Execution {
+pub enum Execution {
     FileChanges {
         id: String,
         edits: Vec<StoredFileEdit>,
@@ -201,7 +201,7 @@ pub(crate) enum Execution {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct StoredFileEdit {
+pub struct StoredFileEdit {
     path: String,
     hunks: Vec<StoredHunk>,
 }
@@ -244,7 +244,7 @@ impl Coverage {
             TranscriptCoverage::Complete => Self::Complete,
         }
     }
-    pub(crate) fn live(&self) -> TranscriptCoverage {
+    pub fn live(&self) -> TranscriptCoverage {
         match self {
             Self::Unavailable => TranscriptCoverage::Unavailable,
             Self::ToolActivity => TranscriptCoverage::ToolActivity,
@@ -271,7 +271,7 @@ impl Status {
             AgentStatus::NotLoaded => Self::NotLoaded,
         }
     }
-    pub(crate) fn live(&self) -> AgentStatus {
+    pub fn live(&self) -> AgentStatus {
         match self {
             Self::Unknown => AgentStatus::Unknown,
             Self::Pending => AgentStatus::Pending,
@@ -296,7 +296,7 @@ impl Outcome {
             crate::TurnOutcome::Error(error) => Self::Error(error.clone()),
         }
     }
-    pub(crate) fn live(&self) -> crate::TurnOutcome {
+    pub fn live(&self) -> crate::TurnOutcome {
         match self {
             Self::Completed => crate::TurnOutcome::Completed,
             Self::Interrupted => crate::TurnOutcome::Interrupted,
@@ -417,7 +417,7 @@ impl Execution {
             },
         }
     }
-    pub(crate) fn live(&self) -> ExecutionEvent {
+    pub fn live(&self) -> ExecutionEvent {
         match self {
             Self::FileChanges { id, edits } => ExecutionEvent::FileChanges {
                 id: id.clone(),
@@ -531,7 +531,7 @@ impl Execution {
 }
 
 impl PersistedActivity {
-    pub(crate) fn from_live(event: &ActivityEvent, duration: Option<Duration>) -> Option<Self> {
+    pub fn from_live(event: &ActivityEvent, duration: Option<Duration>) -> Option<Self> {
         let duration_ms =
             duration.map(|duration| duration.as_millis().min(u64::MAX as u128) as u64);
         Some(match event {
@@ -607,7 +607,7 @@ impl PersistedActivity {
             }
         })
     }
-    pub(crate) fn live(&self) -> ActivityEvent {
+    pub fn live(&self) -> ActivityEvent {
         match self {
             Self::Discovered {
                 key,
@@ -673,7 +673,7 @@ impl PersistedActivity {
         }
     }
     /// Every child key this observation names.
-    pub(crate) fn children(&self) -> impl Iterator<Item = &str> {
+    pub fn children(&self) -> impl Iterator<Item = &str> {
         let keys: [Option<&str>; 2] = match self {
             Self::Discovered { key, .. }
             | Self::Status { key, .. }
@@ -711,7 +711,7 @@ impl PersistedActivity {
                 | Self::CompletionObservation { .. }
         )
     }
-    pub(crate) fn tool_duration(&self) -> Option<(Subject, String, Duration)> {
+    pub fn tool_duration(&self) -> Option<(Subject, String, Duration)> {
         match self {
             Self::Content {
                 key,

@@ -14,7 +14,7 @@ cef = ["ferrite-pane/cef"]
 # the app's `--demo`, `--load`, `--panes` and `--demo parity`. The Engine is
 # ferrite-client's fixture (ADR 0049), so a released app has neither. The
 # app's `demo` feature and `headless` turn this on.
-demo = ["ferrite-client/test-support"]
+demo = ["dep:ferrite-engine", "ferrite-client/test-support"]
 # The Cockpit window drawn off-screen and driven by keys, clicks and shots
 # (`headless`, ADR 0038): gpui's test support carries its input and
 # capture, so release builds never have it. The app's `headless` feature
@@ -27,6 +27,7 @@ headless = [
     "gpui/test-support",
     "dep:gpui-reference-platform",
     "ferrite-core/test-support",
+    "ferrite-engine/test-support",
     "ferrite-client/test-support",
     "ferrite-ui/test-support",
     "ferrite-pane/test-support",
@@ -41,6 +42,9 @@ browser-smoke = ["gpui/test-support", "dep:gpui-reference-platform", "ferrite-pa
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
 ferrite-client = { path = "../ferrite-client" }
+# The demo's scripted Sessions and Store, and the worlds the headless
+# frames and the visual reference build: never a released app's.
+ferrite-engine = { path = "../ferrite-engine", optional = true }
 # The theme, icons, components, motion and menus the Cockpit and Pane share.
 ferrite-ui = { path = "../ferrite-ui" }
 # The Pane: the transcript, the Composer and the Draft.
@@ -83,6 +87,7 @@ libc = "0.2"
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
 # The in-process machine the window's tests attach to.
 ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
+ferrite-engine = { path = "../ferrite-engine", features = ["test-support"] }
 ferrite-client = { path = "../ferrite-client", features = ["test-support"] }
 ferrite-server = { path = "../ferrite-server", features = ["test-support"] }
 ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }

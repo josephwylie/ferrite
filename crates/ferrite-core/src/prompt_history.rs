@@ -4,14 +4,14 @@ pub enum HistoryDirection {
     Newer,
 }
 
-pub(crate) struct PromptHistory {
+pub struct PromptHistory {
     entries: Vec<String>,
     cursor: Option<usize>,
     draft: Option<String>,
 }
 
 impl PromptHistory {
-    pub(crate) fn new(entries: Vec<String>) -> Self {
+    pub fn new(entries: Vec<String>) -> Self {
         Self {
             entries,
             cursor: None,
@@ -19,18 +19,18 @@ impl PromptHistory {
         }
     }
 
-    pub(crate) fn has_entries(&self) -> bool {
+    pub fn has_entries(&self) -> bool {
         !self.entries.is_empty()
     }
 
     /// Forget the latest `count` prompts: what a rewind took back.
-    pub(crate) fn forget_latest(&mut self, count: usize) {
+    pub fn forget_latest(&mut self, count: usize) {
         self.entries
             .truncate(self.entries.len().saturating_sub(count));
         self.reset();
     }
 
-    pub(crate) fn recall(
+    pub fn recall(
         &mut self,
         direction: HistoryDirection,
         current_draft: &str,
@@ -65,12 +65,12 @@ impl PromptHistory {
         }
     }
 
-    pub(crate) fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.cursor = None;
         self.draft = None;
     }
 
-    pub(crate) fn append(&mut self, text: String) {
+    pub fn append(&mut self, text: String) {
         self.entries.push(text);
         self.reset();
     }

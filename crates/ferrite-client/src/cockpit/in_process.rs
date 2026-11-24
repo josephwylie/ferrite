@@ -16,10 +16,10 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub use ferrite_core::engine::{AgentLaunch, Engine, Preparation, RssSampler, SpawnRequest, Spawner};
+pub use ferrite_engine::engine::{AgentLaunch, Engine, Preparation, RssSampler, SpawnRequest, Spawner};
 use ferrite_core::checkout::WorkspaceChoice;
 use ferrite_core::clock::ServerClock;
-use ferrite_core::engine::Launch;
+use ferrite_engine::engine::Launch;
 use ferrite_core::machine::Bridge;
 use ferrite_core::protocol::{
     CliAction, ClientMessage, Command, Done, GitHubAsk, Op, ReviewPullRequest, ReviewPullRequests,
@@ -27,7 +27,7 @@ use ferrite_core::protocol::{
 };
 use ferrite_core::provider::Provider;
 use ferrite_core::roster::DraftId;
-use ferrite_core::store::Store;
+use ferrite_engine::store::Store;
 use ferrite_core::transcript::Input;
 use ferrite_core::{MachineId, MachineKey, ThreadId, ThreadKey};
 use ferrite_reviewr::ferrite::{Bases, FileSides, Read};
@@ -483,7 +483,7 @@ impl Link for InProcess {
             return Ok(read_here(move || Ok(reading)));
         }
         let path = path.to_path_buf();
-        Ok(read_here(move || Ok(ferrite_core::workspace::pull_request(&path))))
+        Ok(read_here(move || Ok(ferrite_engine::workspace::pull_request(&path))))
     }
 
     /// Only stopped here: a new watch is a Server's watcher's.
@@ -508,8 +508,8 @@ impl Link for InProcess {
             return Ok(read_here(move || Ok(names)));
         }
         Ok(read_here(move || {
-            use ferrite_core::github::GitHub;
-            let gh = ferrite_core::github::Gh;
+            use ferrite_engine::github::GitHub;
+            let gh = ferrite_engine::github::Gh;
             match ask {
                 GitHubAsk::Repositories => gh.repositories(),
                 GitHubAsk::Labels { repository } => gh.labels(&repository),
@@ -520,7 +520,7 @@ impl Link for InProcess {
 
     fn cli(&mut self, action: CliAction) -> io::Result<Receiver<io::Result<Done>>> {
         Ok(read_here(move || {
-            ferrite_core::providers::clis::perform(&ferrite_core::providers::clis::Host, &action)
+            ferrite_engine::providers::clis::perform(&ferrite_engine::providers::clis::Host, &action)
                 .map_err(|error| error.message)
         }))
     }
@@ -921,7 +921,7 @@ impl Cockpit {
     /// A fixture world with a Factory of its own that answers Workflow
     /// asks as a Server's does, starting empty.
     pub fn fixture_live_factory(&mut self) {
-        let factory = ferrite_core::factory::Factory::in_memory();
+        let factory = ferrite_engine::factory::Factory::in_memory();
         let board = factory.board();
         self.fixture().factory.factory = Some(factory);
         self.receive_fixture(ServerMessage::Factory { revision: 0, board });
@@ -947,7 +947,7 @@ impl Cockpit {
 
     /// A fixture world's Factory hears `command` as a Server's would
     /// (a GitHub read's answer, say), and the window is told the board.
-    pub fn fixture_factory_command(&mut self, command: ferrite_core::factory::Command) {
+    pub fn fixture_factory_command(&mut self, command: ferrite_engine::factory::Command) {
         if let Some(board) = self.fixture().factory.hear(command) {
             self.receive_fixture(ServerMessage::Factory { revision: 0, board });
         }

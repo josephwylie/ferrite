@@ -226,7 +226,7 @@ fn a_merge_step_reports_each_result_and_a_merged_task_tidies_its_worktree() {
     assert_eq!(done["pr"]["merged"], true, "{done}");
     assert!(!worktree.exists(), "the clean worktree is removed");
     assert!(
-        !ferrite_core::workspace::git_for_tests(&repo, &["branch", "--list", "factory/t-1"])
+        !ferrite_engine::workspace::git_for_tests(&repo, &["branch", "--list", "factory/t-1"])
             .trim()
             .is_empty(),
         "the branch stays"

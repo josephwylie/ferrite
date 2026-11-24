@@ -278,7 +278,7 @@ fn an_unreadable_factory_store_is_said_and_never_started_afresh() {
     assert_eq!(harness.server.join().unwrap(), 0);
     gone(&harness.address);
     gone(&harness.api);
-    let parts = harness.dir.join("threads").join(ferrite_core::factory::DIR_NAME);
+    let parts = harness.dir.join("threads").join(ferrite_engine::factory::DIR_NAME);
     let file = std::fs::read_dir(&parts)
         .unwrap()
         .flatten()

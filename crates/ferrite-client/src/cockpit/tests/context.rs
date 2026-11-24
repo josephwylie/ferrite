@@ -275,7 +275,7 @@ fn parking_never_waits_for_the_drive() {
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
     cockpit.engine().store().settle_all();
-    *ferrite_core::store::worker_lock(&cockpit.engine().store().faults().sync_delay) =
+    *ferrite_engine::store::worker_lock(&cockpit.engine().store().faults().sync_delay) =
         std::time::Duration::from_secs(3);
     let started = std::time::Instant::now();
     cockpit.park(thread).now().unwrap();
@@ -292,7 +292,7 @@ fn parking_never_waits_for_the_drive() {
             .map(|summary| summary.turns),
         Some(1)
     );
-    *ferrite_core::store::worker_lock(&cockpit.engine().store().faults().sync_delay) =
+    *ferrite_engine::store::worker_lock(&cockpit.engine().store().faults().sync_delay) =
         std::time::Duration::ZERO;
 }
 

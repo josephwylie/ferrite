@@ -510,7 +510,7 @@ fn remote(root: &Path, url: &str) {
 /// A Project on `harness`'s Server whose repository is `url`, in `dir`:
 /// its id and directory.
 fn project_of(harness: &Harness, dir: &Path, url: &str) -> (String, PathBuf) {
-    use ferrite_core::workspace::git_for_tests as git;
+    use ferrite_engine::workspace::git_for_tests as git;
     let repo = repo_in(dir);
     git(&repo, &["remote", "add", "origin", url]);
     let opened = call(harness).answer("p", "project.open", serde_json::json!({ "cwd": repo }));

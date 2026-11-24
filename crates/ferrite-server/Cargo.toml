@@ -7,10 +7,12 @@ description = "Ferrite's Server: the headless process that owns every Session (A
 
 [features]
 # What the window's tests drive a machine with: `fixture_machine`.
-test-support = ["ferrite-core/test-support"]
+test-support = ["ferrite-core/test-support", "ferrite-engine/test-support"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
+# The Engine, the Store and the providers' Sessions it serves (ADR 0049).
+ferrite-engine = { path = "../ferrite-engine" }
 # A Project's reviews and commits, read where its checkout is (ADR 0021).
 ferrite-reviewr = { path = "../ferrite-reviewr" }
 serde = { workspace = true }
@@ -49,6 +51,7 @@ ctor = "1"
 libc = "0.2"
 # The Engine's counters and hooks the tests read.
 ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
+ferrite-engine = { path = "../ferrite-engine", features = ["test-support"] }
 ferrite-client = { path = "../ferrite-client", features = ["test-support"] }
 chrono = "0.4.45"
 # The remote access's tests reach it as a window does.

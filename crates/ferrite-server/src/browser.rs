@@ -7,7 +7,7 @@ mod disk;
 pub(super) use disk::Control as DiskControl;
 pub(super) use disk::Disk;
 
-pub(super) fn load(store: &ferrite_core::store::Store) -> Service {
+pub(super) fn load(store: &ferrite_engine::store::Store) -> Service {
     match store.load_browser().and_then(|saved| {
         saved
             .map(Service::restore)

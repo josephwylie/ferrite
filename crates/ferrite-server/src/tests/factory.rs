@@ -354,7 +354,7 @@ fn a_worker_with_background_work_or_a_subagent_running_is_not_prompted() {
 /// only when clean, saying so otherwise, and never its branch.
 #[test]
 fn a_task_is_stopped_resumed_and_deleted_leaving_dirty_work_alone() {
-    use ferrite_core::workspace::git_for_tests as git;
+    use ferrite_engine::workspace::git_for_tests as git;
     let (harness, project, repo) = factory_project("factory-stop");
     let mut window = attach(&harness.address);
     let mut caller = call(&harness);

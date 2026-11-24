@@ -502,7 +502,7 @@ fn the_first_send_bootstraps_the_thread_and_drops_the_band(cx: &mut TestAppConte
 fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
     cx: &mut TestAppContext,
 ) {
-    use ferrite_core::session::SessionLifecycle;
+    use ferrite_engine::session::SessionLifecycle;
     use std::sync::{Arc, Mutex};
     struct Ready {
         events: Receiver<SessionEvent>,

@@ -21,7 +21,7 @@ mod starts;
 mod workflow;
 
 pub use coordinator::{Act, Coordinator, Proposal, ProposalId, ProposalStatus};
-pub(crate) use direct::Said;
+pub use direct::Said;
 pub use direct::{Answered, Feedback, FeedbackKind, Override, Oversight, Question, ThenReturn};
 pub use pr::{
     short, Delivery, Evidence, EvidenceKind, MergeOutcome, MergeRoutes, PullRequest, Revision,

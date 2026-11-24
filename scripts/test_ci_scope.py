@@ -51,6 +51,11 @@ class SelectionTests(unittest.TestCase):
         self.assertNotIn("ferrite-reviewr", result["packages"])
         self.assertTrue(result["browser"])
 
+    def test_engine_selects_the_server_the_app_and_the_tests_that_run_it(self):
+        result = select(self.packages, ["crates/ferrite-engine/src/engine.rs"])["packages"]
+        self.assertEqual(result, ["ferrite", "ferrite-client", "ferrite-cockpit", "ferrite-engine", "ferrite-frame",
+                                  "ferrite-pane", "ferrite-server"])
+
     def test_server_selects_the_app_and_the_tests_that_run_it(self):
         self.assertEqual(select(self.packages, ["crates/ferrite-server/src/calls.rs"])["packages"],
                          ["ferrite", "ferrite-cockpit", "ferrite-server"])
@@ -129,7 +134,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(result["reasons"], ["documentation only"])
 
     def test_markdown_inside_packages_and_vendor_is_not_assumed_documentation(self):
-        for path in ["crates/ferrite-core/tests/fixtures/message.md", "vendor/gpui-base/README.md"]:
+        for path in ["crates/ferrite-engine/tests/fixtures/message.md", "vendor/gpui-base/README.md"]:
             with self.subTest(path=path):
                 self.assertTrue(select(self.packages, [path])["code"])
 
@@ -160,6 +165,7 @@ members = ["crates/*"]
 renamed = { package = "gpui-kit", version = "1" }
 ''')
         self.write_package("ferrite-core")
+        self.write_package("ferrite-engine")
         self.write_package("ferrite-frame")
         self.write_package("ferrite-cockpit")
 
@@ -189,7 +195,7 @@ renamed = { package = "gpui-kit", version = "1" }
             for inherited in [False, True]:
                 with self.subTest(table=table, inherited=inherited):
                     manifest = '''[workspace]
-members = ["crates/ferrite-core", "crates/ferrite-frame", "crates/ferrite-cockpit"]
+members = ["crates/ferrite-core", "crates/ferrite-engine", "crates/ferrite-frame", "crates/ferrite-cockpit"]
 [workspace.dependencies]
 renamed = { package = "helper", path = "crates/helper" }
 '''
@@ -230,6 +236,39 @@ renamed = { package = "helper", path = "crates/helper" }
                 with self.assertRaisesRegex(ValueError, "ferrite-pane -> helper -> ferrite-server"):
                     check_boundaries(workspace(self.root))
 
+    def test_window_crates_link_the_engine_only_behind_a_feature(self):
+        engine = 'ferrite-engine = { path = "../ferrite-engine"'
+        self.write_package("ferrite-client", f'[features]\ntest-support = ["dep:ferrite-engine"]\n'
+                                             f'[dependencies]\n{engine}, optional = true }}\n'
+                                             f'[dev-dependencies]\n{engine} }}\n')
+        self.write_package("ferrite-cockpit", '[features]\ndemo = ["ferrite-client/test-support"]\n'
+                                              '[dependencies]\nferrite-client = { path = "../ferrite-client" }\n')
+        check_boundaries(workspace(self.root))
+        for features, dependency in [("", f"{engine} }}"), ("default = []", f"{engine}, optional = false }}"),
+                                     ('default = ["ferrite-engine"]', f"{engine}, optional = true }}"),
+                                     ('cef = ["ferrite-engine/x"]', f"{engine}, optional = true }}")]:
+            with self.subTest(features=features, dependency=dependency):
+                self.write_package("ferrite-client", f"[features]\n{features}\n[dependencies]\n{dependency}\n")
+                with self.assertRaisesRegex(ValueError, "ferrite-client -> ferrite-engine"):
+                    check_boundaries(workspace(self.root))
+
+    def test_a_window_crate_turning_on_a_feature_that_links_the_engine_is_forbidden(self):
+        self.write_package("ferrite-client", '[features]\ntest-support = ["dep:ferrite-engine"]\n'
+                                             '[dependencies]\nferrite-engine = { path = "../ferrite-engine", optional = true }\n')
+        for table in ["dependencies", "build-dependencies", "target.'cfg(windows)'.dependencies"]:
+            with self.subTest(table=table):
+                self.write_package("ferrite-pane", f'[{table}]\nhelper = {{ path = "../helper", features = ["fixture"] }}\n')
+                self.write_package("helper", '[features]\nfixture = ["client/test-support"]\n[dependencies]\n'
+                                             'client = { package = "ferrite-client", path = "../ferrite-client" }\n')
+                with self.assertRaisesRegex(ValueError, "ferrite-pane -> helper -> ferrite-client -> ferrite-engine"):
+                    check_boundaries(workspace(self.root))
+
+    def test_engine_builds_without_gpui(self):
+        self.write_package("ferrite-engine", '[dev-dependencies]\nhelper = { path = "../helper" }\n')
+        self.write_package("helper", '[dependencies]\nui = { package = "gpui-base", version = "1" }\n')
+        with self.assertRaisesRegex(ValueError, "ferrite-engine -> helper -> gpui-base"):
+            check_boundaries(workspace(self.root))
+
     def test_server_builds_without_gpui(self):
         self.write_package("ferrite-server", '[dependencies]\nhelper = { path = "../helper" }\n')
         self.write_package("helper", '[dependencies]\nui = { package = "gpui-base", version = "1" }\n')
@@ -252,9 +291,9 @@ renamed = { package = "helper", path = "crates/helper" }
         with patch.object(sys, "argv", ["ci_scope.py", "--root", str(self.root), "--github-output", str(output)]), contextlib.redirect_stdout(stdout):
             main()
         result = json.loads(stdout.getvalue())
-        self.assertEqual(result["packages"], ["ferrite-cockpit", "ferrite-core", "ferrite-frame"])
-        self.assertEqual(output.read_text(), "code=true\nbrowser=true\nfull=true\npackages=ferrite-cockpit ferrite-core ferrite-frame\n"
-                         "vendored=\n")
+        self.assertEqual(result["packages"], ["ferrite-cockpit", "ferrite-core", "ferrite-engine", "ferrite-frame"])
+        self.assertEqual(output.read_text(), "code=true\nbrowser=true\nfull=true\npackages=ferrite-cockpit ferrite-core "
+                         "ferrite-engine ferrite-frame\nvendored=\n")
 
     def test_invalid_boundary_writes_no_skip_outputs(self):
         self.write_package("ferrite-core", '[dependencies]\ngpui = "1"\n')

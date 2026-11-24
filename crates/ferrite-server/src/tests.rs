@@ -10,11 +10,11 @@ use std::time::Instant;
 
 use super::*;
 use ferrite_client::cockpit::mirror::Mirrors;
-use ferrite_core::engine::{SpawnRequest, Spawner};
+use ferrite_engine::engine::{SpawnRequest, Spawner};
 use ferrite_core::link::{Attached, Client};
 use ferrite_core::protocol::{Peer, Resume, WireAnswer, WireChoice, WireEntry};
 use ferrite_core::provider::Provider;
-use ferrite_core::providers::Session;
+use ferrite_engine::providers::Session;
 use ferrite_core::transcript::Body;
 use ferrite_core::{Decision, DecisionAnswer, SessionEvent, ThreadKey};
 
@@ -137,7 +137,7 @@ impl Session for Scripted {
     fn search_files(
         &mut self,
         query: &str,
-        reply: ferrite_core::providers::FileSearchReply,
+        reply: ferrite_engine::providers::FileSearchReply,
     ) -> io::Result<()> {
         let _ = reply.send(Ok(vec![ferrite_core::prompt_files::FileSuggestion {
             path: query.into(),
@@ -192,12 +192,12 @@ impl Spawn {
 }
 
 impl Spawner for Spawn {
-    fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn ferrite_core::providers::Session>> {
+    fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn ferrite_engine::providers::Session>> {
         self.launched(&request);
         Ok(Box::new(self.scripted()))
     }
-    fn start(&mut self, request: SpawnRequest) -> io::Result<ferrite_core::session::SessionLifecycle> {
-        use ferrite_core::session::SessionLifecycle;
+    fn start(&mut self, request: SpawnRequest) -> io::Result<ferrite_engine::session::SessionLifecycle> {
+        use ferrite_engine::session::SessionLifecycle;
         if self.gate.is_some() {
             self.launched(&request);
         }
@@ -207,7 +207,7 @@ impl Spawner for Spawn {
         let session = self.scripted();
         SessionLifecycle::background(move || {
             let _ = gate.lock().unwrap().recv();
-            Ok(Box::new(session) as Box<dyn ferrite_core::providers::Session + Send>)
+            Ok(Box::new(session) as Box<dyn ferrite_engine::providers::Session + Send>)
         })
     }
     fn discover_commands(
@@ -245,7 +245,7 @@ struct Harness {
     browser_disk: browser::DiskControl,
     installed: Installed,
     /// The Factory tools a Session is bound to, on this Server's pump.
-    tools: ferrite_core::api::tools::Tools,
+    tools: ferrite_engine::api::tools::Tools,
 }
 
 fn start(name: &str) -> Harness {
@@ -300,7 +300,7 @@ fn serve_configured(
     let store = dir.join("threads");
     let address = link::address(&store);
     let listener = link::listen(&address).unwrap();
-    let api = ferrite_core::api::address(&store);
+    let api = ferrite_engine::api::address(&store);
     let api_listener = link::listen(&api).unwrap();
     let (sessions, started) = mpsc::channel();
     let answers = Answers::default();
@@ -324,7 +324,7 @@ fn serve_configured(
     let (browser, browser_requests) = ferrite_core::browser::channel();
     let (disk_ready, disk) = mpsc::channel();
     let (heard, hear) = mpsc::channel();
-    let tools = ferrite_core::api::tools::Tools::new(heard.clone());
+    let tools = ferrite_engine::api::tools::Tools::new(heard.clone());
     let server = std::thread::spawn(move || {
         let id = server_id::open(&store).unwrap();
         let store = Store::open(&store).unwrap();
@@ -345,7 +345,7 @@ fn serve_configured(
             Ok(())
         });
         configure(&mut server);
-        ferrite_core::api::accept_all(api_listener, heard.clone()).unwrap();
+        ferrite_engine::api::accept_all(api_listener, heard.clone()).unwrap();
         connection::accept_all(listener, heard, tuning.lag_bytes).unwrap();
         server.serve(hear)
     });
@@ -763,7 +763,7 @@ fn a_branch_travels_in_the_digest_and_an_idle_link_carries_nothing() {
     }
     assert!(carried.is_empty(), "an idle link carried: {carried:?}");
 
-    ferrite_core::workspace::git_for_tests(&repo, &["checkout", "-q", "-b", "next"]);
+    ferrite_engine::workspace::git_for_tests(&repo, &["checkout", "-q", "-b", "next"]);
     window.until(|window| on(window, "next"));
 }
 
@@ -817,7 +817,7 @@ fn list_repo_answers_a_projects_worktrees_and_branches_read_by_the_server() {
     let harness = start("list-repo");
     let repo = repository(&harness.dir);
     let tree = harness.dir.join("fix");
-    let git = |args: &[&str]| ferrite_core::workspace::git_for_tests(&repo, args);
+    let git = |args: &[&str]| ferrite_engine::workspace::git_for_tests(&repo, args);
     git(&["worktree", "add", "-q", "-b", "fix", tree.to_str().unwrap()]);
     git(&["branch", "spare"]);
     let mut window = cockpit(&harness);
@@ -856,7 +856,7 @@ fn list_repo_answers_a_projects_worktrees_and_branches_read_by_the_server() {
 fn repositories_answers_each_project_that_is_a_repository_with_a_remote() {
     let harness = start("repositories");
     let repo = repository(&harness.dir);
-    ferrite_core::workspace::git_for_tests(&repo, &["remote", "add", "origin", "git@github.com:Acme/App.git"]);
+    ferrite_engine::workspace::git_for_tests(&repo, &["remote", "add", "origin", "git@github.com:Acme/App.git"]);
     let plain = harness.dir.join("plain");
     std::fs::create_dir_all(&plain).unwrap();
     let mut window = cockpit(&harness);
@@ -888,7 +888,7 @@ fn repositories_answers_each_project_that_is_a_repository_with_a_remote() {
 fn a_review_is_read_by_git_where_the_server_runs() {
     let harness = start("review");
     let repo = repository(&harness.dir);
-    let git = |args: &[&str]| ferrite_core::workspace::git_for_tests(&repo, args);
+    let git = |args: &[&str]| ferrite_engine::workspace::git_for_tests(&repo, args);
     git(&["checkout", "-q", "-b", "dev"]);
     std::fs::write(repo.join("README.md"), "app, reviewed\n").unwrap();
     git(&[
@@ -1976,7 +1976,7 @@ impl Spawner for Recorded {
         self.started.lock().unwrap().push(Start::of(&request));
         self.inner.spawn(request)
     }
-    fn start(&mut self, request: SpawnRequest) -> io::Result<ferrite_core::session::SessionLifecycle> {
+    fn start(&mut self, request: SpawnRequest) -> io::Result<ferrite_engine::session::SessionLifecycle> {
         self.started.lock().unwrap().push(Start::of(&request));
         self.inner.start(request)
     }
@@ -4095,7 +4095,7 @@ fn projects_are_opened_renamed_and_closed() {
 
 /// A repository with one commit on `main`, under `dir`.
 fn repo_in(dir: &Path) -> PathBuf {
-    use ferrite_core::workspace::git_for_tests as git;
+    use ferrite_engine::workspace::git_for_tests as git;
     let repo = dir.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
@@ -4121,7 +4121,7 @@ fn repo_in(dir: &Path) -> PathBuf {
 /// clean, never forced, and its branch stays.
 #[test]
 fn a_worktree_is_removed_only_when_clean_and_its_branch_stays() {
-    use ferrite_core::workspace::git_for_tests as git;
+    use ferrite_engine::workspace::git_for_tests as git;
     let harness = start("api-worktree");
     let repo = repo_in(&harness.dir);
     let mut caller = call(&harness);
@@ -4286,7 +4286,7 @@ fn line(text: &str) -> serde_json::Value {
     serde_json::from_str(text).unwrap()
 }
 
-fn request(method: &str, params: serde_json::Value) -> ferrite_core::api::Request {
+fn request(method: &str, params: serde_json::Value) -> ferrite_engine::api::Request {
     serde_json::from_value(serde_json::json!({ "id": "1", "method": method, "params": params }))
         .unwrap()
 }
@@ -4298,7 +4298,7 @@ fn cli(
     params: serde_json::Value,
 ) -> (i32, Vec<serde_json::Value>, Vec<serde_json::Value>) {
     let ((mut out, said), (mut err, refused)) = (printed(), printed());
-    let status = ferrite_core::api::cli::call(&request(method, params), socket, &mut out, &mut err);
+    let status = ferrite_engine::api::cli::call(&request(method, params), socket, &mut out, &mut err);
     drop((out, err));
     let lines = |told: Receiver<String>| told.iter().map(|text| line(&text)).collect();
     (status, lines(said), lines(refused))
@@ -4314,7 +4314,7 @@ fn cli_in(
     let mut request = request(method, params);
     request.caller = Some(thread);
     let ((mut out, said), (mut err, refused)) = (printed(), printed());
-    let status = ferrite_core::api::cli::call(&request, socket, &mut out, &mut err);
+    let status = ferrite_engine::api::cli::call(&request, socket, &mut out, &mut err);
     drop((out, err));
     let lines = |told: Receiver<String>| told.iter().map(|text| line(&text)).collect();
     (status, lines(said), lines(refused))
@@ -4328,7 +4328,7 @@ fn cli_machine(
 ) -> (i32, Vec<serde_json::Value>, Vec<serde_json::Value>) {
     let ((mut out, said), (mut err, refused)) = (printed(), printed());
     let status =
-        ferrite_core::api::cli::call_machine(&request(method, params), "box", dial, &mut out, &mut err);
+        ferrite_engine::api::cli::call_machine(&request(method, params), "box", dial, &mut out, &mut err);
     drop((out, err));
     let lines = |told: Receiver<String>| told.iter().map(|text| line(&text)).collect();
     (status, lines(said), lines(refused))
@@ -4376,7 +4376,7 @@ fn the_cli_prints_answers_refusals_and_events() {
         serde_json::json!({ "threads": [thread] }),
     );
     let api = harness.api.clone();
-    std::thread::spawn(move || ferrite_core::api::cli::call(&subscribe, &api, &mut out, &mut io::sink()));
+    std::thread::spawn(move || ferrite_engine::api::cli::call(&subscribe, &api, &mut out, &mut io::sink()));
     let next = || line(&said.recv_timeout(PATIENCE).unwrap());
     assert_eq!(next()["result"]["threads"][0]["attention"], "idle");
     call(&harness).answer(
@@ -4474,7 +4474,7 @@ fn the_api_bridge_with_no_server_fails_without_starting_one() {
 fn repository(dir: &Path) -> PathBuf {
     let repo = dir.join("app");
     std::fs::create_dir_all(&repo).unwrap();
-    let git = |args: &[&str]| ferrite_core::workspace::git_for_tests(&repo, args);
+    let git = |args: &[&str]| ferrite_engine::workspace::git_for_tests(&repo, args);
     git(&["init", "-q", "-b", "main"]);
     std::fs::write(repo.join("README.md"), "app\n").unwrap();
     git(&["add", "README.md"]);
