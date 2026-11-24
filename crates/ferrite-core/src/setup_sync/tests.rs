@@ -1052,7 +1052,12 @@ fn a_file_that_changes_while_it_crosses_is_left_to_the_next_sync() {
                 let left: Vec<_> = synced.problems.iter().map(|problem| (problem.path.as_str(), problem.side)).collect();
                 assert_eq!(left, [(edited, side), (added.as_str(), side)]);
             }
-            Err(error) => assert_eq!(side, Side::Here, "only a send may stop at it: {error}"),
+            Err(error) => {
+                assert_eq!(side, Side::Here, "only a send may stop at it: {error}");
+                let stuck = error.get_ref().and_then(|inner| inner.downcast_ref::<tree::Stuck>()).expect("it names where");
+                assert!([edited, added.as_str()].contains(&stuck.path.as_str()), "{error}");
+                assert_eq!(stuck.side, Side::Here, "{error}");
+            }
             outcome => panic!("{outcome:?}"),
         }
         let base = agreed();

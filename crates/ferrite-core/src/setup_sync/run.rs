@@ -243,7 +243,9 @@ pub fn run(
             Side::Here => fetch(there, path)?,
             Side::There => {
                 let mut bytes = Vec::new();
-                tree::Source::open(&job.home, path)?.read_to_end(&mut bytes)?;
+                tree::Source::open(&job.home, path)
+                    .and_then(|mut file| file.read_to_end(&mut bytes))
+                    .map_err(|error| named(path, Side::Here, error))?;
                 bytes
             }
         };
@@ -495,7 +497,7 @@ fn take_here(
         cancel.check()?;
         let path = match action {
             Action::RemoveHere(path) => {
-                job.home.trash(path, trash).map_err(|error| named(path, error))?;
+                job.home.trash(path, trash).map_err(|error| named(path, Side::Here, error))?;
                 continue;
             }
             Action::Pull(path) | Action::Conflict { path, winner: Side::There } => path,
@@ -505,13 +507,13 @@ fn take_here(
             continue;
         };
         if mine.is_some_and(|mine| !same_kind(entry, mine)) {
-            job.home.trash(path, trash).map_err(|error| named(path, error))?;
+            job.home.trash(path, trash).map_err(|error| named(path, Side::Here, error))?;
         }
         taken.push((path.as_str(), entry));
     }
     for (path, entry) in &taken {
         if matches!(entry, Entry::Dir) {
-            job.home.make_dir(path).map_err(|error| named(path, error))?;
+            job.home.make_dir(path).map_err(|error| named(path, Side::Here, error))?;
         }
     }
     let mut local = Session::with_home(job.home.clone());
@@ -574,7 +576,7 @@ impl<'a> Pulls<'a> {
             size,
             mode,
         };
-        self.local.execute(begin).map_err(|error| named(path, error))?;
+        self.local.execute(begin).map_err(|error| named(path, Side::Here, error))?;
         self.open.insert(write, Sha256::new());
         if size == 0 {
             return self.finish(write, path, sha256);
@@ -590,7 +592,7 @@ impl<'a> Pulls<'a> {
                 path: path.to_string(),
                 offset,
             };
-            let asked = self.there.ask(read).map_err(|error| named(path, error))?;
+            let asked = self.there.ask(read).map_err(|error| named(path, Side::There, error))?;
             self.ahead += piece;
             offset += piece;
             self.waiting.push_back(Piece {
@@ -616,17 +618,17 @@ impl<'a> Pulls<'a> {
                 self.leave(piece.write, piece.path, error);
                 return Ok(());
             }
-            reply => reply.map_err(|error| named(piece.path, error))?,
+            reply => reply.map_err(|error| named(piece.path, Side::There, error))?,
         };
         let Reply::Bytes { data, .. } = reply else {
-            return Err(named(piece.path, unanswered()));
+            return Err(named(piece.path, Side::There, unanswered()));
         };
         let Some(hash) = self.open.get_mut(&piece.write) else {
             return Ok(());
         };
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&data)
-            .map_err(|_| named(piece.path, unanswered()))?;
+            .map_err(|_| named(piece.path, Side::There, unanswered()))?;
         if bytes.len() as u64 != piece.size {
             self.leave(piece.write, piece.path, changed_there());
             return Ok(());
@@ -637,7 +639,7 @@ impl<'a> Pulls<'a> {
             offset: piece.offset,
             data,
         };
-        self.local.execute(chunk).map_err(|error| named(piece.path, error))?;
+        self.local.execute(chunk).map_err(|error| named(piece.path, Side::Here, error))?;
         match piece.last {
             Some(sha256) => self.finish(piece.write, piece.path, sha256),
             None => Ok(()),
@@ -655,7 +657,7 @@ impl<'a> Pulls<'a> {
             write,
             sha256: sha256.to_string(),
         };
-        self.local.execute(finish).map(|_| ()).map_err(|error| named(path, error))
+        self.local.execute(finish).map(|_| ()).map_err(|error| named(path, Side::Here, error))
     }
 
     /// The Machine's file at `path` did not come across whole: it is left
@@ -682,12 +684,12 @@ fn fetch(there: &mut dyn Exchange, path: &str) -> io::Result<Vec<u8>> {
             path: path.to_string(),
             offset: bytes.len() as u64,
         };
-        let Reply::Bytes { data, size } = there.call(read).map_err(|error| named(path, error))? else {
-            return Err(named(path, unanswered()));
+        let Reply::Bytes { data, size } = there.call(read).map_err(|error| named(path, Side::There, error))? else {
+            return Err(named(path, Side::There, unanswered()));
         };
         let chunk = base64::engine::general_purpose::STANDARD
             .decode(data)
-            .map_err(|_| named(path, unanswered()))?;
+            .map_err(|_| named(path, Side::There, unanswered()))?;
         let done = chunk.is_empty();
         bytes.extend(chunk);
         if bytes.len() as u64 >= size || done {
@@ -725,12 +727,12 @@ fn same_kind(one: &Entry, other: &Entry) -> bool {
     std::mem::discriminant(one) == std::mem::discriminant(other)
 }
 
-fn named(path: &str, error: io::Error) -> io::Error {
-    io::Error::new(error.kind(), format!("{path}: {error}"))
+fn named(path: &str, side: Side, error: io::Error) -> io::Error {
+    tree::Stuck::at(path, side, error)
 }
 
 fn unanswered() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "the Machine did not answer the setup sync")
+    io::Error::new(io::ErrorKind::InvalidData, "no answer came for it")
 }
 
 fn changed_there() -> io::Error {

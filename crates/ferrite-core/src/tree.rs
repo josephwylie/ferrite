@@ -533,7 +533,7 @@ pub fn send(
                 sha256,
                 mode,
             } => {
-                let file = source.open(path).map_err(|error| named(step, error))?;
+                let file = source.open(path).map_err(|error| named(step, Side::Here, error))?;
                 let write = WRITES.fetch_add(1, Ordering::Relaxed) + 1;
                 let finish = Request::Finish {
                     write,
@@ -551,7 +551,7 @@ pub fn send(
                     let mut pieces = chunked::Pieces::new(file, *size);
                     for piece in &mut pieces {
                         cancel.check()?;
-                        let (piece, data) = piece.map_err(|error| named(step, error))?;
+                        let (piece, data) = piece.map_err(|error| named(step, Side::Here, error))?;
                         let chunk = Request::Chunk {
                             write,
                             offset: piece.start,
@@ -560,7 +560,7 @@ pub fn send(
                         flight.ask(step, chunk, Expect::Written(piece))?;
                     }
                     if pieces.sha256().ok().as_ref() != Some(sha256) {
-                        return Err(named(step, changed()));
+                        return Err(named(step, Side::Here, changed()));
                     }
                     flight.ask(step, finish.clone(), Expect::Taken)
                 })();
@@ -615,7 +615,7 @@ impl<'a> Flight<'a> {
         {
             self.hear()?;
         }
-        let asked = self.exchange.ask(request).map_err(|error| named(step, error))?;
+        let asked = self.exchange.ask(request).map_err(|error| named(step, Side::There, error))?;
         self.ahead += bytes;
         self.waiting.push_back((asked, step, expect));
         Ok(())
@@ -625,7 +625,7 @@ impl<'a> Flight<'a> {
         let Some((asked, step, expect)) = self.waiting.pop_front() else {
             return Ok(());
         };
-        let reply = self.exchange.answer(asked).map_err(|error| named(step, error))?;
+        let reply = self.exchange.answer(asked).map_err(|error| named(step, Side::There, error))?;
         match (expect, reply) {
             (Expect::Taken, Reply::Done) => self.sent.took(step),
             (Expect::Taken, Reply::Unchanged) | (Expect::Begun, Reply::Done) => {}
@@ -638,7 +638,7 @@ impl<'a> Flight<'a> {
                     total: self.total,
                 });
             }
-            _ => return Err(named(step, unanswered())),
+            _ => return Err(named(step, Side::There, unanswered())),
         }
         Ok(())
     }
@@ -785,8 +785,40 @@ fn local(root: &Path, path: &str) -> PathBuf {
     path.split('/').fold(root.to_path_buf(), |at, part| at.join(part))
 }
 
-fn named(step: &Step, error: io::Error) -> io::Error {
-    io::Error::new(error.kind(), format!("{}: {error}", step.path()))
+fn named(step: &Step, side: Side, error: io::Error) -> io::Error {
+    Stuck::at(step.path(), side, error)
+}
+
+/// What cut a send or a sync short: `error`, met at `path` on `side`. It
+/// reads as `<path>: <error>`.
+#[derive(Debug)]
+pub struct Stuck {
+    pub path: String,
+    pub side: Side,
+    pub error: io::Error,
+}
+
+impl Stuck {
+    pub(crate) fn at(path: &str, side: Side, error: io::Error) -> io::Error {
+        let stuck = Stuck {
+            path: path.to_string(),
+            side,
+            error,
+        };
+        io::Error::new(stuck.error.kind(), stuck)
+    }
+}
+
+impl std::fmt::Display for Stuck {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.path, self.error)
+    }
+}
+
+impl std::error::Error for Stuck {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
 }
 
 /// `error`, saying it was at `path`.
