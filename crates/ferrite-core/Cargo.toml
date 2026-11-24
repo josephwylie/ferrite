@@ -44,6 +44,10 @@ schemars = "1"
 # rejects: project roots, worktree placement and cwd identity. Already in
 # the tree via aws-lc-sys.
 dunce = "1"
+# A checkout's work tree walked as `git status` walks it, its ignores
+# honoured, to tell with no git process whether it moved
+# (`workspace::checkout_stamp`). Already in the tree via ferrite-reviewr.
+ignore = "0.4.33"
 
 # Stopping an operator's command ends its process group (`user_commands`).
 [target.'cfg(unix)'.dependencies]

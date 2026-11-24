@@ -22,8 +22,10 @@ use std::process::Command;
 pub mod follow;
 pub mod registry;
 mod repository;
+mod stamp;
 
 pub use repository::repository_key;
+pub use stamp::{checkout_stamp, head_of};
 
 /// The checkout a Thread works in. Persisted by the store (as its own
 /// schema), resolved to a Session's working directory by the cockpit.
@@ -486,27 +488,6 @@ pub fn checkout_branch(cwd: &Path) -> Option<String> {
     let head = git(cwd, &["rev-parse", "--short", "HEAD"]).ok()?;
     let head = head.trim();
     (!head.is_empty()).then(|| head.to_string())
-}
-
-/// What `HEAD` says for the checkout `cwd` is in, read from its file with
-/// no git process: the same words mean `checkout_branch` would answer the
-/// same, so a caller on a cadence runs git only when they change. `None`
-/// outside a checkout.
-pub fn head_of(cwd: &Path) -> Option<String> {
-    let root = cwd.ancestors().find(|dir| dir.join(".git").exists())?;
-    let dot_git = root.join(".git");
-    let admin = if dot_git.is_dir() {
-        dot_git
-    } else {
-        let pointer = fs::read_to_string(&dot_git).ok()?;
-        root.join(pointer.trim().strip_prefix("gitdir:")?.trim())
-    };
-    let mut said = fs::read_to_string(admin.join("HEAD")).ok()?.trim().to_string();
-    // A reftable repository's `HEAD` is a placeholder: its table list moves.
-    if let Ok(tables) = fs::read_to_string(admin.join("reftable").join("tables.list")) {
-        said.push_str(&tables);
-    }
-    Some(said)
 }
 
 /// The branch a repo calls its default: what `origin/HEAD` points at, else
