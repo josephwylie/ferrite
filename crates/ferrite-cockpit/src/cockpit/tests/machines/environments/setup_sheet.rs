@@ -190,7 +190,8 @@ fn where_a_copy_went_is_kept_whatever_git_says(cx: &mut TestAppContext) {
 }
 
 /// A copy stopped part way, by the close button, is unfinished: the sheet
-/// stays up to say so, adds nothing, and leaves the draft where it was.
+/// stays up to say so, lists the folder the copy made, adds nothing, and
+/// leaves the draft where it was.
 /// Closed and opened again, the sheet opens on it, under `~/`, and says
 /// what it is; its Resume sends the rest. A file put there in between
 /// stays, and one of the Project's paths someone changed there stays as
@@ -225,6 +226,9 @@ fn a_copy_cancelled_part_way_is_resumed_and_keeps_what_was_put_there_since(cx: &
         Some("Copy cancelled. Resume finishes it from where it stopped.")
     );
     assert!(debug_bounds(cx, "placement-resume".into()).is_some());
+    until(cx, |cx| {
+        text_of(cx, "folder-browser-rows").is_some_and(|rows| rows.split(' ').any(|row| row == "app"))
+    });
     for _ in 0..4 {
         tick(cx);
     }

@@ -287,7 +287,7 @@ Windows window.
   this folder" marks; one that cannot be read says so in place, in two
   lines at most, and `..` leads out of it. On the setup sheet its folders
   take the card's free height, six rows at least, and it reads its folder
-  again once a copy ends. The
+  again once a copy ends or is cancelled. The
   Project card on a Machine uses the same browser in place of its path
   field: "+ Add directory" under it, or ↵ once it has moved, adds the
   folder shown, and the browser goes back to the folder that one is in.

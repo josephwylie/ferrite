@@ -433,6 +433,8 @@ impl PlacementView {
     pub(super) fn cancel(&mut self, cx: &mut Context<Self>) {
         if matches!(self.stage, Stage::Listing(_) | Stage::Copying(_)) {
             self.stop();
+            // The copy may have made its folder by now.
+            self.dest.update(cx, |dest, cx| dest.relist(cx));
             self.enter(Stage::Cancelled, cx);
         } else {
             cx.emit(PlacementEvent::Closed);
