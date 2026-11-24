@@ -1,13 +1,13 @@
 //! Portable JSON: a setup file's strings that name a place in the home
 //! directory, kept as [`HOME`] then `/` between names, so the same file on
 //! Windows and on Linux reads, and hashes, the same. Only string values
-//! are rewritten, and in them only the home directory where a path starts
-//! (a whole value, or one in a command such as `node "C:\Users\me\a.js"`),
-//! never inside a longer different name; a `~` the operator wrote is
-//! theirs, and left as written. Every other byte of the file is kept as it
-//! was, so a file written out again on the side it came from is the file
-//! it was, but for the separators of a Windows path spelled with `/` or
-//! `\\`, which come back as `\`.
+//! are rewritten, and in them only the path that starts at the home
+//! directory (a whole value, an entry of a list such as `PATH`, or one in a
+//! command such as `node "C:\Users\me\a.js"`), never a longer different
+//! name; a `~` the operator wrote is theirs, and left as written. Every
+//! other byte of the file is kept as it was, so a file written out again
+//! on the side it came from is the file it was, but for the separators of
+//! a Windows path spelled with `/` or `\\`, which come back as `\`.
 
 /// What a portable string has in place of the home directory.
 pub const HOME: &str = "<home>";
@@ -53,7 +53,11 @@ impl Spelling {
         })
     }
 
-    /// Where the home directory, spelled from `at` in `value`, ends.
+    /// Where the home directory, spelled from `at` in `value`, ends: only
+    /// where a path in it may go on or end, at a separator, a list's
+    /// separator or the value's end, or in a command a quote or a space.
+    /// A value that is one path runs on through a space, so `/home/a b` is
+    /// not the home `/home/a`.
     fn home_at(&self, value: &str, at: usize) -> Option<usize> {
         let mut end = at;
         for wanted in self.home.chars() {
@@ -78,8 +82,20 @@ impl Spelling {
                 found.len_utf8()
             };
         }
-        ends_name(&value[end..], self.windows).then_some(end)
+        let ends = match value[end..].chars().next() {
+            None => true,
+            Some(c) => c == '/' || (self.windows && c == '\\') || LISTS.contains(&c) || (at > 0 && quote_or_space(c)),
+        };
+        ends.then_some(end)
     }
+}
+
+/// What separates the entries of a list of paths, as `PATH` does on Unix
+/// and on Windows.
+const LISTS: [char; 2] = [':', ';'];
+
+fn quote_or_space(c: char) -> bool {
+    c.is_whitespace() || c == '"' || c == '\''
 }
 
 /// A character a file's name may run on with.
@@ -117,23 +133,21 @@ fn spots(value: &str, found: impl Fn(usize) -> Option<usize>) -> Vec<(usize, usi
 }
 
 /// `value` with `home` at each of `spots`, and the rest of each path's
-/// separators as `separate` writes them. A value that is one path runs to
-/// its end; a path in a command runs to the next space, quote or path.
+/// separators as `separate` writes them. Each path runs to the next path
+/// or list separator; a value that is one path runs on through spaces,
+/// and a path in a command stops at a space or a quote.
 fn replaced(value: &str, spots: &[(usize, usize)], home: &str, separate: impl Fn(&str) -> String) -> Option<String> {
     if spots.is_empty() {
         return None;
     }
+    let whole = matches!(spots, [(0, _)]);
     let mut out = String::with_capacity(value.len());
     let mut from = 0;
     for (index, (start, end)) in spots.iter().enumerate() {
         let next = spots.get(index + 1).map_or(value.len(), |(start, _)| *start);
-        let path_end = if spots.len() == 1 && *start == 0 {
-            value.len()
-        } else {
-            value[*end..next]
-                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
-                .map_or(next, |stop| end + stop)
-        };
+        let path_end = value[*end..next]
+            .find(|c: char| LISTS.contains(&c) || (!whole && quote_or_space(c)))
+            .map_or(next, |stop| end + stop);
         out.push_str(&value[from..*start]);
         out.push_str(home);
         out.push_str(&separate(&value[*end..path_end]));
@@ -278,6 +292,37 @@ mod tests {
         let two = br#"{"command": "C:\\Users\\josep\\bin\\run.exe C:\\Users\\josep\\a C:\\Users\\josephine\\b"}"#;
         let carried = String::from_utf8(portable(two, &windows())).unwrap();
         assert_eq!(carried, r#"{"command": "<home>/bin/run.exe <home>/a C:\\Users\\josephine\\b"}"#);
+    }
+
+    /// Only the entry of a list that starts at the home is rewritten, its
+    /// separators with it; the entries around it are left as written.
+    #[test]
+    fn a_list_rewrites_only_the_entry_at_the_home() {
+        let unix = br#"{"PATH": "/usr/bin:/home/josep/bin:/opt/x", "one": "/home/josep/bin:/home/josep/b c"}"#;
+        let carried = String::from_utf8(portable(unix, &linux())).unwrap();
+        assert_eq!(carried, r#"{"PATH": "/usr/bin:<home>/bin:/opt/x", "one": "<home>/bin:<home>/b c"}"#);
+        let on_windows = String::from_utf8(expand(carried.as_bytes(), &windows())).unwrap();
+        assert_eq!(
+            on_windows,
+            r#"{"PATH": "/usr/bin:C:\\Users\\josep\\bin:/opt/x", "one": "C:\\Users\\josep\\bin:C:\\Users\\josep\\b c"}"#
+        );
+        assert_eq!(String::from_utf8(portable(on_windows.as_bytes(), &windows())).unwrap(), carried, "the same file on both");
+
+        let windows_path = br#"{"Path": "C:\\Windows;C:\\Users\\josep\\bin;D:\\x"}"#;
+        let carried = String::from_utf8(portable(windows_path, &windows())).unwrap();
+        assert_eq!(carried, r#"{"Path": "C:\\Windows;<home>/bin;D:\\x"}"#);
+    }
+
+    /// The home ends where a path may: `/home/a b` is a folder of its own,
+    /// not the home `/home/a` and then ` b`.
+    #[test]
+    fn a_longer_name_with_a_space_is_not_the_home() {
+        let home = Spelling::new("/home/a", false);
+        let json = br#"{"one": "/home/a b", "two": "/home/a b/c", "home": "/home/a", "in": "/home/a/x y"}"#;
+        assert_eq!(
+            String::from_utf8(portable(json, &home)).unwrap(),
+            r#"{"one": "/home/a b", "two": "/home/a b/c", "home": "<home>", "in": "<home>/x y"}"#
+        );
     }
 
     #[test]
