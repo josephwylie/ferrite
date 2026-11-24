@@ -53,7 +53,7 @@ pub mod pr_watch;
 pub mod progress;
 pub mod project;
 pub mod prompt_files;
-mod file_change;
+pub mod file_change;
 pub mod file_operations;
 pub mod prompt_history;
 pub mod prompt_queue;

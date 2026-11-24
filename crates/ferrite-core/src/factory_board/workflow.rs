@@ -230,7 +230,8 @@ pub struct ApprovalChange {
 }
 
 impl ApprovalChange {
-    pub(crate) fn apply(self, approval: &mut Approval) {
+    /// The Factory's, on a `Command`: a window asks for the change.
+    pub fn apply(self, approval: &mut Approval) {
         if let Some(by) = self.by {
             approval.by = by;
         }
@@ -285,7 +286,8 @@ impl Workflow {
             .is_none_or(|version| version.definition != self.draft)
     }
 
-    pub(crate) fn new_step_id(&mut self) -> StepId {
+    /// The Factory's, on a `Command`: a window asks for the change.
+    pub fn new_step_id(&mut self) -> StepId {
         let id = format!("s-{}", self.next_step);
         self.next_step += 1;
         id
@@ -372,7 +374,8 @@ impl StepChange {
         *self == Self::default()
     }
 
-    pub(crate) fn apply(self, step: &mut Step) {
+    /// The Factory's, on a `Command`: a window asks for the change.
+    pub fn apply(self, step: &mut Step) {
         let blank = |text: String| (!text.trim().is_empty()).then_some(text);
         if let Some(name) = self.name {
             step.name = name;
@@ -519,7 +522,8 @@ impl Definition {
         self.steps.iter().find(|step| step.id == id)
     }
 
-    pub(crate) fn step_mut(&mut self, id: &str) -> Option<&mut Step> {
+    /// The Factory's, on a `Command`: a window asks for the change.
+    pub fn step_mut(&mut self, id: &str) -> Option<&mut Step> {
         self.steps.iter_mut().find(|step| step.id == id)
     }
 

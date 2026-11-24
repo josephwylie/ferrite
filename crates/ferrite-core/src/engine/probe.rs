@@ -5,7 +5,7 @@
 use super::{history, ActivityInput, Engine, Subject};
 use crate::store::Store;
 use crate::suggest::Suggestion;
-use crate::thread::ThreadId;
+use crate::ThreadId;
 
 impl Engine {
     pub fn store(&self) -> &Store {

@@ -4,7 +4,6 @@ use super::*;
 use crate::project::ProjectId;
 use crate::protocol::Repositories;
 use crate::tree::{Asked, Reply, Request, Session};
-use crate::workspace::registry::Registry;
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ferrite-placement-{}-{name}", std::process::id()));
@@ -13,17 +12,16 @@ fn scratch(name: &str) -> PathBuf {
     dunce::canonicalize(&dir).unwrap()
 }
 
-/// The id and root of a Project at each of `roots`, registered on a
-/// Machine whose registry is under `dir`.
+/// The id and root of a Project at each of `roots`, as a Machine whose
+/// registry is new numbers and canonicalizes them.
 fn registered(dir: &Path, roots: &[&str]) -> Vec<(ProjectId, PathBuf)> {
-    let mut registry = Registry::open(&dir.join("registry")).unwrap();
     roots
         .iter()
-        .map(|root| {
+        .zip(1..)
+        .map(|(root, id)| {
             let root = dir.join(root);
             fs::create_dir_all(&root).unwrap();
-            let id = registry.register(&root).unwrap();
-            (id, registry.project(id).unwrap().root.clone())
+            (ProjectId(id), dunce::canonicalize(&root).unwrap())
         })
         .collect()
 }
@@ -161,7 +159,7 @@ fn a_destination_is_a_folder_under_the_home_or_the_root_never_either_itself() {
 }
 
 fn git(root: &Path, args: &[&str]) -> String {
-    crate::workspace::git_for_tests(root, args)
+    crate::git_read::git(root, args).unwrap()
 }
 
 /// A committed checkout at `root`.

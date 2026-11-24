@@ -25,7 +25,7 @@ pub(crate) fn file_change_diffs(item: &Value) -> Vec<(String, Vec<Hunk>)> {
         .collect()
 }
 
-pub(crate) fn parse_file_change(change: &Value) -> Vec<Hunk> {
+pub fn parse_file_change(change: &Value) -> Vec<Hunk> {
     let diff = change
         .get("diff")
         .and_then(Value::as_str)

@@ -8,7 +8,7 @@
 //! [`Proposal`]s, stored here and drawn as cards, that change nothing
 //! until the operator accepts one, which runs the act as theirs.
 
-use super::{Answer, Command, Effect, Refusal, RefusalCode, State};
+use super::{Answer, Command, Effect, Refusal, RefusalCode, State, Transitions};
 use crate::factory_board::{
     Act, Actor, Agent, Catalog, Coordinator, Proposal, ProposalId, ProposalStatus, Task, Turn,
 };

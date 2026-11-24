@@ -536,14 +536,15 @@ impl super::Task {
         }
     }
 
-    pub(crate) fn unfinished(&self) -> bool {
+    pub fn unfinished(&self) -> bool {
         !matches!(self.status, Status::Completed | Status::Stopped)
     }
 }
 
 impl Automation {
     /// Off, forgetting what only a live start needs; what was seen stays.
-    pub(crate) fn turn_off(&mut self) {
+    /// The Factory's, on a `Command`: a window asks for the change.
+    pub fn turn_off(&mut self) {
         *self = Automation {
             seen: std::mem::take(&mut self.seen),
             ..Automation::default()

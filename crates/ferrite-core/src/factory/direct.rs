@@ -7,7 +7,7 @@
 //! A redirect supersedes the run it interrupts: that Worker is parked and
 //! remembered, so a late report from it is ignored, after a restart too.
 
-use super::{Answer, Effect, Refusal, RefusalCode};
+use super::{Answer, Effect, Refusal, RefusalCode, Transitions};
 use crate::factory_board::{
     Actor, Answered, Approver, Destination, EvidenceKind, Feedback, FeedbackKind, Outcome, Override,
     Question, Resolved, Said, Status, Step, StepResult, Task, ThenReturn, Watch,
@@ -22,16 +22,28 @@ fn not_now(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::NotNow, message)
 }
 
-impl Task {
+/// What the Factory reads of a Task's Worker runs, and how it parks one. A
+/// trait, as `Task` is the board's (`factory_board`), not the Factory's.
+pub(super) trait Runs {
+    fn asker(&self) -> String;
+    fn running(&self) -> bool;
+    fn supersede(&mut self, now_ms: i64, effects: &mut Vec<Effect>);
+    fn retire(&mut self, thread: ThreadId, effects: &mut Vec<Effect>);
+    fn label(&self, to: &Destination) -> String;
+    fn decides_in_own_run(&self, step: &Step) -> bool;
+    fn decides(&self) -> bool;
+}
+
+impl Runs for Task {
     /// Who a question or a permission is from: its Step's name.
-    pub(super) fn asker(&self) -> String {
+    fn asker(&self) -> String {
         self.current_step()
             .map(|step| step.name.clone())
             .unwrap_or_else(|| ONE_OFF_ASKER.into())
     }
 
     /// Its Worker's run may still be going: a report from it counts.
-    pub(super) fn running(&self) -> bool {
+    fn running(&self) -> bool {
         self.status == Status::Working
             || (self.status == Status::NeedsHuman && self.oversight.permission.is_some())
     }
@@ -53,7 +65,7 @@ impl Task {
 
     /// `thread` is no longer one of its Workers: parked, kept in its
     /// history (so it goes with the Task), and what it reports dropped.
-    pub(super) fn retire(&mut self, thread: ThreadId, effects: &mut Vec<Effect>) {
+    fn retire(&mut self, thread: ThreadId, effects: &mut Vec<Effect>) {
         if self.worker == Some(thread) {
             self.worker = None;
         }
@@ -74,7 +86,7 @@ impl Task {
     /// This Step decides the approval its own route leads to, in the same
     /// run: an agent approves, it is that agent, and nothing returns the
     /// Task to the operator.
-    pub(super) fn decides_in_own_run(&self, step: &Step) -> bool {
+    fn decides_in_own_run(&self, step: &Step) -> bool {
         let Some(run) = &self.workflow else {
             return false;
         };
@@ -89,7 +101,7 @@ impl Task {
     }
 
     /// The current run decides an approval, now or in its own report.
-    pub(super) fn decides(&self) -> bool {
+    fn decides(&self) -> bool {
         self.oversight.deciding
             || self
                 .current_step()

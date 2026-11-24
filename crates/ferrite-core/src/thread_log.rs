@@ -15,7 +15,7 @@ use crate::provider::Provider;
 use crate::transcript::Input;
 use crate::SessionEvent;
 
-pub(crate) mod activity;
+pub mod activity;
 use activity::PersistedActivity;
 
 /// The schema this store writes. Every log names the schema it was written
@@ -89,65 +89,65 @@ use activity::PersistedActivity;
 /// - **19** — a `wake` record: a prompt the Server sent the agent on its
 ///   own (`crate::wake`), such as a watched PR's news. A v1–v18 log has
 ///   none.
-pub(crate) const SCHEMA_VERSION: u32 = 19;
+pub const SCHEMA_VERSION: u32 = 19;
 
 /// The first line of every log: what wrote it, for what provider, working
 /// where.
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Header {
-    pub(crate) schema: u32,
-    pub(crate) provider: Provider,
+pub struct Header {
+    pub schema: u32,
+    pub provider: Provider,
     /// Schema 3+; a v1/v2 header loads as `None` — those Threads never
     /// recorded a binding.
     #[serde(default)]
-    pub(crate) workspace: Option<PersistedBinding>,
+    pub workspace: Option<PersistedBinding>,
     /// Schema 4+; the git repo inside the binding where work happens.
     /// `None` — and every v1–v3 header — means work in the binding itself.
     #[serde(default)]
-    pub(crate) session_project_root: Option<PathBuf>,
+    pub session_project_root: Option<PathBuf>,
     /// Schema 5+; the model this Thread chose before its first prompt.
     /// `None` — and every v1–v4 header — means the provider's default.
     #[serde(default)]
-    pub(crate) model: Option<String>,
+    pub model: Option<String>,
     /// Schema 6+; the registry id of the project this Thread's CWD choice
     /// named (#29). `None` — and every v1–v5 header — means unregistered:
     /// the binding's resolved paths still say where work happens.
     #[serde(default)]
-    pub(crate) project_id: Option<ProjectId>,
+    pub project_id: Option<ProjectId>,
     /// Schema 7+; absent means the generated `thread-NN` label.
     #[serde(default)]
-    pub(crate) title: Option<String>,
+    pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) snooze: Option<crate::snooze::Snooze>,
+    pub snooze: Option<crate::snooze::Snooze>,
     /// Schema 8+; the reasoning effort this Thread chose. `None` — and
     /// every v1–v7 header — means the provider's default.
     #[serde(default)]
-    pub(crate) effort: Option<String>,
+    pub effort: Option<String>,
     /// Whose the Thread is when not the operator's (ADR 0037). Absent —
     /// every Thread before it, and the operator's own — means theirs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) owner: Option<crate::ThreadOwner>,
+    pub owner: Option<crate::ThreadOwner>,
     /// The Thread on another machine that delegated it. Absent
     /// — every Thread before it, and one started here — means none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) delegated_from: Option<crate::DelegatedFrom>,
+    pub delegated_from: Option<crate::DelegatedFrom>,
     /// The key of the `thread.start` that made it, which the same key
     /// finds again rather than starting another.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) request: Option<String>,
+    pub request: Option<String>,
     /// The most its agent may do without asking. Absent means uncapped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) cap: Option<crate::runtime_mode::RuntimeMode>,
+    pub cap: Option<crate::runtime_mode::RuntimeMode>,
     /// The PRs the Thread's agent watches (ADR 0046). Absent means none.
     #[serde(default, skip_serializing_if = "crate::pull_request::WatchFact::is_empty")]
-    pub(crate) pr_watch: crate::pull_request::WatchFact,
+    pub pr_watch: crate::pull_request::WatchFact,
     /// The Threads it started on other machines (ADR 0047). Absent means none.
     #[serde(default, skip_serializing_if = "crate::delegate::Delegates::is_empty")]
-    pub(crate) delegates: crate::delegate::Delegates,
+    pub delegates: crate::delegate::Delegates,
 }
 
 impl Header {
-    pub(crate) fn facts(&self) -> Facts {
+    pub fn facts(&self) -> Facts {
         Facts {
             provider: self.provider,
             workspace: self.workspace.clone(),
@@ -166,7 +166,7 @@ impl Header {
         }
     }
 
-    pub(crate) fn of(facts: Facts) -> Self {
+    pub fn of(facts: Facts) -> Self {
         Header {
             schema: SCHEMA_VERSION,
             provider: facts.provider,
@@ -191,38 +191,38 @@ impl Header {
 /// every record that changes them restates in full — never a delta, so the
 /// newest one alone is the truth.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Facts {
-    pub(crate) provider: Provider,
+pub struct Facts {
+    pub provider: Provider,
     #[serde(default)]
-    pub(crate) workspace: Option<PersistedBinding>,
+    pub workspace: Option<PersistedBinding>,
     #[serde(default)]
-    pub(crate) session_project_root: Option<PathBuf>,
+    pub session_project_root: Option<PathBuf>,
     #[serde(default)]
-    pub(crate) model: Option<String>,
+    pub model: Option<String>,
     #[serde(default)]
-    pub(crate) project_id: Option<ProjectId>,
+    pub project_id: Option<ProjectId>,
     #[serde(default)]
-    pub(crate) title: Option<String>,
+    pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) snooze: Option<crate::snooze::Snooze>,
+    pub snooze: Option<crate::snooze::Snooze>,
     #[serde(default)]
-    pub(crate) effort: Option<String>,
+    pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) owner: Option<crate::ThreadOwner>,
+    pub owner: Option<crate::ThreadOwner>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) delegated_from: Option<crate::DelegatedFrom>,
+    pub delegated_from: Option<crate::DelegatedFrom>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) request: Option<String>,
+    pub request: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) cap: Option<crate::runtime_mode::RuntimeMode>,
+    pub cap: Option<crate::runtime_mode::RuntimeMode>,
     #[serde(default, skip_serializing_if = "crate::pull_request::WatchFact::is_empty")]
-    pub(crate) pr_watch: crate::pull_request::WatchFact,
+    pub pr_watch: crate::pull_request::WatchFact,
     #[serde(default, skip_serializing_if = "crate::delegate::Delegates::is_empty")]
-    pub(crate) delegates: crate::delegate::Delegates,
+    pub delegates: crate::delegate::Delegates,
 }
 
 impl Facts {
-    pub(crate) fn meta(self) -> ThreadMeta {
+    pub fn meta(self) -> ThreadMeta {
         ThreadMeta {
             provider: self.provider,
             workspace: self.workspace.as_ref().map(PersistedBinding::live),
@@ -246,19 +246,19 @@ impl Facts {
 /// What a parked Thread's nav row counts (schema 13, in every mark): read
 /// off the log's tail instead of replaying the whole log.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Summary {
+pub struct Summary {
     /// Prompts since the last conversation reset: the wall's `11 turns`.
-    pub(crate) turns: u64,
+    pub turns: u64,
     /// Whether any prompt was ever sent, which locks the provider choice.
-    pub(crate) prompted: bool,
+    pub prompted: bool,
     /// The subagents the live Activity knew when the mark was written;
     /// absent when no Activity has told the writer yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) subagents: Option<u64>,
+    pub subagents: Option<u64>,
 }
 
 impl Summary {
-    pub(crate) fn public(&self) -> ThreadSummary {
+    pub fn public(&self) -> ThreadSummary {
         ThreadSummary {
             turns: self.turns as usize,
             prompted: self.prompted,
@@ -267,7 +267,7 @@ impl Summary {
     }
 
     /// Count `record` in.
-    pub(crate) fn observe(&mut self, record: &Record) {
+    pub fn observe(&mut self, record: &Record) {
         match record {
             Record::Prompt { .. } => {
                 self.turns += 1;
@@ -285,9 +285,9 @@ impl Summary {
 /// A replay base, as a mark names it: the offset of a turn start, and the
 /// offsets of the records before it a replay from there needs first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Base {
-    pub(crate) at: u64,
-    pub(crate) carry: Vec<u64>,
+pub struct Base {
+    pub at: u64,
+    pub carry: Vec<u64>,
 }
 
 /// The persisted form of a Thread's workspace binding, mirroring
@@ -295,13 +295,13 @@ pub(crate) struct Base {
 /// so the live vocabulary can change without rewriting anyone's history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum PersistedBinding {
+pub enum PersistedBinding {
     Main { checkout: PathBuf },
     Worktree { repo: PathBuf, path: PathBuf },
 }
 
 impl PersistedBinding {
-    pub(crate) fn from_live(binding: &WorkspaceBinding) -> Self {
+    pub fn from_live(binding: &WorkspaceBinding) -> Self {
         match binding {
             WorkspaceBinding::Main { checkout } => PersistedBinding::Main {
                 checkout: checkout.clone(),
@@ -313,7 +313,7 @@ impl PersistedBinding {
         }
     }
 
-    pub(crate) fn live(&self) -> WorkspaceBinding {
+    pub fn live(&self) -> WorkspaceBinding {
         match self {
             PersistedBinding::Main { checkout } => WorkspaceBinding::Main {
                 checkout: checkout.clone(),
@@ -333,7 +333,7 @@ impl PersistedBinding {
 /// stores what was said, not how the wire chopped it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum Record {
+pub enum Record {
     SummaryPart {
         item_id: String,
         summary_index: u64,
@@ -537,7 +537,7 @@ pub(crate) enum Record {
 
 impl Record {
     /// The facts this record restates, when it carries them.
-    pub(crate) fn facts(&self) -> Option<&Facts> {
+    pub fn facts(&self) -> Option<&Facts> {
         match self {
             Record::Facts { facts } | Record::Mark { facts, .. } => Some(facts),
             Record::Handover { facts, .. } => facts.as_ref(),
@@ -547,7 +547,7 @@ impl Record {
 
     /// The store's own bookkeeping, folded into the facts when a log is
     /// read and never part of the conversation.
-    pub(crate) fn is_bookkeeping(&self) -> bool {
+    pub fn is_bookkeeping(&self) -> bool {
         matches!(self, Record::Facts { .. } | Record::Mark { .. })
     }
 }
@@ -617,7 +617,7 @@ impl LogRecord {
 
 /// The Notice a provider switch leaves in the transcript, live and on
 /// replay alike.
-pub(crate) fn handover_notice(to: Provider, model: Option<&str>) -> String {
+pub fn handover_notice(to: Provider, model: Option<&str>) -> String {
     let label = crate::models::label(model.unwrap_or("default"), &[]);
     format!("continued on {to} · {label} — the earlier conversation is handed over as context")
 }
@@ -626,7 +626,7 @@ pub(crate) fn handover_notice(to: Provider, model: Option<&str>) -> String {
 /// `{"error":"…"}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Outcome {
+pub enum Outcome {
     Completed,
     Interrupted,
     Error(String),
@@ -634,7 +634,7 @@ pub(crate) enum Outcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum StoredRunState {
+pub enum StoredRunState {
     Running,
     RequiresAction,
     Idle,
@@ -661,7 +661,7 @@ impl StoredRunState {
 /// can change without rewriting anyone's history.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum PersistedToolResult {
+pub enum PersistedToolResult {
     #[default]
     Opaque,
     Command {
@@ -691,13 +691,13 @@ pub(crate) enum PersistedToolResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct PersistedFileEdit {
+pub struct PersistedFileEdit {
     path: String,
     hunks: Vec<PersistedHunk>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct PersistedHunk {
+pub struct PersistedHunk {
     old_start: u32,
     old_lines: u32,
     new_start: u32,
@@ -839,7 +839,7 @@ impl PersistedToolResult {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum PersistedProgress {
+pub enum PersistedProgress {
     Phase {
         phase: StoredPhase,
         detail: String,
@@ -890,26 +890,26 @@ pub(crate) enum PersistedProgress {
     },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct StoredBackgroundTask {
+pub struct StoredBackgroundTask {
     id: String,
     label: String,
     status: StoredTaskStatus,
     detail: String,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct StoredStep {
+pub struct StoredStep {
     text: String,
     status: StoredStepStatus,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct StoredPlanTask {
+pub struct StoredPlanTask {
     id: String,
     text: String,
     status: StoredStepStatus,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum StoredPhase {
+pub enum StoredPhase {
     Working,
     Thinking,
     Answering,
@@ -941,7 +941,7 @@ impl StoredPhase {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum StoredStepStatus {
+pub enum StoredStepStatus {
     Pending,
     InProgress,
     Completed,
@@ -964,7 +964,7 @@ impl StoredStepStatus {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum StoredTaskStatus {
+pub enum StoredTaskStatus {
     Working,
     Completed,
     Failed,
@@ -1197,7 +1197,7 @@ impl Record {
     /// with its Session; there is nothing to replay it into). `duration` is
     /// the wall clock the cockpit measured for a settled tool call — the one
     /// thing in the record no event carries.
-    pub(crate) fn from_event(event: &SessionEvent, duration: Option<std::time::Duration>) -> Option<Record> {
+    pub fn from_event(event: &SessionEvent, duration: Option<std::time::Duration>) -> Option<Record> {
         Some(match event {
             SessionEvent::ReasoningSummaryPart {
                 item_id,
@@ -1354,7 +1354,7 @@ impl Record {
     }
 
     /// Replay this record as the transcript input it stands for.
-    pub(crate) fn input(&self) -> Input {
+    pub fn input(&self) -> Input {
         match self {
             Record::SummaryPart {
                 item_id,
@@ -1539,7 +1539,7 @@ impl Record {
     /// Whether the log is consistent here — the transcript's boundary marks,
     /// seen from the store's side of the conversion. A handover is one too:
     /// the header rewrite that follows it must find it on disk.
-    pub(crate) fn is_boundary(&self) -> bool {
+    pub fn is_boundary(&self) -> bool {
         matches!(self, Record::Activity { observation } if observation.is_boundary())
             || matches!(
                 self,
@@ -1554,7 +1554,7 @@ impl Record {
 
     /// Extend this record with a later delta of the same kind, if the two
     /// coalesce. A run of deltas is one record; anything else keeps its line.
-    pub(crate) fn coalesce(&mut self, next: &Record) -> bool {
+    pub fn coalesce(&mut self, next: &Record) -> bool {
         match (self, next) {
             (
                 Record::SummaryPart {

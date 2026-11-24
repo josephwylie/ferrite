@@ -840,7 +840,7 @@ pub fn check_path(path: &str) -> io::Result<()> {
 
 /// Whether two directories of this computer are one, or one holds the
 /// other, however each is spelled.
-pub(crate) fn overlap(one: &Path, other: &Path) -> io::Result<bool> {
+pub fn overlap(one: &Path, other: &Path) -> io::Result<bool> {
     let one = canonical(one).map_err(|error| at(one, error))?;
     let other = canonical(other).map_err(|error| at(other, error))?;
     Ok(holds(&one, &other) || holds(&other, &one))

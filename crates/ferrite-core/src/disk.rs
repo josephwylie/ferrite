@@ -81,7 +81,7 @@ pub fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 /// Sync a file behind a barrier: its writes reach the drive before any
 /// that follow (ADR 0009). For files beside the logs, like the queue.
-pub(crate) fn sync_ordered(file: &File) -> io::Result<()> {
+pub fn sync_ordered(file: &File) -> io::Result<()> {
     barrier(file)
 }
 
@@ -111,7 +111,7 @@ fn barrier(file: &File) -> io::Result<()> {
 /// Rename `from` over `to`. The rename survives a crash once its
 /// directory is synced (`sync_dir`).
 #[cfg(not(windows))]
-pub(crate) fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
+pub fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
     fs::rename(from, to)
 }
 
@@ -148,7 +148,7 @@ pub(crate) fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
 
 /// Make a rename inside `dir` durable: sync the directory itself.
 #[cfg(unix)]
-pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
+pub fn sync_dir(dir: &Path) -> io::Result<()> {
     use std::os::fd::AsRawFd;
     extern "C" {
         fn fsync(fd: std::ffi::c_int) -> std::ffi::c_int;

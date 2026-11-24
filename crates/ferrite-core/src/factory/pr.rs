@@ -8,7 +8,7 @@
 //! Worker reports what its own tools did. Ferrite never closes a PR and
 //! never deletes a branch.
 
-use super::{Answer, Effect, Refusal, RefusalCode};
+use super::{Answer, Effect, Refusal, RefusalCode, Runs, Transitions};
 use crate::factory_board::{
     short, Actor, Evidence, EvidenceKind, MergeOutcome, PullRequest, Revision, Status, Task,
 };

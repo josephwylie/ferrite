@@ -49,6 +49,7 @@ pub use coordinator::{briefing, coordinator_command};
 pub use pr::{evidence_line, TIDY_AGAIN_MS};
 pub use starts::POLL_MS;
 pub use store::{Factory, DIR_NAME};
+use direct::Runs;
 
 /// Where the Factory keeps itself in the Store's directory.
 pub const FILE_NAME: &str = "factory.json";
@@ -488,7 +489,16 @@ fn not_a_worker() -> Refusal {
     Refusal::new(RefusalCode::NotAWorker, "this Thread is no Task's Worker")
 }
 
-impl Task {
+/// The Factory's transitions of a Task, which raise its [`Effect`]s. A
+/// trait, as `Task` is the board's (`factory_board`), not the Factory's.
+trait Transitions {
+    fn note(&mut self, at_ms: i64, by: Actor, text: impl Into<String>);
+    fn to_work(&mut self, effects: &mut Vec<Effect>);
+    fn complete(&mut self, effects: &mut Vec<Effect>);
+    fn enter(&mut self, status: Status, effects: &mut Vec<Effect>);
+}
+
+impl Transitions for Task {
     fn note(&mut self, at_ms: i64, by: Actor, text: impl Into<String>) {
         let revision = self.revision_now();
         self.activity.push(Entry {
@@ -501,7 +511,7 @@ impl Task {
 
     /// Back to work, the one way into Working besides the step letting a
     /// Queued Task in. A Task whose Worker's run still goes holds its
-    /// place in the limit ([`Task::running`]: Working, or waiting on a
+    /// place in the limit ([`Runs::running`]: Working, or waiting on a
     /// Provider permission) and keeps it; any other waits its turn in
     /// Queued, its Worker and what it is to be told kept.
     fn to_work(&mut self, effects: &mut Vec<Effect>) {
