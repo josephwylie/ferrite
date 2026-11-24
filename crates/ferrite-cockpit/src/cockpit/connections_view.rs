@@ -854,8 +854,6 @@ impl ConnectionsView {
         cx.notify();
     }
 
-    /// The Cockpit's answer to a change asked of it: the error it met,
-    /// if any.
     /// Change `machine`'s projects folder in its row, starting from the
     /// one it has.
     fn edit_projects_dir(&mut self, machine: &Machine, window: &mut Window, cx: &mut Context<Self>) {
@@ -885,6 +883,8 @@ impl ConnectionsView {
         cx.notify();
     }
 
+    /// The Cockpit's answer to a change asked of it: the error it met,
+    /// if any.
     pub(super) fn answered(&mut self, error: Option<String>, cx: &mut Context<Self>) {
         self.error = error;
         cx.notify();
@@ -1389,6 +1389,7 @@ impl CockpitView {
                 view.update(cx, |view, cx| view.answered(error, cx));
             }
             ConnectionsEvent::Toggle(target) => {
+                let away = self.drafts_on(&target);
                 let saved = self.save_connections(
                     |saved| {
                         for machine in saved.iter_mut().filter(|machine| machine.target == target) {
@@ -1397,7 +1398,14 @@ impl CockpitView {
                     },
                     cx,
                 );
+                let put_away = saved.is_ok() && away > 0 && self.drafts_on(&target) == 0;
                 view.update(cx, |view, cx| view.answered(saved.err(), cx));
+                if let Some(name) = put_away.then(|| self.saved_name(&target)).flatten() {
+                    let drafts = if away == 1 { "Your draft" } else { "Your drafts" };
+                    let are = if away == 1 { "is" } else { "are" };
+                    let warning = format!("{drafts} on {name} {are} put away until {name} is on again.");
+                    view.update(cx, |view, cx| view.warn(warning, cx));
+                }
             }
             ConnectionsEvent::ToggleSync(target) => {
                 let saved = self.save_connections(
@@ -1432,6 +1440,32 @@ impl CockpitView {
             }
         }
         cx.notify();
+    }
+
+    /// How many drafts are open on the environment `target` names.
+    fn drafts_on(&self, target: &str) -> usize {
+        let Some(machine) = self
+            .machines
+            .as_ref()
+            .and_then(|machines| machines.held(machines.named(target)?))
+        else {
+            return 0;
+        };
+        self.panes
+            .iter()
+            .filter_map(|pane| pane.draft())
+            .filter(|draft| draft.binding.project().machine() == machine)
+            .count()
+    }
+
+    /// What Settings calls the environment `target` names.
+    fn saved_name(&self, target: &str) -> Option<String> {
+        self.prefs
+            .settings
+            .machines
+            .iter()
+            .find(|machine| machine.target == target)
+            .map(|machine| machine.name.clone())
     }
 
     /// Why the window cannot let the environment `target` names go now
@@ -1494,7 +1528,12 @@ impl CockpitView {
                     .iter_mut()
                     .find(|saved| replacing.as_ref() == Some(&saved.target))
                 {
-                    *existing = machine.clone();
+                    // Set up again, it is the same environment: what the
+                    // setup does not ask stays as it was.
+                    *existing = Machine {
+                        projects_dir: existing.projects_dir.clone(),
+                        ..machine.clone()
+                    };
                 } else {
                     saved.push(machine.clone());
                 }
@@ -1505,6 +1544,16 @@ impl CockpitView {
         view.update(cx, |view, cx| view.added(saved, cx));
         if !added {
             return;
+        }
+        if let Some(old) = replacing.filter(|old| *old != machine.target) {
+            let (from, to) = (
+                machine::dir(&self.prefs.dir, &old),
+                machine::dir(&self.prefs.dir, &machine.target),
+            );
+            if let Err(error) = ferrite_core::placement::follow(&from, &to) {
+                let warning = format!("Where Projects were copied to {} was not kept: {error}", machine.name);
+                view.update(cx, |view, cx| view.warn(warning, cx));
+            }
         }
         if let Some(machines) = &self.machines {
             if let Some(index) = machines.named(&machine.target) {

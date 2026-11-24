@@ -4292,10 +4292,13 @@ impl CockpitView {
             window.focus_next(cx);
             return;
         }
-        let composer = self
-            .panes
-            .get(self.focused(cx))
-            .map(|pane| pane.composer.clone());
+        // A draft's files come first; once the band has the ring, tab walks
+        // the band alone, so a file and a chip never hold it at once.
+        let pane = self.panes.get(self.focused(cx));
+        let on_band = pane
+            .and_then(|pane| pane.draft())
+            .is_some_and(|draft| draft.band_focus.is_some());
+        let composer = pane.map(|pane| pane.composer.clone()).filter(|_| !on_band);
         if composer.is_some_and(|composer| {
             composer.update(cx, |composer, cx| composer.cycle_files(false, window, cx))
         }) {
