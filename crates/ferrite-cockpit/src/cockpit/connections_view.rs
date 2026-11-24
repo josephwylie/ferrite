@@ -1581,6 +1581,13 @@ impl CockpitView {
         if !removed {
             return;
         }
+        // Where the Machine's copies went goes with it: a Machine saved
+        // again under that name is another.
+        let kept = ferrite_core::machine::dir(&self.prefs.dir, &target);
+        if let Err(error) = ferrite_core::placement::forget(&kept) {
+            let warning = format!("Environment removed, but where its copies went could not be forgotten: {error}");
+            view.update(cx, |view, cx| view.warn(warning, cx));
+        }
         if machine.is_link() {
             let directory = self.prefs.dir.clone();
             let view = view.downgrade();

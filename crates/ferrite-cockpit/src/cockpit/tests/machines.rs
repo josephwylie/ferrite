@@ -771,6 +771,31 @@ fn removing_a_connection_confirms_then_lets_its_machine_go(cx: &mut TestAppConte
     });
 }
 
+/// Removing box forgets where this computer's Projects were copied to
+/// on it: a Machine saved again under its name is another (ADR 0048).
+#[gpui::test]
+fn removing_a_connection_forgets_where_copies_to_it_went(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("machines-remove-placed", 1);
+    let machines = beside_box("remove-placed", &mut core, needs_sign_in);
+    let mut prefs = Preferences::ephemeral();
+    prefs.settings.machines = vec![box_machine()];
+    let kept = ferrite_core::machine::dir(&prefs.dir, &box_machine().target);
+    let copy = ferrite_core::placement::Placement {
+        local_root: here(),
+        remote_root: "/home/operator/projects/ferrite".into(),
+    };
+    ferrite_core::placement::place(&kept, copy.clone()).unwrap();
+    assert_eq!(ferrite_core::placement::placements(&kept), [copy]);
+    let (view, cx) = window_of(cx, core, machines, prefs);
+    let remove = connection_act(&view, "connection-remove-1", cx);
+    cx.update(|window, cx| remove(window, cx));
+    let confirm = connection_removal(&view, cx);
+    cx.update(|window, cx| confirm(window, cx));
+    tick(cx);
+    view.read_with(cx, |view, _| assert!(view.prefs.settings.machines.is_empty()));
+    assert_eq!(ferrite_core::placement::placements(&kept), []);
+}
+
 /// Both machines' Threads are cards in the one list, box's after this
 /// computer's as they arrived: box's ends its meta line with the server
 /// glyph, at the card's right, and resting the pointer on it shows its
