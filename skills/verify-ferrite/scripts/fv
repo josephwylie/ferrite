@@ -24,6 +24,10 @@ BUILD = ["cargo", "build", "--locked", "-p", "ferrite", "--features", "headless"
 MAC = sys.platform == "darwin"
 TEMP = Path("/tmp").resolve()
 OPERATOR_ENV = ("FERRITE_SOCKET", "FERRITE_THREAD_ID", "FERRITE_BIN")
+# Where Claude Code and Codex would find the operator's setup but for HOME.
+AGENT_HOMES = ("CODEX_HOME", "CLAUDE_CONFIG_DIR")
+# What cargo and rustup keep in the operator's home, kept where it is.
+TOOL_HOMES = (("CARGO_HOME", ".cargo"), ("RUSTUP_HOME", ".rustup"))
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,40}")
 SHOT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,80}")
 NO_RENDERER = ("no HeadlessRenderer", "render_to_image not available")
@@ -52,12 +56,14 @@ class Refused(Exception):
 
 
 class Run:
-    def __init__(self, run_id, mode="headless"):
+    def __init__(self, run_id, mode="headless", operator_home=False):
         if not RUN_ID.fullmatch(run_id or ""):
             raise Refused(f"a run id matches {RUN_ID.pattern}, not {run_id!r}")
         self.id = run_id
         self.mode = mode
+        self.operator_home = operator_home
         self.root = TEMP / f"fv-{run_id}"
+        self.home = self.root / "home"
         self.store = self.root / "threads"
         self.repo = self.root / "repo"
         self.state = self.root / "run.env"
@@ -78,11 +84,22 @@ class Run:
         if saved.get("CHECKOUT") != str(CHECKOUT):
             raise Refused(f"run {run_id} was launched from {saved.get('CHECKOUT')}; use that checkout's fv")
         run.mode = saved.get("MODE", "headless")
+        run.operator_home = saved.get("HOME_OF") == "operator"
         return run
 
     def env(self):
+        """The environment of every process of the run: its own Store, and
+        its own home, so no agent setup of the operator's is read or synced,
+        unless it was launched with --operator-home for signed-in agents."""
         env = {k: v for k, v in os.environ.items() if k not in OPERATOR_ENV}
         env["FERRITE_STORE"] = str(self.store)
+        if self.operator_home:
+            return env
+        for name in AGENT_HOMES:
+            env.pop(name, None)
+        for name, folder in TOOL_HOMES:
+            env.setdefault(name, str(Path.home() / folder))
+        env["HOME"] = env["USERPROFILE"] = str(self.home)
         return env
 
     def saved(self):
@@ -260,7 +277,10 @@ def launch(args):
     if args[:1] == ["--window"]:
         needs_mac("fv launch --window")
         mode, args = "window", args[1:]
-    run = Run(args[0] if args else time.strftime("%H%M%S") + str(os.getpid()), mode)
+    operator_home = args[:1] == ["--operator-home"]
+    if operator_home:
+        args = args[1:]
+    run = Run(args[0] if args else time.strftime("%H%M%S") + str(os.getpid()), mode, operator_home)
     if run.root.exists() or run.evidence.exists():
         raise Refused(f"run {run.id} exists; pick another run id")
     run.evidence.mkdir(parents=True)
@@ -271,6 +291,7 @@ def launch(args):
         raise Refused(f"the build failed; see {run.evidence}")
 
     run.store.mkdir(parents=True)
+    run.home.mkdir()
     (run.root / "settings.json").write_text(json.dumps(SETTINGS, indent=2) + "\n")
     run.repo.mkdir()
     (run.repo / "README.md").write_text("verify\n")
@@ -278,6 +299,7 @@ def launch(args):
     for step in (["init", "-q", "-b", "main"], ["add", "README.md"], ["commit", "-q", "-m", "seed"]):
         subprocess.run([*git, *step], check=True, capture_output=True)
     run.remember("MODE", mode)
+    run.remember("HOME_OF", "operator" if operator_home else "run")
     run.remember("CHECKOUT", CHECKOUT)
     try:
         server, window = settle(run)
@@ -436,7 +458,9 @@ COMMANDS = {
     "stop": stop,
 }
 
-USAGE = """usage: fv launch [--window] [run-id]     --window: the visible window, macOS only
+USAGE = """usage: fv launch [--window] [--operator-home] [run-id]
+                                        --window: the visible window, macOS only
+                                        --operator-home: the operator's HOME, for signed-in agents
        fv doctor | fv stop
        fv cli -- <ferrite args>
        fv key <keys>...                 gpui syntax: cmd-, escape cmd-shift-n enter

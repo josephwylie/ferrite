@@ -17,9 +17,7 @@ state; `-KeepBuild` keeps the WSL build for the next `up`.
 
 .EXAMPLE
 pwsh -File scripts/wsl-machine.ps1 up
-$env:CARGO_HOME = "$env:USERPROFILE\.cargo"; $env:RUSTUP_HOME = "$env:USERPROFILE\.rustup"
 $env:PATH = "$env:TEMP\ferrite-wsl-machine\bin;$env:PATH"
-$env:USERPROFILE = $env:HOME = "$env:TEMP\ferrite-wsl-machine\home"
 python skills/verify-ferrite/scripts/fv_windows.py launch tree
 pwsh -File scripts/wsl-machine.ps1 add -Settings "$env:TEMP\fv-tree\settings.json"
 $env:FV_RUN = 'tree'
@@ -62,7 +60,7 @@ function Find-OpenSsh([string]$Tool) {
 }
 
 function Up {
-    New-Item -ItemType Directory -Force (Join-Path $here 'bin'), (Join-Path $here 'home') | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $here 'bin') | Out-Null
 
     $started = Get-Date
     Invoke-Wsl 'build' @'
@@ -191,10 +189,8 @@ fn main() {
     }
     if ($LASTEXITCODE) { throw "sshd on 127.0.0.1:$Port did not take the key: see ~/ferrite-wsl-machine/sshd/sshd.log in $Distro" }
 
-    Write-Host "Machine target $alias answers. For an isolated Ferrite, in this shell:"
-    Write-Host "  `$env:CARGO_HOME = `"$env:USERPROFILE\.cargo`"; `$env:RUSTUP_HOME = `"$env:USERPROFILE\.rustup`""
+    Write-Host "Machine target $alias answers. For an isolated Ferrite (fv gives each run a home of its own), in this shell:"
     Write-Host "  `$env:PATH = `"$here\bin;`$env:PATH`""
-    Write-Host "  `$env:USERPROFILE = `$env:HOME = `"$here\home`""
     Write-Host "then save it: pwsh -File scripts/wsl-machine.ps1 add -Settings <settings.json>"
 }
 

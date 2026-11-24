@@ -253,6 +253,7 @@ fn a_ready_setup_replaces_the_environment_it_edits_and_keeps_its_warning(
         name: "box".into(),
         target: "me@box".into(),
         enabled: false,
+        sync_setup: true,
     };
     let other = Machine::new("other.example");
     view.update(cx, |view, _| {
@@ -1029,4 +1030,56 @@ fn connection_pairing_url_paste_fills_host_and_code_after_replacing_text(cx: &mu
             "0123456789abcdef0123456789abcdef"
         );
     });
+}
+
+/// A toast stands over Settings: it draws over the sheet's veil, short of
+/// the sheet's close button, which stays in reach, and a press on it is
+/// the toast's, not the veil's, which would close Settings.
+#[gpui::test]
+fn a_toast_stands_over_the_settings_sheet(cx: &mut TestAppContext) {
+    use gpui::component::notification::Notification;
+    use gpui::component::WindowExt as _;
+    let (core, _fake) = cockpit("toast-over-settings", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    // Connections is the widest page: its close button is nearest the
+    // window's right edge, where toasts hang.
+    view.update(cx, |view, cx| {
+        let sheet = view.settings_sheet(cx).expect("Settings is up");
+        sheet.update(cx, |sheet, _| sheet.page = settings::PageKey::Connections);
+        cx.notify();
+    });
+    tick(cx);
+    let pressed = std::rc::Rc::new(std::cell::Cell::new(0));
+    cx.update(|window, cx| {
+        let pressed = pressed.clone();
+        let toast = Notification::new()
+            .title("Over Settings")
+            .autohide(false)
+            .on_click(move |_, _, _| pressed.set(pressed.get() + 1));
+        window.push_notification(toast, cx);
+    });
+    for _ in 0..40 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
+    let card = bounds(cx, "notification-card".into());
+    let close = bounds(cx, "settings-close".into());
+    // Where the toasts end, as the app's theme hangs them (the tests' kit
+    // theme hangs them elsewhere).
+    let end = cx.update(|window, cx| {
+        let shifted = view.read(cx).toasts_shifted(window, cx);
+        window.viewport_size().width - px(ferrite_ui::theme::TOAST_BOX_RIGHT) - shifted
+    });
+    assert!(end <= close.left(), "toasts end at {end:?}, over Settings' close button at {close:?}");
+    cx.simulate_click(card.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(pressed.get(), 1, "the press reached the toast");
+    view.read_with(cx, |view, cx| assert!(view.settings_sheet(cx).is_some(), "Settings stays up"));
 }

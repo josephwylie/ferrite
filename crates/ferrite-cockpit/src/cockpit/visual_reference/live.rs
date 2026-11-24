@@ -308,6 +308,7 @@ pub fn capture(output: String) {
         whats_new: None,
         unreadable: None,
         keys_refused: Vec::new(),
+        setup_home: None,
     };
     let driver = Driver::open(cx, |cx| {
         CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)

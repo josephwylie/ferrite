@@ -74,6 +74,33 @@ pub fn temporary(name: &OsStr) -> bool {
     })
 }
 
+/// A new temporary file in `dir`, named as [`temporary`] reads, made with
+/// the permission bits `mode` where this side keeps them.
+pub fn temporary_file(dir: &Path, mode: Option<u32>) -> io::Result<(PathBuf, File)> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    loop {
+        let nonce = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!(
+            ".ferrite-{}-{}-{nonce}.part",
+            std::process::id(),
+            crate::clock::now().timestamp_micros()
+        ));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if let Some(mode) = mode {
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+        match options.open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 /// Whether a temporary file was left by a write that is over, in this
 /// process or one that stopped: nothing was written to it for [`EXPIRY`],
 /// and no write takes a chunk after that.
@@ -148,28 +175,7 @@ impl<T> Incoming<T> {
         if self.parts.len() >= self.most {
             return Err(invalid("Too many uploads are under way"));
         }
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let (path, file) = loop {
-            let nonce = NEXT.fetch_add(1, Ordering::Relaxed);
-            let path = dir.join(format!(
-                ".ferrite-{}-{}-{nonce}.part",
-                std::process::id(),
-                crate::clock::now().timestamp_micros()
-            ));
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            if let Some(mode) = mode {
-                std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
-            }
-            #[cfg(not(unix))]
-            let _ = mode;
-            match options.open(&path) {
-                Ok(file) => break (path, file),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error),
-            }
-        };
+        let (path, file) = temporary_file(dir, mode)?;
         self.parts.insert(
             id,
             Part {

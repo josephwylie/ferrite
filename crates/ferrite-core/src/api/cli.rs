@@ -24,6 +24,7 @@ use crate::link::{self, TryClone};
 use crate::machine::{self, Dial, Failure, Machine, Tunnel};
 use crate::settings::Settings;
 
+mod setup;
 mod tree;
 
 /// The agent skill: how an agent in one Thread drives the others. Bundled,
@@ -73,6 +74,16 @@ pub fn run(args: &[String], store: &Path, settings_dir: &Path) -> Option<i32> {
                 }
             };
             tree::run(machine, rest, store, settings_dir)
+        }
+        (_, ["setup", rest @ ..]) => {
+            let machine = match machine.map(|name| saved(name, settings_dir)).transpose() {
+                Ok(machine) => machine,
+                Err((status, error)) => {
+                    eprintln!("ferrite: {error}");
+                    return Some(status);
+                }
+            };
+            setup::run(machine, rest, store, settings_dir)
         }
         (_, [group, rest @ ..]) if groups().any(|known| known == *group) => {
             let to = match machine {
@@ -439,6 +450,7 @@ pub fn usage(group: Option<&str>) -> String {
     }
     if group.is_none() {
         out.push_str(tree::USAGE);
+        out.push_str(setup::USAGE);
         out.push_str(
             "\n  ferrite --skill [install]\n      Print the agent skill, or install it for Claude and Codex.\n  \
              ferrite --schema\n      The API's JSON Schema.\n  \

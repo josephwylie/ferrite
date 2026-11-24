@@ -99,10 +99,29 @@ fn send(
             ));
         }
     }
+    tree::mirror(
+        source,
+        &Root::Path { path: dest },
+        skip,
+        &mut attach(machine, "ferrite tree send", store, settings_dir)?,
+        &mut |_| {},
+        &Cancellation::default(),
+    )
+    .map_err(|error| ApiError::new(Code::Failed, error.to_string()))
+}
+
+/// A connection of its own, as `client`, to the Server tree ops go to: the
+/// machine's, through its bridge, or this computer's.
+pub(super) fn attach(
+    machine: Option<&Machine>,
+    client: &str,
+    store: &Path,
+    settings_dir: &Path,
+) -> Result<tree::Remote, ApiError> {
     let hello = ClientMessage::Hello {
         generation: protocol::GENERATION,
         client: Peer {
-            name: "ferrite tree send".into(),
+            name: client.into(),
             version: env!("CARGO_PKG_VERSION").into(),
         },
         capabilities: Vec::new(),
@@ -116,13 +135,5 @@ fn send(
         Some(failure) => unreachable(failure),
         None => ApiError::new(Code::ServerUnavailable, format!("no Ferrite server answered: {error}")),
     })?;
-    tree::mirror(
-        source,
-        &Root::Path { path: dest },
-        skip,
-        &mut tree::Remote::new(attached.client),
-        &mut |_| {},
-        &Cancellation::default(),
-    )
-    .map_err(|error| ApiError::new(Code::Failed, error.to_string()))
+    Ok(tree::Remote::new(attached.client))
 }
