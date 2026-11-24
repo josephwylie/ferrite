@@ -5,11 +5,17 @@ scripts/core-sides.json puts every top-level module of ferrite-core on one of
 two sides: `shared`, what a window and a Server both speak, or `engine`, what
 only a Server runs. A crossing is a path to an `engine` module from a `shared`
 module, or from one of the window's crates. Each is counted per pair and
-compared with the baseline. Tests and fixtures are not counted. Run with:
+compared with the baseline. Run with:
 
     python3 scripts/check_core_sides.py
 
 Add --write to record the counts read as the new baseline.
+
+What a released app cannot compile is not counted: a module whose `mod` line,
+or an ancestor's, has a `cfg` that fails with `test` off and only the
+`shipped` features on, and an inline `#[cfg(test)] mod` block. A file's name
+says nothing. A `pub use` counts once for each engine item it hands on, since
+every crate above can then name that item without naming the engine.
 """
 
 import argparse
@@ -26,13 +32,75 @@ CORE = "ferrite-core"
 INLINE_TESTS = re.compile(r"^#\[cfg\(test\)\]\n(?:pub(?:\([a-z]+\))? )?mod \w+ \{.*?^\}\n", re.M | re.S)
 COMMENT = re.compile(r"^\s*//.*$", re.M)
 NAME = re.compile(r"\s*([a-z_][a-z0-9_]*)")
+MOD = re.compile(r"((?:^[ \t]*(?:#\[[^\n]*\]|//[^\n]*)\n)*)^[ \t]*(?:pub(?:\([^)\n]*\))?[ \t]+)?mod[ \t]+(\w+)[ \t]*;", re.M)
+PATH = re.compile(r'#\[path\s*=\s*"([^"]+)"\]')
+CFG = re.compile(r"#\[cfg\((.*)\)\]")
+TOKEN = re.compile(r'\s*(?:(\w+)\s*=\s*"([^"]*)"|(\w+)|([(),]))')
+PUB_USE = re.compile(r"^[ \t]*pub use ((?:crate|ferrite_core)::[^;]*);", re.M)
+LEAF = re.compile(r"(\w+)\s*(?=[,}]|$)")
 
 
-def is_test(path: Path) -> bool:
-    return any(
-        part == "tests" or part == "test_temp" or part.endswith("_tests") or "fixture" in part
-        for part in (*path.parts[:-1], path.stem)
-    )
+def holds(cfg: str, shipped: set[str]) -> bool | None:
+    """Whether `cfg` holds in a released app: `test` off, only `shipped` features on. None where it
+    rests on what this cannot tell, such as the platform."""
+    tokens = [next(group for group in match.groups() if group is not None) if match.group(1) is None
+              else (match.group(1), match.group(2)) for match in TOKEN.finditer(cfg)]
+    at = 0
+
+    def term() -> bool | None:
+        nonlocal at
+        token = tokens[at]
+        at += 1
+        if isinstance(token, tuple):
+            return token[1] in shipped if token[0] == "feature" else None
+        if token in ("any", "all", "not"):
+            at += 1
+            parts = []
+            while tokens[at] != ")":
+                parts.append(term())
+                if tokens[at] == ",":
+                    at += 1
+            at += 1
+            if token == "not":
+                return None if parts[0] is None else not parts[0]
+            decisive = token == "any"
+            if decisive in parts:
+                return decisive
+            return None if None in parts else not decisive
+        return False if token == "test" else None
+
+    return term()
+
+
+def declared(file: Path, name: str, attributes: str) -> Path | None:
+    """The file `mod name;` in `file` brings in."""
+    if path := PATH.search(attributes):
+        return (file.parent / path.group(1)).resolve()
+    base = file.parent if file.name in ("lib.rs", "main.rs", "mod.rs") else file.with_suffix("")
+    for candidate in (base / f"{name}.rs", base / name / "mod.rs"):
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
+def unshipped(src: Path, shipped: set[str]) -> set[Path]:
+    """The files a released app never compiles: reached from `src/lib.rs` only through a `mod`
+    line whose `cfg` fails there. A file no `mod` line reaches is counted."""
+    reached: dict[Path, bool] = {}
+
+    def walk(file: Path, ships: bool):
+        if reached.get(file) is True or (file in reached and not ships):
+            return
+        reached[file] = ships
+        for attributes, name in MOD.findall(file.read_text(encoding="utf-8")):
+            if child := declared(file, name, attributes):
+                fails = any(holds(cfg, shipped) is False for cfg in CFG.findall(attributes))
+                walk(child, ships and not fails)
+
+    lib = src / "lib.rs"
+    if lib.exists():
+        walk(lib.resolve(), True)
+    return {path for path, ships in reached.items() if not ships}
 
 
 def named(source: str, root: str) -> list[str]:
@@ -58,13 +126,36 @@ def named(source: str, root: str) -> list[str]:
     return found
 
 
-def crossings(root: Path, engine: set[str], window: list[str]) -> Counter:
+def handed_on(tree: str) -> list[tuple[str, int]]:
+    """Each module of a `pub use` tree (`root::a::{X, Y}`, `root::{a::X, b::Y}`) with the items it hands on."""
+    tree = tree.split("::", 1)[1].strip()
+    entries = [tree]
+    if tree.startswith("{"):
+        entries, depth, entry = [], 0, ""
+        for char in tree[1:-1]:
+            depth += {"{": 1, "}": -1}.get(char, 0)
+            if char == "," and depth == 0:
+                entries.append(entry)
+                entry = ""
+            else:
+                entry += char
+        entries.append(entry)
+    handed = []
+    for entry in filter(str.strip, entries):
+        module, _, rest = entry.strip().partition("::")
+        handed.append((module, max(1, len(LEAF.findall(rest)))))
+    return handed
+
+
+def crossings(root: Path, engine: set[str], window: list[str], shipped: set[str]) -> Counter:
     found = Counter()
     for crate in [CORE, *window]:
         src = root / "crates" / crate / "src"
+        skipped = unshipped(src, shipped)
+        prefix = "crate" if crate == CORE else "ferrite_core"
         for path in sorted(src.rglob("*.rs")):
             relative = path.relative_to(src)
-            if is_test(relative):
+            if path.resolve() in skipped:
                 continue
             owner = crate
             if crate == CORE:
@@ -72,7 +163,11 @@ def crossings(root: Path, engine: set[str], window: list[str]) -> Counter:
                 if owner == "lib" or owner in engine:
                     continue
             source = COMMENT.sub("", INLINE_TESTS.sub("", path.read_text(encoding="utf-8")))
-            for module in named(source, "crate" if crate == CORE else "ferrite_core"):
+            for tree in PUB_USE.findall(source):
+                for module, items in handed_on(tree):
+                    if module in engine:
+                        found[f"{owner} -> {module}"] += items
+            for module in named(PUB_USE.sub("", source), prefix):
                 if module in engine:
                     found[f"{owner} -> {module}"] += 1
     return found
@@ -95,7 +190,7 @@ def main(argv: list[str], root: Path = ROOT, sides_file: Path = SIDES, out=sys.s
     if unplaced or gone:
         return 1
 
-    found = crossings(root, engine, config["window"])
+    found = crossings(root, engine, config["window"], set(config["shipped"]))
     if args.write:
         config["crossings"] = dict(sorted(found.items()))
         sides_file.write_text(json.dumps(config, indent=1) + "\n", encoding="utf-8")

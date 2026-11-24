@@ -44,8 +44,14 @@ module from a shared module, or from one of the window's crates
 | `ferrite-pane`, `ferrite-ui` | 0 | |
 
 CI fails when a pair's count rises, a new pair appears, or a module is on
-no side. The baseline only goes down. Tests and fixtures are not counted.
-The `ferrite` crate is not counted: it is the program that starts both.
+no side. The baseline only goes down. What a released app cannot compile
+is not counted: a module whose `mod` line, or an ancestor's, has a `cfg`
+that fails with `test` off and only the `shipped` features of
+`core-sides.json` on (`cef`), and an inline `#[cfg(test)] mod` block. A
+file's name skips nothing. A `pub use` counts once for each engine item it
+hands on, since every crate above can then name it without naming the
+engine. The `ferrite` crate is not counted: it is the program that starts
+both.
 
 A crossing is a type living on the wrong side, or work. `store::Provider`,
 `workspace::WorkspaceChoice` and the Factory's board were facts a window
