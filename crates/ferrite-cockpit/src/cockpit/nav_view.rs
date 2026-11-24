@@ -632,9 +632,25 @@ impl CockpitView {
                 self.open_nav_row(key, cx);
             }
             NavEvent::OpenResult(key) => {
-                if self.open_nav_row(key, cx) {
-                    self.nav_view.update(cx, |nav, cx| nav.clear_search(cx));
+                // A search result that opened ends the search.
+                let opened = |view: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
+                    view.nav_view.update(cx, |nav, cx| nav.clear_search(cx));
                     window.blur(cx);
+                };
+                if self.pane_for(key).is_some() {
+                    self.focus_thread(key, cx);
+                    opened(self, window, cx);
+                } else {
+                    self.revive_thread_in(
+                        key,
+                        window,
+                        move |view, back, window, cx| {
+                            if back {
+                                opened(view, window, cx);
+                            }
+                        },
+                        cx,
+                    );
                 }
             }
             NavEvent::Notice(verb) => self.notice_verb(verb, cx),

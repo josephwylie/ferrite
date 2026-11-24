@@ -295,7 +295,7 @@ impl Spawner for Fake {
 /// Reopen a parked Thread and start its agent, as the operator starting
 /// to write to it does (ADR 0032), and leave the Composer empty again.
 fn revive_awake(cockpit: &mut Cockpit, thread: ThreadKey) {
-    cockpit.revive(thread).unwrap();
+    cockpit.revive(thread).now().unwrap();
     wake(cockpit, thread);
 }
 
@@ -588,7 +588,7 @@ fn a_followed_worktree_that_vanishes_returns_the_thread_to_main() {
     let parked = follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-parked"));
     cockpit.park(thread).now().unwrap();
     git(&["worktree", "remove", "--force", parked.to_str().unwrap()]);
-    cockpit.revive(thread).unwrap();
+    cockpit.revive(thread).now().unwrap();
     assert_eq!(
         fake.cwds.borrow().last().cloned().flatten(),
         Some(repo.clone())
@@ -1411,7 +1411,7 @@ fn thread_title_is_durable_and_blank_rename_is_refused() {
     let mut relaunched = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
     // The relaunch holds its machine under a new id.
     let thread = relaunched.key(thread.thread());
-    relaunched.revive(thread).unwrap();
+    relaunched.revive(thread).now().unwrap();
     assert_eq!(
         relaunched.thread_title(thread).unwrap().as_deref(),
         Some("Parser work")
@@ -1950,7 +1950,7 @@ fn completion_observation_is_quiet_factual_and_unchanged_after_reopen() {
     let mut reopened = Cockpit::new(Store::open(&dir).unwrap(), Box::new(Fake::default()));
     // The relaunch holds its machine under a new id.
     let thread = reopened.key(thread.thread());
-    reopened.revive(thread).unwrap();
+    reopened.revive(thread).now().unwrap();
     assert_eq!(
         completion(&reopened),
         first,
@@ -2359,7 +2359,7 @@ fn a_sent_prompt_reaches_the_provider_the_transcript_and_the_log() {
     assert!(matches!(echoed.map(|b| b.body), Some(Body::Prompt(line)) if line == "run the tests"));
     // And durably: a restart must not lose what the operator asked for.
     cockpit.park(thread).now().unwrap();
-    cockpit.revive(thread).unwrap();
+    cockpit.revive(thread).now().unwrap();
     assert!(cockpit
         .thread(thread)
         .map(|open| open.transcript())
@@ -2388,7 +2388,7 @@ fn prompt_history_is_per_thread_and_rebuilt_from_the_log() {
     );
 
     cockpit.park(first).now().unwrap();
-    cockpit.revive(first).unwrap();
+    cockpit.revive(first).now().unwrap();
     assert_eq!(
         cockpit.recall_prompt(first, HistoryDirection::Older, "revived draft"),
         Some("two".into())
@@ -2553,7 +2553,7 @@ fn a_new_cockpit_recovers_prompt_history_from_the_store() {
     let mut relaunched = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
     // The relaunch holds its machine under a new id.
     let thread = relaunched.key(thread.thread());
-    relaunched.revive(thread).unwrap();
+    relaunched.revive(thread).now().unwrap();
     assert_eq!(
         relaunched.recall_prompt(thread, HistoryDirection::Older, "draft"),
         Some("before relaunch".into())
@@ -2734,7 +2734,7 @@ fn a_revived_thread_keeps_its_root_and_prefaces_its_first_prompt_again() {
     let _ = cockpit.send(thread, "before the park".into());
 
     cockpit.park(thread).now().unwrap();
-    cockpit.revive(thread).unwrap();
+    cockpit.revive(thread).now().unwrap();
 
     assert_eq!(
         cockpit
@@ -3125,7 +3125,7 @@ fn a_restart_finds_the_threads_it_left_behind() {
     let (first, second) = (restarted.key(first.thread()), restarted.key(second.thread()));
 
     assert_eq!(restarted.parked().unwrap(), vec![first, second]);
-    restarted.revive(second).unwrap();
+    restarted.revive(second).now().unwrap();
     assert_eq!(restarted.threads(), vec![second]);
     // What is open is no longer parked.
     assert_eq!(restarted.parked().unwrap(), vec![first]);
@@ -3666,7 +3666,7 @@ fn a_commands_event_becomes_the_thread_menu_and_never_the_history() {
     // The log replays nothing; the revived Thread offers what its agent
     // last said.
     cockpit.park(thread).now().unwrap();
-    cockpit.revive(thread).unwrap();
+    cockpit.revive(thread).now().unwrap();
     assert_eq!(
         cockpit
             .thread(thread)
@@ -3724,7 +3724,7 @@ fn a_models_event_becomes_the_thread_menu_and_never_the_history() {
     );
 
     cockpit.park(thread).now().unwrap();
-    cockpit.revive(thread).unwrap();
+    cockpit.revive(thread).now().unwrap();
     assert_eq!(
         cockpit
             .thread(thread)
@@ -4318,7 +4318,7 @@ fn a_thread_is_named_by_its_title_then_its_first_prompt_then_its_number() {
     );
     cockpit.rename_thread(thread, "CI flake").now().unwrap();
     assert_eq!(cockpit.display_title(thread, true), "CI flake");
-    cockpit.revive(thread).unwrap();
+    cockpit.revive(thread).now().unwrap();
     assert_eq!(
         cockpit.display_title(thread, false),
         "CI flake",
@@ -4370,7 +4370,7 @@ fn a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries() {
     );
     assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
 
-    cockpit.revive(thread).unwrap();
+    cockpit.revive(thread).now().unwrap();
     assert!(cockpit
         .thread(thread)
         .is_some_and(|open| open.first_prompt_sent()));
@@ -4401,7 +4401,7 @@ fn a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries() {
     cockpit.pump();
     // Parked again before any prompt reached Codex.
     cockpit.park(thread).now().unwrap();
-    cockpit.revive(thread).unwrap();
+    cockpit.revive(thread).now().unwrap();
 
     let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
     assert!(
@@ -4703,7 +4703,7 @@ fn a_park_then_revive_keeps_the_chosen_provider_and_model() {
         .unwrap();
 
     cockpit.park(thread).now().unwrap();
-    cockpit.revive(thread).unwrap();
+    cockpit.revive(thread).now().unwrap();
 
     assert_eq!(
         fake.spawn_pairs().last().unwrap(),
@@ -4844,7 +4844,7 @@ fn reopen_walks_this_launches_park_order_then_creation_order() {
     assert!(cockpit.roster().panes().is_empty());
 
     let (first, opened) = cockpit.reopen_last().unwrap();
-    opened.unwrap();
+    opened.now().unwrap();
     assert_eq!(first, threads[1], "the last park comes back first");
     assert_eq!(cockpit.reopen_last().unwrap().0, threads[0]);
     assert_eq!(
@@ -4881,7 +4881,7 @@ fn local_thread_revival_probe() {
         let fake = Fake::default();
         let mut cockpit = Cockpit::new(store, Box::new(fake));
         let started = std::time::Instant::now();
-        cockpit.revive(cockpit.key(ThreadId::new(id))).unwrap();
+        cockpit.revive(cockpit.key(ThreadId::new(id))).now().unwrap();
         let elapsed = started.elapsed();
         let open = cockpit.thread(cockpit.key(ThreadId::new(id))).unwrap();
         let subject = open
@@ -4934,7 +4934,7 @@ fn a_parked_thread_holds_no_draft_when_revived() {
     core.park(thread).now().unwrap();
     core.pump();
     assert!(!core.engine().composing(thread.thread()));
-    core.revive(thread).unwrap();
+    core.revive(thread).now().unwrap();
     core.pump();
     assert!(!core.engine().composing(thread.thread()));
 }
@@ -5056,7 +5056,7 @@ fn stale_board_launch_after_handover_resumes_the_current_provider() {
             &(Vec::new(), Vec::new())
         );
         core.park(thread).now().unwrap();
-        core.revive(thread).unwrap();
+        core.revive(thread).now().unwrap();
         assert!(
             fake.args.borrow().last().unwrap().is_empty(),
             "foreign flags were saved"
@@ -5125,7 +5125,7 @@ fn only_the_first_session_names_the_conversation_it_begins() {
 fn reopening_an_open_thread_lands_on_it_without_starting_it_again() {
     let (mut core, fake) = cockpit("reopen-open");
     let thread = core.open(core.first_machine(), Provider::Claude, main_choice()).unwrap();
-    core.reopen(thread).unwrap();
+    core.reopen(thread).now().unwrap();
     assert_eq!(fake.args.borrow().len(), 1, "one Session");
     assert_eq!(core.roster().focused_thread(), Some(thread));
     assert!(
@@ -5209,7 +5209,7 @@ fn a_thread_revived_with_a_new_launch_keeps_its_id() {
     );
     // What the last revive saved is what the next plain one starts with.
     core.park(thread).now().unwrap();
-    core.revive(thread).unwrap();
+    core.revive(thread).now().unwrap();
     assert!(fake.args.borrow().last().unwrap().is_empty());
 }
 
@@ -5315,7 +5315,7 @@ fn a_store_with_groups_lists_every_thread_and_opens_each_alone() {
         if cockpit.thread(thread).is_some() {
             assert!(cockpit.focus_thread(thread));
         } else {
-            cockpit.reopen(thread).unwrap();
+            cockpit.reopen(thread).now().unwrap();
         }
         assert_eq!(cockpit.visible(), [PaneIdentity::Thread(thread)]);
     }

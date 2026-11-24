@@ -116,7 +116,7 @@ fn invariant_a_hand_over_after_revive_carries_the_whole_history() {
         exchanges.push((format!("question {n}"), answer(n)));
     }
     cockpit.park(thread).now().unwrap();
-    cockpit.revive(thread).unwrap();
+    cockpit.revive(thread).now().unwrap();
     cockpit
         .set_provider(
             thread,
@@ -190,7 +190,7 @@ fn lab_store_costs_on_a_real_log() {
     eprintln!("LAB rename_parked_ms={:.1}", ms(started));
     for round in 0..2 {
         let started = Instant::now();
-        cockpit.revive(thread).unwrap();
+        cockpit.revive(thread).now().unwrap();
         eprintln!("LAB revive#{round}_ms={:.1}", ms(started));
         let started = Instant::now();
         cockpit.rename_thread(thread, "lab live title").now().unwrap();
@@ -279,7 +279,7 @@ fn parking_never_waits_for_the_drive() {
     cockpit.park(thread).now().unwrap();
     // Well under the drive's delay, with room for a loaded CI runner.
     assert!(started.elapsed() < std::time::Duration::from_secs(1));
-    cockpit.revive(thread).unwrap();
+    cockpit.revive(thread).now().unwrap();
     assert_eq!(
         cockpit
             .peek(thread)
@@ -412,7 +412,7 @@ fn what_quitting_cannot_write_is_kept_and_reported() {
     let mut relaunched = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
     // The relaunch holds its machine under a new id.
     let thread = relaunched.key(thread.thread());
-    relaunched.revive(thread).unwrap();
+    relaunched.revive(thread).now().unwrap();
     let notices: Vec<String> = relaunched
         .thread(thread)
         .unwrap()
@@ -524,7 +524,7 @@ fn an_unreadable_saved_queue_is_said_not_silently_dropped() {
         "{ not json",
     )
     .unwrap();
-    cockpit.revive(thread).unwrap();
+    cockpit.revive(thread).now().unwrap();
     assert!(cockpit
         .thread(thread)
         .unwrap()

@@ -1173,7 +1173,7 @@ pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> 
         {
             Some(at) => {
                 let thread = pool.remove(at);
-                match cockpit.revive(thread) {
+                match cockpit.revive(thread).now() {
                     Ok(()) => shown.push(thread),
                     Err(e) => {
                         ferrite_core::log!("thread {} could not be revived: {e:?}", thread.thread())
