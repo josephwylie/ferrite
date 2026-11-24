@@ -203,6 +203,8 @@ function Add {
     $saved = if (Test-Path $Settings) { Get-Content $Settings -Raw | ConvertFrom-Json -AsHashtable } else { @{} }
     $machines = @($saved['machines'] | Where-Object { $_ -and $_['name'] -ne $Name })
     $saved['machines'] = $machines + @(@{ name = $Name; target = $alias; enabled = $true })
+    $folder = Split-Path $Settings -Parent
+    if ($folder) { New-Item -ItemType Directory -Force $folder | Out-Null }
     $saved | ConvertTo-Json -Depth 20 | Set-Content $Settings
     Write-Host "saved Machine $Name ($alias) in $Settings"
 }
