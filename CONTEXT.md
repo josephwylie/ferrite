@@ -375,9 +375,9 @@ _Avoid_: mirror, sync target, remote path.
 A copy of a Project to a Machine that began and has not ended: cancelled,
 cut off, or stopped with the app. This computer keeps it beside the
 Machine's Placements (`unfinished.json`) from before its first byte until
-it ends. Only its Resume changes its destination: it sends what differs
-and removes only what that copy sent, so what anyone else put there stays
-(ADR 0048).
+it ends, or until it stops with nothing landed. Only its Resume changes its
+destination: it sends what is not there, and leaves each file someone else
+changed there as it is and lists it; it removes nothing (ADR 0048).
 _Avoid_: partial copy, interrupted sync, half copy.
 
 **Setup sync**

@@ -241,16 +241,25 @@ Windows window.
   (`draft_environment.rs`):
   1. a counterpart exists: the Draft's Project becomes it. Its text,
      attachments, provider and effort stay; its attachments are aimed at E
-     and their upload there starts at once;
+     and their upload there starts at once. A Draft keeps a file of this
+     computer by its path here, and a Machine's copy of it beside it
+     (`DraftContent.uploaded`), never in its place: put away and back on
+     that Machine it sends the copy without uploading again, and picked
+     onto this computer it sends the file here. One no longer here says
+     "Gone from this computer" on either side and asks for no upload;
+     put back, its Retry sends it;
   2. none, and P is on this computer: the setup sheet (`PlacementView`).
      Where the copy goes is chosen by browsing E, never by typing a path
      (though one can be typed): see **The folder browser** below. The copy
      goes to `<folder browsed>/<name>`, its name P's folder name until
      edited ("Copies to"). P's git-ignored entries are listed with their
-     sizes, unticked; past 20, the rest are one row, "and N more", that
-     ticks them all. Worktrees inside P are never copied nor listed, and
-     the sheet says so; a P that is itself a linked worktree is refused,
-     naming its main checkout, since its `.git` names a path here. Copy
+     sizes, unticked; a folder git ignores whole is one row, nothing in it
+     listed apart, and ticked it carries all it holds; past 20, the rest
+     are one row, "and N more", that ticks them all. Worktrees inside P
+     are never copied nor listed, and the sheet says so; a P that is
+     itself a linked worktree is refused, since its `.git` names a path
+     here, and the sheet names the folder of its main checkout where that
+     `.git` file leads to one. Copy
      runs on a thread of its own over a connection of its own
      (`Cockpit::tree`), with its progress and Cancel. Then the window
      registers the destination on E, names a Project made there as P is
@@ -276,7 +285,9 @@ Windows window.
   name to the first folder it starts, and with none to finish moves on.
   "New folder" names a folder in the one shown, which "The copy makes
   this folder" marks; one that cannot be read says so in place, in two
-  lines at most, and `..` leads out of it. The
+  lines at most, and `..` leads out of it. On the setup sheet its folders
+  take the card's free height, six rows at least, and it reads its folder
+  again once a copy ends. The
   Project card on a Machine uses the same browser in place of its path
   field: "+ Add directory" under it, or ↵ once it has moved, adds the
   folder shown, and the browser goes back to the folder that one is in.
@@ -288,25 +299,37 @@ Windows window.
 - **An unfinished copy can be resumed.** Before its first byte a copy is
   kept on this computer as **unfinished**, at
   `machine::dir(..)/unfinished.json` beside the Placements, by P's root
-  and the destination, with every path it sends there or may have. It is
-  cleared once the copy is in; `placement::copy` alone writes and clears
+  and the destination alone. It is cleared once the copy is in, or once
+  it stops with nothing landed; `placement::copy` alone writes and clears
   it. A copy cancelled, cut off, or stopped with the app is resumed by the
-  next copy of P to that destination: only what differs is sent, and only
-  what the record lists and P no longer holds is removed, so what anyone
-  else put there since stays. The sheet reads the records: for a P with
-  one it opens on that destination, says "An unfinished copy of P is
-  here." and offers Resume, never "Use what is there"; "Start over
-  elsewhere" browses away.
+  next copy of P to that destination, which reads what is done off the
+  destination rather than a list: a file there as the copy sends it is
+  done, one not there is sent, and one there that differs is someone
+  else's, left as it is and listed under Not copied as "changed on E".
+  A resume removes nothing. A destination that holds another repository
+  by then (its `.git/config` names another remote) takes no resume, and
+  its record goes. One that holds another Project's unfinished copy is
+  that Project's: the sheet says "D holds an unfinished copy of Q." and
+  offers nothing to use there. The sheet reads the records: for a P with
+  one it opens on that destination, under `~/`, says "An unfinished copy
+  of P is here." and offers Resume, never "Use what is there"; to start
+  elsewhere, the operator browses away or makes a New folder. Removing a
+  Machine in Settings forgets its Placements and unfinished copies.
 - **A destination is kept sane by the sheet**: `/` or `~/` first (or a
   drive, for a Server on Windows), not the home or a root itself, nothing
   through `.` or `..` (`placement::refuse_destination`).
 - **A file that changes or cannot be read** during the copy is left by its
   name, sent once more, and if it still cannot be, listed when the copy is
-  in: the sheet stays up on Done to list it.
+  in: the sheet stays up on Done to list it under Not copied, "Left as it
+  was", each with why: "in use here", "unreadable on E" or "changed on
+  E".
 - **A copy sends what git would check out on the Machine**
   (`placement::Checkout`, the copy's `tree::Source`). From Windows, a file
-  `git ls-files --eol` has as `i/lf w/crlf`, with no `eol=crlf`
-  attribute, goes with each CRLF made LF, uncommitted edits and all; each
+  `git ls-files --eol` has as `i/lf w/crlf` goes with each CRLF made LF,
+  uncommitted edits and all, when git itself converts it: its attribute
+  is `text` or `text=auto`, or it has none and `core.autocrlf` is true.
+  One that is `-text`, binary, `eol=crlf` or has a
+  `working-tree-encoding` goes as it is; each
   file gets bits of its own, which Windows does not keep: 0755 for one the
   index has as 100755, 0600 for one git ignores (this computer's own, as a
   `.env` is), 0644 for the rest; the copy's `.git/index` lists each file
@@ -329,9 +352,12 @@ Windows window.
   counts the files as it goes, and Cancel stops it there too. While a copy
   runs a press outside the card does nothing, and ✕, Esc and Cancel are
   one act: the copy stops, the sheet stays and says it can be resumed.
-  Retry from a failure copies again. A connection lost under the copy is
-  said in the operator's words: "The connection to E was lost. Resume
-  finishes the copy once it is back." From Copy on, where the copy goes is
+  Through a first copy its button stays Copy; only a resume's reads
+  Resume. Retry from a failure copies again. A failure is said in the
+  operator's words: "The connection to E was lost. Resume finishes the
+  copy once it is back." when the connection went, else the folder that
+  could not be written and why, under `~/`: "Can't write in
+  ~/projects/app: permission denied." From Copy on, where the copy goes is
   held: the browser, the copy's name and the ticks take no press or key
   until it stops. How it stands is a two-line slot under "Copies to",
   whole in its tooltip, there in every stage. Over a draft the card, as
@@ -549,6 +575,20 @@ Windows window.
   read. From Windows an executable in one lands 0644 and its text keeps
   CRLF under its own `core.autocrlf`, so a script there does not run until
   the submodule is checked out afresh on the Machine.
+- **A converted file reads modified on the Machine under
+  `core.splitIndex`.** The copy clears the sizes of what it converts in
+  `.git/index`, and a split index keeps most entries in
+  `sharedindex.*`, which it sends as it is; `git status` there lists
+  those files until the index is refreshed.
+- **`core.eol` goes in the copy's `.git/config`.** Only `core.autocrlf`,
+  `core.filemode` and `core.ignorecase` are taken out; a `core.eol=crlf`
+  set here makes git there check out CRLF.
+- **"Use what is there" registers what is there under P's name.** The
+  destination may hold an unrelated repository; the sheet registers it as
+  the operator asked, and the window names a Project made there as P is
+  named, as for a copy.
+- **Submodules were not tried live**: the tests and the WSL Machine runs
+  copy Projects without one.
 - **Switching a Draft's environment sets its workspace target back to
   Main**, and whether the Draft's provider is installed on the Machine is
   not checked until the first send.
