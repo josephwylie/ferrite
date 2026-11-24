@@ -886,6 +886,7 @@ pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
                 .flex()
                 .items_end()
                 .gap(px(8.))
+                .pl(px(28.))
                 .child(field(
                     "connection-projects-dir",
                     "Projects folder",
