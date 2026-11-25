@@ -116,6 +116,12 @@ pub(super) fn remove(format: Format, keys: &[Key], raw: &[u8], key: &str) -> io:
     }
 }
 
+/// `text`, a JSON file, with the entry `entry` of its key `name` holding
+/// `value` as it is, no home in it spelled: every other byte as it was.
+pub(super) fn put_json(text: &[u8], name: &str, entry: &str, value: Value) -> io::Result<Vec<u8>> {
+    json::set(text, &At { name: name.to_string(), entry: Some(entry.to_string()) }, value)
+}
+
 /// A key path, its names as the file spells them.
 struct At {
     name: String,

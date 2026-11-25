@@ -18,6 +18,7 @@ mod elicitation;
 pub mod limits;
 pub(crate) mod model_cache;
 pub(crate) mod oneshot;
+mod plugins;
 mod resume;
 pub mod update;
 // The Win32 calls are cfg(windows); the pid-selection logic inside is pure
@@ -435,8 +436,8 @@ impl Session for CodexSession {
     }
 }
 pub use claude::discovery::list as claude_sessions;
-/// What installs the Claude plugins a setup sync turns on (ADR 0050).
-pub use claude::plugins::installs as claude_plugin_installs;
+/// What installs the plugins a setup sync turns on (ADR 0050).
+pub use plugins::installs as plugin_installs;
 pub use resume::{ResumeFailure, ResumeRefused};
 /// Each Provider's title filler, beside its Session — the titler runs
 /// whichever the Thread's Provider is.

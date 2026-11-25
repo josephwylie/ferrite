@@ -23,7 +23,7 @@ mod store;
 #[cfg(test)]
 mod tests;
 
-pub use installs::{Installer, Installs};
+pub use installs::{installing, Installer, Installs};
 pub use portable::Spelling;
 pub use reconcile::{agreed, reconcile, Action, Hold};
 pub use run::{run, Job, Kept, Names, Outcome, Replaced, Synced, Valve, BASE, CONFLICTS};
@@ -233,10 +233,4 @@ pub fn chosen(path: &str) -> Option<(&'static Item, &str)> {
 /// The file a setup path lies in: a chosen key's file, else the path.
 pub fn file_of(path: &str) -> &str {
     chosen(path).map_or(path, |(item, _)| item.path)
-}
-
-/// The plugin a problem at `path` says could not be installed: its
-/// `<plugin>@<marketplace>`.
-pub fn installing(path: &str) -> Option<&str> {
-    path.strip_prefix(installs::FAILED)
 }

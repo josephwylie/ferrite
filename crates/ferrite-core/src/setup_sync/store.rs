@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
-use super::installs::Installs;
+use super::installs::{Folders, Installs};
 use super::links::{self, Places};
 use super::portable::{self, Spelling};
 use super::{keys, Format, Item, Key, Source, CLAUDE_KEYCHAIN, ITEMS, LEFT_OUT};
@@ -62,7 +62,7 @@ pub struct Home {
     /// Where Claude's sign-in is kept in place of its file (macOS's), and
     /// the service of its item there.
     keychain: Option<(Arc<dyn Keychain>, String)>,
-    /// What installs the plugins a sync turns on in Claude here.
+    /// What installs the plugins a sync turns on here.
     installs: Option<Arc<Installs>>,
     /// Where what a sync removes or writes over here goes.
     trash: Arc<Trash>,
@@ -191,6 +191,11 @@ impl Home {
     /// it moved anything.
     pub(super) fn trashed(&self) -> Option<PathBuf> {
         self.trash.used()
+    }
+
+    /// Where this side's tools keep what they install.
+    fn folders(&self) -> Folders {
+        Folders { claude: self.claude.clone(), codex: self.codex.clone() }
     }
 
     /// Claude's folder at `dir`, as `CLAUDE_CONFIG_DIR` puts it, its
@@ -328,8 +333,7 @@ impl Home {
             }
         }
         if let Some(installs) = &self.installs {
-            installs.wait(INSTALLING);
-            manifest.problems.extend(installs.problems(&self.claude));
+            manifest.problems.extend(installs.settled(&self.folders(), INSTALLING));
         }
         manifest
     }
@@ -573,12 +577,14 @@ impl Home {
         }
     }
 
-    /// A key at `key` of the file at `at` was written: when it turns a
-    /// plugin or a marketplace of Claude's on or off, install what is on.
+    /// A key at `key` of the file at `at` was written or removed: when it
+    /// turns a plugin or a marketplace on or off, install what is on.
     fn installing(&self, at: &Path, key: &str) {
-        let plugins = key.starts_with("enabledPlugins/") || key.starts_with("extraKnownMarketplaces/");
-        if let Some(installs) = self.installs.as_ref().filter(|_| plugins && *at == self.claude.join("settings.json")) {
-            installs.changed(&self.claude);
+        let claude = *at == self.claude.join("settings.json")
+            && (key.starts_with("enabledPlugins/") || key.starts_with("extraKnownMarketplaces/"));
+        let codex = *at == self.codex.join("config.toml") && (key.starts_with("plugins/") || key.starts_with("marketplaces/"));
+        if let Some(installs) = self.installs.as_ref().filter(|_| claude || codex) {
+            installs.changed();
         }
     }
 
@@ -652,6 +658,7 @@ impl Home {
                 };
                 self.key_aside(path)?;
                 write_over(&at, &written)?;
+                self.installing(&at, key);
                 Ok(true)
             }
             At::Key(..) => Err(not_setup(path)),

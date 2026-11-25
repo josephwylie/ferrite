@@ -1421,70 +1421,40 @@ fn a_server_from_before_the_table_reads_a_setup_root_by_one_as_a_root_it_does_no
     assert_eq!(first, tree::Root::FirstSetup, "and what that Server's hub sends is refused here");
 }
 
-/// Claude's installer as a test runs it: each run said in `calls`, a
-/// marketplace added and a plugin installed by writing Claude's own record
-/// of it, and the plugin `broken` not found.
-struct Claude {
-    dir: PathBuf,
-    calls: Arc<Mutex<Vec<String>>>,
-}
-
-impl Installer for Claude {
-    fn run(&self, words: &[&str]) -> io::Result<()> {
-        self.calls.lock().unwrap().push(words.join(" "));
-        let record = |name: &str, key: &str| {
-            let at = self.dir.join("plugins").join(name);
-            let mut record: serde_json::Value = fs::read(&at).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
-            let into = if name == "installed_plugins.json" { &mut record["plugins"] } else { &mut record };
-            into[key] = serde_json::json!({});
-            fs::create_dir_all(at.parent().unwrap()).unwrap();
-            fs::write(at, record.to_string()).unwrap();
-        };
-        match words {
-            ["marketplace", "add", "cursor/plugins"] => record("known_marketplaces.json", "cursor-plugins"),
-            ["install", plugin, "--json"] if plugin.starts_with("broken@") => {
-                return Err(io::Error::other("Plugin \"broken\" not found in marketplace \"cursor-plugins\"."));
-            }
-            ["install", plugin, "--json"] => record("installed_plugins.json", plugin),
-            words => panic!("{words:?}"),
-        }
-        Ok(())
-    }
-}
-
 #[test]
 fn a_plugin_a_sync_turns_on_is_installed_once_and_one_that_will_not_install_is_said() {
     let world = World::new("installs");
     let mine = world.home("here");
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let far = world.home("machine");
-    let installs = Installs::new(Claude { dir: far.root().join(".claude"), calls: calls.clone() });
-    let far = far.with_installs(installs.clone());
-    put(
-        &mine,
-        ".claude/settings.json",
-        r#"{"enabledPlugins": {"pstack@cursor-plugins": true, "broken@cursor-plugins": true, "off@cursor-plugins": false},
-            "extraKnownMarketplaces": {"cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}}}}"#,
-    );
+    let (far, calls) = with_tools(&world.home("machine"), &["broken@"]);
+    let settings = |more: &str| {
+        format!(
+            r#"{{"enabledPlugins": {{"pstack@cursor-plugins": true, "broken@cursor-plugins": true, "off@cursor-plugins": false{more}}},
+                "extraKnownMarketplaces": {{"cursor-plugins": {{"source": {{"source": "github", "repo": "cursor/plugins"}}}}}}}}"#
+        )
+    };
+    put(&mine, ".claude/settings.json", &settings(""));
     let job = world.job(&mine, "far");
     let synced = sync(&job, &far);
     let said: Vec<_> = synced.problems.iter().map(|problem| (problem.path.as_str(), problem.side, problem.error.as_str())).collect();
-    let broken = (".claude/plugins/broken@cursor-plugins", Side::There, "Plugin \"broken\" not found in marketplace \"cursor-plugins\".");
+    let broken = (".claude/plugins/broken@cursor-plugins", Side::There, "Plugin \"broken@cursor-plugins\" not found.");
     assert_eq!(said, [broken], "said by the sync that turned it on");
-    assert_eq!(installing(&synced.problems[0].path), Some("broken@cursor-plugins"));
+    assert_eq!(installing(&synced.problems[0].path).as_deref(), Some("broken"));
     let ran = |words: &str| calls.lock().unwrap().iter().filter(|call| *call == words).count();
-    assert_eq!((ran("marketplace add cursor/plugins"), ran("install pstack@cursor-plugins --json")), (1, 1));
-    assert_eq!(ran("install off@cursor-plugins --json"), 0, "a plugin turned off is not installed");
+    assert_eq!((ran("marketplace add -- cursor/plugins"), ran("install --json -- pstack@cursor-plugins")), (1, 1));
+    assert_eq!(ran("install --json -- off@cursor-plugins"), 0, "a plugin turned off is not installed");
 
     let before = calls.lock().unwrap().len();
-    installs.changed(&far.root().join(".claude"));
-    installs.wait(Duration::from_secs(10));
-    let again: Vec<String> = calls.lock().unwrap()[before..].to_vec();
-    assert_eq!(again, ["install broken@cursor-plugins --json"], "what is installed is not installed again");
+    put(&mine, ".claude/settings.json", &settings(r#", "more@cursor-plugins": true"#));
+    let next = sync(&job, &far);
+    let mut again: Vec<String> = calls.lock().unwrap()[before..].to_vec();
+    again.sort();
+    assert_eq!(again, ["install --json -- broken@cursor-plugins", "install --json -- more@cursor-plugins"], "what is installed is not installed again");
+    assert_eq!(next.problems.len(), 1, "said until it installs: {next:?}");
     let quiet = sync(&job, &far);
-    assert_eq!(quiet.changed(), 0, "{quiet:?}");
-    assert_eq!(quiet.problems.len(), 1, "said until a later write installs it");
+    assert_eq!((quiet.changed(), quiet.problems.len()), (0, 1), "{quiet:?}");
+    assert_eq!(calls.lock().unwrap().len(), before + 2, "a scan alone runs nothing");
 }
+
 /// What a sync moved aside on one side: each file under each sync's
 /// folder of `trash`, by its path from that folder, with its bytes.
 fn kept_in(trash: &Path) -> BTreeMap<String, Vec<u8>> {
@@ -1763,6 +1733,130 @@ fn the_first_tables_base_and_the_folders_it_made_of_links_lose_nothing() {
     assert_eq!(sync(&job, &far).changed(), 0);
 }
 
+/// Claude's and Codex's installers as a test runs them: each run said in
+/// `calls`, a marketplace added and a plugin installed by writing the
+/// tool's own record of it, a Codex marketplace fetched by making its
+/// copy's folder, and what `broken` names failing. Adding a marketplace
+/// drops its `autoUpdate` from the settings, as Claude Code 2.1.330's
+/// does.
+struct Tools {
+    claude: PathBuf,
+    codex_dir: PathBuf,
+    calls: Arc<Mutex<Vec<String>>>,
+    broken: &'static [&'static str],
+}
+
+impl Tools {
+    fn new(home: &Home, broken: &'static [&'static str]) -> (Self, Arc<Mutex<Vec<String>>>) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let tools = Self { claude: home.root().join(".claude"), codex_dir: home.root().join(".codex"), calls: calls.clone(), broken };
+        (tools, calls)
+    }
+
+    fn claude(&self, words: &[&str]) -> io::Result<()> {
+        let named = |skip: usize| words.iter().skip(skip).find(|word| !word.starts_with('-')).copied();
+        let record = |name: &str, key: &str| {
+            let at = self.claude.join("plugins").join(name);
+            let mut record: serde_json::Value = fs::read(&at).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+            let into = if name == "installed_plugins.json" { &mut record["plugins"] } else { &mut record };
+            into[key] = serde_json::json!({});
+            fs::create_dir_all(at.parent().unwrap()).unwrap();
+            fs::write(at, record.to_string()).unwrap();
+        };
+        match words.first() {
+            Some(&"marketplace") => {
+                let Some(source) = named(2) else { return Err(io::Error::other("no source")) };
+                let at = self.claude.join("settings.json");
+                let mut settings: serde_json::Value = serde_json::from_slice(&fs::read(&at).unwrap()).unwrap();
+                let markets = settings["extraKnownMarketplaces"].as_object_mut().ok_or_else(|| io::Error::other("no marketplaces"))?;
+                let (market, entry) = markets
+                    .iter_mut()
+                    .find(|(_, entry)| [&entry["source"]["repo"], &entry["source"]["url"]].iter().any(|named| named.as_str() == Some(source)))
+                    .ok_or_else(|| io::Error::other(format!("no marketplace at {source}")))?;
+                let market = market.clone();
+                if let Some(entry) = entry.as_object_mut() {
+                    entry.remove("autoUpdate");
+                }
+                fs::write(at, serde_json::to_string_pretty(&settings).unwrap()).unwrap();
+                record("known_marketplaces.json", &market);
+                Ok(())
+            }
+            Some(&"install") => {
+                let Some(plugin) = named(1) else { return Err(io::Error::other("no plugin")) };
+                if self.broken.iter().any(|broken| plugin.starts_with(broken)) {
+                    return Err(io::Error::other(format!("Plugin \"{plugin}\" not found.")));
+                }
+                record("installed_plugins.json", plugin);
+                Ok(())
+            }
+            _ => Err(io::Error::other("not a command of Claude's installer")),
+        }
+    }
+}
+
+impl Tools {
+    /// Codex's `marketplace upgrade`: the marketplace's copy fetched.
+    fn codex(&self, words: &[&str]) -> io::Result<()> {
+        match words {
+            ["marketplace", "upgrade", "--", market] if !self.broken.iter().any(|broken| market.starts_with(broken)) => {
+                fs::create_dir_all(self.codex_dir.join(".tmp").join("marketplaces").join(market))
+            }
+            ["marketplace", "upgrade", "--", market] => Err(io::Error::other(format!("could not clone {market}"))),
+            _ => Err(io::Error::other("not a command of Codex's installer")),
+        }
+    }
+}
+
+impl Installer for Tools {
+    fn run(&self, tool: crate::provider::Provider, words: &[&str]) -> io::Result<()> {
+        match tool {
+            crate::provider::Provider::Claude => {
+                self.calls.lock().unwrap().push(words.join(" "));
+                self.claude(words)
+            }
+            crate::provider::Provider::Codex => {
+                self.calls.lock().unwrap().push(format!("codex {}", words.join(" ")));
+                self.codex(words)
+            }
+        }
+    }
+}
+
+/// `home` with its plugins installed by a [`Tools`] that cannot install a
+/// plugin or fetch a marketplace named in `broken`, what fails kept in its
+/// `.ferrite`, as its Ferrite keeps it.
+fn with_tools(home: &Home, broken: &'static [&'static str]) -> (Home, Arc<Mutex<Vec<String>>>) {
+    let (tools, calls) = Tools::new(home, broken);
+    (home.clone().with_installs(Installs::new(tools, &home.root().join(".ferrite"))), calls)
+}
+
+#[test]
+fn claudes_own_plugins_are_never_missing_and_one_turned_on_is_installed() {
+    let world = World::new("builtin-plugins");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    let (far, calls) = with_tools(&far, &[]);
+    put(
+        &mine,
+        ".claude/settings.json",
+        r#"{"enabledPlugins": {"cc-plugin-telemetry@builtin": true, "cc-plugin-plugin-authoring@builtin": true, "pstack@cursor-plugins": true},
+            "extraKnownMarketplaces": {"cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}}}}"#,
+    );
+    put(&far, ".claude/settings.json", r#"{"enabledPlugins": {"cc-plugin-telemetry@builtin": true}}"#);
+    let job = world.job(&mine, "far");
+    let synced = sync(&job, &far);
+    assert_eq!(synced.problems, [], "{synced:?}");
+    let ran = calls.lock().unwrap().clone();
+    assert!(ran.iter().all(|call| !call.contains("builtin")), "{ran:?}");
+    assert!(ran.iter().any(|call| call.contains("pstack@cursor-plugins")), "{ran:?}");
+    let installed = read(&far, ".claude/plugins/installed_plugins.json").unwrap_or_default();
+    assert!(installed.contains("pstack@cursor-plugins") && !installed.contains("builtin"), "{installed}");
+
+    let (mine, calls) = with_tools(&mine, &[]);
+    let job = world.job(&mine, "far");
+    assert_eq!(sync(&job, &far).problems, []);
+    assert!(calls.lock().unwrap().iter().all(|call| !call.contains("builtin")));
+}
+
 /// `.claude/settings.json` is an allowlist: a key the table does not
 /// name, or one that names a command a computer runs, never travels, and
 /// a marketplace in a folder, with its plugins, stays its side's.
@@ -1902,6 +1996,113 @@ fn what_a_file_browser_leaves_in_a_folder_never_travels() {
     assert_eq!(landed, [".agents/skills/x/SKILL.md", ".claude/commands/go.md", ".claude/skills/y/SKILL.md"]);
     let read = Machine::new(&mine).call(Request::Read { root: tree::Root::SETUP, path: ".agents/skills/x/.DS_Store".into(), offset: 0 });
     assert!(read.is_err());
+}
+
+/// The installer hands Claude a name or a source from a synced file only
+/// when it is one Claude itself would take, after `--`; any other is a
+/// plugin that could not be installed, said on the row.
+#[test]
+fn a_plugin_name_claude_would_read_as_an_option_is_never_handed_to_it() {
+    let world = World::new("installer-names");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    let (far, calls) = with_tools(&far, &[]);
+    put(
+        &mine,
+        ".claude/settings.json",
+        r#"{"enabledPlugins": {"--help@cursor-plugins": true, "pstack@cursor-plugins": true, "x@evil": true},
+            "extraKnownMarketplaces": {"cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}},
+                                       "evil": {"source": {"source": "git", "url": "--upload-pack=touch /tmp/pwned"}}}}"#,
+    );
+    let synced = sync(&world.job(&mine, "far"), &far);
+    let ran = calls.lock().unwrap().clone();
+    for call in &ran {
+        let handed = call.split_once(" -- ").map(|(_, handed)| handed);
+        assert!(handed.is_some_and(|handed| !handed.starts_with('-')), "{call} in {ran:?}");
+        assert!(!call.contains("evil") && !call.contains("upload-pack"), "{call}");
+    }
+    assert!(ran.iter().any(|call| call == "install --json -- pstack@cursor-plugins"), "{ran:?}");
+    let said: BTreeSet<&str> = synced.problems.iter().map(|problem| problem.path.as_str()).collect();
+    assert_eq!(said, BTreeSet::from([".claude/plugins/--help@cursor-plugins"]), "{synced:?}");
+    assert!(!read(&far, ".claude/settings.json").unwrap().contains("evil"), "a marketplace no tool may be handed never travels");
+}
+
+/// A plugin that did not install is tried again when this computer's
+/// Ferrite next starts, and when a plugin key next changes; not before.
+#[test]
+fn a_failed_install_is_tried_again_at_the_next_start_and_not_before() {
+    let world = World::new("installs-again");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    let (first, calls) = with_tools(&far, &["pstack@"]);
+    put(
+        &mine,
+        ".claude/settings.json",
+        r#"{"enabledPlugins": {"pstack@cursor-plugins": true},
+            "extraKnownMarketplaces": {"cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}}}}"#,
+    );
+    let job = world.job(&mine, "far");
+    assert_eq!(sync(&job, &first).problems.len(), 1);
+    let tried = calls.lock().unwrap().len();
+    assert_eq!(sync(&job, &first).problems.len(), 1, "still said");
+    assert_eq!(calls.lock().unwrap().len(), tried, "and not tried again in a loop");
+
+    let (started, calls) = with_tools(&far, &[]);
+    let synced = sync(&job, &started);
+    assert_eq!(synced.problems, [], "{synced:?}");
+    assert!(calls.lock().unwrap().iter().any(|call| call.contains("pstack@cursor-plugins")));
+    assert!(read(&far, ".claude/plugins/installed_plugins.json").unwrap().contains("pstack@cursor-plugins"));
+}
+
+/// Codex lists no plugin while a marketplace its config names has no copy
+/// fetched: the side the sync wrote it to fetches each one, once, and says
+/// a fetch that failed for each plugin of it.
+#[test]
+fn codex_fetches_each_marketplace_a_sync_names_that_it_has_no_copy_of() {
+    let world = World::new("codex-fetch");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    let (far, calls) = with_tools(&far, &["gone-market"]);
+    let market = |name: &str| format!("[marketplaces.{name}]\nsource_type = \"git\"\nsource = \"https://github.com/acme/{name}.git\"\n\n");
+    put(
+        &mine,
+        ".codex/config.toml",
+        &format!(
+            "{}{}[plugins.\"pstack@cursor-plugins\"]\nenabled = true\n\n[plugins.\"sentry@cursor-plugins\"]\nenabled = true\n\n[plugins.\"old@gone-market\"]\nenabled = true\n",
+            market("cursor-plugins"),
+            market("gone-market")
+        ),
+    );
+    let job = world.job(&mine, "far");
+    let synced = sync(&job, &far);
+    assert!(at(&far, ".codex/.tmp/marketplaces/cursor-plugins").is_dir(), "{synced:?}");
+    let ran = calls.lock().unwrap().clone();
+    assert_eq!(ran, ["codex marketplace upgrade -- cursor-plugins", "codex marketplace upgrade -- gone-market"]);
+    let said: Vec<_> = synced.problems.iter().map(|problem| (problem.path.as_str(), problem.side)).collect();
+    assert_eq!(said, [(".codex/plugins/old@gone-market", Side::There)]);
+    assert_eq!(installing(&synced.problems[0].path).as_deref(), Some("old for Codex"));
+    assert_eq!(sync(&job, &far).problems.len(), 1);
+    assert_eq!(calls.lock().unwrap().len(), 2, "a copy fetched is not fetched again, a failure not in a loop");
+}
+
+/// Claude's `marketplace add` writes the marketplace's entry in the
+/// settings again, without its `autoUpdate`: the installer puts back what
+/// the sync wrote, so nothing the operator chose changes.
+#[test]
+fn adding_a_marketplace_leaves_the_operators_entry_for_it_as_it_was() {
+    let world = World::new("installs-keep-entry");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    let (far, _) = with_tools(&far, &[]);
+    put(
+        &mine,
+        ".claude/settings.json",
+        r#"{"enabledPlugins": {"pstack@cursor-plugins": true},
+            "extraKnownMarketplaces": {"cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}, "autoUpdate": true}}}"#,
+    );
+    let job = world.job(&mine, "far");
+    sync(&job, &far);
+    let landed: serde_json::Value = serde_json::from_str(&read(&far, ".claude/settings.json").unwrap()).unwrap();
+    assert_eq!(landed["extraKnownMarketplaces"]["cursor-plugins"]["autoUpdate"], true, "{landed}");
+    assert_eq!(sync(&job, &far), Synced::default());
+    let here: serde_json::Value = serde_json::from_str(&read(&mine, ".claude/settings.json").unwrap()).unwrap();
+    assert_eq!(here["extraKnownMarketplaces"]["cursor-plugins"]["autoUpdate"], true);
 }
 
 /// A JSON file that holds a chosen key twice reads one way to the writer

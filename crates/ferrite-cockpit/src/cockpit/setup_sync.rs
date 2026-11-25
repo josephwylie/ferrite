@@ -242,7 +242,19 @@ impl Status {
             Status::InSync(held) => match held.iter().next() {
                 None => "In sync".into(),
                 Some((path, why)) if held.len() == 1 => format!("In sync except {}", why.said(path, name)),
-                Some((path, why)) => format!("In sync except {} paths. {}", held.len(), why.said(path, name)),
+                Some((path, why)) => {
+                    let plugins = held.keys().filter(|path| setup_sync::installing(path).is_some()).count();
+                    let count = |count: usize, one: &str| match count {
+                        1 => format!("1 {one}"),
+                        count => format!("{count} {one}s"),
+                    };
+                    let counted = match (held.len() - plugins, plugins) {
+                        (paths, 0) => count(paths, "path"),
+                        (0, plugins) => count(plugins, "plugin"),
+                        (paths, plugins) => format!("{} and {}", count(paths, "path"), count(plugins, "plugin")),
+                    };
+                    format!("In sync except {counted}. {}", why.said(path, name))
+                }
             },
             Status::Stopped(valve) => format!("Stopped: {}", stopped(valve, name)),
             Status::Failed(failure) => failure.said(name),
@@ -266,12 +278,7 @@ impl Why {
         let spelled = spelled(path);
         match self {
             Why::Problem(on, error) => match setup_sync::installing(path) {
-                Some(plugin) => format!(
-                    "{} could not be installed on {}: {}",
-                    plugin.rsplit_once('@').map_or(plugin, |(plugin, _)| plugin),
-                    place(*on, name),
-                    plain(error)
-                ),
+                Some(plugin) => format!("{plugin} could not be installed on {}: {}", place(*on, name), plain(error)),
                 None => format!("{spelled} on {}: {}", place(*on, name), plain(error)),
             },
             Why::Held(Hold::Linked(on)) => format!(
@@ -1168,6 +1175,35 @@ mod tests {
             Status::InSync(held(&synced).collect()).line("box"),
             "In sync except pstack could not be installed on box: Plugin \"pstack\" not found in marketplace \"cursor-plugins\"."
         );
+    }
+
+    /// Plugins that did not install here are counted as plugins, and this
+    /// computer is named as itself.
+    #[test]
+    fn plugins_that_did_not_install_here_are_counted_as_plugins_on_this_computer() {
+        let problem = |path: &str, side: Side, error: &str| ferrite_core::tree::Problem {
+            path: path.into(),
+            side,
+            error: error.into(),
+        };
+        let synced = Synced {
+            problems: vec![
+                problem(".claude/plugins/pstack@cursor-plugins", Side::Here, "Plugin \"pstack\" not found."),
+                problem(".claude/plugins/sentry@cursor-plugins", Side::Here, "Plugin \"sentry\" not found."),
+            ],
+            ..Synced::default()
+        };
+        let line = Status::InSync(held(&synced).collect()).line("box");
+        assert_eq!(line, "In sync except 2 plugins. pstack could not be installed on this computer: Plugin \"pstack\" not found.");
+        let mixed = Synced {
+            problems: vec![
+                problem(".claude/plugins/pstack@cursor-plugins", Side::There, "Plugin \"pstack\" not found."),
+                problem(".claude/skills/a.md", Side::There, "Permission denied"),
+            ],
+            ..Synced::default()
+        };
+        let line = Status::InSync(held(&mixed).collect()).line("box");
+        assert!(line.starts_with("In sync except 1 path and 1 plugin. "), "{line}");
     }
 
     #[test]

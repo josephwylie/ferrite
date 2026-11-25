@@ -51,7 +51,7 @@ fn sync(machine: &Machine, allow_removals: bool, store: &Path, settings_dir: &Pa
     let job = Job {
         allow_removals,
         ..Job::for_machine(
-            Home::from_env().map_err(failed)?.with_installs(crate::providers::claude_plugin_installs()),
+            Home::from_env().map_err(failed)?.with_installs(crate::providers::plugin_installs()),
             settings_dir,
             &machine.target,
         )
