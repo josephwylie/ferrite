@@ -412,14 +412,19 @@ fn the_card_goes_and_the_copy_goes_on_until_cancel(cx: &mut TestAppContext) {
 
 /// The card is as tall as what it shows: a Project with nothing git
 /// ignores draws a shorter card than one with a list. Change… opens box's
-/// folders at the card's full height, the folders taking what the rest
-/// leaves.
+/// folders in it, the list as tall as the folder's rows: an almost empty
+/// folder leaves no well under them, and one of many lists eight before
+/// it scrolls.
 #[gpui::test]
 fn the_card_is_as_tall_as_what_it_shows(cx: &mut TestAppContext) {
     let base = resolved_dir("env-one-size");
     let projects = base.join("projects");
     let (mut core, _fake, machines, _agents) =
         two_machines_keeping_projects_in("env-one-size", &projects);
+    for at in 0..20 {
+        std::fs::create_dir_all(projects.join(format!("many/f{at:02}"))).unwrap();
+    }
+    std::fs::create_dir_all(projects.join("few/only")).unwrap();
     let listing = project_folder(&base.join("here/app"), None);
     let bare = base.join("here/bare");
     std::fs::create_dir_all(&bare).unwrap();
@@ -450,14 +455,21 @@ fn the_card_is_as_tall_as_what_it_shows(cx: &mut TestAppContext) {
     assert!(debug_bounds(cx, "placement-ignored-all".into()).is_none(), "no list at all");
 
     browse(cx);
-    settles(cx);
-    assert!(card_size(cx).height > with_list.height, "the browser takes the card's full height");
-    let folders = debug_bounds(cx, "folder-browser-rows".into()).expect("the folders");
-    assert!(
-        folders.size.height > px(6.0 * ferrite_ui::theme::FILES_ROW_H),
-        "the folders take the card's free height: {:?}",
-        folders.size.height
-    );
+    let row = ferrite_ui::theme::FILES_ROW_H;
+    let line = sheet_line(&view, cx);
+    let folders_in = |folder: &str, cx: &mut gpui::VisualTestContext| {
+        line.update(cx, |line, cx| line.set(format!("{}/", projects.join(folder).display()), cx));
+        until(cx, |cx| debug_bounds(cx, "folder-browser-reading".into()).is_none());
+        settles(cx);
+        (debug_bounds(cx, "folder-browser-rows".into()).expect("the folders").size.height, card_size(cx).height)
+    };
+    let (few, card_on_few) = folders_in("few", cx);
+    assert_eq!(few, px(2.0 * row), "`..` and its one folder, no well under them");
+    assert!(card_on_few > without.height, "the browser opens in the card");
+    let (many, card_on_many) = folders_in("many", cx);
+    assert_eq!(many, px(8.0 * row), "eight, the rest scrolling");
+    let grew = f32::from(card_on_many - card_on_few);
+    assert!((grew - 6.0 * row).abs() < 1.0, "the card as tall as the list: it grew {grew}");
 }
 
 /// The tick over what git ignores is all of them, none or some: a press

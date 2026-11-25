@@ -22,7 +22,8 @@ const KEY_CONTEXT: &str = "FolderBrowser";
 
 /// How many rows the list shows at least, however few the folder has, so
 /// the sheet holds still as the browser moves. It takes the card's free
-/// height too; more scroll.
+/// height too; more scroll. A fitted browser (`fitted`) shows as many as
+/// the folder has instead.
 const ROWS: f32 = 6.0;
 
 /// Where the browser goes when the folder it was put at cannot be read.
@@ -58,6 +59,8 @@ pub(super) struct FolderBrowser {
     makes: Option<SharedString>,
     /// A new folder's name, while one is being named.
     naming: Option<Entity<Composer>>,
+    /// The list is as tall as its rows, up to this many; more scroll.
+    fitted: Option<usize>,
     scroll: UniformListScrollHandle,
 }
 
@@ -133,6 +136,7 @@ impl FolderBrowser {
             made: HashSet::new(),
             makes: None,
             naming: None,
+            fitted: None,
             scroll: UniformListScrollHandle::new(),
         };
         browser.edited(cx);
@@ -143,6 +147,13 @@ impl FolderBrowser {
     /// calls `note`.
     pub(super) fn making(mut self, note: impl Into<SharedString>) -> Self {
         self.makes = Some(note.into());
+        self
+    }
+
+    /// The list as tall as the folder's rows, up to `rows`: a folder with
+    /// almost nothing in it leaves no well under them.
+    pub(super) fn fitted(mut self, rows: usize) -> Self {
+        self.fitted = Some(rows);
         self
     }
 
@@ -595,10 +606,12 @@ impl Render for FolderBrowser {
             self.rows.len(),
             cx.processor(|browser, range, _, cx| browser.drawn_rows(range, cx)),
         )
-        .track_scroll(&self.scroll)
-        .flex_grow(1.)
-        .flex_basis(px(0.))
-        .min_h_0();
+        .track_scroll(&self.scroll);
+        let rows = match self.fitted {
+            Some(most) => rows.h(px(self.rows.len().min(most) as f32 * FILES_ROW_H)),
+            None => rows.flex_grow(1.).flex_basis(px(0.)).min_h_0(),
+        };
+        let fitted = self.fitted.is_some();
         div()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|browser, _: &Up, window, cx| browser.step(-1, window, cx)))
@@ -606,7 +619,7 @@ impl Render for FolderBrowser {
             .on_action(cx.listener(|browser, _: &Open, window, cx| browser.confirm(window, cx)))
             .on_action(cx.listener(|browser, _: &Cancel, window, cx| browser.cancel(window, cx)))
             .flex_shrink_0()
-            .flex_grow(1.)
+            .when(!fitted, |browser| browser.flex_grow(1.))
             .flex()
             .flex_col()
             .gap(px(SPACE_1))
@@ -619,10 +632,9 @@ impl Render for FolderBrowser {
                 div()
                     .debug_selector(|| "folder-browser-rows".into())
                     .flex_shrink_0()
-                    .flex_grow(1.)
                     .flex()
                     .flex_col()
-                    .min_h(px(ROWS * FILES_ROW_H))
+                    .when(!fitted, |list| list.flex_grow(1.).min_h(px(ROWS * FILES_ROW_H)))
                     .child(rows)
                     .children(naming)
                     .children(note),

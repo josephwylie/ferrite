@@ -34,21 +34,14 @@ impl CardSize {
         (card > 0. && content > 0.).then(|| card - body + content)
     }
 
-    /// The card's size this frame: `width` wide, and `steady` tall, or as
-    /// tall as its content up to `room`. A change from the last eases
-    /// there; no height until the content has been laid out once, when
-    /// the card takes its content's height on its own.
-    pub(super) fn frame(
-        &mut self,
-        width: f32,
-        steady: Option<f32>,
-        room: f32,
-        window: &mut Window,
-        cx: &App,
-    ) -> (f32, Option<f32>) {
+    /// The card's size this frame: `width` wide, and as tall as its
+    /// content up to `room`. A change from the last eases there; no height
+    /// until the content has been laid out once, when the card takes its
+    /// content's height on its own.
+    pub(super) fn frame(&mut self, width: f32, room: f32, window: &mut Window, cx: &App) -> (f32, Option<f32>) {
         let now = cx.background_executor().now();
         let reduced = motion::reduced_motion(cx);
-        let Some(height) = steady.or_else(|| self.natural().map(|natural| natural.min(room))) else {
+        let Some(height) = self.natural().map(|natural| natural.min(room)) else {
             return (width, None);
         };
         let moved = self

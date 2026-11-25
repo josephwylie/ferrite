@@ -18,6 +18,9 @@ use gpui::App;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
+/// The most folders the card's browser lists before it scrolls.
+const BROWSER_ROWS: usize = 8;
+
 mod card_size;
 mod faces;
 mod ignored;
@@ -156,6 +159,7 @@ impl PlacementView {
                 cx,
             )
             .making("The copy makes this folder")
+            .fitted(BROWSER_ROWS)
         });
         dest.update(cx, |dest, cx| dest.ask_home(cx));
         cx.subscribe(&dest, |sheet: &mut Self, _, _: &Moved, cx| sheet.edited(cx))
@@ -565,8 +569,7 @@ impl PlacementView {
             Face::Choose => project_editor::WIDTH,
             Face::Progress | Face::Result => project_editor::COMPACT_WIDTH,
         };
-        let steady = (face == Face::Choose && self.browsing).then_some(room);
-        let (width, height) = self.size.frame(width, steady, room, window, cx);
+        let (width, height) = self.size.frame(width, room, window, cx);
         let (head, content, footer) = match face {
             Face::Choose => self.choose(window, cx),
             Face::Progress => self.progress(cx),
@@ -580,11 +583,9 @@ impl PlacementView {
             .child(
                 content
                     .relative()
+                    // The content is its own height, which the card is
+                    // measured by.
                     .flex_shrink_0()
-                    // At the card's steady height the browser takes what
-                    // the rest leaves; else the content is its own height,
-                    // which the card is measured by.
-                    .when(steady.is_some(), |content| content.flex_grow(1.))
                     .px(px(ferrite_ui::theme::MODAL_PAD))
                     .pt(px(ferrite_ui::theme::HALF_ROW))
                     .pb(px(ferrite_ui::theme::ROW))
