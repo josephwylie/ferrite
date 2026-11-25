@@ -10,13 +10,16 @@
 //! release parks them all. Released back on the first card, it parks that
 //! one alone.
 
-use super::nav_view::{NavEvent, NavView};
-use super::*;
+use ferrite_core::ThreadKey;
+use gpui::prelude::*;
+use gpui::{Context, Div, MouseButton, MouseMoveEvent, MouseUpEvent, Stateful};
+
+use super::{NavEvent, NavView};
 
 /// A Park press held down: the card it started on, and every card drawn
 /// from there to the one under the pointer now.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ParkSweep {
+pub(crate) struct ParkSweep {
     from: ThreadKey,
     swept: Vec<ThreadKey>,
 }
@@ -35,7 +38,7 @@ impl NavView {
     }
 
     /// Whether `thread`'s card wears the picked fill.
-    pub(super) fn card_picked(&self, thread: ThreadKey) -> bool {
+    pub fn card_picked(&self, thread: ThreadKey) -> bool {
         self.picked.contains(&thread)
             || self
                 .park_sweep
@@ -45,7 +48,7 @@ impl NavView {
 
     /// What a menu opened on `thread` acts on: the whole pick when the
     /// card is in it, else the Thread alone.
-    pub(super) fn menu_threads(&self, thread: ThreadKey) -> Vec<ThreadKey> {
+    pub fn menu_threads(&self, thread: ThreadKey) -> Vec<ThreadKey> {
         if self.picked.len() > 1 && self.picked.contains(&thread) {
             self.picked.clone()
         } else {

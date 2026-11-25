@@ -781,7 +781,7 @@ pub(super) fn menu_surface<K, V: 'static>(
                 .text_color(rgb(ferrite_ui::theme::INK_STRONG))
                 .child(detail);
             // A drawer as wide as the box has no room on its right.
-            crate::float::beside(
+            ferrite_ui::float::beside(
                 ferrite_ui::theme::SUBMENU_GAP,
                 row_top.max(0.),
                 ferrite_ui::theme::MENU_WINDOW_MARGIN,

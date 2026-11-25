@@ -18,11 +18,12 @@ fn solo_of<'a>(
     (view, fake, cx)
 }
 
-/// F-13: the empty board offers only what would do something (no parked
-/// Thread to reopen here), its rows walk with `Next` /
-/// `Previous`, wrapping.
+/// F-13, through the window: the empty board offers only what would do
+/// something (no parked Thread to reopen here, no Thread used last), the
+/// window hands its list the keys, and ⏎ runs the way the cursor is on.
+/// The list's own walk is `ferrite_nav::empty_board`'s tests'.
 #[gpui::test]
-fn the_empty_board_walks_its_rows(cx: &mut TestAppContext) {
+fn the_empty_board_offers_only_what_would_do_something(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("frame-empty-board", 0);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -38,25 +39,25 @@ fn the_empty_board_walks_its_rows(cx: &mut TestAppContext) {
         debug_bounds(cx, "empty-board-command-3".to_string()).is_none(),
         "no `Reopen last` with nothing to reopen"
     );
-    let step = |action: Box<dyn gpui::Action>, cx: &mut gpui::VisualTestContext| {
-        cx.update(|window, cx| window.dispatch_action(action, cx));
-        tick(cx);
-    };
-    step(Box::new(empty_board::Next), cx);
-    step(Box::new(empty_board::Next), cx);
-    view.read_with(cx, |view, cx| assert_eq!(view.empty_board.read(cx).cursor, 2));
-    step(Box::new(empty_board::Next), cx);
-    view.read_with(cx, |view, cx| assert_eq!(view.empty_board.read(cx).cursor, 0, "it wraps"));
-    step(Box::new(empty_board::Previous), cx);
-    view.read_with(cx, |view, cx| assert_eq!(view.empty_board.read(cx).cursor, 2, "both ways"));
+    assert!(cx.debug_bounds("empty-board-recent").is_none(), "no Thread used last");
+    let cursor = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.empty_board.read(cx).cursor());
+    cx.simulate_keystrokes("down");
+    tick(cx);
+    assert_eq!(cursor(cx), 1, "the window handed the list the keys");
+    cx.simulate_keystrokes("up");
+    tick(cx);
+    assert_eq!(cursor(cx), 0);
     // Its first row, a new Thread, leaves the empty board.
-    step(Box::new(empty_board::Next), cx);
-    step(Box::new(empty_board::Run), cx);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
     assert!(cx.debug_bounds("empty-board").is_none());
 }
 
-/// F-13: a press answers as the keys do. A recent Thread's row brings it
-/// back on the board, and a way to start does what its row says.
+/// F-13, through the window: closing the last Pane leaves the empty board,
+/// which offers `Reopen last` and the Thread under Recent once a Thread is
+/// parked. A press answers as the keys do: the recent Thread's row brings
+/// it back on the board, and a way to start does what its row says, a new
+/// Thread taking the empty board's place.
 #[gpui::test]
 fn the_empty_board_answers_a_press(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("frame-empty-board-press", 1);
@@ -64,9 +65,16 @@ fn the_empty_board_answers_a_press(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
+    assert!(cx.debug_bounds("empty-board").is_none());
     let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     cx.simulate_keystrokes("cmd-w");
     tick(cx);
+    view.read_with(cx, |view, _| assert!(view.panes.is_empty()));
+    assert!(cx.debug_bounds("empty-board").is_some());
+    assert!(
+        debug_bounds(cx, "empty-board-command-3".to_string()).is_some(),
+        "`Reopen last`, with a Thread parked"
+    );
     let recent = bounds(cx, format!("empty-board-recent-{}", thread.thread().get()));
     cx.simulate_click(recent.center(), gpui::Modifiers::none());
     tick(cx);

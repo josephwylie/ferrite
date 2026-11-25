@@ -244,7 +244,7 @@ jobs:
       - name: Hold feature code's raw presses to the baseline
         shell: bash
         run: |
-          cargo clippy --locked -p ferrite -p ferrite-cockpit -p ferrite-frame -p ferrite-pane -p ferrite-review -p ferrite-factory -p ferrite-tools -p ferrite-settings -p ferrite-terminal \
+          cargo clippy --locked -p ferrite -p ferrite-cockpit -p ferrite-frame -p ferrite-pane -p ferrite-review -p ferrite-factory -p ferrite-tools -p ferrite-nav -p ferrite-settings -p ferrite-terminal \
             --message-format=json -- --cap-lints warn -A clippy::all -W clippy::disallowed_methods \
             | python3 scripts/check_raw_presses.py
       # The untangling's guards take seconds and build nothing, so they report

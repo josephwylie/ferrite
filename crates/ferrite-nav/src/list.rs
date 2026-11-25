@@ -137,7 +137,7 @@ pub enum SlimTitle {
 
 /// The blend a slim row's time-to-action crossfade and its badge ride,
 /// apart from its fill's.
-pub(crate) fn slim_fade_key(key: &str) -> SharedString {
+pub fn slim_fade_key(key: &str) -> SharedString {
     format!("{key}:slim").into()
 }
 
@@ -176,7 +176,7 @@ fn slim(
     let fade_key = slim_fade_key(&key);
     let hover = if live { motion::hover_t(&key) } else { 0.0 };
     let lit = if live { motion::hover_t(&fade_key) } else { 0.0 };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if live {
         super::testing::DRAWN_HOVER.with(|drawn| drawn.borrow_mut().insert(key.clone(), hover));
         super::testing::DRAWN_SLIM.with(|drawn| drawn.borrow_mut().insert(row.key, lit));
@@ -445,7 +445,7 @@ fn grain_tile(window: &gpui::Window, cx: &gpui::App) -> Arc<RenderImage> {
         }
         let renderer = cx.svg_renderer();
         let svg = renderer
-            .parse_svg(include_bytes!("../../assets/t3-surface-grain.svg"))
+            .parse_svg(include_bytes!("../assets/t3-surface-grain.svg"))
             .expect("the bundled T3 surface grain is valid SVG");
         let tile = renderer
             .render_parsed(

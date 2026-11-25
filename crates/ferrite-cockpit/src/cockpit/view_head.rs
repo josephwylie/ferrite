@@ -413,7 +413,7 @@ impl CockpitView {
 
     /// The parent's title drawn whole, as wide as the head would draw it.
     fn parent_title_w(&self, parent: ThreadKey, cx: &gpui::App) -> f32 {
-        crate::nav::Measure::Text(cx, self.nav_expanded_width()).ui(self.facts.name(parent).as_ref(), theme::FS_TITLE, theme::W_LABEL)
+        ferrite_nav::Measure::Text(cx, self.nav_expanded_width()).ui(self.facts.name(parent).as_ref(), theme::FS_TITLE, theme::W_LABEL)
     }
 
     /// The head's spare width after the breadcrumb, laid out: once it says

@@ -977,7 +977,7 @@ fn a_machines_threads_sit_in_the_one_list_with_its_icon(cx: &mut TestAppContext)
     cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds("nav-hover-card").is_some(), "its detail");
-    let said = crate::nav::testing::drawn_hover_card();
+    let said = ferrite_nav::testing::drawn_hover_card();
     assert_eq!(said.first().map(String::as_str), Some("box"), "{said:?}");
     assert_eq!(
         said.last().map(String::as_str),
@@ -1002,7 +1002,7 @@ fn a_machines_threads_sit_in_the_one_list_with_its_icon(cx: &mut TestAppContext)
     tick(cx);
     cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
     tick(cx);
-    let said = crate::nav::testing::drawn_hover_card();
+    let said = ferrite_nav::testing::drawn_hover_card();
     assert_eq!(said.last().map(String::as_str), Some("Haiku 4.5"), "it ends on the model, as T3's does");
 }
 
@@ -1038,7 +1038,7 @@ fn an_unopened_machines_thread_names_its_model(cx: &mut TestAppContext) {
     let card = debug_bounds(cx, format!("nav-thread-{}", on(on_box, theirs))).expect("box's card");
     cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
     tick(cx);
-    let said = crate::nav::testing::drawn_hover_card();
+    let said = ferrite_nav::testing::drawn_hover_card();
     assert_eq!(said.last().map(String::as_str), Some("Haiku 4.5"), "{said:?}");
 }
 
@@ -1093,7 +1093,7 @@ fn this_computers_rows_draw_no_icon(cx: &mut TestAppContext) {
     assert!(debug_bounds(cx, format!("nav-card-machine-{}", on(here, mine))).is_none());
     assert!(cx.debug_bounds("nav-hover-card").is_some(), "its detail");
     assert!(
-        !crate::nav::testing::drawn_hover_card().iter().any(|line| line == "box"),
+        !ferrite_nav::testing::drawn_hover_card().iter().any(|line| line == "box"),
         "names no machine"
     );
     assert!(machine_notices(&view, cx).is_empty(), "both are there");
@@ -1883,11 +1883,11 @@ fn a_lost_machine_holds_only_its_own_panes(cx: &mut TestAppContext) {
     });
     assert_ne!(connection(&view, 1, cx), Connection::Online, "Settings says so");
     assert_eq!(connection(&view, 0, cx), Connection::Online);
-    let card = |thread| crate::nav::testing::drawn_card(thread).expect("its card").opacity;
+    let card = |thread| ferrite_nav::testing::drawn_card(thread).expect("its card").opacity;
     assert!(card(theirs) <= ferrite_ui::theme::MACHINE_LOST_OPACITY, "box's card, dimmed");
     assert_eq!(card(mine), 1.0, "this computer's, not");
     assert!(machine_notices(&view, cx).is_empty(), "nothing said within T3's grace");
-    cx.executor().advance_clock(crate::cockpit::machines::RECONNECT_GRACE);
+    cx.executor().advance_clock(ferrite_nav::view::RECONNECT_GRACE);
     tick(cx);
     assert_eq!(machine_notices(&view, cx), ["box is reconnecting"]);
     prompt(&view, mine, "still here", cx);
@@ -2258,7 +2258,7 @@ fn a_machines_decision_rings_once_and_opens_in_place(cx: &mut TestAppContext) {
     let view = shown(&root, cx);
     ring(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.toasts.read(cx).needs_you.toasts().is_empty(), "held when first heard");
+        assert!(view.toasts.read(cx).needs_you().toasts().is_empty(), "held when first heard");
         assert!(view.chimed.is_empty());
     });
 
@@ -2269,7 +2269,7 @@ fn a_machines_decision_rings_once_and_opens_in_place(cx: &mut TestAppContext) {
     ring(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.chimed, [Sound::NeedsYou], "once");
-        let toasts = view.toasts.read(cx).needs_you.toasts();
+        let toasts = view.toasts.read(cx).needs_you().toasts();
         assert_eq!(toasts.len(), 1);
         assert_eq!(toasts[0].alert.thread, theirs);
         let row = view
@@ -2328,7 +2328,7 @@ fn a_toast_press_opens_its_machines_thread_in_place(cx: &mut TestAppContext) {
     ring(cx);
     ring(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1, "it toasts");
+        assert_eq!(view.toasts.read(cx).needs_you().toasts().len(), 1, "it toasts");
         assert!(view.chimed.is_empty(), "Claude is muted");
     });
 
@@ -3451,4 +3451,55 @@ fn local_environment_switch_preserves_unreadable_settings(cx: &mut TestAppContex
         assert!(view.prefs.settings.local_environment_enabled);
     });
     assert_eq!(std::fs::read(&path).unwrap(), b"not json");
+}
+
+/// Letting box go forgets what the toasts heard of it: its toast and its
+/// Notices' watermark go with it, while this computer's toast and
+/// watermark stay.
+#[gpui::test]
+fn letting_a_machine_go_forgets_only_its_toasts(cx: &mut TestAppContext) {
+    let (mut core, fake, machines, agents) = two_machines("forget-toasts", 2);
+    let here = core.threads();
+    let (mine, local) = (here[0].machine(), here[1]);
+    let on_box = machines.held(1).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    core.focus_thread(here[0]);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    until(cx, |cx| view.read_with(cx, |view, cx| view.attached(on_box, cx)));
+    ring(cx);
+    // A turn fails on box and on this computer, each off the board.
+    view.update(cx, |view, cx| {
+        let _ = view.cockpit.update(cx, |cockpit, _| cockpit.send(theirs, "go".into()));
+    });
+    agents.say(0, SessionEvent::TextDelta { text: "working\n\n".into() });
+    until(cx, |cx| running(&view, theirs, cx));
+    let failed = || SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Error("rate limited".into()),
+        cost_usd: None,
+    };
+    agents.say(0, failed());
+    fake.streams.borrow()[1].send(failed()).unwrap();
+    let heard = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            let needs_you = view.toasts.read(cx).needs_you();
+            let mut toasts: Vec<_> = needs_you.toasts().iter().map(|toast| toast.alert.thread).collect();
+            toasts.sort();
+            (toasts, needs_you.presented(on_box), needs_you.presented(mine))
+        })
+    };
+    until(cx, |cx| {
+        ring(cx);
+        heard(cx).0.len() == 2
+    });
+    let (toasts, box_mark, mark) = heard(cx);
+    let mut both = vec![theirs, local];
+    both.sort();
+    assert_eq!(toasts, both, "a toast of each machine stands");
+    assert!(box_mark.is_some() && mark.is_some(), "each machine's Notices heard");
+
+    view.update(cx, |view, cx| {
+        view.prefs.settings.machines.clear();
+        view.machines_changed(cx);
+    });
+    assert_eq!(heard(cx), (vec![local], None, mark), "box's toast and watermark went");
 }

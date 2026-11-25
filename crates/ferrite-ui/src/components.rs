@@ -251,16 +251,59 @@ impl MenuDoor {
         press: impl Fn(&mut Window, &mut App) + 'static,
     ) -> F {
         let tip = tip.into();
-        face.menu_button(
-            self.up,
+        self.dressed(
+            face,
             move |mut face| {
                 face.interactivity().tooltip(crate::menu::tooltip(tip));
                 face
             },
-            self.record,
             press,
         )
     }
+
+    /// `button`, with `tip` dressing the face while its menu is shut: a
+    /// surface whose tooltips are its own (the nav's).
+    pub fn dressed<F: MenuButton>(
+        self,
+        face: F,
+        tip: impl FnOnce(F) -> F,
+        press: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> F {
+        face.menu_button(self.up, tip, self.record, press)
+    }
+}
+
+/// A rename editor with its keys beside it while it edits: `↵ save · esc
+/// cancel` in mono `INK_SUBTLE`, the `·` in structure ink. The keys live
+/// here, where they act, rather than on the menu row that opened it.
+pub fn rename_field(editor: impl IntoElement, hint: bool) -> Div {
+    let text = "↵ save · esc cancel";
+    let at = text.find(" · ").unwrap_or(0);
+    let hint_text = text_meta()
+        .debug_selector(|| "rename-hint".into())
+        .flex_shrink_0()
+        .font_family(theme::FONT_CODE)
+        .child(gpui::StyledText::new(text).with_highlights(vec![(
+            at..at + " · ".len(),
+            gpui::HighlightStyle {
+                color: Some(gpui::rgb(theme::TEXT_FAINT).into()),
+                ..Default::default()
+            },
+        )]));
+    div()
+        .flex()
+        .items_center()
+        .gap(px(theme::SPACE_2))
+        .min_w_0()
+        .flex_1()
+        .child(
+            div()
+                .debug_selector(|| "rename-field".into())
+                .min_w_0()
+                .flex_1()
+                .child(editor),
+        )
+        .children(hint.then_some(hint_text))
 }
 
 /// A Surface's own row of tools under the Panel's head: `SURFACE_BAR_H`

@@ -1,10 +1,12 @@
 // Ferrite's shared UI: what the Cockpit and the Pane both draw with.
+pub mod age;
 pub mod answer;
 pub mod components;
 pub mod controls;
 #[cfg(any(test, feature = "test-support"))]
 pub mod face;
 pub mod field;
+pub mod float;
 pub mod form;
 pub mod frame;
 pub mod fuzzy;

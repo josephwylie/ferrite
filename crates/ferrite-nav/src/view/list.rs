@@ -2,94 +2,47 @@
 //! (ADR 0045) — Pinned and Active cards from the top, under the notice of
 //! any machine the window cannot reach, then the Working, Snoozed and
 //! Parked shelves anchored over the foot. Each row rides the list's
-//! motion (`nav::flip`), keyed by its Thread and its kind, so a card that
+//! motion (`crate::flip`), keyed by its Thread and its kind, so a card that
 //! moves from Active to Working slides there while one that parks leaves
 //! as a ghost and enters the Parked shelf as a slim row.
 
-use super::menu_button::{Door, Edge};
-use super::nav_view::{MenuAt, NavEvent, NavInputs, NavView};
-use super::*;
-use crate::nav::flip::{self, Update};
-use crate::nav::{list, NavItem, Shelf, SHELVES};
-use ferrite_ui::motion::{fold_body, Reveal, FOLD};
 use std::time::Instant;
+
+use ferrite_core::ThreadKey;
+use ferrite_pane::link_target::Open;
+use ferrite_ui::motion::{fold_body, Reveal, FOLD};
+use gpui::prelude::*;
+use gpui::{
+    div, px, AnyElement, ClickEvent, Context, Div, MouseButton, MouseDownEvent, SharedString,
+    Stateful, Window,
+};
+
+use super::{MenuAt, NavEvent, NavInputs, NavMenu, NavView};
+use crate::flip::{self, Update};
+use crate::notifications::Verb;
+use crate::{list, NavItem, Shelf, SHELVES};
 
 /// A row of the list as its motion keys it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum NavKey {
+pub enum NavKey {
     Card(ThreadKey),
     Slim(ThreadKey),
 }
 
 /// What a row last looked like, for its ghost.
 #[derive(Clone)]
-pub(crate) enum NavFace {
-    Card(nav::ThreadRow),
-    Slim(nav::ThreadRow, list::SlimTime),
+pub enum NavFace {
+    Card(crate::ThreadRow),
+    Slim(crate::ThreadRow, list::SlimTime),
 }
 
 /// The list's motion, shared with its elements.
-pub(crate) type NavMotion = flip::Motion<NavKey, NavFace>;
-
-/// What the last nav act has to say, drawn in the list as `nav-notice`.
-/// Its text is private: a problem the operator sees also reaches the log.
-#[derive(Default)]
-pub(super) struct Notice(Option<SharedString>);
-
-impl Notice {
-    /// Something went wrong: shown, and logged in the same words.
-    pub(super) fn problem(&mut self, text: impl Into<SharedString>) {
-        let text = text.into();
-        ferrite_core::log!("{text}");
-        self.0 = Some(text);
-    }
-
-    /// Guidance on what the operator asked for, not a failure: shown only.
-    pub(super) fn hint(&mut self, text: impl Into<SharedString>) {
-        self.0 = Some(text.into());
-    }
-
-    pub(super) fn clear(&mut self) {
-        self.0 = None;
-    }
-
-    pub(super) fn text(&self) -> Option<&SharedString> {
-        self.0.as_ref()
-    }
-}
-
-
-impl CockpitView {
-    pub(crate) fn shelf_open(&self, shelf: Shelf) -> bool {
-        self.prefs.settings.open_shelves.contains(&shelf)
-    }
-
-    /// Open or fold `shelf` and remember it. Its body eases open and shut
-    /// (`NavView::shelf_shown`), and the list's motion stands still for it:
-    /// the rows would travel over the headers below, which the body's own
-    /// height already moves.
-    pub(crate) fn set_shelf_open(&mut self, shelf: Shelf, open: bool, cx: &mut Context<Self>) {
-        if self.shelf_open(shelf) == open {
-            return;
-        }
-        self.nav_view.read(cx).snap.set(true);
-        self.change_settings(
-            |settings| {
-                settings.open_shelves.retain(|other| *other != shelf);
-                if open {
-                    settings.open_shelves.push(shelf);
-                }
-            },
-            cx,
-        );
-        cx.notify();
-    }
-}
+pub type NavMotion = flip::Motion<NavKey, NavFace>;
 
 impl NavView {
     pub(super) fn content(&self, inputs: &NavInputs, window: &Window, cx: &mut Context<Self>) -> Div {
-        #[cfg(test)]
-        drawn::built_nav();
+        #[cfg(any(test, feature = "test-support"))]
+        crate::testing::built_nav();
         self.drawn.borrow_mut().clear();
         let list = if self.searching(cx) {
             self.search_results(&inputs.state, cx)
@@ -97,7 +50,7 @@ impl NavView {
             self.list(inputs, window, cx)
         };
         let list = self.sweep_release(list, cx);
-        nav::content().w(px(inputs.width))
+        crate::content().w(px(inputs.width))
             .child(self.search_row(inputs, window, cx))
             // Over the list, outside its keys: the field's ⏎ and Esc are its own.
             .children(self.snooze_field(inputs))
@@ -109,8 +62,8 @@ impl NavView {
                     .flex_1()
                     .min_h_0()
                     .child(list)
-                    .children(nav::edge_fades(&self.scroll))
-                    .child(nav::scrollbar(&self.scroll, self.hovered)),
+                    .children(crate::edge_fades(&self.scroll))
+                    .child(crate::scrollbar(&self.scroll, self.hovered)),
             )
             .child(self.foot(inputs, window, cx))
     }
@@ -140,21 +93,21 @@ impl NavView {
 
     /// The rows a shelf draws: all of them open (Parked's first pages),
     /// folded only the shown Thread's.
-    pub(crate) fn shelf_rows<'a>(
+    pub fn shelf_rows<'a>(
         &self,
         inputs: &'a NavInputs,
         shelf: Shelf,
-    ) -> Vec<&'a nav::ThreadRow> {
+    ) -> Vec<&'a crate::ThreadRow> {
         self.rows_of(&inputs.state, shelf, inputs.shelf_open(shelf))
     }
 
     /// [`Self::shelf_rows`] for a shelf `open` or not.
     fn rows_of<'a>(
         &self,
-        state: &'a nav::NavState,
+        state: &'a crate::NavState,
         shelf: Shelf,
         open: bool,
-    ) -> Vec<&'a nav::ThreadRow> {
+    ) -> Vec<&'a crate::ThreadRow> {
         let rows = state.shelf(shelf);
         if !open {
             return rows.iter().filter(|row| row.selected).collect();
@@ -179,12 +132,12 @@ impl NavView {
             inputs
                 .notice
                 .as_ref()
-                .map(|error| nav::notice(error.clone()).into_any_element()),
+                .map(|error| crate::notice(error.clone()).into_any_element()),
         );
         rows.extend(inputs.machines.iter().map(|notice| {
             let machine = notice.machine;
             let sign_in = notice.sign_in;
-            nav::machine_notice(machine.get(), notice.words.clone(), cx)
+            crate::machine_notice(machine.get(), notice.words.clone(), cx)
                 .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                     cx.emit(if sign_in {
                         NavEvent::SignIn(machine)
@@ -269,11 +222,11 @@ impl NavView {
             now,
             reduced,
         });
-        let measure = nav::Measure::Text(cx, inputs.width);
+        let measure = crate::Measure::Text(cx, inputs.width);
         let ghosts = ghosts.into_iter().map(|ghost| {
             let (top, opacity) = ghost.at(now);
             let face = match &ghost.face {
-                NavFace::Card(row) => nav::ghost_card(row, &measure),
+                NavFace::Card(row) => crate::ghost_card(row, &measure),
                 NavFace::Slim(row, time) => list::ghost_slim(row, time.clone(), &measure),
             };
             div()
@@ -288,7 +241,7 @@ impl NavView {
             ferrite_ui::motion::request_frame(window);
         }
         let body = list::body().children(rows).children(ghosts);
-        self.keys(nav::list_scroll(&self.scroll), cx)
+        self.keys(crate::list_scroll(&self.scroll), cx)
             .child(flip::flip_list(&self.motion, body))
     }
 
@@ -330,7 +283,7 @@ impl NavView {
                     MouseButton::Right,
                     cx.listener(|_, event: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        cx.emit(NavEvent::Menu(MenuTarget::Parked, MenuAt::Point(event.position)));
+                        cx.emit(NavEvent::Menu(NavMenu::Parked, MenuAt::Point(event.position)));
                     }),
                 )
             })
@@ -343,7 +296,7 @@ impl NavView {
     fn card(
         &self,
         inputs: &NavInputs,
-        row: &nav::ThreadRow,
+        row: &crate::ThreadRow,
         open: Option<Verb>,
         faces: &mut Vec<(NavKey, NavFace)>,
         cx: &mut Context<Self>,
@@ -351,12 +304,12 @@ impl NavView {
         let thread = row.key;
         faces.push((NavKey::Card(thread), NavFace::Card(row.clone())));
         let title = self.thread_title(inputs, row, true, cx);
-        let card = nav::thread_card(
+        let card = crate::thread_card(
             row,
             title,
             self.card_doors(inputs, row, cx),
             renaming(inputs, thread),
-            &nav::Measure::Text(cx, inputs.width),
+            &crate::Measure::Text(cx, inputs.width),
         )
         .children(self.cursor_reveal(NavItem::Thread(thread)))
         .children(self.shown_reveal(row))
@@ -379,38 +332,31 @@ impl NavView {
                 cx.listener(move |nav, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     nav.pick_for_menu(thread, cx);
-                    cx.emit(NavEvent::Menu(MenuTarget::Thread(thread), MenuAt::Point(event.position)));
+                    cx.emit(NavEvent::Menu(NavMenu::Thread(thread), MenuAt::Point(event.position)));
                 }),
             );
         flip::flip_row(&self.motion, NavKey::Card(thread), card).into_any_element()
     }
 
-    /// What a Thread's card wires (`nav::CardDoors`): its hover strip —
+    /// What a Thread's card wires (`crate::CardDoors`): its hover strip —
     /// Snooze, whose menu opens under it (hidden while a turn is queued),
     /// and Park — for an open Thread; the pin's unpin; and the PR chip,
     /// whose press opens the PR in the Panel's preview (⌘-press, in the
     /// browser). Pin stays in the context menu.
-    fn card_doors(&self, inputs: &NavInputs, row: &nav::ThreadRow, cx: &mut Context<Self>) -> nav::CardDoors {
+    fn card_doors(&self, inputs: &NavInputs, row: &crate::ThreadRow, cx: &mut Context<Self>) -> crate::CardDoors {
         let thread = row.key;
         let id = row.tag();
-        let held = inputs.menu == Some(MenuTarget::Snooze(thread));
+        let held = inputs.menu == Some(NavMenu::Snooze(thread));
         let strip = inputs.open.get(&thread).map(|open| {
             let mut buttons = Vec::new();
             if !open.queued {
                 buttons.push(
-                    inputs
-                        .doors
-                        .button(
-                            nav::snooze_button(id),
-                            Door::new(MenuTarget::Snooze(thread), Edge::Left),
-                            "Snooze thread",
-                            cx,
-                        )
+                    self.door(crate::snooze_button(id), NavMenu::Snooze(thread), "Snooze thread", inputs, cx)
                         .into_any_element(),
                 );
             }
             buttons.push(
-                nav::park_button(id)
+                crate::park_button(id)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |nav, _: &MouseDownEvent, _, cx| {
@@ -421,9 +367,9 @@ impl NavView {
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .into_any_element(),
             );
-            nav::strip(buttons, nav::strip_w(!open.queued, &nav::Measure::Text(cx, inputs.width)))
+            crate::strip(buttons, crate::strip_w(!open.queued, &crate::Measure::Text(cx, inputs.width)))
         });
-        let pin = nav::pin_glyph(id, true)
+        let pin = crate::pin_glyph(id, true)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |_, _: &MouseDownEvent, _, cx| {
@@ -434,7 +380,7 @@ impl NavView {
             .on_click(|_, _, cx| cx.stop_propagation())
             .into_any_element();
         let pr = row.pr.as_ref().map(|pr| {
-            nav::pr_chip(id, pr)
+            crate::pr_chip(id, pr)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |_, event: &MouseDownEvent, _, cx| {
@@ -446,13 +392,13 @@ impl NavView {
                     MouseButton::Right,
                     cx.listener(move |_, event: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        cx.emit(NavEvent::Menu(MenuTarget::PrLink(thread), MenuAt::Point(event.position)));
+                        cx.emit(NavEvent::Menu(NavMenu::PrLink(thread), MenuAt::Point(event.position)));
                     }),
                 )
                 .on_click(|_, _, cx| cx.stop_propagation())
                 .into_any_element()
         });
-        nav::CardDoors {
+        crate::CardDoors {
             strip,
             strip_held: held,
             pr,
@@ -465,14 +411,14 @@ impl NavView {
     fn thread_title(
         &self,
         inputs: &NavInputs,
-        row: &nav::ThreadRow,
+        row: &crate::ThreadRow,
         hint: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let thread = row.key;
         if let Some((editing, editor)) = &inputs.rename {
             if *editing == thread {
-                return rename_field(editor.clone(), hint)
+                return ferrite_ui::components::rename_field(editor.clone(), hint)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
@@ -480,7 +426,7 @@ impl NavView {
                     .into_any_element();
             }
         }
-        nav::rename_target_thread(row.tag(), row.name.clone())
+        crate::rename_target_thread(row.tag(), row.name.clone())
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |_, event: &MouseDownEvent, _, cx| {
@@ -498,11 +444,11 @@ impl NavView {
 
     /// A card's hover detail, while the pointer rests on it — never during
     /// a drag or with its Snooze menu open.
-    fn hover_card(&self, inputs: &NavInputs, row: &nav::ThreadRow, cx: &gpui::App) -> Option<AnyElement> {
-        let snoozing = matches!(inputs.menu, Some(MenuTarget::Snooze(_)));
+    fn hover_card(&self, inputs: &NavInputs, row: &crate::ThreadRow, cx: &gpui::App) -> Option<AnyElement> {
+        let snoozing = matches!(inputs.menu, Some(NavMenu::Snooze(_)));
         if snoozing
             || cx.has_active_drag()
-            || ferrite_ui::motion::hover_t(&crate::nav::card_key(row.tag())) < 1.0
+            || ferrite_ui::motion::hover_t(&crate::card_key(row.tag())) < 1.0
         {
             return None;
         }
@@ -520,9 +466,9 @@ impl NavView {
             lines.push((ferrite_ui::icons::FOLDER, worktree.clone()));
         }
         let provider = row.provider.map(|provider| (provider, self.row_model(row, provider, cx)));
-        Some(crate::nav::chrome::hover_card(
+        Some(crate::chrome::hover_card(
             row,
-            crate::nav::chrome::HoverLines { lines, provider },
+            crate::chrome::HoverLines { lines, provider },
             inputs.width,
         ))
     }
@@ -533,7 +479,7 @@ impl NavView {
     fn slim(
         &self,
         inputs: &NavInputs,
-        row: &nav::ThreadRow,
+        row: &crate::ThreadRow,
         shelf: Shelf,
         faces: &mut Vec<(NavKey, NavFace)>,
         cx: &mut Context<Self>,
@@ -574,7 +520,7 @@ impl NavView {
                     .on_click(|_, _, cx| cx.stop_propagation());
                 let age = row
                     .activity_at
-                    .map(|at| nav::card_age(at, wall))
+                    .map(|at| crate::card_age(at, wall))
                     .unwrap_or_default();
                 (list::SlimTime::Parked(age), revive.into_any_element())
             }
@@ -585,7 +531,7 @@ impl NavView {
         } else {
             list::SlimTitle::Row
         };
-        let slim = list::slim_row(row, title, time, action, &nav::Measure::Text(cx, inputs.width))
+        let slim = list::slim_row(row, title, time, action, &crate::Measure::Text(cx, inputs.width))
             .children(self.cursor_reveal(NavItem::Thread(thread)))
             .children(self.shown_reveal(row))
             .on_click(cx.listener(move |nav, _: &ClickEvent, window, cx| {
@@ -599,7 +545,7 @@ impl NavView {
                 cx.listener(move |nav, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     nav.pick_for_menu(thread, cx);
-                    cx.emit(NavEvent::Menu(MenuTarget::Thread(thread), MenuAt::Point(event.position)));
+                    cx.emit(NavEvent::Menu(NavMenu::Thread(thread), MenuAt::Point(event.position)));
                 }),
             );
         flip::flip_row(&self.motion, NavKey::Slim(thread), slim).into_any_element()

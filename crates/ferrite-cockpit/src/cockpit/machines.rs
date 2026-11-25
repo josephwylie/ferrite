@@ -5,28 +5,11 @@
 //! any machine's Thread opens it in place.
 
 use super::*;
-use crate::notifications::Alert;
+use ferrite_nav::notifications::Alert;
+use ferrite_nav::view::MachineNotice;
 use ferrite_client::cockpit::ServerState;
 use ferrite_core::machine::Failure;
 use gpui::App;
-
-/// A machine the window holds and cannot reach, as the notice at the top
-/// of the nav's list says it, in T3 Code's words for an environment that
-/// is not there (`useSystemComposerBanners`), and what its press does.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct MachineNotice {
-    pub machine: ferrite_core::MachineId,
-    pub words: SharedString,
-    /// Its press signs in, in a terminal; else it tries again now.
-    pub sign_in: bool,
-    /// It is reaching the machine again: T3 says so only once that has
-    /// taken `RECONNECT_GRACE`.
-    pub reconnecting: bool,
-}
-
-/// How long a machine is being reached again before its notice says so
-/// (T3 Code's `ENVIRONMENT_RECONNECT_WARNING_GRACE_MS`).
-pub(crate) const RECONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// What a machine's failure reads as, `place` naming the machine: a Server
 /// from before the ask is told to update, not shown its refusal.
@@ -284,12 +267,7 @@ impl CockpitView {
         if !reheld.is_empty() {
             self.reopen_put_away_drafts(cx);
         }
-        self.toasts.update(cx, |toasts, cx| {
-            for machine in &gone {
-                toasts.needs_you.forget(*machine);
-            }
-            toasts.look_again(cx);
-        });
+        self.toasts.update(cx, |toasts, cx| toasts.forget(&gone, cx));
         self.sync_panes(cx);
         cx.notify();
     }
@@ -332,7 +310,7 @@ impl CockpitView {
     pub(super) fn row_title(&self, thread: ThreadKey, cx: &App) -> SharedString {
         let title = self.facts.name(thread);
         match self.machine_label(thread.machine(), cx) {
-            Some(machine) => crate::notifications::machine_title(&machine, &title),
+            Some(machine) => ferrite_nav::notifications::machine_title(&machine, &title),
             None => title,
         }
     }

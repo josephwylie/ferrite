@@ -678,7 +678,7 @@ impl CockpitView {
         }
         let window_active = self.cockpit.read(cx).window_active();
         if self.prefs.settings.system_notifications && crate::system_notifications::wanted(true, window_active) {
-            let posting = crate::system_notifications::Posting {
+            let posting = ferrite_nav::notifications::Posting {
                 tag: key.tag(),
                 needs_you: !done,
                 word: if done { "done" } else { "failed" },

@@ -7,7 +7,7 @@
 //! Thread's digest says what became of it (`ThreadFacts::delegating`).
 
 use super::*;
-use crate::notifications::{Alert, RowTarget};
+use ferrite_nav::notifications::{Alert, RowTarget};
 use ferrite_client::cockpit::ServerState;
 use ferrite_core::delegate::{self, DelegateId, Delegated};
 use ferrite_core::notifications::{DecisionNoticeId, RequestKind};

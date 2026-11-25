@@ -12,7 +12,7 @@ use gpui::{
 
 /// How a float stands against its anchor's bounds.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum FloatPlace {
+pub enum FloatPlace {
     /// Under the anchor, its left edge on the anchor's, its head `gap`
     /// below: a toast under the window's head.
     Below { gap: f32 },
@@ -25,14 +25,14 @@ pub(crate) enum FloatPlace {
 }
 
 /// The priority every float paints at: over the kit's toasts and the veil
-/// (`VEIL_PRIORITY`), with every menu (`ferrite_ui::layer`).
-pub(crate) const FLOAT_PRIORITY: usize = ferrite_ui::layer::MENU;
+/// (`VEIL_PRIORITY`), with every menu (the `layer` ladder).
+pub const FLOAT_PRIORITY: usize = crate::layer::MENU;
 /// The palette's veil: over the board's Panes, under the float.
-pub(crate) const VEIL_PRIORITY: usize = ferrite_ui::layer::SHEET;
+pub const VEIL_PRIORITY: usize = crate::layer::SHEET;
 
 /// The anchored corner, the point it is pinned to and the offset for a
 /// placement — pure, so the geometry is testable without a window.
-pub(crate) fn placement(
+pub fn placement(
     anchor: Bounds<Pixels>,
     place: FloatPlace,
 ) -> (Anchor, gpui::Point<Pixels>, gpui::Point<Pixels>) {
@@ -53,7 +53,7 @@ pub(crate) fn placement(
 
 /// Hang `view` against `anchor` (window coordinates): deferred so it paints
 /// over every Pane, anchored and snapped so it never leaves the window.
-pub(crate) fn hang(
+pub fn hang(
     view: AnyView,
     anchor: Bounds<Pixels>,
     place: FloatPlace,
@@ -65,7 +65,7 @@ pub(crate) fn hang(
 
 /// `hang` for a float drawn as an element rather than a view of its own
 /// (a toast, the notifications list): the same placement, the same layer.
-pub(crate) fn hang_element(
+pub fn hang_element(
     float: AnyElement,
     anchor: Bounds<Pixels>,
     place: FloatPlace,
@@ -164,7 +164,7 @@ impl gpui::Element for Translated {
 /// head `top` under the box's: `gap` off its right edge, or off its left
 /// when the right has no room inside the window's `margin`, and not drawn
 /// when neither side has.
-pub(crate) fn beside(gap: f32, top: f32, margin: f32, card: AnyElement) -> Beside {
+pub fn beside(gap: f32, top: f32, margin: f32, card: AnyElement) -> Beside {
     Beside {
         gap: px(gap),
         top: px(top),
@@ -176,7 +176,7 @@ pub(crate) fn beside(gap: f32, top: f32, margin: f32, card: AnyElement) -> Besid
 
 /// Where a card `width` wide stands beside `anchor` in a window `room`
 /// wide (`beside`): its left edge, or `None` when no side has room.
-pub(crate) fn beside_x(
+pub fn beside_x(
     anchor: Bounds<Pixels>,
     width: Pixels,
     gap: Pixels,
@@ -195,7 +195,7 @@ pub(crate) fn beside_x(
 }
 
 /// See [`beside`].
-pub(crate) struct Beside {
+pub struct Beside {
     gap: Pixels,
     top: Pixels,
     margin: Pixels,

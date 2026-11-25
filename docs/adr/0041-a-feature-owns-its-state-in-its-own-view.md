@@ -27,7 +27,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   borrowed passes those values in instead of having the feature read them.
   The nav and the toast float read their own instead, and hear the
   model (below).
-- **The nav is the first slice.** `NavView` (`cockpit/nav_view.rs`) owns
+- **The nav is the first slice.** `NavView` (`ferrite_nav::view` since
+  the 2026-11-25 amendment; the root's side is `cockpit/nav_view.rs`) owns
   the nav's own state: its motion, scroll and viewport, keyboard focus and
   cursor, hover, search, picks and Park sweep, and Undo. It emits
   `NavEvent`. What the rest of the window also decides stays on the root:
@@ -221,7 +222,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   again when the agent edits the file, while the Changes read in the
   scope the operator picks, when the Surface opens or Refresh is pressed.
   A gone Thread's folds, hunks and scroll go with it.
-- **The toasts are the fourteenth.** `ToastsView` (`cockpit/toasts.rs`)
+- **The toasts are the fourteenth.** `ToastsView` (`ferrite_nav::toasts`
+  since the 2026-11-25 amendment; the root's side is `cockpit/toasts.rs`)
   owns the Inbox's alerts (`NeedsYou`): what it heard of each machine,
   what waits out its delay, the toasts standing and the system
   notifications posted, and the toast fading out. Its render is the toast
@@ -368,12 +370,13 @@ that happened to touch it, and nothing in the code said whose a field was.
   ⌘⏎ from across the room too. The open Decision is core's, and its reply
   error the Pane's. A gone Thread's rules go with it.
 - **The empty board is the twenty-first.** `EmptyBoardView`
-  (`cockpit/empty_board.rs`) owns the home's selected row and its list's
+  (`ferrite_nav::empty_board` since the 2026-11-25 amendment; the root's
+  side is `cockpit/empty_board.rs`) owns the home's selected row and its list's
   focus; its keys (↑ ↓ ⏎ under `EmptyBoard`) answer on its own element,
   as the PRs' do. The root holds it for the window's life, so the row
   stays where it was left at the next visit. It reads the CLIs' versions,
   the ways to start that would do something now and the Threads used last
-  through `empty_board_inputs`. It emits `EmptyBoardEvent`: a way to
+  (each as its nav row names it) through `empty_board_inputs`. It emits `EmptyBoardEvent`: a way to
   start's action, which the root dispatches, or a recent Thread, which the
   root focuses when a Pane shows it and brings back when none does.
   Whether it shows (no Pane on the board), the probe of the CLIs' versions,
@@ -1435,6 +1438,47 @@ Cockpit, and each of its tests opened a Cockpit window.
   (14-40 s with the Cockpit's typecheck after it); a Files test takes
   0.6-0.8 s in its own window on average, against 2.0-11.9 s in a
   Cockpit window.
+
+- **The nav's crate.** `ferrite-nav` holds the empty board
+  (`Source<EmptyBoardInputs>`; a recent Thread comes as the fields of its
+  nav row it draws, its mark, name and Project). A one-line edit to it,
+  to its tests green and a typecheck, took 15-18 s through the Cockpit
+  and takes 4-5 s in `ferrite-nav` (6-8 s with the Cockpit's typecheck
+  after it); one of its tests takes 0.02-0.14 s in its own window, against
+  0.2-0.75 s in a Cockpit window.
+- **The toasts.** `ToastsView` is `ferrite_nav::toasts`, over two reads
+  (`ToastSources`). A tend asks one question (`Source<Tending, Asked>`):
+  it says each machine's watermark, the alerts standing and those whose
+  delay is up, and the root answers what each machine said since, whether
+  each alert still wants the operator and is in view, and whether each
+  due one chimes and what it posts. The float reads its newest toast's
+  row (`Source<Row, Alert>`). The view no longer holds the model: the
+  root hands it its wakes (`watch`: the root's notify and the model's
+  `Arrived`, which stays the Cockpit's), and it keeps its own clock.
+  `Posting`, a system notification's words, is `ferrite_nav`'s, since
+  the view hands it to the root to post.
+- **The nav.** `NavView` is `ferrite_nav::view`, with its list, keys,
+  search, picks, Snooze field and foot (`view/`), over three reads
+  (`NavSources`). `Source<Vec<Listed>>` says each open Thread's section;
+  the view notes when each came into it and asks `Source<NavLook,
+  NavAsked>` with those arrivals, and the root answers what it draws
+  (`NavInputs`) and the factories. A hover card's model is a read of the
+  model (`Source<SharedString, (ThreadKey, Provider)>`). The open menu
+  and the button holding it come as `NavMenu`, which the root maps to its
+  `MenuTarget`; a press says `NavEvent::Menu` or `Door`, and the root
+  hangs the menu and picks its edge. Where a menu button stands is
+  draw-time geometry: as it builds each button the view asks `door`, a
+  factory the root makes once over the popup slot's triggers, for that
+  menu's `MenuDoor`, bound to its menu alone, as the Terminal's is. A
+  factory, not a door in the inputs, since a row's Snooze button comes
+  and goes with the row. The machine notices (`MachineNotice`) and their
+  reconnect grace are the view's; the rename field's look is
+  `ferrite_ui::components::rename_field`, which the board's title
+  rename shares. The root keeps what the rest of the window decides: the list
+  and its order (`listed_threads`, `thread_order`), the notice, the
+  shelves' folds, the Filter and Snooze rows, a Park's undo
+  (`nav_undo.rs`) and the keys that move focus to the list
+  (`nav_keys.rs`).
 
 ## Precedent
 
