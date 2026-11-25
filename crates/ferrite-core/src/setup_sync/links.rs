@@ -59,6 +59,15 @@ pub(super) fn resolved(path: &Path) -> PathBuf {
     }
 }
 
+/// `path` with its folder [`resolved`] and its own name kept, so a link
+/// there is itself, not the folder it leads to.
+pub(super) fn unfollowed(path: &Path) -> PathBuf {
+    match (path.parent(), path.file_name()) {
+        (Some(folder), Some(name)) => resolved(folder).join(name),
+        _ => resolved(path),
+    }
+}
+
 /// `path` with each `.` left out and each `..` taking the name before it.
 fn lexical(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();

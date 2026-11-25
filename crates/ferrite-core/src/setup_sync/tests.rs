@@ -1046,14 +1046,19 @@ fn a_file_that_changes_while_it_crosses_is_left_to_the_next_sync() {
 /// `~/.claude/skills/<name>` as a skill installer leaves it: a link into
 /// `~/.agents/skills/<name>`, relative on Unix, a junction on Windows.
 fn link_skill(home: &Home, name: &str) {
+    link_skill_to(home, name, name);
+}
+
+/// `~/.claude/skills/<name>` a link into `~/.agents/skills/<target>`.
+fn link_skill_to(home: &Home, name: &str, target: &str) {
     let at = at(home, &format!(".claude/skills/{name}"));
     #[cfg(unix)]
     {
         fs::create_dir_all(at.parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink(format!("../../.agents/skills/{name}"), &at).unwrap();
+        std::os::unix::fs::symlink(format!("../../.agents/skills/{target}"), &at).unwrap();
     }
     #[cfg(windows)]
-    link_dir(&home.root().join(".agents").join("skills").join(name), &at);
+    link_dir(&home.root().join(".agents").join("skills").join(target), &at);
 }
 
 /// Every file under `home/path`, by its path from there, with its bytes.
@@ -2275,4 +2280,40 @@ fn a_scan_waits_once_for_an_install_under_way_and_the_next_goes_on() {
     let waited = second.elapsed();
     end.send(()).unwrap();
     assert!(waited < within / 2, "a later scan waited for the same run again: {waited:?}");
+}
+
+/// Take away the link at `at`, not what it leads to.
+fn unlink(at: &Path) {
+    #[cfg(unix)]
+    fs::remove_file(at).unwrap();
+    #[cfg(windows)]
+    fs::remove_dir(at).unwrap();
+}
+
+/// A linked skill moved to another folder on one side: the other side's
+/// link is made anew, its old one kept in that side's trash. Before, the
+/// sync failed on it every time, the link already there.
+#[test]
+fn a_link_whose_target_changed_on_one_side_is_made_anew_on_the_other() {
+    let world = World::new("link-moved");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    for home in [&mine, &far] {
+        put(home, ".agents/skills/old/SKILL.md", "# Old\n");
+        put(home, ".agents/skills/new/SKILL.md", "# New\n");
+        link_skill_to(home, "tool", "old");
+    }
+    let job = world.job(&mine, "far");
+    sync(&job, &far);
+    unlink(&at(&mine, ".claude/skills/tool"));
+    link_skill_to(&mine, "tool", "new");
+    let synced = sync(&job, &far);
+    assert_eq!(synced.problems, [], "{synced:?}");
+    assert!(is_link(&at(&far, ".claude/skills/tool")));
+    assert_eq!(read(&far, ".claude/skills/tool/SKILL.md").as_deref(), Some("# New\n"));
+    let mut syncs = fs::read_dir(trash_of(&far)).unwrap().flatten();
+    assert!(
+        syncs.any(|sync| is_link(&sync.path().join("claude").join("skills").join("tool"))),
+        "the old link is in the Machine's trash"
+    );
+    assert_eq!(sync(&job, &far), Synced::default());
 }

@@ -629,7 +629,9 @@ impl Home {
     /// Make `path`, in a tree, a link to `target`, the path from its folder
     /// to a folder in the table, as its sender listed it: whether it was not
     /// so already. The link is made to where that folder is here, from the
-    /// link's folder, as a tree makes one: a junction on Windows.
+    /// link's folder, as a tree makes one: a junction on Windows. A link
+    /// there to anywhere else goes to the trash first, as anything a write
+    /// takes the place of does.
     pub(crate) fn link(&self, path: &str, target: &str) -> io::Result<bool> {
         let At::In(item, rest) = item(path)? else {
             return Err(not_setup(path));
@@ -642,10 +644,9 @@ impl Home {
         let _held = self.lock.write()?;
         let root = self.physical(item.path);
         private_dirs(&root)?;
-        let at = links::resolved(&tree::inside(&root, rest)?);
-        if fs::symlink_metadata(&at).is_ok_and(|meta| meta.file_type().is_symlink())
-            && self.places().target(&at, path).as_deref() == Some(target)
-        {
+        let at = links::unfollowed(&tree::inside(&root, rest)?);
+        let linked = fs::symlink_metadata(&at).is_ok_and(|meta| meta.file_type().is_symlink());
+        if linked && self.places().target(&at, path).as_deref() == Some(target) {
             return Ok(false);
         }
         let place = links::resolved(&self.physical(&to));
@@ -654,6 +655,9 @@ impl Home {
         }
         let (under, spelled) = links::relative(at.parent().unwrap_or(&root), &place)
             .ok_or_else(|| tree::at(&place, io::Error::other("it is on another drive than the link")))?;
+        if linked {
+            self.copy_aside(path, &at)?;
+        }
         tree::make_link(&under, &at, &spelled).map_err(|why| tree::at(&at, unmade(why)))
     }
 
