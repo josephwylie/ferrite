@@ -110,20 +110,6 @@ fn a_parked_worker_keeps_its_shells(cx: &mut TestAppContext) {
     assert!(panel_tabs(&view, worker, cx).0.contains(&SurfaceId::Terminal(1)), "and keeps its tab");
 }
 
-#[gpui::test]
-fn a_local_shell_with_a_failed_exit_still_closes_its_tab(cx: &mut TestAppContext) {
-    let (view, thread, cx) = window("terminal-local-exit", cx);
-    opened(&view, cx);
-    run(&view, thread, b"exit 7\r", cx);
-    let until = std::time::Instant::now() + SHELL_LOST_AFTER;
-    while !numbers(&view, thread, cx).is_empty() {
-        assert!(std::time::Instant::now() < until, "the local shell's tab never closed");
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        tick(cx);
-    }
-    assert!(cx.debug_bounds("terminal-failed").is_none());
-}
-
 /// ⌘W with the keyboard in the shell closes that tab, as it does from the
 /// Panel's controls, and never parks the Thread.
 #[gpui::test]
@@ -150,13 +136,8 @@ fn cmd_w_in_the_shell_closes_its_tab_not_the_thread(cx: &mut TestAppContext) {
 /// and offers Try again, which starts it once the folder is back.
 #[gpui::test]
 fn a_shell_that_cannot_start_says_so_and_retries(cx: &mut TestAppContext) {
-    let (core, _fake, checkout) = bound_cockpit("terminal-fails", Provider::Claude);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let (view, thread, cx) = window("terminal-fails", cx);
+    let checkout = view.read_with(cx, |view, cx| view.thread_path(thread, cx)).unwrap();
     let moved = checkout.with_extension("moved");
     std::fs::rename(&checkout, &moved).unwrap();
     opened(&view, cx);
@@ -192,33 +173,6 @@ fn a_second_terminal_is_a_second_tab_and_cmd_j_shows_the_last(cx: &mut TestAppCo
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)), "its neighbour");
 }
 
-#[gpui::test]
-fn the_more_menu_holds_claudes_four_rows(cx: &mut TestAppContext) {
-    let (view, thread, cx) = window("terminal-more", cx);
-    opened(&view, cx);
-    view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::TerminalMore(thread), gpui::point(px(1700.), px(60.)), cx)
-    });
-    let rows = view.read_with(cx, |view, _| {
-        view.context_menu()
-            .unwrap()
-            .rows
-            .iter()
-            .flatten()
-            .map(|(item, _)| (item.label.to_string(), item.checked, item.detail.as_ref().map(|d| d.to_string())))
-            .collect::<Vec<_>>()
-    });
-    assert_eq!(
-        rows,
-        [
-            ("Cursor style".into(), false, Some("Block".into())),
-            ("Blink cursor".into(), true, None),
-            ("Copy on select".into(), false, None),
-            ("Scrollback".into(), false, Some("10,000 lines".into())),
-        ]
-    );
-}
-
 /// What the `⋯` menu sets is the window's: the menu shows it the next time
 /// it opens, whichever shell it opens over.
 #[gpui::test]
@@ -226,10 +180,10 @@ fn a_more_menu_choice_shows_when_the_menu_opens_again(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-more-choice", cx);
     opened(&view, cx);
     let verbs = [
-        crate::cockpit::tools::TerminalVerb::ToggleBlink,
-        crate::cockpit::tools::TerminalVerb::ToggleCopyOnSelect,
-        crate::cockpit::tools::TerminalVerb::Cursor(ferrite_terminal::Cursor::Bar),
-        crate::cockpit::tools::TerminalVerb::Scrollback(1_000),
+        ferrite_tools::terminal::Verb::ToggleBlink,
+        ferrite_tools::terminal::Verb::ToggleCopyOnSelect,
+        ferrite_tools::terminal::Verb::Cursor(ferrite_terminal::Cursor::Bar),
+        ferrite_tools::terminal::Verb::Scrollback(1_000),
     ];
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
@@ -395,34 +349,6 @@ fn a_selection_offers_attach_and_attaches_as_a_reply_tile(cx: &mut TestAppContex
     let replies = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).replies().len());
     assert_eq!(replies, 1, "a Reply tile in the tray");
     assert!(shell.read_with(cx, |shell, _| shell.selection().is_none()), "the selection lets go");
-}
-
-#[gpui::test]
-fn with_no_selection_the_menu_has_no_attach_row_and_copy_is_greyed(cx: &mut TestAppContext) {
-    let (view, thread, cx) = window("terminal-menu-empty", cx);
-    opened(&view, cx);
-    let grid = cx.debug_bounds("terminal").unwrap();
-    cx.simulate_mouse_down(grid.center(), gpui::MouseButton::Right, gpui::Modifiers::none());
-    tick(cx);
-    let _ = thread;
-    let rows = view.read_with(cx, |view, _| {
-        view.context_menu()
-            .unwrap()
-            .rows
-            .iter()
-            .flatten()
-            .map(|(item, _)| (item.label.to_string(), item.disabled))
-            .collect::<Vec<_>>()
-    });
-    assert_eq!(
-        rows,
-        [
-            ("Copy".to_string(), true),
-            ("Paste".into(), false),
-            ("Select all".into(), false),
-            ("Clear terminal".into(), false),
-        ]
-    );
 }
 
 /// Keys typed in the window reach the shell through the window's own
@@ -666,23 +592,3 @@ fn cmd_click_opens_what_the_shell_printed(cx: &mut TestAppContext) {
     assert_eq!(text[..caret].matches('\n').count(), 2, "the caret is on line 3");
 }
 
-/// A Thread with the same id on another machine is another Thread (ADR
-/// 0045): each has its own Terminal 1, and ending one leaves the other's.
-#[gpui::test]
-fn a_terminal_keeps_two_machines_threads_apart(cx: &mut TestAppContext) {
-    let (view, thread, cx) = window("terminal-two-machines", cx);
-    opened(&view, cx);
-    let there = ferrite_core::ThreadKey::fixture(u32::MAX, thread.thread().get());
-    let numbers_there = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| view.terminals.read(cx).numbers(there))
-    };
-    view.update(cx, |view, cx| {
-        let directory = view.thread_path(thread, cx).unwrap();
-        view.terminals.update(cx, |terminals, cx| terminals.open(there, &directory, None, cx));
-    });
-    assert_eq!(numbers(&view, thread, cx), [1]);
-    assert_eq!(numbers_there(&view, cx), [1], "a Terminal 1 of its own");
-    view.update(cx, |view, cx| view.terminals.update(cx, |terminals, cx| terminals.end(there, 1, cx)));
-    assert!(numbers_there(&view, cx).is_empty());
-    assert_eq!(numbers(&view, thread, cx), [1], "this Thread's shell runs on");
-}

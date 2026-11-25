@@ -56,6 +56,13 @@ impl Doors {
         self.up == Some(door.target)
     }
 
+    /// The button that opens `target`'s menu, for a view of its own crate
+    /// that draws it and asks for its menu by an event: whether the menu
+    /// is up from it, and where its bounds go.
+    pub(crate) fn door(&self, target: MenuTarget) -> ferrite_ui::components::MenuDoor {
+        ferrite_ui::components::MenuDoor::new(self.up == Some(target), self.triggers.record(Door::key(target)))
+    }
+
     /// `face` as the button that opens `door`'s menu, `tip` its tooltip.
     pub(crate) fn button<F, H>(
         &self,

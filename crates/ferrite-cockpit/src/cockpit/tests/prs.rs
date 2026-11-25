@@ -257,8 +257,8 @@ fn a_listed_pr_shows_whole_with_its_review_threads(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn a_project_pr_reads_published_code_without_a_thread(cx: &mut TestAppContext) {
-    use crate::cockpit::panel::pr_read::PrTarget;
-    use crate::cockpit::tools::Diff;
+    use ferrite_core::pull_request::PrTarget;
+    use ferrite_tools::changes::Diff;
     let (world, cx) = world("prs-published-code", 0, two_rows(), false, cx);
     world.view.update(cx, |view, cx| {
         let files = ferrite_core::protocol::sides_of_unified("diff --git a/remote.rs b/remote.rs\n--- a/remote.rs\n+++ b/remote.rs\n@@ -1 +1 @@\n-old\n+remote\n");
@@ -289,8 +289,8 @@ fn a_project_pr_reads_published_code_without_a_thread(cx: &mut TestAppContext) {
 /// the Code segment, and the PR left keeps its own.
 #[gpui::test]
 fn a_project_pr_opened_on_code_reads_its_diff(cx: &mut TestAppContext) {
-    use crate::cockpit::panel::pr_read::PrTarget;
-    use crate::cockpit::tools::Diff;
+    use ferrite_core::pull_request::PrTarget;
+    use ferrite_tools::changes::Diff;
     let (world, cx) = world("prs-code-reads", 0, two_rows(), false, cx);
     world.view.update(cx, |view, cx| {
         let files = ferrite_core::protocol::sides_of_unified("diff --git a/remote.rs b/remote.rs\n--- a/remote.rs\n+++ b/remote.rs\n@@ -1 +1 @@\n-old\n+remote\n");
@@ -466,7 +466,7 @@ fn the_list_reads_again_each_time_the_view_opens(cx: &mut TestAppContext) {
 /// stays with a mark while the read is out, then follows the forge.
 #[gpui::test]
 fn a_pr_opened_again_is_read_again_and_follows_the_forge(cx: &mut TestAppContext) {
-    use crate::cockpit::panel::pr_read::PrTarget;
+    use ferrite_core::pull_request::PrTarget;
 
     let (world, cx) = world("prs-detail-refresh", 0, two_rows(), false, cx);
     let target = PrTarget::project(world.project, 7);

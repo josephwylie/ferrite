@@ -112,6 +112,23 @@ impl ThreadKey {
     }
 }
 
+/// A machine the window holds again, after it let go of it: held as `now`,
+/// it was `was`. A machine's Thread ids are its Store's, which a new attach
+/// does not change, so what the window keeps by a Thread's key moves to
+/// the same Thread's new key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rehold {
+    pub was: MachineId,
+    pub now: MachineId,
+}
+
+impl Rehold {
+    /// `thread`'s key now, when it was a Thread of the machine let go.
+    pub fn key(self, thread: ThreadKey) -> Option<ThreadKey> {
+        (thread.machine() == self.was).then(|| thread.held_again(self.now))
+    }
+}
+
 /// A Project and the machine it is registered on: a `ProjectId` is per
 /// machine too, so the same repo on two machines is two Projects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

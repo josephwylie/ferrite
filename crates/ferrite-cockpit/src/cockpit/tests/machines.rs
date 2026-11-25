@@ -1314,12 +1314,14 @@ fn turning_a_machine_off_lets_only_it_go(cx: &mut TestAppContext) {
     });
 }
 
-#[gpui::test]
-fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut TestAppContext) {
+/// box, a Server of its own standing in for it over a Bridge, holding a
+/// Codex Thread in a checkout of its own whose `notes.txt` box wrote.
+fn box_holding_notes(name: &str) -> (Cockpit, ThreadKey, std::path::PathBuf) {
     use ferrite_client::cockpit::{Attach, Endpoint, ServerState};
-    use crate::cockpit::surfaces::SurfaceId;
-    let dir = settings_dir("tool-keys");
+    let dir = settings_dir(name);
     let _ = std::fs::remove_dir_all(&dir);
+    let checkout = repo_in(&dir);
+    std::fs::write(checkout.join("notes.txt"), "written on box\n").unwrap();
     let dial = ferrite_server::fixture_machine(
         dir.join("box"), Box::new(OnBox(Default::default())),
     ).unwrap();
@@ -1338,7 +1340,17 @@ fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut Test
         core.pump();
         matches!(core.server(core.first_machine()), Some(ServerState::Attached { .. }))
     });
-    let thread = core.open(core.first_machine(), Provider::Codex, WorkspaceChoice::Main { checkout: here() }).unwrap();
+    let thread = core.open(core.first_machine(), Provider::Codex, WorkspaceChoice::Main { checkout: checkout.clone() }).unwrap();
+    (core, thread, checkout)
+}
+
+/// Files and the Terminal of a Thread on box open through their keys, and
+/// a file opened there shows what box read of it: the window's own
+/// `Submit` carried the read to box and its answer back.
+#[gpui::test]
+fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut TestAppContext) {
+    use crate::cockpit::surfaces::SurfaceId;
+    let (core, thread, checkout) = box_holding_notes("tool-keys");
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
@@ -1352,10 +1364,61 @@ fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut Test
     cx.simulate_keystrokes("cmd-shift-f");
     tick(cx);
     view.read_with(cx, |view, _| assert_eq!(view.active_surface(thread), Some(SurfaceId::Files)));
+    view.update(cx, |view, cx| view.open_in_files(thread, checkout.join("notes.txt"), None, true, cx));
+    until(cx, |cx| {
+        view.read_with(cx, |view, cx| {
+            view.files.read(cx).shown_editor(thread).is_some_and(|editor| editor.read(cx).text() == "written on box\n")
+        })
+    });
     cx.simulate_keystrokes("cmd-j");
     tick(cx);
     view.read_with(cx, |view, _| assert!(matches!(view.active_surface(thread), Some(SurfaceId::Terminal(_)))));
     assert!(cx.debug_bounds("terminal-failed").is_some(), "a fake SSH bridge cannot start a local shell");
+}
+
+/// A write to box queued as the window closes never reaches box, though
+/// the window's connection to box outlives it.
+#[gpui::test]
+fn a_remote_write_queued_as_the_window_closes_never_reaches_the_machine(cx: &mut TestAppContext) {
+    use ferrite_core::file_operations::Request;
+    let (core, thread, checkout) = box_holding_notes("closing-write");
+    let view = cx.new(|cx| CockpitView::new(core, cx));
+    let (connection, bridge) = view.read_with(cx, |view, cx| {
+        (view.cockpit.clone(), view.cockpit.read(cx).bridge(thread.machine()).cloned().expect("box's bridge"))
+    });
+    let submit = crate::cockpit::tools::remote_files::submit(view.downgrade(), thread.machine(), bridge);
+    let write = Request::Write {
+        root: checkout.clone(),
+        path: checkout.join("notes.txt"),
+        text: "written after the window closed\n".into(),
+        expected: None,
+    };
+    // The request waits for the window's next turn; the window closes
+    // before it comes.
+    let mut answer = cx.update(move |cx| {
+        let answer = submit(write, cx);
+        drop(view);
+        answer
+    });
+    // The connection lives on (another window holds it): it carries what
+    // reaches it and hands back box's answers.
+    let mut reply = None;
+    ferrite_core::doorbell::until("the write never answered", || {
+        connection.update(cx, |connection, _| connection.pump());
+        cx.executor().advance_clock(std::time::Duration::from_millis(50));
+        cx.run_until_parked();
+        if let Ok(Some(answered)) = answer.try_recv() {
+            reply = Some(answered);
+        }
+        reply.is_some()
+    });
+    assert!(reply.unwrap().is_err(), "the closed window's write is refused");
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("notes.txt")).unwrap(),
+        "written on box\n",
+        "box never got the write"
+    );
+    drop(connection);
 }
 
 /// Another client (the board or another window) can close and open Threads

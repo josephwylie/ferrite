@@ -490,7 +490,7 @@ fn the_last_turn_reads_what_changed_since_the_prompt(cx: &mut TestAppContext) {
 /// and the next frames draw the edit with its line of context either side.
 #[gpui::test]
 fn unfolding_a_panel_file_reads_its_hunks_off_the_ui_thread(cx: &mut TestAppContext) {
-    use crate::cockpit::panel::hunks::{Shown, Sign};
+    use ferrite_pane::hunks::{Shown, Sign};
     let (mut core, fake, repo) = edited("panel-hunks");
     tidied(&mut core, &fake, &repo);
     bind_production_keys(cx);

@@ -895,7 +895,7 @@ impl CockpitView {
             // The image is read on a thread of its own, and only a frame
             // looks for it: ask for another, or an idle window never shows it.
             cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(crate::cockpit::beside::ANSWER_POLL).await;
+                cx.background_executor().timer(ferrite_ui::answer::POLL).await;
                 this.update(cx, |_, cx| cx.notify()).ok();
             })
             .detach();

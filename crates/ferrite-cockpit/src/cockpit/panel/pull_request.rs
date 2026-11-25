@@ -34,7 +34,8 @@ use std::rc::Rc;
 use gpui::WeakEntity;
 
 use super::pr_action::{ActionState, PrActions, Stage};
-use super::pr_read::{Answer, PrFailure, PrRead, PrReads, PrSource, PrTarget, stamp_age};
+use super::pr_read::{Answer, PrFailure, PrRead, PrReads, stamp_age};
+use ferrite_core::pull_request::{PrSource, PrTarget};
 use super::*;
 use crate::cockpit::menu_button::{Door, Doors, Edge, MenuHost};
 use crate::cockpit::surfaces::PrTab;
@@ -545,7 +546,7 @@ impl CockpitView {
             tab,
             branch: self.branch_pr(target),
             code: (tab == PrTab::Code).then(|| {
-                self.changes_pane(tools::Diff::PullRequest(target), cx)
+                self.changes_pane(ferrite_tools::changes::Diff::PullRequest(target), cx)
                     .into_any_element()
             }),
             focus: self.panel.focus.clone(),
@@ -584,7 +585,7 @@ impl CockpitView {
             PrEvent::Read(target) => self.read_pr_snapshot(target, true, cx),
             PrEvent::SelectTab(target, tab) => {
                 if tab == PrTab::Code {
-                    self.ensure_diff(tools::Diff::PullRequest(target), cx);
+                    self.ensure_diff(ferrite_tools::changes::Diff::PullRequest(target), cx);
                 }
                 match target.source {
                     PrSource::Thread(thread) => {
@@ -595,7 +596,7 @@ impl CockpitView {
                 }
                 cx.notify();
             }
-            PrEvent::EnsureCode(target) => self.ensure_diff(tools::Diff::PullRequest(target), cx),
+            PrEvent::EnsureCode(target) => self.ensure_diff(ferrite_tools::changes::Diff::PullRequest(target), cx),
             PrEvent::Run(target, action) => self.run_pr_action(target, action, cx),
             PrEvent::Door(door) => self.toggle_door(door, cx),
         }
@@ -636,7 +637,7 @@ impl PullRequestView {
         cx: &mut Context<Self>,
     ) {
         cx.spawn(async move |this, cx| {
-            let read = crate::cockpit::beside::answered(answer, cx).await;
+            let read = ferrite_ui::answer::answered(answer, cx).await;
             this.update(cx, |view, cx| view.landed(target, request, read, cx))
                 .ok();
         })

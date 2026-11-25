@@ -41,10 +41,10 @@ pub(super) enum MenuTarget {
     /// The Files pane's `⋯`.
     FilesMore(ThreadKey),
     /// The Changes scope dropdown, and its `⋯`.
-    ChangesScope(tools::Diff),
-    ChangesMore(tools::Diff),
+    ChangesScope(ferrite_tools::changes::Diff),
+    ChangesMore(ferrite_tools::changes::Diff),
     /// The Changes toolbar's base: the branches to compare against.
-    ChangesBase(tools::Diff),
+    ChangesBase(ferrite_tools::changes::Diff),
     /// The terminal's right-click, and its `⋯`.
     Terminal(ThreadKey),
     TerminalMore(ThreadKey),
@@ -53,7 +53,7 @@ pub(super) enum MenuTarget {
     /// A Panel tab's right-click, by its place in the strip.
     SurfaceTab { thread: ThreadKey, at: usize },
     /// The pull request Surface's `⋯`.
-    PrMore(super::panel::pr_read::PrTarget),
+    PrMore(ferrite_core::pull_request::PrTarget),
     /// The nav card's PR badge: the PR's own doors, not the Thread's.
     PrLink(ThreadKey),
     /// A Factory picker (#221): its rows are the Factory view's `picks`.
@@ -114,10 +114,10 @@ pub(super) enum MenuVerb {
     Fork,
     /// A Files verb (`tools::FilesVerb`).
     Files(tools::FilesVerb),
-    /// A Changes verb (`tools::ChangesVerb`).
-    Changes(tools::ChangesVerb),
-    /// A Terminal verb (`tools::TerminalVerb`).
-    Terminal(tools::TerminalVerb),
+    /// A Changes verb (`ferrite_tools::changes::Verb`).
+    Changes(ferrite_tools::changes::Verb),
+    /// A Terminal verb (`ferrite_tools::terminal::Verb`).
+    Terminal(ferrite_tools::terminal::Verb),
     /// A web page verb (`browser::page_menu::PageVerb`).
     Browser(super::browser::PageVerb),
     /// The Thread's id in the form the CLI takes (`thread_link`).
@@ -153,9 +153,9 @@ pub(super) enum Submenu {
     /// The Files menus' parent rows: `Copy ›` and `Tab size ›`.
     Files(tools::FilesSub),
     /// `Compare against ›`.
-    Changes(tools::ChangesSub),
+    Changes(ferrite_tools::changes::Sub),
     /// `Cursor style ›` and `Scrollback ›`.
-    Terminal(tools::TerminalSub),
+    Terminal(ferrite_tools::terminal::Sub),
 }
 
 /// The context menu up on screen.
@@ -431,15 +431,53 @@ impl CockpitView {
                 rows = tools::FilesView::row_rows(self.elsewhere(thread.machine(), cx))
             }
             MenuTarget::FilesMore(thread) => rows = self.files.read(cx).more_rows(thread),
-            MenuTarget::ChangesScope(diff) => rows = self.changes.read(cx).scope_rows(diff),
-            MenuTarget::ChangesMore(diff) => rows = self.changes.read(cx).more_rows(diff),
+            MenuTarget::ChangesScope(diff) => {
+                use ferrite_tools::changes::Row;
+                rows = (self.changes.read(cx).scope_rows(diff).into_iter())
+                    .map(|row| {
+                        row.map(|(item, row)| match row {
+                            Row::Verb(verb) => (item, MenuVerb::Changes(verb)),
+                            Row::Sub(sub) => (item, MenuVerb::Submenu(Submenu::Changes(sub))),
+                        })
+                    })
+                    .collect()
+            }
+            MenuTarget::ChangesMore(diff) => {
+                rows = (self.changes.read(cx).more_rows(diff).into_iter())
+                    .map(|row| row.map(|(item, verb)| (item, MenuVerb::Changes(verb))))
+                    .collect()
+            }
             MenuTarget::ChangesBase(diff) => {
-                rows = self.changes.read(cx).branch_rows(diff).into_iter().map(Some).collect()
+                rows = (self.changes.read(cx).branch_rows(diff).into_iter())
+                    .map(|(item, verb)| Some((item, MenuVerb::Changes(verb))))
+                    .collect()
             }
             MenuTarget::BrowserPage(thread) => rows = self.browser_page_rows(thread, cx),
             MenuTarget::Details(_) => rows = self.details_menu_rows(),
-            MenuTarget::Terminal(_) => rows = self.terminals.read(cx).context_rows(),
-            MenuTarget::TerminalMore(_) => rows = self.terminals.read(cx).more_rows(),
+            MenuTarget::Terminal(_) => {
+                rows = self
+                    .terminals
+                    .read(cx)
+                    .context_rows()
+                    .into_iter()
+                    .map(|row| row.map(|(item, verb)| (item, MenuVerb::Terminal(verb))))
+                    .collect()
+            }
+            MenuTarget::TerminalMore(_) => {
+                use ferrite_tools::terminal::Row;
+                rows = self
+                    .terminals
+                    .read(cx)
+                    .more_rows()
+                    .into_iter()
+                    .map(|row| {
+                        row.map(|(item, row)| match row {
+                            Row::Verb(verb) => (item, MenuVerb::Terminal(verb)),
+                            Row::Sub(sub) => (item, MenuVerb::Submenu(Submenu::Terminal(sub))),
+                        })
+                    })
+                    .collect()
+            }
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread, cx),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
             MenuTarget::PrMore(target) => {
@@ -623,11 +661,17 @@ impl CockpitView {
                 self.files.read(cx).sub_rows(thread, sub)
             }
             (Submenu::Files(_), _) => Vec::new(),
-            (Submenu::Changes(_), MenuTarget::ChangesScope(diff)) => {
-                self.changes.read(cx).branch_rows(diff)
-            }
+            (Submenu::Changes(_), MenuTarget::ChangesScope(diff)) => (self.changes.read(cx).branch_rows(diff).into_iter())
+                .map(|(item, verb)| (item, MenuVerb::Changes(verb)))
+                .collect(),
             (Submenu::Changes(_), _) => Vec::new(),
-            (Submenu::Terminal(sub), _) => self.terminals.read(cx).sub_rows(sub),
+            (Submenu::Terminal(sub), _) => self
+                .terminals
+                .read(cx)
+                .sub_rows(sub)
+                .into_iter()
+                .map(|(item, verb)| (item, MenuVerb::Terminal(verb)))
+                .collect(),
         }
     }
 

@@ -454,9 +454,9 @@ pub struct CockpitView {
     tools: tools::Tools,
     /// Every Thread's Files: its tree, editor tabs and their unsaved edits.
     files: Entity<tools::FilesView>,
-    terminals: Entity<tools::TerminalsView>,
+    terminals: Entity<ferrite_tools::terminal::TerminalsView>,
     /// Every diff read: a Thread's Changes and each pull request's Code.
-    changes: Entity<tools::ChangesView>,
+    changes: Entity<ferrite_tools::changes::ChangesView>,
     /// The pull request reader: the Panel's PR Surface and the PRs' detail.
     pull_request: Entity<panel::pull_request::PullRequestView>,
     /// The Inbox's alerts and the toast float that shows them.
@@ -1257,10 +1257,8 @@ impl CockpitView {
         cx.subscribe(&prs, Self::on_prs_event).detach();
         let side_chat = cx.new(|_| side_chat_view::SideChatView::new(cockpit_weak.clone()));
         let files = cx.new(|_| tools::FilesView::new(cockpit_weak.clone()));
-        let terminals = cx.new(|_| tools::TerminalsView::new(cockpit_weak.clone()));
-        cx.subscribe(&terminals, Self::on_terminals_event).detach();
-        let changes = cx.new(|_| tools::ChangesView::new(cockpit_weak.clone()));
-        cx.subscribe(&changes, Self::on_changes_event).detach();
+        let terminals = Self::new_terminals(cx);
+        let changes = Self::new_changes(cx);
         // The root draws the diffs into its own frame (`changes_pane`), so
         // each change redraws the window.
         cx.observe(&changes, |_, _, cx| cx.notify()).detach();

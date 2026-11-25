@@ -248,7 +248,7 @@ fn the_panels_plus_owns_its_menu(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_prs_more_owns_its_menu(cx: &mut TestAppContext) {
-    use crate::cockpit::panel::pr_read::PrTarget;
+    use ferrite_core::pull_request::PrTarget;
     let (view, thread, _fake, cx) =
         super::pr::with_pr("menu-button-pr-more", ferrite_core::protocol::WirePrState::Open, cx);
     view.update(cx, |view, cx| view.open_pr_surface(thread, cx));

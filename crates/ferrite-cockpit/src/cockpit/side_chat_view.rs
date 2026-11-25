@@ -40,7 +40,8 @@ use std::collections::HashMap;
 
 use gpui::WeakEntity;
 
-use crate::cockpit::surfaces::{Rehold, SurfaceId};
+use crate::cockpit::surfaces::SurfaceId;
+use ferrite_core::Rehold;
 
 use super::*;
 
@@ -985,7 +986,7 @@ impl SideChatView {
             cx.stop_propagation();
             view.trash(owner, id, confirm, cx);
         }));
-        tools::surface_bar()
+        ferrite_ui::components::surface_bar()
             .debug_selector(|| "side-chat-head".into())
             .pl(px(SPACE_3))
             .pr(px(SPACE_1))

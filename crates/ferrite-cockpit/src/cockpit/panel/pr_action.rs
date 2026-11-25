@@ -23,7 +23,8 @@ use std::collections::HashMap;
 use ferrite_core::protocol::{WireMerge, WirePr, WirePrState};
 use gpui::{ClipboardItem, Context};
 
-use super::pr_read::{PrRead, PrSource, PrTarget};
+use super::pr_read::PrRead;
+use ferrite_core::pull_request::{PrSource, PrTarget};
 use super::pull_request::{PrAction, PrEvent, PullRequestView};
 use crate::cockpit::{CockpitView, Handoff};
 use ferrite_client::cockpit::ThreadView;

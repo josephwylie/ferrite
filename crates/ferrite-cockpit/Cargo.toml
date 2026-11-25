@@ -31,6 +31,7 @@ headless = [
     "ferrite-client/test-support",
     "ferrite-ui/test-support",
     "ferrite-pane/test-support",
+    "ferrite-tools/test-support",
 ]
 # Opt-in native framebuffer artifacts (`cockpit::visual_reference`);
 # excluded from normal application builds. The app's own
@@ -64,6 +65,9 @@ ferrite-review = { path = "../ferrite-review" }
 # The Factory's views (ADR 0037), which the cockpit makes over itself and
 # lays out in the board's place.
 ferrite-factory = { path = "../ferrite-factory" }
+# The tools Surfaces (ADR 0039), which the cockpit makes over itself and
+# draws in the Panel.
+ferrite-tools = { path = "../ferrite-tools" }
 # The kit facade keeps the renderer, native platform and components on one
 # compatible stack. Keep the gpui import name for derives and existing code.
 gpui = { package = "gpui-kit", version = "=0.6.0" }
@@ -100,6 +104,7 @@ ferrite-client = { path = "../ferrite-client", features = ["test-support"] }
 ferrite-server = { path = "../ferrite-server", features = ["test-support"] }
 ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
 ferrite-pane = { path = "../ferrite-pane", features = ["test-support"] }
+ferrite-tools = { path = "../ferrite-tools", features = ["test-support"] }
 # The window's frame the app installs (ADR 0035): the tests draw it too.
 ferrite-frame = { path = "../ferrite-frame" }
 # The platform as `headless` builds it, so the tests and a headless build

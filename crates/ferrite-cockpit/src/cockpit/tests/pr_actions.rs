@@ -3,7 +3,7 @@
 //! once the PR shows it.
 use super::pr::snapshot;
 use super::*;
-use crate::cockpit::panel::pr_read::PrTarget;
+use ferrite_core::pull_request::PrTarget;
 use crate::cockpit::panel::PrAction;
 use ferrite_client::cockpit::HeldRead;
 use ferrite_core::protocol::{ReviewPullRequest, WireMerge, WirePr, WirePrState};

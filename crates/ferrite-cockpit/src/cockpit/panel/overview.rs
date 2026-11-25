@@ -238,7 +238,7 @@ impl CockpitView {
         thread: ThreadKey,
         path: &str,
         cx: &gpui::App,
-    ) -> Option<super::hunks::Shown> {
+    ) -> Option<ferrite_pane::hunks::Shown> {
         self.overview.read(cx).hunks_for_test(thread, path).cloned()
     }
 }

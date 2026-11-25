@@ -6,7 +6,10 @@
 //! one door (`upsert_surface`); pressed again they bring the same tab
 //! forward. The Terminal keeps its shells, Changes its diffs and Files
 //! its trees and editors in views of their own (`TerminalsView`,
-//! `ChangesView`, `FilesView`, ADR 0041).
+//! `ChangesView`, `FilesView`, ADR 0041). The first two are
+//! `ferrite-tools`', and `changes` and `terminal` here are the window's
+//! side of them; Files is the Cockpit's, as it registers its tab stops in
+//! the Panel's `PanelFocus` while it draws.
 
 use std::collections::HashSet;
 
@@ -15,6 +18,7 @@ use ferrite_core::ThreadKey;
 mod changes;
 mod editor;
 mod files;
+pub(in crate::cockpit) mod remote_files;
 mod save;
 mod terminal;
 mod tree;
@@ -35,14 +39,12 @@ gpui::actions!(cockpit, [ToggleTerminal, ToggleChanges, ToggleFiles, ToggleFileT
 
 #[cfg(test)]
 pub(crate) use editor::AUTO_SAVE_AFTER;
-pub(crate) use changes::{ChangesView, Diff, Sub as ChangesSub, Verb as ChangesVerb};
 pub(crate) use editor::Editor;
 #[cfg(test)]
 pub(crate) use save::SaveState;
 pub(crate) use files::{FilesView, Sub as FilesSub, Verb as FilesVerb};
 #[cfg(test)]
 pub(crate) use tree::Status as FileStatus;
-pub(crate) use terminal::{Sub as TerminalSub, TerminalsView, Verb as TerminalVerb};
 pub(crate) use working_set::WorkingSets;
 
 impl CockpitView {
@@ -58,7 +60,7 @@ impl CockpitView {
     /// buffer that holds no edits of its own takes its file's new text.
     pub(super) fn follow_workspace(&mut self, cx: &mut Context<Self>) {
         for thread in std::mem::take(&mut self.tools.worked) {
-            let diff = Diff::Changes(thread);
+            let diff = ferrite_tools::changes::Diff::Changes(thread);
             if self.changes.read(cx).holds(diff) {
                 self.read_diff(diff, true, cx);
             }
@@ -141,19 +143,4 @@ impl CockpitView {
     pub(super) fn tools_held_for_test(&self, thread: ThreadKey, cx: &gpui::App) -> usize {
         usize::from(self.files.read(cx).holds(thread)) + self.changes.read(cx).held(thread)
     }
-}
-
-/// A Surface's own row of tools under the Panel's head: `SURFACE_BAR_H`
-/// tall, a hairline under it.
-pub(super) fn surface_bar() -> Div {
-    use ferrite_ui::theme::*;
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(SPACE_1))
-        .h(px(SURFACE_BAR_H))
-        .px(px(SIDE_CHAT_INSET))
-        .border_b(px(HAIRLINE_W))
-        .border_color(paint::LINE)
 }

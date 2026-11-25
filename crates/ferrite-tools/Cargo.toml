@@ -1,0 +1,36 @@
+[package]
+name = "ferrite-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ferrite's tools Surfaces (ADR 0039): Changes, the Terminal and Files' remote checkout, each reading the window through a Source"
+
+[lib]
+doctest = false
+
+[features]
+# The readings and fixtures the Cockpit's own tests reach for.
+test-support = []
+
+[dependencies]
+ferrite-core = { path = "../ferrite-core" }
+# The theme, components and menus, and the Source a view reads through.
+ferrite-ui = { path = "../ferrite-ui" }
+# The Terminal's grid.
+ferrite-terminal = { path = "../ferrite-terminal" }
+# The Changes' filter field and the hunks a diff draws.
+ferrite-pane = { path = "../ferrite-pane" }
+# The Review core's diff of a file's two sides.
+ferrite-reviewr = { path = "../ferrite-reviewr" }
+# The kit facade keeps the renderer, native platform and components on one
+# compatible stack. Keep the gpui import name for derives and existing code.
+gpui = { package = "gpui-kit", version = "=0.6.0" }
+# A remote file operation's answer. Already in the tree via gpui.
+futures = "0.3"
+
+[dev-dependencies]
+# `ThreadKey::fixture`: a Thread with no Cockpit behind it.
+ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
+# The tests open each view in a window of its own (`ferrite_ui::testing`).
+gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
+ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
