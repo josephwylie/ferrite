@@ -1,0 +1,12 @@
+2.4G	/home/joseph/ferrite-wsl-machine/home/projects/atlas
+.
+..
+.env
+.git
+.gitignore
+README.md
+assets
+data
+src
+18056
+ls: cannot access '/home/joseph/ferrite-wsl-machine/home/projects/atlas/dist': No such file or directory
