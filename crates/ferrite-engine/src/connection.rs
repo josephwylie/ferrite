@@ -9,7 +9,8 @@
 //! reconnects. What is too large to queue — a Thread's history — is read on
 //! a thread of its own ([`Deferred`], a few at once) and waits in the queue
 //! as its pieces arrive: what that Thread is sent after it waits for it,
-//! every other Thread's messages go past, and histories take turns.
+//! every other Thread's messages go past, histories take turns, and a
+//! roster that closes the Thread ends its history unsent.
 //! A reconnecting client resumes each Thread from the [`Ring`], the last
 //! [`RING_BYTES`] of its inputs, or rebuilds it from history.
 
@@ -337,10 +338,13 @@ impl Outbox {
                 let waiting = self.queue.remove(index).expect("in the queue");
                 self.bytes -= waiting.bytes;
                 self.piece_last = false;
-                match waiting.entry {
-                    Entry::Message(message) => Some(message),
-                    Entry::History(_) => unreachable!("a message was found here"),
+                let Entry::Message(message) = waiting.entry else {
+                    unreachable!("a message was found here")
+                };
+                if let ServerMessage::Roster { roster, .. } = &message {
+                    self.end_closed_histories(&roster.open);
                 }
+                Some(message)
             }
             (_, Some((_, index))) => {
                 let Entry::History(history) = &mut self.queue[index].entry else {
@@ -353,6 +357,30 @@ impl Outbox {
             (None, None) => None,
             (Some(_), None) => unreachable!("matched above"),
         }
+    }
+
+    /// The client is about to hear that only `open` are open, and lets the
+    /// rest go: a closed Thread's history still being read, and what waits
+    /// on it, would have it hold that Thread again, so they go unsent.
+    fn end_closed_histories(&mut self, open: &[ThreadId]) {
+        let Self { queue, bytes, .. } = self;
+        let mut closed: Vec<ThreadId> = Vec::new();
+        queue.retain(|waiting| {
+            let kept = match &waiting.entry {
+                Entry::History(history) if !open.contains(&history.thread) => {
+                    closed.push(history.thread);
+                    false
+                }
+                Entry::History(_) => true,
+                Entry::Message(message) => {
+                    after_history(message).is_none_or(|thread| !closed.contains(&thread))
+                }
+            };
+            if !kept {
+                *bytes -= waiting.bytes;
+            }
+            kept
+        });
     }
 
     /// Whether nothing waits to be sent, history or message.
