@@ -9,7 +9,7 @@ use super::background_dialog_view::BackgroundDialogView;
 use ferrite_factory::direct::DirectView;
 use ferrite_factory::new_task::NewTaskView;
 use super::placement_view::PlacementView;
-use super::project_editor_view::ProjectEditorView;
+use ferrite_settings::project_editor::ProjectEditorView;
 use super::settings_view::SettingsView;
 use super::*;
 use ferrite_ui::motion;

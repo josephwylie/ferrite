@@ -22,7 +22,6 @@ mod nav;
 mod notifications;
 pub mod palette;
 mod pr;
-mod project_editor;
 pub mod shortcuts;
 mod status;
 mod system_notifications;
@@ -57,7 +56,6 @@ mod tests {
                 include_str!("cockpit/panel/preview.rs"),
             ),
             ("nav.rs", include_str!("nav.rs")),
-            ("project_editor.rs", include_str!("project_editor.rs")),
             ("notifications.rs", include_str!("notifications.rs")),
         ]);
     }

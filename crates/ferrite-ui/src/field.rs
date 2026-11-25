@@ -8,22 +8,6 @@ use gpui::{div, px, rgb, Div, SharedString};
 use crate::components;
 use crate::theme::*;
 
-/// The Project name row: its label as a `INK_SUBTLE` row over a field — a
-/// box a cell in, one row high, rounded as every control is (`R_CONTROL`)
-/// and ringed with the Composer's hairline (`FIELD_RING`), the strong edge
-/// (`CONTROL_FOCUS`) while the keyboard is in it — recognizable before the
-/// live editor holds any text.
-pub fn name_field(editor: impl IntoElement, focused: bool) -> Div {
-    field(
-        "Name".into(),
-        editor,
-        focused,
-        "project-name-focused",
-        false,
-        None,
-    )
-}
-
 /// A one-line field whose value follows `prefix`, drawn in the box before
 /// it in `INK_SUBTLE` and cut from its start: a name in the folder the
 /// prefix names.
@@ -44,7 +28,11 @@ pub fn prefixed_field(
     )
 }
 
-/// Any one-line field on a sheet in the name row's face.
+/// A one-line field: its label as a `INK_SUBTLE` row over a box a cell
+/// in, one row high, rounded as every control is (`R_CONTROL`) and ringed
+/// with the Composer's hairline (`FIELD_RING`), the strong edge
+/// (`CONTROL_FOCUS`, named `focused_selector`) while the keyboard is in
+/// it, recognizable before the live editor holds any text.
 pub fn text_field(
     label: SharedString,
     editor: impl IntoElement,

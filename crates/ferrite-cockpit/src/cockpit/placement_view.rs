@@ -9,7 +9,7 @@
 //! `PlacementEvent`, and the Cockpit registers it and chooses it on the
 //! draft.
 
-use super::draft_environment::Band;
+use ferrite_pane::band::Band;
 use ferrite_settings::folder_browser::{FolderBrowser, Moved};
 use super::*;
 use ferrite_core::chunked::{Cancellation, Progress};

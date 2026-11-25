@@ -5,15 +5,16 @@
 //! builds and tests without it.
 
 pub mod folder_browser;
+pub mod project_editor;
 
 #[cfg(test)]
 mod tests {
     /// Rule 10 over this crate's render code (`ferrite_ui::face`).
     #[test]
     fn render_code_draws_only_covered_glyphs() {
-        ferrite_ui::face::assert_render_code_draws_only_covered_glyphs(&[(
-            "folder_browser.rs",
-            include_str!("folder_browser.rs"),
-        )]);
+        ferrite_ui::face::assert_render_code_draws_only_covered_glyphs(&[
+            ("folder_browser.rs", include_str!("folder_browser.rs")),
+            ("project_editor.rs", include_str!("project_editor.rs")),
+        ]);
     }
 }

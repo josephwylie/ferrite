@@ -121,36 +121,6 @@ fn the_popover_keeps_its_keyboard_cursor_in_view(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// The Project card's name field wears the focus ink while the keyboard is
-/// in it, like every other field, and its resting edge otherwise.
-#[gpui::test]
-fn the_project_name_field_shows_keyboard_focus(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("project-name-focus", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
-    view.update(cx, |view, cx| view.open_project_creator(cx));
-    tick(cx);
-    let name = view.read_with(cx, |view, cx| {
-        view.project_card(cx).unwrap().read(cx).name.clone()
-    });
-    cx.update(|window, cx| {
-        let handle = name.read(cx).focus_handle(cx);
-        window.focus(&handle, cx);
-    });
-    tick(cx);
-    assert!(
-        cx.debug_bounds("project-name-focused").is_some(),
-        "focused: the edge is the focus ink"
-    );
-    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript_focus.clone());
-    cx.update(|window, cx| window.focus(&transcript, cx));
-    tick(cx);
-    assert!(
-        cx.debug_bounds("project-name-focused").is_none(),
-        "elsewhere: the resting edge"
-    );
-}
-
 /// The watchdog sweeps on the executor's clock, not the wall clock: a slow
 /// or loaded machine that takes longer than `SWEEP_INTERVAL` of real time
 /// over a test must not drop a sweep (and its repaint and git refresh) into
@@ -568,23 +538,60 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
     );
 }
 
-/// A Project with Threads still offers "Remove project", disabled, with the
-/// reason in its tooltip; pressing it removes nothing.
+/// The Project card in the window (`ferrite_settings::project_editor` has
+/// the card's own tests): it draws the Project as the registry has it,
+/// and keeps Remove project shut while a Thread records it; its presses
+/// reach the window, which removes a directory and redraws the card,
+/// renames the Project on Done, and removes one no Thread records.
 #[gpui::test]
-fn a_project_in_use_keeps_its_remove_verb_disabled(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("remove-project-in-use", 1);
+fn the_project_card_reads_and_answers_the_window(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("project-card-window", 1);
     let thread = core.threads()[0];
-    let project = core.project_of(thread).expect("the Thread's Project");
+    let busy = core.project_of(thread).expect("the Thread's Project");
+    let extra = scratch("project-card-window-extra");
+    std::fs::create_dir_all(&extra).unwrap();
+    core.add_project_directories(busy, &[extra.clone()]).now().unwrap();
+    let idle = repo_in(&scratch("project-card-window-idle"));
+    let idle = core.register_project(core.first_machine(), &idle).now().unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
-    view.update(cx, |view, cx| view.open_project_editor(project, cx));
+    let press = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        let at = cx.debug_bounds(selector).unwrap_or_else(|| panic!("{selector}"));
+        cx.simulate_click(at.center(), gpui::Modifiers::none());
+        tick(cx);
+    };
+    let extra = format!("project-directory:{}", ferrite_core::git_read::canonical(&extra).display());
+
+    view.update(cx, |view, cx| view.open_project_editor(busy, cx));
     tick(cx);
-    let remove = cx.debug_bounds("remove-project").expect("the remove verb");
-    cx.simulate_click(remove.center(), gpui::Modifiers::none());
-    tick(cx);
+    assert!(debug_bounds(cx, extra.clone()).is_some(), "drawn from the registry");
+    let card = view.read_with(cx, |view, cx| view.project_card(cx).expect("the card"));
+    let heard = ferrite_ui::testing::record(cx, &card, ferrite_settings::project_editor::ProjectEditorEvent::clone);
+    press(cx, "remove-project");
+    assert_eq!(heard.take(), [], "the window says it is in use, so the card takes no press");
     view.read_with(cx, |view, cx| {
-        assert!(view.cockpit.read(cx).registry(view.cockpit.read(cx).first_machine()).project(project.project()).is_some());
+        assert!(view.cockpit.read(cx).project(busy).is_some(), "a Thread records it");
         assert!(view.project_card(cx).is_some(), "the sheet stays up");
+    });
+    press(cx, "remove-project-directory-1");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.cockpit.read(cx).project(busy).unwrap().additional_roots, Vec::<std::path::PathBuf>::new());
+    });
+    assert!(debug_bounds(cx, extra).is_none(), "the card is drawn again");
+    let name = view.read_with(cx, |view, cx| view.project_card(cx).unwrap().read(cx).name.clone());
+    name.update(cx, |name, cx| name.set("Renamed".into(), cx));
+    press(cx, "project-confirm");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.cockpit.read(cx).project(busy).unwrap().title, "Renamed");
+        assert!(view.project_card(cx).is_none(), "Done closes it");
+    });
+
+    view.update(cx, |view, cx| view.open_project_editor(idle, cx));
+    tick(cx);
+    press(cx, "remove-project");
+    view.read_with(cx, |view, cx| {
+        assert!(view.cockpit.read(cx).project(idle).is_none(), "no Thread records it");
+        assert!(view.project_card(cx).is_none());
     });
 }
 

@@ -20,6 +20,8 @@ ferrite-pane = { path = "../ferrite-pane" }
 gpui = { package = "gpui-kit", version = "=0.6.0" }
 
 [dev-dependencies]
+# `ProjectKey::fixture`: a Project with no window behind it.
+ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
 # The tests open each view in a window of its own (`ferrite_ui::testing`).
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
 ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
