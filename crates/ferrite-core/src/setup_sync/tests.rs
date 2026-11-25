@@ -136,11 +136,24 @@ fn files(home: &Home) -> BTreeMap<String, String> {
     into
 }
 
+/// One sync with `machine`, asked again while either home is busy, as the
+/// window asks: an install the last sync wanted goes first.
 fn sync(job: &Job, machine: &Home) -> Synced {
-    match run(job, &mut Machine::new(machine), &mut |_| {}, &Cancellation::default()).unwrap() {
-        Outcome::Synced(synced) => synced,
-        outcome => panic!("{outcome:?}"),
+    for _ in 0..1000 {
+        match run(job, &mut Machine::new(machine), &mut |_| {}, &Cancellation::default()).unwrap() {
+            Outcome::Synced(synced) => return synced,
+            Outcome::Busy => std::thread::sleep(Duration::from_millis(10)),
+            outcome => panic!("{outcome:?}"),
+        }
     }
+    panic!("it stayed busy");
+}
+
+/// A sync, then the next: an install the first wanted runs between
+/// them, and the second says what it found.
+fn sync_and_install(job: &Job, machine: &Home) -> Synced {
+    sync(job, machine);
+    sync(job, machine)
 }
 
 /// A setup like the operator's, on this computer.
@@ -806,10 +819,13 @@ fn no_sign_in_is_ever_put_in_the_trash_or_kept_as_a_conflict() {
         ..world.job(&mine, "far")
     };
     sync(&job, &far);
+    let mut held = Machine::new(&far);
+    assert_eq!(held.call(Request::Hold { root: tree::Root::SETUP }).unwrap(), Reply::Done);
     for path in [".claude/.credentials.json", ".codex/auth.json"] {
-        let removed = Machine::new(&far).call(Request::Remove { root: tree::Root::SETUP, path: path.into() });
+        let removed = held.call(Request::Remove { root: tree::Root::SETUP, path: path.into() });
         assert!(removed.is_err(), "the Machine refuses too: {path}");
     }
+    drop(held);
 
     gone(&far, ".claude");
     gone(&far, ".codex");
@@ -1442,10 +1458,10 @@ fn a_plugin_a_sync_turns_on_is_installed_once_and_one_that_will_not_install_is_s
     };
     put(&mine, ".claude/settings.json", &settings(""));
     let job = world.job(&mine, "far");
-    let synced = sync(&job, &far);
+    let synced = sync_and_install(&job, &far);
     let said: Vec<_> = synced.problems.iter().map(|problem| (problem.path.as_str(), problem.side, problem.error.as_str())).collect();
     let broken = (".claude/plugins/broken@cursor-plugins", Side::There, "Plugin \"broken@cursor-plugins\" not found.");
-    assert_eq!(said, [broken], "said by the sync that turned it on");
+    assert_eq!(said, [broken], "said by the next sync");
     assert_eq!(installing(&synced.problems[0].path).as_deref(), Some("broken"));
     let ran = |words: &str| calls.lock().unwrap().iter().filter(|call| *call == words).count();
     assert_eq!((ran("marketplace add -- cursor/plugins"), ran("install --json -- pstack@cursor-plugins")), (1, 1));
@@ -1453,7 +1469,7 @@ fn a_plugin_a_sync_turns_on_is_installed_once_and_one_that_will_not_install_is_s
 
     let before = calls.lock().unwrap().len();
     put(&mine, ".claude/settings.json", &settings(r#", "more@cursor-plugins": true"#));
-    let next = sync(&job, &far);
+    let next = sync_and_install(&job, &far);
     let mut again: Vec<String> = calls.lock().unwrap()[before..].to_vec();
     again.sort();
     assert_eq!(again, ["install --json -- broken@cursor-plugins", "install --json -- more@cursor-plugins"], "what is installed is not installed again");
@@ -1851,7 +1867,7 @@ fn claudes_own_plugins_are_never_missing_and_one_turned_on_is_installed() {
     );
     put(&far, ".claude/settings.json", r#"{"enabledPlugins": {"cc-plugin-telemetry@builtin": true}}"#);
     let job = world.job(&mine, "far");
-    let synced = sync(&job, &far);
+    let synced = sync_and_install(&job, &far);
     assert_eq!(synced.problems, [], "{synced:?}");
     let ran = calls.lock().unwrap().clone();
     assert!(ran.iter().all(|call| !call.contains("builtin")), "{ran:?}");
@@ -2021,7 +2037,7 @@ fn a_plugin_name_claude_would_read_as_an_option_is_never_handed_to_it() {
             "extraKnownMarketplaces": {"cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}},
                                        "evil": {"source": {"source": "git", "url": "--upload-pack=touch /tmp/pwned"}}}}"#,
     );
-    let synced = sync(&world.job(&mine, "far"), &far);
+    let synced = sync_and_install(&world.job(&mine, "far"), &far);
     let ran = calls.lock().unwrap().clone();
     for call in &ran {
         let handed = call.split_once(" -- ").map(|(_, handed)| handed);
@@ -2048,13 +2064,13 @@ fn a_failed_install_is_tried_again_at_the_next_start_and_not_before() {
             "extraKnownMarketplaces": {"cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}}}}"#,
     );
     let job = world.job(&mine, "far");
-    assert_eq!(sync(&job, &first).problems.len(), 1);
+    assert_eq!(sync_and_install(&job, &first).problems.len(), 1);
     let tried = calls.lock().unwrap().len();
     assert_eq!(sync(&job, &first).problems.len(), 1, "still said");
     assert_eq!(calls.lock().unwrap().len(), tried, "and not tried again in a loop");
 
     let (started, calls) = with_tools(&far, &[]);
-    let synced = sync(&job, &started);
+    let synced = sync_and_install(&job, &started);
     assert_eq!(synced.problems, [], "{synced:?}");
     assert!(calls.lock().unwrap().iter().any(|call| call.contains("pstack@cursor-plugins")));
     assert!(read(&far, ".claude/plugins/installed_plugins.json").unwrap().contains("pstack@cursor-plugins"));
@@ -2105,7 +2121,7 @@ fn codex_fetches_each_marketplace_a_sync_names_that_it_has_no_copy_of() {
         ),
     );
     let job = world.job(&mine, "far");
-    let synced = sync(&job, &far);
+    let synced = sync_and_install(&job, &far);
     assert!(at(&far, ".codex/.tmp/marketplaces/cursor-plugins").is_dir(), "{synced:?}");
     let ran = calls.lock().unwrap().clone();
     assert_eq!(ran, ["codex marketplace upgrade -- cursor-plugins", "codex marketplace upgrade -- gone-market"]);
@@ -2132,9 +2148,9 @@ fn adding_a_marketplace_leaves_the_operators_entry_for_it_as_it_was() {
     );
     let job = world.job(&mine, "far");
     sync(&job, &far);
+    assert_eq!(sync(&job, &far), Synced::default(), "the install between changed nothing the operator chose");
     let landed: serde_json::Value = serde_json::from_str(&read(&far, ".claude/settings.json").unwrap()).unwrap();
     assert_eq!(landed["extraKnownMarketplaces"]["cursor-plugins"]["autoUpdate"], true, "{landed}");
-    assert_eq!(sync(&job, &far), Synced::default());
     let here: serde_json::Value = serde_json::from_str(&read(&mine, ".claude/settings.json").unwrap()).unwrap();
     assert_eq!(here["extraKnownMarketplaces"]["cursor-plugins"]["autoUpdate"], true);
 }
@@ -2317,12 +2333,12 @@ fn both_kept(synced: &Synced, home: &Home) -> [String; 2] {
     both
 }
 
-/// The verifier's run. The Mac's sync holds Windows' home from its scan
-/// to its end, so Windows' own sync with Linux, asked as the Mac's write
-/// is on its way, is busy; once it runs it finds both edits and keeps
-/// both. Before, Windows took Linux's edit between the Mac's scan and its
-/// write, the Mac's copy went over it unsaid, and Windows' next sync
-/// carried that on to Linux, Linux's edit only in Windows' trash.
+/// The Mac's sync holds Windows' home from its scan to its end, so
+/// Windows' own sync with Linux, asked as the Mac's write is on its way,
+/// is busy; once it runs it finds both edits and keeps both. Before,
+/// Windows took Linux's edit between the Mac's scan and its write, the
+/// Mac's copy went over it unsaid, and Windows' next sync carried that on
+/// to Linux, Linux's edit only in Windows' trash.
 #[test]
 fn a_hubs_sync_holds_its_machines_home_from_the_scan_to_the_end() {
     let world = World::new("machine-held");
@@ -2361,8 +2377,6 @@ fn a_write_after_the_machine_let_its_hub_go_is_refused_and_changes_nothing() {
     there.before = Box::new(move |request, session| {
         if !asleep && matches!(request, Request::Begin { .. }) {
             asleep = true;
-            // What the Server's lane does once a connection asks nothing
-            // for as long as it waits.
             session.expire();
             sync(&hub_of(&hub, "linux"), &machine);
         }
@@ -2425,7 +2439,6 @@ fn two_computers_that_are_each_others_hub_both_finish() {
             loop {
                 let mut there = Machine::new(&machine);
                 if busy == 0 {
-                    // Each holds its own home before it asks the other.
                     let (together, mut met) = (together.clone(), false);
                     there.before = Box::new(move |_, _| {
                         if !std::mem::replace(&mut met, true) {

@@ -113,7 +113,7 @@ impl Exchange for Vanishing {
 }
 
 /// A hub that vanishes mid-sync: while it synced, the Machine's home was
-/// held, so the Machine's own syncs waited for it, and once its connection
+/// held, so the Machine's own syncs were busy, and once its connection
 /// goes the Server lets the home go.
 #[test]
 fn a_hub_that_vanishes_mid_sync_leaves_the_machines_home_free() {

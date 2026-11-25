@@ -1,6 +1,8 @@
 //! One connection's tree ops (ADR 0048), run on a thread of their own in
 //! the order they were asked: a sender asks ahead of the replies, and a
-//! write's chunks must land in order.
+//! write's chunks must land in order. The setup home a sync holds is held
+//! by its connection's Session (ADR 0050): let go as the connection goes,
+//! and once it asks nothing for `EXPIRY`.
 
 use std::io;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -16,8 +18,8 @@ use super::failed;
 pub(super) const MOST: usize = 16;
 
 /// Dropped as its connection goes: what it was asked and has not begun is
-/// never run, and the files it was writing are dropped with their
-/// temporary files.
+/// never run, the files it was writing are dropped with their temporary
+/// files, and the setup home it held is let go.
 pub(super) struct Lane {
     asked: Sender<(u64, Request)>,
     gone: Cancellation,

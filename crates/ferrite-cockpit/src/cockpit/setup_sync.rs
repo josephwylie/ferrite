@@ -24,9 +24,17 @@ use gpui::App;
 /// How often a connected Machine is looked at for what changed there.
 const CHECK: Duration = Duration::from_secs(60);
 /// How long the setup here is left to settle after a change before it
-/// syncs: an edit is often several writes. A sync that found another
-/// under way tries again after as long.
+/// syncs: an edit is often several writes.
 const SETTLE: Duration = Duration::from_secs(3);
+
+/// How long a sync that found another under way waits to try again:
+/// [`SETTLE`], and up to as long again by chance. Two computers that are
+/// each other's hub each hold their own home as they ask for the other's,
+/// so two that ask at once both find the other busy, and would again each
+/// time they tried again together.
+fn retry_after() -> Duration {
+    SETTLE + SETTLE.mul_f64(rand::random::<f64>())
+}
 
 pub(crate) struct SetupSync {
     /// This computer's setup, or why this window syncs none of it; `None`
@@ -308,17 +316,20 @@ fn named(path: &str) -> String {
             "enabledPlugins" | "plugins" => format!("plugin {}", name.rsplit_once('@').map_or(name, |(plugin, _)| plugin)),
             "extraKnownMarketplaces" | "marketplaces" => format!("marketplace {name}"),
             "mcpServers" | "mcp_servers" => format!("MCP server {name}"),
-            _ => key.replace('/', " › "),
+            "" => words(name),
+            _ => format!("{} › {name}", words(kind)),
         };
         return format!("{tool} {what}");
     }
     let file = |under: &str, suffix: &str| path.strip_prefix(under).and_then(|rest| rest.strip_suffix(suffix));
-    // A skill is a folder: what lies in one, or a name with no extension.
-    let folder = |under: &str| {
+    let skill = |under: &str| {
         let rest = path.strip_prefix(under)?;
         match rest.split_once('/') {
-            Some((name, _)) => Some(name),
-            None => (!rest.is_empty() && !rest.contains('.')).then_some(rest),
+            Some((folder, _)) => Some(folder),
+            None => {
+                let loose_markdown = rest.ends_with(".md");
+                (!rest.is_empty() && !loose_markdown).then_some(rest)
+            }
         }
     };
     let named = [
@@ -327,7 +338,7 @@ fn named(path: &str) -> String {
         (".codex/skills/", "the Codex skill"),
     ]
     .iter()
-    .find_map(|(under, kind)| Some(format!("{kind} {}", folder(under)?)))
+    .find_map(|(under, kind)| Some(format!("{kind} {}", skill(under)?)))
     .or_else(|| {
         [
             (".claude/commands/", "the command"),
@@ -347,6 +358,21 @@ fn named(path: &str) -> String {
         ".claude/statusline.sh" => "Claude's status line script".to_string(),
         _ => format!("~/{path}"),
     })
+}
+
+/// A tool's key in plain words: `skillOverrides` is "skill overrides",
+/// and `model_reasoning_effort` "model reasoning effort".
+fn words(key: &str) -> String {
+    let mut words = String::new();
+    for letter in key.chars() {
+        if letter == '_' || letter.is_uppercase() {
+            words.push(' ');
+        }
+        if letter != '_' {
+            words.extend(letter.to_lowercase());
+        }
+    }
+    words
 }
 
 /// A key's old value, short enough for a line.
@@ -780,7 +806,7 @@ impl Track {
                     ..ask
                 };
                 self.again = Some(self.again.map_or(ask, |again| again.and(ask)));
-                self.retry = Some(now + SETTLE);
+                self.retry = Some(now + retry_after());
                 Status::Syncing(None)
             }
             Err(error) if error.kind() == std::io::ErrorKind::Unsupported => Status::Older,

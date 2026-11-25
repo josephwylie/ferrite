@@ -5,8 +5,9 @@
 //! tools' installers on a thread of its own, one run at a time, for the
 //! plugins of marketplaces that travel alone: what a tool bundles, Claude's
 //! `@builtin` for one, is never missing. A run holds the side's home as a
-//! sync does, so no tool rewrites a file a sync is writing: on the side
-//! whose sync it is, it begins once that sync lets go. A scan waits for a
+//! sync does, so no tool rewrites a file a sync is writing: on either side
+//! of the sync that wanted it, it begins once that sync lets go, and before
+//! the next sync of that home, which says what it found. A scan waits for a
 //! run once at most, and each tool is stopped once it runs too long.
 //!
 //! - Claude installs nothing by itself: each plugin set on that it has not
@@ -276,6 +277,12 @@ impl Installs {
                 write_over(&self.kept, &serde_json::to_vec_pretty(&kept).unwrap_or_default())
             }),
         };
+    }
+
+    /// Whether a run waits for its home, which a sync holds: it goes before
+    /// the next sync of that home, which then says what it found.
+    pub(super) fn waiting(&self) -> bool {
+        self.lock().blocked
     }
 
     /// Wait for the run under way, if any, to end, until `until` at most:

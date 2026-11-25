@@ -74,6 +74,7 @@ Windows window.
   | `read { root, path, offset }` | `bytes { data, size }` | Up to a chunk of a file. |
   | `make_dir`, `link`, `remove { root, path, … }` | `done`, or `unchanged` when already so | |
   | `begin`, `finish`, `make_dir`, `link` | `unmade { why }` | This entry cannot be made there: `leads_out`, `leads_nowhere`, `name`, or `failed { error }`. The send leaves it and goes on. |
+  | `hold { root }` | `done`, or `busy` | The Setup root's home held for this connection's sync, until it goes or asks nothing for 10 minutes (ADR 0050). Every other Setup op needs it. |
 
   The sender numbers each write, never the same number twice in its
   process, so a file's `begin`, chunks and `finish` go out together, with

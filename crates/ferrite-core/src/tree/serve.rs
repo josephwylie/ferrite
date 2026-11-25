@@ -13,6 +13,8 @@
 //! directory, as `setup_sync` spells it, and each write to it is on disk
 //! before it is in place. A Setup root by any table but this Ferrite's is
 //! refused, so two Ferrites whose tables differ move nothing (ADR 0050).
+//! So is every op on it of a connection that does not hold its home: a sync
+//! holds it from its first scan to its end, and no other writes it then.
 
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -23,8 +25,8 @@ use base64::Engine as _;
 
 use super::links::link;
 use super::{at, canonical, check_path, holds, local, scan, windows_name, Manifest, Refusal, Reply, Request, Root};
-use crate::chunked::{self, CHUNK_SIZE};
-use crate::setup_sync::{Home, Installs, Place, TABLE};
+use crate::chunked::{self, CHUNK_SIZE, EXPIRY};
+use crate::setup_sync::{Held, Home, Installs, Place, TABLE};
 
 /// At most this many files are written at once on one connection.
 pub(crate) const MOST_WRITES: usize = 4;
@@ -49,7 +51,8 @@ enum Target {
 }
 
 /// One connection's tree ops: the files it is writing, each received
-/// beside where it goes, and the scan whose pages it is reading.
+/// beside where it goes, the scan whose pages it is reading, and the home
+/// it holds for its sync.
 pub struct Session {
     writes: chunked::Incoming<Target>,
     scanned: Option<Scanned>,
@@ -59,6 +62,32 @@ pub struct Session {
     /// What installs the Claude plugins a write to this process's home
     /// turns on.
     installs: Option<Arc<Installs>>,
+    holding: Holding,
+}
+
+/// How a connection holds the Setup root's home: from the `hold` its sync
+/// begins with until the connection goes, the home let go with it.
+enum Holding {
+    /// It has not asked: a hub from before the hold, or one yet to ask.
+    Never,
+    Held { _held: Held },
+    /// It asked nothing for [`EXPIRY`], and the home was let go: what it
+    /// asks next was planned from a scan the home may no longer match.
+    Lapsed,
+}
+
+impl Holding {
+    /// Refused, and why, unless the home is held.
+    fn check(&self) -> io::Result<()> {
+        match self {
+            Holding::Held { .. } => Ok(()),
+            Holding::Never => Err(newer_here()),
+            Holding::Lapsed => Err(io::Error::other(format!(
+                "This sync asked nothing of the Machine for {} minutes, so the Machine let its setup go: the next sync starts again",
+                EXPIRY.as_secs() / 60
+            ))),
+        }
+    }
 }
 
 /// A scan not yet read to its last page.
@@ -81,6 +110,7 @@ impl Default for Session {
             scanned: None,
             home: None,
             installs: None,
+            holding: Holding::Never,
         }
     }
 }
@@ -94,6 +124,16 @@ impl Session {
         }
     }
 
+    /// Ops on the Setup root work on `home`, which `held` holds for the
+    /// sync they are of.
+    pub(crate) fn held(home: Home, held: Held) -> Self {
+        Self {
+            home: Some(home),
+            holding: Holding::Held { _held: held },
+            ..Self::default()
+        }
+    }
+
     /// Ops on the Setup root work on this process's home, and what a
     /// write there turns on in Claude is installed by `installs`.
     pub fn installing(installs: Arc<Installs>) -> Self {
@@ -103,8 +143,13 @@ impl Session {
         }
     }
 
+    /// The connection asked nothing for [`EXPIRY`]: each write it began
+    /// is let go, and so is the home it held, whose next op is refused.
     pub fn expire(&mut self) {
         self.writes.expire();
+        if let Holding::Held { .. } = self.holding {
+            self.holding = Holding::Lapsed;
+        }
     }
 
     fn home(&mut self) -> io::Result<&Home> {
@@ -120,7 +165,8 @@ impl Session {
 
     pub fn execute(&mut self, request: Request) -> io::Result<Reply> {
         let root = match &request {
-            Request::Scan { root, .. }
+            Request::Hold { root }
+            | Request::Scan { root, .. }
             | Request::Begin { root, .. }
             | Request::Read { root, .. }
             | Request::MakeDir { root, .. }
@@ -130,8 +176,21 @@ impl Session {
         };
         if let Some(root) = root {
             by_this_table(root)?;
+            if matches!(root, Root::Setup { .. }) && !matches!(request, Request::Hold { .. }) {
+                self.holding.check()?;
+            }
         }
         match request {
+            Request::Hold { root: Root::Setup { .. } } => {
+                if !matches!(self.holding, Holding::Held { .. }) {
+                    let Some(held) = self.home()?.hold()? else {
+                        return Ok(Reply::Busy);
+                    };
+                    self.holding = Holding::Held { _held: held };
+                }
+                Ok(Reply::Done)
+            }
+            Request::Hold { .. } => Err(invalid("Only the setup is held for a sync".into())),
             Request::Scan { root, skip, after } => {
                 let root = match root {
                     Root::Setup { .. } => Resolved::Setup,
@@ -213,6 +272,7 @@ impl Session {
                         }
                     }
                     Target::Setup(place) => {
+                        self.holding.check()?;
                         received.sync()?;
                         self.home()?.place(place, received.path())?;
                     }

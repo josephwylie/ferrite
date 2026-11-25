@@ -7,7 +7,7 @@
 //! removes or writes over on either side goes to that side's trash, not
 //! away. Both sides scan by the same [`TABLE`], or the Machine refuses the
 //! scan and nothing moves, and a base is read only by the table that wrote
-//! it. One sync of a home runs at a time, whichever Machine it is with.
+//! it. One sync of a home runs at a time, whichever computer drives it.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::lock::Held;
 use super::reconcile::{agreed, reconcile, Action, Hold};
 use super::store::{self, visible, Home, STAMP};
 use super::{file_of, sign_in, Item, ITEMS, TABLE, UNREAD_WITHOUT_SIGN_INS};
@@ -172,16 +173,17 @@ pub struct Valve {
 }
 
 /// Sync `job`'s setup with the Machine `there` reaches. `planned` hears
-/// how many entries the sync moves or removes, once it knows. The home is
-/// held from the first scan to the base, so one sync of it runs at a time,
-/// to whichever Machine: one that finds it held is busy.
+/// how many entries the sync moves or removes, once it knows. Both homes
+/// are held from the first scan to the base, this computer's and the
+/// Machine's, so one sync of either runs at a time, whichever computer
+/// drives it: one that finds either held is busy, and wrote nothing.
 pub fn run(
     job: &Job,
     there: &mut dyn Exchange,
     planned: &mut dyn FnMut(usize),
     cancel: &Cancellation,
 ) -> io::Result<Outcome> {
-    let Some(_held) = job.home.hold()? else {
+    let Some(held) = job.home.hold()? else {
         return Ok(Outcome::Busy);
     };
     fs::create_dir_all(&job.dir).map_err(|error| tree::at(&job.dir, error))?;
@@ -193,8 +195,14 @@ pub fn run(
         if reconcile(&base, &here, &base).is_empty() {
             return Ok(Outcome::Synced(Synced::default()));
         }
+        if !hold_there(there)? {
+            return Ok(Outcome::Busy);
+        }
         (here, tree::scan_far(there, &Root::SETUP, &unread)?)
     } else {
+        if !hold_there(there)? {
+            return Ok(Outcome::Busy);
+        }
         let asked = there.ask(tree::scan_request(&Root::SETUP, &unread, None))?;
         let here = job.home.scan(&unread);
         (here, tree::pages(there, &Root::SETUP, &unread, asked)?)
@@ -273,7 +281,7 @@ pub fn run(
 
     let steps = steps_there(&actions, &here, &far);
     let sent = tree::send(&job.home, &steps, &Root::SETUP, there, &mut |_| {}, cancel)?;
-    let pulled = take_here(job, &actions, &here, &far, there, cancel)?;
+    let pulled = take_here(job, &held, &actions, &here, &far, there, cancel)?;
     synced.trashed = job.home.trashed();
 
     if !actions.is_empty() {
@@ -294,6 +302,17 @@ pub fn run(
     }
     synced.problems.extend(sent.problems.into_iter().chain(pulled));
     Ok(Outcome::Synced(synced))
+}
+
+/// Hold the Machine's home for this sync: whether it was free. A Machine
+/// from before the hold refuses it as unsupported, so the row says to
+/// update Ferrite there.
+fn hold_there(there: &mut dyn Exchange) -> io::Result<bool> {
+    match there.call(Request::Hold { root: Root::SETUP })? {
+        Reply::Done => Ok(true),
+        Reply::Busy => Ok(false),
+        _ => Err(unanswered()),
+    }
 }
 
 /// What a base file holds: the state both sides last agreed on, and the
@@ -495,10 +514,12 @@ fn steps_there(actions: &[Action], here: &Manifest, far: &Manifest) -> Vec<Step>
 
 /// Do here what the actions do on this computer: what goes first, moved
 /// to the trash, then each folder, then each file, read from the Machine
-/// and asked ahead of the replies, then each link. A file that does not
-/// come across whole is left as each side has it, and said.
+/// and asked ahead of the replies, then each link, all under `held`. A
+/// file that does not come across whole is left as each side has it, and
+/// said.
 fn take_here(
     job: &Job,
+    held: &Held,
     actions: &[Action],
     here: &Manifest,
     far: &Manifest,
@@ -529,7 +550,7 @@ fn take_here(
             job.home.make_dir(path).map_err(|error| named(path, Side::Here, error))?;
         }
     }
-    let mut local = Session::with_home(job.home.clone());
+    let mut local = Session::held(job.home.clone(), held.clone());
     let mut pulls = Pulls {
         local: &mut local,
         there,
