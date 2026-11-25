@@ -22,9 +22,11 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 mod meter;
+mod toasts;
 pub(crate) mod words;
 pub(crate) use meter::Reading;
 use meter::Meter;
+pub(crate) use toasts::{not_copied, CopyEvent};
 
 #[cfg(test)]
 mod tests;
@@ -616,12 +618,13 @@ fn cut_off(error: &io::Error) -> bool {
     )
 }
 
-/// Every copy, in the order each began.
+/// Every copy, in the order each began, and the toasts that follow them.
 pub(crate) struct Copies {
     cockpit: Entity<Cockpit>,
     entries: Vec<(CopyKey, Entry)>,
     /// The clock that reads the meters again is running.
     ticking: bool,
+    toasts: toasts::Toasts,
 }
 
 impl Copies {
@@ -630,6 +633,7 @@ impl Copies {
             cockpit,
             entries: Vec::new(),
             ticking: false,
+            toasts: Default::default(),
         }
     }
 

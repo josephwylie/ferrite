@@ -6,7 +6,7 @@
 //! setup sheet, `PlacementView`), and a machine's Project gets the Project
 //! card there.
 
-use super::copies::{self, CopyKey};
+use super::copies::{self, words, CopyEvent, CopyKey};
 use super::menu_rows::Environment;
 use super::placement_view::{PlacementEvent, PlacementView, Placing};
 use super::*;
@@ -598,5 +598,117 @@ impl CockpitView {
             // to show.
             self.hide_sheet(cx);
         }
+    }
+
+    /// The window's copies, drawn again as they move and doing what their
+    /// toasts ask.
+    pub(super) fn copies_of_window(cockpit: Entity<Cockpit>, cx: &mut Context<Self>) -> Entity<copies::Copies> {
+        let copies = cx.new(|_| copies::Copies::new(cockpit));
+        cx.observe(&copies, |_, _, cx| cx.notify()).detach();
+        cx.subscribe(&copies, |view, _, event, cx| match event {
+            CopyEvent::Show(key) => view.show_copy(key, cx),
+            CopyEvent::Again(key) => view.copy_again(key, cx),
+            CopyEvent::Chat(key, project) => view.chat_on_copy(key, *project, cx),
+        })
+        .detach();
+        copies
+    }
+
+    /// Hear the copies, and do what each that moved asks of the window.
+    pub(super) fn poll_copies(&mut self, cx: &mut Context<Self>) {
+        let landed = self.copies.update(cx, |copies, cx| copies.poll(cx));
+        for landed in landed {
+            self.copy_landed(landed, cx);
+        }
+    }
+
+    /// Do what a copy that moved asks of the window.
+    fn copy_landed(&mut self, landed: copies::Landed, cx: &mut Context<Self>) {
+        match landed {
+            copies::Landed::Sent(key) => self.place_copy(&key, cx),
+            copies::Landed::Ended(key) => self.tell_copy(&key, cx),
+        }
+    }
+
+    /// The copy of `key` again (`Copies::again`): one whose files all
+    /// landed is added at once.
+    pub(super) fn copy_again(&mut self, key: &CopyKey, cx: &mut Context<Self>) {
+        if let Some(landed) = self.copies.update(cx, |copies, cx| copies.again(key, cx)) {
+            self.copy_landed(landed, cx);
+        }
+    }
+
+    /// The copy of `key` ended: the chime, and with the window in the
+    /// background, the system's notification, card or no card.
+    pub(super) fn tell_copy(&mut self, key: &CopyKey, cx: &mut Context<Self>) {
+        let Some(copy) = self.copies.read(cx).get(key) else {
+            return;
+        };
+        let done = matches!(copy.phase, copies::Phase::Done(_));
+        let detail = match &copy.phase {
+            copies::Phase::Done(summary) => match summary.skipped.entries {
+                0 => format!("{} in {}", words::bytes(summary.bytes), words::took(summary.took)),
+                entries => copies::not_copied(entries),
+            },
+            _ => copy.why().unwrap_or_default(),
+        };
+        let title = format!("Copy of {} to {}", copy.order.placing.title, copy.order.placing.machine_name);
+        if self.prefs.settings.sounds {
+            self.chime(if done { Sound::Done } else { Sound::NeedsYou });
+        }
+        let window_active = self.cockpit.read(cx).window_active();
+        if self.prefs.settings.system_notifications && crate::system_notifications::wanted(true, window_active) {
+            let posting = crate::system_notifications::Posting {
+                tag: key.tag(),
+                needs_you: !done,
+                word: if done { "done" } else { "failed" },
+                title,
+                detail,
+                agent: None,
+                cwd: None,
+            };
+            crate::system_notifications::post(posting, cx);
+            self.copies.update(cx, |copies, _| copies.posted(key));
+        }
+    }
+
+    /// A click on a copy's system notification: its card.
+    pub(super) fn open_copy_notification(&mut self, tag: &str, cx: &mut Context<Self>) -> bool {
+        let Some(key) = self.copies.read(cx).tagged(tag) else {
+            return false;
+        };
+        self.show_copy(&key, cx);
+        true
+    }
+
+    /// Each copy's toast as it stands (`Copies::present`), none for the
+    /// copy on the card up.
+    pub(super) fn present_copies(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let carded = self.placement_sheet(cx).map(|sheet| sheet.read(cx).key());
+        let window_active = self.cockpit.read(cx).window_active();
+        self.copies
+            .update(cx, |copies, cx| copies.present(carded, window_active, window, cx));
+    }
+
+    /// The environment chip of the draft in Pane `index` while it waits
+    /// on a copy: the copy's Machine, with how far while it runs, alone
+    /// once it stopped.
+    pub(super) fn copy_chip(&self, index: usize, cx: &App) -> Option<(pane::ChipMark, SharedString)> {
+        let (_, copy) = self.waited_on(index, cx)?;
+        let name = copy.order.placing.machine_name.clone();
+        Some(match (copy.phase.done(), copy.phase.live()) {
+            (Some(done), true) => (pane::ChipMark::Ring(done), format!("{name} {}%", (done * 100.).floor()).into()),
+            (None, true) => (pane::ChipMark::Ring(0.), name),
+            (_, false) => (pane::ChipMark::Icon(ferrite_ui::icons::SERVER), name),
+        })
+    }
+
+    /// The draft in Pane `index`'s band, `chips`, with why Send is not
+    /// there beside the copy's chip while it waits on a copy.
+    pub(super) fn noting_copy(&self, index: usize, mut chips: Vec<AnyElement>, cx: &App) -> Vec<AnyElement> {
+        if let Some((_, copy)) = self.waited_on(index, cx) {
+            chips.insert(1, copy_waits_note(copy.phase.live()).into_any_element());
+        }
+        chips
     }
 }

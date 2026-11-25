@@ -1,13 +1,11 @@
-//! What the window says of a copy (`Copies`) away from its card: a toast
-//! that follows one under way and can be closed without stopping it, a
-//! toast for how it ended, and as it ends the chime and, with the window
-//! in the background, the system's notification (Settings › Notifications).
-//! Each reads the copy as it is drawn; none keeps a copy's state. A toast
-//! for a copy done goes by itself unless it left something as it was; one
-//! for a copy that stopped stays until it is closed.
+//! What the window says of a copy away from its card: a toast that
+//! follows one under way and can be closed without stopping it, and a
+//! toast for how it ended. Each reads the copy as it is drawn; none keeps
+//! a copy's state. A toast for a copy done goes by itself unless it left
+//! something as it was; one for a copy that stopped stays until it is
+//! closed. What a toast's buttons ask of the window is a `CopyEvent`.
 
-use super::copies::words::{bytes, count, took};
-use super::copies::{CopyKey, Landed, Phase};
+use super::words::{bytes, count, took};
 use super::*;
 use ferrite_ui::components;
 use gpui::component::notification::{Notification, NotificationProgress, NotificationType};
@@ -27,8 +25,18 @@ enum Kind {
     Failed { back: bool },
 }
 
+/// What a copy's toast asks of the window: its card, the copy again, or
+/// a chat on the Project it made.
+pub(crate) enum CopyEvent {
+    Show(CopyKey),
+    Again(CopyKey),
+    Chat(CopyKey, ProjectKey),
+}
+
+impl EventEmitter<CopyEvent> for Copies {}
+
 #[derive(Default)]
-pub(super) struct CopyToasts {
+pub(super) struct Toasts {
     /// The toast up for each copy, and which one it is: the kit tells of
     /// every close, its own replacing too, and only the one up counts.
     up: HashMap<CopyKey, (Kind, u64)>,
@@ -41,110 +49,45 @@ pub(super) struct CopyToasts {
     posted: HashSet<CopyKey>,
 }
 
-impl CockpitView {
-    /// Hear the copies, and do what each that moved asks of the window.
-    pub(super) fn poll_copies(&mut self, cx: &mut Context<Self>) {
-        let landed = self.copies.update(cx, |copies, cx| copies.poll(cx));
-        for landed in landed {
-            self.copy_landed(landed, cx);
-        }
+impl Copies {
+    /// The system's notification told how the copy of `key` ended: it is
+    /// taken back once the window shows it (`present`).
+    pub(crate) fn posted(&mut self, key: &CopyKey) {
+        self.toasts.posted.insert(key.clone());
     }
 
-    /// Do what a copy that moved asks of the window.
-    fn copy_landed(&mut self, landed: Landed, cx: &mut Context<Self>) {
-        match landed {
-            Landed::Sent(key) => self.place_copy(&key, cx),
-            Landed::Ended(key) => self.tell_copy(&key, cx),
-        }
+    /// The copy a system notification tagged `tag` told of.
+    pub(crate) fn tagged(&self, tag: &str) -> Option<CopyKey> {
+        self.iter().map(|(key, _)| key).find(|key| key.tag() == tag).cloned()
     }
 
-    /// The copy of `key` again (`Copies::again`): one whose files all
-    /// landed is added at once.
-    pub(super) fn copy_again(&mut self, key: &CopyKey, cx: &mut Context<Self>) {
-        if let Some(landed) = self.copies.update(cx, |copies, cx| copies.again(key, cx)) {
-            self.copy_landed(landed, cx);
-        }
-    }
-
-    /// The copy of `key` ended: the chime, and with the window in the
-    /// background, the system's notification, card or no card.
-    pub(super) fn tell_copy(&mut self, key: &CopyKey, cx: &mut Context<Self>) {
-        let Some(copy) = self.copies.read(cx).get(key) else {
-            return;
-        };
-        let done = matches!(copy.phase, Phase::Done(_));
-        let detail = match &copy.phase {
-            Phase::Done(summary) => match summary.skipped.entries {
-                0 => format!("{} in {}", bytes(summary.bytes), took(summary.took)),
-                entries => not_copied(entries),
-            },
-            _ => copy.why().unwrap_or_default(),
-        };
-        let title = format!("Copy of {} to {}", copy.order.placing.title, copy.order.placing.machine_name);
-        if self.prefs.settings.sounds {
-            self.chime(if done { Sound::Done } else { Sound::NeedsYou });
-        }
-        let window_active = self.cockpit.read(cx).window_active();
-        if self.prefs.settings.system_notifications && crate::system_notifications::wanted(true, window_active) {
-            crate::system_notifications::post(
-                crate::system_notifications::Posting {
-                    tag: key.tag(),
-                    needs_you: !done,
-                    word: if done { "done" } else { "failed" },
-                    title,
-                    detail,
-                    agent: None,
-                    cwd: None,
-                },
-                cx,
-            );
-            self.copy_toasts.posted.insert(key.clone());
-        }
-    }
-
-    /// A click on a copy's system notification: its card.
-    pub(super) fn open_copy_notification(&mut self, tag: &str, cx: &mut Context<Self>) -> bool {
-        let key = self
-            .copies
-            .read(cx)
-            .iter()
-            .map(|(key, _)| key)
-            .find(|key| key.tag() == tag)
-            .cloned();
-        match key {
-            Some(key) => {
-                self.show_copy(&key, cx);
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// Each copy's toast as it stands: none for the copy on the card up,
-    /// one that follows it while it runs unless the operator closed that,
-    /// and one for how it ended until the operator has seen it, said again
-    /// once its Machine is back. A system notification is taken back once
-    /// the window, active, shows what it told.
-    pub(super) fn present_copies(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let carded = self.placement_sheet(cx).map(|sheet| sheet.read(cx).key());
-        let window_active = self.cockpit.read(cx).window_active();
-        let copies = self.copies.read(cx);
-        let toasts = &mut self.copy_toasts;
-        let running: HashSet<&CopyKey> = copies
+    /// Each copy's toast as it stands: none for the copy on the card up
+    /// (`carded`), one that follows it while it runs unless the operator
+    /// closed that, and one for how it ended until the operator has seen
+    /// it, said again once its Machine is back. A system notification is
+    /// taken back once the window, active, shows what it told.
+    pub(crate) fn present(
+        &mut self,
+        carded: Option<CopyKey>,
+        window_active: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let running: HashSet<CopyKey> = self
             .iter()
             .filter(|(key, copy)| copy.phase.live() && carded.as_ref() != Some(*key))
-            .map(|(key, _)| key)
+            .map(|(key, _)| key.clone())
             .collect();
-        toasts.closed.retain(|key| running.contains(key));
-        let wanted: HashMap<CopyKey, Kind> = copies
+        self.toasts.closed.retain(|key| running.contains(key));
+        let wanted: HashMap<CopyKey, Kind> = self
             .iter()
             .filter(|(key, copy)| carded.as_ref() != Some(*key) && !copy.seen())
             .filter_map(|(key, copy)| {
                 let kind = match &copy.phase {
-                    phase if phase.live() => (!toasts.closed.contains(key)).then_some(Kind::Progress)?,
+                    phase if phase.live() => (!self.toasts.closed.contains(key)).then_some(Kind::Progress)?,
                     Phase::Done(_) => Kind::Done,
                     Phase::Failed { when_back, .. } => Kind::Failed {
-                        back: *when_back && copies.back(key, cx),
+                        back: *when_back && self.back(key, cx),
                     },
                     Phase::Occupied { .. } => Kind::Failed { back: false },
                     // Cancelled on its card: the operator saw it stop.
@@ -153,10 +96,11 @@ impl CockpitView {
                 Some((key.clone(), kind))
             })
             .collect();
-        let seen: Vec<CopyKey> = toasts
+        let seen: Vec<CopyKey> = self
+            .toasts
             .posted
             .iter()
-            .filter(|key| match copies.get(key) {
+            .filter(|key| match self.get(key) {
                 Some(copy) if !copy.phase.live() => {
                     let shown = carded.as_ref() == Some(*key)
                         || matches!(wanted.get(*key), Some(Kind::Done | Kind::Failed { .. }));
@@ -167,59 +111,62 @@ impl CockpitView {
             })
             .cloned()
             .collect();
-        let gone: Vec<CopyKey> = toasts
+        let gone: Vec<CopyKey> = self
+            .toasts
             .up
             .keys()
             .filter(|key| !wanted.contains_key(*key))
             .cloned()
             .collect();
         for key in gone {
-            toasts.up.remove(&key);
+            self.toasts.up.remove(&key);
             window.remove_notification1::<CopyToast>(key.tag(), cx);
         }
         for key in seen {
-            toasts.posted.remove(&key);
+            self.toasts.posted.remove(&key);
             crate::system_notifications::withdraw(&key.tag(), cx);
         }
         let fresh: Vec<(CopyKey, Kind)> = wanted
             .into_iter()
-            .filter(|(key, kind)| toasts.up.get(key).map(|(up, _)| up) != Some(kind))
+            .filter(|(key, kind)| self.toasts.up.get(key).map(|(up, _)| up) != Some(kind))
             .collect();
         for (key, kind) in fresh {
-            self.copy_toasts.pushed += 1;
-            let pushed = self.copy_toasts.pushed;
-            self.copy_toasts.up.insert(key.clone(), (kind, pushed));
-            if let Some(toast) = self.copy_toast(&key, kind, pushed, cx) {
+            self.toasts.pushed += 1;
+            let pushed = self.toasts.pushed;
+            self.toasts.up.insert(key.clone(), (kind, pushed));
+            if let Some(toast) = self.toast(&key, kind, pushed, cx) {
                 window.push_notification(toast, cx);
             }
         }
     }
 
     /// The toast for the copy of `key`, the `pushed`th.
-    fn copy_toast(&self, key: &CopyKey, kind: Kind, pushed: u64, cx: &mut Context<Self>) -> Option<Notification> {
-        let copy = self.copies.read(cx).get(key)?;
+    fn toast(&self, key: &CopyKey, kind: Kind, pushed: u64, cx: &mut Context<Self>) -> Option<Notification> {
+        let copy = self.get(key)?;
         let (title, machine) = (&copy.order.placing.title, &copy.order.placing.machine_name);
-        let view = cx.weak_entity();
-        let closed = (view.clone(), key.clone());
+        let copies = cx.weak_entity();
+        let closed = (copies.clone(), key.clone());
         let toast = Notification::new()
             .id1::<CopyToast>(key.tag())
             .on_close(move |_, cx| {
-                let (view, key) = &closed;
-                view.update(cx, |view, cx| view.copy_toast_closed(key, pushed, cx))
+                let (copies, key) = &closed;
+                copies
+                    .update(cx, |copies, cx| copies.toast_closed(key, pushed, cx))
                     .ok();
             });
-        let shown = (view.clone(), key.clone());
+        // A button that asks `event` of the window.
+        let asks = |copies: &gpui::WeakEntity<Self>, event: CopyEvent, cx: &mut App| {
+            copies.update(cx, |_, cx| cx.emit(event)).ok();
+        };
+        let shown = (copies.clone(), key.clone());
         let show = move |_: &mut Notification, _: &mut Window, cx: &mut Context<Notification>| {
-            let (view, key) = shown.clone();
+            let (copies, key) = shown.clone();
             components::secondary_button("copy-toast-show", None, "Show", cx)
                 .debug_selector(|| "copy-toast-show".into())
-                .on_click(move |_, _, cx| {
-                    view.update(cx, |view, cx| view.show_copy(&key, cx)).ok();
-                })
+                .on_click(move |_, _, cx| asks(&copies, CopyEvent::Show(key.clone()), cx))
         };
         Some(match kind {
             Kind::Progress => {
-                let copies = self.copies.downgrade();
                 let key = key.clone();
                 toast
                     .title(format!("Copying {title} to {machine}"))
@@ -255,12 +202,10 @@ impl CockpitView {
                 } else {
                     let (project, key) = (summary.project, key.clone());
                     toast.action(move |_, _, cx| {
-                        let (view, key) = (view.clone(), key.clone());
+                        let (copies, key) = (copies.clone(), key.clone());
                         project_editor::primary_button("copy-toast-chat", "Start a chat there", false, cx)
                             .debug_selector(|| "copy-toast-chat".into())
-                            .on_click(move |_, _, cx| {
-                                view.update(cx, |view, cx| view.chat_on_copy(&key, project, cx)).ok();
-                            })
+                            .on_click(move |_, _, cx| asks(&copies, CopyEvent::Chat(key.clone(), project), cx))
                     })
                 };
                 // A press on it does not keep a toast that says all went
@@ -281,12 +226,10 @@ impl CockpitView {
                 };
                 let key = key.clone();
                 toast.action(show).action(move |_, _, cx| {
-                    let (view, key) = (view.clone(), key.clone());
+                    let (copies, key) = (copies.clone(), key.clone());
                     components::secondary_button("copy-toast-again", None, verb, cx)
                         .debug_selector(|| "copy-toast-again".into())
-                        .on_click(move |_, _, cx| {
-                            view.update(cx, |view, cx| view.copy_again(&key, cx)).ok();
-                        })
+                        .on_click(move |_, _, cx| asks(&copies, CopyEvent::Again(key.clone()), cx))
                 })
             }
         })
@@ -294,20 +237,20 @@ impl CockpitView {
 
     /// The operator closed the `pushed`th toast of the copy of `key`: the
     /// copy runs on unfollowed, or how it ended has been seen.
-    fn copy_toast_closed(&mut self, key: &CopyKey, pushed: u64, cx: &mut Context<Self>) {
-        let Some((kind, up)) = self.copy_toasts.up.get(key).copied() else {
+    fn toast_closed(&mut self, key: &CopyKey, pushed: u64, cx: &mut Context<Self>) {
+        let Some((kind, up)) = self.toasts.up.get(key).copied() else {
             return;
         };
         if up != pushed {
             return;
         }
-        self.copy_toasts.up.remove(key);
+        self.toasts.up.remove(key);
         match kind {
             Kind::Progress => {
-                self.copy_toasts.closed.insert(key.clone());
+                self.toasts.closed.insert(key.clone());
             }
             Kind::Done | Kind::Failed { .. } => {
-                self.copies.update(cx, |copies, cx| copies.forget(key, cx));
+                self.forget(key, cx);
             }
         }
         cx.notify();
@@ -339,7 +282,7 @@ fn progress(phase: &Phase, dest: &str, machine: &str) -> NotificationProgress {
 }
 
 /// How many entries a copy left as they were: `2 items not copied`.
-fn not_copied(entries: usize) -> String {
+pub(crate) fn not_copied(entries: usize) -> String {
     match entries {
         1 => "1 item not copied".into(),
         entries => format!("{} items not copied", count(entries)),

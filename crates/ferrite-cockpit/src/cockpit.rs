@@ -18,7 +18,6 @@ mod columns;
 mod composer_menu;
 mod context_menu;
 mod copies;
-mod copy_toasts;
 pub(crate) mod coordinator;
 pub(crate) mod decisions;
 mod delegates;
@@ -592,10 +591,8 @@ pub struct CockpitView {
     server_bands: server::ServerBands,
     /// The operator's setup kept in sync with each Machine (ADR 0048).
     setup_sync: Entity<setup_sync::SetupSync>,
-    /// Every copy of a Project of this computer to a Machine (ADR 0048 §2),
-    /// and the toasts that follow them.
+    /// Every copy of a Project of this computer to a Machine (ADR 0048 §2).
     copies: Entity<copies::Copies>,
-    copy_toasts: copy_toasts::CopyToasts,
     /// Whether the window has said `settings.json` could not be used.
     unreadable_told: bool,
     /// The operator's commands running, and what they and the keys have
@@ -1252,8 +1249,7 @@ impl CockpitView {
         let setup_sync = cx.new(|_| {
             setup_sync::SetupSync::new(prefs.setup_home.clone(), prefs.dir.clone(), cockpit.clone())
         });
-        let copies = cx.new(|_| copies::Copies::new(cockpit.clone()));
-        cx.observe(&copies, |_, _, cx| cx.notify()).detach();
+        let copies = Self::copies_of_window(cockpit.clone(), cx);
         let composer_menu = cx.new(|_| composer_menu::ComposerMenuView::default());
         // Whether a Composer's key context is the menu's follows the menu.
         cx.observe(&composer_menu, |view, _, cx| view.sync_composer_floats(cx))
@@ -1393,7 +1389,6 @@ impl CockpitView {
             server_bands: Default::default(),
             setup_sync,
             copies,
-            copy_toasts: Default::default(),
             unreadable_told: false,
             user_commands: Default::default(),
             leave_asked: false,
@@ -5664,13 +5659,10 @@ impl CockpitView {
         let (Some(draft), Some(id)) = (pane.draft(), pane.identity.draft()) else {
             return;
         };
-        // It runs where its copy goes, once the copy is in.
-        if self.waited_on(self.focused(cx), cx).is_some() {
-            return;
-        }
         let binding = draft.binding.clone();
         let composer = pane.composer.clone();
-        if !self.admit_files(self.focused(cx), cx) {
+        // A draft waiting on its copy runs where the copy goes, once it is in.
+        if self.waited_on(self.focused(cx), cx).is_some() || !self.admit_files(self.focused(cx), cx) {
             return;
         }
         let text = composer.read(cx).prompt().trim().to_string();
@@ -5776,21 +5768,8 @@ impl CockpitView {
         // environment to choose, or a copy to wait on, else a word for a
         // machine.
         let machine = draft.binding.project().machine();
-        let waits = self.waited_on(index, cx).map(|(_, copy)| copy.phase.live());
         let environment = self.environment_chip_shown(index, cx).then(|| {
-            // The copy the draft waits on: where to, and how far while it
-            // runs; the Machine alone once it stopped.
-            if let Some((_, copy)) = self.waited_on(index, cx) {
-                let name = copy.order.placing.machine_name.clone();
-                let (done, live) = (copy.phase.done(), copy.phase.live());
-                let (mark, label) = match done {
-                    Some(done) if live => {
-                        let label = format!("{name} {}%", (done * 100.).floor());
-                        (pane::ChipMark::Ring(done), label.into())
-                    }
-                    _ if live => (pane::ChipMark::Ring(0.), name),
-                    _ => (pane::ChipMark::Icon(ferrite_ui::icons::SERVER), name),
-                };
+            if let Some((mark, label)) = self.copy_chip(index, cx) {
                 return (pane::BandChip::Environment, 2, mark, label);
             }
             let mark = if self.elsewhere(machine, cx) {
@@ -5846,12 +5825,7 @@ impl CockpitView {
                 )
                 .into_any_element()
             });
-        let mut chips: Vec<AnyElement> = word.into_iter().chain(chips).collect();
-        if let Some(running) = waits {
-            // Beside the copy's chip, why Send is not there.
-            chips.insert(1, draft_environment::copy_waits_note(running).into_any_element());
-        }
-        chips
+        self.noting_copy(index, word.into_iter().chain(chips).collect(), cx)
     }
 
     /// The focused draft's model chip (#29), where a live Thread's stands
@@ -6021,12 +5995,7 @@ impl CockpitView {
         Some(pane::ComposerControls {
             attach: Some(attach),
             stop: composer_footer::stop_button(index, running, line_empty, cx),
-            // A draft waiting on its copy is sent once the copy is in.
-            send: if self.waited_on(index, cx).is_some() {
-                None
-            } else {
-                composer_footer::send_button(index, running, line_empty, cx)
-            },
+            send: composer_footer::send_button(index, running, line_empty, cx).filter(|_| self.waited_on(index, cx).is_none()),
             footer: Some(pane::composer_footer(model, words, ring).into_any_element()),
             env: env
                 .filter(|chips: &Vec<AnyElement>| !chips.is_empty())
@@ -7735,10 +7704,7 @@ impl CockpitView {
             return cell.child(pane::render_draft(
                 pane,
                 pane::DraftState {
-                    start: {
-                        let hero = self.draft_hero(index, cx);
-                        self.under_sheets(hero, cx)
-                    },
+                    start: self.under_sheets(self.draft_hero(index, cx), cx),
                     attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
                     menu: self.popover_element(index, cx),
                     composer_empty: pane.composer.read(cx).is_empty(),
