@@ -1,0 +1,74 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   V:\.worktrees\ferrite\setup-kinds\vendor\taffy\Cargo.toml
+workspace: V:\.worktrees\ferrite\setup-kinds\Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   V:\.worktrees\ferrite\setup-kinds\vendor\taffy\Cargo.toml
+workspace: V:\.worktrees\ferrite\setup-kinds\Cargo.toml
+warning: function `sign_in_script` is never used
+   --> crates\ferrite-core\src\machine.rs:736:4
+    |
+736 | fn sign_in_script(name: &str, target: &str, control: &Path) -> String {
+    |    ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `connect`
+ --> crates\ferrite-core\src\connection\tests.rs:5:28
+  |
+5 | use crate::link::{address, connect, listen, Client};
+  |                            ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `scratch` is never used
+   --> crates\ferrite-core\src\providers\discover.rs:219:8
+    |
+219 |     fn scratch(name: &str) -> PathBuf {
+    |        ^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `scratch` is never used
+   --> crates\ferrite-core\src\user_commands.rs:264:8
+    |
+264 |     fn scratch(name: &str) -> std::path::PathBuf {
+    |        ^^^^^^^
+
+warning: function `command` is never used
+   --> crates\ferrite-core\src\user_commands.rs:274:8
+    |
+274 |     fn command(run: Run) -> UserCommand {
+    |        ^^^^^^^
+
+warning: `ferrite-core` (lib) generated 1 warning
+warning: `ferrite-core` (lib test) generated 4 warnings (run `cargo fix --lib -p ferrite-core --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+────────────
+ Nextest run ID 0d204204-1108-4216-9823-a62fa11f1620 with nextest profile: default
+    Starting 1 test across 2 binaries (1329 tests skipped)
+        FAIL [   0.242s] (1/1) ferrite-core setup_sync::tests::a_windows_home_and_a_linux_home_share_what_the_operator_chose_and_nothing_else
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::a_windows_home_and_a_linux_home_share_what_the_operator_chose_and_nothing_else ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::a_windows_home_and_a_linux_home_share_what_the_operator_chose_and_nothing_else
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1217 filtered out; finished in 0.18s
+
+  stderr ───
+
+    thread 'setup_sync::tests::a_windows_home_and_a_linux_home_share_what_the_operator_chose_and_nothing_else' (13912) panicked at crates\ferrite-core\src\setup_sync\tests.rs:1202:5:
+    assertion `left == right` failed: Synced { pushed: 2, pulled: 17, removed_here: 0, removed_there: 0, conflicts: [Kept { path: ".claude/CLAUDE.md", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\CLAUDE.md" }, Kept { path: ".claude/plugins/.last_inuse_sweep", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\.last_inuse_sweep" }, Kept { path: ".claude/plugins/cache/cursor-plugins/pstack/0.15.48/README.md", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\cache\\cursor-plugins\\pstack\\0.15.48\\README.md" }, Kept { path: ".claude/plugins/cache/cursor-plugins/pstack/0.15.48/skills/a/SKILL.md", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\cache\\cursor-plugins\\pstack\\0.15.48\\skills\\a\\SKILL.md" }, Kept { path: ".claude/plugins/data/pstack/state.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\data\\pstack\\state.json" }, Kept { path: ".claude/plugins/installed_plugins.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\installed_plugins.json" }, Kept { path: ".claude/plugins/known_marketplaces.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\known_marketplaces.json" }, Kept { path: ".claude/plugins/plugin-directory-cache-v2.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\plugin-directory-cache-v2.json" }, Kept { path: ".claude/plugins/store/cc-plugin.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\store\\cc-plugin.json" }, Kept { path: ".claude/plugins/synced/manifest.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\synced\\manifest.json" }, Kept { path: ".claude/settings.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\settings.json" }, Kept { path: ".claude/skills/synced/.bucket-7f", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\skills\\synced\\.bucket-7f" }, Kept { path: ".claude/skills/synced/.last-complete-round", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\skills\\synced\\.last-complete-round" }, Kept { path: ".claude/skills/synced/manifest.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\skills\\synced\\manifest.json" }, Kept { path: ".codex/config.toml", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.codex\\config.toml" }], held: {".claude/skills/shared/SKILL.md": Linked(Here)}, problems: [], trashed: None }
+      left: [Kept { path: ".claude/CLAUDE.md", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\CLAUDE.md" }, Kept { path: ".claude/plugins/.last_inuse_sweep", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\.last_inuse_sweep" }, Kept { path: ".claude/plugins/cache/cursor-plugins/pstack/0.15.48/README.md", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\cache\\cursor-plugins\\pstack\\0.15.48\\README.md" }, Kept { path: ".claude/plugins/cache/cursor-plugins/pstack/0.15.48/skills/a/SKILL.md", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\cache\\cursor-plugins\\pstack\\0.15.48\\skills\\a\\SKILL.md" }, Kept { path: ".claude/plugins/data/pstack/state.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\data\\pstack\\state.json" }, Kept { path: ".claude/plugins/installed_plugins.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\installed_plugins.json" }, Kept { path: ".claude/plugins/known_marketplaces.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\known_marketplaces.json" }, Kept { path: ".claude/plugins/plugin-directory-cache-v2.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\plugin-directory-cache-v2.json" }, Kept { path: ".claude/plugins/store/cc-plugin.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\store\\cc-plugin.json" }, Kept { path: ".claude/plugins/synced/manifest.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\plugins\\synced\\manifest.json" }, Kept { path: ".claude/settings.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\settings.json" }, Kept { path: ".claude/skills/synced/.bucket-7f", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\skills\\synced\\.bucket-7f" }, Kept { path: ".claude/skills/synced/.last-complete-round", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\skills\\synced\\.last-complete-round" }, Kept { path: ".claude/skills/synced/manifest.json", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.claude\\skills\\synced\\manifest.json" }, Kept { path: ".codex/config.toml", winner: There, kept: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\52620\\ferrite-setup-sync-acceptance\\settings\\sync-conflicts\\20261125-093555-446\\.codex\\config.toml" }]
+     right: []
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure
+────────────
+     Summary [   0.243s] 1 test run: 0 passed, 1 failed, 1329 skipped
+        FAIL [   0.242s] (1/1) ferrite-core setup_sync::tests::a_windows_home_and_a_linux_home_share_what_the_operator_chose_and_nothing_else
+error: test run failed

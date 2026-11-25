@@ -1,0 +1,98 @@
+== skills
+.agents/skills:
+total 0
+drwxr-xr-x 1 josep 197609 0 Nov 25 10:30 ./
+drwxr-xr-x 1 josep 197609 0 Nov 25 10:26 ../
+drwxr-xr-x 1 josep 197609 0 Nov 25 10:30 made-on-linux/
+drwxr-xr-x 1 josep 197609 0 Nov 25 10:26 made-on-windows/
+drwxr-xr-x 1 josep 197609 0 Nov 25 10:26 shared/
+
+.claude/skills:
+total 4
+drwxr-xr-x 1 josep 197609  0 Nov 25 10:30 ./
+drwxr-xr-x 1 josep 197609  0 Nov 25 10:30 ../
+lrwxrwxrwx 1 josep 197609 47 Nov 25 10:30 made-on-linux -> /tmp/fv-kinds/home/.agents/skills/made-on-linux/
+lrwxrwxrwx 1 josep 197609 49 Nov 25 10:26 made-on-windows -> /tmp/fv-kinds/home/.agents/skills/made-on-windows/
+lrwxrwxrwx 1 josep 197609 40 Nov 25 10:26 shared -> /tmp/fv-kinds/home/.agents/skills/shared/
+drwxr-xr-x 1 josep 197609  0 Nov 25 10:26 synced/
+25/11/2026  10:30 AM    <JUNCTION>     made-on-linux [C:\Users\josep\AppData\Local\Temp\fv-kinds\home\.agents\skills\made-on-linux]
+25/11/2026  10:26 AM    <JUNCTION>     made-on-windows [C:\Users\josep\AppData\Local\Temp\fv-kinds\home\.agents\skills\made-on-windows]
+25/11/2026  10:26 AM    <JUNCTION>     shared [C:\Users\josep\AppData\Local\Temp\fv-kinds\home\.agents\skills\shared]
+== settings.json
+{
+  "model": "opus",
+  "enabledPlugins": {
+    "pstack@cursor-plugins": true,
+    "origin-apps@cursor-plugins": true
+  },
+  "extraKnownMarketplaces": {
+    "cursor-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "cursor/plugins"
+      }
+    }
+  }
+}
+== installed
+['origin-apps@cursor-plugins', 'pstack@cursor-plugins']
+== .claude.json
+{
+  "mcpServers": {
+    "windows-docs": {
+      "command": "docs-mcp",
+      "args": [
+        "--stdio"
+      ]
+    },
+    "linux-docs": {
+      "args": [
+        "--stdio"
+      ],
+      "command": "docs-mcp"
+    }
+  },
+  "userID": "9af14e75baeaec76302177bcfb597046e99c3d19e22be8e0400069ee6d3484ff",
+  "projects": {
+    "C:\\Users\\win\\app": {}
+  },
+  "firstStartTime": "2026-11-25T00:00:32.967Z",
+  "firstStartVersion": "2.1.330",
+  "machineID": "c1ba283d7d3d982b5b90ed1723a03a6c2472aeb52f03cbf91dd0220a6264ed5b",
+  "opusProMigrationComplete": true,
+  "seenNotifications": {},
+  "hasResetAutoModeOptInForDefaultOffer": true,
+  "migrationVersion": 15
+}
+== config.toml
+# Codex on the Windows computer
+model = "gpt-5.1-codex" # the one I like
+notify = ["C:\\Users\\win\\bin\\notify.cmd"]
+
+[projects.'C:\Users\win\app']
+trust_level = "trusted"
+
+[plugins."pstack@cursor-plugins"]
+enabled = true
+
+[marketplaces.cursor-plugins]
+source_type = "git"
+source = "https://github.com/cursor/plugins.git"
+== CLAUDE.md
+0000000   B   e       c   a   r   e   f   u   l   .  \r  \n   B   e    
+0000020   k   i   n   d   .  \r  \n
+== made-on-linux
+0000000   #       M   a   d   e       o   n       L   i   n   u   x  \n
+0000020
+ls: cannot access 'sync-conflicts': No such file or directory
+ls: cannot access 'sync-trash': No such file or directory
+drafts.json
+home/
+logs/
+machines/
+repo/
+run.env
+server.out
+settings.json
+threads/
+window.out

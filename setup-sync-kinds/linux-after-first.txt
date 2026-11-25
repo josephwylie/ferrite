@@ -1,0 +1,63 @@
+== skills
+.agents/skills:
+total 20
+drwxr-xr-x 5 joseph joseph 4096 Nov 25 10:30 .
+drwxr-xr-x 3 joseph joseph 4096 Nov 25 10:15 ..
+drwxr-xr-x 2 joseph joseph 4096 Nov 25 10:15 made-on-linux
+drwx------ 2 joseph joseph 4096 Nov 25 10:30 made-on-windows
+drwxr-xr-x 2 joseph joseph 4096 Nov 25 10:15 shared
+
+.claude/skills:
+total 12
+drwxr-xr-x 3 joseph joseph 4096 Nov 25 10:30 .
+drwxr-xr-x 4 joseph joseph 4096 Nov 25 10:30 ..
+lrwxrwxrwx 1 joseph joseph   34 Nov 25 10:15 made-on-linux -> ../../.agents/skills/made-on-linux
+lrwxrwxrwx 1 joseph joseph   36 Nov 25 10:30 made-on-windows -> ../../.agents/skills/made-on-windows
+lrwxrwxrwx 1 joseph joseph   27 Nov 25 10:15 shared -> ../../.agents/skills/shared
+drwxr-xr-x 2 joseph joseph 4096 Nov 25 10:15 synced
+== settings.json
+{
+  "model": "opus",
+  "enabledPlugins": {
+    "origin-apps@cursor-plugins": true,
+    "pstack@cursor-plugins": true
+  },
+  "extraKnownMarketplaces": {
+    "cursor-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "cursor/plugins"
+      }
+    }
+  }
+}
+== .claude.json
+{"mcpServers":{"linux-docs":{"command":"docs-mcp","args":["--stdio"]}, "windows-docs":{"args":["--stdio"],"command":"docs-mcp"}},"userID":"linux-user","projects":{"/home/ubuntu/app":{}}}
+
+== config.toml
+# Codex on the Linux Machine
+model = "gpt-5.1-codex" # the one I like
+notify = ["/home/joseph/bin/notify.sh"]
+
+[projects."/home/joseph/app"]
+trust_level = "trusted"
+
+[marketplaces.cursor-plugins]
+source_type = "git"
+source = "https://github.com/cursor/plugins.git"
+
+[plugins."pstack@cursor-plugins"]
+enabled = true
+== CLAUDE.md
+0000000   B   e       c   a   r   e   f   u   l   .  \n   B   e       k
+0000020   i   n   d   .  \n
+== shared SKILL.md
+0000000   #       S   h   a   r   e   d  \n  \n   O   n   e       s   k
+0000020   i   l   l       o   n       e   v   e   r   y       s   i   d
+== plugins dir
+cache
+installed_plugins.json
+known_marketplaces.json
+marketplaces
+{"version":1,"skills":{}}
+{"round":7}
