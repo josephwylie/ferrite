@@ -48,7 +48,8 @@ use super::*;
 use ferrite_pane::page::Shown;
 pub(crate) use ferrite_pane::preview::BROWSER_PATH;
 use ferrite_pane::preview::{
-    head_suffix, head_title, reading_head, Body, Document, Preview, Text, Unshown,
+    head_suffix, head_title, reading_head, settle_markdown_found, Body, Document, Preview, PreviewFind, Text,
+    Unshown,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -99,50 +100,6 @@ impl PreviewTab {
             find: None,
             annotation_image: None,
         }
-    }
-}
-
-/// Find in the preview (⌘F when the preview took the last press or holds
-/// the keyboard; the bar is the transcript's, `ferrite_pane::find`): a file's
-/// lines, or a rendered Markdown document's text.
-pub(crate) struct PreviewFind {
-    pub(in crate::cockpit) bar: ferrite_pane::find::Find,
-    /// The document it searches: the bar closes with it, and another one
-    /// opening closes it too (`tend_previews`).
-    path: PathBuf,
-    /// Frames left to settle a Markdown occurrence into view.
-    reveal: u8,
-    /// A new query in a Markdown document, waiting for its paint to say
-    /// which occurrence is the first in view.
-    start_in_view: bool,
-}
-
-impl PreviewFind {
-    pub(in crate::cockpit) fn new(bar: ferrite_pane::find::Find, path: PathBuf) -> Self {
-        Self {
-            bar,
-            path,
-            reveal: 0,
-            start_in_view: false,
-        }
-    }
-
-    /// Have the active occurrence scrolled into view once it paints; a new
-    /// query (`start_in_view`) starts on the first occurrence in view.
-    pub(in crate::cockpit) fn reveal_when_painted(&mut self, start_in_view: bool) {
-        let report = self.bar.report();
-        report.revealed.set(None);
-        report.ahead.set(None);
-        self.reveal = ferrite_pane::find::REVEAL_FRAMES;
-        self.start_in_view = start_in_view;
-    }
-}
-
-#[cfg(test)]
-impl PreviewFind {
-    /// What the bar reads, and where a Markdown occurrence last painted.
-    pub(crate) fn state(&self) -> (Option<SharedString>, Option<gpui::Bounds<Pixels>>) {
-        (self.bar.count(), self.bar.report().revealed.get())
     }
 }
 
@@ -321,7 +278,7 @@ impl FileSurfaceView {
             let Some(find) = &mut tab.find else {
                 continue;
             };
-            if document.is_none_or(|document| document.path != find.path) {
+            if document.is_none_or(|document| document.path != find.path()) {
                 tab.find = None;
                 continue;
             }
@@ -580,7 +537,7 @@ impl FileSurfaceView {
         if tab
             .find
             .as_ref()
-            .is_none_or(|find| find.path != document.path)
+            .is_none_or(|find| find.path() != document.path)
         {
             tab.find = Some(PreviewFind::new(
                 ferrite_pane::find::Find::new(cx, move |view: &mut Self, cx| {
@@ -1303,50 +1260,6 @@ fn slide_to(line: &str, found: &std::ops::Range<usize>, slid: f32, view: f32) ->
         return slid;
     }
     (start - view / 3.).max(0.)
-}
-
-/// Each frame while a Markdown reveal is due: once the active occurrence
-/// has painted, a new query moves to the first occurrence in view (or the
-/// first below it) and paints again; then an occurrence outside the
-/// preview's view scrolls a third of the way down.
-pub(in crate::cockpit) fn settle_markdown_found(
-    find: &mut PreviewFind,
-    scroll: &ScrollHandle,
-    window: &mut Window,
-) {
-    if find.reveal == 0 {
-        return;
-    }
-    let report = find.bar.report().clone();
-    let Some(found) = report.revealed.get() else {
-        find.reveal -= 1;
-        if find.reveal > 0 {
-            window.request_animation_frame();
-        }
-        return;
-    };
-    let start = std::mem::take(&mut find.start_in_view);
-    let on = find.bar.active().map(|hit| hit.ordinal);
-    if let Some(ahead) = report
-        .ahead
-        .get()
-        .filter(|ahead| start && Some(*ahead) != on)
-    {
-        find.bar.go_to(ahead);
-        report.revealed.set(None);
-        find.reveal = ferrite_pane::find::REVEAL_FRAMES;
-        window.request_animation_frame();
-        return;
-    }
-    find.reveal = 0;
-    let view = scroll.bounds();
-    if found.top() < view.top() || found.bottom() > view.bottom() {
-        let goal = view.top() + view.size.height / 3.;
-        let offset = scroll.offset();
-        let lowest = -scroll.max_offset().y;
-        let y = (offset.y - (found.top() - goal)).clamp(lowest, px(0.));
-        scroll.set_offset(gpui::point(offset.x, y));
-    }
 }
 
 #[cfg(test)]

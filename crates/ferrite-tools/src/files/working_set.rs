@@ -26,7 +26,7 @@ pub(super) struct OpenFile {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct WorkingSet {
+pub struct WorkingSet {
     pub(super) files: Vec<OpenFile>,
     pub(super) active: Option<usize>,
     pub(super) settings: Settings,
@@ -65,13 +65,13 @@ struct Version {
 /// Every Thread's saved working set, on every machine the window has been
 /// on.
 #[derive(Clone, Default)]
-pub(crate) struct WorkingSets {
+pub struct WorkingSets {
     sets: BTreeMap<SavedThread, WorkingSet>,
     revision: u64,
 }
 
 impl WorkingSets {
-    pub(crate) fn load(dir: &Path) -> Self {
+    pub fn load(dir: &Path) -> Self {
         let read = || -> io::Result<BTreeMap<SavedThread, WorkingSet>> {
             let bytes = match std::fs::read(dir.join(FILE_NAME)) {
                 Ok(bytes) => bytes,
@@ -107,11 +107,11 @@ impl WorkingSets {
         Self { sets, revision: 0 }
     }
 
-    pub(super) fn get(&self, thread: &SavedThread) -> Option<&WorkingSet> {
+    pub fn get(&self, thread: &SavedThread) -> Option<&WorkingSet> {
         self.sets.get(thread)
     }
 
-    pub(super) fn sync(&mut self, live: impl Iterator<Item = (SavedThread, WorkingSet)>) -> bool {
+    pub fn sync(&mut self, live: impl Iterator<Item = (SavedThread, WorkingSet)>) -> bool {
         let mut changed = false;
         for (thread, set) in live {
             if self.sets.get(&thread) != Some(&set) {
@@ -128,7 +128,7 @@ impl WorkingSets {
     /// `machine`'s sets keep only the Threads it still knows. Another
     /// machine's sets wait for that machine's own list, and an empty list
     /// is a machine not heard from yet: it prunes nothing.
-    pub(super) fn retain(&mut self, machine: &MachineKey, known: &HashSet<ThreadId>) {
+    pub fn retain(&mut self, machine: &MachineKey, known: &HashSet<ThreadId>) {
         if !known.is_empty() {
             let before = self.sets.len();
             self.sets
@@ -139,11 +139,11 @@ impl WorkingSets {
         }
     }
 
-    pub(crate) fn revision(&self) -> u64 {
+    pub fn revision(&self) -> u64 {
         self.revision
     }
 
-    pub(crate) fn save(&self, dir: &Path) -> io::Result<()> {
+    pub fn save(&self, dir: &Path) -> io::Result<()> {
         let bytes = serde_json::to_vec_pretty(&Persisted {
             version: SCHEMA_VERSION,
             threads: self

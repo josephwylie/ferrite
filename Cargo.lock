@@ -2577,6 +2577,9 @@ dependencies = [
  "ferrite-ui",
  "futures",
  "gpui-kit",
+ "serde",
+ "serde_json",
+ "url",
 ]
 
 [[package]]

@@ -41,14 +41,14 @@ use gpui::{
     MouseMoveEvent, Pixels, Render, SharedString, StyledText, TextLayout, UTF16Selection, Window,
 };
 
-use ferrite_tools::remote_files::{self, RemoteFiles};
+use crate::remote_files::{self, RemoteFiles};
 use super::save::{self, Outcome, SaveState};
 use ferrite_core::file_operations::Reply as FileReply;
 
 actions!(editor, [Enter, Tab, PageUp, PageDown, Save]);
 
 /// How long after the last edit Auto save writes the file.
-pub(crate) const AUTO_SAVE_AFTER: Duration = Duration::from_millis(800);
+pub const AUTO_SAVE_AFTER: Duration = Duration::from_millis(800);
 /// How far past the viewport the list lays out rows.
 const OVERDRAW: f32 = 400.0;
 /// Lines kept above a line the view jumps to.
@@ -81,7 +81,7 @@ impl Default for Settings {
     }
 }
 
-pub(crate) struct Editor {
+pub struct Editor {
     path: PathBuf,
     text: Line,
     /// Where each line starts, as byte offsets (`reindex`).
@@ -160,11 +160,11 @@ impl Editor {
         editor
     }
 
-    pub(in crate::cockpit::tools) fn set_remote(&mut self, remote: RemoteFiles) {
+    pub(super) fn set_remote(&mut self, remote: RemoteFiles) {
         self.remote = Some(remote);
     }
 
-    pub(crate) fn is_dirty(&self) -> bool {
+    pub fn is_dirty(&self) -> bool {
         self.revision != self.saved_revision
     }
 
@@ -180,14 +180,14 @@ impl Editor {
     }
 
     /// Put the caret at the start of `line` (1-based) and show it.
-    pub(crate) fn go_to_line(&mut self, line: usize, cx: &mut Context<Self>) {
+    pub fn go_to_line(&mut self, line: usize, cx: &mut Context<Self>) {
         let line = line.saturating_sub(1).min(self.starts.len() - 1);
         self.text.place_caret(self.starts[line]);
         self.reveal_caret();
         cx.notify();
     }
 
-    pub(crate) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.find.is_none() {
             self.find = Some(ferrite_pane::find::Find::new(
                 cx,
@@ -234,20 +234,20 @@ impl Editor {
     }
 
     /// Whether the bar, or the file under it, holds the keyboard.
-    pub(crate) fn holds_keyboard(&self, window: &Window, cx: &App) -> bool {
+    pub fn holds_keyboard(&self, window: &Window, cx: &App) -> bool {
         self.focus.contains_focused(window, cx)
             || self.find.as_ref().is_some_and(|find| find.holds_focus(window, cx))
     }
 
     /// Write the file now, unless the disk changed since it was read.
-    pub(crate) fn save(&mut self, cx: &mut Context<Self>) {
+    pub fn save(&mut self, cx: &mut Context<Self>) {
         self.begin_save(false, cx);
     }
 
     /// A tab's close: whether it may go now. With unsaved text it writes
     /// the file first and closes when that succeeds, or stays with its
     /// status bar when it does not.
-    pub(crate) fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
+    pub fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.is_dirty() {
             return true;
         }
@@ -258,7 +258,7 @@ impl Editor {
     }
 
     /// A write finished that a close was waiting on.
-    pub(crate) fn is_closing_clean(&self) -> bool {
+    pub fn is_closing_clean(&self) -> bool {
         self.closing && !self.is_dirty()
     }
 
@@ -326,7 +326,7 @@ impl Editor {
     /// holds other text, the buffer takes it, its caret kept where it was.
     /// An edited buffer is left alone; saving it reports the conflict. The
     /// file is read only once its size or modification time has moved.
-    pub(crate) fn follow_disk(&mut self, cx: &mut Context<Self>) {
+    pub fn follow_disk(&mut self, cx: &mut Context<Self>) {
         if self.is_dirty() || matches!(self.save, SaveState::Saving(_)) {
             return;
         }
@@ -505,7 +505,7 @@ impl Editor {
 
     /// Move the view alone, as the paging keys do when the caret is not
     /// the reader's.
-    pub(crate) fn scroll_page(&self, page: Page) {
+    pub fn scroll_page(&self, page: Page) {
         match page {
             Page::Top => self.list.scroll_to(ListOffset::default()),
             Page::Bottom => self.list.scroll_to_end(),
@@ -1211,18 +1211,18 @@ impl Element for CodeLine {
 }
 
 impl Editor {
-    pub(crate) fn save_state(&self) -> &SaveState {
+    pub fn save_state(&self) -> &SaveState {
         &self.save
     }
 
-    pub(crate) fn text(&self) -> &str {
+    pub fn text(&self) -> &str {
         self.text.text()
     }
 
     /// Whether leaving would lose this buffer's text: it is dirty, and
     /// `flush_for_quit` will not write it, because auto save is off, the
     /// disk refused its last write, or the file changed under it.
-    pub(crate) fn lost_by_leaving(&self) -> bool {
+    pub fn lost_by_leaving(&self) -> bool {
         self.is_dirty()
             && (self.remote.is_some()
                 || !self.settings.auto_save
@@ -1233,7 +1233,7 @@ impl Editor {
     /// A quit's last write. Auto save promised the text would reach the
     /// disk, so what its pause has not yet written is written now, unless
     /// the file changed under the buffer.
-    pub(crate) fn flush_for_quit(&mut self) {
+    pub fn flush_for_quit(&mut self) {
         if self.remote.is_some() || !self.is_dirty() || !self.settings.auto_save {
             return;
         }
@@ -1246,14 +1246,14 @@ impl Editor {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Editor {
-    pub(crate) fn caret_line_for_test(&self) -> usize {
+    pub fn caret_line_for_test(&self) -> usize {
         self.cursor_line() + 1
     }
 
     /// Whether line `line` (1-based) is laid out inside the viewport.
-    pub(crate) fn line_in_view_for_test(&self, line: usize) -> bool {
+    pub fn line_in_view_for_test(&self, line: usize) -> bool {
         let viewport = self.list.viewport_bounds();
         self.list.bounds_for_item(line - 1).is_some_and(|bounds| {
             bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom()
@@ -1261,20 +1261,20 @@ impl Editor {
     }
 
     /// The first line (1-based) the viewport shows.
-    pub(crate) fn top_line_for_test(&self) -> usize {
+    pub fn top_line_for_test(&self) -> usize {
         self.list.logical_scroll_top().item_ix + 1
     }
 
-    pub(crate) fn find_count_for_test(&self) -> Option<String> {
+    pub fn find_count_for_test(&self) -> Option<String> {
         self.find.as_ref()?.count().map(|count| count.to_string())
     }
 
-    pub(crate) fn caret_for_test(&self) -> usize {
+    pub fn caret_for_test(&self) -> usize {
         self.text.cursor()
     }
 
     /// Writes fail as a read-only disk would.
-    pub(crate) fn refuse_writes(&mut self) {
+    pub fn refuse_writes(&mut self) {
         self.writer = |_, _| {
             Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
@@ -1283,12 +1283,12 @@ impl Editor {
         };
     }
 
-    pub(crate) fn allow_writes(&mut self) {
+    pub fn allow_writes(&mut self) {
         self.writer = save::replace_file;
     }
 
     /// What typing `text` at the caret does.
-    pub(crate) fn type_text(&mut self, text: &str, cx: &mut Context<Self>) {
+    pub fn type_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.edit(cx, |line| line.replace(None, text));
     }
 }

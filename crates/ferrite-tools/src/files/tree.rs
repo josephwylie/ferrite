@@ -21,7 +21,7 @@ const ROW_LIMIT: usize = 1_000;
 
 /// What git says of a path (`git status`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Status {
+pub enum Status {
     Modified,
     /// New to git: added, or untracked.
     Added,

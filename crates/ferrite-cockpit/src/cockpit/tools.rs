@@ -6,23 +6,17 @@
 //! one door (`upsert_surface`); pressed again they bring the same tab
 //! forward. The Terminal keeps its shells, Changes its diffs and Files
 //! its trees and editors in views of their own (`TerminalsView`,
-//! `ChangesView`, `FilesView`, ADR 0041). The first two are
-//! `ferrite-tools`', and `changes` and `terminal` here are the window's
-//! side of them; Files is still the Cockpit's. Its file tabs are stops of
-//! the Panel's row, which it declares and the root registers.
+//! `ChangesView`, `FilesView`, ADR 0041), each `ferrite-tools`'; `changes`,
+//! `files` and `terminal` here are the window's side of them.
 
 use std::collections::HashSet;
 
 use ferrite_core::ThreadKey;
 
 mod changes;
-mod editor;
 mod files;
 pub(in crate::cockpit) mod remote_files;
-mod save;
 mod terminal;
-mod tree;
-mod working_set;
 
 use super::surfaces::SurfaceId;
 use super::*;
@@ -38,14 +32,8 @@ pub(crate) struct Tools {
 gpui::actions!(cockpit, [ToggleTerminal, ToggleChanges, ToggleFiles, ToggleFileTree, GoToFile]);
 
 #[cfg(test)]
-pub(crate) use editor::AUTO_SAVE_AFTER;
-pub(crate) use editor::Editor;
-#[cfg(test)]
-pub(crate) use save::SaveState;
-pub(crate) use files::{FilesView, Sub as FilesSub, Verb as FilesVerb};
-#[cfg(test)]
-pub(crate) use tree::Status as FileStatus;
-pub(crate) use working_set::WorkingSets;
+pub(crate) use ferrite_tools::files::{FileSaveState as SaveState, FileStatus, AUTO_SAVE_AFTER};
+pub(crate) use ferrite_tools::files::{Editor, FilesView, Sub as FilesSub, Verb as FilesVerb, WorkingSets};
 
 impl CockpitView {
     /// Note that the agent of each of these Threads worked this frame.
