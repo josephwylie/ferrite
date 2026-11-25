@@ -37,10 +37,6 @@ pub(super) const MID_WRITE: &str = "the sign-in is being written; it syncs once 
 /// does not travel.
 pub(super) const OWN: &str = "it names a place of this computer's own";
 
-/// How long a scan waits for the plugins a sync turned on to install, so
-/// it can say which did not.
-const INSTALLING: Duration = Duration::from_secs(120);
-
 /// Where what a sync removes or writes over is moved, in Ferrite's
 /// settings folder, a folder for each sync.
 pub const TRASH: &str = "sync-trash";
@@ -335,9 +331,8 @@ impl Home {
     /// it does not read. What it could not read is a problem, and so is an
     /// item behind a link to something not there; only an item that is
     /// not there at all is nothing. Each plugin a sync turned on here that
-    /// could not be installed is a problem too, once the installs under way
-    /// are over. A scan begins a sync here: what it moves aside goes in a
-    /// trash folder of its own.
+    /// the last run could not install is a problem too. A scan begins a
+    /// sync here: what it moves aside goes in a trash folder of its own.
     pub(crate) fn scan(&self, skip: &[String]) -> Manifest {
         self.trash.begin();
         for dir in self.file_dirs() {
@@ -351,7 +346,7 @@ impl Home {
             }
         }
         if let Some(installs) = &self.installs {
-            manifest.problems.extend(installs.settled(&self.folders(), INSTALLING));
+            manifest.problems.extend(installs.settled(&self.folders()));
         }
         manifest
     }

@@ -18,7 +18,7 @@ use super::*;
 use ferrite_core::chunked::Cancellation;
 use ferrite_client::cockpit::ServerState;
 use ferrite_core::setup_sync::{self, Hold, Home, Job, Kept, Outcome, Replaced, Synced, Valve};
-use ferrite_core::tree::{Side, Stuck};
+use ferrite_core::tree::{self, Side, Stuck};
 use gpui::App;
 
 /// How often a connected Machine is looked at for what changed there.
@@ -199,7 +199,7 @@ pub(crate) struct Failure {
 
 impl Failure {
     fn of(error: &std::io::Error) -> Self {
-        match error.get_ref().and_then(|inner| inner.downcast_ref::<Stuck>()) {
+        let failure = match error.get_ref().and_then(|inner| inner.downcast_ref::<Stuck>()) {
             Some(stuck) => Self {
                 at: Some((stuck.path.clone(), stuck.side)),
                 why: plain(&stuck.error.to_string()),
@@ -208,6 +208,11 @@ impl Failure {
                 at: None,
                 why: plain(&error.to_string()),
             },
+        };
+        // A lapsed hold is the whole sync's, not the path's it met it at.
+        match failure.why == tree::LAPSED {
+            true => Self { at: None, ..failure },
+            false => failure,
         }
     }
 
@@ -215,6 +220,7 @@ impl Failure {
     fn said(&self, name: &str) -> String {
         match &self.at {
             Some((path, on)) => format!("{} on {}: {}", named(path), place(*on, name), self.why),
+            None if self.why == tree::LAPSED => self.why.replacen("The Machine", name, 1),
             None => self.why.clone(),
         }
     }
@@ -1061,6 +1067,20 @@ mod tests {
             .collect();
         assert!(tried.iter().all(|after| (SETTLE..=2 * SETTLE).contains(after)), "{tried:?}");
         assert!(tried.len() > 1, "each tried again at the same moment: {tried:?}");
+    }
+
+    /// A hold the Machine let lapse reads as that Machine, by its name,
+    /// giving up on this computer, not as the path the sync was at.
+    #[test]
+    fn a_lapsed_hold_says_which_machine_stopped_waiting() {
+        let mut track = track();
+        let stuck = Stuck {
+            path: ".claude/CLAUDE.md".into(),
+            side: Side::There,
+            error: std::io::Error::other(tree::LAPSED),
+        };
+        track.finished(Err(std::io::Error::other(stuck)), Ask::HERE, Instant::now(), &mut News::default());
+        assert_eq!(track.status.line("box"), "box stopped waiting for this computer; the next sync starts over");
     }
 
     const SIGN_IN: &str = ".claude/.credentials.json";

@@ -20,6 +20,7 @@ use std::fs;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use base64::Engine as _;
 
@@ -30,6 +31,16 @@ use crate::setup_sync::{Held, Home, Installs, Place, TABLE};
 
 /// At most this many files are written at once on one connection.
 pub(crate) const MOST_WRITES: usize = 4;
+
+/// How long a connection that holds the setup may ask nothing before its
+/// hold lapses. A hub mid-sync asks again well within the 30 s it waits
+/// for each reply, so one this quiet has gone, as a laptop that sleeps
+/// mid-sync, and its Machine's own syncs and installs go on.
+pub const HOLD_QUIET: Duration = Duration::from_secs(90);
+
+/// What a Machine answers each op of a sync whose hold lapsed. The hub's
+/// row puts the Machine's name for "The Machine".
+pub const LAPSED: &str = "The Machine stopped waiting for this computer; the next sync starts over";
 
 /// A scan's reply goes in pages of at most about this many bytes, far
 /// below what a connection may fall behind by (`link::LAGGED_BYTES`).
@@ -63,6 +74,8 @@ pub struct Session {
     /// turns on.
     installs: Option<Arc<Installs>>,
     holding: Holding,
+    /// How long the hold outlasts a quiet connection: [`HOLD_QUIET`].
+    hold_quiet: Duration,
 }
 
 /// How a connection holds the Setup root's home: from the `hold` its sync
@@ -71,8 +84,8 @@ enum Holding {
     /// It has not asked: a hub from before the hold, or one yet to ask.
     Never,
     Held { _held: Held },
-    /// It asked nothing for [`EXPIRY`], and the home was let go: what it
-    /// asks next was planned from a scan the home may no longer match.
+    /// It asked nothing for [`HOLD_QUIET`], and the home was let go: what
+    /// it asks next was planned from a scan the home may no longer match.
     Lapsed,
 }
 
@@ -82,10 +95,7 @@ impl Holding {
         match self {
             Holding::Held { .. } => Ok(()),
             Holding::Never => Err(newer_here()),
-            Holding::Lapsed => Err(io::Error::other(format!(
-                "This sync asked nothing of the Machine for {} minutes, so the Machine let its setup go: the next sync starts again",
-                EXPIRY.as_secs() / 60
-            ))),
+            Holding::Lapsed => Err(io::Error::other(LAPSED)),
         }
     }
 }
@@ -111,6 +121,7 @@ impl Default for Session {
             home: None,
             installs: None,
             holding: Holding::Never,
+            hold_quiet: HOLD_QUIET,
         }
     }
 }
@@ -143,8 +154,25 @@ impl Session {
         }
     }
 
-    /// The connection asked nothing for [`EXPIRY`]: each write it began
-    /// is let go, and so is the home it held, whose next op is refused.
+    /// A hold that lapses after `quiet`, not [`HOLD_QUIET`].
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn quiet_after(self, quiet: Duration) -> Self {
+        Self { hold_quiet: quiet, ..self }
+    }
+
+    /// How long the connection may ask nothing before [`Session::expire`]:
+    /// a hold lapses long before an unfinished write is dropped. A write's
+    /// every chunk is an ask, so a long write keeps its hold.
+    pub fn quiet(&self) -> Duration {
+        match self.holding {
+            Holding::Held { .. } => self.hold_quiet,
+            Holding::Never | Holding::Lapsed => EXPIRY,
+        }
+    }
+
+    /// The connection asked nothing for [`Session::quiet`]: the home it
+    /// held is let go, and its next op refused, and each write it has not
+    /// touched for [`EXPIRY`] is dropped.
     pub fn expire(&mut self) {
         self.writes.expire();
         if let Holding::Held { .. } = self.holding {

@@ -5,11 +5,16 @@
 
 use std::io;
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
 use ferrite_core::chunked::Cancellation;
+use ferrite_core::protocol::{Done, WireError};
 use ferrite_core::setup_sync::{self, Home, Job, Outcome};
-use ferrite_core::tree::{Asked, Exchange, Reply, Request};
+use ferrite_core::tree::{Asked, Exchange, Reply, Request, Root, Session};
+use ferrite_engine::connection::Heard;
+use sha2::Digest as _;
 
 use super::remote_operations::machine;
 use super::*;
@@ -143,4 +148,81 @@ fn a_hub_that_vanishes_mid_sync_leaves_the_machines_home_free() {
         assert!(Instant::now() < deadline, "the Machine's home stayed held once its hub vanished");
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// A Lane over its own home at `root`, its hold lapsing after `quiet`, and
+/// what it answers.
+fn lane(root: &Path, quiet: Duration) -> (crate::tree::Lane, mpsc::Receiver<Heard>) {
+    let (heard, answers) = mpsc::channel();
+    let home = Home::at(root.to_path_buf(), None);
+    (crate::tree::Lane::serving(1, heard, move || Session::with_home(home).quiet_after(quiet)), answers)
+}
+
+/// The Lane's answer to the request numbered `id`.
+fn answer(answers: &mpsc::Receiver<Heard>, id: u64) -> Result<Reply, WireError> {
+    loop {
+        match answers.recv_timeout(PATIENCE).expect("the Lane answers") {
+            Heard::Answered(_, asked, answer) if asked == id => {
+                return answer.map(|done| match done {
+                    Some(Done::Tree { reply }) => reply,
+                    done => panic!("{done:?}"),
+                })
+            }
+            _ => continue,
+        }
+    }
+}
+
+/// A hub that goes quiet mid-sync, as a laptop that sleeps: the Lane lets
+/// the Machine's home go once the hold's limit passes, not the 10 minutes
+/// an unfinished write is kept, and what the hub asks next is refused in
+/// plain words.
+#[test]
+fn a_hub_quiet_past_the_holds_limit_lets_the_machines_home_go() {
+    let root = scratch("hold-lapses");
+    let lock = root.join(".ferrite/setup-sync.lock");
+    let (lane, answers) = lane(&root, Duration::from_millis(200));
+    lane.ask(1, Request::Hold { root: Root::SETUP });
+    assert_eq!(answer(&answers, 1), Ok(Reply::Done));
+    assert!(held(&lock), "the hold holds the home");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while held(&lock) {
+        assert!(Instant::now() < deadline, "the Machine's home stayed held past the hold's limit");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    lane.ask(2, Request::Scan { root: Root::SETUP, skip: Vec::new(), after: None });
+    let refused = answer(&answers, 2).expect_err("the lapsed sync's next ask");
+    assert_eq!(refused.message, ferrite_core::tree::LAPSED);
+}
+
+/// A write longer than the hold's limit, its chunks each sooner: every
+/// chunk is an ask, so the hold never lapses mid-write and the file lands.
+#[test]
+fn a_long_write_keeps_its_hold_while_its_chunks_keep_coming() {
+    let root = scratch("hold-long-write");
+    let lock = root.join(".ferrite/setup-sync.lock");
+    let quiet = Duration::from_millis(200);
+    let (lane, answers) = lane(&root, quiet);
+    lane.ask(1, Request::Hold { root: Root::SETUP });
+    assert_eq!(answer(&answers, 1), Ok(Reply::Done));
+
+    let text = b"Each chunk comes sooner than the hold lapses.\n";
+    lane.ask(2, Request::Begin { write: 1, root: Root::SETUP, path: ".claude/CLAUDE.md".into(), size: text.len() as u64, mode: None });
+    assert_eq!(answer(&answers, 2), Ok(Reply::Done));
+    let began = Instant::now();
+    let mut id = 2;
+    for (index, chunk) in text.chunks(4).enumerate() {
+        std::thread::sleep(quiet / 4);
+        id += 1;
+        let data = base64::engine::general_purpose::STANDARD.encode(chunk);
+        lane.ask(id, Request::Chunk { write: 1, offset: (index * 4) as u64, data });
+        assert!(matches!(answer(&answers, id), Ok(Reply::Written { .. })), "chunk {index}");
+    }
+    assert!(began.elapsed() > 2 * quiet, "the write outlasted the hold's limit");
+    id += 1;
+    lane.ask(id, Request::Finish { write: 1, sha256: format!("{:x}", sha2::Sha256::digest(text)) });
+    assert_eq!(answer(&answers, id), Ok(Reply::Done));
+    assert_eq!(std::fs::read(root.join(".claude/CLAUDE.md")).unwrap(), text);
+    assert!(held(&lock), "still held once the write landed");
 }
