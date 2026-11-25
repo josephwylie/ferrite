@@ -219,12 +219,13 @@ fn each_source_shows_its_own_settings_and_keeps_what_was_typed(cx: &mut TestAppC
     assert!(shows(cx, "start-script-command"));
     assert!(shows(cx, "automation-off"));
     let workflow = view.read_with(cx, |view, cx| view.shown_workflow(cx).unwrap().id.clone());
-    let command = crate::cockpit::starts::script_command("/Apps/Ferrite/ferrite", &workflow);
-    assert_eq!(
-        command,
-        format!(
-            "\"/Apps/Ferrite/ferrite\" task submit {workflow} \"<identity>\" \"<instructions>\""
-        )
+    let command = cx
+        .update(|window, _| window.debug_text("start-script-command"))
+        .unwrap()
+        .join("");
+    assert!(
+        command.contains(&format!(" task submit {workflow} ")),
+        "the shown Workflow's: {command}"
     );
 
     // The row's number, clear of the route choosers in the middle.

@@ -147,7 +147,7 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
             .step("s-4")
             .unwrap()
             .clone();
-        view.drop_step(&StepDrag::of(&reviewer), 0, cx);
+        view.drop_step(&StepDrag::new(reviewer.id.clone(), reviewer.name.clone().into()), 0, cx);
     });
     tick(cx);
     assert_eq!(
@@ -474,7 +474,7 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
     click(cx, "inspector-instructions");
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.factory().unwrap().read(cx).editor.read(cx).focused,
+            view.factory().unwrap().read(cx).editor.read(cx).focused().cloned(),
             Some(instructions.clone())
         );
     });
@@ -592,6 +592,11 @@ fn inspected(cx: &mut gpui::VisualTestContext) -> Vec<&'static str> {
     .collect()
 }
 
+/// What `selector` is drawn saying.
+fn drawn(cx: &mut gpui::VisualTestContext, selector: &str) -> String {
+    cx.update(|window, _| window.debug_text(selector)).unwrap_or_default().join(" ")
+}
+
 /// Press an outline row, chosen or not.
 fn press_row(cx: &mut gpui::VisualTestContext, row: &str) {
     let selector = ["-selected", "", "-selected-flagged", "-flagged"]
@@ -633,10 +638,12 @@ fn the_inspector_shows_one_thing_and_its_row_alone_is_chosen(cx: &mut TestAppCon
         "the approval, from the start"
     );
 
-    // Another Workflow, then back: each lands on its first Step.
-    view.update(cx, |view, cx| view.apply_pick(Pick::Create(Template::Blank), cx));
+    // Another Workflow, then back: each lands on its own first Step.
+    view.update(cx, |view, cx| view.apply_pick(Pick::Create(Template::IssueToReviewedPr), cx));
     tick(cx);
     assert_eq!((chosen_rows(cx), inspected(cx)), (vec!["step"], vec!["step"]));
+    assert_eq!(drawn(cx, "workflow-picker"), "Issue to reviewed PR");
+    assert_eq!(drawn(cx, "inspector-name"), "Name Triager");
     press_row(cx, "outline-approval");
     view.update(cx, |view, cx| view.apply_pick(Pick::Select(first), cx));
     tick(cx);
@@ -645,11 +652,13 @@ fn the_inspector_shows_one_thing_and_its_row_alone_is_chosen(cx: &mut TestAppCon
         (vec!["step"], vec!["step"]),
         "a Workflow chosen shows its first Step"
     );
+    assert_eq!(drawn(cx, "workflow-picker"), "Untitled workflow");
+    assert_eq!(drawn(cx, "inspector-name"), "Name Agent", "the first Workflow's, not the second's");
 }
 
 /// The New task sheet's Process menu walks from the process chosen: ↓ ⏎
 /// picks the next one and ↑ ⏎ the one before, not the choice already
-/// made.
+/// made; the sheet names the one chosen.
 #[gpui::test]
 fn the_process_menus_arrows_walk_from_the_chosen_process(cx: &mut TestAppContext) {
     let (view, cx, _fake, _project) = workflows_window(cx, "workflows-process-keys", |_| {});
@@ -668,27 +677,50 @@ fn the_process_menus_arrows_walk_from_the_chosen_process(cx: &mut TestAppContext
     view.update(cx, |view, cx| view.save_workflow(cx));
     tick(cx);
     let workflow = view.read_with(cx, |view, cx| view.shown_workflow(cx).unwrap().id.clone());
+    view.update(cx, |view, cx| view.create_workflow(Template::IssueToReviewedPr, cx));
+    tick(cx);
+    view.update(cx, |view, cx| view.save_workflow(cx));
+    tick(cx);
+    let second = view.read_with(cx, |view, cx| view.shown_workflow(cx).unwrap().id.clone());
+    assert_ne!(workflow, second);
     view.update(cx, |view, cx| view.open_new_task(cx));
     tick(cx);
     assert_eq!(
         view.read_with(cx, |view, cx| view.process_picks(cx).len()),
-        2,
-        "one-off and the saved Workflow"
+        3,
+        "one-off and the two saved Workflows"
     );
     let chosen = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| view.new_task(cx).unwrap().read(cx).workflow.clone())
+        view.read_with(cx, |view, cx| view.new_task(cx).unwrap().read(cx).workflow().cloned())
+    };
+    // What the sheet draws of the process is what the window names for the
+    // one chosen.
+    let process = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, _| window.debug_text("new-task-process")).unwrap_or_default().join(" ")
     };
     assert_eq!(chosen(&view, cx), None, "one-off at first");
+    assert!(process(cx).contains("One-off"), "{}", process(cx));
 
     click(cx, "new-task-process");
     assert!(shows(cx, "context-menu"), "the Process menu");
     cx.simulate_keystrokes("down enter");
     tick(cx);
     assert!(!shows(cx, "context-menu"), "the pick closes the menu");
-    assert_eq!(chosen(&view, cx), Some(workflow), "↓ ⏎ picks the Workflow");
+    assert_eq!(chosen(&view, cx), Some(workflow.clone()), "↓ ⏎ picks the Workflow");
+    assert_eq!(process(cx), "Untitled workflow \u{b7} version 1", "and the sheet names it");
+
+    click(cx, "new-task-process");
+    cx.simulate_keystrokes("down enter");
+    tick(cx);
+    assert_eq!(chosen(&view, cx), Some(second), "↓ ⏎ from it picks the next");
+    assert_eq!(process(cx), "Issue to reviewed PR \u{b7} version 1", "the second's own name");
 
     click(cx, "new-task-process");
     cx.simulate_keystrokes("up enter");
     tick(cx);
-    assert_eq!(chosen(&view, cx), None, "↑ ⏎ goes back to one-off");
+    assert_eq!(chosen(&view, cx), Some(workflow), "↑ ⏎ goes back to the first");
+    click(cx, "new-task-process");
+    cx.simulate_keystrokes("up enter");
+    tick(cx);
+    assert_eq!(chosen(&view, cx), None, "and again to one-off");
 }

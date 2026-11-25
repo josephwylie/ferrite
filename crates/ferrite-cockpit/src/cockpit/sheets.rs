@@ -6,8 +6,8 @@
 //! Cockpit's (`show_sheet`, `hide_sheet`).
 
 use super::background_dialog_view::BackgroundDialogView;
-use super::direct_view::DirectView;
-use super::new_task_view::NewTaskView;
+use ferrite_factory::direct::DirectView;
+use ferrite_factory::new_task::NewTaskView;
 use super::placement_view::PlacementView;
 use super::project_editor_view::ProjectEditorView;
 use super::settings_view::SettingsView;
@@ -329,11 +329,11 @@ impl CockpitView {
                 self.cockpit.read(cx).thread(dialog.read(cx).thread).is_none()
             }
             Some(Sheet::NewTask(sheet)) => {
-                self.factory_project() != Some(sheet.read(cx).project)
+                self.factory_project() != Some(sheet.read(cx).project())
             }
             Some(Sheet::Direct(sheet)) => {
                 let sheet = sheet.read(cx);
-                self.direct_inputs(sheet.project, &sheet.task, cx).is_none()
+                self.direct_inputs(sheet.project(), sheet.task(), cx).is_none()
             }
             Some(Sheet::Placement(sheet)) => self
                 .index_of(sheet.read(cx).placing.draft)

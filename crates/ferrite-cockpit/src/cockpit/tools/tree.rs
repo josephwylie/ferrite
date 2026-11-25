@@ -256,7 +256,7 @@ impl FileTree {
                 .iter()
                 .filter_map(|entry| {
                     let relative = entry.path.strip_prefix(&self.root).unwrap_or(&entry.path);
-                    crate::fuzzy::matches(&self.filter, &relative.to_string_lossy())
+                    ferrite_ui::fuzzy::matches(&self.filter, &relative.to_string_lossy())
                         .map(|(score, _)| (score, entry.clone()))
                 })
                 .collect();
@@ -294,7 +294,7 @@ impl FileTree {
                 }
                 let relative = entry.path.strip_prefix(&self.root).unwrap_or(&entry.path);
                 if let Some((score, _)) =
-                    crate::fuzzy::matches(&self.filter, &relative.to_string_lossy())
+                    ferrite_ui::fuzzy::matches(&self.filter, &relative.to_string_lossy())
                 {
                     found.push((score, entry));
                 }

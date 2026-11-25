@@ -1,44 +1,30 @@
-//! A Project's Workflows in the Factory view (ADR 0037, #221): an ordered
-//! outline of Steps beside an inspector, the pickers that set a Step's
-//! routes, Provider, model, Effort and skills, the draft's problems, and
-//! Save, which makes the next version and starts nothing.
-//!
-//! The Workflow lives in the Server's Factory: every edit is one command
-//! (`Cockpit::workflow`) and the draft the Server publishes is what is
-//! drawn. A text field is a Composer this window keeps for as long as the
-//! Factory view is open, so what was typed survives a picker, a revealed
-//! field, a notice, a scroll and a switch of surface; the draft keeps it
-//! across a save and a reopen. What is chosen, the Composers and the field
-//! that holds the keyboard are the editor's own view's (`editor`), whose
-//! render is the surface; the root hosts it and answers every edit.
-
-use std::collections::HashMap;
+//! A Project's Workflows in the Factory view (ADR 0037, #221), as the
+//! window keeps them. The Workflow lives in the Server's Factory: every
+//! edit is one command (`Cockpit::workflow`) and the draft the Server
+//! publishes is what is drawn. The editor is
+//! `ferrite_factory::workflows::WorkflowsView`, whose render is the
+//! surface, and which keeps what is chosen, each field's Composer and the
+//! field that holds the keyboard; the root hosts it, makes the fields the
+//! draft shows and answers every edit.
 
 use super::*;
 use ferrite_core::factory_board::{
-    ApprovalChange, Approver, Catalog, Definition, Destination, Problem, RouteKind, Step,
-    StepChange, StepId, Switch, Template, Workflow, WorkflowId,
+    ApprovalChange, Catalog, Problem, RouteKind, Step, StepChange, StepId, Template, Workflow,
+    WorkflowId,
 };
 use ferrite_core::protocol::{Done, WorkflowAction};
-use ferrite_pane::composer::{Composer, Edited, Role};
-use gpui::component::Disableable as _;
 
+pub(crate) use ferrite_factory::field::Field;
+pub(crate) use ferrite_factory::picker::{Pick, Trigger};
+pub(crate) use ferrite_factory::workflows::pickers::{model_choices, model_chosen, model_name};
+pub(crate) use ferrite_factory::workflows::{
+    Inspected, StepDrag, WorkflowsEvent, WorkflowsInputs, WorkflowsView,
+};
 mod editor;
-pub(crate) use editor::{Inspected, WorkflowsEvent, WorkflowsInputs, WorkflowsView};
-mod inspector;
-mod outline;
-pub(crate) use outline::field_input;
 mod pickers;
-pub(crate) use pickers::{model_choices, model_chosen, model_name, Trigger};
-use pickers::{effort_picks, model_picks, provider_picks};
 mod save;
 mod skills;
 pub(crate) use skills::Skills;
-
-/// The outline's width beside the inspector.
-const OUTLINE_W: f32 = 440.;
-/// How many skills the search offers at once.
-const SKILL_ROWS: usize = 8;
 
 /// What the Factory view shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,142 +35,12 @@ pub(crate) enum Surface {
     Workflows,
 }
 
-/// A text field of the editor.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Field {
-    WorkflowName(WorkflowId),
-    StepName(WorkflowId, StepId),
-    Instructions(WorkflowId, StepId),
-    /// The skills picker's search.
-    SkillSearch,
-    /// Agent approval's decision instructions (#222).
-    ApprovalInstructions(WorkflowId),
-    /// What each scheduled run's Task is told (#225).
-    ScheduleInstructions(WorkflowId),
-    /// A GitHub start's extra instructions for every Task.
-    ExtraInstructions(WorkflowId),
-}
-
-impl Field {
-    /// Instructions, written as prose in a text area that grows.
-    pub(crate) fn prose(&self) -> bool {
-        matches!(
-            self,
-            Field::Instructions(..)
-                | Field::ApprovalInstructions(_)
-                | Field::ScheduleInstructions(_)
-                | Field::ExtraInstructions(_)
-        )
-    }
-
-    /// Its selector.
-    pub(crate) fn key(&self) -> String {
-        match self {
-            Field::WorkflowName(_) => "workflow-name".into(),
-            Field::StepName(..) => "inspector-name".into(),
-            Field::Instructions(..) => "inspector-instructions".into(),
-            Field::SkillSearch => "skill-search".into(),
-            Field::ApprovalInstructions(_) => "approval-instructions".into(),
-            Field::ScheduleInstructions(_) => "start-schedule-instructions".into(),
-            Field::ExtraInstructions(_) => "start-extra-instructions".into(),
-        }
-    }
-}
-
-/// What a Factory picker's row does.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Pick {
-    Select(WorkflowId),
-    Create(Template),
-    Route {
-        step: StepId,
-        kind: RouteKind,
-        to: Destination,
-    },
-    Provider(StepId, Provider),
-    /// Empty: the Provider's default.
-    Model(StepId, String),
-    Effort(StepId, String),
-    MoveUp(StepId),
-    MoveDown(StepId),
-    AddAfter(StepId),
-    Delete(StepId),
-    /// The New task sheet's process: one-off, or a Workflow.
-    Process(Option<WorkflowId>),
-    /// A choice on a Task's Rework or Direct this task sheet (#222).
-    Task(super::direction::TaskPick),
-    /// Who approves the shown Workflow's results.
-    Approver(Approver),
-    /// The Step that decides agent approval.
-    Decider(StepId),
-    /// What runs once approved.
-    AfterApproval(Destination),
-    /// Where the Workflow sends rework.
-    ReworkGoesTo(Destination),
-    /// A "Tasks start" setting (#225).
-    Start(super::starts::StartPick),
-    /// The Coordinator's Provider, model or effort (#224).
-    Coordinator(super::coordinator::CoordinatorPick),
-}
-
-/// A Step's row, dragged to a new place in the outline.
-#[derive(Clone)]
-pub(crate) struct StepDrag {
-    pub(crate) step: StepId,
-    name: SharedString,
-}
-
-impl StepDrag {
-    /// A drag of `step`, as a press on its row starts one.
-    #[cfg(test)]
-    pub(crate) fn of(step: &Step) -> Self {
-        Self {
-            step: step.id.clone(),
-            name: SharedString::from(step.name.clone()),
-        }
-    }
-}
-
-struct StepDragPreview(SharedString);
-
-impl Render for StepDragPreview {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        use ferrite_ui::theme::*;
-        div()
-            .px(px(SPACE_3))
-            .py(px(SPACE_1))
-            .rounded(px(R_CONTROL))
-            .bg(paint::RAISED)
-            .text_color(rgb(INK_STRONG))
-            .font_family(FONT_UI)
-            .text_size(px(FS_UI))
-            .child(self.0.clone())
-    }
-}
-
-fn provider_mark(provider: Provider) -> AnyElement {
-    use ferrite_ui::theme::*;
-    let (mark, ink) = ferrite_ui::provider::mark(provider);
-    ferrite_ui::icons::icon(mark, BAR_MARK, ink)
-    .into_any_element()
-}
-
-/// A Step's skill, matched by name or description.
-fn skill_matches(skill: &ferrite_core::SessionCommand, filter: &str) -> bool {
-    let filter = filter.trim().to_lowercase();
-    filter.is_empty()
-        || skill.name.to_lowercase().contains(&filter)
-        || skill.description.to_lowercase().contains(&filter)
-        || crate::fuzzy::matches(&filter, &skill.name).is_some()
-}
-
-/// A command the provider lists that is a skill.
 impl CockpitView {
     /// Switch the Factory view between its Board and its Workflows.
     pub(crate) fn factory_surface(&mut self, surface: Surface, cx: &mut Context<Self>) {
         let shown = self.update_factory(cx, |view, cx| {
             view.surface = surface;
-            view.editor.update(cx, |editor, _| editor.focused = None);
+            view.editor.update(cx, |editor, _| editor.set_focused(None));
         });
         if shown.is_none() {
             return;
@@ -209,7 +65,7 @@ impl CockpitView {
 
     /// The Workflow the surface shows: the one chosen, else the first.
     pub(crate) fn shown_workflow<'a>(&self, cx: &'a gpui::App) -> Option<&'a Workflow> {
-        self.chosen_workflow(self.factory()?.read(cx).editor.read(cx).selected.as_deref(), cx)
+        self.chosen_workflow(self.factory()?.read(cx).editor.read(cx).selected().map(String::as_str), cx)
     }
 
     /// The Workflow shown with `chosen` chosen: it, else the Project's
@@ -371,7 +227,7 @@ impl CockpitView {
                 .map(|step| step.id.clone())
         });
         if let Some(editor) = self.factory_editor(cx) {
-            editor.update(cx, |editor, _| editor.step = next);
+            editor.update(cx, |editor, _| editor.set_step(next));
         }
         self.ensure_fields(cx);
         cx.notify();
@@ -469,7 +325,7 @@ impl CockpitView {
     /// Give a text field the keyboard.
     pub(crate) fn focus_field(&mut self, field: Field, cx: &mut Context<Self>) {
         if let Some(editor) = self.factory_editor(cx) {
-            editor.update(cx, |editor, _| editor.focused = Some(field));
+            editor.update(cx, |editor, _| editor.set_focused(Some(field)));
         }
         cx.notify();
     }
@@ -495,7 +351,7 @@ impl CockpitView {
         Some(
             editor
                 .focus(cx)
-                .unwrap_or_else(|| editor.outline_focus.clone()),
+                .unwrap_or_else(|| editor.outline_focus().clone()),
         )
     }
 }

@@ -19,6 +19,7 @@ use super::workflows::Pick;
 use super::*;
 use ferrite_core::factory_board::{Act, Agent, Proposal, ProposalId, ProposalStatus, TaskId};
 use ferrite_core::protocol::{CoordinatorAction, Done};
+use ferrite_factory::picker::CoordinatorPick;
 use ferrite_pane::composer::{Composer, Role};
 
 /// The proposals' column beside the conversation.
@@ -156,7 +157,7 @@ impl CoordinatorView {
                         .max_w(px(ferrite_ui::theme::SETTINGS_MENU_MAX_W))
                         .child({
                             let picks = std::rc::Rc::new(coordinator_picks(inputs, which));
-                            super::direction::picker_button(
+                            ferrite_factory::picker::picker_button(
                                 selector,
                                 text,
                                 false,
@@ -253,7 +254,7 @@ impl CoordinatorView {
         use ferrite_ui::theme::*;
         let field = self.field.clone();
         let focused = field.read(cx).focus_handle(cx).is_focused(window);
-        let send = crate::project_editor::primary_button("coordinator-send", "Send", false, cx)
+        let send = ferrite_ui::form::primary_button("coordinator-send", "Send", false, cx)
             .debug_selector(|| "coordinator-send".into())
             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -377,7 +378,7 @@ impl CoordinatorView {
                 let dismiss_key = format!("{key}-dismiss");
                 actions = actions
                     .child(
-                        crate::project_editor::primary_button(
+                        ferrite_ui::form::primary_button(
                             SharedString::from(accept_key.clone()),
                             card.action,
                             false,
@@ -446,15 +447,6 @@ impl CoordinatorView {
             .child(actions)
             .into_any_element()
     }
-}
-
-/// A choice on the Coordinator's settings.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum CoordinatorPick {
-    Provider(Provider),
-    /// Empty: the Provider's default.
-    Model(String),
-    Effort(String),
 }
 
 impl CockpitView {

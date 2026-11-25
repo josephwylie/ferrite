@@ -20,7 +20,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 
 /// The band over a draft's Composer, where its Pane was last laid out: a
 /// sheet opened for the draft keeps its card clear of it
-/// (`project_editor::card_over`).
+/// (`ferrite_ui::form::card_over`).
 #[derive(Clone)]
 pub(super) struct Band(Rc<Cell<pane::PaneGeometry>>);
 
