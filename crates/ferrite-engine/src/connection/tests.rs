@@ -329,6 +329,27 @@ fn another_threads_messages_pass_a_history_still_being_read() {
     assert_eq!(outbox.pop(), None, "Thread 1 waits on its history");
 }
 
+/// A roster that closes a Thread is the last its client hears of it: the
+/// Thread's history still being read stops, and what waited on it goes
+/// unsent, or the client would hold again the Thread the roster closed. A
+/// Thread the roster keeps open keeps its history.
+#[test]
+fn a_roster_that_closes_a_thread_ends_its_history_still_being_read() {
+    let mut outbox = Outbox::default();
+    let (closed, closed_history) = mpsc::sync_channel(4);
+    let (kept, kept_history) = mpsc::sync_channel(4);
+    outbox.history(ThreadId::new(1), closed_history).unwrap();
+    outbox.push(text(1, 1, "after its history")).unwrap();
+    outbox.history(ThreadId::new(2), kept_history).unwrap();
+    outbox.push(roster(&[2], 1)).unwrap();
+    assert_eq!(outbox.pop(), Some(roster(&[2], 1)));
+    assert!(closed.send(text(1, 9, "its history")).is_err(), "its reading stops");
+    kept.send(text(2, 9, "still open")).unwrap();
+    drop(kept);
+    assert_eq!(outbox.pop(), Some(text(2, 9, "still open")));
+    assert_eq!(outbox.pop(), None, "nothing of the closed Thread follows");
+}
+
 /// Histories read at once take turns: a small one never waits for a big
 /// one to finish.
 #[test]
