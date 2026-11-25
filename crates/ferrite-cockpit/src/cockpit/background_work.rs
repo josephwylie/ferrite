@@ -304,11 +304,11 @@ fn stop_leaves(work: &[Work], targets: &[StopTarget]) -> Option<String> {
 }
 
 /// The line's and the dialog's `Stop`, as they draw.
-#[derive(Hash)]
+#[derive(Clone, Hash)]
 pub(super) struct StopControl {
-    leaves: Option<String>,
-    stopping: bool,
-    refused: Option<String>,
+    pub(super) leaves: Option<String>,
+    pub(super) stopping: bool,
+    pub(super) refused: Option<String>,
 }
 
 /// The refusal, what stays running and the button itself; `prefix` names
