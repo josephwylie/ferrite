@@ -1,8 +1,12 @@
 //! The Server's half of a tree's ops, for one connection, run in the order
 //! they were asked (ADR 0048). A chunk or finish of a write that failed,
 //! expired or never began is refused, so what a sender asked after a
-//! failure never puts part of a file in place. Nothing is read or written
-//! through a symlink inside a root. A root is resolved once, links
+//! failure never puts part of a file in place. An entry of a `Root::Path`
+//! that this side cannot make, by its name, its place or what it is, is
+//! answered `unmade`, and the sender goes on without it; a root that cannot
+//! be made fails every op. Nothing is written through a symlink inside a
+//! root, and only a link this side makes reads through one
+//! (`links::link`). A root is resolved once, links
 //! followed, and refused if it is the home directory, an ancestor of it, or
 //! the filesystem's root, which a mirror would empty, however it is
 //! spelled. The Setup root is the operator's setup in this side's home
@@ -15,7 +19,8 @@ use std::path::{Component, Path, PathBuf};
 
 use base64::Engine as _;
 
-use super::{at, canonical, check_path, holds, local, scan, Manifest, Reply, Request, Root};
+use super::links::link;
+use super::{at, canonical, check_path, holds, local, scan, windows_name, Manifest, Refusal, Reply, Request, Root};
 use crate::chunked::{self, CHUNK_SIZE};
 use crate::setup_sync::{Home, Place};
 
@@ -146,7 +151,10 @@ impl Session {
                 size,
                 mode,
             } => {
-                let path = inside(&made(&root)?, &path)?;
+                let path = match placed(&made(&root)?, &path)? {
+                    Ok(path) => path,
+                    Err(why) => return Ok(Reply::Unmade(why)),
+                };
                 let there = fs::symlink_metadata(&path).ok();
                 if there.as_ref().is_some_and(fs::Metadata::is_dir) {
                     return Err(invalid(format!("{} is a directory", path.display())));
@@ -170,7 +178,9 @@ impl Session {
                         if let Some(mode) = mode {
                             set_mode(received.path(), *mode)?;
                         }
-                        fs::rename(received.path(), path).map_err(|error| at(path, error))?;
+                        if let Err(error) = fs::rename(received.path(), path) {
+                            return Ok(Reply::Unmade(Refusal::failed(error)));
+                        }
                     }
                     Target::Setup(place) => {
                         received.sync()?;
@@ -210,7 +220,10 @@ impl Session {
                 path,
             } => Ok(done(self.home()?.make_dir(&path)?)),
             Request::MakeDir { root, path } => {
-                let path = inside(&made(&root)?, &path)?;
+                let path = match placed(&made(&root)?, &path)? {
+                    Ok(path) => path,
+                    Err(why) => return Ok(Reply::Unmade(why)),
+                };
                 match fs::create_dir(&path) {
                     Ok(()) => {
                         set_mode(&path, DIR_MODE).map_err(|error| at(&path, error))?;
@@ -222,7 +235,7 @@ impl Session {
                     {
                         Ok(Reply::Unchanged)
                     }
-                    Err(error) => Err(at(&path, error)),
+                    Err(error) => Ok(Reply::Unmade(Refusal::failed(error))),
                 }
             }
             Request::Link { root: Root::Setup, .. } => Err(io::Error::new(
@@ -230,7 +243,11 @@ impl Session {
                 "Setup sync makes no links",
             )),
             Request::Link { root, path, target } => {
-                Ok(done(link(&target, &inside(&made(&root)?, &path)?)?))
+                let root = made(&root)?;
+                Ok(match placed(&root, &path)?.and_then(|path| link(&root, &path, &target)) {
+                    Ok(changed) => done(changed),
+                    Err(why) => Reply::Unmade(why),
+                })
             }
             Request::Remove {
                 root: Root::Setup,
@@ -324,6 +341,18 @@ fn made(root: &Root) -> io::Result<PathBuf> {
     Ok(root)
 }
 
+/// Where the entry at `path` is made in `root`, or why this side leaves it
+/// unmade: a name it cannot hold, or a folder on the way that is not one
+/// here. A path that is not in the tree is refused.
+fn placed(root: &Path, path: &str) -> io::Result<Result<PathBuf, Refusal>> {
+    let named = |name: &str| matches!(name, "" | "." | "..") || windows_name(name);
+    if cfg!(windows) && !path.split('/').all(named) {
+        return Ok(Err(Refusal::Name));
+    }
+    check_path(path)?;
+    Ok(inside(root, path).map_err(Refusal::failed))
+}
+
 /// `path` in `root`, refused unless every directory on the way is a real
 /// one there.
 pub(crate) fn inside(root: &Path, path: &str) -> io::Result<PathBuf> {
@@ -368,24 +397,6 @@ pub(crate) fn remove(root: &Path, path: &str) -> io::Result<bool> {
         })
     };
     removed.map(|()| true).map_err(|error| at(&path, error))
-}
-
-/// Make the symlink: whether it was not already so.
-#[cfg(unix)]
-fn link(target: &str, path: &Path) -> io::Result<bool> {
-    if fs::read_link(path).is_ok_and(|there| there == Path::new(target)) {
-        return Ok(false);
-    }
-    std::os::unix::fs::symlink(target, path).map_err(|error| at(path, error))?;
-    Ok(true)
-}
-
-#[cfg(not(unix))]
-fn link(_: &str, path: &Path) -> io::Result<bool> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        format!("{}: this Server does not make symlinks on Windows", path.display()),
-    ))
 }
 
 /// The permission bits a file written over `there` ends with. A file

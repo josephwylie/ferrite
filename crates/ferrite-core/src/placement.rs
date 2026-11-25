@@ -759,7 +759,7 @@ fn pass(
 /// What a resume leaves as the destination has it: everything there but a
 /// folder the Project has too, whose entries are each looked at. Of those,
 /// the files the Project holds and sends otherwise are someone else's,
-/// changed there.
+/// changed there; a link there as the destination holds one is done.
 fn left_there(here: &Manifest, there: &Manifest) -> (Vec<String>, Vec<String>) {
     let mut left = Vec::new();
     let mut changed = Vec::new();
@@ -768,6 +768,7 @@ fn left_there(here: &Manifest, there: &Manifest) -> (Vec<String>, Vec<String>) {
             (Some(Entry::Dir), Entry::Dir) => continue,
             (None, _) => true,
             (Some(Entry::File { size, sha256, .. }), Entry::File { size: s, sha256: h, .. }) => size == s && sha256 == h,
+            (Some(Entry::Symlink { target }), theirs) => here.holds_link(path, target, theirs),
             (Some(ours), theirs) => ours == theirs,
         };
         if !same {
@@ -817,7 +818,8 @@ fn same_repository(
     matches!((crate::repository::repository_key(source), theirs), (Some(ours), Some(theirs)) if ours == theirs)
 }
 
-/// `first` and then `then`, whose problems are the ones left.
+/// `first` and then `then`, whose problems and entries left unmade are the
+/// ones left.
 fn added(first: Sent, then: Sent) -> Sent {
     Sent {
         removed: first.removed + then.removed,
@@ -826,6 +828,7 @@ fn added(first: Sent, then: Sent) -> Sent {
         linked: first.linked + then.linked,
         bytes: first.bytes + then.bytes,
         problems: then.problems,
+        unmade: then.unmade,
     }
 }
 

@@ -73,6 +73,7 @@ Windows window.
   | `finish { write, sha256 }` | `done` | Verified and renamed into place; either way the write is over. |
   | `read { root, path, offset }` | `bytes { data, size }` | Up to a chunk of a file. |
   | `make_dir`, `link`, `remove { root, path, … }` | `done`, or `unchanged` when already so | |
+  | `begin`, `finish`, `make_dir`, `link` | `unmade { why }` | This entry cannot be made there: `leads_out`, `leads_nowhere`, `name`, or `failed { error }`. The send leaves it and goes on. |
 
   The sender numbers each write, never the same number twice in its
   process, so a file's `begin`, chunks and `finish` go out together, with
@@ -100,7 +101,12 @@ Windows window.
 - **`plan(source, dest, skip) -> Vec<Step>` is pure.** First what must go,
   the outermost entry of each removal only: what only `dest` holds, and an
   entry whose kind or link target differs. Then what is made, in path
-  order, so a directory is made before what it holds. A file that differs
+  order, so a directory is made before what it holds. Links come last,
+  each after the links it leads through, so a Windows Server finds what a
+  link leads to already there. A link there is the one this side holds
+  when its target is spelled the same but for `.` and empty steps, or,
+  for a link to a file, when it is a file equal to that one, as a Windows
+  Server may make it. A file that differs
   is rewritten in place, its `Step::Write` carrying the size, SHA-256 and
   bits the scan listed. What `skip` names and what either side could not
   list are held: left as each side has them, with all under them, and so is
@@ -126,7 +132,9 @@ Windows window.
   was listed: "it changed after it was listed") is left as the far side
   has it, a `Side::Here` problem of the send, and the send goes on. Its
   `finish` carries the listed hash, so the Server never puts a torn file in
-  place. Every write begun is finished, however its send ends, so a failed
+  place. An entry the far side answers `unmade` is left too, with all
+  under it, and listed in `Sent.unmade` with why: no one entry stops a
+  send. Every write begun is finished, however its send ends, so a failed
   send never holds a write slot of its connection. A send that stops
   returns `Stopped { error, sent }`: the error names the entry whose
   request it answered, and `sent` is what was taken there once the replies
@@ -148,7 +156,11 @@ Windows window.
   creation time instead. A file that moved within 2 seconds of the scan is
   hashed every time, since it may change again within one tick of the clock
   unseen. At most 200,000 files' hashes are kept, the roots listed longest
-  ago dropped first. Symlinks are listed, never followed. An entry that
+  ago dropped first. Symlinks are listed, never followed. On Windows a
+  junction is listed as a symlink too, and a link to a place inside the
+  root is listed from its own folder, `/`-separated, as a Unix side spells
+  it, so a link a Windows Server made reads as the one it was sent. An
+  entry that
   goes while it is listed is left out; one that cannot be read is a
   problem, and every error names its path, the root's included. What is
   none of a file, a directory or a symlink is left out.
@@ -178,7 +190,13 @@ Windows window.
   also by device and inode, which a bind mount or a macOS firmlink spells
   twice: a mirror would empty it. Inside the root, a path through a
   symlink or a non-directory is refused, as are `..` and an absolute path.
-  A Windows Server makes no symlinks: it refuses `link` as unsupported.
+  A Windows Server makes a link to a folder as a junction, which needs no
+  privilege, and a link to a file as a file symlink when the process may
+  make one, else as a copy of that file. It makes either only to a place
+  inside the root that is there. A link that leads out of the root or to
+  nothing, a name Windows cannot hold (`aux`, a trailing dot), and a
+  write the filesystem refuses are answered `unmade`; only a root that
+  cannot be resolved fails a request. `Root::Setup` makes no links.
 - **The window** reaches it as `Cockpit::tree(machine)` beside
   `upload_attachment(machine, …)`. It answers a `tree::Connect`, which opens
   a connection of its own to that Server when run, off the window's thread,
@@ -187,8 +205,9 @@ Windows window.
 - **The CLI** proves and scripts it with no window:
   `ferrite [--machine <name>] tree send <local-dir> <remote-dir> [--skip
   <path>]…` (ADR 0027's exit codes and JSON lines). It prints what it did
-  (`{"removed":0,"made":46,"written":693,"linked":0,"bytes":7132898}`, and
-  `problems` when a side could not list something) and a refusal as
+  (`{"removed":0,"made":46,"written":693,"linked":0,"bytes":7132898}`,
+  `problems` when a side could not list something, and `unmade` when the
+  far side could not make an entry) and a refusal as
   `{"error":{"code","message"}}` on stderr. With no `--machine` it refuses
   a destination that is its source, inside it or around it. PowerShell
   turns a leading `~` in an argument into its own home, so from PowerShell
@@ -322,7 +341,13 @@ Windows window.
   name, sent once more, and if it still cannot be, listed when the copy is
   in: the sheet stays up on Done to list it under Not copied, "Left as it
   was", each with why: "in use here", "unreadable on E" or "changed on
-  E".
+  E". An entry E cannot make is listed there too: "a link outside the
+  Project, not made on E", "a link to nothing on E, not made", "a name E
+  cannot hold", or "not made on E:" and the reason. More than three alike
+  are one line, by the folder they share: "312 links in
+  apps/web/node_modules lead outside the Project and were not made on
+  E". A copy that leaves some is still in: the Project is registered and
+  the Draft moves to it.
 - **A copy sends what git would check out on the Machine**
   (`placement::Checkout`, the copy's `tree::Source`). From Windows, a file
   `git ls-files --eol` has as `i/lf w/crlf` goes with each CRLF made LF,
@@ -551,10 +576,22 @@ Windows window.
   that changes after it is listed, or while it is read (a live log, a git
   index), is left out of that send by its name; the setup sheet sends what
   was left once more and lists what still is.
-- **A Windows Server makes no symlinks**, so a tree that holds one never
-  completes there: each send fails at its first link, though what it asked
-  ahead lands. Making one there needs Developer Mode or an elevated
-  process, and Ferrite's Machines are Unix.
+- **A Windows Server makes links as Windows tools do**, not as Unix does.
+  A junction holds an absolute path, so a copied folder moved on Windows
+  keeps links into its old place until the next copy remakes them. A file
+  symlink needs Developer Mode or an elevated process; without one the
+  link is a copy of its file, refreshed when that file's hash changes, and
+  git there may list a tracked file link as modified. A link a Unix side
+  spells with a needless `..` (`a/../b`) is removed and made again by
+  every send. Links take
+  little of a copy: to this computer's own Windows Server, a debug build,
+  600 pnpm junctions took 1.1 to 1.7 s, against 0.29 to 0.41 s for a send
+  with nothing to do: about 1.5 ms a link, asked ahead as any request is
+  and made one after another by the connection's lane.
+- **A window older than its Server stops at `unmade`**, which it reads as
+  an unknown reply, as it stopped at `link` before. A newer window and an
+  older Windows Server stop at the first link as before, and a Resume
+  after the Server is updated finishes the copy.
 - **Names that differ only in case never converge** on a destination that
   ignores case (Windows, a default macOS volume): both are written to one
   file, and every send writes it again. A git checkout there has the same

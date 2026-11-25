@@ -30,7 +30,9 @@ static HASHED: Mutex<Cache> = Mutex::new(Cache(Vec::new()));
 /// temporary file, is left out. An entry that goes while it is listed is
 /// left out; one that cannot be read or named is a problem, by its path. A
 /// file is read only when what its metadata says of it moved since this
-/// process last listed `root`.
+/// process last listed `root`. On Windows a link that holds the whole path
+/// to a place in the tree, as a junction does, is listed by the way there
+/// from its folder, as a Mac lists its links.
 pub fn scan(root: &Path, skip: &[String]) -> io::Result<Manifest> {
     list(root, skip, Listing::default(), &mut |_| Ok(()))
 }
@@ -89,6 +91,7 @@ fn list(
     }
     let mut walk = Walk {
         root: root.to_path_buf(),
+        real: if cfg!(windows) { dunce::canonicalize(root).ok() } else { None },
         skip,
         listing,
         started: SystemTime::now(),
@@ -123,6 +126,9 @@ fn list(
 /// A scan under way.
 struct Walk<'a> {
     root: PathBuf,
+    /// The root as Windows names it, links followed, where a link may hold
+    /// the whole path it leads to.
+    real: Option<PathBuf>,
     skip: &'a [String],
     listing: Listing<'a>,
     started: SystemTime,
@@ -179,10 +185,14 @@ impl Walk<'_> {
         let mut meta = entry.metadata()?;
         if meta.file_type().is_symlink() {
             if !self.listing.follow {
-                let target = fs::read_link(entry.path())?
-                    .into_os_string()
-                    .into_string()
-                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "its target is not UTF-8"))?;
+                let target = fs::read_link(entry.path())?;
+                let target = match self.inside(&target) {
+                    Some(to) => super::relative(path, &to),
+                    None => target
+                        .into_os_string()
+                        .into_string()
+                        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "its target is not UTF-8"))?,
+                };
                 return Ok(Some(Entry::Symlink {
                     target: if cfg!(windows) { target.replace('\\', "/") } else { target },
                 }));
@@ -225,6 +235,24 @@ impl Walk<'_> {
             mode: mode(&meta),
             modified,
         }))
+    }
+
+    /// The names, under the root, of where a link of Windows leads, when it
+    /// holds the whole path to a place in the tree, as a junction does.
+    fn inside(&self, target: &Path) -> Option<Vec<String>> {
+        let real = self.real.as_ref()?;
+        let target = dunce::simplified(target);
+        if !target.is_absolute() || !super::holds(real, target) {
+            return None;
+        }
+        target
+            .components()
+            .skip(real.components().count())
+            .map(|part| match part {
+                std::path::Component::Normal(name) => name.to_str().map(str::to_string),
+                _ => None,
+            })
+            .collect()
     }
 
     /// What the symlink at `link`, in `dir`, points to. One whose target

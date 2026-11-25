@@ -119,13 +119,13 @@ fn a_changed_file_is_rewritten_in_place_and_a_changed_kind_replaced() {
             Step::Remove("was-dir".into()),
             Step::Remove("was-file".into()),
             write("changed.txt", &file("new")),
+            write("was-dir", &file("d")),
+            Step::MakeDir("was-file".into()),
+            write("was-file/inner.txt", &file("i")),
             Step::Link {
                 path: "moved".into(),
                 target: "there".into(),
             },
-            write("was-dir", &file("d")),
-            Step::MakeDir("was-file".into()),
-            write("was-file/inner.txt", &file("i")),
         ]
     );
 }
@@ -483,9 +483,16 @@ fn sent_to(source: &Path, listed: &Manifest, dest: &Path, exchange: &mut Here) -
     send(source, &steps, &root, exchange, &mut |_| {}, &Cancellation::default()).expect("the send completes")
 }
 
+/// The paths a send left unmade there, and why.
+fn unmade(sent: &Sent) -> Vec<(&str, &Refusal)> {
+    sent.unmade.iter().map(|unmade| (unmade.path.as_str(), &unmade.why)).collect()
+}
+
 /// A tree from a side that keeps links, sent to this computer: each link
-/// that leads to a folder or a file in the tree reads as what it leads to,
-/// and sending it again moves nothing.
+/// that leads to a folder or a file in the tree reads as what it leads to.
+/// One that leads out of the tree or to nothing is made where this side
+/// makes such links (Unix); Windows leaves it unmade, says why, and takes
+/// the rest. Sending it again moves nothing.
 #[test]
 fn a_tree_with_links_lands_with_each_one_that_leads_inside_it_usable() {
     let dir = scratch("links");
@@ -510,9 +517,182 @@ fn a_tree_with_links_lands_with_each_one_that_leads_inside_it_usable() {
     assert_eq!(fs::read(dest.join("packages/web/lib/index.js")).unwrap(), b"module.exports = 1;\n");
     assert_eq!(fs::read(dest.join("GUIDE.md")).unwrap(), b"# Guide\n");
     assert_eq!((first.made, first.written), (4, 2));
+    let left = if cfg!(windows) {
+        vec![("broken", &Refusal::LeadsNowhere), ("escape", &Refusal::LeadsOut)]
+    } else {
+        Vec::new()
+    };
+    assert_eq!(unmade(&first), left);
+    assert_eq!(first.linked, 4 - left.len());
 
     let again = sent_to(&source, &listed, &dest, &mut exchange);
     assert_eq!((again.removed, again.made, again.written, again.linked), (0, 0, 0, 0), "{again:?}");
+    assert_eq!(unmade(&again), left, "what this side cannot make is said again, and nothing else is asked");
+}
+
+/// The step that writes `path` as `listed` lists it.
+fn writing(listed: &Manifest, path: &str) -> Step {
+    write(path, &listed.entries[path])
+}
+
+/// An entry the far side cannot make is left, by its path and why, with
+/// all it holds, and the send takes the rest. A file whose write it would
+/// not begin takes no chunk of it, and the chunks already on their way
+/// stop nothing.
+#[test]
+fn an_entry_the_far_side_cannot_make_is_left_with_what_it_holds_and_the_rest_is_taken() {
+    let dir = scratch("unmade");
+    let (source, dest) = (dir.join("source"), dir.join("dest"));
+    fs::create_dir_all(source.join("blocked")).unwrap();
+    fs::create_dir_all(source.join("nested/deep")).unwrap();
+    fs::write(source.join("first.txt"), "first").unwrap();
+    fs::write(source.join("blocked/big.bin"), vec![7; chunked::CHUNK_SIZE * 3]).unwrap();
+    fs::write(source.join("nested/deep/x.txt"), "x").unwrap();
+    fs::write(source.join("last.txt"), "last").unwrap();
+    // A file stands where each folder goes.
+    fs::create_dir_all(&dest).unwrap();
+    fs::write(dest.join("blocked"), "someone's").unwrap();
+    fs::write(dest.join("nested"), "someone's").unwrap();
+    let listed = scan(&source, &[]).unwrap();
+    let steps = [
+        writing(&listed, "first.txt"),
+        writing(&listed, "blocked/big.bin"),
+        Step::MakeDir("nested".into()),
+        Step::MakeDir("nested/deep".into()),
+        writing(&listed, "nested/deep/x.txt"),
+        writing(&listed, "last.txt"),
+    ];
+    let root = Root::Path { path: dest.clone() };
+    let mut exchange = Here::default();
+    let sent = send(&source, &steps, &root, &mut exchange, &mut |_| {}, &Cancellation::default()).unwrap();
+
+    assert_eq!(sent.unmade.iter().map(|unmade| unmade.path.as_str()).collect::<Vec<_>>(), ["blocked/big.bin", "nested"]);
+    assert!(sent.unmade.iter().all(|unmade| matches!(unmade.why, Refusal::Failed { .. })));
+    assert_eq!((sent.written, sent.made), (2, 0));
+    assert_eq!(fs::read(dest.join("last.txt")).unwrap(), b"last");
+    assert_eq!(fs::read(dest.join("nested")).unwrap(), b"someone's");
+    let mut there: Vec<_> = fs::read_dir(&dest).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+    there.sort();
+    assert_eq!(there, ["blocked", "first.txt", "last.txt", "nested"], "no write left a part behind");
+}
+
+/// A source whose every file holds the same bytes.
+struct Same(&'static [u8]);
+
+impl Source for Same {
+    fn open(&self, _: &str) -> io::Result<Box<dyn io::Read + '_>> {
+        Ok(Box::new(self.0))
+    }
+}
+
+/// A name Windows cannot hold is left unmade there, a folder of one with
+/// all in it, and the rest lands.
+#[cfg(windows)]
+#[test]
+fn a_name_windows_cannot_hold_is_left_unmade_there() {
+    let dir = scratch("names");
+    let (source, dest) = (dir.join("source"), dir.join("dest"));
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("kept.txt"), "kept").unwrap();
+    let mut listed = scan(&source, &[]).unwrap();
+    let kept = listed.entries["kept.txt"].clone();
+    listed.entries.insert("aux".into(), Entry::Dir);
+    listed.entries.insert("aux/inner.txt".into(), kept.clone());
+    listed.entries.insert("notes.".into(), kept.clone());
+    let steps = plan(&listed, &Manifest::default(), &[]);
+    let root = Root::Path { path: dest.clone() };
+    let sent = send(&Same(b"kept"), &steps, &root, &mut Here::default(), &mut |_| {}, &Cancellation::default()).unwrap();
+    assert_eq!(unmade(&sent), [("aux", &Refusal::Name), ("notes.", &Refusal::Name)]);
+    assert_eq!(sent.written, 1);
+    assert_eq!(fs::read_dir(&dest).unwrap().count(), 1, "only kept.txt is there");
+}
+
+/// A link is made after what it leads to, and one that leads through
+/// another after that one, so a side that makes a link by what it leads
+/// to finds it there.
+#[test]
+fn each_link_comes_after_what_it_leads_to() {
+    let source = manifest(&[
+        ("a-bin", Entry::Symlink { target: "z-tool/bin/run".into() }),
+        ("b-docs", Entry::Symlink { target: "./z-real/docs/".into() }),
+        ("m.txt", file("m")),
+        ("z-real", Entry::Dir),
+        ("z-real/bin", Entry::Dir),
+        ("z-real/bin/run", file("r")),
+        ("z-tool", Entry::Symlink { target: "z-real".into() }),
+    ]);
+    let order: Vec<String> = plan(&source, &Manifest::default(), &[])
+        .iter()
+        .map(|step| step.path().to_string())
+        .collect();
+    assert_eq!(order, ["m.txt", "z-real", "z-real/bin", "z-real/bin/run", "b-docs", "z-tool", "a-bin"]);
+    assert_eq!(source.lead("a-bin", "z-tool/bin/run"), Some(("z-real/bin/run".into(), 1)));
+    assert_eq!(source.lead("z-real/bin/up", "../../.."), None, "out of the tree");
+    assert_eq!(source.lead("z-real/x", "/etc/hosts"), None);
+}
+
+/// A far side holds a link as a link that leads the same way, however its
+/// target is spelled, or as a copy of the file it leads to (a Windows side
+/// that may not make a file link): that is no change. A stale copy is.
+#[test]
+fn a_link_held_as_the_far_side_can_hold_it_is_left() {
+    let source = manifest(&[
+        ("docs", Entry::Dir),
+        ("docs/guide.md", file("guide")),
+        ("GUIDE.md", Entry::Symlink { target: "docs/guide.md".into() }),
+        ("lib", Entry::Symlink { target: "./docs/".into() }),
+    ]);
+    let held = manifest(&[
+        ("docs", Entry::Dir),
+        ("docs/guide.md", file("guide")),
+        ("GUIDE.md", file("guide")),
+        ("lib", Entry::Symlink { target: "docs".into() }),
+    ]);
+    assert!(plan(&source, &held, &[]).is_empty());
+    let stale = manifest(&[
+        ("docs", Entry::Dir),
+        ("docs/guide.md", file("guide")),
+        ("GUIDE.md", file("old guide")),
+        ("lib", Entry::Symlink { target: "../docs".into() }),
+    ]);
+    let link = |path: &str, target: &str| Step::Link {
+        path: path.into(),
+        target: target.into(),
+    };
+    assert_eq!(
+        plan(&source, &stale, &[]),
+        [
+            Step::Remove("GUIDE.md".into()),
+            Step::Remove("lib".into()),
+            link("GUIDE.md", "docs/guide.md"),
+            link("lib", "./docs/"),
+        ]
+    );
+}
+
+/// A link of Windows that holds the whole path to a place in the tree, as
+/// a junction does, is listed by the way there from its folder.
+#[test]
+fn a_link_to_a_place_in_the_tree_is_spelled_from_its_folder() {
+    let to = |path: &str| path.split('/').map(str::to_string).collect::<Vec<_>>();
+    assert_eq!(relative("node_modules/@scope/name", &to("node_modules/.pnpm/name@1/node_modules/name")), "../.pnpm/name@1/node_modules/name");
+    assert_eq!(relative("apps/web/node_modules/x", &to("node_modules/.pnpm/x")), "../../../node_modules/.pnpm/x");
+    assert_eq!(relative("GUIDE.md", &to("docs/guide.md")), "docs/guide.md");
+    assert_eq!(relative("a/up", &[]), "..");
+    assert_eq!(relative("a/itself", &to("a")), ".");
+    assert_eq!(relative("Docs/x", &to("docs/y")), if cfg!(any(windows, target_os = "macos")) { "y" } else { "../docs/y" });
+}
+
+/// A name Windows cannot hold: a device's, a character it refuses, a
+/// trailing dot or space.
+#[test]
+fn windows_holds_no_device_name_and_no_trailing_dot() {
+    for name in ["aux", "AUX.js", "com1.txt", "lpt9", "con ", "a.", "a:b", "a\\b", "a?b", "tab\tname"] {
+        assert!(!windows_name(name), "{name:?}");
+    }
+    for name in ["auxiliary.js", "com10", "com0", ".env", "a.b", "nul-ish"] {
+        assert!(windows_name(name), "{name:?}");
+    }
 }
 
 /// A pnpm install: a store of package folders under `node_modules/.pnpm`,

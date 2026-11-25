@@ -14,7 +14,7 @@ use super::folder_browser::{FolderBrowser, Moved};
 use super::*;
 use ferrite_core::chunked::{Cancellation, Progress};
 use ferrite_core::placement::{self, Copied, Copying, Ignored};
-use ferrite_core::tree::{Side, Stopped};
+use ferrite_core::tree::{self, Refusal, Sent, Side, Stopped};
 use gpui::component::{checkbox::Checkbox, Disableable};
 use gpui::App;
 use std::io;
@@ -490,13 +490,8 @@ impl PlacementView {
         // failed between when that is not the entry: `entry: /where: Why`.
         let said = error.to_string();
         let mut parts: Vec<&str> = said.split(": ").collect();
-        let why = parts.pop().unwrap_or_default();
-        let why = why.split(" (os error").next().unwrap_or(why).trim_end_matches('.');
-        let mut letters = why.chars();
-        let why: String = match letters.next() {
-            Some(first) => first.to_lowercase().chain(letters).collect(),
-            None => "it stopped".into(),
-        };
+        let why = plainly(parts.pop().unwrap_or_default());
+        let why = if why.is_empty() { "it stopped".into() } else { why };
         let shown = |path: &Path| {
             self.dest
                 .read(cx)
@@ -647,16 +642,7 @@ impl PlacementView {
                 self.enter(Stage::Occupied { dest, of }, cx);
             }
             Ok(Copied::Sent { sent, changed }) => {
-                let why = |side| match side {
-                    Side::Here => "in use here".to_string(),
-                    Side::There => format!("unreadable on {machine}"),
-                };
-                let skipped = sent
-                    .problems
-                    .into_iter()
-                    .map(|problem| format!("{} \u{b7} {}", problem.path, why(problem.side)))
-                    .chain(changed.into_iter().map(|path| format!("{path} \u{b7} changed on {machine}")))
-                    .collect();
+                let skipped = not_copied(&sent, &changed, &machine);
                 self.enter(Stage::Registering { dest, skipped }, cx);
                 cx.emit(PlacementEvent::Place { dest: target });
             }
@@ -912,6 +898,100 @@ fn leaf(placing: &Placing) -> String {
         .unwrap_or_else(|| placing.title.to_string())
 }
 
+/// How many alike are listed one by one under Not copied before they are
+/// told as one line.
+const LISTED: usize = 3;
+
+/// What a copy to `machine` left as it was, in the operator's words: each
+/// by its path and why, or, past [`LISTED`] of one kind left for one
+/// reason, how many and the folder they share.
+fn not_copied(sent: &Sent, changed: &[String], machine: &str) -> Vec<String> {
+    // Each one left: its path, what it is, and what is said of one and of
+    // several.
+    let mut left: Vec<(&str, &str, String, String)> = Vec::new();
+    for problem in &sent.problems {
+        let (one, many) = match problem.side {
+            Side::Here => ("in use here".to_string(), "were in use here".to_string()),
+            Side::There => (format!("unreadable on {machine}"), format!("could not be read on {machine}")),
+        };
+        left.push((&problem.path, "files", one, many));
+    }
+    for unmade in &sent.unmade {
+        let what = match unmade.entry {
+            tree::Entry::Dir => "folders",
+            tree::Entry::Symlink { .. } => "links",
+            _ => "files",
+        };
+        let (one, many) = match &unmade.why {
+            Refusal::LeadsOut => (
+                format!("a link outside the Project, not made on {machine}"),
+                format!("lead outside the Project and were not made on {machine}"),
+            ),
+            Refusal::LeadsNowhere => (
+                format!("a link to nothing on {machine}, not made"),
+                format!("lead to nothing on {machine} and were not made"),
+            ),
+            Refusal::Name => (
+                format!("a name {machine} cannot hold"),
+                format!("have names {machine} cannot hold"),
+            ),
+            Refusal::Failed { error } => {
+                let why = plainly(error);
+                (format!("not made on {machine}: {why}"), format!("could not be made on {machine}: {why}"))
+            }
+            Refusal::Unknown => (format!("not made on {machine}"), format!("could not be made on {machine}")),
+        };
+        left.push((&unmade.path, what, one, many));
+    }
+    for path in changed {
+        left.push((path, "files", format!("changed on {machine}"), format!("were changed on {machine}")));
+    }
+    let mut alike: Vec<((&str, String), Vec<(&str, String)>)> = Vec::new();
+    for (path, what, one, many) in left {
+        match alike.iter_mut().find(|((kind, said), _)| *kind == what && *said == many) {
+            Some((_, these)) => these.push((path, one)),
+            None => alike.push(((what, many), vec![(path, one)])),
+        }
+    }
+    alike
+        .into_iter()
+        .flat_map(|((what, many), these)| {
+            if these.len() <= LISTED {
+                return these.into_iter().map(|(path, one)| format!("{path} \u{b7} {one}")).collect();
+            }
+            let folder = shared_folder(these.iter().map(|(path, _)| *path));
+            let within = if folder.is_empty() { String::new() } else { format!(" in {folder}") };
+            vec![format!("{} {what}{within} {many}", count(these.len()))]
+        })
+        .collect()
+}
+
+/// The deepest folder that holds every one of `paths`: `""` for the
+/// Project's own.
+fn shared_folder<'a>(paths: impl Iterator<Item = &'a str>) -> String {
+    let mut shared: Option<Vec<&str>> = None;
+    for path in paths {
+        let mut folder: Vec<&str> = path.split('/').collect();
+        folder.pop();
+        shared = Some(match shared {
+            None => folder,
+            Some(shared) => shared.into_iter().zip(folder).take_while(|(one, other)| one == other).map(|(one, _)| one).collect(),
+        });
+    }
+    shared.unwrap_or_default().join("/")
+}
+
+/// What a Server said went wrong, as a clause: `Access is denied. (os
+/// error 5)` reads `access is denied`.
+fn plainly(said: &str) -> String {
+    let why = said.split(" (os error").next().unwrap_or(said).trim_end_matches('.');
+    let mut letters = why.chars();
+    match letters.next() {
+        Some(first) => first.to_lowercase().chain(letters).collect(),
+        None => String::new(),
+    }
+}
+
 /// Whether `error` is the connection to the Machine ending under the copy.
 fn cut_off(error: &io::Error) -> bool {
     use io::ErrorKind::*;
@@ -958,5 +1038,62 @@ fn bytes(size: u64) -> String {
         format!("{value:.1} {}", UNITS[unit])
     } else {
         format!("{value:.0} {}", UNITS[unit])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferrite_core::tree::{Problem, Unmade};
+
+    fn unmade(path: &str, entry: tree::Entry, why: Refusal) -> Unmade {
+        Unmade {
+            path: path.into(),
+            entry,
+            why,
+        }
+    }
+
+    fn link() -> tree::Entry {
+        tree::Entry::Symlink { target: "../x".into() }
+    }
+
+    /// A few left are each named by path; many of one kind left for one
+    /// reason are one line, with how many and the folder they share.
+    #[test]
+    fn what_a_copy_left_is_said_plainly_and_many_alike_as_one_line() {
+        let mut sent = Sent::default();
+        sent.problems.push(Problem {
+            path: "server.log".into(),
+            side: Side::Here,
+            error: "The process cannot access the file. (os error 32)".into(),
+        });
+        for at in 0..312 {
+            let path = format!("apps/web/node_modules/@scope/name-{at}");
+            sent.unmade.push(unmade(&path, link(), Refusal::LeadsOut));
+        }
+        sent.unmade.push(unmade("apps/docs/node_modules/x", link(), Refusal::LeadsOut));
+        sent.unmade.push(unmade(".env", link(), Refusal::LeadsNowhere));
+        sent.unmade.push(unmade("src/aux", tree::Entry::Dir, Refusal::Name));
+        let failed = Refusal::Failed {
+            error: "Access is denied. (os error 5)".into(),
+        };
+        sent.unmade.push(unmade("dist/app.js", tree::Entry::File { size: 1, sha256: String::new(), mode: None, modified: None }, failed));
+        assert_eq!(
+            not_copied(&sent, &["notes.md".into()], "josephpc"),
+            [
+                "server.log \u{b7} in use here",
+                "313 links in apps lead outside the Project and were not made on josephpc",
+                ".env \u{b7} a link to nothing on josephpc, not made",
+                "src/aux \u{b7} a name josephpc cannot hold",
+                "dist/app.js \u{b7} not made on josephpc: access is denied",
+                "notes.md \u{b7} changed on josephpc",
+            ]
+        );
+        sent.unmade.truncate(312);
+        assert_eq!(
+            not_copied(&Sent { problems: Vec::new(), ..sent }, &[], "josephpc"),
+            ["312 links in apps/web/node_modules/@scope lead outside the Project and were not made on josephpc"]
+        );
     }
 }
