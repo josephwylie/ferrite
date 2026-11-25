@@ -2661,7 +2661,7 @@ fn hang_menu(
                 ferrite_ui::motion::Opens::Down,
             )),
     )
-    .with_priority(2)
+    .with_priority(ferrite_ui::layer::MENU)
     .into_any_element()
 }
 

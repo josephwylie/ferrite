@@ -7588,11 +7588,7 @@ impl CockpitView {
             .children(self.sheet_floats(window, cx))
             .children(self.lightbox_element(cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
-            // The kit's toasts, where the theme hangs them whatever is up
-            // (`TOAST_FOOT`).
-            .children(gpui::component::Root::render_notification_layer(window, cx).map(|layer| {
-                deferred(layer).with_priority(crate::float::FLOAT_PRIORITY)
-            }))
+            .children(self.kit_toasts(window, cx))
     }
 }
 

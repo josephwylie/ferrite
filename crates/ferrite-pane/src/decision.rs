@@ -1392,7 +1392,7 @@ pub fn approval_actions(
                     .mt(px(theme::FLOAT_OFFSET))
                     .child(menu),
             )
-            .with_priority(1)
+            .with_priority(ferrite_ui::layer::MENU)
         }));
     div()
         .debug_selector(|| "decision-actions".into())

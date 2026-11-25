@@ -7,6 +7,7 @@ pub mod field;
 pub mod frame;
 pub mod icons;
 pub mod keymap;
+pub mod layer;
 pub mod loops_overlay;
 pub mod menu;
 pub mod motion;

@@ -59,7 +59,12 @@ the plan card came back on a Thread focused again later.
   context menu opened from inside a sheet still opens over it: the first
   Escape closes the menu, the second the sheet.
 - **One draw.** The popup up is drawn in one place, `deferred` at
-  `FLOAT_PRIORITY`, over the sheets.
+  `FLOAT_PRIORITY`, over the sheets and the kit's toasts. The window's
+  layers are one ladder (`ferrite_ui::layer`), bottom to top: sheet,
+  toast, menu, lightbox. Every menu the operator opens, in the slot or
+  out of it (a Composer's text menu, a transcript row's, a Decision's),
+  is a menu there, so no toast ever hides one; a sheet stays under the
+  toasts.
 - **Out of the slot.** The Composer's text menus (`/` and `@`), which
   follow what is typed, the palette and shortcuts, the Thread details
   card, the lightbox and the transcript's own menus keep their own state.

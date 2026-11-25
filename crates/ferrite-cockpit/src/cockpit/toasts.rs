@@ -413,31 +413,77 @@ impl CockpitView {
     }
 
     /// Hand the toast float where it hangs this frame, as the columns are
-    /// laid out, and keep the kit's toast stack (`theme.notification`) on
-    /// the transcript's column with it: its right margin follows the
-    /// panel, written only when it moves.
+    /// laid out.
     pub(super) fn place_toasts(&self, window: &Window, cx: &mut Context<Self>) {
-        let board_right =
-            self.panel_column_w(cx) + self.task_panel_w(cx) + self.details_toast_inset(window, cx);
         let place = Place {
             folded: self.nav_folded(),
             nav_w: self.nav_width(),
-            board_right,
+            board_right: self.toast_board_right(window, cx),
         };
         // The Cockpit is drawing: the float takes its place as it is.
         self.toasts.update(cx, |toasts, cx| toasts.place(place, cx));
-        let right = px(board_right + ferrite_ui::theme::TOAST_BOX_RIGHT);
-        if gpui::component::Theme::global(cx)
-            .notification
-            .margins
-            .right
-            != right
-        {
-            gpui::component::Theme::global_mut(cx)
-                .notification
-                .margins
-                .right = right;
+    }
+
+    /// The kit's toasts (the root's), over the sheets and under every menu
+    /// (`ferrite_ui::layer`), where `toast_home` puts them: drawn again at
+    /// once when the Panes, laid out, moved their home.
+    pub(super) fn kit_toasts(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let home = self.toast_home(window, cx);
+        let margins = &gpui::component::Theme::global(cx).notification.margins;
+        if (margins.right, margins.bottom) != home {
+            let margins = &mut gpui::component::Theme::global_mut(cx).notification.margins;
+            (margins.right, margins.bottom) = home;
         }
+        let layer = gpui::component::Root::render_notification_layer(window, cx)?;
+        let view = cx.weak_entity();
+        let layer = ferrite_ui::components::on_bounds(div().absolute().inset_0().child(layer), move |_, window, cx| {
+            if view.upgrade().is_some_and(|view| view.read(cx).toast_home(window, cx) != home) {
+                ferrite_ui::components::redraw_drawn_view(window, cx);
+            }
+        });
+        Some(deferred(layer).with_priority(ferrite_ui::layer::TOAST).into_any_element())
+    }
+
+    /// Where the kit's toasts stand, as their margins from the window's
+    /// right edge and foot: over the Composer of the board's lower right
+    /// Pane, their right edge on its box's and their foot `TOAST_TOP` over
+    /// its stack, or over the row the operator answers at its transcript's
+    /// foot when they would reach that, though never over the Pane's head.
+    /// With no Composer there, or the Factory or the pull requests in the
+    /// board's place, the board's lower right corner (`TOAST_FOOT`).
+    pub(super) fn toast_home(&self, window: &Window, cx: &gpui::App) -> (Pixels, Pixels) {
+        use ferrite_ui::theme::{PANE_HEAD_H, TOAST_BOX_RIGHT, TOAST_FOOT, TOAST_KIT_H, TOAST_REACH, TOAST_TOP};
+        let viewport = window.viewport_size();
+        let corner = |(_, a): &(usize, layout::Rect), (_, b): &(usize, layout::Rect)| {
+            (a.x + a.w, a.y + a.h).partial_cmp(&(b.x + b.w, b.y + b.h)).unwrap_or(std::cmp::Ordering::Equal)
+        };
+        // A Pane the board does not show keeps where it was last drawn.
+        let panes_shown =
+            self.cockpit.read(cx).environment_available() && self.factory().is_none() && !self.prs_shown();
+        let panes = if panes_shown { self.pane_rects(window, cx) } else { Vec::new() };
+        let over_composer = panes.into_iter().max_by(corner).and_then(|(index, pane)| {
+            let geometry = self.panes[index].geometry.get();
+            let (field, stack) = (geometry.composer?, geometry.stack?);
+            let reach = stack.top() - px(TOAST_TOP + TOAST_REACH);
+            let clear = geometry
+                .answers
+                .filter(|answers| answers.bottom() > reach)
+                .map_or(stack.top(), |answers| answers.top().min(stack.top()));
+            let highest = px(pane.y + PANE_HEAD_H + TOAST_TOP + TOAST_KIT_H);
+            Some((field.right(), (clear - px(TOAST_TOP)).max(highest)))
+        });
+        let (right, foot) = over_composer.unwrap_or_else(|| {
+            let right = px(self.toast_board_right(window, cx) + TOAST_BOX_RIGHT);
+            (viewport.width - right, viewport.height - px(TOAST_FOOT))
+        });
+        (viewport.width - right, viewport.height - foot)
+    }
+
+    /// How far in from the window's right edge the board ends for a toast
+    /// in its corner: short of the panel, an open Task's, and the Details
+    /// cards standing there.
+    fn toast_board_right(&self, window: &Window, cx: &gpui::App) -> f32 {
+        self.panel_column_w(cx) + self.task_panel_w(cx) + self.details_toast_inset(window, cx)
     }
 }
 

@@ -177,16 +177,37 @@ fn failure_words(message: &str) -> SharedString {
 }
 
 impl CockpitView {
+    /// The row after a transcript's last (`tail_row`), where it is drawn
+    /// kept in the Pane's geometry for the kit's toasts to stand clear of
+    /// (`toast_home`); with none, none is kept.
+    pub(super) fn transcript_tail(&self, index: usize, cx: &Context<Self>) -> Option<TranscriptTail> {
+        use ferrite_pane::pane::PaneGeometry;
+        let geometry = self.panes.get(index)?.geometry.clone();
+        let Some(tail) = self.tail_row(index, cx) else {
+            geometry.set(PaneGeometry { answers: None, ..geometry.get() });
+            return None;
+        };
+        let row = tail.render;
+        Some(TranscriptTail {
+            key: tail.key,
+            render: std::rc::Rc::new(move |window: &mut Window, cx: &mut App| {
+                use gpui::prelude::*;
+                let geometry = geometry.clone();
+                let row = gpui::div().flex().flex_col().w_full().min_w_0().child(row(window, cx));
+                ferrite_ui::components::on_bounds(row, move |bounds, _, _| {
+                    geometry.set(PaneGeometry { answers: Some(bounds), ..geometry.get() })
+                })
+                .into_any_element()
+            }),
+        })
+    }
+
     /// The row after a transcript's last: the pending Decision, as its
     /// card is built for the tail (`CockpitView::decision_tail`, the
     /// Decision card's owner), else the failure strip or the
     /// background-work line, under the line that says a Delegate waits on
     /// the operator (T3's `ThreadNow`: the line that needs you first).
-    pub(super) fn transcript_tail(
-        &self,
-        index: usize,
-        cx: &Context<Self>,
-    ) -> Option<TranscriptTail> {
+    fn tail_row(&self, index: usize, cx: &Context<Self>) -> Option<TranscriptTail> {
         if let Some(decision) = self.decision_tail(index, cx) {
             return Some(decision);
         }

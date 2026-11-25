@@ -211,8 +211,8 @@ impl Render for Sheets {
         div()
             .absolute()
             .inset_0()
-            .child(deferred(face).with_priority(3))
-            .children(above.map(|above| deferred(above).with_priority(4)))
+            .child(deferred(face).with_priority(ferrite_ui::layer::SHEET))
+            .children(above.map(|above| deferred(above).with_priority(ferrite_ui::layer::SHEET_ABOVE)))
             .into_any_element()
     }
 }

@@ -132,7 +132,16 @@ pub struct PaneView {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PaneGeometry {
     pub card: Option<gpui::Bounds<gpui::Pixels>>,
+    /// The Composer's box.
     pub composer: Option<gpui::Bounds<gpui::Pixels>>,
+    /// The Composer's whole stack: what stands over its box (the band, the
+    /// queue, the shelf), the box, and its footer. None while the Pane has
+    /// no Composer (a subagent's transcript runs to its foot).
+    pub stack: Option<gpui::Bounds<gpui::Pixels>>,
+    /// The row the operator answers at the transcript's foot (a Decision,
+    /// a failed turn's Retry), as last drawn, while there is one
+    /// (`cockpit::transcript_tail`).
+    pub answers: Option<gpui::Bounds<gpui::Pixels>>,
 }
 
 /// View ownership stays with a Subject even while its transcript is hidden.
@@ -879,6 +888,11 @@ fn dock_slot(cx: &mut PaneCtx) -> Vec<AnyElement> {
 /// its transcript runs to the Pane's foot.
 fn composer_slot(cx: &mut PaneCtx) -> Option<AnyElement> {
     if !cx.view.is_main() {
+        let geometry = &cx.view.geometry;
+        geometry.set(PaneGeometry {
+            stack: None,
+            ..geometry.get()
+        });
         return None;
     }
     Some(

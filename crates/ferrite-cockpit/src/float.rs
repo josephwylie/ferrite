@@ -24,11 +24,11 @@ pub(crate) enum FloatPlace {
     BoardTop { top: f32, width: f32 },
 }
 
-/// The priority every float paints at: over the Panes' own deferred menus
-/// and over the veil (`VEIL_PRIORITY`).
-pub(crate) const FLOAT_PRIORITY: usize = 4;
+/// The priority every float paints at: over the kit's toasts and the veil
+/// (`VEIL_PRIORITY`), with every menu (`ferrite_ui::layer`).
+pub(crate) const FLOAT_PRIORITY: usize = ferrite_ui::layer::MENU;
 /// The palette's veil: over the board's Panes, under the float.
-pub(crate) const VEIL_PRIORITY: usize = 3;
+pub(crate) const VEIL_PRIORITY: usize = ferrite_ui::layer::SHEET;
 
 /// The anchored corner, the point it is pinned to and the offset for a
 /// placement — pure, so the geometry is testable without a window.

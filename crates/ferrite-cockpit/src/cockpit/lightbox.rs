@@ -24,7 +24,7 @@ use ferrite_ui::theme::{self, paint};
 gpui::actions!(lightbox, [Close]);
 
 /// Over every float and the toasts: nothing else answers while it is up.
-const LIGHTBOX_PRIORITY: usize = crate::float::FLOAT_PRIORITY + 1;
+const LIGHTBOX_PRIORITY: usize = ferrite_ui::layer::LIGHTBOX;
 
 impl CockpitView {
     /// The focused Pane's lightbox, while it has one open. Focus moving to

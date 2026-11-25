@@ -419,7 +419,7 @@ pub(super) fn tray(entity: &Entity<Composer>, now: Instant, cx: &App) -> Option<
                     .margin(px(16.))
                     .child(panel(entity, index, reply, cx)),
             )
-            .with_priority(4)
+            .with_priority(ferrite_ui::layer::MENU)
             .into_any_element()
         });
     Some(

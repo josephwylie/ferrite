@@ -432,9 +432,17 @@ Windows window.
   a toast that does not hide by itself says "Copying P to E", a thin bar,
   "38% · about 3 min left" and Show, which brings the card back; closing
   it does not stop the copy. Toasts standing together (two copies under
-  way) each show whole, one above the other. Leaving the app while a copy
-  runs asks first ("Copying P to E. Leaving stops it; Resume finishes it
-  later.").
+  way) each show whole, one above the other. **Where toasts stand:** the
+  kit's toasts stand over the Composer of the board's lower right Pane,
+  their right edge on its box's and their foot just over its stack, or
+  just over a Decision or a failed turn's Retry at the transcript's foot
+  when they would reach it, never over the Pane's head; with no Composer
+  there, in the board's lower right corner (`toast_home`). So they read
+  as anchored in every layout (a draft, a Thread, the panel or the
+  Details card open, a sheet up), and never cover an answer the operator
+  owes. They draw over any sheet and under every menu (ADR 0043's
+  ladder). Leaving the app while a copy runs asks first ("Copying P to
+  E. Leaving stops it; Resume finishes it later.").
 - **A copy is always a pick away.** Every Draft's environment chip lists
   each copy under way after its environments, "Copying P to E" and how
   far, the Draft's own Project first; a pick opens its card. The chip

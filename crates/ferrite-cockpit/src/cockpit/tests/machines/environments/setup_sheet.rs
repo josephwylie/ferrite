@@ -8,6 +8,8 @@ use super::*;
 use crate::cockpit::copies::Phase;
 use ferrite_core::sound::Sound;
 
+mod off_the_card;
+
 /// The draft's composer text.
 fn draft_text(view: &Entity<CockpitView>, draft: PaneIdentity, cx: &mut gpui::VisualTestContext) -> String {
     view.read_with(cx, |view, cx| {

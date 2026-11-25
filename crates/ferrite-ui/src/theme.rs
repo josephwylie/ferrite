@@ -1369,8 +1369,8 @@ pub fn init_components(cx: &mut gpui::App) {
     // (Button::primary, menu rows, tooltips, checkboxes) would paint the
     // kit's neutrals. Rebuild them from the colours above.
     theme.tokens = gpui::component::ThemeTokens::from(&theme.colors);
-    // The kit's toasts have one home, whatever sheet is up (`TOAST_FOOT`);
-    // the Cockpit keeps their right margin short of the panel.
+    // The kit's toasts have one home, whatever sheet is up: the Cockpit
+    // keeps their margins on a Composer (`TOAST_FOOT`).
     theme.notification.placement = gpui::Anchor::BottomRight;
     theme.notification.margins = gpui::base::Edges {
         top: px(WIN_CHROME_H + PANE_HEAD_H + TOAST_TOP),
@@ -2859,15 +2859,23 @@ pub const TOOLTIP_MAX_W: f32 = 320.0;
 /// `TOAST_QUICK_GAP` over the float's edge.
 pub const TOAST_BOX_RIGHT: f32 = SPACE_4;
 pub const TOAST_TOP: f32 = SPACE_2;
-/// How far over the window's foot the kit's toasts stand (a copy's, a
-/// setup sync's), `TOAST_BOX_RIGHT` in from the board's right edge as a
-/// toast's is (the window's while no panel shows), the newest lowest:
-/// clear of a draft's Composer and its band, so they cover none of its
-/// presses, and in the corner a sheet keeps clear of, a sheet's head and
-/// footer being narrower than the window or ending above it. They never
-/// move for a sheet.
+/// The kit's toasts (a copy's, a setup sync's) stand over the Composer of
+/// the board's lower right Pane, the newest lowest: their right edge on
+/// the Composer box's, their foot `TOAST_TOP` over its band, or over the
+/// row the operator answers at the transcript's foot (a Decision, a failed
+/// turn's Retry) when they would reach it (`cockpit::toasts::toast_home`).
+/// They never move for a sheet. With no Composer there, they stand
+/// `TOAST_FOOT` over the window's foot, `TOAST_BOX_RIGHT` in from the
+/// board's right edge, clear of where a draft's Composer and band would
+/// be.
 pub const TOAST_FOOT: f32 =
     ENV_STRIP_H + COMPOSER_HERO_INPUT_H + COMPOSER_TOOLBAR_H + COMPOSER_FOOTER_H + TOAST_TOP;
+/// A kit toast at its tallest: its title, a bar or two lines, and the
+/// caption row its buttons end.
+pub const TOAST_KIT_H: f32 = 112.0;
+/// How far over their foot the kit's toasts reach, standing together: as
+/// many as stand at once (`notification.max_items`), `TOAST_GAP` apart.
+pub const TOAST_REACH: f32 = 3.0 * TOAST_KIT_H + 2.0 * TOAST_GAP;
 pub const TOAST_QUICK_GAP: f32 = SPACE_2;
 /// **The palette** (command search, ⌘K; SPEC §5.8), measured off the
 /// Claude app's own ⌘K search at 1x (2026-11-03): a `PALETTE_W` dialog

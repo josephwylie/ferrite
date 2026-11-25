@@ -78,7 +78,7 @@ thread_local! {
 }
 
 /// The priorities of the `deferred` draws whose loops the overlay draws:
-/// every one the app's floats use (`float::FLOAT_PRIORITY` is the highest).
+/// every one the app's floats use (`layer::LIGHTBOX` is the highest).
 const LAYERS: std::ops::RangeInclusive<usize> = 0..=8;
 
 fn with_marks<R>(window: WindowId, f: impl FnOnce(&mut WindowMarks) -> R) -> R {

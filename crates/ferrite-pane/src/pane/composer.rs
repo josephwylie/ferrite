@@ -682,38 +682,48 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
     field = field.children(drop_hint);
     // The `/`, `@` or `$` menu is a drawer standing on the box's top edge
     // (T3's `ComposerBanner`), as wide as the box — deferred, so it
-    // escapes the Pane's clip and draws over the transcript (#24).
+    // escapes the Pane's clip and draws over the transcript (#24) and any
+    // toast.
     if let Some(menu) = menu {
-        field = field.child(deferred(
-            div()
-                .debug_selector(|| "composer-menu-drawer".into())
-                .absolute()
-                .bottom(relative(1.))
-                .left_0()
-                .right_0()
-                .child(menu),
-        ));
+        field = field.child(
+            deferred(
+                div()
+                    .debug_selector(|| "composer-menu-drawer".into())
+                    .absolute()
+                    .bottom(relative(1.))
+                    .left_0()
+                    .right_0()
+                    .child(menu),
+            )
+            .with_priority(ferrite_ui::layer::MENU),
+        );
     }
-    composer_stack(None)
-        .children(offer.map(in_column))
-        .children(queue.map(|queue| {
-            in_column(queue).pb(px(theme::QUEUE_CARD_GAP))
-        }))
-        // Where the work runs, on the box's top edge (Codex's).
-        .children(env.map(in_column))
-        .child(in_column(field))
-        // The model, effort and mode under the box, as plain words, the
-        // last one's ink ending where the column's text does.
-        .child(in_column(
-            div()
-                .debug_selector(|| "composer-footer".into())
-                .flex()
-                .items_center()
-                .min_w_0()
-                .h(px(theme::COMPOSER_FOOTER_H))
-                .px(px(theme::COMPOSER_OUTSET - theme::FOOTER_CHIP_PAD_X))
-                .children(footer),
-        ))
+    let recorded = view.geometry.clone();
+    components::on_bounds(composer_stack(None), move |bounds, _, _| {
+        recorded.set(PaneGeometry {
+            stack: Some(bounds),
+            ..recorded.get()
+        })
+    })
+    .children(offer.map(in_column))
+    .children(queue.map(|queue| {
+        in_column(queue).pb(px(theme::QUEUE_CARD_GAP))
+    }))
+    // Where the work runs, on the box's top edge (Codex's).
+    .children(env.map(in_column))
+    .child(in_column(field))
+    // The model, effort and mode under the box, as plain words, the
+    // last one's ink ending where the column's text does.
+    .child(in_column(
+        div()
+            .debug_selector(|| "composer-footer".into())
+            .flex()
+            .items_center()
+            .min_w_0()
+            .h(px(theme::COMPOSER_FOOTER_H))
+            .px(px(theme::COMPOSER_OUTSET - theme::FOOTER_CHIP_PAD_X))
+            .children(footer),
+    ))
 }
 
 /// Stop then send, `PRIMARY_ACTIONS_GAP` apart (T3's `gap-2`), or none.
