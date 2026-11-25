@@ -279,9 +279,24 @@ impl Why {
                 place(*on, name)
             ),
             Why::Held(Hold::Kinds) => format!("{spelled}: it is a file on one side and a folder on the other"),
+            Why::Held(Hold::FolderAndLink(folder)) => {
+                let what = skill(path).map_or(spelled, |skill| format!("the skill {skill}"));
+                match folder {
+                    Side::Here => format!("{what} is a folder here and a link on {name}: left as each has it"),
+                    Side::There => format!("{what} is a folder on {name} and a link here: left as each has it"),
+                }
+            }
             Why::Held(Hold::SignIn) => format!("{spelled}: it is signed in differently on each side"),
         }
     }
+}
+
+/// The skill a setup path is the folder of, by its name.
+fn skill(path: &str) -> Option<&str> {
+    [".claude/skills/", ".agents/skills/", ".codex/skills/"]
+        .iter()
+        .find_map(|skills| path.strip_prefix(skills))
+        .filter(|name| !name.contains('/'))
 }
 
 /// A setup path as the operator reads it: a chosen key by its name in its
@@ -1152,6 +1167,26 @@ mod tests {
         assert_eq!(
             Status::InSync(held(&synced).collect()).line("box"),
             "In sync except pstack could not be installed on box: Plugin \"pstack\" not found in marketplace \"cursor-plugins\"."
+        );
+    }
+
+    #[test]
+    fn a_skill_that_is_a_folder_on_one_side_and_a_link_on_the_other_says_so() {
+        let on = |path: &str, folder: Side| {
+            let synced = Synced { held: BTreeMap::from([(path.to_string(), Hold::FolderAndLink(folder))]), ..Synced::default() };
+            Status::InSync(held(&synced).collect()).line("josephpc")
+        };
+        assert_eq!(
+            on(".claude/skills/reui", Side::There),
+            "In sync except the skill reui is a folder on josephpc and a link here: left as each has it"
+        );
+        assert_eq!(
+            on(".claude/skills/reui", Side::Here),
+            "In sync except the skill reui is a folder here and a link on josephpc: left as each has it"
+        );
+        assert_eq!(
+            on(".claude/commands/team", Side::There),
+            "In sync except ~/.claude/commands/team is a folder on josephpc and a link here: left as each has it"
         );
     }
 

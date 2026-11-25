@@ -1629,6 +1629,50 @@ fn what_a_sync_removes_or_replaces_on_either_side_is_kept_in_that_sides_trash() 
     assert_eq!(sync(&job, &far), Synced::default());
 }
 
+/// A skill that is a real folder on one side and a link on the other is
+/// made the link only when the folder holds nothing the link would not:
+/// then the folder goes to that side's trash. Else it is held, both ways.
+#[test]
+fn a_folder_against_a_link_is_held_unless_the_link_loses_nothing() {
+    let world = World::new("folder-or-link");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    put(&mine, ".agents/skills/same/SKILL.md", "# Same\n");
+    put(&mine, ".agents/skills/differs/SKILL.md", "# Differs\n");
+    link_skill(&mine, "same");
+    link_skill(&mine, "differs");
+    put(&far, ".agents/skills/same/SKILL.md", "# Same\r\n");
+    put(&far, ".claude/skills/same/SKILL.md", "# Same\n");
+    put(&far, ".agents/skills/differs/SKILL.md", "# Differs\n");
+    put(&far, ".claude/skills/differs/SKILL.md", "# Differs, edited on the Machine\n");
+    put(&far, ".claude/skills/differs/notes.md", "Only on the Machine.\n");
+    let job = world.job(&mine, "far");
+
+    let synced = sync(&job, &far);
+    assert!(is_link(&at(&far, ".claude/skills/same")), "{synced:?}");
+    assert_eq!(read(&far, ".claude/skills/same/SKILL.md").as_deref(), Some("# Same\r\n"), "the link leads to the Machine's own");
+    let there = kept_in(&trash_of(&far));
+    assert_eq!(there.get("claude/skills/same/SKILL.md").map(Vec::as_slice), Some(&b"# Same\n"[..]), "{:?}", there.keys());
+    assert!(!is_link(&at(&far, ".claude/skills/differs")));
+    assert_eq!(read(&far, ".claude/skills/differs/SKILL.md").as_deref(), Some("# Differs, edited on the Machine\n"));
+    assert_eq!(read(&far, ".claude/skills/differs/notes.md").as_deref(), Some("Only on the Machine.\n"));
+    assert!(synced.held.contains_key(".claude/skills/differs"), "{synced:?}");
+    assert!(is_link(&at(&mine, ".claude/skills/differs")) && read(&mine, ".agents/skills/differs/SKILL.md").as_deref() == Some("# Differs\n"));
+    let again = sync(&job, &far);
+    assert_eq!(again.changed(), 0, "{again:?}");
+    assert!(again.held.contains_key(".claude/skills/differs"));
+
+    put(&mine, ".claude/skills/both/SKILL.md", "# Both\n");
+    put(&mine, ".agents/skills/both/SKILL.md", "# Both, as the installer has it\n");
+    sync(&job, &far);
+    assert_eq!(read(&far, ".claude/skills/both/SKILL.md").as_deref(), Some("# Both\n"));
+    gone(&mine, ".claude/skills/both");
+    link_skill(&mine, "both");
+    let later = sync(&job, &far);
+    assert!(later.held.contains_key(".claude/skills/both"), "a base does not make it go: {later:?}");
+    assert_eq!(read(&far, ".claude/skills/both/SKILL.md").as_deref(), Some("# Both\n"));
+    assert!(!is_link(&at(&far, ".claude/skills/both")));
+}
+
 /// With no base, two copies that differ only in line ends are one file,
 /// though a base from another table named the bytes of one.
 #[test]
@@ -1643,5 +1687,76 @@ fn with_no_base_a_line_end_difference_never_moves_even_from_an_old_base() {
     assert_eq!(synced.changed(), 0, "{synced:?}");
     assert_eq!(read(&mine, ".claude/CLAUDE.md").as_deref(), Some("Be careful.\r\nBe kind.\r\n"));
     assert_eq!(read(&far, ".claude/CLAUDE.md").as_deref(), Some("Be careful.\nBe kind.\n"));
+}
+
+/// The verifier's run on the operator's homes, as a test: a base Ferrite
+/// 0.4.0's table wrote (links followed, plugin downloads, Claude's account
+/// sync, whole tool files), and three linked skills the first table made
+/// real folders on the Machine. Nothing the Machine held is lost: each of
+/// its files is where it was or in its own trash, and only a folder that
+/// held what its link holds becomes the link.
+#[test]
+fn the_first_tables_base_and_the_folders_it_made_of_links_lose_nothing() {
+    let world = World::new("first-table-folders");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    for home in [&mine, &far] {
+        put(home, ".claude/plugins/installed_plugins.json", r#"{"plugins": {"pstack@cursor-plugins": [{}]}}"#);
+        put(home, ".claude/plugins/cache/cursor-plugins/pstack/0.15.48/README.md", "# pstack\n");
+        put(home, ".claude/skills/synced/manifest.json", "{}\n");
+        put(home, ".claude/settings.json", r#"{"model": "opus", "enabledPlugins": {"cc-plugin-telemetry@builtin": true}}"#);
+        put(home, ".codex/config.toml", "model = \"gpt\"\n");
+        put(home, ".claude.json", r#"{"numStartups": 1}"#);
+    }
+    put(&mine, ".agents/skills/reui/SKILL.md", "# ReUI\n");
+    put(&mine, ".agents/skills/reui/rules/colors.md", "Colors.\n");
+    put(&mine, ".agents/skills/brandkit/SKILL.md", "# Brandkit, newer\n");
+    put(&mine, ".agents/skills/better-ui/SKILL.md", "# Better UI\n");
+    for name in ["reui", "brandkit", "better-ui"] {
+        link_skill(&mine, name);
+    }
+    put(&far, ".claude/skills/reui/SKILL.md", "# ReUI\n");
+    put(&far, ".claude/skills/reui/rules/colors.md", "Colors.\n");
+    put(&far, ".claude/skills/brandkit/SKILL.md", "# Brandkit\n");
+    for at in 0..6 {
+        put(&far, &format!(".claude/skills/brandkit/assets/{at}.md"), &format!("Asset {at}.\n"));
+    }
+    put(&far, ".claude/skills/better-ui/SKILL.md", "# Better UI\n");
+    for at in 0..6 {
+        put(&far, &format!(".claude/skills/better-ui/examples/{at}.md"), &format!("Example {at}.\n"));
+    }
+    put(&far, ".claude/skills/better-ui/written-on-the-machine.md", "Mine.\n");
+    let job = world.job(&mine, "far");
+    let mut entries = Vec::new();
+    for path in [".claude/skills", ".claude/plugins", ".claude/settings.json", ".codex/config.toml", ".claude.json"] {
+        entries.extend(first_table_entries(&far, path));
+    }
+    entries.retain(|(path, _)| path != ".claude/skills/better-ui/written-on-the-machine.md");
+    first_table_base(&job, entries);
+    let before = own_files(&far);
+    let lost = |far: &Home| -> Vec<String> {
+        let (now, kept) = (own_files(far), kept_in(&trash_of(far)));
+        before
+            .iter()
+            .filter(|(path, bytes)| {
+                let shown = path.strip_prefix('.').unwrap_or(path);
+                now.get(*path) != Some(*bytes) && kept.get(shown) != Some(*bytes)
+            })
+            .map(|(path, _)| path.clone())
+            .collect()
+    };
+
+    let first = sync(&job, &far);
+    assert_eq!(lost(&far), Vec::<String>::new(), "{first:?}");
+    assert_eq!((first.removed_here, first.removed_there), (0, 0), "{first:?}");
+    let second = sync(&job, &far);
+    assert_eq!(lost(&far), Vec::<String>::new(), "{second:?}");
+    assert!(is_link(&at(&far, ".claude/skills/reui")), "it held what its link holds: {second:?}");
+    assert_eq!(read(&far, ".claude/skills/reui/rules/colors.md").as_deref(), Some("Colors.\n"));
+    for name in ["brandkit", "better-ui"] {
+        assert!(!is_link(&at(&far, &format!(".claude/skills/{name}"))), "{name}");
+        assert!(second.held.contains_key(&format!(".claude/skills/{name}")), "{name}: {second:?}");
+    }
+    assert_eq!(read(&far, ".claude/plugins/cache/cursor-plugins/pstack/0.15.48/README.md").as_deref(), Some("# pstack\n"));
+    assert_eq!(sync(&job, &far).changed(), 0);
 }
 

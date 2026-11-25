@@ -7,14 +7,16 @@
 //! union of both sides and removes nothing; a chosen key both sides hold
 //! differently takes this computer's, and two different sign-ins wait for
 //! the operator. A sign-in is never removed: a side without one takes the
-//! other's.
+//! other's. A folder on one side where the other has a link is never
+//! replaced, base or no base, unless it holds only what the link leads to
+//! on that side.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 
 use serde::Serialize;
 
-use super::{chosen, file_of, sign_in};
+use super::{chosen, file_of, links, sign_in};
 use crate::tree::{executable_differs, Entry, Manifest, Side};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +41,9 @@ pub enum Hold {
     Linked(Side),
     /// A file on one side and a folder on the other.
     Kinds,
+    /// A folder on `Side`, and a link on the other side to a folder that,
+    /// on `Side`, holds other than it does: either way something would go.
+    FolderAndLink(Side),
     /// Two sign-ins, one each side, with none agreed before: which is kept
     /// is the operator's to say, since each may be another account.
     SignIn,
@@ -72,9 +77,10 @@ impl Action {
 pub fn reconcile(base: &Manifest, here: &Manifest, there: &Manifest) -> Vec<Action> {
     let sides = Sides { here, there };
     let mut held = Held::of(here, there);
+    let mut linked_over = BTreeSet::new();
     let mut actions = BTreeMap::new();
     for path in paths(base, here, there) {
-        if held.covers(path) {
+        if held.covers(path) || linked_over.iter().any(|link: &&str| under(path, link)) {
             continue;
         }
         let [b, h, t] = [base, here, there].map(|manifest| manifest.entries.get(path));
@@ -82,17 +88,52 @@ pub fn reconcile(base: &Manifest, here: &Manifest, there: &Manifest) -> Vec<Acti
             held.0.insert(path);
             continue;
         }
-        let Some(action) = decide(path, b, h, t, &sides) else {
+        let action = match folder_and_link(h, t) {
+            Some((folder, target)) if !sides.loses_nothing(path, folder, target, &held) => {
+                Some(Action::Hold { path: path.to_string(), why: Hold::FolderAndLink(folder) })
+            }
+            Some((folder, _)) => {
+                let link = || match folder {
+                    Side::Here => Action::Pull(path.to_string()),
+                    Side::There => Action::Push(path.to_string()),
+                };
+                let action = match decide(path, b, h, t, &sides) {
+                    Some(Action::Hold { why: Hold::Kinds, .. }) => Some(link()),
+                    action => action,
+                };
+                if action == Some(link()) {
+                    linked_over.insert(path);
+                }
+                action
+            }
+            None => decide(path, b, h, t, &sides),
+        };
+        let Some(action) = action else {
             continue;
         };
-        if matches!(action, Action::Hold { why: Hold::Kinds, .. }) {
+        if matches!(action, Action::Hold { why: Hold::Kinds | Hold::FolderAndLink(_), .. }) {
             held.0.insert(path);
         }
         actions.insert(path, action);
     }
-    keep_what_survives(&mut actions, &held, &sides);
+    keep_what_survives(&mut actions, &held, &linked_over, &sides);
     let actions = outermost(actions, &sides);
     actions.into_iter().map(|action| through_links(action, &sides)).collect()
+}
+
+/// The side holding a folder where the other holds a link, and the link's
+/// target.
+fn folder_and_link<'a>(h: Option<&'a Entry>, t: Option<&'a Entry>) -> Option<(Side, &'a str)> {
+    match (h, t) {
+        (Some(Entry::Dir), Some(Entry::Symlink { target })) => Some((Side::Here, target)),
+        (Some(Entry::Symlink { target }), Some(Entry::Dir)) => Some((Side::There, target)),
+        _ => None,
+    }
+}
+
+/// Whether `path` lies in the folder `dir`.
+fn under(path: &str, dir: &str) -> bool {
+    path.strip_prefix(dir).is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// What both sides hold alike now, by path, and the base's entry where
@@ -157,10 +198,10 @@ fn decide(path: &str, b: Option<&Entry>, h: Option<&Entry>, t: Option<&Entry>, s
 /// made again on the other side instead, and a file put in its place is
 /// a clash of kinds. Deepest first, so a folder kept keeps each holding
 /// it.
-fn keep_what_survives(actions: &mut BTreeMap<&str, Action>, held: &Held, sides: &Sides) {
+fn keep_what_survives(actions: &mut BTreeMap<&str, Action>, held: &Held, linked_over: &BTreeSet<&str>, sides: &Sides) {
     let paths: Vec<&str> = actions.keys().rev().copied().collect();
     for path in paths {
-        let Some(action) = actions.get(path) else {
+        let Some(action) = actions.get(path).filter(|_| !linked_over.contains(path)) else {
             continue;
         };
         let (on, removal) = match action {
@@ -263,6 +304,27 @@ impl Sides<'_> {
     fn linked(&self, side: Side, path: &str) -> bool {
         let links = &self.of(side).links;
         within(path, |at| links.contains(at))
+    }
+
+    /// Whether the folder at `path` on `side` holds only what the link the
+    /// other side has there, to `target`, leads to on `side`: each entry
+    /// under it the same as the one at its place in that folder, its text
+    /// by its line ends aside, and nothing under either one held.
+    fn loses_nothing(&self, path: &str, side: Side, target: &str, held: &Held) -> bool {
+        let Some(to) = links::joined(path, target) else {
+            return false;
+        };
+        let manifest = self.of(side);
+        let inside = |dir: &str, at: &str| at == dir || under(at, dir);
+        if manifest.entries.get(&to) != Some(&Entry::Dir) || held.0.iter().any(|at| inside(path, at) || inside(&to, at)) {
+            return false;
+        }
+        let under_path = format!("{path}/");
+        manifest
+            .entries
+            .range::<str, _>((Bound::Included(under_path.as_str()), Bound::Unbounded))
+            .take_while(|(at, _)| at.starts_with(&under_path))
+            .all(|(at, entry)| same(Some(entry), manifest.entries.get(&format!("{to}/{}", &at[under_path.len()..]))))
     }
 }
 
@@ -518,6 +580,25 @@ mod tests {
         );
         let unchanged = manifest(&[("x", Entry::Dir), ("x/a", file("a", 0))]);
         assert_eq!(reconcile(&base, &replaced, &unchanged), [Action::Push("x".into())], "the folder goes for the file");
+    }
+
+    #[test]
+    fn a_folder_against_a_link_goes_only_when_it_holds_what_the_link_leads_to() {
+        let (skill, inside) = (".claude/skills/x", ".claude/skills/x/SKILL.md");
+        let link = Entry::Symlink { target: "../../.agents/skills/x".into() };
+        let installed = [(".agents/skills/x", Entry::Dir), (".agents/skills/x/SKILL.md", file("a", 0))];
+        let with = |more: &[(&str, Entry)]| manifest(&[installed.as_slice(), more].concat());
+        let (linked, folder) = (with(&[(skill, link.clone())]), with(&[(skill, Entry::Dir), (inside, file("a", 3))]));
+        assert_eq!(reconcile(&Manifest::default(), &linked, &folder), [Action::Push(skill.into())], "the link, with no base");
+        let edited = with(&[(skill, Entry::Dir), (inside, file("b", 3))]);
+        let held = [Action::Hold { path: skill.into(), why: Hold::FolderAndLink(There) }];
+        assert_eq!(reconcile(&Manifest::default(), &linked, &edited), held);
+        assert_eq!(reconcile(&with(&[(skill, Entry::Dir), (inside, file("b", 0))]), &linked, &edited), held, "a base does not make it go");
+        assert_eq!(
+            reconcile(&linked, &folder, &linked),
+            [Action::Push(skill.into()), Action::Push(inside.into())],
+            "a link made a folder of what it held, since the base"
+        );
     }
 
     #[test]
