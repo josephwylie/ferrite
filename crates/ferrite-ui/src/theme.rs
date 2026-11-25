@@ -1379,6 +1379,10 @@ pub fn init_components(cx: &mut gpui::App) {
         left: px(SPACE_2),
     };
     theme.notification.width = px(TOAST_W);
+    // A toast is a float: it edges itself as one. The kit's `border` is
+    // `LINE`, the float's own grey, so a toast over a sheet's card had no
+    // edge and read as part of the sheet.
+    theme.notification.ring = Some(paint::FLOAT_EDGE.into());
     // Toasts that stand together, two copies under way, each show whole,
     // `TOAST_GAP` apart: no ghost edges behind a front one.
     theme.notification.max_items = 3;
@@ -4148,6 +4152,12 @@ mod tests {
             assert_eq!(theme.muted, solid(RAISED));
             assert_eq!(theme.background, solid(CARD));
             assert!(!theme.shadow, "floats wear Ferrite's own shadow");
+            assert_eq!(
+                theme.notification.ring,
+                Some(paint::FLOAT_EDGE.hsla()),
+                "a toast edges itself as every float does: `LINE` vanishes on a float's \
+                 ground, a sheet's under it among them"
+            );
             assert_eq!(theme.radius, gpui::px(R_CONTROL));
             assert_eq!(theme.radius_lg, gpui::px(R_FLOAT));
             assert_eq!(theme.font_size, gpui::px(FS_UI));

@@ -2,7 +2,7 @@ use std::{any::TypeId, borrow::Cow, cell::Cell, collections::HashMap, rc::Rc, ti
 
 use gpui::{
     Anchor, Animation, AnimationExt, AnyElement, AnyWindowHandle, App, AppContext, ClickEvent,
-    Context, DismissEvent, ElementId, Entity, EventEmitter, FocusHandle, Global,
+    Context, DismissEvent, ElementId, Entity, EventEmitter, FocusHandle, Global, Hsla,
     InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, SharedString,
     StatefulInteractiveElement, StyleRefinement, Styled, Subscription, SystemNotification,
     SystemNotificationResponse, WeakEntity, Window, WindowId, div, prelude::FluentBuilder, px,
@@ -517,7 +517,7 @@ impl Render for Notification {
             .relative()
             .w_full()
             .border_1()
-            .border_color(cx.theme().border)
+            .border_color(cx.theme().notification.ring.unwrap_or(cx.theme().border))
             .bg(cx.theme().tokens.popover)
             .rounded(cx.theme().radius_lg)
             .shadow(toast_shadow(1.))
@@ -687,6 +687,11 @@ pub struct NotificationSettings {
     ///
     /// A single notification can override this with [`Notification::delivery`].
     pub delivery: NotificationDelivery,
+    /// Ferrite's patch: the card's 1px ring, default: the theme's `border`.
+    /// A theme whose `border` is the plane's line, the same grey as its
+    /// floats, gives toasts a float's own edge here, or a toast over a sheet
+    /// reads as part of it.
+    pub ring: Option<Hsla>,
 }
 
 impl Default for NotificationSettings {
@@ -703,6 +708,7 @@ impl Default for NotificationSettings {
             max_items: 10,
             width: DEFAULT_NOTIFICATION_WIDTH,
             delivery: NotificationDelivery::default(),
+            ring: None,
         }
     }
 }

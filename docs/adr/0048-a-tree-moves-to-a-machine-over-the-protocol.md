@@ -444,7 +444,8 @@ Windows window.
   as anchored in every layout (a draft, a Thread, the panel or the
   Details card open, a sheet up), and never cover an answer the operator
   owes. They draw over any sheet and under every menu (ADR 0043's
-  ladder). Leaving the app while a copy runs asks first ("Copying P to
+  ladder), edged as every float is (`FLOAT_EDGE`), so one over a sheet's
+  card reads as its own card. Leaving the app while a copy runs asks first ("Copying P to
   E. Leaving stops it; Resume finishes it later.").
 - **A copy is always a pick away.** Every Draft's environment chip lists
   each copy the window keeps after its environments, the Draft's own
