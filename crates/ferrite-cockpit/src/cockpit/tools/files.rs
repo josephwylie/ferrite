@@ -1359,7 +1359,7 @@ impl FilesView {
                 cx,
             )
         };
-        super::surface_bar()
+        ferrite_ui::components::surface_bar()
             .child(
                 div()
                     .flex()

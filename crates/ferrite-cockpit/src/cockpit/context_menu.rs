@@ -116,8 +116,8 @@ pub(super) enum MenuVerb {
     Files(tools::FilesVerb),
     /// A Changes verb (`tools::ChangesVerb`).
     Changes(tools::ChangesVerb),
-    /// A Terminal verb (`tools::TerminalVerb`).
-    Terminal(tools::TerminalVerb),
+    /// A Terminal verb (`ferrite_tools::terminal::Verb`).
+    Terminal(ferrite_tools::terminal::Verb),
     /// A web page verb (`browser::page_menu::PageVerb`).
     Browser(super::browser::PageVerb),
     /// The Thread's id in the form the CLI takes (`thread_link`).
@@ -155,7 +155,7 @@ pub(super) enum Submenu {
     /// `Compare against ›`.
     Changes(tools::ChangesSub),
     /// `Cursor style ›` and `Scrollback ›`.
-    Terminal(tools::TerminalSub),
+    Terminal(ferrite_tools::terminal::Sub),
 }
 
 /// The context menu up on screen.
@@ -438,8 +438,30 @@ impl CockpitView {
             }
             MenuTarget::BrowserPage(thread) => rows = self.browser_page_rows(thread, cx),
             MenuTarget::Details(_) => rows = self.details_menu_rows(),
-            MenuTarget::Terminal(_) => rows = self.terminals.read(cx).context_rows(),
-            MenuTarget::TerminalMore(_) => rows = self.terminals.read(cx).more_rows(),
+            MenuTarget::Terminal(_) => {
+                rows = self
+                    .terminals
+                    .read(cx)
+                    .context_rows()
+                    .into_iter()
+                    .map(|row| row.map(|(item, verb)| (item, MenuVerb::Terminal(verb))))
+                    .collect()
+            }
+            MenuTarget::TerminalMore(_) => {
+                use ferrite_tools::terminal::Row;
+                rows = self
+                    .terminals
+                    .read(cx)
+                    .more_rows()
+                    .into_iter()
+                    .map(|row| {
+                        row.map(|(item, row)| match row {
+                            Row::Verb(verb) => (item, MenuVerb::Terminal(verb)),
+                            Row::Sub(sub) => (item, MenuVerb::Submenu(Submenu::Terminal(sub))),
+                        })
+                    })
+                    .collect()
+            }
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread, cx),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
             MenuTarget::PrMore(target) => {
@@ -627,7 +649,13 @@ impl CockpitView {
                 self.changes.read(cx).branch_rows(diff)
             }
             (Submenu::Changes(_), _) => Vec::new(),
-            (Submenu::Terminal(sub), _) => self.terminals.read(cx).sub_rows(sub),
+            (Submenu::Terminal(sub), _) => self
+                .terminals
+                .read(cx)
+                .sub_rows(sub)
+                .into_iter()
+                .map(|(item, verb)| (item, MenuVerb::Terminal(verb)))
+                .collect(),
         }
     }
 

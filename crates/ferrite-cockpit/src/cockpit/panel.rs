@@ -42,7 +42,8 @@ mod sections;
 mod strip;
 pub(in crate::cockpit) mod controls;
 
-use super::surfaces::{Close, CloseSelection, PrTab, Rehold, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
+use super::surfaces::{Close, CloseSelection, PrTab, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
+use ferrite_core::Rehold;
 use ferrite_ui::icons::{self, icon};
 use super::*;
 

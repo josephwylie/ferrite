@@ -5,3 +5,4 @@
 //! names the Cockpit, so an edit to one builds and tests without it.
 
 pub mod remote_files;
+pub mod terminal;

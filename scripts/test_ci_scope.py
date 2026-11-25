@@ -34,7 +34,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_terminal_selects_reverse_dependencies_only(self):
         self.assertEqual(select(self.packages, ["crates/ferrite-terminal/src/lib.rs"])["packages"],
-                         ["ferrite", "ferrite-cockpit", "ferrite-terminal"])
+                         ["ferrite", "ferrite-cockpit", "ferrite-terminal", "ferrite-tools"])
 
     def test_focus_notify_is_tested_with_its_consumers(self):
         self.assertEqual(select(self.packages, ["crates/ferrite-focus-notify/src/lib.rs"])["packages"],
