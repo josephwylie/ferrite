@@ -238,8 +238,11 @@ RULES = (
     ("scripts/ci_scope.py", SHARED),
     # A script a check here runs, or one it reads or calls, selects that
     # check. Every script ci.yml names needs its own rule, since the folder
-    # rule below selects nothing.
+    # rule below selects nothing. Every test run reads the quarantine's
+    # filter and ends in the JUnit summary.
+    ("scripts/quarantine.py", SHARED), ("scripts/junit_summary.py", SHARED),
     ("scripts/check_raw_presses.py", CHECKS), ("scripts/raw-presses.json", CHECKS),
+    ("scripts/check_tangle.py", CHECKS), ("scripts/tangle.json", CHECKS), ("scripts/check_crate_graph.py", CHECKS),
     ("scripts/tests/windows-stage.ps1", WINDOWS), ("scripts/stage-windows.ps1", WINDOWS),
     ("scripts/copy-chromium-windows.ps1", WINDOWS),
     # The scope job runs its own tests for every change. Other workflows
