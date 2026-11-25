@@ -14,48 +14,7 @@ use std::collections::HashMap;
 use gpui::SharedString;
 
 use ferrite_core::protocol::{WirePr, WirePrUnread};
-use ferrite_core::ProjectKey;
-use ferrite_core::ThreadKey;
-
-/// Whose repository a PR number is read in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum PrSource {
-    Thread(ThreadKey),
-    Project(ProjectKey),
-}
-
-impl PrSource {
-    /// The machine the repository is on, whose forge CLI reads it.
-    pub(crate) fn machine(self) -> ferrite_core::MachineId {
-        match self {
-            Self::Thread(thread) => thread.machine(),
-            Self::Project(project) => project.machine(),
-        }
-    }
-}
-
-/// A pull request as a PR tab or the PRs destination names it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct PrTarget {
-    pub source: PrSource,
-    pub number: u64,
-}
-
-impl PrTarget {
-    pub(crate) fn thread(thread: ThreadKey, number: u64) -> Self {
-        Self {
-            source: PrSource::Thread(thread),
-            number,
-        }
-    }
-
-    pub(crate) fn project(project: ProjectKey, number: u64) -> Self {
-        Self {
-            source: PrSource::Project(project),
-            number,
-        }
-    }
-}
+use ferrite_core::pull_request::PrTarget;
 
 /// Why the newest read brought no snapshot, and how to say it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -214,7 +173,8 @@ impl PrReads {
     }
 
     #[cfg(test)]
-    pub(crate) fn held_for_test(&self, thread: ThreadKey) -> usize {
+    pub(crate) fn held_for_test(&self, thread: ferrite_core::ThreadKey) -> usize {
+        use ferrite_core::pull_request::PrSource;
         self.reads.keys().filter(|target| target.source == PrSource::Thread(thread)).count()
     }
 }
@@ -222,6 +182,7 @@ impl PrReads {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferrite_core::ThreadKey;
 
     fn target(number: u64) -> PrTarget {
         PrTarget::thread(ThreadKey::fixture(0, 1), number)

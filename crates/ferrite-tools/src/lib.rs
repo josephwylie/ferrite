@@ -4,5 +4,6 @@
 //! and says what the operator asks as an event (ADR 0041). Nothing here
 //! names the Cockpit, so an edit to one builds and tests without it.
 
+pub mod changes;
 pub mod remote_files;
 pub mod terminal;

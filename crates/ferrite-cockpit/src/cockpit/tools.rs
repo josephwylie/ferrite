@@ -36,7 +36,6 @@ gpui::actions!(cockpit, [ToggleTerminal, ToggleChanges, ToggleFiles, ToggleFileT
 
 #[cfg(test)]
 pub(crate) use editor::AUTO_SAVE_AFTER;
-pub(crate) use changes::{ChangesView, Diff, Sub as ChangesSub, Verb as ChangesVerb};
 pub(crate) use editor::Editor;
 #[cfg(test)]
 pub(crate) use save::SaveState;
@@ -58,7 +57,7 @@ impl CockpitView {
     /// buffer that holds no edits of its own takes its file's new text.
     pub(super) fn follow_workspace(&mut self, cx: &mut Context<Self>) {
         for thread in std::mem::take(&mut self.tools.worked) {
-            let diff = Diff::Changes(thread);
+            let diff = ferrite_tools::changes::Diff::Changes(thread);
             if self.changes.read(cx).holds(diff) {
                 self.read_diff(diff, true, cx);
             }

@@ -13,6 +13,7 @@ mod draft_files;
 pub mod file_links;
 pub mod link_target;
 pub mod find;
+pub mod hunks;
 pub mod image_viewer;
 pub mod line;
 mod link_chip;

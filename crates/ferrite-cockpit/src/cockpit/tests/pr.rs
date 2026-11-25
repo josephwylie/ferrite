@@ -374,7 +374,7 @@ fn merge_asks_twice_and_a_merged_pr_shows_its_pill(cx: &mut TestAppContext) {
     );
     let rows: Vec<String> = view.read_with(cx, |view, cx| {
         view.context_rows(MenuTarget::PrMore(
-            crate::cockpit::panel::pr_read::PrTarget::thread(thread, 48),
+            ferrite_core::pull_request::PrTarget::thread(thread, 48),
         ), cx)
         .into_iter()
         .flatten()
@@ -419,7 +419,7 @@ fn an_open_pr_surface_follows_a_merge(cx: &mut TestAppContext) {
     );
     let rows: Vec<String> = view.read_with(cx, |view, cx| {
         view.context_rows(MenuTarget::PrMore(
-            crate::cockpit::panel::pr_read::PrTarget::thread(thread, 48),
+            ferrite_core::pull_request::PrTarget::thread(thread, 48),
         ), cx)
         .into_iter()
         .flatten()
@@ -522,9 +522,9 @@ fn a_restored_tab_for_another_pr_keeps_its_identity(cx: &mut TestAppContext) {
 /// diff, with no pointer near the Code segment.
 #[gpui::test]
 fn a_thread_pr_restored_on_code_reads_its_diff(cx: &mut TestAppContext) {
-    use crate::cockpit::panel::pr_read::PrTarget;
+    use ferrite_core::pull_request::PrTarget;
     use crate::cockpit::surfaces::{PrTab, SurfaceAction, SurfaceId, Surfaces};
-    use crate::cockpit::tools::Diff;
+    use ferrite_tools::changes::Diff;
     use ferrite_core::protocol::WirePrState;
     let (mut core, _fake, checkout) = bound_cockpit("pr-restored-code", Provider::Claude);
     let thread = core.threads()[0];
@@ -601,7 +601,7 @@ fn pr_header_metadata_stays_visible_across_tabs(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_prs_code_view_reads_the_published_diff(cx: &mut TestAppContext) {
     use crate::cockpit::surfaces::SurfaceId;
-    use crate::cockpit::tools::Diff;
+    use ferrite_tools::changes::Diff;
     use ferrite_core::protocol::WirePrState;
     let (view, thread, _fake, cx) = with_pr("pr-code", WirePrState::Open, cx);
     view.update(cx, |view, cx| {
@@ -619,7 +619,7 @@ fn a_prs_code_view_reads_the_published_diff(cx: &mut TestAppContext) {
     };
     assert_eq!(
         scope(
-            Diff::PullRequest(crate::cockpit::panel::pr_read::PrTarget::thread(thread, 48)),
+            Diff::PullRequest(ferrite_core::pull_request::PrTarget::thread(thread, 48)),
             cx
         )
         .as_deref(),
@@ -636,7 +636,7 @@ fn a_prs_code_view_reads_the_published_diff(cx: &mut TestAppContext) {
     );
     until(cx, |cx| {
         view.read_with(cx, |view, cx| {
-            view.changes.read(cx).files_read(Diff::PullRequest(crate::cockpit::panel::pr_read::PrTarget::thread(
+            view.changes.read(cx).files_read(Diff::PullRequest(ferrite_core::pull_request::PrTarget::thread(
                 thread, 48,
             ))) == Some(1)
         })

@@ -4,7 +4,8 @@ use super::*;
 use crate::cockpit::context_menu::Submenu;
 use crate::cockpit::panel::Opener;
 use crate::cockpit::surfaces::SurfaceId;
-use crate::cockpit::tools::{Diff, FilesSub, FilesVerb};
+use crate::cockpit::tools::{FilesSub, FilesVerb};
+use ferrite_tools::changes::Diff;
 
 fn files_window<'a>(
     name: &str,

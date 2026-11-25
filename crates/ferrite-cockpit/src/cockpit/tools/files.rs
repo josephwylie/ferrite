@@ -51,7 +51,7 @@ use ferrite_ui::components::{icon_button, IconSize, Tip as _};
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::theme::{self};
 
-use super::changes::ChangesView;
+use ferrite_tools::changes::ChangesView;
 use super::editor::{self, Editor};
 use super::save::SaveState;
 use super::tree::{FileTree, Row, Status};

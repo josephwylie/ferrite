@@ -67,7 +67,7 @@ class SelectionTests(unittest.TestCase):
     def test_engine_selects_the_server_the_app_and_the_tests_that_run_it(self):
         result = select(self.packages, ["crates/ferrite-engine/src/engine.rs"])["packages"]
         self.assertEqual(result, ["ferrite", "ferrite-client", "ferrite-cockpit", "ferrite-engine", "ferrite-factory",
-                                  "ferrite-frame", "ferrite-pane", "ferrite-review", "ferrite-server"])
+                                  "ferrite-frame", "ferrite-pane", "ferrite-review", "ferrite-server", "ferrite-tools"])
 
     def test_server_selects_the_app_and_the_tests_that_run_it(self):
         self.assertEqual(select(self.packages, ["crates/ferrite-server/src/calls.rs"])["packages"],

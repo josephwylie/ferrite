@@ -18,6 +18,10 @@ ferrite-core = { path = "../ferrite-core" }
 ferrite-ui = { path = "../ferrite-ui" }
 # The Terminal's grid.
 ferrite-terminal = { path = "../ferrite-terminal" }
+# The Changes' filter field and the hunks a diff draws.
+ferrite-pane = { path = "../ferrite-pane" }
+# The Review core's diff of a file's two sides.
+ferrite-reviewr = { path = "../ferrite-reviewr" }
 # The kit facade keeps the renderer, native platform and components on one
 # compatible stack. Keep the gpui import name for derives and existing code.
 gpui = { package = "gpui-kit", version = "=0.6.0" }

@@ -32,7 +32,8 @@ use std::collections::HashMap;
 
 use gpui::{actions, WeakEntity};
 
-use super::panel::pr_read::{PrFailure, PrTarget};
+use super::panel::pr_read::PrFailure;
+use ferrite_core::pull_request::PrTarget;
 use super::panel::pull_request::PrTone;
 use super::*;
 use super::destination::{Destination, Shows};
@@ -314,7 +315,7 @@ impl PrsView {
             }
         }
         cx.spawn(async move |this, cx| {
-            let read = crate::cockpit::beside::answered(answer, cx).await;
+            let read = ferrite_ui::answer::answered(answer, cx).await;
             this.update(cx, |view, cx| view.landed(key, request, read, cx))
                 .ok();
         })
