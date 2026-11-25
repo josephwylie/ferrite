@@ -1251,8 +1251,8 @@ fn a_machine_removed_mid_copy_takes_the_copy_with_it(cx: &mut TestAppContext) {
     assert!(!copy_runs(&view, cx), "its copy stops at once");
     BOX_SLOW.store(false, Ordering::SeqCst);
     view.update(cx, |view, cx| view.hide_sheet(cx));
-    until(cx, |cx| text_of(cx, "notification-message").as_deref() == Some("box was removed."));
     settles(cx);
+    assert_eq!(text_of(cx, "notification-message").as_deref(), Some("box was removed."));
     for none in ["copy-toast-again", "copy-toast-show"] {
         assert!(debug_bounds(cx, none.into()).is_none(), "{none}: nothing to resume or show");
     }
