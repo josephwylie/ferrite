@@ -63,11 +63,23 @@ fn changes_follow_the_agents_edits_without_a_refresh(cx: &mut TestAppContext) {
 
 /// The window's side of the Changes' menus: `⋯` and the scope dropdown
 /// open their menus with the rows the spec names, a row picked runs on
-/// the diff and reads it again, and a file's `↗` opens it in Files.
+/// the diff and reads it again, and a file's `↗` opens it in Files. The
+/// branch's own commit (`c.rs`) is in All changes and not in the
+/// uncommitted ones, so the list says which scope was read.
 #[gpui::test]
 fn the_menus_hold_what_the_spec_names_and_a_scope_rereads(cx: &mut TestAppContext) {
-    let (view, thread, cx) = window("changes-menus", cx);
+    let (view, _fake, repo, thread, cx) = window_with_agent("changes-menus", cx);
+    git(&repo, &["switch", "-qc", "work"]);
+    std::fs::write(repo.join("c.rs"), "committed on the branch\n").unwrap();
+    git(&repo, &["add", "c.rs"]);
+    git(&repo, &["commit", "-q", "-m", "c"]);
     opened(&view, thread, cx);
+    let listed = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            ["a.rs", "b.rs", "c.rs"].into_iter().filter(|path| view.changes.read(cx).lists(thread, path)).collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(listed(&view, cx), ["a.rs", "b.rs"], "uncommitted: the worktree's edits");
     let names = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, _| {
             view.context_menu()
@@ -111,10 +123,19 @@ fn the_menus_hold_what_the_spec_names_and_a_scope_rereads(cx: &mut TestAppContex
         view.read_with(cx, |view, cx| view.changes.read(cx).scope_label(Diff::Changes(thread))).as_deref(),
         Some("All changes")
     );
-    reread(&view, thread, cx);
+    wait_for_changes(&view, thread, cx, |changes, _| changes.lists(thread, "c.rs"));
+    assert_eq!(listed(&view, cx), ["a.rs", "b.rs", "c.rs"], "all changes: the branch's commit too");
     assert!(cx.debug_bounds("changes-comparing").is_some(), "against the base, it says so");
-    press("changes-open-0", cx);
-    assert_eq!(view.read_with(cx, |view, _| view.active_surface(thread)), Some(SurfaceId::Files), "a.rs opens in Files");
+    let c = (0..3)
+        .find(|at| {
+            let head: &'static str = Box::leak(format!("changes-file-{at}").into_boxed_str());
+            cx.update(|window, _| window.debug_text(head)).is_some_and(|text| text.iter().any(|text| text == "c.rs"))
+        })
+        .expect("c.rs is listed");
+    press(Box::leak(format!("changes-open-{c}").into_boxed_str()), cx);
+    assert_eq!(view.read_with(cx, |view, _| view.active_surface(thread)), Some(SurfaceId::Files), "it opens in Files");
+    let shown = view.read_with(cx, |view, cx| view.files.read(cx).active_path(thread));
+    assert_eq!(shown.as_deref().and_then(|path| path.file_name()), Some(std::ffi::OsStr::new("c.rs")), "{shown:?}");
 }
 
 #[gpui::test]

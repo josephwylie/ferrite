@@ -321,9 +321,10 @@ impl CockpitView {
         let Some(root) = self.thread_path(thread, cx) else {
             return;
         };
+        let window = cx.weak_entity();
         let cockpit = self.cockpit.read(cx);
         let remote = cockpit.bridge(thread.machine()).cloned().map(|bridge| {
-            let submit = super::remote_files::submit(self.cockpit.downgrade(), thread.machine(), bridge);
+            let submit = super::remote_files::submit(window, thread.machine(), bridge);
             RemoteFiles::new(root.clone(), submit)
         });
         let stored = cockpit

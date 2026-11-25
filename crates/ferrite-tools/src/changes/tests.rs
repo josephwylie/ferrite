@@ -1,6 +1,7 @@
 //! `ChangesView` in a window of its own: what it draws, what it asks of
 //! the window, and how it answers the window's calls.
 
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -168,9 +169,28 @@ fn sides(path: &str, old: &str, new: &str) -> FileSides {
     }
 }
 
+/// `sides` as git counts it: `added` lines in, `removed` out.
+fn counted(mut sides: FileSides, added: u32, removed: u32) -> FileSides {
+    sides.file.additions = added;
+    sides.file.deletions = removed;
+    sides
+}
+
 /// `a.rs` edited and `b.rs` new since the commit.
 fn two_files() -> Vec<FileSides> {
-    vec![sides("a.rs", "one\ntwo\n", "one\n2\n"), sides("b.rs", "", "new\n")]
+    vec![
+        counted(sides("a.rs", "one\ntwo\n", "one\n2\n"), 1, 1),
+        counted(sides("b.rs", "", "new\nfile\n"), 2, 0),
+    ]
+}
+
+fn snapshot(files: Vec<FileSides>) -> std::io::Result<Snapshot> {
+    Ok(Snapshot { files, branches: Vec::new(), staged: Default::default() })
+}
+
+/// Another Thread's Changes, read in a checkout of its own.
+fn other() -> Diff {
+    Diff::Changes(ThreadKey::fixture(1, 8))
 }
 
 /// `files` files of twenty lines, every other one edited: each taller than
@@ -185,10 +205,11 @@ fn tall_files(files: usize) -> Vec<FileSides> {
 }
 
 /// What the window keeps of Changes, as a test keeps it: where it reads
-/// the diff and whether the `⋯` menu is up, drawing the diff as the root does.
+/// each diff and whether the `⋯` menu is up, drawing the Thread's diff as
+/// the root does.
 struct Host {
     changes: Entity<ChangesView>,
-    root: PathBuf,
+    roots: HashMap<Diff, PathBuf>,
     up: bool,
 }
 
@@ -210,10 +231,13 @@ impl Render for Host {
 /// The Thread's Changes in a window of their own, made and not yet read.
 fn open(cx: &mut TestAppContext) -> (Entity<Host>, Entity<ChangesView>, &mut VisualTestContext) {
     let (host, cx) = mount(cx, |_, cx| {
-        let origin = Source::of(&cx.entity(), |host: &Host, _: &Diff, _| Some(Origin::new(host.root.clone(), None)));
+        let origin = Source::of(&cx.entity(), |host: &Host, diff: &Diff, _| {
+            Some(Origin::new(host.roots.get(diff)?.clone(), None))
+        });
         let changes = cx.new(|_| ChangesView::new(origin));
         cx.observe(&changes, |_, _, cx| cx.notify()).detach();
-        Host { changes, root: checkout(), up: false }
+        let roots = HashMap::from([(diff(), checkout()), (other(), PathBuf::from("/work/other"))]);
+        Host { changes, roots, up: false }
     });
     cx.simulate_resize(gpui::size(px(900.), px(700.)));
     let changes = host.read_with(cx, |host, _| host.changes.clone());
@@ -316,9 +340,14 @@ fn the_pane_lists_each_changed_file_with_its_hunks_and_stat(cx: &mut TestAppCont
     assert_eq!(files_read(&changes, cx), Some(2));
     assert_eq!(scope_label(&changes, cx).as_deref(), Some("Uncommitted changes"));
     assert!(shows(cx, "changes-file-0") && shows(cx, "changes-file-1"));
-    assert!(shows(cx, "panel-hunks-0"), "the hunks under the head");
-    let head = text("changes-file-0", cx);
-    assert!(head.iter().any(|text| text == "a.rs") && head.iter().any(|text| text == "+1"), "{head:?}");
+    assert!(shows(cx, "panel-hunks-0") && shows(cx, "panel-hunks-1"), "the hunks under each head");
+    let edited = text("changes-file-0", cx);
+    for said in ["a.rs", "+1", "\u{2212}1"] {
+        assert!(edited.iter().any(|text| text == said), "a.rs says {said}: {edited:?}");
+    }
+    let new = text("changes-file-1", cx);
+    assert!(new.iter().any(|text| text == "b.rs") && new.iter().any(|text| text == "+2"), "{new:?}");
+    assert!(!new.iter().any(|text| text.starts_with('\u{2212}')), "nothing removed, no count of it: {new:?}");
 }
 
 #[gpui::test]
@@ -604,9 +633,31 @@ fn a_file_revealed_far_down_the_list_comes_into_view_unfolded(cx: &mut TestAppCo
 #[gpui::test]
 fn an_answer_from_elsewhere_or_from_an_older_read_is_dropped(cx: &mut TestAppContext) {
     let (host, changes, cx) = open(cx);
-    host.update(cx, |host, _| host.root = PathBuf::from("/work/moved"));
-    read(&changes, two_files(), cx);
+    assert!(changes.update(cx, |changes, cx| changes.make(other(), cx)));
+    // Both diffs are read where the window reads them, and git takes its
+    // time to answer.
+    let held = |diff: Diff, root: PathBuf, cx: &mut VisualTestContext| {
+        let (send, answer) = mpsc::channel();
+        changes.update(cx, |changes, cx| {
+            let (generation, _) = changes.begin_read(diff, true, cx).expect("made");
+            changes.wait_local(diff, generation, Origin::new(root, None), Ok(answer), cx);
+        });
+        send
+    };
+    let this = held(diff(), checkout(), cx);
+    let that = held(other(), PathBuf::from("/work/other"), cx);
+    settle(cx);
+    // Meanwhile the Thread moves to another checkout; the other does not.
+    host.update(cx, |host, _| host.roots.insert(diff(), PathBuf::from("/work/moved")));
+    this.send(snapshot(two_files())).unwrap();
+    that.send(snapshot(two_files())).unwrap();
+    settle(cx);
     assert_eq!(files_read(&changes, cx), None, "read at the old checkout: dropped");
+    assert_eq!(
+        changes.read_with(cx, |changes, _| changes.files_read(other())),
+        Some(2),
+        "the other diff is still read where it was asked: it lands"
+    );
     answered_at(&changes, PathBuf::from("/work/moved"), two_files(), &[], cx);
     assert_eq!(files_read(&changes, cx), Some(2), "read where the window reads it now");
     let (send, older) = mpsc::channel();

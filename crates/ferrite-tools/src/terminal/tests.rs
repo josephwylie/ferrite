@@ -312,6 +312,8 @@ fn a_terminal_keeps_two_machines_threads_apart(cx: &mut TestAppContext) {
     let (view, _kept, cx) = shell_shown(cx);
     let there = ThreadKey::fixture(u32::MAX, thread().thread().get());
     assert_eq!(started(&view, there, &folder(), cx), 1, "a Terminal 1 of its own");
+    assert_eq!(view.read_with(cx, |view, _| view.numbers(there)), [1], "the other machine's Thread holds it");
+    assert_eq!(view.read_with(cx, |view, _| view.numbers(thread())), [1], "and this Thread its own");
     view.update(cx, |view, cx| view.end(there, 1, cx));
     assert!(view.read_with(cx, |view, _| view.numbers(there)).is_empty());
     assert_eq!(view.read_with(cx, |view, _| view.numbers(thread())), [1], "this Thread's shell runs on");
