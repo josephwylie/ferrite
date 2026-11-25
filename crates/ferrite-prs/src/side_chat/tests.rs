@@ -21,6 +21,11 @@ fn fork_thread() -> ThreadKey {
     ThreadKey::fixture(1, 2)
 }
 
+/// A second tab's fork, of the same Thread.
+fn other_fork() -> ThreadKey {
+    ThreadKey::fixture(1, 4)
+}
+
 /// The window's side of the side chat.
 struct Host {
     chat: Entity<SideChatView>,
@@ -42,7 +47,7 @@ impl Render for Host {
 #[derive(Debug, PartialEq)]
 enum Asked {
     Ask { tab: u64, fork: ThreadKey, prompt: String },
-    BringBack { owner: ThreadKey, fork: ThreadKey },
+    BringBack { owner: ThreadKey, fork: Fork },
     Trash { owner: ThreadKey, tab: u64 },
 }
 
@@ -55,7 +60,7 @@ fn asked(event: &SideChatEvent) -> Asked {
         },
         SideChatEvent::BringBack { owner, fork } => Asked::BringBack {
             owner: *owner,
-            fork: fork.thread,
+            fork: *fork,
         },
         SideChatEvent::Trash { owner, tab } => Asked::Trash {
             owner: *owner,
@@ -225,27 +230,34 @@ fn enter_asks_the_window_once_the_forks_history_is_held(cx: &mut TestAppContext)
     assert_eq!(chat.read_with(cx, |chat, cx| chat.draft(owner(), cx)).as_deref(), Some("what is alpha?"));
 }
 
-/// Bring back asks the window for the tab's fork; a tab with no fork yet
-/// asks nothing.
+/// Bring back asks the window for the shown tab's fork, with where its
+/// own run starts; a tab with no fork yet asks nothing.
 #[gpui::test]
 fn bring_back_asks_for_the_tabs_fork(cx: &mut TestAppContext) {
     let (host, chat, cx) = window(cx);
     open(&host, &chat, None, cx);
-    let heard = record(cx, &chat, asked);
-    click(cx, "side-chat-bring-back");
-    assert_eq!(heard.take(), [], "no fork yet");
-    let fork = Fork {
+    let first = Fork {
         thread: fork_thread(),
         inherited: Some(3),
     };
-    chat.update(cx, |chat, cx| chat.bind(owner(), fork, cx));
+    chat.update(cx, |chat, cx| chat.bind(owner(), first, cx));
+    open(&host, &chat, None, cx);
+    let heard = record(cx, &chat, asked);
+    click(cx, "side-chat-bring-back");
+    assert_eq!(heard.take(), [], "no fork yet");
+    let second = Fork {
+        thread: other_fork(),
+        inherited: Some(5),
+    };
+    chat.update(cx, |chat, cx| chat.bind(owner(), second, cx));
     click(cx, "side-chat-bring-back");
     assert_eq!(
         heard.take(),
         [Asked::BringBack {
             owner: owner(),
-            fork: fork_thread()
-        }]
+            fork: second
+        }],
+        "the second tab's fork, from its own boundary"
     );
 }
 

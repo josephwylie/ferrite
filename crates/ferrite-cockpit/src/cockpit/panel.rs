@@ -710,6 +710,7 @@ impl CockpitView {
             .and_then(|owner| owner.thread())
             ;
         self.panel.focus.begin(thread, window, cx);
+        self.register_prs_stops(cx);
         let (index, owner) = (index?, owner?);
         let sliding_out = self.panel_pane(cx).is_none();
         let column = div()

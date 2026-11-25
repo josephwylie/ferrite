@@ -59,7 +59,7 @@ use action::{ActionState, PrActions, Stage};
 use read::{stamp_age, Answer, PrFailure, PrRead, PrReads};
 
 pub mod action;
-pub mod read;
+pub(crate) mod read;
 
 /// A pull request's state, as its pill and its tab's icon show it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -319,7 +319,7 @@ fn checks_line(pr: &WirePr) -> Option<(String, u32)> {
 }
 
 /// A hairline at 60% (T3's `border-border/60`).
-pub fn soft_line() -> gpui::Rgba {
+pub(crate) fn soft_line() -> gpui::Rgba {
     rgba((ferrite_ui::theme::LINE << 8) | 0x99)
 }
 
@@ -693,7 +693,7 @@ impl PullRequestView {
     /// holds this reader as its child and draws it with a read. `code` is
     /// Code's body, `stops` the views' handles, `this` the reader their
     /// presses go to.
-    pub fn pr_content(
+    pub(crate) fn pr_content(
         &self,
         shown: PrShown,
         code: Option<AnyView>,
@@ -1495,7 +1495,7 @@ fn pr_more(id: &'static str, said: &'static str, url: &str) -> AnyElement {
 
 /// A merged or closed PR's pill (T3's outline Badge): its state's icon and
 /// word in its ink.
-pub fn pr_pill(tone: PrTone) -> Div {
+pub(crate) fn pr_pill(tone: PrTone) -> Div {
     use ferrite_ui::theme::*;
     div()
         .debug_selector(|| "pr-pill".into())

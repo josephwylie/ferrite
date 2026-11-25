@@ -9,10 +9,11 @@
 use ferrite_core::protocol::WirePrFilter;
 use ferrite_core::ProjectKey;
 use ferrite_prs::prs::{PrsEvent, PrsInputs, PrsView};
-use ferrite_prs::pull_request::PullRequestView;
+use ferrite_prs::pull_request::{PrStop, PullRequestView};
 use ferrite_ui::source::Source;
 
 use super::destination::{Destination, Shows};
+use super::panel::PanelControl;
 use super::*;
 
 impl CockpitView {
@@ -157,6 +158,24 @@ impl CockpitView {
             .into_iter()
             .map(|(key, _, title)| (key, SharedString::from(title)))
             .collect();
-        PrsInputs { projects }
+        let stops = self.panel.focus.handles(|control| match control {
+            PanelControl::PrView(tab) => Some(PrStop::View(*tab)),
+            _ => None,
+        });
+        PrsInputs { projects, stops }
+    }
+
+    /// The open PR's views, as the PRs declare them, enter the window's
+    /// row of stops before the PRs draw them, so the arrows walk them as
+    /// they walk a Thread's PR tab's.
+    pub(super) fn register_prs_stops(&self, cx: &mut Context<Self>) {
+        if !self.prs_shown() {
+            return;
+        }
+        for (stop, semantics) in self.prs.read(cx).tab_stops() {
+            if let PrStop::View(tab) = stop {
+                self.panel.focus.register(PanelControl::PrView(tab), semantics, cx);
+            }
+        }
     }
 }

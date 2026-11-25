@@ -539,3 +539,61 @@ fn a_pr_opened_again_keeps_the_view_it_was_left_on(cx: &mut TestAppContext) {
     click(cx, "prs-row-7");
     lands(cx, "pr-snippet-0");
 }
+
+/// The handle of the open PR's `tab` segment.
+fn view_stop(world: &World, tab: ferrite_prs::PrTab, cx: &mut gpui::VisualTestContext) -> gpui::FocusHandle {
+    use crate::cockpit::panel::PanelControl;
+    world.view.read_with(cx, |view, _| {
+        view.panel.focus.handle(&PanelControl::PrView(tab)).expect("a stop in the window's row")
+    })
+}
+
+/// The open PR's views are one row for the arrows, as a Thread's PR tab's
+/// are: → reaches the next, ⏎ chooses it, ⇱ and ⇲ go to the ends.
+#[gpui::test]
+fn the_detail_views_are_walked_by_arrows(cx: &mut TestAppContext) {
+    use super::panel_focus::{activate, press};
+    use ferrite_prs::PrTab;
+    let (world, cx) = world("prs-detail-arrows", 0, two_rows(), false, cx);
+    click(cx, "nav-pull-requests");
+    lands(cx, "prs-row-7");
+    click(cx, "prs-row-7");
+    lands(cx, "pr-body");
+    let on = |tab, cx: &mut gpui::VisualTestContext| {
+        let handle = view_stop(&world, tab, cx);
+        cx.update(|window, _| handle.is_focused(window))
+    };
+    let summary = view_stop(&world, PrTab::Summary, cx);
+    cx.update(|window, cx| window.focus(&summary, cx));
+    tick(cx);
+    assert!(on(PrTab::Summary, cx));
+    press("right", cx);
+    assert!(on(PrTab::Guide, cx), "→ reaches Guide");
+    activate("enter", cx);
+    let chosen = world.view.read_with(cx, |view, cx| view.prs.read(cx).open().map(|(_, tab)| tab));
+    assert_eq!(chosen, Some(PrTab::Guide), "⏎ chooses it");
+    assert!(on(PrTab::Guide, cx), "and the keyboard stays on it");
+    press("end", cx);
+    assert!(on(PrTab::Code, cx), "⇲ reaches the last view");
+    press("home", cx);
+    assert!(on(PrTab::Summary, cx), "⇱ the first");
+}
+
+/// Each filter reads its own list from the forge: Closed's is empty here,
+/// so its rows are not Open's.
+#[gpui::test]
+fn a_filter_reads_its_own_list(cx: &mut TestAppContext) {
+    let (world, cx) = world("prs-filter-empty", 0, two_rows(), false, cx);
+    world.view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| {
+            cockpit.fixture_pr_list(world.path.clone(), WirePrFilter::Closed, list_of(Vec::new(), false))
+        })
+    });
+    click(cx, "nav-pull-requests");
+    lands(cx, "prs-row-7");
+    click(cx, "prs-filter-Closed");
+    lands(cx, "prs-empty");
+    assert!(!shows(cx, "prs-row-7"));
+    click(cx, "prs-filter-Open");
+    lands(cx, "prs-row-7");
+}

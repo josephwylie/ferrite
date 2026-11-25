@@ -134,6 +134,22 @@ fn full_pr() -> WirePr {
     }
 }
 
+/// PR #3, merged: its own title, address and description.
+fn older_pr() -> WirePr {
+    WirePr {
+        number: 3,
+        title: "Older change".into(),
+        url: "https://github.com/o/r/pull/3".into(),
+        body: "An older change.".into(),
+        state: WirePrState::Merged,
+        head: "feature/3".into(),
+        checks: Vec::new(),
+        comments: Vec::new(),
+        comments_truncated: false,
+        ..full_pr()
+    }
+}
+
 /// Code's body as the window hands it over.
 struct Code;
 
@@ -149,8 +165,8 @@ struct Host {
     projects: Vec<(ProjectKey, SharedString)>,
     /// What the forge lists, by Project and state.
     lists: HashMap<(ProjectKey, WirePrFilter), ReviewPullRequests>,
-    /// What a PR's detail reads.
-    pr: WirePr,
+    /// What each PR's detail reads, by number.
+    pulls: HashMap<u64, WirePr>,
 }
 
 impl Render for Host {
@@ -184,6 +200,7 @@ fn open(rows: Vec<WirePrRow>, more: bool, cx: &mut TestAppContext) -> (Entity<Ho
         let inputs = Source::of(&root, |host: &Host, _: &(), _| {
             Some(PrsInputs {
                 projects: host.projects.clone(),
+                stops: HashMap::new(),
             })
         });
         let none = Source::of(&root, |_: &Host, _: &(), _| None);
@@ -201,11 +218,12 @@ fn open(rows: Vec<WirePrRow>, more: bool, cx: &mut TestAppContext) -> (Entity<Ho
                 prs.update(cx, |prs, cx| prs.reading((project, filter), Ok(answer), cx));
             }
             PrsEvent::Opened(target) => {
-                let pr = host.pr.clone();
-                prs.read(cx).reader.clone().update(cx, |reader, cx| {
-                    reader.install(target, pr);
-                    cx.notify();
-                });
+                if let Some(pr) = host.pulls.get(&target.number).cloned() {
+                    prs.read(cx).reader.clone().update(cx, |reader, cx| {
+                        reader.install(target, pr);
+                        cx.notify();
+                    });
+                }
             }
             PrsEvent::Leave | PrsEvent::AddProject => {}
         })
@@ -227,7 +245,7 @@ fn open(rows: Vec<WirePrRow>, more: bool, cx: &mut TestAppContext) -> (Entity<Ho
             prs,
             projects: vec![(project(), "ferrite".into()), (other(), "other".into())],
             lists,
-            pr: full_pr(),
+            pulls: HashMap::from([(7, full_pr()), (3, older_pr())]),
         }
     });
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
@@ -304,7 +322,7 @@ fn a_pr_shows_each_review_verdict_and_its_failed_checks_run(cx: &mut TestAppCont
 #[gpui::test]
 fn a_merged_pr_shows_its_state_and_no_merge_line(cx: &mut TestAppContext) {
     let (host, cx) = open(two_rows(), false, cx);
-    host.update(cx, |host, _| host.pr.state = WirePrState::Merged);
+    host.update(cx, |host, _| host.pulls.get_mut(&7).unwrap().state = WirePrState::Merged);
     show(&host, Some(project()), cx);
     click(cx, "prs-row-7");
     assert!(shows(cx, "pr-body"));
@@ -402,14 +420,17 @@ fn the_prs_are_walked_by_keys(cx: &mut TestAppContext) {
     assert_eq!(marked(cx), Some(3), "held at the last");
     cx.simulate_keystrokes("up");
     assert_eq!(marked(cx), Some(7));
+    cx.simulate_keystrokes("down");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert!(shows(cx, "prs-detail"));
-    assert_eq!(heard.take(), [format!("{:?}", PrsEvent::Opened(PrTarget::project(project(), 7)))]);
+    assert_eq!(heard.take(), [format!("{:?}", PrsEvent::Opened(PrTarget::project(project(), 3)))]);
+    click(cx, "prs-open-external");
+    assert_eq!(cx.opened_url().as_deref(), Some("https://github.com/o/r/pull/3"), "the row opened, read as itself");
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert!(shows(cx, "prs-rows"), "esc goes back to the list");
-    assert_eq!(marked(cx), Some(7), "on the row it left");
+    assert_eq!(marked(cx), Some(3), "on the row it left");
     assert_eq!(heard.take(), Vec::<String>::new(), "the board stays");
     cx.simulate_keystrokes("escape");
     assert_eq!(heard.take(), [format!("{:?}", PrsEvent::Leave)], "esc again asks for the board");

@@ -26,7 +26,9 @@
 //!   each read again, over the content the last read left.
 //! - **Keys:** the view owns its keys under the `PullRequests` context:
 //!   ↑ ↓ move the marked row, ⏎ opens it, esc goes back to the list, then
-//!   closes the view.
+//!   closes the view. The open PR's views are stops it declares
+//!   (`tab_stops`) and the root enters in the window's row, so ← → ⇱ ⇲
+//!   walk them as they walk a Thread's PR tab's.
 
 use std::collections::HashMap;
 
@@ -36,6 +38,7 @@ use ferrite_core::ProjectKey;
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::pointer::Pointer as _;
 use ferrite_ui::source::Source;
+use ferrite_ui::stop::Semantics;
 use gpui::prelude::*;
 use gpui::{
     actions, div, px, rgb, rgba, AnyElement, AnyView, ClickEvent, Context, Div, Entity, EventEmitter,
@@ -69,8 +72,6 @@ pub struct PrsView {
     reader: Entity<PullRequestView>,
     /// Code's body, Changes' pane of the open PR: the root's view.
     code: AnyView,
-    /// The detail's views' handles: stops of their own, not the Panel's.
-    stops: HashMap<PrStop, FocusHandle>,
     project: Option<ProjectKey>,
     filter: WirePrFilter,
     lists: HashMap<(ProjectKey, WirePrFilter), ListRead>,
@@ -86,6 +87,9 @@ pub struct PrsView {
 pub struct PrsInputs {
     /// The Projects to scope to, in the registry's order, by title.
     pub projects: Vec<(ProjectKey, SharedString)>,
+    /// The handles of the stops `tab_stops` declared, as the root entered
+    /// them in the window's row this frame.
+    pub stops: HashMap<PrStop, FocusHandle>,
 }
 
 /// What the PRs ask of the window.
@@ -125,10 +129,6 @@ impl PrsView {
             inputs,
             reader,
             code,
-            stops: PrTab::ALL
-                .into_iter()
-                .map(|tab| (PrStop::View(tab), cx.focus_handle()))
-                .collect(),
             project: None,
             filter: WirePrFilter::Open,
             lists: HashMap::new(),
@@ -274,7 +274,7 @@ impl PrsView {
 
     /// A row pressed: its PR's detail shows, read again over what the last
     /// read left.
-    pub fn open_detail(&mut self, number: u64, cx: &mut Context<Self>) {
+    fn open_detail(&mut self, number: u64, cx: &mut Context<Self>) {
         let Some(project) = self.project else {
             return;
         };
@@ -363,7 +363,7 @@ impl PrsView {
         use ferrite_ui::theme::*;
         let body = match (self.project, self.open()) {
             (None, _) => self.no_project(cx),
-            (Some(_), Some(open)) => self.detail(open, cx),
+            (Some(_), Some(open)) => self.detail(open, &inputs.stops, cx),
             (Some(project), None) => self.list(project, &inputs.projects, cx),
         };
         div()
@@ -739,7 +739,12 @@ impl PrsView {
 
     /// The open PR: a way back to the list, its number on the forge, then
     /// the views a Thread's PR tab has, drawn by the reader.
-    fn detail(&self, (target, tab): (PrTarget, PrTab), cx: &mut Context<Self>) -> Div {
+    fn detail(
+        &self,
+        (target, tab): (PrTarget, PrTab),
+        stops: &HashMap<PrStop, FocusHandle>,
+        cx: &mut Context<Self>,
+    ) -> Div {
         use ferrite_ui::theme::*;
         let number = target.number;
         let reader = self.reader.read(cx);
@@ -752,7 +757,7 @@ impl PrsView {
             branch: false,
         };
         let code = (tab == PrTab::Code).then(|| self.code.clone());
-        let content = reader.pr_content(shown, code, &self.stops, &self.reader.downgrade());
+        let content = reader.pr_content(shown, code, stops, &self.reader.downgrade());
         let tone = tone.or_else(|| {
             let row = self.rows().iter().find(|row| row.number == number)?;
             Some(PrTone::of_wire(row.state, row.draft))
@@ -819,6 +824,18 @@ impl PrsView {
 }
 
 impl PrsView {
+    /// The open PR's views, as keyboard stops in the order they are
+    /// drawn: the root enters them in the window's row of stops before
+    /// the view draws, and hands their handles back in `PrsInputs`.
+    pub fn tab_stops(&self) -> Vec<(PrStop, Semantics)> {
+        let Some((_, shown)) = self.open() else {
+            return Vec::new();
+        };
+        PrTab::ALL
+            .map(|tab| (PrStop::View(tab), Semantics::tab(tab.label(), tab == shown)))
+            .into()
+    }
+
     /// The PR whose detail shows, and the view of it chosen.
     pub fn open(&self) -> Option<(PrTarget, PrTab)> {
         self.project

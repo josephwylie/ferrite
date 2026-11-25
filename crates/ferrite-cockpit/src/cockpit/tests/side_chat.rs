@@ -365,6 +365,12 @@ fn the_side_chat_head_brings_back_and_trashes(cx: &mut TestAppContext) {
     assert_eq!(head.size.height, px(ferrite_ui::theme::SURFACE_BAR_H));
     let blocked = view.read_with(cx, |view, cx| bring_back_blocked(view, owner, id, cx));
     assert_eq!(blocked, Some("Available after a finished reply."));
+    let back = cx.debug_bounds("side-chat-bring-back").unwrap();
+    assert_eq!(
+        super::machines::tooltip_at(cx, back.center()).as_deref(),
+        blocked,
+        "Bring back says why it cannot run"
+    );
 
     cx.simulate_input("what is alpha?");
     cx.simulate_keystrokes("enter");
@@ -782,4 +788,24 @@ fn a_side_chat_the_agent_cannot_fork_still_opens_its_tab(cx: &mut TestAppContext
     assert_eq!(side_tabs(&view, owner, cx).len(), 1, "the tab is there");
     assert!(cx.debug_bounds("side-chat-empty").is_some(), "the reason shows");
     assert!(view.read_with(cx, |view, cx| shown_fork(view, owner, cx)).is_none());
+}
+
+/// A fork the agent refuses once its tab is open (another of the Thread's
+/// is still under way) leaves that tab waiting for none: the fork that
+/// lands is not its.
+#[gpui::test]
+fn a_refused_fork_leaves_its_tab_waiting_for_none(cx: &mut TestAppContext) {
+    let (view, fake, cx) = answered("side-chat-refused-late", cx);
+    let owner = owner(&view, cx);
+    view.update(cx, |view, cx| {
+        view.open_side_chat(owner, cx);
+        view.open_side_chat(owner, cx);
+    });
+    tick(cx);
+    tick(cx);
+    let tabs = side_tabs(&view, owner, cx);
+    assert_eq!(tabs.len(), 2);
+    assert_eq!(fake.forks.borrow().len(), 1, "the agent was asked for one");
+    let refused = view.read_with(cx, |view, cx| view.side_chat.read(cx).fork(owner, tabs[1]));
+    assert_eq!(refused, None, "the refused tab took no fork");
 }

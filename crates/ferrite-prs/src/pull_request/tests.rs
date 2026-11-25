@@ -4,7 +4,7 @@
 //! still wanted, the `⋯`'s door and the stops' handles.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -22,6 +22,11 @@ fn thread() -> ThreadKey {
 
 fn target() -> PrTarget {
     PrTarget::thread(thread(), 48)
+}
+
+/// A second PR the window reads, not the one shown.
+fn other() -> PrTarget {
+    PrTarget::thread(thread(), 51)
 }
 
 /// PR #48, open, a failed check and one comment.
@@ -69,6 +74,17 @@ fn snapshot(state: WirePrState) -> WirePr {
     }
 }
 
+/// PR #51, open: its own title and address.
+fn other_snapshot() -> WirePr {
+    WirePr {
+        number: 51,
+        title: "Keep the bar".into(),
+        url: "https://github.com/o/r/pull/51".into(),
+        head: "fix/bar".into(),
+        ..snapshot(WirePrState::Open)
+    }
+}
+
 /// Code's body as the window hands it over: a view of its own.
 struct Code;
 
@@ -82,7 +98,8 @@ impl Render for Code {
 struct Host {
     reader: Entity<PullRequestView>,
     shown: PrShown,
-    wanted: bool,
+    /// The PRs whose answers the window still wants.
+    wanted: HashSet<PrTarget>,
     /// Whether the `⋯`'s menu is up, and where its button was drawn.
     up: bool,
     hung: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -113,7 +130,7 @@ fn open(tab: PrTab, cx: &mut TestAppContext) -> (Entity<Host>, Entity<PullReques
     let (host, cx) = mount(cx, |_, cx| {
         let root = cx.entity();
         let inputs = Source::of(&root, |host: &Host, _: &(), _| Some(host.inputs()));
-        let wanted = Source::of(&root, |host: &Host, _: &PrTarget, _| Some(host.wanted));
+        let wanted = Source::of(&root, |host: &Host, target: &PrTarget, _| Some(host.wanted.contains(target)));
         let code = cx.new(|_| Code);
         let reader = cx.new(|_| PullRequestView::new(inputs, wanted, code.into()));
         cx.subscribe(&reader, |host: &mut Host, _, event, cx| {
@@ -135,7 +152,7 @@ fn open(tab: PrTab, cx: &mut TestAppContext) -> (Entity<Host>, Entity<PullReques
                 tab,
                 branch: true,
             },
-            wanted: true,
+            wanted: HashSet::from([target(), other()]),
             up: false,
             hung: Rc::default(),
             stops,
@@ -155,17 +172,18 @@ fn read(reader: &Entity<PullRequestView>, pr: WirePr, cx: &mut VisualTestContext
     cx.run_until_parked();
 }
 
-/// A read asked for and answered with `answer`.
+/// A read of `target`'s PR asked for and answered with `answer`.
 fn answered(
     reader: &Entity<PullRequestView>,
+    target: PrTarget,
     answer: std::io::Result<ReviewPullRequest>,
     cx: &mut VisualTestContext,
 ) {
     let (send, receive) = std::sync::mpsc::channel();
     send.send(answer).unwrap();
     reader.update(cx, |reader, cx| {
-        let request = reader.begin_read(target(), true).expect("a read to wait on");
-        reader.wait(target(), request, Ok(receive), cx);
+        let request = reader.begin_read(target, true).expect("a read to wait on");
+        reader.wait(target, request, Ok(receive), cx);
     });
     for _ in 0..3 {
         cx.executor().advance_clock(Duration::from_millis(64));
@@ -318,7 +336,7 @@ fn write_guide_asks_the_window_for_the_agents_guide(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_failed_read_offers_retry_which_asks_again(cx: &mut TestAppContext) {
     let (_host, reader, cx) = open(PrTab::Summary, cx);
-    answered(&reader, Err(std::io::Error::other("gh is not installed")), cx);
+    answered(&reader, target(), Err(std::io::Error::other("gh is not installed")), cx);
     assert!(shows(cx, "pr-failed"), "what went wrong");
     let heard = record(cx, &reader, |event: &PrEvent| *event);
     click(cx, "pr-retry");
@@ -326,18 +344,24 @@ fn a_failed_read_offers_retry_which_asks_again(cx: &mut TestAppContext) {
 }
 
 /// An answer the window no longer wants (its tab closed meanwhile) is let
-/// go: it neither shows nor fails the PR.
+/// go: it neither shows nor fails the PR. Another PR's, still wanted,
+/// lands.
 #[gpui::test]
 fn an_answer_no_longer_wanted_is_let_go(cx: &mut TestAppContext) {
     let (host, reader, cx) = open(PrTab::Summary, cx);
-    host.update(cx, |host, _| host.wanted = false);
-    let answer = ReviewPullRequest {
+    host.update(cx, |host, _| host.wanted.remove(&target()));
+    let answer = |pr| ReviewPullRequest {
         noun: "PR".into(),
-        pr: Ok(snapshot(WirePrState::Open)),
+        pr: Ok(pr),
         unread: None,
     };
-    answered(&reader, Ok(answer), cx);
-    assert!(reader.read_with(cx, |reader, _| reader.snapshot(target()).is_none()), "let go");
+    answered(&reader, target(), Ok(answer(snapshot(WirePrState::Open))), cx);
+    answered(&reader, other(), Ok(answer(other_snapshot())), cx);
+    let held = |target, cx: &mut VisualTestContext| {
+        reader.read_with(cx, |reader, _| reader.snapshot(target).map(|pr| pr.url.clone()))
+    };
+    assert_eq!(held(target(), cx), None, "let go");
+    assert_eq!(held(other(), cx).as_deref(), Some("https://github.com/o/r/pull/51"), "still wanted");
     assert!(!shows(cx, "pr-body") && !shows(cx, "pr-failed"));
 }
 
