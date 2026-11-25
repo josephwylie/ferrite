@@ -61,3 +61,36 @@ impl Board {
         found.into_iter()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::Task;
+
+    fn task(title: &str, instructions: &str) -> Task {
+        serde_json::from_value(serde_json::json!({
+            "id": "t-1",
+            "project": 1,
+            "title": title,
+            "instructions": instructions,
+            "status": "completed",
+            "agent": {"provider": "claude", "model": "claude-opus-4"},
+            "branch": "factory/t-1",
+            "activity": [],
+            "created_ms": 1,
+        }))
+        .unwrap()
+    }
+
+    /// The Archive is searched by title and instructions, ignoring case.
+    #[test]
+    fn a_task_matches_its_title_or_instructions_in_any_case() {
+        let task = task(
+            "Fix the flaky login test",
+            "It fails one run in ten.",
+        );
+        for query in ["", "  ", "FLAKY LOGIN", "one run in ten", " login "] {
+            assert!(task.matches(query), "{query:?}");
+        }
+        assert!(!task.matches("deploy"));
+    }
+}

@@ -59,6 +59,9 @@ ferrite-reviewr = { path = "../ferrite-reviewr" }
 # The Review slot's view (ADR 0021), which the cockpit reads for and lays
 # beside a Pane.
 ferrite-review = { path = "../ferrite-review" }
+# The Factory's views (ADR 0037), which the cockpit makes over itself and
+# lays out in the board's place.
+ferrite-factory = { path = "../ferrite-factory" }
 # The kit facade keeps the renderer, native platform and components on one
 # compatible stack. Keep the gpui import name for derives and existing code.
 gpui = { package = "gpui-kit", version = "=0.6.0" }

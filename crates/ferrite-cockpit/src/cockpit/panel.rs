@@ -442,7 +442,10 @@ impl CockpitView {
             + self.decisions.read(cx).rules().iter().filter(|rule| rule.thread == thread).count()
             + self
                 .factory()
-                .map_or(0, |view| view.read(cx).archive.read(cx).held_for_test(thread))
+                .map_or(0, |view| {
+                    let reading = view.read(cx).archive.read(cx).reading;
+                    usize::from(reading.is_some_and(|(held, _)| held == thread))
+                })
             + usize::from(self.pr_reads.holds(thread))
     }
 

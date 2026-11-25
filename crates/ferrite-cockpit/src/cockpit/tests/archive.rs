@@ -2,6 +2,9 @@
 //! the board for the Archive, Clear asks for it at once, the Archive is
 //! searched and an archived Task opens read-only with its activity and
 //! Worker history; an unreadable Factory store is said on the board.
+//! The Archive's list on its own (its rows, its search and what it emits)
+//! is `ferrite-factory`'s to test, and what a search matches is core's
+//! (`Task::matches`); these are the window's journeys through it.
 #[allow(unused_imports)]
 use super::*;
 use ferrite_core::factory_board::{Board, Status, Task};
@@ -116,6 +119,20 @@ fn archived_tasks_leave_the_board_and_clear_asks_for_the_rest(cx: &mut TestAppCo
     assert_eq!(asks, vec![TaskAction::Clear { project }]);
 }
 
+/// What is typed in the search reaches the window: a line no archived Task
+/// matches empties the list.
+#[gpui::test]
+fn a_search_nothing_matches_empties_the_archive(cx: &mut TestAppContext) {
+    let (_view, cx, _) = world(cx, "archive-miss");
+    click(cx, "factory-archive");
+    assert!(shows(cx, "factory-archive-t-1"));
+    click(cx, "factory-archive-search");
+    cx.simulate_input("deploy");
+    tick(cx);
+    assert!(!shows(cx, "factory-archive-t-1"));
+    assert!(shows(cx, "factory-archive-empty"));
+}
+
 /// AC: the Archive opens and is searched by title and instructions; an
 /// archived Task opens read-only, with its activity and its Workers.
 #[gpui::test]
@@ -133,12 +150,6 @@ fn the_archive_is_searched_and_opens_a_task_read_only(cx: &mut TestAppContext) {
         shows(cx, "factory-archive-t-1"),
         "found by its instructions"
     );
-    view.update(cx, |view, cx| view.set_archive_search("deploy", cx));
-    tick(cx);
-    assert!(!shows(cx, "factory-archive-t-1"));
-    assert!(shows(cx, "factory-archive-empty"));
-    view.update(cx, |view, cx| view.set_archive_search("FLAKY LOGIN", cx));
-    tick(cx);
 
     click(cx, "factory-archive-t-1");
     assert!(shows(cx, "task-panel"));

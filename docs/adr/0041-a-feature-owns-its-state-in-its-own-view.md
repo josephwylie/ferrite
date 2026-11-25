@@ -377,9 +377,10 @@ that happened to touch it, and nothing in the code said whose a field was.
   stay the root's. It keeps nothing by Thread or Pane, so a gone Thread or
   a dropped Pane leaves it nothing to free.
 - **The Archive is the twenty-second, and the Factory's first slice.**
-  `ArchiveView` (`cockpit/archive.rs`) owns a Factory's Archive search
-  field and the earlier Worker being read, with whether this window
-  reopened it to park it again. The Factory (`FactoryView`) holds it,
+  `ArchiveView` (`ferrite_factory::archive` since the 2026-11-25
+  amendment; the root's side is `cockpit/archive.rs`) owns a Factory's
+  Archive search field and the earlier Worker being read, with whether
+  this window reopened it to park it again. The Factory (`FactoryView`) holds it,
   made as the Factory opens on a Project, so it goes when the Factory
   leaves the board's place, as before. Its render is the Archive's list
   beside the Task panel, reading the archived Tasks that match its search
@@ -1317,6 +1318,52 @@ never waits. The rest still do.
     would block its own listener.
   - The Browser's state stays the root's here (What does not get a
     view). Moving it is not part of this change.
+
+## Amendment (2026-11-25): a feature view reads the window through a `Source`
+
+A feature read its inputs through a weak handle to the root
+(`WeakEntity<CockpitView>`, 21 files), so none could build, draw or be
+tested without the whole window. An edit to the Archive rebuilt the
+Cockpit, and each of its tests opened a Cockpit window.
+
+- **A new feature view takes a `Source`, not a handle to the root.**
+  `ferrite_ui::source::Source<T, Q>` is one read:
+  `read(&Q, &App) -> Option<T>`, `None` once its owner is gone. The root
+  makes it over itself as it makes the view
+  (`Source::of(&root, |root, query, cx| root.archive_inputs(query, cx))`).
+  `Q` is what the view asks to be answered: the Archive's search, the
+  `Background work` dialog's Thread.
+- **The read cannot write.** It takes `&App`, so a draw through it cannot
+  update the root. It reads the root as an entity, so a root notify still
+  redraws the view, as the read through the handle did (`tracking_reads`);
+  a cached sibling that read nothing keeps its cache (`source.rs`'s
+  test). Root code that runs while the root is borrowed still passes the
+  values in: a `Source` read there panics, as the handle's did. There is
+  no writing `Source`: a view the root builds rows for or that writes from
+  render (PRs, Settings, the PR reader, the side chat) is redesigned
+  before it moves.
+- **What the view asks still goes out as its event**, and the root still
+  answers by a method that takes its values.
+- **A feature view is tested without the window.** `ferrite_ui::testing`
+  (behind `test-support`) mounts one view under the toolkit's root in a
+  window of its own. The test hands it a `Source` over an entity of its
+  own and notifies that entity as the root would; `record` hears what the
+  view emits. Whole-window tests stay for what the root wires: one
+  journey through the Archive, the dialog's opening, closing and `Stop`.
+- **The first two.** The Archive's list is `ferrite_factory::archive`, a
+  crate that builds and tests without the Cockpit, the Engine and the
+  Server: `cargo tree -p ferrite-factory` reaches none of them, and
+  `scripts/ci_scope.py` forbids it the Cockpit. The search's matching is
+  core's (`Task::matches`). The `Background work` dialog reads through a
+  `Source` where it is, in the Cockpit, until the background work's own
+  crate exists. The other root handles (19 files) move one view at a
+  time, each keeping its handle until it does.
+- **Measured** on Windows (i9-14900KF, warm build, the machine idle): a
+  one-line edit to the Archive, to its tests green and a typecheck, took
+  16-17 s through the Cockpit and takes 4 s in `ferrite-factory` (6-8 s
+  with the Cockpit's typecheck after it). One Archive or dialog test
+  takes about 0.02 s in its own window, against 0.2-0.4 s in a Cockpit
+  window.
 
 ## Precedent
 

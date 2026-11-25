@@ -1,266 +1,30 @@
 //! A Project's Archive in the window (#226): Completed Tasks leave the
 //! board 7 days after completing, or at once with the board head's Clear
-//! completed. The Archive is searched by title and instructions; an archived
-//! Task opens in the ordinary Task panel, read-only, with its activity
-//! and the Workers it had.
+//! completed. An archived Task opens in the ordinary Task panel, read-only,
+//! with its activity and the Workers it had.
 //!
-//! Its state lives in a view of its own (ADR 0041), `ArchiveView`: the
-//! search field and the earlier Worker being read. The Factory holds it,
-//! so it goes when the Factory leaves the board's place, as it did. Its
-//! render is the list beside the Task panel, reading the archived Tasks
-//! that match through `archive_inputs`; what a row or Board asks it says
-//! as an `ArchiveEvent`. Whether the Archive shows stays the Factory's
+//! The Archive's list is `ferrite_factory::archive::ArchiveView`, which the
+//! Factory holds, so it goes when the Factory leaves the board's place. It
+//! reads the archived Tasks that match its search through a `Source` the
+//! root makes over itself (`archive_inputs`); what a row or Board asks it
+//! says as an `ArchiveEvent`. Whether the Archive shows stays the Factory's
 //! (`archive_shown`), which sets the list beside the Task panel; reopening
 //! an earlier Worker to be read, and drawing it on the panel's Worker tab,
 //! stay the root's.
 
-use gpui::WeakEntity;
-
 use super::*;
 use super::destination::{Destination, Shows};
-use ferrite_core::factory_board::{self, Task, TaskId};
+use ferrite_core::factory_board::Task;
 use ferrite_core::protocol::TaskAction;
 use ferrite_core::ThreadKey;
-use ferrite_pane::composer::{Composer, Role};
-
-/// One archived Task as its row says it.
-pub(crate) struct ArchivedRow {
-    id: TaskId,
-    title: String,
-    completed_ms: Option<i64>,
-    archived_ms: Option<i64>,
-    result: Option<String>,
-}
-
-/// What the Archive's list draws from the window.
-pub(crate) struct ArchiveInputs {
-    /// The archived Tasks that match the search, most recently archived
-    /// first.
-    found: Vec<ArchivedRow>,
-    /// Whether anything is archived at all.
-    any: bool,
-    /// The Task whose panel is open.
-    open: Option<TaskId>,
-}
-
-/// What the Archive's list asks of the window.
-pub(crate) enum ArchiveEvent {
-    /// An archived Task's row: open its panel.
-    Open(TaskId),
-    /// Board: give the board back.
-    Close,
-}
-
-/// The Archive: its search, and the earlier Worker being read.
-pub(crate) struct ArchiveView {
-    cockpit: WeakEntity<CockpitView>,
-    search: Entity<Composer>,
-    /// An earlier Worker of the open Task, opened to be read (G4), and
-    /// whether this window reopened it, to park it again.
-    pub(super) reading: Option<(ThreadKey, bool)>,
-}
-
-impl EventEmitter<ArchiveEvent> for ArchiveView {}
-
-impl ArchiveView {
-    pub(super) fn new(cockpit: WeakEntity<CockpitView>, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(Composer::new);
-        search.update(cx, |field, cx| field.set_role(Role::Field(None), cx));
-        cx.observe(&search, |_, _, cx| cx.notify()).detach();
-        Self {
-            cockpit,
-            search,
-            reading: None,
-        }
-    }
-
-    /// The search field's focus, which holds the keyboard while the
-    /// Archive shows.
-    pub(super) fn focus(&self, cx: &gpui::App) -> FocusHandle {
-        self.search.read(cx).focus_handle(cx)
-    }
-
-    /// Replace what the Archive is searched for.
-    #[cfg(test)]
-    pub(super) fn set_search(&self, text: &str, cx: &mut Context<Self>) {
-        self.search
-            .update(cx, |field, cx| field.set(text.to_string(), cx));
-    }
-
-    /// Forget an earlier Worker whose Thread is gone.
-    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadKey) -> bool) {
-        if self.reading.is_some_and(|(thread, _)| !keep(thread)) {
-            self.reading = None;
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn held_for_test(&self, thread: ThreadKey) -> usize {
-        usize::from(self.reading.is_some_and(|(held, _)| held == thread))
-    }
-
-    /// One archived Task: its title, when it completed and was archived,
-    /// and its result. Opening it starts nothing.
-    fn row(&self, task: ArchivedRow, open: bool, cx: &mut Context<Self>) -> AnyElement {
-        use ferrite_ui::theme::*;
-        let ArchivedRow {
-            id,
-            title,
-            completed_ms,
-            archived_ms,
-            result,
-        } = task;
-        let key = format!("factory-archive-{id}");
-        let when = |label: &str, at: Option<i64>| {
-            at.map(|at| format!("{label} {}", factory_board::when_label(at)))
-        };
-        let meta: Vec<String> = [
-            Some(format!("#{id}")),
-            when("Completed", completed_ms),
-            when("Archived", archived_ms),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-        div()
-            .id(SharedString::from(key.clone()))
-            .debug_selector(move || key.clone())
-            .flex()
-            .flex_col()
-            .flex_shrink_0()
-            .gap(px(SPACE_1))
-            .p(px(SPACE_3))
-            .rounded(px(R_CONTROL))
-            .border_1()
-            .border_color(paint::CARD_RING)
-            .cursor_pointer()
-            .map(|row| {
-                if open {
-                    row.bg(paint::SELECTED)
-                } else {
-                    row.bg(paint::RAISED).hover(|row| row.bg(paint::SELECTED))
-                }
-            })
-            .child(
-                div()
-                    .text_color(rgb(INK_STRONG))
-                    .truncate()
-                    .child(SharedString::from(title)),
-            )
-            .child(
-                div()
-                    .text_size(px(FS_META))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child(SharedString::from(meta.join(" \u{b7} "))),
-            )
-            .children(result.map(|result| {
-                div()
-                    .text_size(px(FS_META))
-                    .line_clamp(2)
-                    .text_ellipsis()
-                    .child(SharedString::from(result))
-            }))
-            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
-                cx.emit(ArchiveEvent::Open(id.clone()))
-            }))
-            .into_any_element()
-    }
-}
-
-impl Render for ArchiveView {
-    /// The Archive's list: its head, its search, and each archived Task
-    /// that matches.
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        use ferrite_ui::theme::*;
-        let query = self.search.read(cx).text().to_string();
-        let Some(ArchiveInputs { found, any, open }) = self
-            .cockpit
-            .upgrade()
-            .and_then(|cockpit| cockpit.read(cx).archive_inputs(&query, cx))
-        else {
-            return div().id("factory-archive-list");
-        };
-        let search = self.search.clone();
-        let focused = search.read(cx).focus_handle(cx).is_focused(window);
-
-        let head = div()
-            .flex()
-            .items_center()
-            .gap(px(SPACE_2))
-            .child(
-                div()
-                    .font_weight(W_LABEL)
-                    .text_color(rgb(INK_STRONG))
-                    .child("Archive"),
-            )
-            // The note gives way, so Board stays in a narrow board.
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(FS_META))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child("Completed tasks, 7 days after they complete or when cleared"),
-            )
-            .child(div().flex_1())
-            .child(
-                ferrite_ui::components::ghost_button("factory-archive-close", "Board", cx)
-                    .debug_selector(|| "factory-archive-close".into())
-                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        cx.emit(ArchiveEvent::Close);
-                    })),
-            );
-        let mut list = div()
-            .id("factory-archive-list")
-            .debug_selector(|| "factory-archive-list".into())
-            .flex_1()
-            .min_w_0()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .gap(px(SPACE_2))
-            .px(px(SPACE_4))
-            .pb(px(SPACE_4))
-            .overflow_y_scroll()
-            .child(head)
-            .child(
-                div()
-                    .debug_selector(|| "factory-archive-search".into())
-                    .child(crate::project_editor::text_field(
-                        "Search titles and instructions".into(),
-                        search,
-                        focused,
-                        "factory-archive-search-focused",
-                    )),
-            );
-        if found.is_empty() {
-            list = list.child(
-                div()
-                    .debug_selector(|| "factory-archive-empty".into())
-                    .py(px(SPACE_3))
-                    .text_size(px(FS_META))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child(if any {
-                        "No archived task matches."
-                    } else {
-                        "Nothing is archived yet."
-                    }),
-            );
-        }
-        for task in found {
-            let open = open.as_deref() == Some(task.id.as_str());
-            list = list.child(self.row(task, open, cx));
-        }
-        list
-    }
-}
+use ferrite_factory::archive::{ArchiveEvent, ArchiveInputs, ArchiveView, ArchivedRow};
+use ferrite_ui::source::Source;
 
 impl CockpitView {
     /// A Factory's Archive, heard from its making.
     pub(super) fn new_archive(&mut self, cx: &mut Context<Self>) -> Entity<ArchiveView> {
-        let me = cx.entity().downgrade();
-        let archive = cx.new(|cx| ArchiveView::new(me, cx));
+        let inputs = Source::of(&cx.entity(), |root: &Self, query: &String, cx| root.archive_inputs(query, cx));
+        let archive = cx.new(|cx| ArchiveView::new(inputs, cx));
         cx.subscribe(&archive, Self::on_archive_event).detach();
         archive
     }
@@ -453,16 +217,6 @@ impl CockpitView {
                 )
                 .into_any_element(),
         )
-    }
-
-    /// Replace what the Archive is searched for.
-    #[cfg(test)]
-    pub(crate) fn set_archive_search(&mut self, text: &str, cx: &mut Context<Self>) {
-        let Some(archive) = self.factory().map(|view| view.read(cx).archive.clone()) else {
-            return;
-        };
-        archive.update(cx, |archive, cx| archive.set_search(text, cx));
-        cx.notify();
     }
 
     /// The Archive's search field holds the keyboard while it shows.

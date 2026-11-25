@@ -158,7 +158,7 @@ impl NewTaskView {
                         MouseButton::Left,
                         cx.listener(|view, _: &MouseDownEvent, _, cx| view.focus_pr(false, cx)),
                     )
-                    .child(crate::project_editor::text_area(
+                    .child(ferrite_ui::field::text_area(
                         "Instructions".into(),
                         self.instructions.clone(),
                         focused,
@@ -173,7 +173,7 @@ impl NewTaskView {
                         MouseButton::Left,
                         cx.listener(|view, _: &MouseDownEvent, _, cx| view.focus_pr(true, cx)),
                     )
-                    .child(crate::project_editor::text_field(
+                    .child(ferrite_ui::field::text_field(
                         "Pull request (optional): owner/repository#number or its URL".into(),
                         self.pr.clone(),
                         pr_focused,

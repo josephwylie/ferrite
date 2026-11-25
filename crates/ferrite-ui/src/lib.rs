@@ -3,6 +3,7 @@ pub mod components;
 pub mod controls;
 #[cfg(any(test, feature = "test-support"))]
 pub mod face;
+pub mod field;
 pub mod frame;
 pub mod icons;
 pub mod keymap;
@@ -19,6 +20,9 @@ mod scrollbar;
 #[cfg(any(test, feature = "test-support"))]
 pub use scrollbar::painted_thumb_in;
 pub mod sheet;
+pub mod source;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
 pub mod theme;
 mod working_mark;
 
