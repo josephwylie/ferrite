@@ -42,7 +42,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_frame_selects_cockpit_dev_dependency(self):
         self.assertEqual(select(self.packages, ["crates/ferrite-frame/src/lib.rs"])["packages"],
-                         ["ferrite", "ferrite-cockpit", "ferrite-frame"])
+                         ["ferrite", "ferrite-cockpit", "ferrite-frame", "ferrite-settings"])
 
     def test_review_selects_the_window_that_lays_it_out(self):
         self.assertEqual(select(self.packages, ["crates/ferrite-review/src/lib.rs"])["packages"],
@@ -56,6 +56,10 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(select(self.packages, ["crates/ferrite-tools/src/remote_files.rs"])["packages"],
                          ["ferrite", "ferrite-cockpit", "ferrite-tools"])
 
+    def test_settings_selects_the_window_that_makes_its_views(self):
+        self.assertEqual(select(self.packages, ["crates/ferrite-settings/src/folder_browser.rs"])["packages"],
+                         ["ferrite", "ferrite-cockpit", "ferrite-settings"])
+
     def test_core_selects_transitive_consumers(self):
         result = select(self.packages, ["crates/ferrite-core/src/browser.rs"])
         self.assertIn("ferrite-terminal", result["packages"])
@@ -67,7 +71,8 @@ class SelectionTests(unittest.TestCase):
     def test_engine_selects_the_server_the_app_and_the_tests_that_run_it(self):
         result = select(self.packages, ["crates/ferrite-engine/src/engine.rs"])["packages"]
         self.assertEqual(result, ["ferrite", "ferrite-client", "ferrite-cockpit", "ferrite-engine", "ferrite-factory",
-                                  "ferrite-frame", "ferrite-pane", "ferrite-review", "ferrite-server", "ferrite-tools"])
+                                  "ferrite-frame", "ferrite-pane", "ferrite-review", "ferrite-server",
+                                  "ferrite-settings", "ferrite-tools"])
 
     def test_server_selects_the_app_and_the_tests_that_run_it(self):
         self.assertEqual(select(self.packages, ["crates/ferrite-server/src/calls.rs"])["packages"],
@@ -90,6 +95,11 @@ class SelectionTests(unittest.TestCase):
                 self.assertEqual(result["packages"], self.ferrite)
                 self.assertEqual(result["vendored"], self.vendored)
                 self.assertTrue(result["checks"])
+        # An input no rule knows may be one only the packaged run reads.
+        for path in [".github/actions/setup/action.yml", "resources/icon.ico", "assets/logo.png", ".gitattributes",
+                     "new-build-input", "crates/removed/src/lib.rs", "packaging/Ferrite.entitlements"]:
+            with self.subTest(path=path):
+                self.assertTrue(select(self.packages, [path])["browser"])
 
     def test_scripts_no_check_here_runs_select_nothing(self):
         # The scope job runs its own tests on every event; other workflows
@@ -209,7 +219,12 @@ class SelectionTests(unittest.TestCase):
                  "crates/ferrite-core/src/browser_annotations.rs", "crates/ferrite-pane/src/visual/engine.rs",
                  "crates/ferrite-pane/src/annotation_editor.rs", "crates/ferrite/src/lib.rs", "crates/ferrite-ui/Cargo.toml",
                  "Cargo.lock", "vendor/gpui-pre/src/window.rs", "scripts/install-app.sh", "scripts/probe-browser-window.py",
-                 "scripts/patches/agent-browser-0.41.2-ferrite.patch", ".github/workflows/browser-window.yml"]
+                 "scripts/patches/agent-browser-0.41.2-ferrite.patch", ".github/workflows/browser-window.yml",
+                 # Each can break the macOS pass alone.
+                 "crates/ferrite/assets/app-icon.png", "Cargo.toml", "crates/ferrite-pane/src/visual/web/cef/input.rs",
+                 "crates/ferrite-pane/src/visual/web/cef/handlers.rs", "crates/ferrite-pane/src/visual/browser_control/native.rs",
+                 "crates/ferrite-pane/src/visual/web/cef/profile.rs", "scripts/browser_resources.py",
+                 "vendor/gpui-base/src/macos_accessibility.rs"]
         for path in paths:
             with self.subTest(path=path):
                 self.assertTrue(select(self.packages, [path])["browser"])
@@ -350,9 +365,9 @@ renamed = { package = "helper", path = "crates/helper" }
         with self.assertRaisesRegex(ValueError, "Untracked in-tree path dependency.*workspace.exclude"):
             select(workspace(self.root), ["README.md"])
 
-    def test_transitive_frame_review_factory_and_tools_cockpit_edges_are_forbidden(self):
+    def test_transitive_frame_review_factory_tools_and_settings_cockpit_edges_are_forbidden(self):
         self.write_package("helper", '[dev-dependencies]\nwindow = { package = "ferrite-cockpit", path = "../ferrite-cockpit" }\n')
-        for source in ["ferrite-frame", "ferrite-review", "ferrite-factory", "ferrite-tools"]:
+        for source in ["ferrite-frame", "ferrite-review", "ferrite-factory", "ferrite-tools", "ferrite-settings"]:
             with self.subTest(source=source):
                 self.write_package(source, '[dependencies]\nhelper = { path = "../helper" }\n')
                 with self.assertRaisesRegex(ValueError, f"{source} -> helper -> ferrite-cockpit"):

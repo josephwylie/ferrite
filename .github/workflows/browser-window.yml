@@ -11,20 +11,26 @@ env:
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: 'true'
 
-# Every merge to main runs it. A PR runs it when it changes what only this run
-# sees whole (scripts/ci_scope.py) or carries the `browser-ci` label.
+# Main runs it after merges and every night. A PR runs it when it changes
+# what only this run sees whole (scripts/ci_scope.py) or carries the
+# `browser-ci` label.
 on:
   push:
     branches: [main]
   pull_request:
     types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
+  # After ci.yml's nightly run, so the two don't share the macOS runners.
+  schedule:
+    - cron: '47 5 * * *'
 
 concurrency:
   # Adding any other label starts a run that does nothing, so it must not
   # replace this PR's real one. Main's runs all finish and save the caches
-  # PRs read; a newer merge replaces only a run still waiting.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'browser-ci' && format('-{0}', github.run_id) || '' }}
+  # PRs read; a newer merge replaces only a run still waiting, and checks
+  # its change too. The nightly run has its own group, so no merge replaces
+  # it.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}${{ github.event.action == 'labeled' && github.event.label.name != 'browser-ci' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -80,9 +86,13 @@ jobs:
           if ! command -v sccache >/dev/null 2>&1; then
             echo 'RUSTC_WRAPPER=' >> "$GITHUB_ENV"
           fi
+      # Saved from main only, which every PR reads, as in ci.yml. A PR's own
+      # cache (about 0.9 GB a platform, and no other PR can read it) pushed
+      # the repository past its 10 GB, and GitHub evicted main's caches.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: browser-cef
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - uses: actions/setup-python@v5
         with:

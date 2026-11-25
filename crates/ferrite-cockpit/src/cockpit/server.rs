@@ -9,6 +9,7 @@ use ferrite_client::cockpit::{ServerRestart, ServerState};
 use ferrite_core::machine::Failure;
 use ferrite_core::protocol::When;
 use ferrite_core::server::agent;
+use ferrite_settings::sheet::ServerInputs;
 use gpui::component::notification::{Notification, NotificationType};
 use gpui::component::WindowExt as _;
 use gpui::PromptLevel;
@@ -441,7 +442,7 @@ impl CockpitView {
 
     /// Stop this computer's Server, asking first as a restart does. Its
     /// open Threads resume when a window starts it again.
-    fn stop_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn stop_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.server_act("Stop", window, cx, |cockpit, home| {
             cockpit.stop_server(home, When::Now)
         });
@@ -508,18 +509,9 @@ impl CockpitView {
     }
 
     /// Settings › Server: this computer's, for a window attached to it.
-    pub(super) fn server_rows(&self, cx: &Context<Self>) -> Vec<settings::Row> {
+    pub(super) fn server_inputs(&self, cx: &gpui::App) -> ServerInputs {
         let (Some(home), Some(state)) = (self.home(cx), self.home_server(cx)) else {
-            // A sentence, so the row's words (as About says it), not a
-            // fact's machine-text value.
-            return vec![settings::action(
-                "settings-server-none",
-                "Status",
-                self.server_standing(cx),
-                SharedString::default(),
-                None,
-                |_, _| {},
-            )];
+            return ServerInputs::None(self.server_standing(cx).into());
         };
         let mut status = self.server_standing(cx);
         if let ServerState::Attached { server, .. } = state {
@@ -535,58 +527,17 @@ impl CockpitView {
                 status.push_str(&format!(" · runs {}", server.executable.display()));
             }
         }
-        let status: SharedString = status.into();
-        let act = |view: gpui::WeakEntity<Self>,
-                   run: fn(&mut Self, &mut Window, &mut Context<Self>)| {
-            move |window: &mut Window, cx: &mut gpui::App| {
-                let _ = view.update(cx, |view, cx| run(view, window, cx));
-            }
-        };
-        let view = cx.entity().downgrade();
-        let mut rows = vec![settings::fact("Status", status)];
-        // A development build never installs the LaunchAgent (main), and
-        // must not point the operator's at itself.
-        if !crate::DEV {
-            rows.push(settings::toggle(
-                "settings-start-at-login",
-                "Start at login",
-                "Your agents keep running with no window open",
-                self.prefs.settings.start_at_login,
-                {
-                    let view = view.clone();
-                    move |on, cx| {
-                        let _ = view.update(cx, |view, cx| {
-                            view.change_settings(|settings| settings.start_at_login = on, cx);
-                            if let Err(error) = std::env::current_exe()
-                                .and_then(|exe| agent::start_at_login(&exe, on))
-                            {
-                                view.nav_notice
-                                    .problem(format!("start at login not changed: {error}"));
-                            }
-                        });
-                    }
-                },
-            ));
+        ServerInputs::Home(status.into())
+    }
+
+    /// Settings › Server's Start at login: saved, and the LaunchAgent
+    /// installed or removed.
+    pub(super) fn set_start_at_login(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.change_settings(|settings| settings.start_at_login = on, cx);
+        if let Err(error) = std::env::current_exe().and_then(|exe| agent::start_at_login(&exe, on)) {
+            self.nav_notice
+                .problem(format!("start at login not changed: {error}"));
         }
-        rows.extend([
-            settings::action(
-                "settings-server-restart",
-                "Restart",
-                "Restart the server and resume every open Thread",
-                SharedString::default(),
-                Some("Restart".into()),
-                act(view.clone(), Self::restart_server),
-            ),
-            settings::action(
-                "settings-server-stop",
-                "Stop",
-                "Stop the server and its agents; a window starts it again",
-                SharedString::default(),
-                Some("Stop".into()),
-                act(view, Self::stop_server),
-            ),
-        ]);
-        rows
     }
 }
 

@@ -697,10 +697,20 @@ fn a_revoked_session_asks_to_sign_in_and_opens_its_pairing(cx: &mut TestAppConte
         name: "box".into(),
         ..Machine::new("ferrite-link:00112233445566778899aabbccddeeff")
     };
-    let mut machines = Machines::new(reach("revoked", revoked), &[link], None, true);
+    let mut machines = Machines::new(reach("revoked", revoked), &[link.clone()], None, true);
     machines.beside(&mut core);
     let on_box = machines.held(1).unwrap();
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    // The link's host is kept where the window's settings live: the
+    // editor spells it from there.
+    let dir = view.read_with(cx, |view, _| view.prefs.dir.clone());
+    let profile = ferrite_core::machine::dir(&dir, &link.target).join("link.json");
+    std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+    std::fs::write(
+        &profile,
+        r#"{"origin":"https://box.example.com","server_id":"00112233445566778899aabbccddeeff","credential":"box"}"#,
+    )
+    .unwrap();
     until(cx, |cx| connection(&view, 1, cx) == Connection::Attention);
     tick(cx);
     assert_eq!(machine_notices(&view, cx), ["Sign in to box"]);
@@ -718,13 +728,111 @@ fn a_revoked_session_asks_to_sign_in_and_opens_its_pairing(cx: &mut TestAppConte
     tick(cx);
     view.read_with(cx, |view, cx| {
         let settings = view.sheets.read(cx).settings().expect("Settings opened");
-        assert!(settings.read(cx).connections.read(cx).editing(), "on box's pairing");
+        assert!(settings.read(cx).connections().read(cx).editing(), "on box's pairing");
     });
     let dialog = cx
         .update(|window, _| window.debug_text("connection-dialog"))
         .expect("its dialog");
     assert!(dialog.iter().any(|line| line == "Sign in to box"), "{dialog:?}");
     assert!(!dialog.iter().any(|line| line == "SSH"), "a link stays a link: {dialog:?}");
+    let host = cx
+        .update(|window, _| window.debug_text("connection-remote-host"))
+        .unwrap_or_default()
+        .join(" ");
+    assert!(host.contains("https://box.example.com"), "its host, as the window keeps it: {host}");
+    let row = connection_groups(&view, cx)
+        .into_iter()
+        .flat_map(|group| group.rows)
+        .find_map(|row| match row.control {
+            settings::Control::ConnectionRow(row) if row.name.as_ref() == "box" => Some(row),
+            _ => None,
+        })
+        .expect("box's Connections row");
+    assert_eq!(row.status.as_ref(), "Needs attention", "the row says it too");
+    assert!(row.actions.iter().any(|action| action.id.as_ref() == "connection-retry-1" && action.label.as_ref() == "Sign in"));
+}
+
+/// Connections reads its rows from the window (`connections_inputs`):
+/// each environment where the window lists it, as the window reaches it,
+/// with the reason the window gives; and the window answers a press on
+/// one of them.
+#[gpui::test]
+fn the_connections_rows_are_the_windows_environments(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("machines-reached", 1);
+    fresh("reached");
+    let link = Machine {
+        name: "box".into(),
+        ..Machine::new("ferrite-link:00112233445566778899aabbccddeeff")
+    };
+    let spare = Machine {
+        name: "spare".into(),
+        enabled: false,
+        ..Machine::new("me@spare")
+    };
+    let mut machines = Machines::new(reach("reached", revoked), &[link, spare], None, true);
+    machines.beside(&mut core);
+    let on_box = machines.held(1).unwrap();
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    until(cx, |cx| connection(&view, 1, cx) == Connection::Attention);
+    view.update(cx, |view, cx| view.open_connections(cx));
+    tick(cx);
+    let reason = view.read_with(cx, |view, cx| match view.cockpit.read(cx).server(on_box) {
+        Some(ferrite_client::cockpit::ServerState::Detached { reason, .. }) => reason,
+        _ => panic!("box is detached"),
+    });
+    let rows = |cx: &mut gpui::VisualTestContext| -> Vec<settings::ConnectionRow> {
+        connection_groups(&view, cx)
+            .into_iter()
+            .flat_map(|group| group.rows)
+            .filter_map(|row| match row.control {
+                settings::Control::ConnectionRow(row) => Some(row),
+                _ => None,
+            })
+            .collect()
+    };
+    let said: Vec<_> = rows(cx)
+        .iter()
+        .map(|row| {
+            let retry = row
+                .actions
+                .iter()
+                .find(|action| action.id.starts_with("connection-retry-"))
+                .map(|action| (action.id.to_string(), action.label.to_string()));
+            (row.name.to_string(), row.status.to_string(), row.detail.as_ref().map(|detail| detail.to_string()), row.connected, retry)
+        })
+        .collect();
+    assert_eq!(
+        said,
+        [
+            (
+                "Local environment".into(),
+                "Run agents on this computer. Turn off to use Ferrite only with remote environments.".into(),
+                None,
+                true,
+                None,
+            ),
+            (
+                "box".into(),
+                "Needs attention".into(),
+                Some(reason),
+                false,
+                Some(("connection-retry-1".into(), "Sign in".into())),
+            ),
+            ("spare".into(), "Disconnected".into(), None, false, None),
+        ],
+    );
+    let open = rows(cx)[1]
+        .actions
+        .iter()
+        .find(|action| action.id.as_ref() == "connection-open-1")
+        .expect("box's Open")
+        .act
+        .clone();
+    cx.update(|window, cx| open(window, cx));
+    tick(cx);
+    assert_eq!(view.read_with(cx, |view, cx| view.settings_machine(cx)), Some(on_box));
+    let open = rows(cx)[1].actions.iter().find(|action| action.id.as_ref() == "connection-open-1").map(|action| action.enabled);
+    assert_eq!(open, Some(false), "Settings is about box now");
 }
 
 /// Another machine's Thread draws the row this computer's does: its
@@ -1069,7 +1177,7 @@ fn add_project_with_no_machine_reached_offers_to_connect_one(cx: &mut TestAppCon
     cx.simulate_keystrokes("enter");
     tick(cx);
     let sheet = view.read_with(cx, |view, cx| view.settings_sheet(cx).expect("Settings"));
-    assert_eq!(sheet.read_with(cx, |sheet, _| sheet.page), settings::PageKey::Connections);
+    assert_eq!(sheet.read_with(cx, |sheet, _| sheet.page()), settings::PageKey::Connections);
 }
 
 /// The machine pick goes back a step, to the palette it was opened from
@@ -3003,58 +3111,51 @@ fn two_quick_edits_to_a_machines_defaults_both_land(cx: &mut TestAppContext) {
     });
 }
 
-/// A machine that cannot write its file says so in both groups that show
-/// its defaults, beside the values it kept.
-#[cfg(unix)]
+/// A machine that cannot write its file says so beside the values it
+/// kept: the window gives Settings the kept values and the refusal, so
+/// both are drawn.
 #[gpui::test]
 fn a_machine_that_cannot_save_its_defaults_says_so(cx: &mut TestAppContext) {
     use ferrite_core::settings::Settings;
-    use std::os::unix::fs::PermissionsExt;
     let there = Settings {
         factory_tasks_at_once: 5,
         ..Default::default()
     };
     let (view, cx, remote) = settings_on_a_machine(cx, "rd-readonly", &there);
-    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let blocked = refuse_writes(&remote);
     let search = cx.debug_bounds("settings-search").unwrap();
     cx.simulate_click(search.center(), gpui::Modifiers::none());
     cx.simulate_input("at once");
     tick(cx);
     let more = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
     cx.simulate_click(more, gpui::Modifiers::none());
-    let says = |group: &super::settings::Group| {
-        group
-            .rows
-            .iter()
-            .any(|row| row.words.iter().any(|word| word.contains("Not saved on box")))
-    };
-    let unsaved = |cx: &mut gpui::VisualTestContext| {
-        view.update(cx, |view, cx| {
-            (
-                says(&view.machine_group(cx)),
-                view.permission_groups(cx).iter().any(says),
-            )
-        })
-    };
-    until(cx, |cx| unsaved(cx).0);
-    assert!(unsaved(cx).1, "the Permissions page says it too");
-    until(cx, |cx| {
-        view.read_with(cx, |view, cx| view.factory_limit(cx)) == Some(5)
-    });
-    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Said on each page that shows the defaults: the sheet's own test.
+    until(cx, |cx| matches!(defaults_said(&view, cx), (Ok(5), Some(said)) if said.contains("Not saved on box")));
+    std::fs::remove_dir(blocked).unwrap();
 }
 
-#[cfg(unix)]
-fn says_in_machine_group(
+/// The machine's settings in `remote` can be read but not written: the
+/// file a write is made in first is a folder. What to remove to let
+/// writes through again.
+fn refuse_writes(remote: &std::path::Path) -> std::path::PathBuf {
+    let blocked = remote.join(format!("{}.tmp", ferrite_core::settings::Settings::FILE));
+    std::fs::create_dir_all(&blocked).unwrap();
+    blocked
+}
+
+/// What the window gives Settings of the machine's defaults: the factory
+/// limit it shows, or what stands in for the values; and what it says
+/// beside them.
+fn defaults_said(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
-    words: &str,
-) -> bool {
-    view.update(cx, |view, cx| {
-        view.machine_group(cx)
-            .rows
-            .iter()
-            .any(|row| row.words.iter().any(|word| word.contains(words)))
+) -> (Result<usize, String>, Option<String>) {
+    view.read_with(cx, |view, cx| {
+        let inputs = view.settings_inputs(cx);
+        (
+            inputs.defaults.map(|defaults| defaults.factory_tasks_at_once).map_err(|said| said.to_string()),
+            inputs.unsaved.map(|said| said.to_string()),
+        )
     })
 }
 
@@ -3071,44 +3172,39 @@ fn a_failed_read_that_later_lands_is_not_an_unsaved_edit(cx: &mut TestAppContext
         view.environment.defaults = None;
         view.ask_server_defaults(cx);
     });
-    until(cx, |cx| says_in_machine_group(&view, cx, "Could not read them"));
+    until(cx, |cx| matches!(defaults_said(&view, cx), (Err(said), None) if said.contains("Could not read them")));
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
     view.update(cx, |view, cx| view.ask_server_defaults(cx));
     until(cx, |cx| {
         view.read_with(cx, |view, cx| view.shown_defaults(cx).is_some())
     });
     tick(cx);
-    assert!(!says_in_machine_group(&view, cx, "Not saved"));
+    assert!(matches!(defaults_said(&view, cx), (Ok(_), None)), "the values, and nothing said beside them");
 }
 
 /// An edit that saves after one was refused takes the refusal away.
-#[cfg(unix)]
 #[gpui::test]
 fn a_saved_edit_clears_an_earlier_refusal(cx: &mut TestAppContext) {
     use ferrite_core::settings::Settings;
-    use std::os::unix::fs::PermissionsExt;
     let there = Settings {
         factory_tasks_at_once: 5,
         ..Default::default()
     };
     let (view, cx, remote) = settings_on_a_machine(cx, "rd-resave", &there);
-    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let blocked = refuse_writes(&remote);
     let search = cx.debug_bounds("settings-search").unwrap();
     cx.simulate_click(search.center(), gpui::Modifiers::none());
     cx.simulate_input("at once");
     tick(cx);
     let more = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
     cx.simulate_click(more, gpui::Modifiers::none());
-    until(cx, |cx| says_in_machine_group(&view, cx, "Not saved on box"));
-    until(cx, |cx| {
-        view.read_with(cx, |view, cx| view.factory_limit(cx)) == Some(5)
-    });
-    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o755)).unwrap();
+    until(cx, |cx| matches!(defaults_said(&view, cx), (Ok(5), Some(said)) if said.contains("Not saved on box")));
+    std::fs::remove_dir(blocked).unwrap();
     cx.simulate_click(more, gpui::Modifiers::none());
     until(cx, |_| {
         Settings::load(&remote).is_ok_and(|written| written.factory_tasks_at_once == 6)
     });
-    until(cx, |cx| !says_in_machine_group(&view, cx, "Not saved"));
+    until(cx, |cx| matches!(defaults_said(&view, cx), (Ok(6), None)));
 }
 
 /// box — an Engine of its own standing in for it — with an edited file of
@@ -3300,7 +3396,7 @@ fn open_connections_opens_settings_on_connections(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         assert!(view.settings_open(cx), "Settings opens");
         let sheet = view.settings_sheet(cx).unwrap();
-        assert_eq!(sheet.read(cx).page, settings::PageKey::Connections, "on Connections");
+        assert_eq!(sheet.read(cx).page(), settings::PageKey::Connections, "on Connections");
     });
 }
 

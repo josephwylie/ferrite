@@ -137,7 +137,7 @@ def workspace(root: Path) -> dict[str, Package]:
 # The window's crates. Each builds without the Server process, so an edit to
 # the Server rebuilds no window code; their tests may still run a Server.
 WINDOW_CHAIN = ("ferrite-client", "ferrite-ui", "ferrite-terminal", "ferrite-pane", "ferrite-frame", "ferrite-review",
-                "ferrite-factory", "ferrite-tools", "ferrite-cockpit")
+                "ferrite-factory", "ferrite-tools", "ferrite-settings", "ferrite-cockpit")
 
 
 def check_boundaries(packages: dict[str, Package]) -> None:
@@ -152,9 +152,9 @@ def check_boundaries(packages: dict[str, Package]) -> None:
     # The Server holds no window model (ADR 0049); its tests drive one.
     if "ferrite-server" in packages:
         forbid(packages, "ferrite-server", lambda name: name == "ferrite-client", "runtime")
-    # The frame, the Review, the Factory's views and the tools build and test
-    # without the Cockpit.
-    for source in ("ferrite-frame", "ferrite-review", "ferrite-factory", "ferrite-tools"):
+    # The frame, the Review, the Factory's views, the tools and the Settings
+    # views build and test without the Cockpit.
+    for source in ("ferrite-frame", "ferrite-review", "ferrite-factory", "ferrite-tools", "ferrite-settings"):
         if source in packages:
             forbid(packages, source, lambda name: name == "ferrite-cockpit", "dependencies")
     for source in WINDOW_CHAIN:
@@ -271,7 +271,8 @@ def rule(path: str) -> str | None:
 # the Browser, the app crate, the GPUI stack, dependencies, the packaging
 # scripts, and any line naming the `cef` or `browser-smoke` feature. ci.yml
 # compiles both features on every PR, so a caller's change that breaks gated
-# code fails there, and main runs the packaged browser after every merge.
+# code fails there. Main runs the packaged browser after merges (a newer merge
+# replaces a run still waiting) and every night.
 BROWSER_FILES = {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", ".github/workflows/browser-window.yml",
                  "scripts/ci_scope.py", "scripts/install-app.sh", "scripts/stage-windows.ps1", "scripts/copy-chromium-windows.ps1"}
 BROWSER_INPUTS = ("vendor/", ".cargo/", "scripts/patches/", "crates/ferrite/", "crates/ferrite-pane/src/visual/",
@@ -292,7 +293,6 @@ def select(packages: dict[str, Package], paths: list[str], full: bool = False, b
     selected = set()
     inputs = {SHARED} if full or not paths else set()
     reasons = {"full run or unavailable change list"} if inputs else set()
-    browser = browser or not paths or any(map(browser_input, paths))
     for path in paths:
         owners = {name for name, package in packages.items() if package.reads(path)}
         selects = rule(path) or (None if owners else UNCLASSIFIED)
@@ -302,6 +302,8 @@ def select(packages: dict[str, Package], paths: list[str], full: bool = False, b
         if selects not in (None, NOTHING):
             inputs.add(selects)
             reasons.add(f"{selects}: {path}")
+    # An input no rule knows may be one only the packaged run reads.
+    browser = browser or not paths or UNCLASSIFIED in inputs or any(map(browser_input, paths))
     if inputs & {SHARED, UNCLASSIFIED, VENDORED}:
         selected = set(packages)
     else:

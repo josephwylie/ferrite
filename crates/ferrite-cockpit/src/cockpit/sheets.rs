@@ -9,8 +9,8 @@ use super::background_dialog_view::BackgroundDialogView;
 use ferrite_factory::direct::DirectView;
 use ferrite_factory::new_task::NewTaskView;
 use super::placement_view::PlacementView;
-use super::project_editor_view::ProjectEditorView;
-use super::settings_view::SettingsView;
+use ferrite_settings::project_editor::ProjectEditorView;
+use ferrite_settings::sheet::SettingsView;
 use super::*;
 use ferrite_ui::motion;
 use ferrite_ui::sheet::Drawn;
@@ -33,7 +33,7 @@ pub(crate) enum Sheet {
 impl Sheet {
     pub(super) fn focus(&self, cx: &App) -> FocusHandle {
         match self {
-            Sheet::Settings(view) => view.read(cx).focus.clone(),
+            Sheet::Settings(view) => view.read(cx).focus_handle(cx),
             Sheet::ProjectEditor(view) => view.read(cx).focus.clone(),
             Sheet::BackgroundDialog(view) => view.read(cx).focus.clone(),
             Sheet::NewTask(view) => view.read(cx).focus(cx),
@@ -289,7 +289,7 @@ impl CockpitView {
             // At the close, not when the fade drops the view: the editor
             // holds the window's keystrokes and an attempt in flight.
             Sheet::Settings(sheet) => {
-                let connections = sheet.read(cx).connections.clone();
+                let connections = sheet.read(cx).connections().clone();
                 connections.update(cx, |connections, _| connections.close_editor());
             }
             Sheet::NewTask(sheet) => self.new_task_gone(&sheet, cx),

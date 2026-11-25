@@ -18,95 +18,84 @@ fn connection_fields(
         .expect("the connection editor is open")
 }
 
+/// Connections in the window, with the key table launch binds
+/// (`ferrite_settings::connections` has the page's own tests). It is the
+/// sheet's Connections page. A pairing URL pasted over the host field
+/// fills the host and the code: the paste is the field's, and the
+/// Composer takes none of it (on Windows ctrl-v is also the Composer's
+/// paste and the window's). Escape cancels the editor and then closes
+/// Settings. A finished setup is asked of the window once: its answer
+/// ends the editor, and it is saved in Settings' file.
 #[gpui::test]
-fn connections_keep_failed_input_save_only_ready_and_cancel_with_escape(cx: &mut TestAppContext) {
+fn connections_take_a_paste_cancel_with_escape_and_save_a_ready_setup_once(cx: &mut TestAppContext) {
     use ferrite_core::machine::{setup::Event, Machine};
+    use ferrite_ui::keymap::{bindings, PLATFORM};
     let (core, _fake) = cockpit("connection-editor", 1);
-    bind_production_keys(cx);
+    cx.update(|cx| {
+        // As launch binds them: this platform's table, Windows' on Windows.
+        ferrite_pane::pane::init_components(cx);
+        let table = ferrite_frame::keys::load(bindings(PLATFORM), cx);
+        cx.bind_keys(table);
+    });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(800.), px(600.)));
     tick(cx);
-    cx.simulate_keystrokes("cmd-,");
+    let settings_key = PLATFORM.chord(",");
+    cx.simulate_keystrokes(&settings_key);
     tick(cx);
-    let hit = cx
-        .debug_bounds("settings-page-connections")
-        .unwrap()
-        .center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    let hit = cx.debug_bounds("connection-add").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    let hit = cx.debug_bounds("connection-mode-ssh").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
+    let click = |selector: &'static str, cx: &mut gpui::VisualTestContext| {
+        let hit = cx.debug_bounds(selector).expect(selector).center();
+        cx.simulate_click(hit, gpui::Modifiers::none());
+        tick(cx);
+    };
+    click("settings-page-connections", cx);
+    click("connection-add", cx);
+    assert!(cx.debug_bounds("connection-dialog").is_some());
     let fields = connection_fields(&view, cx);
-    cx.update(|window, cx| {
-        fields
-            .host
-            .update(cx, |field, cx| field.set_value("-bad", window, cx));
-        fields
-            .username
-            .update(cx, |field, cx| field.set_value("developer", window, cx));
-        fields
-            .port
-            .update(cx, |field, cx| field.set_value("2222", window, cx));
-    });
-    cx.simulate_keystrokes("enter");
+    cx.simulate_input("https://backend.example.com");
     tick(cx);
-    assert!(cx.debug_bounds("connection-error").is_some());
-    let card = cx.debug_bounds("connection-dialog").unwrap();
-    for selector in [
-        "connection-host",
-        "connection-username",
-        "connection-port",
-        "connection-submit",
-        "connection-close",
-    ] {
-        let bounds = cx.debug_bounds(selector).expect(selector);
-        assert!(
-            bounds.left() >= card.left() && bounds.right() <= card.right(),
-            "{selector} fits the small sheet"
-        );
-    }
-    view.read_with(cx, |view, cx| {
-        assert!(view.prefs.settings.machines.is_empty());
-        assert_eq!(fields.host.read(cx).value().as_ref(), "-bad");
-        assert_eq!(fields.username.read(cx).value().as_ref(), "developer");
-        assert_eq!(fields.port.read(cx).value().as_ref(), "2222");
+    cx.simulate_keystrokes(&PLATFORM.chord("a"));
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+            "https://backend.example.com/pair#code=0123456789abcdef0123456789abcdef&server=fedcba9876543210fedcba9876543210".into(),
+        ))
     });
-    connections_view(&view, cx).update(cx, |connections, cx| {
-        connections.setup_event(
-            Event::Failed("Connection refused. Check the host and port.".into()),
-            cx,
-        )
-    });
+    cx.simulate_keystrokes(&PLATFORM.chord("v"));
     tick(cx);
-    assert_eq!(
-        connection_fields(&view, cx).host,
-        fields.host,
-        "connection failure retains the same fields"
-    );
+    view.read_with(cx, |_, cx| {
+        assert_eq!(fields.remote_host.read(cx).value().as_ref(), "https://backend.example.com");
+        assert_eq!(fields.pairing_code.read(cx).value().as_ref(), "0123456789abcdef0123456789abcdef");
+    });
+    assert_eq!(composer_text(&view, cx), "", "the Composer takes none of the paste");
     cx.simulate_keystrokes("escape");
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(
-            view.settings_open(cx),
-            "Escape cancels the editor before closing Settings"
-        );
+        assert!(view.settings_open(cx), "Escape cancels the editor before closing Settings");
         assert!(!view.connections(cx).unwrap().read(cx).editing());
     });
     assert!(cx.debug_bounds("connection-add").is_some());
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(!view.read_with(cx, |view, cx| view.settings_open(cx)), "a second Escape closes Settings");
 
-    let hit = cx.debug_bounds("connection-add").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
+    cx.simulate_keystrokes(&settings_key);
     tick(cx);
+    click("settings-page-connections", cx);
+    click("connection-add", cx);
+    let connections = connections_view(&view, cx);
+    let heard = ferrite_ui::testing::record(cx, &connections, ferrite_settings::connections::ConnectionsEvent::clone);
     let machine = Machine::new("ready.example");
-    connections_view(&view, cx).update(cx, |connections, cx| {
-        connections.setup_event(Event::Ready(machine.clone()), cx);
-        connections.setup_event(Event::Ready(machine.clone()), cx);
-    });
-    tick(cx);
+    // As the attempt's poll says it: once a frame, the window answering
+    // between.
+    for _ in 0..2 {
+        connections.update(cx, |connections, cx| connections.setup_event(Event::Ready(machine.clone()), cx));
+        tick(cx);
+    }
+    let ready = heard.take();
+    assert!(
+        matches!(&ready[..], [ferrite_settings::connections::ConnectionsEvent::Ready { machine: asked, replacing: None }] if *asked == machine),
+        "asked once: {ready:?}"
+    );
     view.read_with(cx, |view, cx| {
         assert!(!view.connections(cx).unwrap().read(cx).editing());
         assert_eq!(view.prefs.settings.machines, vec![machine.clone()]);
@@ -156,29 +145,6 @@ fn a_connection_save_failure_keeps_the_form_and_runtime_unchanged(cx: &mut TestA
         .expect("saving failed inline");
     assert!(error.contains("not saved"));
     assert_eq!(std::fs::read(blocked).unwrap(), b"keep");
-}
-
-#[gpui::test]
-fn leaving_the_connections_page_drops_the_connection_editor(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("connection-page-leave", 1);
-    bind_production_keys(cx);
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    tick(cx);
-    cx.simulate_keystrokes("cmd-,");
-    tick(cx);
-    let click = |selector: &'static str, cx: &mut gpui::VisualTestContext| {
-        let hit = cx.debug_bounds(selector).expect(selector).center();
-        cx.simulate_click(hit, gpui::Modifiers::none());
-        tick(cx);
-    };
-    click("settings-page-connections", cx);
-    click("connection-add", cx);
-    assert!(cx.debug_bounds("connection-dialog").is_some());
-    click("settings-page-about", cx);
-    click("settings-page-connections", cx);
-    assert!(cx.debug_bounds("connection-dialog").is_none(), "another page dropped the editor");
-    assert!(cx.debug_bounds("connection-add").is_some());
 }
 
 /// Behaviour's sidebar hint names the key this platform binds to the
@@ -258,8 +224,9 @@ fn a_ready_setup_replaces_the_environment_it_edits_and_keeps_its_warning(
     view.update(cx, |view, _| {
         view.prefs.settings.machines = vec![saved.clone(), other.clone()];
     });
+    let dir = view.read_with(cx, |view, _| view.prefs.dir.clone());
     connections_view(&view, cx).update_in(cx, |connections, window, cx| {
-        connections.edit(Some(saved.clone()), window, cx)
+        connections.edit(Some(saved.clone()), &dir, window, cx)
     });
     tick(cx);
     let ready = Machine {
@@ -331,30 +298,18 @@ fn reconnect_leaves_search_and_rejects_another_saved_target(cx: &mut TestAppCont
         view.prefs.settings.machines = saved.clone();
         view.settings_sheet(cx)
             .unwrap()
-            .read(cx)
-            .search
-            .clone()
-            .unwrap()
-            .update(cx, |search, cx| {
-                search.set_value("first.example", window, cx)
-            });
+            .update(cx, |sheet, cx| sheet.search("first.example", window, cx));
     });
+    let dir = view.read_with(cx, |view, _| view.prefs.dir.clone());
     connections_view(&view, cx).update_in(cx, |connections, window, cx| {
-        connections.edit(Some(saved[0].clone()), window, cx)
+        connections.edit(Some(saved[0].clone()), &dir, window, cx)
     });
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.settings_sheet(cx).unwrap().read(cx).page, settings::PageKey::Connections);
-        assert!(view
-            .settings_sheet(cx)
-            .unwrap()
-            .read(cx)
-            .search
-            .as_ref()
-            .unwrap()
-            .read(cx)
-            .value()
-            .is_empty());
+        assert_eq!(view.settings_sheet(cx).unwrap().read(cx).page(), settings::PageKey::Connections);
     });
+    tick(cx);
+    let search = cx.update(|window, _| window.debug_text("settings-search")).expect("the search field");
+    assert!(!search.iter().any(|said| said.contains("first.example")), "the search ended: {search:?}");
     tick(cx);
     let fields = connection_fields(&view, cx);
     cx.update(|window, cx| {
@@ -493,12 +448,11 @@ fn a_right_click_summons_the_menu_and_delete_takes_two_presses(cx: &mut TestAppC
     });
 }
 
-/// With the sheet itself focused, as it opens, ↓ and ↑ step the
-/// sidebar's pages and hold at the ends; a path in About copies whole
-/// on a click and shows its check until the sheet closes; reopening
-/// starts on the first page again.
+/// The window gives the sheet the keyboard as it opens, so ↓ steps its
+/// pages at once; and each opening is a sheet of its own, on the first
+/// page with nothing copied.
 #[gpui::test]
-fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
+fn settings_opens_with_the_keyboard_and_afresh_each_time(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("settings-keys", 1);
     bind_production_keys(cx);
     let (root, cx) = cx.add_window_view(|window, cx| {
@@ -517,49 +471,117 @@ fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
-    let page = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.settings_sheet(cx).unwrap().read(cx).page);
+    let sheet = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.settings_sheet(cx).unwrap());
+    let page = |cx: &mut gpui::VisualTestContext| sheet(cx).read_with(cx, |sheet, _| sheet.page());
     assert_eq!(page(cx), settings::PageKey::NewThreads);
     cx.simulate_keystrokes("down");
     tick(cx);
     assert_eq!(page(cx), settings::PageKey::Permissions);
-    assert!(cx.debug_bounds("settings-codex-sandbox").is_some());
-    assert!(cx.debug_bounds("settings-provider-0").is_none());
     cx.simulate_keystrokes("down down down down down down");
     tick(cx);
-    assert_eq!(page(cx), settings::PageKey::About, "held at the foot");
-    cx.simulate_keystrokes("up");
-    tick(cx);
-    assert_eq!(page(cx), settings::PageKey::Labs);
-    assert!(cx.debug_bounds("settings-linked-machines").is_some());
-    cx.simulate_keystrokes("up up up up");
-    tick(cx);
-    assert_eq!(page(cx), settings::PageKey::Behaviour);
-    cx.simulate_keystrokes("down down down down down");
-    tick(cx);
-
     let threads = cx
         .debug_bounds("settings-fact-Threads")
         .expect("About lists the threads directory")
         .center();
     cx.simulate_click(threads, gpui::Modifiers::none());
     tick(cx);
-    let dir = view.read_with(cx, |view, cx| {
-        assert_eq!(view.settings_sheet(cx).unwrap().read(cx).copied, Some("Threads"));
-        view.prefs.dir.join("threads").display().to_string()
-    });
-    assert_eq!(
-        cx.read_from_clipboard().and_then(|item| item.text()),
-        Some(dir),
-        "the whole path, never the ~ form"
-    );
+    let first = sheet(cx);
+    assert_eq!(first.read_with(cx, |sheet, _| sheet.copied()), Some("Threads"));
     assert!(view.read_with(cx, |view, cx| view.settings_open(cx)));
 
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
+    assert_ne!(sheet(cx), first, "a sheet of its own");
     assert_eq!(page(cx), settings::PageKey::NewThreads);
-    view.read_with(cx, |view, cx| assert_eq!(view.settings_sheet(cx).unwrap().read(cx).copied, None));
+    assert_eq!(sheet(cx).read_with(cx, |sheet, _| sheet.copied()), None);
+}
+
+/// The sheet draws what the window has (`settings_inputs`), and the
+/// window answers what it asks (`on_settings_event`): this computer's
+/// text size, its defaults, its CLIs, its paths, its build and its
+/// update; an edit saved, a default changed where it lives, a step
+/// taken.
+#[gpui::test]
+fn the_settings_sheet_reads_and_answers_the_window(cx: &mut TestAppContext) {
+    use ferrite_core::settings::{ReadingSize, Settings};
+    let (core, _fake) = cockpit("settings-wiring", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    view.update(cx, |view, cx| {
+        view.prefs.settings.reading_size = ReadingSize::nearest(18);
+        view.prefs.settings.factory_tasks_at_once = 5;
+        view.prefs.ferrite_updates = true;
+        view.cli_versions = Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into()));
+        view.show_settings(cx);
+    });
+    tick(cx);
+    let text = |selector: &str, cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, _| window.debug_text(selector))
+            .unwrap_or_else(|| panic!("nothing drawn as {selector}"))
+            .join(" ")
+    };
+    let click = |selector: &'static str, cx: &mut gpui::VisualTestContext| {
+        let hit = cx.debug_bounds(selector).unwrap_or_else(|| panic!("{selector}")).center();
+        cx.simulate_click(hit, gpui::Modifiers::none());
+        cx.run_until_parked();
+    };
+    // The card is the sheet's height: a row low on a page is found.
+    let seek = |query: &'static str, cx: &mut gpui::VisualTestContext| {
+        let sheet = view.read_with(cx, |view, cx| view.settings_sheet(cx).expect("Settings is up"));
+        sheet.update_in(cx, |sheet, window, cx| sheet.search(query, window, cx));
+        cx.run_until_parked();
+    };
+    let place = view.read_with(cx, |view, cx| view.machine_place(cx));
+    seek("Applies to", cx);
+    assert!(text("settings-card", cx).contains(place.as_ref()), "Applies to {place}");
+    seek("Text size", cx);
+    assert_eq!(text("settings-text-size-value", cx), "18px");
+    click("settings-text-size-1", cx);
+    seek("Tasks working at once", cx);
+    assert_eq!(text("settings-factory-limit-value", cx), "5", "the machine's defaults");
+    click("settings-factory-limit-1", cx);
+    seek("Name threads automatically", cx);
+    click("settings-auto-title", cx);
+    let saved = view.read_with(cx, |view, _| Settings::load(&view.prefs.dir).unwrap());
+    assert_eq!(saved.reading_size, ReadingSize::nearest(18).step(1));
+    assert_eq!(saved.factory_tasks_at_once, 6, "a step of the machine's own");
+    assert!(!saved.auto_title, "a default, changed where it lives");
+    seek("Tasks working at once", cx);
+    assert_eq!(text("settings-factory-limit-value", cx), "6", "and drawn again");
+
+    click("settings-page-server", cx);
+    assert!(
+        text("settings-card", cx).contains("This window runs without a separate server"),
+        "{}",
+        text("settings-card", cx)
+    );
+    assert!(cx.debug_bounds("settings-server-restart").is_none(), "no server of its own to restart");
+    // Each CLI's row, found by the version the window gave it.
+    for (version, row) in [("2.3.1 (Claude Code)", "Claude CLI"), ("codex-cli 0.61.0", "Codex CLI")] {
+        seek(version, cx);
+        assert!(text("settings-card", cx).contains(row), "{version}: {}", text("settings-card", cx));
+    }
+    click("settings-page-about", cx);
+    let about = text("settings-card", cx);
+    let version = format!("{} · dev", env!("CARGO_PKG_VERSION"));
+    assert!(about.contains(&version), "{version}: {about}");
+    let threads = view.read_with(cx, |view, _| view.prefs.dir.join("threads").display().to_string());
+    click("settings-fact-Threads", cx);
+    assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()), Some(threads), "the window's own directory");
+    click("settings-copy-diagnostics", cx);
+    let report = cx.read_from_clipboard().and_then(|item| item.text()).unwrap_or_default();
+    assert!(report.starts_with("Ferrite diagnostics\n"), "{report}");
+    assert!(text("settings-copy-diagnostics", cx).contains("Copied"));
+    assert!(cx.debug_bounds("settings-update-ferrite").is_some(), "a build that updates itself");
+    view.update(cx, |view, cx| {
+        view.prefs.ferrite_updates = false;
+        cx.notify();
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("settings-update-ferrite").is_none(), "one that does not");
 }
 
 /// cmd-, opens the Settings panel and escape closes it; a chip press
@@ -837,196 +859,4 @@ fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
         assert!(view.cockpit.read(cx).thread(thread).is_none(), "gone on one press");
     });
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[gpui::test]
-fn connection_modal_defaults_to_link_traps_tab_and_resets_on_reopen(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("connection-modal-focus", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    tick(cx);
-    cx.simulate_keystrokes("cmd-,");
-    tick(cx);
-    let hit = cx
-        .debug_bounds("settings-page-connections")
-        .unwrap()
-        .center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    let hit = cx.debug_bounds("connection-add").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    assert!(cx.debug_bounds("connection-remote-host").is_some());
-    assert!(cx.debug_bounds("connection-pairing-code").is_some());
-    assert!(cx.debug_bounds("connection-host").is_none());
-    let fields = connection_fields(&view, cx);
-    cx.update(|window, cx| {
-        assert!(fields
-            .remote_host
-            .read(cx)
-            .focus_handle(cx)
-            .is_focused(window))
-    });
-    let mut visited = Vec::new();
-    for _ in 0..12 {
-        cx.simulate_keystrokes("tab");
-        tick(cx);
-        let focused = view.update_in(cx, |view, window, cx| {
-            assert!(view.connections(cx).unwrap().read(cx).holds_focus(window, cx));
-            window.focused(cx).unwrap()
-        });
-        if !visited.contains(&focused) {
-            visited.push(focused);
-        }
-    }
-    assert!(visited.len() >= 6, "Tab reaches the fields, modes, close, and submit");
-    for _ in 0..12 {
-        cx.simulate_keystrokes("shift-tab");
-        tick(cx);
-        view.update_in(cx, |view, window, cx| {
-            assert!(view.connections(cx).unwrap().read(cx).holds_focus(window, cx))
-        });
-    }
-    cx.update(|window, cx| {
-        fields.remote_host.update(cx, |field, cx| {
-            field.set_value("backend.example.com", window, cx)
-        });
-        fields
-            .pairing_code
-            .update(cx, |field, cx| field.set_value("", window, cx));
-    });
-    let hit = cx.debug_bounds("connection-submit").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    assert!(cx.debug_bounds("connection-error").is_some());
-    let hit = cx.debug_bounds("connection-mode-ssh").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    assert!(cx.debug_bounds("connection-error").is_none());
-    let hit = cx.debug_bounds("connection-close").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    let hit = cx.debug_bounds("connection-add").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    let reopened = connection_fields(&view, cx);
-    assert_ne!(fields.remote_host, reopened.remote_host);
-    assert!(cx.debug_bounds("connection-remote-host").is_some());
-    assert!(cx.debug_bounds("connection-host").is_none());
-    view.read_with(cx, |_, cx| {
-        assert!(reopened.remote_host.read(cx).value().is_empty());
-        assert!(reopened.pairing_code.read(cx).value().is_empty());
-    });
-    cx.simulate_keystrokes("escape");
-    tick(cx);
-    view.read_with(cx, |view, cx| {
-        assert!(view.settings_open(cx) && !view.connections(cx).unwrap().read(cx).editing())
-    });
-    cx.simulate_keystrokes("escape");
-    tick(cx);
-    view.read_with(cx, |view, cx| assert!(!view.settings_open(cx)));
-}
-
-#[gpui::test]
-fn connection_modal_does_not_submit_or_close_during_ime_composition(cx: &mut TestAppContext) {
-    use gpui::EntityInputHandler;
-    let (core, _fake) = cockpit("connection-modal-ime", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-    cx.simulate_keystrokes("cmd-,");
-    tick(cx);
-    connections_view(&view, cx)
-        .update_in(cx, |connections, window, cx| connections.edit(None, window, cx));
-    tick(cx);
-    let fields = connection_fields(&view, cx);
-    cx.update(|window, cx| {
-        fields.remote_host.update(cx, |input, cx| {
-            input.focus(window, cx);
-            input.replace_and_mark_text_in_range(None, "仮", None, window, cx);
-        });
-    });
-    for key in ["enter", "escape"] {
-        cx.simulate_keystrokes(key);
-        tick(cx);
-        assert!(cx.debug_bounds("connection-dialog").is_some());
-        assert!(cx.debug_bounds("connection-error").is_none());
-    }
-    cx.update(|window, cx| {
-        fields
-            .remote_host
-            .update(cx, |input, cx| input.unmark_text(window, cx))
-    });
-    cx.simulate_keystrokes("escape");
-    tick(cx);
-    assert!(cx.debug_bounds("connection-dialog").is_none());
-}
-
-#[gpui::test]
-fn connection_pairing_url_can_be_typed_without_rewriting_its_prefix(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("connection-typed-pairing", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-    cx.simulate_keystrokes("cmd-,");
-    tick(cx);
-    connections_view(&view, cx)
-        .update_in(cx, |connections, window, cx| connections.edit(None, window, cx));
-    tick(cx);
-    let fields = connection_fields(&view, cx);
-    let url = "https://backend.example.com/pair#code=0123456789abcdef0123456789abcdef&server=fedcba9876543210fedcba9876543210";
-    let mut typed = String::new();
-    for character in url.chars() {
-        typed.push(character);
-        cx.simulate_input(&character.to_string());
-        cx.run_until_parked();
-        view.read_with(cx, |_, cx| {
-            assert_eq!(fields.remote_host.read(cx).value().as_ref(), typed.as_str());
-            assert!(fields.pairing_code.read(cx).value().is_empty());
-        });
-    }
-    view.read_with(cx, |_, cx| {
-        let parsed = ferrite_core::machine::remote::PairingFields::parse(
-            fields.remote_host.read(cx).value().as_ref(),
-            fields.pairing_code.read(cx).value().as_ref(),
-        )
-        .unwrap();
-        assert_eq!(parsed.host, "https://backend.example.com");
-        assert_eq!(parsed.pairing_code, "0123456789abcdef0123456789abcdef");
-    });
-}
-
-#[gpui::test]
-fn connection_pairing_url_paste_fills_host_and_code_after_replacing_text(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("connection-pasted-pairing", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-    cx.simulate_keystrokes(&ferrite_ui::keymap::PLATFORM.chord(","));
-    tick(cx);
-    connections_view(&view, cx)
-        .update_in(cx, |connections, window, cx| connections.edit(None, window, cx));
-    tick(cx);
-    let fields = connection_fields(&view, cx);
-    cx.simulate_input("https://backend.example.com");
-    cx.run_until_parked();
-    cx.simulate_keystrokes(&ferrite_ui::keymap::PLATFORM.chord("a"));
-    cx.update(|_, cx| {
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-            "https://backend.example.com/pair#code=0123456789abcdef0123456789abcdef&server=fedcba9876543210fedcba9876543210".into(),
-        ))
-    });
-    cx.simulate_keystrokes(&ferrite_ui::keymap::PLATFORM.chord("v"));
-    cx.run_until_parked();
-    view.read_with(cx, |_, cx| {
-        assert_eq!(
-            fields.remote_host.read(cx).value().as_ref(),
-            "https://backend.example.com"
-        );
-        assert_eq!(
-            fields.pairing_code.read(cx).value().as_ref(),
-            "0123456789abcdef0123456789abcdef"
-        );
-    });
 }

@@ -727,7 +727,7 @@ fn press_nav_verb(
 fn connections_view(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
-) -> Entity<super::connections_view::ConnectionsView> {
+) -> Entity<ferrite_settings::connections::ConnectionsView> {
     view.update(cx, |view, cx| {
         if !view.settings_open(cx) {
             view.show_settings(cx);

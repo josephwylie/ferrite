@@ -285,6 +285,17 @@ impl Status {
     pub(crate) fn sign_ins(&self) -> bool {
         matches!(self, Status::InSync(held) if held.values().any(|why| *why == Why::Held(Hold::SignIn)))
     }
+
+    /// The status as Connections' row of the Machine `name` says it.
+    pub(crate) fn row(&self, name: &str) -> ferrite_settings::connections::Sync {
+        ferrite_settings::connections::Sync {
+            refused: matches!(self, Status::Refused(_)),
+            stopped: matches!(self, Status::Stopped(_)),
+            sign_ins: self.sign_ins(),
+            failed: self.failed(),
+            line: self.line(name),
+        }
+    }
 }
 
 impl Why {
@@ -1100,6 +1111,22 @@ mod tests {
             pushed: 1,
             ..Synced::default()
         })
+    }
+
+    /// Connections' row says each status as what it offers: a refusal
+    /// draws the switch off, a stop offers to go on, two sign-ins offer
+    /// each side's, and the line is the one the Machine's status says.
+    #[test]
+    fn a_status_is_said_on_its_connections_row() {
+        use ferrite_settings::connections::Sync;
+        let refused = Status::Refused("This window syncs no setup".into());
+        assert_eq!(refused.row("box"), Sync { refused: true, line: "This window syncs no setup".into(), ..Sync::default() });
+        let stopped = Status::Stopped(valve(SIGN_IN));
+        assert_eq!(stopped.row("box"), Sync { stopped: true, failed: true, line: stopped.line("box"), ..Sync::default() });
+        let held = Status::InSync(BTreeMap::from([(SIGN_IN.to_string(), Why::Held(Hold::SignIn))]));
+        assert_eq!(held.row("box"), Sync { sign_ins: true, line: held.line("box"), ..Sync::default() });
+        assert_eq!(Status::InSync(BTreeMap::new()).row("box"), Sync { line: "In sync".into(), ..Sync::default() });
+        assert_eq!(Status::Older.row("box"), Sync { failed: true, line: "Update Ferrite on box to sync your setup".into(), ..Sync::default() });
     }
 
     /// "Sync anyway" asks what the sync that stopped asked, whole and

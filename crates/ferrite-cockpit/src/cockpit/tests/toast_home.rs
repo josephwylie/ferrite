@@ -146,7 +146,7 @@ fn a_toast_stands_over_the_settings_sheet(cx: &mut TestAppContext) {
     // nearest the toasts.
     view.update(cx, |view, cx| {
         let sheet = view.settings_sheet(cx).expect("Settings is up");
-        sheet.update(cx, |sheet, _| sheet.page = settings::PageKey::Connections);
+        sheet.update(cx, |sheet, cx| sheet.show(settings::PageKey::Connections, cx));
         cx.notify();
     });
     settles(cx);

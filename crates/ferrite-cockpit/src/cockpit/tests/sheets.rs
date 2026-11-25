@@ -95,12 +95,13 @@ fn closing_settings_drops_the_connection_editor(cx: &mut TestAppContext) {
         });
         tick(cx);
         let connections = connections_view(&view, cx);
-        connections.update_in(cx, |connections, window, cx| connections.edit(None, window, cx));
+        let dir = view.read_with(cx, |view, _| view.prefs.dir.clone());
+        connections.update_in(cx, |connections, window, cx| connections.edit(None, &dir, window, cx));
         tick(cx);
         assert!(connections.read_with(cx, |connections, _| connections.editing()));
         connections
     };
-    let dropped = |connections: &Entity<super::connections_view::ConnectionsView>,
+    let dropped = |connections: &Entity<ferrite_settings::connections::ConnectionsView>,
                    cx: &mut gpui::VisualTestContext,
                    how: &str| {
         view.read_with(cx, |view, cx| {
@@ -118,7 +119,7 @@ fn closing_settings_drops_the_connection_editor(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.settings_sheet(cx)
             .unwrap()
-            .update(cx, |_, cx| cx.emit(settings_view::SettingsEvent::Closed))
+            .update(cx, |_, cx| cx.emit(ferrite_settings::sheet::SettingsEvent::Closed))
     });
     tick(cx);
     dropped(&connections, cx, "the close button");

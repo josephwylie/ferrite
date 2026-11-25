@@ -82,8 +82,8 @@ cockpit its feel. It can:
    visuals. CI compiles the feature on macOS for every PR, and on Windows
    wherever its Windows check runs. The packaged browser run builds it and
    runs `ferrite --visual-smoke`, the engine headless on a GPU-less runner
-   checking a page's pixels, content height and hover, after every merge
-   and on a PR that changes the Browser.
+   checking a page's pixels, content height and hover, after merges to
+   main, every night, and on a PR that changes the Browser.
 4. **Chromium starts lazily.** `visual::boot()` is the first line of `main`:
    a CEF helper process (the same binary, started with `--type=`) runs and
    exits there, before any shell, store or window; the app only loads the

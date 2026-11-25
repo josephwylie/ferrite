@@ -6,7 +6,7 @@
 //! gets the Project card. What the draft holds goes with it.
 
 use super::*;
-use crate::cockpit::connections_view::ConnectionsEvent;
+use ferrite_settings::connections::ConnectionsEvent;
 use crate::cockpit::placement_view::PlacementView;
 use std::path::{Path, PathBuf};
 
@@ -262,7 +262,7 @@ fn the_environment_chip_lists_each_environment_with_the_drafts_ticked(cx: &mut T
     press(cx, "composer-menu-row-2");
     view.read_with(cx, |view, cx| {
         let settings = view.settings_sheet(cx).expect("Settings is up");
-        assert_eq!(settings.read(cx).page, settings::PageKey::Connections);
+        assert_eq!(settings.read(cx).page(), settings::PageKey::Connections);
     });
 }
 
@@ -301,7 +301,7 @@ fn a_machine_the_window_cannot_reach_is_dimmed_and_opens_connections(cx: &mut Te
     press(cx, "composer-menu-row-1");
     view.read_with(cx, |view, cx| {
         let settings = view.settings_sheet(cx).expect("Settings is up");
-        assert_eq!(settings.read(cx).page, settings::PageKey::Connections);
+        assert_eq!(settings.read(cx).page(), settings::PageKey::Connections);
         assert!(view.placement_sheet(cx).is_none());
     });
 }

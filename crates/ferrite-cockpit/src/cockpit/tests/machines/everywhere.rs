@@ -533,10 +533,7 @@ fn open_in_connections_names_the_machine_settings_edit(cx: &mut TestAppContext) 
     cx.simulate_keystrokes("cmd-,");
     tick(cx);
     let sheet = view.read_with(cx, |view, cx| view.settings_sheet(cx).expect("Settings"));
-    sheet.update(cx, |sheet, cx| {
-        sheet.page = settings::PageKey::Connections;
-        cx.notify();
-    });
+    sheet.update(cx, |sheet, cx| sheet.show(settings::PageKey::Connections, cx));
     tick(cx);
     let scope = |cx: &mut gpui::VisualTestContext| {
         cx.update(|window, _| window.debug_text("settings-scope"))

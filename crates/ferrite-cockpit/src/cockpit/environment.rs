@@ -191,190 +191,24 @@ impl CockpitView {
         cx.notify();
     }
 
-    fn default_change<T: 'static>(
-        &self,
-        cx: &Context<Self>,
-        write: impl Fn(&mut ServerDefaults, T) + 'static,
-    ) -> impl Fn(T, &mut gpui::App) + 'static {
-        let view = cx.entity().downgrade();
-        move |value, cx| {
-            let _ = view.update(cx, |view, cx| {
-                view.change_defaults(|defaults| write(defaults, value), cx);
-            });
-        }
-    }
-
-    /// What stands in for the machine's rows until it has said them.
-    fn defaults_unread(&self, cx: &gpui::App) -> settings::Row {
+    /// What Settings says in place of the machine's defaults until it has
+    /// said them.
+    pub(super) fn defaults_unread(&self, cx: &gpui::App) -> SharedString {
         if self.settings_machine(cx).is_none() {
-            return settings::fact(
-                "Defaults",
-                "Enable or add an environment in Connections".into(),
-            );
+            return "Enable or add an environment in Connections".into();
         }
-        let status: SharedString = match &self.environment.defaults_error {
+        match &self.environment.defaults_error {
             Some(DefaultsTrouble::Unread(error)) => format!("Could not read them: {error}").into(),
             _ => format!("Reading from {}…", self.machine_place(cx)).into(),
-        };
-        settings::fact("Defaults", status)
+        }
     }
 
-    /// The machine's refusal of an edit, shown beside the values it kept.
-    fn defaults_unsaved(&self, cx: &gpui::App) -> Option<settings::Row> {
+    /// The machine's refusal of an edit, said beside the values it kept.
+    pub(super) fn defaults_unsaved(&self, cx: &gpui::App) -> Option<SharedString> {
         let Some(DefaultsTrouble::Unsaved(error)) = &self.environment.defaults_error else {
             return None;
         };
-        Some(settings::fact(
-            "Defaults",
-            format!("Not saved on {}: {error}", self.machine_place(cx)).into(),
-        ))
-    }
-
-    /// Settings › Permissions: how each provider's Sessions ask before
-    /// acting, as the machine they run on says. The page says which
-    /// machine atop it (`settings_scope`).
-    pub(super) fn permission_groups(&self, cx: &Context<Self>) -> Vec<settings::Group> {
-        let Some(defaults) = self.shown_defaults(cx) else {
-            return vec![settings::Group::new(None).rows([self.defaults_unread(cx)])];
-        };
-        let modes = |options: &[(&str, Option<&str>)], selected: Option<&str>| {
-            options
-                .iter()
-                .map(|(label, value)| {
-                    (
-                        SharedString::from(label.to_string()),
-                        selected == *value,
-                        value.map(str::to_string),
-                    )
-                })
-                .collect()
-        };
-        let claude = vec![settings::choices(
-            "settings-claude-mode",
-            "Permissions",
-            "When Claude asks before acting",
-            modes(
-                &[
-                    (settings::CLI_DEFAULT, None),
-                    ("Ask", Some("default")),
-                    ("Accept edits", Some("acceptEdits")),
-                    ("Plan", Some("plan")),
-                    ("Bypass permissions", Some("bypassPermissions")),
-                ],
-                defaults.claude_permission_mode.as_deref(),
-            ),
-            self.default_change(cx, |d, v| d.claude_permission_mode = v),
-        )];
-        let codex = vec![
-            settings::choices(
-                "settings-codex-approval",
-                "Approvals",
-                "When Codex asks before acting",
-                modes(
-                    &[
-                        ("On request", Some("on-request")),
-                        ("Untrusted", Some("untrusted")),
-                        ("Never", Some("never")),
-                    ],
-                    Some(&defaults.codex_approval_policy),
-                ),
-                self.default_change(cx, |d, v: Option<String>| {
-                    d.codex_approval_policy = v.unwrap_or_else(|| "on-request".into())
-                }),
-            ),
-            settings::choices(
-                "settings-codex-sandbox",
-                "Sandbox",
-                "What Codex may touch",
-                modes(
-                    &[
-                        (settings::CLI_DEFAULT, None),
-                        ("Read only", Some("read-only")),
-                        ("Workspace write", Some("workspace-write")),
-                        ("Full access", Some("danger-full-access")),
-                    ],
-                    defaults.codex_sandbox.as_deref(),
-                ),
-                self.default_change(cx, |d, v| d.codex_sandbox = v),
-            ),
-        ];
-        self.defaults_unsaved(cx)
-            .map(|unsaved| settings::Group::new(None).rows([unsaved]))
-            .into_iter()
-            .chain([
-                provider_group(Provider::Claude).rows(claude),
-                provider_group(Provider::Codex).rows(codex),
-            ])
-            .collect()
-    }
-
-    /// Settings › Behaviour's group of what the machine does on its own
-    /// account: titles, follow-up suggestions and its Factory's limit.
-    pub(super) fn machine_group(&self, cx: &Context<Self>) -> settings::Group {
-        let applies = settings::fact("Applies to", self.machine_place(cx));
-        let group = settings::Group::new(Some("Machine defaults"));
-        let Some(defaults) = self.shown_defaults(cx) else {
-            return group.rows([applies, self.defaults_unread(cx)]);
-        };
-        let at_once = defaults.factory_tasks_at_once;
-        group.rows(
-            std::iter::once(applies)
-                .chain(self.defaults_unsaved(cx))
-                .chain([
-                    settings::toggle(
-                        "settings-auto-title",
-                        "Name threads automatically",
-                        "Titled from the first prompt until you rename it",
-                        defaults.auto_title,
-                        self.default_change(cx, |d, v| d.auto_title = v),
-                    ),
-                    settings::toggle(
-                        "settings-placeholder-suggestions",
-                        "Suggest follow-up prompts",
-                        "A likely next prompt in an empty composer · tab takes it",
-                        defaults.placeholder_suggestions,
-                        self.default_change(cx, |d, v| d.placeholder_suggestions = v),
-                    ),
-                    settings::stepper(
-                        "settings-factory-limit",
-                        "Tasks working at once",
-                        "In the Factory · the rest wait in Queued",
-                        at_once.to_string().into(),
-                        at_once > *ferrite_core::factory_board::LIMIT_RANGE.start(),
-                        at_once < *ferrite_core::factory_board::LIMIT_RANGE.end(),
-                        {
-                            let view = cx.entity().downgrade();
-                            move |delta, cx| {
-                                let _ =
-                                    view.update(cx, |view, cx| view.step_factory_limit(delta, cx));
-                            }
-                        },
-                    ),
-                ]),
-        )
-    }
-
-    /// Settings › Labs: what is still being tried on the machine, each off
-    /// until turned on there (T3 Code's Labs › Beta, scoped to its server).
-    /// The page says which machine atop it (`settings_scope`).
-    pub(super) fn labs_groups(&self, cx: &Context<Self>) -> Vec<settings::Group> {
-        let group = settings::Group::new(Some("Beta"));
-        let Some(defaults) = self.shown_defaults(cx) else {
-            return vec![group.rows([self.defaults_unread(cx)])];
-        };
-        vec![group.rows(
-            self.defaults_unsaved(cx)
-                .into_iter()
-                .chain([settings::toggle(
-                    "settings-linked-machines",
-                    "Linked machines",
-                    "Let agents here work on your other machines, and theirs here. Turn it on \
-                     for each machine, then link them in Connections. While off, nothing new \
-                     starts over a link; running tasks finish.",
-                    defaults.linked_machines,
-                    self.default_change(cx, |d, v| d.linked_machines = v),
-                )]),
-        )]
+        Some(format!("Not saved on {}: {error}", self.machine_place(cx)).into())
     }
 
     /// The CLIs of the machine Settings is about, asked `action`.

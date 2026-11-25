@@ -12,6 +12,7 @@ members = [
     "crates/ferrite-review",
     "crates/ferrite-factory",
     "crates/ferrite-tools",
+    "crates/ferrite-settings",
     "crates/ferrite-terminal",
     "crates/ferrite-frame",
     "crates/ferrite-focus-notify",

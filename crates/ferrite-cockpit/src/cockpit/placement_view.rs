@@ -10,8 +10,8 @@
 //! opens on it, and only its Resume goes there.
 
 use super::copies::{self, Again, Copies, CopyKey, Order, Phase};
-use super::draft_environment::Band;
-use super::folder_browser::{FolderBrowser, Moved};
+use ferrite_pane::band::Band;
+use ferrite_settings::folder_browser::{FolderBrowser, Moved};
 use super::*;
 use ferrite_core::placement::{self, Ignored};
 use gpui::App;
@@ -165,8 +165,7 @@ impl PlacementView {
         };
         let dest = cx.new(|cx| {
             FolderBrowser::new(
-                model.clone(),
-                placing.machine,
+                super::machines::folders_on(model.clone(), placing.machine),
                 format!("Folder on {}", placing.machine_name).into(),
                 folder.clone(),
                 cx,
