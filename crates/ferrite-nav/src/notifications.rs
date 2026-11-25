@@ -135,7 +135,7 @@ pub struct Row {
     pub title: SharedString,
     pub state: State,
     pub detail: Detail,
-    /// Its age (`facts::since_label`: `2m`, `1h`; nothing in its first
+    /// Its age (`ferrite_ui::age::since_label`: `2m`, `1h`; nothing in its first
     /// minute — no surface prints `now`, theme rule 11).
     pub when: SharedString,
     pub read: bool,
@@ -450,7 +450,6 @@ impl NeedsYou {
     /// Take every toast down and forget what was waiting, keeping what was
     /// heard as heard: a scene's requests that stood before the window
     /// opened.
-    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
     pub fn clear_toasts(&mut self) {
         self.pending.clear();
         self.toasts.clear();
@@ -644,7 +643,7 @@ pub fn toast_face(row: &Row, width: f32) -> Div {
 }
 
 fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
-    let tag = crate::nav::RowTag::of(row.thread, row.elsewhere);
+    let tag = crate::RowTag::of(row.thread, row.elsewhere);
     let machine = row.thread.machine();
     let word = row.word();
     let body: AnyElement = match &row.detail {

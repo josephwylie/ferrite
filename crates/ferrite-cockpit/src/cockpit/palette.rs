@@ -11,7 +11,7 @@
 //! (`register_palette_actions`).
 
 use super::*;
-use crate::float::{self, FloatPlace};
+use ferrite_ui::float::{self, FloatPlace};
 use crate::palette::{
     Act, Command, Palette, PaletteEvent, PaletteScope, Row as PaletteRow,
     Section as PaletteSection,
@@ -93,7 +93,7 @@ fn session_row(
         .map(|name| name.to_string_lossy().into_owned());
     let age = candidate
         .modified
-        .map(|at| crate::facts::since_label(at, now).to_string())
+        .map(|at| ferrite_ui::age::since_label(at, now).to_string())
         .filter(|age| !age.is_empty());
     let context = project
         .into_iter()
@@ -525,7 +525,7 @@ impl CockpitView {
                 let age = self
                     .facts
                     .last_used(thread)
-                    .map(|at| crate::facts::since_label(at, now))
+                    .map(|at| ferrite_ui::age::since_label(at, now))
                     .unwrap_or_default();
                 let word = state_word(&row, age);
                 let ordinal = order.iter().position(|listed| *listed == thread);

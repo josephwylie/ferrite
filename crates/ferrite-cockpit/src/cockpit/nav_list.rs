@@ -9,8 +9,8 @@
 use super::menu_button::{Door, Edge};
 use super::nav_view::{MenuAt, NavEvent, NavInputs, NavView};
 use super::*;
-use crate::nav::flip::{self, Update};
-use crate::nav::{list, NavItem, Shelf, SHELVES};
+use ferrite_nav::flip::{self, Update};
+use ferrite_nav::{list, NavItem, Shelf, SHELVES};
 use ferrite_ui::motion::{fold_body, Reveal, FOLD};
 use std::time::Instant;
 
@@ -502,7 +502,7 @@ impl NavView {
         let snoozing = matches!(inputs.menu, Some(MenuTarget::Snooze(_)));
         if snoozing
             || cx.has_active_drag()
-            || ferrite_ui::motion::hover_t(&crate::nav::card_key(row.tag())) < 1.0
+            || ferrite_ui::motion::hover_t(&ferrite_nav::card_key(row.tag())) < 1.0
         {
             return None;
         }
@@ -520,9 +520,9 @@ impl NavView {
             lines.push((ferrite_ui::icons::FOLDER, worktree.clone()));
         }
         let provider = row.provider.map(|provider| (provider, self.row_model(row, provider, cx)));
-        Some(crate::nav::chrome::hover_card(
+        Some(ferrite_nav::chrome::hover_card(
             row,
-            crate::nav::chrome::HoverLines { lines, provider },
+            ferrite_nav::chrome::HoverLines { lines, provider },
             inputs.width,
         ))
     }

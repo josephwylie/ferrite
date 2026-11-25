@@ -1051,7 +1051,7 @@ fn a_window_lists_this_computers_threads_by_their_last_turn(cx: &mut TestAppCont
     let state = view.read_with(cx, |view, cx| view.nav_state(cx));
     let age = |row: &nav::ThreadRow| {
         row.activity_at
-            .map(|at| crate::facts::since_label(at, now).to_string())
+            .map(|at| ferrite_ui::age::since_label(at, now).to_string())
     };
     let project = Some(gpui::SharedString::from(title));
     let open: Vec<_> = state
@@ -1082,4 +1082,25 @@ fn a_window_lists_this_computers_threads_by_their_last_turn(cx: &mut TestAppCont
         ],
         "the parked Threads, in the order they were parked"
     );
+}
+
+/// The ⌘ digits are bound: each names the action its key is bound to.
+#[test]
+fn the_command_digits_are_bound() {
+    for ordinal in 1..=9 {
+        let action = crate::cockpit::focus_thread_action(ordinal).expect("one action per digit");
+        assert_eq!(
+            ferrite_ui::components::bound_chord(action),
+            Some(format!(
+                "{}-{ordinal}",
+                if cfg!(target_os = "macos") {
+                    "cmd"
+                } else {
+                    "ctrl"
+                }
+            )),
+            "⌘{ordinal}"
+        );
+    }
+    assert_eq!(crate::cockpit::focus_thread_action(10), None);
 }

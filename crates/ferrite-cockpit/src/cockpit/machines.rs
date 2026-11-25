@@ -5,7 +5,7 @@
 //! any machine's Thread opens it in place.
 
 use super::*;
-use crate::notifications::Alert;
+use ferrite_nav::notifications::Alert;
 use ferrite_client::cockpit::ServerState;
 use ferrite_core::machine::Failure;
 use gpui::App;
@@ -313,7 +313,7 @@ impl CockpitView {
     pub(super) fn row_title(&self, thread: ThreadKey, cx: &App) -> SharedString {
         let title = self.facts.name(thread);
         match self.machine_label(thread.machine(), cx) {
-            Some(machine) => crate::notifications::machine_title(&machine, &title),
+            Some(machine) => ferrite_nav::notifications::machine_title(&machine, &title),
             None => title,
         }
     }

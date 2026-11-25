@@ -19,8 +19,8 @@
 use gpui::WeakEntity;
 
 use super::*;
-use crate::float::{self, FloatPlace};
-use crate::notifications::{Alert, QuickAnswer, ToastStage};
+use ferrite_ui::float::{self, FloatPlace};
+use ferrite_nav::notifications::{Alert, QuickAnswer, ToastStage};
 use crate::system_notifications::Posting;
 use ferrite_core::notifications::{DecisionNoticeId, NoticeId, Notifications};
 use ferrite_client::cockpit::OnMachine;
@@ -356,14 +356,14 @@ impl Render for ToastsView {
         };
         let leaving = leaving.map(|(row, left)| {
             hang(
-                ferrite_ui::motion::toast_out(left, crate::notifications::toast_face(&row, width))
+                ferrite_ui::motion::toast_out(left, ferrite_nav::notifications::toast_face(&row, width))
                     .into_any_element(),
             )
         });
         let standing = standing.map(|row| {
-            let toast = crate::notifications::toast(&row, Self::handle(cx), width);
+            let toast = ferrite_nav::notifications::toast(&row, Self::handle(cx), width);
             hang(
-                ferrite_ui::motion::toast_in(crate::notifications::toast_key(&row), toast)
+                ferrite_ui::motion::toast_in(ferrite_nav::notifications::toast_key(&row), toast)
                     .into_any_element(),
             )
         });

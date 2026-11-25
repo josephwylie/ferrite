@@ -1333,7 +1333,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let (scene, branches) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
-                view.set_shelf_open(crate::nav::Shelf::Parked, true, cx);
+                view.set_shelf_open(ferrite_nav::Shelf::Parked, true, cx);
                 view.nav_view.read(cx).scroll.scroll_to_bottom();
                 let parked = view
                     .nav_view
@@ -1346,8 +1346,8 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     .find(|row| row.name.as_ref() == "Codex resume handshake")
                     .expect("the fixture's parked Thread")
                     .tag();
-                let key = crate::nav::card_key(parked);
-                for key in [crate::nav::list::slim_fade_key(&key), key] {
+                let key = ferrite_nav::card_key(parked);
+                for key in [ferrite_nav::list::slim_fade_key(&key), key] {
                     ferrite_ui::motion::hover_snap(key)(&true, window, cx);
                 }
                 cx.notify();
@@ -1381,7 +1381,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 view.cockpit
                     .update(cx, |cockpit, _| cockpit.snooze_thread(copy, Some(wake)).now())
                     .expect("snooze the fixture Thread");
-                view.set_shelf_open(crate::nav::Shelf::Working, true, cx);
+                view.set_shelf_open(ferrite_nav::Shelf::Working, true, cx);
                 cx.notify();
             });
             (scene, setup)
@@ -1409,7 +1409,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 let harness = named_thread(view, "Screenshot harness", cx);
                 view.facts
                     .pr_answered(harness, Some(fixture_pr(415, PrState::Open, false)));
-                crate::nav::card_hover(crate::nav::card_key(crate::nav::RowTag::of(harness, false)), false, None)(&true, window, cx);
+                ferrite_nav::card_hover(ferrite_nav::card_key(ferrite_nav::RowTag::of(harness, false)), false, None)(&true, window, cx);
                 cx.notify();
             });
             (scene, setup)
@@ -1443,7 +1443,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     view.facts.pr_answered(thread, Some(reading));
                 }
                 let running = named_thread(view, "Retained transcript rendering", cx);
-                crate::nav::card_hover(crate::nav::card_key(crate::nav::RowTag::of(running, false)), true, None)(&true, window, cx);
+                ferrite_nav::card_hover(ferrite_nav::card_key(ferrite_nav::RowTag::of(running, false)), true, None)(&true, window, cx);
                 cx.notify();
             });
             (scene, setup)
@@ -3181,8 +3181,8 @@ pub fn motion_preview(output: String) {
                             .w(px(260.))
                             .flex()
                             .flex_col()
-                            .child(crate::nav::list::shelf_heading(
-                                crate::nav::Shelf::Working,
+                            .child(ferrite_nav::list::shelf_heading(
+                                ferrite_nav::Shelf::Working,
                                 3,
                                 !self.folded,
                                 false,

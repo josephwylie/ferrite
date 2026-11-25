@@ -1541,9 +1541,9 @@ fn cockpit_renders_over(cx: &mut gpui::VisualTestContext, ms: u64) -> usize {
 /// Finishes' toasts come and go: a leap to each of their timers, and the
 /// frames each one asks for. Nothing between them is counted.
 fn outlast_toasts(cx: &mut gpui::VisualTestContext) {
-    leap(cx, crate::notifications::ALERT_DELAY);
+    leap(cx, ferrite_nav::notifications::ALERT_DELAY);
     settle(cx);
-    leap(cx, crate::notifications::DONE_TOAST);
+    leap(cx, ferrite_nav::notifications::DONE_TOAST);
     settle(cx);
 }
 
@@ -2105,7 +2105,7 @@ fn needs_you_toast_comes_and_goes(
 
     // It rings once the finish has waited out its delay.
     cx.executor()
-        .advance_clock(crate::notifications::ALERT_DELAY / 2);
+        .advance_clock(ferrite_nav::notifications::ALERT_DELAY / 2);
     cx.run_until_parked();
     let mut waited = 0;
     while cx.debug_bounds(toast).is_none() {
@@ -2126,7 +2126,7 @@ fn needs_you_toast_comes_and_goes(
 
     // It times out, the window drawing a frame at a time.
     cx.executor()
-        .advance_clock(crate::notifications::DONE_TOAST - Duration::from_secs(1));
+        .advance_clock(ferrite_nav::notifications::DONE_TOAST - Duration::from_secs(1));
     cx.run_until_parked();
     let mut waited = 0;
     while cx.debug_bounds(toast).is_some() {
@@ -2418,7 +2418,7 @@ fn a_nav_rebuild_lays_out_no_character_again(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_keystrokes("cmd-shift-e down");
     tick(cx);
-    let (nav, shaped) = (crate::cockpit::drawn::nav_renders(), crate::nav::testing::shaped());
+    let (nav, shaped) = (crate::cockpit::drawn::nav_renders(), ferrite_nav::testing::shaped());
     assert!(shaped > 0, "the premise: the nav measured its titles");
     cx.simulate_keystrokes("down up down");
     tick(cx);
@@ -2427,7 +2427,7 @@ fn a_nav_rebuild_lays_out_no_character_again(cx: &mut TestAppContext) {
         "the premise: the moves rebuilt the nav"
     );
     assert_eq!(
-        crate::nav::testing::shaped(),
+        ferrite_nav::testing::shaped(),
         shaped,
         "a nav rebuild laid out a character again"
     );

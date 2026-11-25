@@ -851,7 +851,7 @@ fn until(
 /// 0017).
 fn ring(cx: &mut gpui::VisualTestContext) {
     cx.executor()
-        .advance_clock(crate::notifications::ALERT_DELAY);
+        .advance_clock(ferrite_nav::notifications::ALERT_DELAY);
     tick(cx);
 }
 

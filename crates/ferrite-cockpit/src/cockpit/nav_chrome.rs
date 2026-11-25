@@ -7,7 +7,7 @@
 use super::menu_button::{Door, Edge};
 use super::nav_view::{NavEvent, NavInputs, NavView};
 use super::*;
-use crate::nav::{chrome, NavTooltip};
+use ferrite_nav::{chrome, NavTooltip};
 use ferrite_ui::components::{icon_button, IconSize};
 use ferrite_ui::icons;
 use ferrite_pane::composer::{Composer, Edited, Role};
@@ -220,7 +220,7 @@ impl NavView {
             })
             .collect();
         let body = if rows.is_empty() {
-            crate::nav::list::empty("nav-no-results", "No threads found", None)
+            ferrite_nav::list::empty("nav-no-results", "No threads found", None)
                 .into_any_element()
         } else {
             chrome::results(rows).into_any_element()

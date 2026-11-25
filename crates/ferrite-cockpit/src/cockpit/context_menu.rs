@@ -1268,7 +1268,7 @@ impl CockpitView {
                 );
             }
             // Its first row level with its parent (the shell's pad above both).
-            crate::float::beside(
+            ferrite_ui::float::beside(
                 ferrite_ui::theme::SUBMENU_GAP,
                 f32::from(parent_top) - ferrite_ui::theme::FLOAT_PAD,
                 ferrite_ui::theme::GRID_PAD,

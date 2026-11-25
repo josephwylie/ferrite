@@ -395,7 +395,7 @@ fn a_request_toast_expires(cx: &mut TestAppContext) {
         1
     );
     cx.executor()
-        .advance_clock(crate::notifications::NEEDS_YOU_TOAST);
+        .advance_clock(ferrite_nav::notifications::NEEDS_YOU_TOAST);
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.toasts.read(cx).needs_you.toasts().is_empty(), "it went on its own");

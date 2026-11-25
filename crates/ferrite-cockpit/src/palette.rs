@@ -39,7 +39,7 @@ use gpui::{
 };
 
 use crate::cockpit::Attention;
-use crate::nav::RowStatus;
+use ferrite_nav::RowStatus;
 use ferrite_pane::composer::{Composer, Edited, Role};
 use ferrite_ui::components;
 use ferrite_ui::pointer::{Pointer, PointerPressed};
@@ -1031,7 +1031,7 @@ pub(crate) fn footer_row(left: impl IntoElement, right: SharedString) -> gpui::D
 /// mark, else the command's icon, else nothing.
 fn mark(row: &Row) -> Option<gpui::AnyElement> {
     match (row.status, &row.act) {
-        (Some(status), _) => Some(crate::nav::mark(status, false)),
+        (Some(status), _) => Some(ferrite_nav::mark(status, false)),
         (None, Act::Command(command)) => command.icon().map(|icon| {
             ferrite_ui::icons::icon(icon, PALETTE_MARK_ICON, INK_STRONG).into_any_element()
         }),

@@ -12,7 +12,7 @@ use super::nav_chrome::{NavUndo, UndoAct};
 use super::nav_pick::ParkSweep;
 use super::machines::{MachineNotice, RECONNECT_GRACE};
 use super::*;
-use crate::nav::{NavCursor, Shelf};
+use ferrite_nav::{NavCursor, Shelf};
 use ferrite_core::transcript::RateLimits;
 use ferrite_pane::link_target::Open;
 use ferrite_ui::motion::Reveal;
@@ -188,7 +188,7 @@ impl menu_button::MenuHost for NavView {
     }
 
     fn tip<E: InteractiveElement>(element: E, text: SharedString) -> E {
-        use crate::nav::NavTooltip as _;
+        use ferrite_nav::NavTooltip as _;
         element.nav_tooltip(text)
     }
 }

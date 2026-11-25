@@ -283,7 +283,7 @@ fn the_nav_moves_a_working_thread_on_the_beat_without_the_window(cx: &mut TestAp
         |_, cx| cx.observe(&view, move |_, _| notified.set(notified.get() + 1))
     });
     let rows = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.nav_state(cx));
-    let ids = |rows: &[crate::nav::ThreadRow]| rows.iter().map(|row| row.key).collect::<Vec<_>>();
+    let ids = |rows: &[ferrite_nav::ThreadRow]| rows.iter().map(|row| row.key).collect::<Vec<_>>();
     // Its first event settles what the Session says of itself.
     fake.streams.borrow()[1]
         .send(SessionEvent::TextDelta { text: "working ".into() })
@@ -473,7 +473,7 @@ fn the_factory_door_counts_what_needs_you_as_the_board_arrives(cx: &mut TestAppC
 /// otherwise, and the pump reads no Notices for it.
 #[gpui::test]
 fn a_done_toast_comes_and_goes_on_its_own_clock(cx: &mut TestAppContext) {
-    use crate::notifications::{ALERT_DELAY, DONE_TOAST};
+    use ferrite_nav::notifications::{ALERT_DELAY, DONE_TOAST};
     let _clock = hold_wall_clock();
     let (view, fake, panes, cx) = window("wakes-toast-clock", 2, cx);
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));

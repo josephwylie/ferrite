@@ -283,7 +283,7 @@ fn hover_fact(selector: &'static str, mark: impl IntoElement, words: SharedStrin
 /// face (`menu::glass`). The Title, a line per fact, then the pull
 /// request under a rule.
 pub fn hover_card(row: &ThreadRow, lines: HoverLines, width: f32) -> AnyElement {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     super::testing::DRAWN_HOVER_CARD.with(|drawn| {
         *drawn.borrow_mut() = lines
             .lines

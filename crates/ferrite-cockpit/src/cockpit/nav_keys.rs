@@ -26,7 +26,7 @@
 
 use super::nav_view::{MenuAt, NavEvent, NavInputs, NavView};
 use super::*;
-use crate::nav::{NavCursor, NavItem, Shelf, SHELVES};
+use ferrite_nav::{NavCursor, NavItem, Shelf, SHELVES};
 use gpui::{App, Bounds};
 
 impl NavView {
@@ -100,11 +100,11 @@ impl NavView {
     fn move_cursor(&mut self, next: Option<NavCursor>, window: &mut Window, cx: &mut Context<Self>) {
         let painter = Some(cx.entity_id());
         if let Some(old) = self.cursor.take() {
-            crate::nav::card_hover(old.key, true, painter)(&false, window, cx);
+            ferrite_nav::card_hover(old.key, true, painter)(&false, window, cx);
         }
         self.cursor_bounds.set(None);
         if let Some(next) = &next {
-            crate::nav::card_hover(next.key.clone(), true, painter)(&true, window, cx);
+            ferrite_nav::card_hover(next.key.clone(), true, painter)(&true, window, cx);
             self.reveal.set(true);
         }
         self.cursor = next;

@@ -82,7 +82,7 @@ impl CockpitView {
                     age: self
                         .facts
                         .last_used(thread)
-                        .map(|at| crate::facts::since_label(at, now)),
+                        .map(|at| ferrite_ui::age::since_label(at, now)),
                     open: self.pane_for(thread).is_some(),
                 }
             })

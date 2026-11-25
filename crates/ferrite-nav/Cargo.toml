@@ -8,15 +8,22 @@ description = "Ferrite's nav (ADR 0040) and what stands beside it: the empty boa
 [lib]
 doctest = false
 
+[features]
+# What the Cockpit's own tests read of what the nav last drew
+# (`testing`).
+test-support = []
+
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
 # The theme, components and keys, and the Source a view reads through.
 ferrite-ui = { path = "../ferrite-ui" }
-# A Thread's status mark.
+# A Thread's status mark, its tail, and the Composer the search is typed in.
 ferrite-pane = { path = "../ferrite-pane" }
 # The kit facade keeps the renderer, native platform and components on one
 # compatible stack. Keep the gpui import name for derives and existing code.
 gpui = { package = "gpui-kit", version = "=0.6.0" }
+# A request's input, which its Inbox row words.
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # `ThreadKey::fixture`: a Thread with no Cockpit behind it.

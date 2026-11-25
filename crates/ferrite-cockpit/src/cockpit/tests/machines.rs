@@ -945,7 +945,7 @@ fn a_machines_threads_sit_in_the_one_list_with_its_icon(cx: &mut TestAppContext)
     cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds("nav-hover-card").is_some(), "its detail");
-    let said = crate::nav::testing::drawn_hover_card();
+    let said = ferrite_nav::testing::drawn_hover_card();
     assert_eq!(said.first().map(String::as_str), Some("box"), "{said:?}");
     assert_eq!(
         said.last().map(String::as_str),
@@ -970,7 +970,7 @@ fn a_machines_threads_sit_in_the_one_list_with_its_icon(cx: &mut TestAppContext)
     tick(cx);
     cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
     tick(cx);
-    let said = crate::nav::testing::drawn_hover_card();
+    let said = ferrite_nav::testing::drawn_hover_card();
     assert_eq!(said.last().map(String::as_str), Some("Haiku 4.5"), "it ends on the model, as T3's does");
 }
 
@@ -1006,7 +1006,7 @@ fn an_unopened_machines_thread_names_its_model(cx: &mut TestAppContext) {
     let card = debug_bounds(cx, format!("nav-thread-{}", on(on_box, theirs))).expect("box's card");
     cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
     tick(cx);
-    let said = crate::nav::testing::drawn_hover_card();
+    let said = ferrite_nav::testing::drawn_hover_card();
     assert_eq!(said.last().map(String::as_str), Some("Haiku 4.5"), "{said:?}");
 }
 
@@ -1061,7 +1061,7 @@ fn this_computers_rows_draw_no_icon(cx: &mut TestAppContext) {
     assert!(debug_bounds(cx, format!("nav-card-machine-{}", on(here, mine))).is_none());
     assert!(cx.debug_bounds("nav-hover-card").is_some(), "its detail");
     assert!(
-        !crate::nav::testing::drawn_hover_card().iter().any(|line| line == "box"),
+        !ferrite_nav::testing::drawn_hover_card().iter().any(|line| line == "box"),
         "names no machine"
     );
     assert!(machine_notices(&view, cx).is_empty(), "both are there");
@@ -1851,7 +1851,7 @@ fn a_lost_machine_holds_only_its_own_panes(cx: &mut TestAppContext) {
     });
     assert_ne!(connection(&view, 1, cx), Connection::Online, "Settings says so");
     assert_eq!(connection(&view, 0, cx), Connection::Online);
-    let card = |thread| crate::nav::testing::drawn_card(thread).expect("its card").opacity;
+    let card = |thread| ferrite_nav::testing::drawn_card(thread).expect("its card").opacity;
     assert!(card(theirs) <= ferrite_ui::theme::MACHINE_LOST_OPACITY, "box's card, dimmed");
     assert_eq!(card(mine), 1.0, "this computer's, not");
     assert!(machine_notices(&view, cx).is_empty(), "nothing said within T3's grace");

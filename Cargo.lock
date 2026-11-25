@@ -2470,6 +2470,7 @@ dependencies = [
  "ferrite-pane",
  "ferrite-ui",
  "gpui-kit",
+ "serde_json",
 ]
 
 [[package]]
