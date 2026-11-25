@@ -436,8 +436,11 @@ Windows window.
   kit's toasts stand over the Composer of the board's lower right Pane,
   their right edge on its box's and their foot just over its stack, or
   just over a Decision or a failed turn's Retry at the transcript's foot
-  when they would reach it, never over the Pane's head; with no Composer
-  there, in the board's lower right corner (`toast_home`). So they read
+  when they would reach it and no sheet is up, never over the Pane's
+  head; with no Composer there, in the board's lower right corner
+  (`toast_home`). A sheet holds the keys and the pointer, so the row
+  under it waits and the toasts stay home rather than rise into its
+  card. So they read
   as anchored in every layout (a draft, a Thread, the panel or the
   Details card open, a sheet up), and never cover an answer the operator
   owes. They draw over any sheet and under every menu (ADR 0043's

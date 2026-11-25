@@ -450,7 +450,9 @@ impl CockpitView {
     /// its stack, or over the row the operator answers at its transcript's
     /// foot when they would reach that, though never over the Pane's head.
     /// With no Composer there, or the Factory or the pull requests in the
-    /// board's place, the board's lower right corner (`TOAST_FOOT`).
+    /// board's place, the board's lower right corner (`TOAST_FOOT`). A
+    /// sheet up holds the keys and the pointer: the row under it waits, and
+    /// the toasts stay home rather than rise into its card.
     pub(super) fn toast_home(&self, window: &Window, cx: &gpui::App) -> (Pixels, Pixels) {
         use ferrite_ui::theme::{PANE_HEAD_H, TOAST_BOX_RIGHT, TOAST_FOOT, TOAST_KIT_H, TOAST_REACH, TOAST_TOP};
         let viewport = window.viewport_size();
@@ -461,13 +463,14 @@ impl CockpitView {
         let panes_shown =
             self.cockpit.read(cx).environment_available() && self.factory().is_none() && !self.prs_shown();
         let panes = if panes_shown { self.pane_rects(window, cx) } else { Vec::new() };
+        let answerable = !self.sheet_up(cx);
         let over_composer = panes.into_iter().max_by(corner).and_then(|(index, pane)| {
             let geometry = self.panes[index].geometry.get();
             let (field, stack) = (geometry.composer?, geometry.stack?);
             let reach = stack.top() - px(TOAST_TOP + TOAST_REACH);
             let clear = geometry
                 .answers
-                .filter(|answers| answers.bottom() > reach)
+                .filter(|answers| answerable && answers.bottom() > reach)
                 .map_or(stack.top(), |answers| answers.top().min(stack.top()));
             let highest = px(pane.y + PANE_HEAD_H + TOAST_TOP + TOAST_KIT_H);
             Some((field.right(), (clear - px(TOAST_TOP)).max(highest)))

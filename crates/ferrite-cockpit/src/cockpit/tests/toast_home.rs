@@ -106,6 +106,28 @@ fn a_toast_stands_clear_of_a_waiting_decision(cx: &mut TestAppContext) {
     assert_eq!(pressed.get(), 0, "a press on Allow or Deny is the Decision's");
 }
 
+/// A sheet up holds the pointer and the keys, so the Decision under it is
+/// not answered there: a toast over the sheet stands at its home on the
+/// Composer, not risen into the sheet's card.
+#[gpui::test]
+fn a_toast_over_a_sheet_does_not_rise_for_the_decision_under_it(cx: &mut TestAppContext) {
+    let (_view, fake, cx) = board("toast-sheet-decision", cx);
+    let said: String = (0..60).map(|line| format!("Line {line} of what the agent read.\n\n")).collect();
+    fake.streams.borrow()[0].send(SessionEvent::TextDelta { text: said }).unwrap();
+    fake.streams.borrow()[0].send(decision("perm_01")).unwrap();
+    tick(cx);
+    toast("Copy of app to box stopped", cx);
+    let (risen, field) = toast_and_box(cx);
+    assert!(
+        risen.bottom() < field.top() - px(TOAST_TOP),
+        "the premise: the toast at {risen:?} rose over the Decision"
+    );
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    let (card, field) = toast_and_box(cx);
+    on_the_composer(card, field, "Settings up over a waiting Decision");
+}
+
 /// A toast stands over Settings where it stands without it, over the
 /// Composer under the sheet: it draws over the sheet's veil, clear of the
 /// widest page's close button, Add button and Local switch, and a press on
