@@ -5,6 +5,10 @@
 //! asks as an event (ADR 0041). Nothing here names the Cockpit, so an edit
 //! to one builds and tests without it.
 
+#[cfg(test)]
+#[path = "../../ferrite-core/src/test_temp.rs"]
+mod test_temp;
+
 pub mod changes;
 pub mod files;
 pub mod remote_files;
