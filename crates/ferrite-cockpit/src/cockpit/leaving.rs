@@ -2,7 +2,8 @@
 //! an agent is working or a Decision waits: either would be cut off
 //! mid-turn. With nothing in flight it goes at once, as before. A window on
 //! the Server never asks: its agents keep running without it (ADR 0025).
-//! Unsaved file text that leaving cannot write is asked about too.
+//! Unsaved file text that leaving cannot write is asked about too, and a
+//! copy under way, which runs in the window (`Copies`).
 
 use super::*;
 use gpui::{App, PromptLevel};
@@ -81,10 +82,15 @@ impl CockpitView {
             1 => Some("1 file has unsaved changes. Leaving discards them.".to_string()),
             count => Some(format!("{count} files have unsaved changes. Leaving discards them.")),
         };
-        match (agents, files) {
-            (Some(agents), Some(files)) => Some(format!("{agents} {files}")),
-            (warning, None) | (None, warning) => warning,
-        }
+        let copying: Vec<(&str, &str)> = self
+            .copies
+            .read(cx)
+            .iter()
+            .filter(|(_, copy)| copy.phase.live())
+            .map(|(_, copy)| (copy.order.placing.title.as_ref(), copy.order.placing.machine_name.as_ref()))
+            .collect();
+        let said: Vec<String> = [agents, copies_under_way(&copying), files].into_iter().flatten().collect();
+        (!said.is_empty()).then(|| said.join(" "))
     }
 
     /// `in_flight` on this computer: what an update of this computer's
@@ -124,6 +130,21 @@ impl CockpitView {
     }
 }
 
+/// The copies under way, each a Project and the Machine it goes to: what
+/// leaving stops.
+fn copies_under_way(copies: &[(&str, &str)]) -> Option<String> {
+    Some(match copies {
+        [] => return None,
+        [(project, machine)] => {
+            format!("Copying {project} to {machine}. Leaving stops it; Resume finishes it later.")
+        }
+        copies => format!(
+            "{} copies are under way. Leaving stops them; Resume finishes each later.",
+            copies.len()
+        ),
+    })
+}
+
 /// Who is working and who waits.
 fn in_flight(working: usize, waiting: usize) -> Option<String> {
     let agents = |n: usize| match n {
@@ -143,7 +164,20 @@ fn in_flight(working: usize, waiting: usize) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::in_flight;
+    use super::{copies_under_way, in_flight};
+
+    #[test]
+    fn the_question_names_the_copies_leaving_stops() {
+        assert_eq!(copies_under_way(&[]), None);
+        assert_eq!(
+            copies_under_way(&[("atlas", "ferrite-wsl")]).unwrap(),
+            "Copying atlas to ferrite-wsl. Leaving stops it; Resume finishes it later."
+        );
+        assert_eq!(
+            copies_under_way(&[("atlas", "ferrite-wsl"), ("web", "box")]).unwrap(),
+            "2 copies are under way. Leaving stops them; Resume finishes each later."
+        );
+    }
 
     #[test]
     fn the_question_names_who_is_working_and_who_waits() {
