@@ -9,7 +9,7 @@
 //! own update has ended.
 
 use super::draft_environment::Band;
-use super::folder_browser::FolderBrowser;
+use ferrite_settings::folder_browser::FolderBrowser;
 use super::*;
 use gpui::{App, WeakEntity};
 use std::path::PathBuf;
@@ -96,7 +96,7 @@ impl ProjectEditorView {
             }
         });
         let remote = browse.map(|(model, label)| {
-            cx.new(|cx| FolderBrowser::new(model, machine, label, REMOTE_HOME.into(), cx))
+            cx.new(|cx| FolderBrowser::new(super::machines::folders_on(model, machine), label, REMOTE_HOME.into(), cx))
         });
         Self {
             cockpit,

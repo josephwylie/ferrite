@@ -1,7 +1,7 @@
 //! The Project card's own rows, on a sheet's form (`ferrite_ui::form`):
-//! a machine's folder browser and the Project's directories.
+//! the Project's directories.
 
-use gpui::component::{button::Button, Disableable};
+use gpui::component::button::Button;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, App, Div, SharedString};
 
@@ -13,115 +13,6 @@ use ferrite_ui::theme::*;
 
 pub fn close_button(cx: &App) -> Button {
     sheet::sheet_close("project-editor-close", "Close project editor", cx)
-}
-
-/// One row of a folder browser, the Files tree's row (`FILES_ROW_H`, its
-/// mark in a chevron-wide column, `FS_LABEL` in `INK_STRONG`) as the shared
-/// press: a folder to go into, or `..` out of one. The row the arrows rest
-/// on is `paint::SELECTED`, as the tree's open file is. A `held` row takes
-/// no press and its name is `INK_SUBTLE`.
-pub fn folder_row(
-    id: impl Into<gpui::ElementId>,
-    mark: &'static str,
-    label: SharedString,
-    cursor: bool,
-    held: bool,
-    cx: &App,
-) -> Button {
-    let rest = if cursor {
-        paint::SELECTED
-    } else {
-        Paint(TRANSPARENT)
-    };
-    components::form_button_on(id, rest, cx)
-        .disabled(held)
-        .when(held, |row| row.cursor_default())
-        .w_full()
-        .h(px(FILES_ROW_H))
-        .p_0()
-        .rounded(px(R_CONTROL))
-        .child(
-            folder_line(mark).child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(FS_LABEL))
-                    .line_height(px(LH_UI))
-                    .text_color(rgb(if held { INK_SUBTLE } else { INK_STRONG }))
-                    .child(label),
-            ),
-        )
-}
-
-/// A new folder's name, typed in a row of the browser's: the field's ring
-/// a row's height inside it, `Folder name` while it is empty.
-pub fn folder_name_row(editor: impl IntoElement, focused: bool, empty: bool) -> Div {
-    folder_line(ferrite_ui::icons::FOLDER_PLUS)
-        .h(px(FILES_ROW_H))
-        .child(
-            div()
-                .relative()
-                .flex()
-                .items_center()
-                .flex_1()
-                .min_w_0()
-                .h(px(FILES_ROW_H - SPACE_1))
-                .px(px(FORM_FIELD_PAD_X))
-                .rounded(px(R_CONTROL))
-                .border_1()
-                .border_color(if focused {
-                    gpui::Hsla::from(rgb(CONTROL_FOCUS))
-                } else {
-                    paint::FIELD_RING.into()
-                })
-                .child(div().flex_1().min_w_0().child(editor))
-                .when(empty, |field| {
-                    field.child(
-                        components::text_ui()
-                            .absolute()
-                            .left(px(FORM_FIELD_PAD_X))
-                            .text_color(rgb(INK_SUBTLE))
-                            .child("Folder name"),
-                    )
-                }),
-        )
-}
-
-/// A note in a folder browser's list, a row's height at least, on the
-/// edge its rows' names start from: two lines at most, whole in its
-/// tooltip.
-pub fn folder_note(note: Div, text: SharedString) -> gpui::Stateful<Div> {
-    div()
-        .id("folder-note")
-        .flex()
-        .items_center()
-        .min_h(px(FILES_ROW_H))
-        .pl(px(SPACE_1 + ICON_CHEVRON + SPACE_1 + SPACE_1_5))
-        .pr(px(SPACE_2))
-        .tooltip(ferrite_ui::menu::tooltip(text))
-        .child(div().flex_1().min_w_0().line_clamp(2).child(note))
-}
-
-/// A folder row's line: its mark in a chevron-wide column, as the Files
-/// tree sets its rows.
-fn folder_line(mark: &'static str) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .w_full()
-        .min_w_0()
-        .gap(px(SPACE_1_5))
-        .pl(px(SPACE_1))
-        .pr(px(SPACE_2))
-        .child(
-            div()
-                .flex()
-                .flex_shrink_0()
-                .justify_center()
-                .w(px(ICON_CHEVRON + SPACE_1))
-                .child(ferrite_ui::icons::icon(mark, ICON_CHEVRON, INK_SUBTLE)),
-        )
 }
 
 /// The quiet text control under the list that adds a directory (`+ Add

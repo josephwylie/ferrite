@@ -67,7 +67,6 @@ mod setup_sync;
 mod sheets;
 mod side_chat_view;
 mod rename;
-mod folder_browser;
 mod returns;
 use rename::{rename_field, RenameTarget};
 mod snooze;

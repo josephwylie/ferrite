@@ -24,12 +24,6 @@ pub fn name_field(editor: impl IntoElement, focused: bool) -> Div {
     )
 }
 
-/// On a machine (ADR 0026), where no folder dialog can browse: the line a
-/// folder browser shows its folder in, in the name row's field.
-pub fn path_field(label: SharedString, editor: impl IntoElement, focused: bool) -> Div {
-    field(label, editor, focused, "project-path-focused", false, None)
-}
-
 /// A one-line field whose value follows `prefix`, drawn in the box before
 /// it in `INK_SUBTLE` and cut from its start: a name in the folder the
 /// prefix names.

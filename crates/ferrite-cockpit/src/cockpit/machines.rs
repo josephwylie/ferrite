@@ -380,3 +380,9 @@ pub(super) fn wanted(alert: &Alert, view: &CockpitView, cx: &App) -> Option<bool
     let notifications = view.cockpit.read(cx).notifications(machine);
     Some(alert.target.wants(notifications.reading()))
 }
+
+/// What a folder of `machine` holds, asked of its Server through `model`:
+/// a folder browser's `List` (ADR 0026).
+pub(super) fn folders_on(model: Entity<Cockpit>, machine: MachineId) -> ferrite_settings::folder_browser::List {
+    std::rc::Rc::new(move |path, cx| model.update(cx, |cockpit, _| cockpit.list_dir(machine, path)))
+}

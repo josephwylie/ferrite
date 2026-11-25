@@ -6,14 +6,27 @@
 //! last name narrows the rows. Only the rows in view are drawn, however
 //! many the folder holds. The setup sheet's destination and the Project
 //! card's directory on a Machine are each one.
+//!
+//! What the Machine holds the browser asks through its `List`, which the
+//! Cockpit makes over the Machine's Server and a test over folders of its
+//! own; it holds no window and no Server.
 
-use super::*;
-use ferrite_core::folder::Listing;
-use gpui::{App, ScrollStrategy, UniformListScrollHandle};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::mpsc::{Receiver, TryRecvError};
+
+use ferrite_core::folder::Listing;
+use ferrite_pane::composer::{Composer, Edited, Role};
+use ferrite_ui::components;
+use ferrite_ui::theme::*;
+use gpui::component::{button::Button, Disableable};
+use gpui::prelude::*;
+use gpui::{
+    div, px, rgb, AnyElement, App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle,
+    Focusable, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
+};
 
 gpui::actions!(folder_browser, [Up, Down, Open, Cancel]);
 
@@ -30,13 +43,16 @@ const HOME: &str = "~/";
 
 const SEPARATORS: [char; 2] = ['/', '\\'];
 
-pub(super) struct FolderBrowser {
-    model: Entity<Cockpit>,
-    machine: MachineId,
+/// Ask the Machine what one of its folders holds, answered later: a
+/// Machine is a round trip away.
+pub type List = Rc<dyn Fn(&Path, &mut App) -> std::io::Result<Receiver<std::io::Result<Listing>>>>;
+
+pub struct FolderBrowser {
+    list: List,
     label: SharedString,
     /// The folder shown, `/` last; a last name without one narrows its
     /// rows.
-    pub(super) field: Entity<Composer>,
+    pub field: Entity<Composer>,
     /// The directory the rows are of, as the line has it.
     shown: String,
     /// The rows under the line, as the line and the listings have them.
@@ -65,7 +81,7 @@ pub(super) struct FolderBrowser {
 }
 
 /// The line moved: to another folder, or by a keystroke.
-pub(super) struct Moved;
+pub struct Moved;
 
 impl EventEmitter<Moved> for FolderBrowser {}
 
@@ -107,11 +123,10 @@ fn child(parent: &Path, name: &str) -> PathBuf {
 }
 
 impl FolderBrowser {
-    /// A browser of `machine`'s folders labelled `label`, opened at
+    /// A browser of the folders `list` reads, labelled `label`, opened at
     /// `start`, or at home when `start` cannot be read.
-    pub(super) fn new(
-        model: Entity<Cockpit>,
-        machine: MachineId,
+    pub fn new(
+        list: List,
         label: SharedString,
         start: String,
         cx: &mut Context<Self>,
@@ -123,8 +138,7 @@ impl FolderBrowser {
         })
         .detach();
         let mut browser = Self {
-            model,
-            machine,
+            list,
             label,
             field,
             shown: String::new(),
@@ -145,13 +159,13 @@ impl FolderBrowser {
 
     /// What goes into a folder not there yet makes it, which the browser
     /// calls `note`.
-    pub(super) fn making(mut self, note: impl Into<SharedString>) -> Self {
+    pub fn making(mut self, note: impl Into<SharedString>) -> Self {
         self.makes = Some(note.into());
         self
     }
 
     /// Hold the folder shown, or let it go.
-    pub(super) fn hold(&mut self, held: bool, cx: &mut Context<Self>) {
+    pub fn hold(&mut self, held: bool, cx: &mut Context<Self>) {
         if self.held == held {
             return;
         }
@@ -164,7 +178,7 @@ impl FolderBrowser {
     fn line(cx: &mut Context<Self>) -> Entity<Composer> {
         let line = cx.new(Composer::new);
         line.update(cx, |line, cx| {
-            line.set_role(ferrite_pane::composer::Role::Field(Some(KEY_CONTEXT)), cx)
+            line.set_role(Role::Field(Some(KEY_CONTEXT)), cx)
         });
         line
     }
@@ -174,7 +188,7 @@ impl FolderBrowser {
     }
 
     /// The folder the line names: what is typed, no `/` last but a root's.
-    pub(super) fn folder(&self, cx: &App) -> String {
+    pub fn folder(&self, cx: &App) -> String {
         let typed = self.typed(cx).trim();
         match typed.trim_end_matches(SEPARATORS) {
             "" if !typed.is_empty() => typed[..1].to_string(),
@@ -182,13 +196,13 @@ impl FolderBrowser {
         }
     }
 
-    pub(super) fn focus_handle(&self, cx: &App) -> FocusHandle {
+    pub fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.field.read(cx).focus_handle(cx)
     }
 
     /// Whether the browser holds the keyboard: its line, or a new folder's
     /// name.
-    pub(super) fn focused(&self, window: &Window, cx: &App) -> bool {
+    pub fn focused(&self, window: &Window, cx: &App) -> bool {
         self.focus_handle(cx).is_focused(window) || self.naming_focused(window, cx)
     }
 
@@ -206,20 +220,20 @@ impl FolderBrowser {
     }
 
     /// Show `folder`, as the browser's own move rather than the operator's.
-    pub(super) fn open_at(&mut self, folder: String, cx: &mut Context<Self>) {
+    pub fn open_at(&mut self, folder: String, cx: &mut Context<Self>) {
         self.put = Some(folder.clone());
         self.go(folder, cx);
     }
 
     /// Whether the line still holds the folder the browser was put at:
     /// nothing has been browsed to since.
-    pub(super) fn untouched(&self) -> bool {
+    pub fn untouched(&self) -> bool {
         self.put.is_some()
     }
 
     /// The folder shown, spelled out, for its owner to keep; the browser
     /// goes back to the folder it is in. None when the line names none.
-    pub(super) fn take(&mut self, cx: &mut Context<Self>) -> Option<PathBuf> {
+    pub fn take(&mut self, cx: &mut Context<Self>) -> Option<PathBuf> {
         let folder = self.folder(cx);
         if folder.is_empty() {
             return None;
@@ -266,12 +280,8 @@ impl FolderBrowser {
         {
             return;
         }
-        let machine = self.machine;
         let path = PathBuf::from(&directory);
-        if let Ok(answer) = self
-            .model
-            .update(cx, |cockpit, _| cockpit.list_dir(machine, &path))
-        {
+        if let Ok(answer) = (self.list)(&path, cx) {
             self.asking.push((directory, answer));
         }
     }
@@ -281,7 +291,7 @@ impl FolderBrowser {
     /// folders and the folder it is in has none of that name; else it goes
     /// home. An answer the lost connection took is asked again at the next
     /// move.
-    pub(super) fn poll(&mut self, cx: &mut Context<Self>) {
+    pub fn poll(&mut self, cx: &mut Context<Self>) {
         let mut landed = false;
         let listed = &mut self.listed;
         self.asking.retain(|(directory, answer)| {
@@ -335,14 +345,14 @@ impl FolderBrowser {
     }
 
     /// Ask the Machine where its home is, for `tilde`.
-    pub(super) fn ask_home(&mut self, cx: &mut Context<Self>) {
+    pub fn ask_home(&mut self, cx: &mut Context<Self>) {
         self.list(HOME.into(), cx);
     }
 
     /// `path`, as the Machine spells it, under `~/` where it is in the
     /// Machine's home, as the browser shows paths; as it is where the home
     /// cannot be read. None until the home is asked (`ask_home`) and read.
-    pub(super) fn tilde(&self, path: &Path) -> Option<String> {
+    pub fn tilde(&self, path: &Path) -> Option<String> {
         let home = match self.listed.get(HOME)? {
             Ok(home) => &home.path,
             Err(_) => return Some(path.display().to_string()),
@@ -357,7 +367,7 @@ impl FolderBrowser {
     }
 
     /// Read the folder shown again: a copy may have made a folder in it.
-    pub(super) fn relist(&mut self, cx: &mut Context<Self>) {
+    pub fn relist(&mut self, cx: &mut Context<Self>) {
         self.listed.remove(&self.shown);
         self.list(self.shown.clone(), cx);
     }
@@ -365,7 +375,7 @@ impl FolderBrowser {
     /// `path` as the Machine's Server spelled it out, its `~` the Machine's
     /// home: by the listing of the nearest folder on its way that was read.
     /// As typed otherwise: the Server spells `~` out when it registers.
-    pub(super) fn spelled_out(&self, path: &str) -> PathBuf {
+    pub fn spelled_out(&self, path: &str) -> PathBuf {
         let trimmed = path.trim_end_matches(SEPARATORS);
         let listed = self
             .listed
@@ -418,7 +428,7 @@ impl FolderBrowser {
     /// Tab in the line: go into the first folder its last name starts.
     /// False when there is no name to finish, or the browser does not hold
     /// the keyboard: Tab moves on.
-    pub(super) fn tab(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+    pub fn tab(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
         if !self.focused(window, cx) || split_typed(self.typed(cx)).1.is_empty() {
             return false;
         }
@@ -475,7 +485,7 @@ impl FolderBrowser {
 
     /// Name a folder in the one shown, made by what goes into it: a row
     /// under its folders.
-    pub(super) fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.held {
             return;
         }
@@ -539,11 +549,11 @@ impl FolderBrowser {
         let line = if unread {
             ferrite_ui::form::error_line(text.clone())
         } else {
-            ferrite_ui::components::text_ui()
-                .text_color(gpui::rgb(ferrite_ui::theme::INK_SUBTLE))
+            components::text_ui()
+                .text_color(rgb(INK_SUBTLE))
                 .child(text.clone())
         };
-        Some(project_editor::folder_note(
+        Some(folder_note(
             line.debug_selector(move || selector.into()),
             text,
         ))
@@ -566,7 +576,7 @@ impl FolderBrowser {
                         format!("folder-row:{name}"),
                     ),
                 };
-                project_editor::folder_row(
+                folder_row(
                     ("folder-row", at),
                     icon,
                     label.into(),
@@ -586,14 +596,122 @@ impl FolderBrowser {
     }
 }
 
+/// One row of a folder browser, the Files tree's row (`FILES_ROW_H`, its
+/// mark in a chevron-wide column, `FS_LABEL` in `INK_STRONG`) as the shared
+/// press: a folder to go into, or `..` out of one. The row the arrows rest
+/// on is `paint::SELECTED`, as the tree's open file is. A `held` row takes
+/// no press and its name is `INK_SUBTLE`.
+fn folder_row(
+    id: impl Into<gpui::ElementId>,
+    mark: &'static str,
+    label: SharedString,
+    cursor: bool,
+    held: bool,
+    cx: &App,
+) -> Button {
+    let rest = if cursor {
+        paint::SELECTED
+    } else {
+        Paint(TRANSPARENT)
+    };
+    components::form_button_on(id, rest, cx)
+        .disabled(held)
+        .when(held, |row| row.cursor_default())
+        .w_full()
+        .h(px(FILES_ROW_H))
+        .p_0()
+        .rounded(px(R_CONTROL))
+        .child(
+            folder_line(mark).child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(FS_LABEL))
+                    .line_height(px(LH_UI))
+                    .text_color(rgb(if held { INK_SUBTLE } else { INK_STRONG }))
+                    .child(label),
+            ),
+        )
+}
+
+/// A new folder's name, typed in a row of the browser's: the field's ring
+/// a row's height inside it, `Folder name` while it is empty.
+fn folder_name_row(editor: impl IntoElement, focused: bool, empty: bool) -> Div {
+    folder_line(ferrite_ui::icons::FOLDER_PLUS)
+        .h(px(FILES_ROW_H))
+        .child(
+            div()
+                .relative()
+                .flex()
+                .items_center()
+                .flex_1()
+                .min_w_0()
+                .h(px(FILES_ROW_H - SPACE_1))
+                .px(px(FORM_FIELD_PAD_X))
+                .rounded(px(R_CONTROL))
+                .border_1()
+                .border_color(if focused {
+                    gpui::Hsla::from(rgb(CONTROL_FOCUS))
+                } else {
+                    paint::FIELD_RING.into()
+                })
+                .child(div().flex_1().min_w_0().child(editor))
+                .when(empty, |field| {
+                    field.child(
+                        components::text_ui()
+                            .absolute()
+                            .left(px(FORM_FIELD_PAD_X))
+                            .text_color(rgb(INK_SUBTLE))
+                            .child("Folder name"),
+                    )
+                }),
+        )
+}
+
+/// A note in a folder browser's list, a row's height at least, on the
+/// edge its rows' names start from: two lines at most, whole in its
+/// tooltip.
+fn folder_note(note: Div, text: SharedString) -> gpui::Stateful<Div> {
+    div()
+        .id("folder-note")
+        .flex()
+        .items_center()
+        .min_h(px(FILES_ROW_H))
+        .pl(px(SPACE_1 + ICON_CHEVRON + SPACE_1 + SPACE_1_5))
+        .pr(px(SPACE_2))
+        .tooltip(ferrite_ui::menu::tooltip(text))
+        .child(div().flex_1().min_w_0().line_clamp(2).child(note))
+}
+
+/// A folder row's line: its mark in a chevron-wide column, as the Files
+/// tree sets its rows.
+fn folder_line(mark: &'static str) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .w_full()
+        .min_w_0()
+        .gap(px(SPACE_1_5))
+        .pl(px(SPACE_1))
+        .pr(px(SPACE_2))
+        .child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .justify_center()
+                .w(px(ICON_CHEVRON + SPACE_1))
+                .child(ferrite_ui::icons::icon(mark, ICON_CHEVRON, INK_SUBTLE)),
+        )
+}
+
 impl Render for FolderBrowser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        use ferrite_ui::theme::*;
         let note = self.note(cx);
         let line = if self.held {
-            ferrite_ui::components::text_ui()
+            components::text_ui()
                 .truncate()
-                .text_color(gpui::rgb(INK_SUBTLE))
+                .text_color(rgb(INK_SUBTLE))
                 .child(self.typed(cx).to_string())
                 .into_any_element()
         } else {
@@ -602,7 +720,7 @@ impl Render for FolderBrowser {
         let naming = self.naming.clone().map(|naming| {
             let focused = naming.read(cx).focus_handle(cx).is_focused(window);
             let empty = naming.read(cx).text().is_empty();
-            project_editor::folder_name_row(naming, focused, empty)
+            folder_name_row(naming, focused, empty)
                 .debug_selector(|| "folder-browser-naming".into())
         });
         let rows = gpui::uniform_list(
@@ -625,10 +743,11 @@ impl Render for FolderBrowser {
             .flex()
             .flex_col()
             .gap(px(SPACE_1))
-            .child(ferrite_ui::field::path_field(
+            .child(ferrite_ui::field::text_field(
                 self.label.clone(),
                 line,
                 !self.held && self.focus_handle(cx).is_focused(window),
+                "project-path-focused",
             ))
             .child(
                 div()
@@ -647,6 +766,13 @@ impl Render for FolderBrowser {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::sync::mpsc::{channel, Sender};
+
+    use ferrite_core::folder::DirEntry;
+    use ferrite_ui::testing::{click, mount, record, shows};
+    use gpui::{KeyBinding, TestAppContext, VisualTestContext};
+
     use super::*;
 
     #[test]
@@ -671,5 +797,381 @@ mod tests {
         assert_eq!(joined("/home/me/src", "repo"), "/home/me/src/repo");
         assert_eq!(joined("/", "srv"), "/srv");
         assert_eq!(joined(r"D:\work\", "repo"), r"D:\work/repo");
+    }
+
+    type Held = Result<Vec<(String, bool)>, &'static str>;
+
+    /// A Machine's folders, as a test keeps them: what each folder it is
+    /// asked holds, or why it cannot be read, and each folder asked. A
+    /// folder it does not keep is not answered until `answer`.
+    #[derive(Default)]
+    struct Machine {
+        folders: HashMap<String, Held>,
+        asked: Vec<String>,
+        waiting: Vec<(String, Sender<std::io::Result<Listing>>)>,
+    }
+
+    impl Machine {
+        fn with(folders: &[(&str, Result<&[(&str, bool)], &'static str>)]) -> Self {
+            Self {
+                folders: folders
+                    .iter()
+                    .map(|(folder, held)| (folder.to_string(), (*held).map(owned)))
+                    .collect(),
+                ..Self::default()
+            }
+        }
+
+        /// What the Machine says `folder` holds: its own spelling of it,
+        /// with no `/` last.
+        fn listing(folder: &str, held: &[(String, bool)]) -> Listing {
+            Listing {
+                path: folder.trim_end_matches('/').to_string().into(),
+                entries: held
+                    .iter()
+                    .map(|(name, directory)| DirEntry {
+                        name: name.clone(),
+                        directory: *directory,
+                    })
+                    .collect(),
+            }
+        }
+
+        fn answer(&mut self, folder: &str, held: &[(&str, bool)]) {
+            let at = self.waiting.iter().position(|(asked, _)| asked == folder).unwrap();
+            let (_, answer) = self.waiting.remove(at);
+            answer.send(Ok(Self::listing(folder, &owned(held)))).unwrap();
+        }
+    }
+
+    fn owned(held: &[(&str, bool)]) -> Vec<(String, bool)> {
+        held.iter().map(|(name, directory)| (name.to_string(), *directory)).collect()
+    }
+
+    /// `/home/me/`: three folders, a file and a dot folder; `work/` holds
+    /// `clients/`; `empty/` nothing; `locked/` cannot be read.
+    fn home() -> Machine {
+        Machine::with(&[
+            (
+                "/home/me/",
+                Ok(&[
+                    ("empty", true),
+                    ("locked", true),
+                    ("work", true),
+                    ("notes.txt", false),
+                    (".cache", true),
+                ][..]),
+            ),
+            ("/home/me/work/", Ok(&[("clients", true)][..])),
+            ("/home/me/work/clients/", Ok(&[][..])),
+            ("/home/me/empty/", Ok(&[][..])),
+            ("/home/me/locked/", Err("permission denied")),
+            ("/home/", Ok(&[("me", true)][..])),
+            ("~/", Ok(&[("work", true)][..])),
+        ])
+    }
+
+    /// The browser's owner, as the setup sheet holds it: it counts each ↵
+    /// the browser leaves it.
+    struct Owner {
+        browser: Entity<FolderBrowser>,
+        confirmed: usize,
+    }
+
+    impl Render for Owner {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .on_action(cx.listener(|owner, _: &Open, _, _| owner.confirmed += 1))
+                .child(self.browser.clone())
+        }
+    }
+
+    /// The browser at `start` in a window of its own, under its owner,
+    /// reading `machine` as the Cockpit reads a Machine's Server, every
+    /// answer landed.
+    fn open<'a>(
+        machine: Machine,
+        start: &str,
+        makes: bool,
+        cx: &'a mut TestAppContext,
+    ) -> (Entity<FolderBrowser>, Rc<RefCell<Machine>>, &'a mut VisualTestContext) {
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("up", Up, Some(KEY_CONTEXT)),
+                KeyBinding::new("down", Down, Some(KEY_CONTEXT)),
+                KeyBinding::new("enter", Open, Some(KEY_CONTEXT)),
+                KeyBinding::new("escape", Cancel, Some(KEY_CONTEXT)),
+            ])
+        });
+        let machine = Rc::new(RefCell::new(machine));
+        let kept = machine.clone();
+        let list: List = Rc::new(move |path, _| {
+            let folder = path.display().to_string();
+            let mut machine = kept.borrow_mut();
+            machine.asked.push(folder.clone());
+            let (answer, answered) = channel();
+            match machine.folders.get(&folder).cloned() {
+                Some(Ok(held)) => answer.send(Ok(Machine::listing(&folder, &held))).unwrap(),
+                Some(Err(why)) => answer.send(Err(std::io::Error::other(why))).unwrap(),
+                None => machine.waiting.push((folder, answer)),
+            }
+            Ok(answered)
+        });
+        let start = start.to_string();
+        let (owner, cx) = mount(cx, move |_, cx| Owner {
+            browser: cx.new(|cx| {
+                let browser = FolderBrowser::new(list, "Directory on box".into(), start, cx);
+                if makes {
+                    browser.making("The copy makes this folder")
+                } else {
+                    browser
+                }
+            }),
+            confirmed: 0,
+        });
+        let view = owner.read_with(cx, |owner, _| owner.browser.clone());
+        settle(&view, cx);
+        (view, machine, cx)
+    }
+
+    /// The owner's pump: the answers that landed are taken, twice, as a
+    /// browser put at a missing folder asks the one it is in.
+    fn settle(view: &Entity<FolderBrowser>, cx: &mut VisualTestContext) {
+        for _ in 0..2 {
+            view.update(cx, |view, cx| view.poll(cx));
+            cx.run_until_parked();
+        }
+    }
+
+    fn line(view: &Entity<FolderBrowser>, cx: &mut VisualTestContext) -> String {
+        view.read_with(cx, |view, cx| view.field.read(cx).text().to_string())
+    }
+
+    fn type_line(view: &Entity<FolderBrowser>, typed: &str, cx: &mut VisualTestContext) {
+        let field = view.read_with(cx, |view, _| view.field.clone());
+        field.update(cx, |field, cx| field.set(typed.to_string(), cx));
+        settle(view, cx);
+    }
+
+    fn focus_line(view: &Entity<FolderBrowser>, cx: &mut VisualTestContext) {
+        cx.update(|window, cx| {
+            let focus = view.read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
+        });
+        cx.run_until_parked();
+    }
+
+    fn said(cx: &mut VisualTestContext, selector: &str) -> Option<String> {
+        cx.update(|window, _| window.debug_text(selector))
+            .map(|lines| lines.join(" "))
+    }
+
+    /// Under the line are the folders in the one shown, never its files
+    /// or its dot folders until a dot is typed, and `..` out of it.
+    #[gpui::test]
+    fn the_rows_are_the_folders_in_the_one_shown(cx: &mut TestAppContext) {
+        let (view, machine, cx) = open(home(), "/home/me/", false, cx);
+        assert_eq!(machine.borrow().asked, ["/home/me/"]);
+        for drawn in ["folder-row-up", "folder-row:work", "folder-row:empty"] {
+            assert!(shows(cx, drawn), "{drawn}");
+        }
+        assert!(!shows(cx, "folder-row:notes.txt"), "no files");
+        assert!(!shows(cx, "folder-row:.cache"), "no dot folders");
+        type_line(&view, "/home/me/w", cx);
+        assert!(shows(cx, "folder-row:work"), "the last name narrows the rows");
+        assert!(!shows(cx, "folder-row:empty"));
+        type_line(&view, "/home/me/.", cx);
+        assert!(shows(cx, "folder-row:.cache"), "a dot typed shows the dot folders");
+    }
+
+    /// A press goes into a folder, `..` out of it; each move is said, and
+    /// each folder is asked of the Machine once.
+    #[gpui::test]
+    fn a_press_goes_into_a_folder_and_up_out_of_it(cx: &mut TestAppContext) {
+        let (view, machine, cx) = open(home(), "/home/me/", false, cx);
+        let heard = record(cx, &view, |_: &Moved| ());
+        click(cx, "folder-row:work");
+        settle(&view, cx);
+        assert_eq!(line(&view, cx), "/home/me/work/");
+        assert!(shows(cx, "folder-row:clients"));
+        assert!(!shows(cx, "folder-row:work"));
+        assert_eq!(heard.take().len(), 1, "the move is said");
+        click(cx, "folder-row-up");
+        settle(&view, cx);
+        assert_eq!(line(&view, cx), "/home/me/");
+        assert!(shows(cx, "folder-row:work"));
+        assert_eq!(machine.borrow().asked, ["/home/me/", "/home/me/work/"], "read once each");
+    }
+
+    /// A folder on its way says so; an empty one says it has none.
+    #[gpui::test]
+    fn the_list_says_a_folder_is_being_read_or_holds_none(cx: &mut TestAppContext) {
+        let (view, machine, cx) = open(home(), "/home/me/", false, cx);
+        type_line(&view, "/srv/", cx);
+        assert_eq!(said(cx, "folder-browser-reading").as_deref(), Some("Reading /srv/"));
+        machine.borrow_mut().answer("/srv/", &[("www", true)]);
+        settle(&view, cx);
+        assert!(!shows(cx, "folder-browser-reading"));
+        assert!(shows(cx, "folder-row:www"), "the answer is drawn once it lands");
+        type_line(&view, "/home/me/empty/", cx);
+        assert_eq!(said(cx, "folder-browser-empty").as_deref(), Some("No folders"));
+        assert!(shows(cx, "folder-row-up"), "with its way out");
+    }
+
+    /// A folder the Machine cannot read says so, by name, where its rows
+    /// would be; the line stays where it was typed and `..` leads out.
+    #[gpui::test]
+    fn a_folder_that_cannot_be_read_says_so_in_place(cx: &mut TestAppContext) {
+        let (view, _machine, cx) = open(home(), "/home/me/", false, cx);
+        type_line(&view, "/home/me/locked/", cx);
+        assert_eq!(
+            said(cx, "folder-browser-unread").as_deref(),
+            Some("/home/me/locked/ cannot be read \u{b7} permission denied"),
+            "it names the folder and why"
+        );
+        assert_eq!(line(&view, cx), "/home/me/locked/");
+        click(cx, "folder-row-up");
+        settle(&view, cx);
+        assert_eq!(line(&view, cx), "/home/me/");
+        assert!(!shows(cx, "folder-browser-unread"));
+    }
+
+    /// ↓ walks the rows and ↵ goes into the one it rests on; ↑ from none
+    /// is the last; esc leaves the rows, and ↵ resting on none is the
+    /// owner's.
+    #[gpui::test]
+    fn the_arrows_walk_the_rows_and_enter_goes_in(cx: &mut TestAppContext) {
+        let (view, _machine, cx) = open(home(), "/home/me/", false, cx);
+        focus_line(&view, cx);
+        cx.simulate_keystrokes("down down down down enter");
+        settle(&view, cx);
+        assert_eq!(line(&view, cx), "/home/me/work/", "past `..`, empty/ and locked/");
+        cx.simulate_keystrokes("up enter");
+        settle(&view, cx);
+        assert_eq!(line(&view, cx), "/home/me/work/clients/", "↑ from none is the last row");
+        let confirmed = |cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                let owner = window.root::<gpui::component::Root>().flatten().unwrap();
+                let owner = owner.read(cx).view().clone().downcast::<Owner>().unwrap();
+                owner.read(cx).confirmed
+            })
+        };
+        assert_eq!(confirmed(cx), 0, "each ↵ so far was the browser's");
+        cx.simulate_keystrokes("down escape enter");
+        settle(&view, cx);
+        assert_eq!(line(&view, cx), "/home/me/work/clients/");
+        assert_eq!(confirmed(cx), 1, "esc left the rows: ↵ is the owner's");
+    }
+
+    /// A folder of twenty thousand draws only the rows in view, and the
+    /// arrows reach the last of them.
+    #[gpui::test]
+    fn a_folder_of_thousands_draws_only_the_rows_in_view(cx: &mut TestAppContext) {
+        let names: Vec<String> = (0..20_000).map(|at| format!("f{at:05}")).collect();
+        let held: Vec<(&str, bool)> = names.iter().map(|name| (name.as_str(), true)).collect();
+        let (view, _machine, cx) = open(Machine::with(&[("/big/", Ok(held.as_slice()))]), "/big/", false, cx);
+        assert!(shows(cx, "folder-row:f00000"));
+        assert!(!shows(cx, "folder-row:f19999"), "out of view, not drawn");
+        focus_line(&view, cx);
+        cx.simulate_keystrokes("up");
+        assert!(shows(cx, "folder-row:f19999"));
+        assert!(!shows(cx, "folder-row:f00000"));
+    }
+
+    /// Tab goes into the first folder the line's last name starts, and
+    /// says there was nothing to finish when the line does not hold the
+    /// keyboard or holds no name.
+    #[gpui::test]
+    fn tab_finishes_a_folder_name(cx: &mut TestAppContext) {
+        let (view, _machine, cx) = open(home(), "/home/me/", false, cx);
+        let tab = |cx: &mut VisualTestContext| {
+            cx.update(|window, cx| view.update(cx, |view, cx| view.tab(window, cx)))
+        };
+        type_line(&view, "/home/me/wo", cx);
+        assert!(!tab(cx), "the line does not hold the keyboard");
+        focus_line(&view, cx);
+        assert!(tab(cx));
+        settle(&view, cx);
+        assert_eq!(line(&view, cx), "/home/me/work/");
+        assert!(!tab(cx), "no name to finish");
+    }
+
+    /// New folder names one in the folder shown; ↵ goes into it, which
+    /// the browser says what goes into it makes. Nothing is asked of the
+    /// Machine for it, and the line has the keyboard back.
+    #[gpui::test]
+    fn a_new_folder_is_named_in_the_one_shown(cx: &mut TestAppContext) {
+        let (view, machine, cx) = open(home(), "/home/me/", true, cx);
+        cx.update(|window, cx| view.update(cx, |view, cx| view.new_folder(window, cx)));
+        cx.run_until_parked();
+        assert!(shows(cx, "folder-browser-naming"));
+        cx.simulate_input("fresh");
+        cx.simulate_keystrokes("enter");
+        settle(&view, cx);
+        assert_eq!(line(&view, cx), "/home/me/fresh/");
+        assert!(!shows(cx, "folder-browser-naming"));
+        assert_eq!(said(cx, "folder-browser-new").as_deref(), Some("The copy makes this folder"));
+        assert!(!machine.borrow().asked.iter().any(|asked| asked.contains("fresh")));
+        let focused = cx.update(|window, cx| view.read(cx).focus_handle(cx).is_focused(window));
+        assert!(focused);
+    }
+
+    /// Put at a folder the Machine lacks, a browser that makes folders
+    /// shows it as one to make once the folder it is in has none of that
+    /// name.
+    #[gpui::test]
+    fn a_missing_folder_is_one_to_make(cx: &mut TestAppContext) {
+        let mut machine = home();
+        machine.folders.insert("/home/me/nowhere/".into(), Err("not found"));
+        let (view, _machine, cx) = open(machine, "/home/me/nowhere/", true, cx);
+        assert_eq!(line(&view, cx), "/home/me/nowhere/", "not home");
+        assert_eq!(said(cx, "folder-browser-new").as_deref(), Some("The copy makes this folder"));
+        assert!(!shows(cx, "folder-browser-unread"));
+    }
+
+    /// One that makes none goes home instead.
+    #[gpui::test]
+    fn a_missing_folder_sends_a_browser_that_makes_none_home(cx: &mut TestAppContext) {
+        let mut machine = home();
+        machine.folders.insert("/home/me/nowhere/".into(), Err("not found"));
+        let (view, _machine, cx) = open(machine, "/home/me/nowhere/", false, cx);
+        assert_eq!(line(&view, cx), "~/");
+        assert!(shows(cx, "folder-row:work"), "home's folders");
+    }
+
+    /// The folder shown, held: its rows take no press. Let go, they do.
+    #[gpui::test]
+    fn a_held_folder_takes_no_press(cx: &mut TestAppContext) {
+        let (view, _machine, cx) = open(home(), "/home/me/", false, cx);
+        view.update(cx, |view, cx| view.hold(true, cx));
+        cx.run_until_parked();
+        click(cx, "folder-row:work");
+        settle(&view, cx);
+        assert_eq!(line(&view, cx), "/home/me/");
+        view.update(cx, |view, cx| view.hold(false, cx));
+        cx.run_until_parked();
+        click(cx, "folder-row:work");
+        settle(&view, cx);
+        assert_eq!(line(&view, cx), "/home/me/work/");
+    }
+
+    /// The folder shown is taken spelled out as the Machine spells it, and
+    /// the browser goes back to the folder it is in; `untouched` until
+    /// the operator moves it, and again once put back.
+    #[gpui::test]
+    fn the_folder_shown_is_taken_spelled_out(cx: &mut TestAppContext) {
+        let (view, _machine, cx) = open(home(), "/home/me/", false, cx);
+        assert!(view.read_with(cx, |view, _| view.untouched()));
+        click(cx, "folder-row:work");
+        settle(&view, cx);
+        assert!(!view.read_with(cx, |view, _| view.untouched()), "moved");
+        let taken = view.update(cx, |view, cx| view.take(cx));
+        settle(&view, cx);
+        assert_eq!(taken, Some(PathBuf::from("/home/me/work")));
+        assert_eq!(line(&view, cx), "/home/me/");
+        assert!(view.read_with(cx, |view, _| view.untouched()), "put back, not browsed");
     }
 }

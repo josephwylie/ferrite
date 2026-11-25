@@ -68,6 +68,9 @@ ferrite-factory = { path = "../ferrite-factory" }
 # The tools Surfaces (ADR 0039), which the cockpit makes over itself and
 # draws in the Panel.
 ferrite-tools = { path = "../ferrite-tools" }
+# The Settings views and the Project card, which the cockpit makes over
+# itself and lays on its sheet.
+ferrite-settings = { path = "../ferrite-settings" }
 # The kit facade keeps the renderer, native platform and components on one
 # compatible stack. Keep the gpui import name for derives and existing code.
 gpui = { package = "gpui-kit", version = "=0.6.0" }
