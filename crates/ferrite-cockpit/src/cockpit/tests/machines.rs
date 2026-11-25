@@ -198,6 +198,8 @@ struct Agents {
     lines: Arc<Mutex<Vec<ferrite_core::doorbell::Sender<SessionEvent>>>>,
     sent: Arc<Mutex<Vec<String>>>,
     interrupts: Arc<AtomicUsize>,
+    /// Set, every Session refuses what it is sent.
+    refuse: Arc<AtomicBool>,
 }
 
 impl Agents {
@@ -216,6 +218,7 @@ struct Agent {
     events: mpsc::Receiver<SessionEvent>,
     sent: Arc<Mutex<Vec<String>>>,
     interrupts: Arc<AtomicUsize>,
+    refuse: Arc<AtomicBool>,
 }
 
 impl ferrite_engine::engine::Spawner for Agents {
@@ -230,6 +233,7 @@ impl ferrite_engine::engine::Spawner for Agents {
             events,
             sent: self.sent.clone(),
             interrupts: self.interrupts.clone(),
+            refuse: self.refuse.clone(),
         }))
     }
 }
@@ -239,6 +243,9 @@ impl ferrite_engine::providers::Session for Agent {
         &self.events
     }
     fn send(&mut self, text: &str) -> std::io::Result<()> {
+        if self.refuse.load(Ordering::SeqCst) {
+            return Err(std::io::Error::other("the agent refused it"));
+        }
         self.sent.lock().unwrap().push(text.into());
         Ok(())
     }
@@ -1179,7 +1186,7 @@ fn only_this_computers_checkout_is_local_in_details(cx: &mut TestAppContext) {
 }
 
 /// What the tooltip says once the pointer has rested on `at`.
-fn tooltip_at(cx: &mut gpui::VisualTestContext, at: gpui::Point<gpui::Pixels>) -> Option<String> {
+pub(super) fn tooltip_at(cx: &mut gpui::VisualTestContext, at: gpui::Point<gpui::Pixels>) -> Option<String> {
     cx.simulate_mouse_move(at, None, gpui::Modifiers::none());
     cx.simulate_mouse_move(at + gpui::point(px(1.), px(0.)), None, gpui::Modifiers::none());
     cx.executor().advance_clock(std::time::Duration::from_secs(1));
@@ -3502,4 +3509,56 @@ fn letting_a_machine_go_forgets_only_its_toasts(cx: &mut TestAppContext) {
         view.machines_changed(cx);
     });
     assert_eq!(heard(cx), (vec![local], None, mark), "box's toast and watermark went");
+}
+
+/// A side chat's question that box's fork refuses comes back to the field
+/// it was asked from, though another tab shows by the time the refusal
+/// crosses back.
+#[gpui::test]
+fn a_side_chat_question_box_refuses_goes_back_to_the_tab_it_was_asked_from(cx: &mut TestAppContext) {
+    use super::side_chat::{draft, shown_fork, side_tabs};
+    bind_production_keys(cx);
+    let (mut core, _fake, machines, agents) = two_machines("side-chat-unsent", 0);
+    let on_box = machines.held(1).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(theirs).is_some()));
+    view.update(cx, |view, cx| view.focus_thread(theirs, cx));
+    tick(cx);
+    agents.say(0, SessionEvent::TextDelta { text: "alpha\n\n".into() });
+    agents.say(
+        0,
+        SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        },
+    );
+    until(cx, |cx| shows(&view, theirs, "alpha", cx));
+    for _ in 0..2 {
+        view.update(cx, |view, cx| view.open_side_chat(theirs, cx));
+        until(cx, |cx| {
+            view.read_with(cx, |view, cx| {
+                shown_fork(view, theirs, cx).is_some() && view.side_chat.read(cx).unsettled().is_empty()
+            })
+        });
+    }
+    let tabs = side_tabs(&view, theirs, cx);
+    assert_eq!(tabs.len(), 2);
+    agents.refuse.store(true, Ordering::SeqCst);
+    cx.simulate_input("what is alpha?");
+    cx.simulate_keystrokes("enter");
+    let asked = view.read_with(cx, |view, cx| draft(view, theirs, cx));
+    assert_eq!(asked.as_deref(), Some(""), "the field gave its question up");
+    let first = debug_bounds(cx, format!("panel-tab-SideChat-{}", tabs[0])).unwrap();
+    cx.simulate_click(first.center(), gpui::Modifiers::none());
+    let field = |view: &CockpitView, index, cx: &gpui::App| {
+        let field = view.side_chat.read(cx).field_of(theirs, index).cloned();
+        field.map(|field| field.read(cx).text().to_string())
+    };
+    until(cx, |cx| view.read_with(cx, |view, cx| field(view, 1, cx).as_deref() == Some("what is alpha?")));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.side_chat.read(cx).titles(theirs).1, 0, "the first tab shows");
+        assert_eq!(field(view, 0, cx).as_deref(), Some(""), "not in the tab shown");
+    });
 }

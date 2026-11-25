@@ -2361,6 +2361,7 @@ dependencies = [
  "ferrite-frame",
  "ferrite-nav",
  "ferrite-pane",
+ "ferrite-prs",
  "ferrite-review",
  "ferrite-reviewr",
  "ferrite-server",
@@ -2495,6 +2496,20 @@ dependencies = [
  "tungstenite 0.24.0",
  "url",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ferrite-prs"
+version = "0.4.0"
+dependencies = [
+ "ctor",
+ "ferrite-client",
+ "ferrite-core",
+ "ferrite-pane",
+ "ferrite-ui",
+ "gpui-kit",
+ "libc",
+ "serde",
 ]
 
 [[package]]

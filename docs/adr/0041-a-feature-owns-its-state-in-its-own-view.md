@@ -75,8 +75,9 @@ that happened to touch it, and nothing in the code said whose a field was.
   since the view lives on through the sheet's fade. Its save stays its
   own, not `change_settings`: it keeps nothing it could not write, and
   will not leave an environment whose files are unsaved.
-- **PRs is the fifth.** `PrsView` (`cockpit/prs_view.rs`) owns the PRs
-  destination's scope and filter, the lists it has read and the reads still
+- **PRs is the fifth.** `PrsView` (`ferrite_prs::prs` since the
+  2026-11-26 amendment; the root's side is `cockpit/prs_view.rs`) owns the
+  PRs destination's scope and filter, the lists it has read and the reads still
   out, the marked row and whether its detail shows, the PR view chosen, its
   scroll and its focus; its keys answer on its own element. It reads the
   Projects and an open PR through `prs_inputs`. The root holds it for the
@@ -85,10 +86,11 @@ that happened to touch it, and nothing in the code said whose a field was.
   view to wait on, reads an opened PR, gives the board back, or opens the
   Project card. Whether the PRs stand in the board's place stays the root's
   `destination`, shared with the Factory. An open PR's body is the PR
-  reader's (the eighth, below), which the root has it draw and hands over
-  with the inputs.
-- **The Side chat is the sixth.** `SideChatView`
-  (`cockpit/side_chat_view.rs`) owns every Thread's side chats in one
+  reader's (the eighth, below), which the view holds as its child and
+  draws.
+- **The Side chat is the sixth.** `SideChatView` (`ferrite_prs::side_chat`
+  since the 2026-11-26 amendment; the root's side is
+  `cockpit/side_chat_view.rs`) owns every Thread's side chats in one
   view: each tab's field, title and fork once it lands, the tab each
   Panel last showed, the forks still on their way, the field's wait for
   the keyboard, and a Trash waiting for its second press. One view, not
@@ -120,20 +122,21 @@ that happened to touch it, and nothing in the code said whose a field was.
   for Try again. Which Surface the Panel shows, its tabs and the
   context menu stay the root's; the menu's rows it reads from the view.
 - **The PR reader is the eighth.** `PullRequestView`
-  (`cockpit/panel/pull_request.rs`) owns every PR it has read, a Thread's
+  (`ferrite_prs::pull_request` since the 2026-11-26 amendment; the root's
+  side is `cockpit/panel/pull_request.rs`) owns every PR it has read, a Thread's
   tab's or a Project's, with the request still out for each; what each
   action on a PR became, from its hand-off to the PR read back; the Merge
   waiting for its second press; when a view was last chosen; and the
   cache its prose renders through. One view for the window: the Panel's
-  PR Surface is its render, reading `pr_inputs`, and the PRs' detail is
-  drawn by it as the root hands the open PR over, since the two can stand
-  in one frame while the Panel slides shut. It emits `PrEvent`: read a PR
+  PR Surface is its render, reading `pr_inputs`, and the PRs' detail
+  holds it as a child and draws it, since the two can stand in one frame
+  while the Panel slides shut. It emits `PrEvent`: read a PR
   again, a view chosen, Code's diff, a hand-off, the `⋯`. The forge and
   the Thread's agent are the root's, so it asks them and hands the
   answers to the view, and every frame it disarms a Merge whose Surface
   is no longer shown, the Surface drawn or not. Which view of a PR is
   chosen stays where it is kept (the Surface's, the PRs'), and Code's
-  body stays Changes', which the root draws into the inputs.
+  body stays Changes', a view the root hands the reader and the PRs.
 - **Changes is the ninth.** `ChangesView` (`cockpit/tools/changes.rs`)
   owns every diff the window has read, a Thread's Changes and each pull
   request's Code: its scope, the files read and the read still out, the
@@ -1479,6 +1482,31 @@ Cockpit, and each of its tests opened a Cockpit window.
   shelves' folds, the Filter and Snooze rows, a Park's undo
   (`nav_undo.rs`) and the keys that move focus to the list
   (`nav_keys.rs`).
+- **The pull requests' crate.** `ferrite-prs` holds the PRs destination,
+  the PR reader with its reads and actions, and the side chat, which
+  build and test without the Cockpit. None of them leases the root in its
+  render now. The reader reads `Source<PrInputs>` (what is shown, its
+  read, the `⋯`'s `MenuDoor` and the handles of its stops) and asks
+  `Source<bool, PrTarget>` whether an answer is still wanted, so one
+  for a closed tab is let go. The PRs read `Source<PrsInputs>` (the
+  Projects) and hold the window's reader as a child; Code's body for
+  both is a `ferrite_tools::changes::ChangesPane` the root makes, handed
+  in as an `AnyView`, since a feature crate does not reach another. The
+  reader's stops are handles the root enters in the Panel's row as it
+  draws (`register_pr_stops`), as Files' are. The side chat asks
+  `Source<SideChatInputs, Forks>` with the forks its tabs hold; the root
+  tells the shown fork's transcript what it holds from its pump
+  (`sync_visible_transcripts`), not from the side chat's draw, and a
+  fork's words still land in the frame that brings them. `PrTab` is
+  `ferrite_prs`'s, kept on the Surface. What the root keeps: the forge,
+  the Thread's agent and a hand-off's prompt, the reads' pacing
+  (`PrReads`), the PRs' place on the board, the forks, and the context
+  menu, whose PR rows it reads from the reader (`menu_rows`). Measured
+  on the PRs (Windows, warm build): a one-line edit, to its tests
+  green, took 14 s through the Cockpit and takes 3-4 s in `ferrite-prs`
+  (2 s more for the Cockpit's typecheck after it); a PRs test takes
+  0.11-0.22 s in its own window on average, against 1.4-1.9 s in a
+  Cockpit window.
 
 ## Precedent
 

@@ -36,19 +36,18 @@ mod persistence;
 pub(crate) mod hunks;
 pub(crate) mod preview;
 pub(in crate::cockpit) mod pr_action;
-pub(in crate::cockpit) mod pr_read;
 pub(in crate::cockpit) mod pull_request;
 mod sections;
 mod strip;
 pub(in crate::cockpit) mod controls;
 
-use super::surfaces::{Close, CloseSelection, PrTab, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
+use ferrite_prs::PrTab;
+use super::surfaces::{Close, CloseSelection, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
 use ferrite_core::Rehold;
 use ferrite_ui::icons::{self, icon};
 use super::*;
 
 pub(crate) use controls::{PanelControl, PanelFocus, Semantics};
-pub(crate) use pull_request::PrAction;
 pub(crate) use strip::Opener;
 #[cfg(test)]
 pub(crate) use ferrite_ui::tab_scroll::tab_scroll_step;
@@ -711,6 +710,7 @@ impl CockpitView {
             .and_then(|owner| owner.thread())
             ;
         self.panel.focus.begin(thread, window, cx);
+        self.register_prs_stops(cx);
         let (index, owner) = (index?, owner?);
         let sliding_out = self.panel_pane(cx).is_none();
         let column = div()
@@ -881,7 +881,10 @@ impl CockpitView {
             Some(SurfaceId::Changes) => filled(self.changes_pane(ferrite_tools::changes::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(_)) => filled(self.terminals.clone().into_any_element()),
             Some(SurfaceId::SideChat(_)) => filled(self.side_chat.clone().into_any_element()),
-            Some(SurfaceId::PullRequest(_)) => filled(self.pull_request.clone().into_any_element()),
+            Some(SurfaceId::PullRequest(_)) => {
+                self.register_pr_stops(cx);
+                filled(self.pull_request.clone().into_any_element())
+            }
         };
         let body = if takes_keys { keyed(body) } else { body };
         ferrite_ui::motion::swap_since(

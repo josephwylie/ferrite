@@ -132,7 +132,7 @@ pub(super) enum MenuVerb {
     FilterProject(Option<ProjectKey>),
     OpenFactory(ProjectKey),
     /// A pull request Surface's row.
-    Pr(panel::PrAction),
+    Pr(ferrite_prs::pull_request::PrAction),
     /// A PR link's rows (`MenuTarget::PrLink`): open it by a door, copy
     /// its forge address, or watch it for changes (`true`) or stop.
     PrOpen(Open),
@@ -496,7 +496,13 @@ impl CockpitView {
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread, cx),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
             MenuTarget::PrMore(target) => {
-                rows = self.pull_request.read(cx).menu_rows(target, self.branch_pr(target))
+                rows = self
+                    .pull_request
+                    .read(cx)
+                    .menu_rows(target, self.branch_pr(target))
+                    .into_iter()
+                    .map(|row| row.map(|(item, action)| (item, MenuVerb::Pr(action))))
+                    .collect()
             }
             MenuTarget::PrLink(key) => rows = self.pr_link_rows(key, cx),
             MenuTarget::Factory => {

@@ -6,8 +6,8 @@ Reads `cargo clippy --message-format=json` on stdin, counts the
 with scripts/raw-presses.json. Run locally with:
 
     cargo clippy --locked -p ferrite-cockpit -p ferrite-pane -p ferrite-frame \\
-        -p ferrite -p ferrite-review -p ferrite-factory -p ferrite-tools \\
-        -p ferrite-settings -p ferrite-terminal \\
+        -p ferrite -p ferrite-review -p ferrite-factory -p ferrite-tools -p ferrite-nav \\
+        -p ferrite-settings -p ferrite-prs -p ferrite-terminal \\
         --message-format=json \\
         -- --cap-lints warn -A clippy::all -W clippy::disallowed_methods \\
         | python3 scripts/check_raw_presses.py

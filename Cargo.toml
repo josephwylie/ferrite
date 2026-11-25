@@ -14,6 +14,7 @@ members = [
     "crates/ferrite-tools",
     "crates/ferrite-nav",
     "crates/ferrite-settings",
+    "crates/ferrite-prs",
     "crates/ferrite-terminal",
     "crates/ferrite-frame",
     "crates/ferrite-focus-notify",

@@ -24,6 +24,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use ferrite_core::{MachineId, MachineKey, Rehold, SavedThread, ThreadId, ThreadKey};
+use ferrite_prs::PrTab;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// What one tab shows. Singletons per Thread, then one per resource.
@@ -98,30 +99,6 @@ impl SurfaceId {
             Self::Browser => Lifecycle::new(Close::End("page"), Restart::Ends),
             Self::Terminal(_) => Lifecycle::new(Close::End("shell"), Restart::Ends),
             Self::SideChat(_) => Lifecycle::new(Close::End("side chat"), Restart::Ends),
-        }
-    }
-}
-
-/// Which of a pull request's views its Surface shows (T3's `detailTab`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum PrTab {
-    #[default]
-    Summary,
-    Guide,
-    Timeline,
-    Code,
-}
-
-impl PrTab {
-    pub(crate) const ALL: [Self; 4] = [Self::Summary, Self::Guide, Self::Timeline, Self::Code];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Summary => "Summary",
-            Self::Guide => "Guide",
-            Self::Timeline => "Timeline",
-            Self::Code => "Code",
         }
     }
 }

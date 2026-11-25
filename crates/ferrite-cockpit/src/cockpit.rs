@@ -434,7 +434,7 @@ pub struct CockpitView {
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
     /// Every Thread's side chat, a body of the Panel.
-    side_chat: Entity<side_chat_view::SideChatView>,
+    side_chat: Entity<ferrite_prs::side_chat::SideChatView>,
     /// Drafts sent while a Session was starting, kept whole until it takes
     /// the prompt or hands it back.
     held_sends: sends::HeldSends,
@@ -452,7 +452,7 @@ pub struct CockpitView {
     /// Every diff read: a Thread's Changes and each pull request's Code.
     changes: Entity<ferrite_tools::changes::ChangesView>,
     /// The pull request reader: the Panel's PR Surface and the PRs' detail.
-    pull_request: Entity<panel::pull_request::PullRequestView>,
+    pull_request: Entity<ferrite_prs::pull_request::PullRequestView>,
     /// The Inbox's alerts and the toast float that shows them.
     pub(crate) toasts: Entity<ferrite_nav::toasts::ToastsView>,
     native_copy: Option<String>,
@@ -615,7 +615,7 @@ pub struct CockpitView {
     /// What stands in the board's place: the Factory or the PRs.
     destination: Option<destination::Destination>,
     /// The PRs destination, kept as it was left while another view shows.
-    prs: Entity<prs_view::PrsView>,
+    prs: Entity<ferrite_prs::prs::PrsView>,
     /// The Tasks whose needs-you toast stands, and the state it announced.
     task_toasts: std::collections::HashMap<(MachineId, String), ferrite_core::factory_board::Status>,
     /// The empty board: its selected row and the list's own focus.
@@ -1225,7 +1225,6 @@ impl CockpitView {
             gpui::KeyBinding::new("escape", browser::CancelAnnotation, Some("BrowserAnnotationCapture")),
             gpui::KeyBinding::new("escape", ferrite_pane::annotation_editor::Cancel, Some("AnnotationEditor")),
         ]);
-        let cockpit_weak = cx.weak_entity();
         let cockpit = cx.new(|_| cockpit);
         let setup_sync = cx.new(|_| {
             setup_sync::SetupSync::new(prefs.setup_home.clone(), prefs.dir.clone(), cockpit.clone())
@@ -1236,18 +1235,17 @@ impl CockpitView {
             .detach();
         let sheets = cx.new(|_| sheets::Sheets::default());
         cx.subscribe(&sheets, Self::on_sheets_event).detach();
-        let prs = cx.new(|cx| prs_view::PrsView::new(cockpit_weak.clone(), cx));
         let empty_board = Self::new_empty_board(cx);
-        cx.subscribe(&prs, Self::on_prs_event).detach();
-        let side_chat = cx.new(|_| side_chat_view::SideChatView::new(cockpit_weak.clone()));
+        let side_chat = Self::new_side_chat(cx);
         let files = Self::new_files(cx);
         let terminals = Self::new_terminals(cx);
         let changes = Self::new_changes(cx);
         // The root draws the diffs into its own frame (`changes_pane`), so
         // each change redraws the window.
         cx.observe(&changes, |_, _, cx| cx.notify()).detach();
-        let pull_request =
-            cx.new(|_| panel::pull_request::PullRequestView::new(cockpit_weak.clone()));
+        let pull_request = Self::new_pull_request(&changes, cx);
+        let prs = Self::new_prs(&changes, &pull_request, cx);
+        cx.subscribe(&prs, Self::on_prs_event).detach();
         cx.subscribe(&pull_request, Self::on_pr_event).detach();
         // What the reader shows is drawn by the root's frame too (a tab's
         // state, the PRs' header), so each change redraws the window.
@@ -1797,9 +1795,8 @@ impl CockpitView {
                 .and_then(|thread| self.pane_for(thread))
                 .filter(|index| !shown.contains(index)),
         );
-        for index in shown {
-            self.sync_transcript(index, cx);
-        }
+        shown.into_iter().for_each(|index| self.sync_transcript(index, cx));
+        self.sync_side_chat_transcript(cx);
     }
 
     /// Core's child-retention budget evicted these Subjects. Release only
@@ -7083,7 +7080,7 @@ impl CockpitView {
         } else if let Some(focus) = self.factory_focus(window, cx) {
             focus
         } else if !self.rename.is_open() && self.prs_shown() {
-            self.prs.read(cx).focus.clone()
+            self.prs.read(cx).focus().clone()
         } else if !self.rename.is_open() && self.empty_board_shown(cx) {
             self.empty_board.read(cx).focus().clone()
         } else {

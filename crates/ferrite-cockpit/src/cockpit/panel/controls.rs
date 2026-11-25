@@ -19,14 +19,15 @@
 //! and a key that shows another Thread alike hand it to the new Thread's
 //! Composer, and only a move in a Thread's own Panel is kept for it.
 //!
-//! The root registers each stop on the shared `PanelFocus`: the head's as
-//! it draws them, then the body's as the body's view declares them, before
-//! that view draws (Files' file tabs, `FilesView::tab_stops`). The view
-//! reads its stops' handles with what else it draws, and never writes the
-//! row. The PR reader, still the Cockpit's, registers its own as it
-//! renders, after the root. So the row is finished only once the whole
-//! frame is drawn, and every reader sees the row of the last finished
-//! frame, never one half drawn.
+//! The root registers each stop on the shared `PanelFocus`, as the view
+//! that draws it declares it and before that view draws: the PRs
+//! destination's open PR's views as the frame begins
+//! (`PrsView::tab_stops`), the head's as it draws them, then the body's
+//! (Files' file tabs, `FilesView::tab_stops`; the PR reader's,
+//! `PullRequestView::tab_stops`). Each view reads its stops' handles with
+//! what else it draws, and never writes the row. The row is finished once
+//! the whole frame is drawn, and every reader sees the row of the last
+//! finished frame, never one half drawn.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -37,7 +38,7 @@ use gpui::prelude::*;
 use gpui::{App, FocusHandle, SharedString, Window};
 
 use super::*;
-use crate::cockpit::surfaces::PrTab;
+use ferrite_prs::PrTab;
 pub(crate) use ferrite_ui::stop::{focusable, icon_stop, Semantics};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -568,7 +569,10 @@ impl CockpitView {
                 MenuTarget::SurfaceTab { thread, at }
             }
             PanelControl::Plus => return self.toggle_door(super::strip::plus_door(thread), cx),
-            PanelControl::PrNumber => MenuTarget::PrLink(thread),
+            PanelControl::PrNumber => {
+                let number = self.pull_request.read(cx).number_bounds();
+                return self.open_menu_under(number, MenuTarget::PrLink(thread), cx);
+            }
             PanelControl::PrMore => {
                 let Some(number) = self.pr_snapshot(thread, cx).map(|pr| pr.number) else {
                     return;
@@ -589,7 +593,19 @@ impl CockpitView {
         target: MenuTarget,
         cx: &mut Context<Self>,
     ) {
-        let Some(bounds) = self.panel.focus.bounds.borrow().get(&control).copied() else {
+        let bounds = self.panel.focus.bounds.borrow().get(&control).copied();
+        self.open_menu_under(bounds, target, cx);
+    }
+
+    /// Open `target`'s menu under a stop drawn at `bounds`, its left edge
+    /// on the stop's.
+    fn open_menu_under(
+        &mut self,
+        bounds: Option<gpui::Bounds<gpui::Pixels>>,
+        target: MenuTarget,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(bounds) = bounds else {
             return;
         };
         let at = gpui::point(
