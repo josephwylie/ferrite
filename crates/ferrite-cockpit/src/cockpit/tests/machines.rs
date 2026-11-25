@@ -57,22 +57,33 @@ static SENT_TO_BOX: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 static BOX_DOWN: AtomicBool = AtomicBool::new(false);
 /// While it names a file, box's Server takes nothing more a window sends
 /// once that file is there, as over a line that stalled, till the test
-/// lets it go (`hold_box_once`, `let_box_go`).
+/// lets it go (`hold_box_once`).
 static BOX_HELD_ONCE: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 static BOX_LET_GO: std::sync::Condvar = std::sync::Condvar::new();
 /// Box's links as `serving` made them, to end when it goes down.
 static BOX_LINKS: Mutex<Vec<ferrite_core::link::Stream>> = Mutex::new(Vec::new());
 
 /// Box's Server takes nothing more once `landed` is there: a copy that
-/// lands it is held part way, however loaded the machine, till
-/// `let_box_go`.
-fn hold_box_once(landed: std::path::PathBuf) {
+/// lands it is held part way, however loaded the machine, till the hold
+/// lets go or drops, so a test that fails while box holds ends.
+fn hold_box_once(landed: std::path::PathBuf) -> BoxHeld {
     *BOX_HELD_ONCE.lock().unwrap() = Some(landed);
+    BoxHeld
 }
 
-fn let_box_go() {
-    *BOX_HELD_ONCE.lock().unwrap() = None;
-    BOX_LET_GO.notify_all();
+#[must_use = "box is let go when the hold drops"]
+struct BoxHeld;
+
+impl BoxHeld {
+    /// Box takes what it is sent again.
+    fn let_go(self) {}
+}
+
+impl Drop for BoxHeld {
+    fn drop(&mut self) {
+        *BOX_HELD_ONCE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        BOX_LET_GO.notify_all();
+    }
 }
 
 /// Box's Server stops, ending every link to it, or starts again.

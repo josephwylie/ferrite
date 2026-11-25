@@ -23,10 +23,10 @@ fn card_size(cx: &mut gpui::VisualTestContext) -> gpui::Size<gpui::Pixels> {
 }
 
 /// A first copy under way once the copy has made its folder there, held
-/// there by box till `let_box_go`: it stops part way whenever the test
-/// stops it. Till it stops, it is a Copy, not a Resume.
-fn copying_part_way(dest: &Path, cx: &mut gpui::VisualTestContext) {
-    hold_box_once(dest.join(".gitignore"));
+/// there by box till the hold lets go: it stops part way whenever the
+/// test stops it. Till it stops, it is a Copy, not a Resume.
+fn copying_part_way(dest: &Path, cx: &mut gpui::VisualTestContext) -> BoxHeld {
+    let held = hold_box_once(dest.join(".gitignore"));
     press(cx, "placement-copy");
     until(cx, |cx| {
         dest.join(".gitignore").is_file()
@@ -34,6 +34,7 @@ fn copying_part_way(dest: &Path, cx: &mut gpui::VisualTestContext) {
     });
     assert!(debug_bounds(cx, "placement-copy".into()).is_some());
     assert!(debug_bounds(cx, "placement-resume".into()).is_none(), "a first copy is no Resume");
+    held
 }
 
 /// `path` as the sheet shows box's paths: under `~/` where it is in the
@@ -217,9 +218,9 @@ fn a_copy_cancelled_part_way_is_resumed_and_keeps_what_was_put_there_since(cx: &
     drawn(cx, "placement-ignored:.env");
     let dest = projects.join("app");
 
-    copying_part_way(&dest, cx);
+    let held = copying_part_way(&dest, cx);
     press(cx, "placement-close");
-    let_box_go();
+    held.let_go();
     assert!(sheet(&view, cx).is_some(), "the close button cancels the copy, not the sheet");
     assert_eq!(
         text_of(cx, "placement-cancelled").as_deref(),
@@ -308,7 +309,7 @@ fn while_a_copy_runs_where_it_goes_is_held_and_the_card_keeps_its_size(cx: &mut 
     let aimed = destination(&view, cx);
     cx.update(|window, cx| window.focus(&name.read(cx).focus_handle(cx), cx));
     let dest = projects.join("app");
-    hold_box_once(dest.join(".gitignore"));
+    let held = hold_box_once(dest.join(".gitignore"));
     cx.simulate_keystrokes("enter");
     until(cx, |cx| {
         dest.join(".gitignore").is_file()
@@ -331,7 +332,7 @@ fn while_a_copy_runs_where_it_goes_is_held_and_the_card_keeps_its_size(cx: &mut 
     assert!(text_of(cx, "placement-progress").is_some_and(|said| said.starts_with("Copying ")));
 
     cx.simulate_keystrokes("escape");
-    let_box_go();
+    held.let_go();
     assert!(sheet(&view, cx).is_some(), "esc cancels the copy, not the sheet");
     assert_eq!(
         text_of(cx, "placement-cancelled").as_deref(),
@@ -664,9 +665,9 @@ fn another_projects_unfinished_copy_is_left_to_it(cx: &mut TestAppContext) {
     pick_on(&view, ENVIRONMENT, "box", cx);
     drawn(cx, "placement-ignored:.env");
     let dest = projects.join("app");
-    copying_part_way(&dest, cx);
+    let held = copying_part_way(&dest, cx);
     press(cx, "placement-close");
-    let_box_go();
+    held.let_go();
     press(cx, "placement-close");
     // The write the cancel cut off is dropped there once its connection ends.
     let part = |path: &PathBuf| path.extension().is_some_and(|ext| ext == "part");
@@ -711,9 +712,9 @@ fn a_machine_lost_part_way_is_said_so_and_resume_finishes_once_it_is_back(cx: &m
     pick_on(&view, ENVIRONMENT, "box", cx);
     drawn(cx, "placement-ignored:.env");
     let dest = projects.join("app");
-    copying_part_way(&dest, cx);
+    let held = copying_part_way(&dest, cx);
     box_down(true);
-    let_box_go();
+    held.let_go();
     drawn(cx, "placement-failed");
     let said = "The connection to box was lost. Resume finishes the copy once it is back.";
     assert_eq!(text_of(cx, "placement-failed").as_deref(), Some(said));
