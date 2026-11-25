@@ -1,0 +1,1 @@
+{"type":"command","id":331,"op":"tree","request":{"action":"link","root":{"kind":"setup_table","table":2},"path":".claude/skills/shared","target":"../../.agents/skills/shared"}}

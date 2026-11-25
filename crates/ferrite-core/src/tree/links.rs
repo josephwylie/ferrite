@@ -9,7 +9,7 @@
 /// Make the link at `path`, in `root`, to `target`: whether it was not
 /// already so.
 #[cfg(unix)]
-pub(super) fn link(_: &std::path::Path, path: &std::path::Path, target: &str) -> Result<bool, super::Refusal> {
+pub(crate) fn link(_: &std::path::Path, path: &std::path::Path, target: &str) -> Result<bool, super::Refusal> {
     if std::fs::read_link(path).is_ok_and(|there| there == std::path::Path::new(target)) {
         return Ok(false);
     }
@@ -18,7 +18,7 @@ pub(super) fn link(_: &std::path::Path, path: &std::path::Path, target: &str) ->
 }
 
 #[cfg(windows)]
-pub(super) use windows::link;
+pub(crate) use windows::link;
 
 #[cfg(windows)]
 mod windows {
@@ -31,7 +31,7 @@ mod windows {
 
     /// Make the link at `path`, in `root`, to `target` (`/`-separated, as
     /// a Mac sends it) by what it leads to: whether it was not already so.
-    pub(in super::super) fn link(root: &Path, path: &Path, target: &str) -> Result<bool, Refusal> {
+    pub(crate) fn link(root: &Path, path: &Path, target: &str) -> Result<bool, Refusal> {
         let to = leads(root, path.parent().unwrap_or(root), target).ok_or(Refusal::LeadsOut)?;
         let real = match dunce::canonicalize(&to) {
             Ok(real) => real,

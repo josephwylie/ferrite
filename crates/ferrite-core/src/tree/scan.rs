@@ -53,16 +53,24 @@ pub(super) fn sweeping(root: &Path, skip: &[String]) -> io::Result<Manifest> {
     list(root, skip, Listing { sweep: true, ..Listing::default() }, &mut |_| Ok(()))
 }
 
-/// One tree of the operator's setup: [`sweeping`], but each symlink is
+/// One tree of the operator's setup: [`sweeping`], but a symlink whose
+/// target `as_link` names is listed as a link to that, and every other is
 /// followed and listed as what it points to, its path kept in the
-/// manifest's `links`; each file's modification time is listed; and every
-/// directory called one of `left_out`, at any depth, is left out with all
-/// under it. A link to a directory that holds it is a problem.
-pub(crate) fn setup(root: &Path, skip: &[String], left_out: &[&str]) -> io::Result<Manifest> {
+/// manifest's `links`; each file's modification time and text hash are
+/// listed; and everything called one of `left_out`, in any case and at any
+/// depth, is left out with all under it. A link to a directory that holds
+/// it is a problem.
+pub(crate) fn setup(
+    root: &Path,
+    skip: &[String],
+    left_out: &[&str],
+    as_link: &dyn Fn(&Path) -> Option<String>,
+) -> io::Result<Manifest> {
     let listing = Listing {
         sweep: true,
         follow: true,
         left_out,
+        as_link: Some(as_link),
     };
     list(root, skip, listing, &mut |_| Ok(()))
 }
@@ -72,6 +80,9 @@ struct Listing<'a> {
     sweep: bool,
     follow: bool,
     left_out: &'a [&'a str],
+    /// The target a link at a path of this computer is listed with, when it
+    /// is listed as a link and not followed.
+    as_link: Option<&'a dyn Fn(&Path) -> Option<String>>,
 }
 
 fn list(
@@ -158,7 +169,7 @@ impl Walk<'_> {
                 continue;
             };
             let path = join(prefix, name);
-            if self.skip.contains(&path) || self.listing.left_out.contains(&name) {
+            if self.skip.contains(&path) || self.listing.left_out.iter().any(|left| left.eq_ignore_ascii_case(name)) {
                 continue;
             }
             if let Err(stopped) = (self.watch)(self.manifest.entries.len()) {
@@ -197,6 +208,9 @@ impl Walk<'_> {
                     target: if cfg!(windows) { target.replace('\\', "/") } else { target },
                 }));
             }
+            if let Some(target) = self.listing.as_link.and_then(|as_link| as_link(&entry.path())) {
+                return Ok(Some(Entry::Symlink { target }));
+            }
             meta = self.followed(dir, &entry.path())?;
             self.manifest.links.insert(path.to_string());
         }
@@ -215,25 +229,31 @@ impl Walk<'_> {
             return Ok(None);
         }
         let stamp = Stamp::of(&meta)?;
-        let sha256 = match self.known.remove(path) {
-            Some(hashed) if hashed.stamp == stamp => hashed.sha256,
-            _ => hash(&entry.path())?,
+        // A setup listing wants each file's text hash, which a hash another
+        // listing kept may not have: then the file is read again.
+        let texts = self.listing.follow;
+        let (sha256, text) = match self.known.remove(path) {
+            Some(hashed) if hashed.stamp == stamp && (hashed.text.is_some() || !texts) => (hashed.sha256, hashed.text),
+            _ => {
+                let (sha256, text) = hash(&entry.path(), texts)?;
+                (sha256, texts.then_some(text))
+            }
         };
         if stamp.settled(self.started) {
-            self.kept.insert(
-                path.to_string(),
-                Hashed {
-                    stamp,
-                    sha256: sha256.clone(),
-                },
-            );
+            let hashed = Hashed {
+                stamp,
+                sha256: sha256.clone(),
+                text: text.clone(),
+            };
+            self.kept.insert(path.to_string(), hashed);
         }
-        let modified = self.listing.follow.then(|| millis(&meta)).flatten();
+        let modified = texts.then(|| millis(&meta)).flatten();
         Ok(Some(Entry::File {
             size: meta.len(),
             sha256,
             mode: mode(&meta),
             modified,
+            text: text.filter(|_| texts).flatten(),
         }))
     }
 
@@ -352,6 +372,9 @@ impl Stamp {
 struct Hashed {
     stamp: Stamp,
     sha256: String,
+    /// Its text hash, when the listing that read it hashed its text:
+    /// `Some(None)` for bytes that are not text.
+    text: Option<Option<String>>,
 }
 
 /// Each root's hashes, the root listed last at the end.
@@ -390,17 +413,88 @@ thread_local! {
     pub(super) static READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn hash(path: &Path) -> io::Result<String> {
+/// The file's SHA-256, and with `text` its [`Text`] hash.
+fn hash(path: &Path, text: bool) -> io::Result<(String, Option<String>)> {
     #[cfg(test)]
     READ.with(|read| read.set(read.get() + 1));
     let mut file = fs::File::open(path)?;
     let mut hash = Sha256::new();
+    let mut lines = text.then(Text::default);
     let mut buffer = vec![0; 1 << 20];
     loop {
         match file.read(&mut buffer)? {
-            0 => return Ok(hex(&hash.finalize())),
-            count => hash.update(&buffer[..count]),
+            0 => return Ok((hex(&hash.finalize()), lines.and_then(Text::finish))),
+            count => {
+                hash.update(&buffer[..count]);
+                if let Some(text) = &mut lines {
+                    text.update(&buffer[..count]);
+                }
+            }
         }
+    }
+}
+
+/// The SHA-256 of a file's text with each CR before an LF left out, so the
+/// same text with Windows' line ends and with Unix's hashes alike. Only
+/// UTF-8 is text: anything else has no text hash.
+#[derive(Default)]
+pub(crate) struct Text {
+    hash: Sha256,
+    /// A CR the last piece ended in, not yet known to come before an LF.
+    cr: bool,
+    /// The bytes of a character the last piece ended part way through.
+    partial: Vec<u8>,
+    binary: bool,
+}
+
+impl Text {
+    pub(crate) fn of(bytes: &[u8]) -> Option<String> {
+        let mut text = Text::default();
+        text.update(bytes);
+        text.finish()
+    }
+
+    fn update(&mut self, piece: &[u8]) {
+        if self.binary {
+            return;
+        }
+        let joined;
+        let piece = if self.partial.is_empty() {
+            piece
+        } else {
+            joined = [std::mem::take(&mut self.partial).as_slice(), piece].concat();
+            &joined
+        };
+        let whole = match std::str::from_utf8(piece) {
+            Ok(_) => piece.len(),
+            Err(error) if error.error_len().is_none() => error.valid_up_to(),
+            Err(_) => {
+                self.binary = true;
+                return;
+            }
+        };
+        self.partial = piece[whole..].to_vec();
+        let mut kept = Vec::with_capacity(whole + 1);
+        for &byte in &piece[..whole] {
+            if std::mem::take(&mut self.cr) && byte != b'\n' {
+                kept.push(b'\r');
+            }
+            match byte {
+                b'\r' => self.cr = true,
+                byte => kept.push(byte),
+            }
+        }
+        self.hash.update(&kept);
+    }
+
+    fn finish(mut self) -> Option<String> {
+        if self.binary || !self.partial.is_empty() {
+            return None;
+        }
+        if self.cr {
+            self.hash.update(b"\r");
+        }
+        Some(hex(&self.hash.finalize()))
     }
 }
 
@@ -433,7 +527,7 @@ mod tests {
                     changed: SystemTime::UNIX_EPOCH,
                     identity: (0, 0),
                 };
-                (format!("{at:04}"), Hashed { stamp, sha256: String::new() })
+                (format!("{at:04}"), Hashed { stamp, sha256: String::new(), text: None })
             })
             .collect()
     }
@@ -456,5 +550,38 @@ mod tests {
         assert_eq!(held(&cache), [("d", 8)]);
         assert_eq!(cache.take(Path::new("d")).len(), 8);
         assert!(cache.0.is_empty());
+    }
+
+    /// A hash a plain listing kept has no text hash: a setup listing of the
+    /// same folder reads the file again for it, so two copies that differ
+    /// only in line ends still read as one.
+    #[test]
+    fn a_setup_listing_hashes_the_text_a_plain_listing_kept_no_hash_of() {
+        let root = std::env::temp_dir().join("ferrite-scan-kept-text");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("SKILL.md"), "# Skill\r\n").unwrap();
+        let old = SystemTime::now() - Duration::from_secs(60);
+        std::fs::File::options().write(true).open(root.join("SKILL.md")).unwrap().set_modified(old).unwrap();
+        let plain = scan(&root, &[]).unwrap();
+        assert!(matches!(&plain.entries["SKILL.md"], Entry::File { text: None, .. }), "{plain:?}");
+        let setup = setup(&root, &[], &[], &|_| None).unwrap();
+        let Entry::File { text, .. } = &setup.entries["SKILL.md"] else { panic!("{setup:?}") };
+        assert_eq!(text.as_deref(), Text::of(b"# Skill\n").as_deref(), "{setup:?}");
+    }
+
+    #[test]
+    fn text_equal_but_for_line_ends_hashes_alike_and_bytes_that_are_not_text_have_none() {
+        let unix = Text::of(b"# Skill\n\nOne.\n").unwrap();
+        assert_eq!(Text::of(b"# Skill\r\n\r\nOne.\r\n").as_deref(), Some(unix.as_str()));
+        assert_ne!(Text::of(b"# Skill\r\rOne.\r").as_deref(), Some(unix.as_str()), "a CR alone is kept");
+        assert_ne!(Text::of(b"# Skill\n\nTwo.\n").as_deref(), Some(unix.as_str()));
+        assert_eq!(Text::of(&[0xff, 0xfe, b'\n']), None);
+
+        let mut pieces = Text::default();
+        for piece in [&b"# Sk\xc3"[..], b"\xa9ill\r", b"\n"] {
+            pieces.update(piece);
+        }
+        assert_eq!(pieces.finish(), Text::of("# Skéill\n".as_bytes()), "a CR and a character split between reads");
     }
 }

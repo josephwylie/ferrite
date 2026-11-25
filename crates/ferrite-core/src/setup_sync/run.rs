@@ -1,43 +1,36 @@
-//! One sync of this computer's setup with one Machine's (ADR 0048): both
-//! sides scanned, [`reconcile`]d with the state they last agreed on, and
-//! what changed moved each way. Each side is rescanned once all of it is
-//! done, when anything was, and only then is the base written, from what
-//! the two now hold alike: a sync cut short anywhere leaves the base it began from, and the
-//! next one finishes it. What it removes on this computer goes to a trash
-//! folder, not away.
+//! One sync of this computer's setup with one Machine's (ADR 0048, ADR
+//! 0050): both sides scanned, [`reconcile`]d with the state they last
+//! agreed on, and what changed moved each way. Each side is rescanned once
+//! all of it is done, when anything was, and only then is the base
+//! written, from what the two now hold alike: a sync cut short anywhere
+//! leaves the base it began from, and the next one finishes it. What it
+//! removes or writes over on either side goes to that side's trash, not
+//! away. Both sides scan by the same [`TABLE`], or the Machine refuses the
+//! scan and nothing moves, and a base is read only by the table that wrote
+//! it. One sync of a home runs at a time, whichever Machine it is with.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::reconcile::{agreed, reconcile, seeded, Action, Hold};
-use super::store::{self, local, Home};
-use super::{sign_in, Item, Source, ITEMS, UNREAD_WITHOUT_SIGN_INS};
+use super::reconcile::{agreed, reconcile, Action, Hold};
+use super::store::{self, visible, Home, STAMP};
+use super::{file_of, sign_in, Item, ITEMS, TABLE, UNREAD_WITHOUT_SIGN_INS};
 use crate::chunked::{Cancellation, CHUNK_SIZE};
 use crate::tree::{self, Asked, Entry, Exchange, Manifest, Problem, Reply, Request, Root, Session, Side, Step};
 
 /// The state a Machine and this computer last agreed on, in the Machine's
 /// own folder of this computer's settings.
 pub const BASE: &str = "setup-sync.json";
-/// Held while a sync of that Machine is under way, by any process.
-const LOCK: &str = "setup-sync.lock";
 /// Where each conflict's losing copy is kept, in Ferrite's settings folder.
 pub const CONFLICTS: &str = "sync-conflicts";
-/// Where what a sync removes on this computer is moved, in Ferrite's
-/// settings folder, a folder for each sync.
-pub const TRASH: &str = "sync-trash";
-/// How long a sync's trash folder is kept.
-const KEPT: Duration = Duration::from_secs(14 * 24 * 60 * 60);
 /// How far the files pulled here are asked ahead of the replies.
 const AHEAD: usize = 64;
 const AHEAD_BYTES: u64 = 4 << 20;
-/// How a sync's folder of conflicts or trash is named: its time.
-const STAMP: &str = "%Y%m%d-%H%M%S-%3f";
 
 pub struct Job {
     /// This computer's setup.
@@ -47,9 +40,6 @@ pub struct Job {
     /// Where the losing copy of each conflict is kept, under the time of
     /// the sync.
     pub conflicts: PathBuf,
-    /// Where what the sync removes here is moved, under the time of the
-    /// sync.
-    pub trash: PathBuf,
     /// Remove whatever the plan removes: the operator said so.
     pub allow_removals: bool,
     /// Leave the Machine be when nothing here changed since the base: a
@@ -68,13 +58,12 @@ pub struct Job {
 
 impl Job {
     /// A whole sync of `home` with the Machine `target` names, whose base,
-    /// conflicts and trash are kept in `settings_dir`.
+    /// conflicts, trash and lock are kept in `settings_dir`.
     pub fn for_machine(home: Home, settings_dir: &Path, target: &str) -> Self {
         Self {
-            home,
+            home: home.with_settings_in(settings_dir),
             dir: crate::machine::dir(settings_dir, target),
             conflicts: settings_dir.join(CONFLICTS),
-            trash: settings_dir.join(TRASH),
             allow_removals: false,
             only_if_changed_here: false,
             read_sign_ins: true,
@@ -120,7 +109,8 @@ pub enum Outcome {
     Synced(Synced),
     /// Nothing was done: the plan removed too much.
     Stopped(Valve),
-    /// Another sync of this Machine was under way: this one did nothing.
+    /// Another sync of this home, to any Machine, or an install in it was
+    /// under way: this one did nothing, and is asked again later.
     Busy,
 }
 
@@ -132,12 +122,14 @@ pub struct Synced {
     pub removed_there: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub conflicts: Vec<Kept>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub replaced: Vec<Replaced>,
     /// What changed and was left as each side has it, by path.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub held: BTreeMap<String, Hold>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<Problem>,
-    /// Where what was removed here was moved.
+    /// Where what was removed or written over here was moved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trashed: Option<PathBuf>,
 }
@@ -158,6 +150,15 @@ pub struct Kept {
     pub kept: PathBuf,
 }
 
+/// A chosen key both sides held differently: the `winner`'s value is on
+/// both now, and the other side's was `was`, kept in that side's trash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Replaced {
+    pub path: String,
+    pub winner: Side,
+    pub was: String,
+}
+
 /// The plan would remove `removing` of the `holding` files of `item` on
 /// `side`: more than half of them, or all an item the other side lost
 /// whole (`vanished`).
@@ -171,38 +172,32 @@ pub struct Valve {
 }
 
 /// Sync `job`'s setup with the Machine `there` reaches. `planned` hears
-/// how many entries the sync moves or removes, once it knows.
+/// how many entries the sync moves or removes, once it knows. The home is
+/// held from the first scan to the base, so one sync of it runs at a time,
+/// to whichever Machine: one that finds it held is busy.
 pub fn run(
     job: &Job,
     there: &mut dyn Exchange,
     planned: &mut dyn FnMut(usize),
     cancel: &Cancellation,
 ) -> io::Result<Outcome> {
+    let Some(_held) = job.home.hold()? else {
+        return Ok(Outcome::Busy);
+    };
     fs::create_dir_all(&job.dir).map_err(|error| tree::at(&job.dir, error))?;
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(job.dir.join(LOCK))?;
-    match lock.try_lock() {
-        Ok(()) => {}
-        Err(fs::TryLockError::WouldBlock) => return Ok(Outcome::Busy),
-        Err(fs::TryLockError::Error(error)) => return Err(error),
-    }
-    prune(&job.trash);
     let base = base(&job.dir);
     let unread = job.unread();
     let (mut here, mut far) = if job.only_if_changed_here {
         let mut here = job.home.scan(&unread);
         as_base(&mut here, &base, &unread);
-        if reconcile(&base, &here, &base).iter().all(|action| seeded(action.path())) {
+        if reconcile(&base, &here, &base).is_empty() {
             return Ok(Outcome::Synced(Synced::default()));
         }
-        (here, tree::scan_far(there, &Root::Setup, &unread)?)
+        (here, tree::scan_far(there, &Root::SETUP, &unread)?)
     } else {
-        let asked = there.ask(tree::scan_request(&Root::Setup, &unread, None))?;
+        let asked = there.ask(tree::scan_request(&Root::SETUP, &unread, None))?;
         let here = job.home.scan(&unread);
-        (here, tree::pages(there, &Root::Setup, &unread, asked)?)
+        (here, tree::pages(there, &Root::SETUP, &unread, asked)?)
     };
     settle(job, &base, &mut here, &mut far, &unread);
     let actions: Vec<Action> = reconcile(&base, &here, &far)
@@ -250,10 +245,20 @@ pub fn run(
             }
         };
         let loser = job.home.written(path, loser);
+        if super::chosen(path).is_some() {
+            let was = serde_json::from_slice::<serde_json::Value>(&loser)
+                .map_or_else(|_| String::from_utf8_lossy(&loser).into_owned(), |was| was.to_string());
+            synced.replaced.push(Replaced {
+                path: path.clone(),
+                winner: *winner,
+                was,
+            });
+            continue;
+        }
         let kept = match kept_already(&job.conflicts, path, &loser) {
             Some(kept) => kept,
             None => {
-                let kept = local(&job.conflicts.join(&stamp), path);
+                let kept = visible(&job.conflicts.join(&stamp), path);
                 store::private_dirs(kept.parent().unwrap_or(&job.conflicts))?;
                 store::write_over(&kept, &loser)?;
                 kept
@@ -267,34 +272,48 @@ pub fn run(
     }
 
     let steps = steps_there(&actions, &here, &far);
-    let sent = tree::send(&job.home, &steps, &Root::Setup, there, &mut |_| {}, cancel)?;
-    let trash = job.trash.join(&stamp);
-    let pulled = take_here(job, &actions, &here, &far, there, &trash, cancel)?;
-    synced.trashed = trash.exists().then_some(trash);
+    let sent = tree::send(&job.home, &steps, &Root::SETUP, there, &mut |_| {}, cancel)?;
+    let pulled = take_here(job, &actions, &here, &far, there, cancel)?;
+    synced.trashed = job.home.trashed();
 
     if !actions.is_empty() {
         here = job.home.scan(&unread);
-        far = tree::scan_far(there, &Root::Setup, &unread)?;
+        far = tree::scan_far(there, &Root::SETUP, &unread)?;
         settle(job, &base, &mut here, &mut far, &unread);
     }
     let agreed = agreed(&base, &here, &far);
     if agreed != base {
-        store::write_over(&job.dir.join(BASE), &serde_json::to_vec(&agreed)?)?;
+        store::write_over(&job.dir.join(BASE), &serde_json::to_vec(&Base { table: TABLE, agreed })?)?;
     }
     for (side, manifest) in [(Side::Here, here), (Side::There, far)] {
-        let said = manifest.problems.into_iter().filter(|(path, error)| !(sign_in(path) && error == store::MID_WRITE));
+        let said = manifest
+            .problems
+            .into_iter()
+            .filter(|(path, error)| !(sign_in(path) && error == store::MID_WRITE) && error != store::OWN);
         synced.problems.extend(said.map(|(path, error)| Problem { path, side, error }));
     }
     synced.problems.extend(sent.problems.into_iter().chain(pulled));
     Ok(Outcome::Synced(synced))
 }
 
-/// The base, or none: a base that is not there or does not read is a
-/// first sync, which removes nothing.
-fn base(dir: &Path) -> Manifest {
+/// What a base file holds: the state both sides last agreed on, and the
+/// table that read them.
+#[derive(Serialize, Deserialize)]
+pub(super) struct Base {
+    pub table: u32,
+    pub agreed: Manifest,
+}
+
+/// The base, or none: a base that is not there, does not read, or that
+/// another table wrote is a first sync, which removes nothing. Another
+/// table's base is never read in part: it agreed by other rules, and a
+/// removal planned from it could take what this table never synced.
+pub(super) fn base(dir: &Path) -> Manifest {
     fs::read(dir.join(BASE))
         .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .and_then(|bytes| serde_json::from_slice::<Base>(&bytes).ok())
+        .filter(|base| base.table == TABLE)
+        .map(|base| base.agreed)
         .unwrap_or_default()
 }
 
@@ -328,8 +347,8 @@ pub(crate) fn unholdable(far: &mut Manifest, here: &Manifest, names: Names) {
     }
     let mut held: BTreeMap<String, String> = BTreeMap::new();
     if names == Names::Windows {
-        for path in far.entries.keys() {
-            if let Some(name) = path.split('/').find(|name| !windows_name(name)) {
+        for path in far.entries.keys().filter(|path| super::chosen(path).is_none()) {
+            if let Some(name) = path.split('/').find(|name| !tree::windows_name(name)) {
                 held.entry(path.clone()).or_insert_with(|| format!("this computer cannot hold the name `{name}`"));
             }
         }
@@ -339,7 +358,7 @@ pub(crate) fn unholdable(far: &mut Manifest, here: &Manifest, names: Names) {
         .keys()
         .map(|path| (path.to_lowercase(), path.as_str()))
         .collect();
-    for path in far.entries.keys() {
+    for path in far.entries.keys().filter(|path| super::chosen(path).is_none()) {
         match seen.get(&path.to_lowercase()) {
             Some(other) if *other != path => {
                 let why = format!("it differs only in case from `{other}`, and this computer tells no case apart");
@@ -362,19 +381,6 @@ pub(crate) fn unholdable(far: &mut Manifest, here: &Manifest, names: Names) {
     }
 }
 
-/// Whether Windows can hold a file named `name`.
-fn windows_name(name: &str) -> bool {
-    const DEVICES: &[&str] = &["con", "prn", "aux", "nul"];
-    let stem = name.split('.').next().unwrap_or(name).trim_end().to_lowercase();
-    let numbered = |prefix: &str| {
-        stem.strip_prefix(prefix)
-            .is_some_and(|digit| digit.len() == 1 && digit.chars().all(|c| c.is_ascii_digit() && c != '0'))
-    };
-    let device = DEVICES.contains(&stem.as_str()) || numbered("com") || numbered("lpt");
-    let refused = name.chars().any(|c| c < ' ' || "<>:\"\\|?*".contains(c));
-    !(device || refused || name.ends_with('.') || name.ends_with(' '))
-}
-
 /// `action`, with two sign-ins that differ settled as the operator chose.
 fn chosen(action: Action, sign_ins: Option<Side>) -> Action {
     match (action, sign_ins) {
@@ -384,8 +390,9 @@ fn chosen(action: Action, sign_ins: Option<Side>) -> Action {
     }
 }
 
-/// The table's item `path` is, or lies in: its deepest.
+/// The table's item `path` is, lies in, or is a key of: its deepest.
 fn owner(path: &str) -> Option<&'static Item> {
+    let path = file_of(path);
     ITEMS
         .iter()
         .filter(|item| path == item.path || path.strip_prefix(item.path).is_some_and(|rest| rest.starts_with('/')))
@@ -408,7 +415,7 @@ fn valve(actions: &[Action], base: &Manifest, here: &Manifest, there: &Manifest)
     let in_base = counts(base);
     let sides = [(Side::Here, here, counts(here)), (Side::There, there, counts(there))];
     let held = |side: Side| &sides[usize::from(side == Side::There)].2;
-    for item in ITEMS.iter().filter(|item| item.source != Source::Seed) {
+    for item in ITEMS {
         for (side, manifest, holding) in &sides {
             let removing: usize = actions
                 .iter()
@@ -445,10 +452,12 @@ fn valve(actions: &[Action], base: &Manifest, here: &Manifest, there: &Manifest)
 }
 
 /// What the actions do on the Machine, as a send's steps: what goes first,
-/// then what is made, in path order.
+/// then what is made, in path order, then each link, once what it points
+/// at is there.
 fn steps_there(actions: &[Action], here: &Manifest, far: &Manifest) -> Vec<Step> {
     let mut removed = Vec::new();
     let mut made = Vec::new();
+    let mut linked = Vec::new();
     for action in actions {
         let path = match action {
             Action::RemoveThere(path) => {
@@ -472,24 +481,28 @@ fn steps_there(actions: &[Action], here: &Manifest, far: &Manifest) -> Vec<Step>
                 sha256: sha256.clone(),
                 mode: *mode,
             }),
-            _ => {}
+            Entry::Symlink { target } => linked.push(Step::Link {
+                path: path.clone(),
+                target: target.clone(),
+            }),
+            Entry::Unknown => {}
         }
     }
     removed.extend(made);
+    removed.extend(linked);
     removed
 }
 
 /// Do here what the actions do on this computer: what goes first, moved
-/// to `trash`, then each folder, then each file, read from the Machine and
-/// asked ahead of the replies. A file that does not come across whole is
-/// left as each side has it, and said.
+/// to the trash, then each folder, then each file, read from the Machine
+/// and asked ahead of the replies, then each link. A file that does not
+/// come across whole is left as each side has it, and said.
 fn take_here(
     job: &Job,
     actions: &[Action],
     here: &Manifest,
     far: &Manifest,
     there: &mut dyn Exchange,
-    trash: &Path,
     cancel: &Cancellation,
 ) -> io::Result<Vec<Problem>> {
     let mut taken = Vec::new();
@@ -497,7 +510,7 @@ fn take_here(
         cancel.check()?;
         let path = match action {
             Action::RemoveHere(path) => {
-                job.home.trash(path, trash).map_err(|error| named(path, Side::Here, error))?;
+                job.home.remove(path).map_err(|error| named(path, Side::Here, error))?;
                 continue;
             }
             Action::Pull(path) | Action::Conflict { path, winner: Side::There } => path,
@@ -507,7 +520,7 @@ fn take_here(
             continue;
         };
         if mine.is_some_and(|mine| !same_kind(entry, mine)) {
-            job.home.trash(path, trash).map_err(|error| named(path, Side::Here, error))?;
+            job.home.remove(path).map_err(|error| named(path, Side::Here, error))?;
         }
         taken.push((path.as_str(), entry));
     }
@@ -525,7 +538,7 @@ fn take_here(
         open: BTreeMap::new(),
         left: Vec::new(),
     };
-    for (write, (path, entry)) in taken.into_iter().enumerate() {
+    for (write, (path, entry)) in taken.iter().copied().enumerate() {
         let Entry::File { size, sha256, mode, .. } = entry else {
             continue;
         };
@@ -534,6 +547,11 @@ fn take_here(
     }
     while !pulls.waiting.is_empty() {
         pulls.hear()?;
+    }
+    for (path, entry) in &taken {
+        if let Entry::Symlink { target } = entry {
+            job.home.link(path, target).map_err(|error| named(path, Side::Here, error))?;
+        }
     }
     Ok(pulls.left)
 }
@@ -571,7 +589,7 @@ impl<'a> Pulls<'a> {
         }
         let begin = Request::Begin {
             write,
-            root: Root::Setup,
+            root: Root::SETUP,
             path: path.to_string(),
             size,
             mode,
@@ -588,7 +606,7 @@ impl<'a> Pulls<'a> {
                 self.hear()?;
             }
             let read = Request::Read {
-                root: Root::Setup,
+                root: Root::SETUP,
                 path: path.to_string(),
                 offset,
             };
@@ -680,7 +698,7 @@ fn fetch(there: &mut dyn Exchange, path: &str) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     loop {
         let read = Request::Read {
-            root: Root::Setup,
+            root: Root::SETUP,
             path: path.to_string(),
             offset: bytes.len() as u64,
         };
@@ -704,23 +722,8 @@ fn kept_already(conflicts: &Path, path: &str, bytes: &[u8]) -> Option<PathBuf> {
     fs::read_dir(conflicts)
         .ok()?
         .flatten()
-        .map(|sync| local(&sync.path(), path))
+        .map(|sync| visible(&sync.path(), path))
         .find(|kept| fs::read(kept).is_ok_and(|held| held == bytes))
-}
-
-/// Remove each sync's trash folder older than [`KEPT`].
-fn prune(trash: &Path) {
-    let Ok(folders) = fs::read_dir(trash) else {
-        return;
-    };
-    let now = crate::clock::now().naive_local();
-    for folder in folders.flatten() {
-        let name = folder.file_name();
-        let when = name.to_str().and_then(|name| chrono::NaiveDateTime::parse_from_str(name, STAMP).ok());
-        if when.is_some_and(|when| (now - when).to_std().is_ok_and(|age| age > KEPT)) {
-            let _ = fs::remove_dir_all(folder.path());
-        }
-    }
 }
 
 fn same_kind(one: &Entry, other: &Entry) -> bool {

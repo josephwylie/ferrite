@@ -26,8 +26,9 @@ mod serve;
 mod tests;
 
 pub use scan::{scan, scan_watched};
-pub(crate) use scan::{millis, mode, setup as scan_setup};
-pub(crate) use serve::{inside, permissions, remove as remove_entry, set_mode, MOST_WRITES};
+pub(crate) use links::link as make_link;
+pub(crate) use scan::{millis, mode, setup as scan_setup, Text};
+pub(crate) use serve::{inside, permissions, set_mode, MOST_WRITES};
 pub use serve::Session;
 
 /// What a tree holds, by path: relative, `/`-separated, never absolute and
@@ -60,6 +61,11 @@ pub enum Entry {
         /// scan's): the newer of two edits wins.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         modified: Option<u64>,
+        /// The SHA-256 of its text with each CR before an LF left out,
+        /// when it is UTF-8 (a Setup scan's): two copies that differ only
+        /// in their line ends hold the same.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
     },
     Symlink {
         target: String,
@@ -75,11 +81,24 @@ pub enum Entry {
 pub enum Root {
     /// A directory of the Server's computer, `~` its home.
     Path { path: PathBuf },
-    /// The operator's agent setup on that computer, by the paths
-    /// `setup_sync::ITEMS` lists (ADR 0048).
-    Setup,
+    /// Setup sync's first table, Ferrite 0.4.0's (ADR 0048): refused, so a
+    /// Ferrite that syncs by it never moves what the tables name otherwise.
+    #[serde(rename = "setup")]
+    FirstSetup,
+    /// The operator's agent setup on that computer, by the paths table
+    /// `table` lists (`setup_sync::ITEMS`, ADR 0050). A Server that syncs
+    /// by another table refuses it.
+    #[serde(rename = "setup_table")]
+    Setup { table: u32 },
     #[serde(other)]
     Unknown,
+}
+
+impl Root {
+    /// The setup as this Ferrite's table names it.
+    pub const SETUP: Root = Root::Setup {
+        table: crate::setup_sync::TABLE,
+    };
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,6 +337,7 @@ impl Step {
                 sha256: sha256.clone(),
                 mode: *mode,
                 modified: None,
+                text: None,
             }),
             Step::Link { target, .. } => Some(Entry::Symlink { target: target.clone() }),
         }

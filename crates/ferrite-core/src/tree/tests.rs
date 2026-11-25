@@ -11,6 +11,7 @@ fn file(sha256: &str) -> Entry {
         sha256: sha256.into(),
         mode: Some(0o644),
         modified: None,
+        text: None,
     }
 }
 
@@ -137,6 +138,7 @@ fn an_executable_bit_differs_only_between_two_sides_that_keep_one() {
         sha256: "r".into(),
         mode,
         modified: None,
+        text: None,
     };
     let source = manifest(&[("run", with(Some(0o755)))]);
     assert_eq!(
@@ -211,6 +213,7 @@ fn a_scan_lists_without_following_and_leaves_out_what_is_skipped() {
                 sha256: chunked::hex(&Sha256::digest(b"fn main() {}")),
                 mode: cfg!(unix).then_some(0o640),
                 modified: None,
+                text: None,
             },
         ),
     ]
