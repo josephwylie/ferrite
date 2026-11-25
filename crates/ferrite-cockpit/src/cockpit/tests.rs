@@ -836,6 +836,7 @@ fn leap(cx: &mut gpui::VisualTestContext, by: Duration) {
 /// read, a command, a Server's message) to land (`ferrite_core::doorbell`),
 /// not for wall-clock time. Each look leaps the clock by `ENDED_POLL`, the
 /// longest the window waits before it looks for what landed.
+#[track_caller]
 fn until(
     cx: &mut gpui::VisualTestContext,
     mut done: impl FnMut(&mut gpui::VisualTestContext) -> bool,

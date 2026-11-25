@@ -201,6 +201,7 @@ pub fn wait_past(seen: u64) -> bool {
 /// has looked for twice that: a look that rings the bell itself would
 /// otherwise never be lost.
 #[cfg(any(test, feature = "test-support"))]
+#[track_caller]
 pub fn until(lost: &str, mut look: impl FnMut() -> bool) {
     let started = std::time::Instant::now();
     let mut seen = None;
@@ -209,9 +210,17 @@ pub fn until(lost: &str, mut look: impl FnMut() -> bool) {
         if look() {
             return;
         }
-        assert!(started.elapsed() < LOST_AFTER * 2, "{lost}");
+        let looked = started.elapsed();
+        assert!(
+            looked < LOST_AFTER * 2,
+            "{lost}: still not so after {looked:.1?}, though something landed at least once a minute"
+        );
         if let Some(seen) = seen {
-            assert!(wait_past(seen), "{lost}");
+            assert!(
+                wait_past(seen),
+                "{lost}: nothing landed for {LOST_AFTER:?}, {:.1?} after the first look",
+                started.elapsed()
+            );
         }
         seen = Some(before);
     }

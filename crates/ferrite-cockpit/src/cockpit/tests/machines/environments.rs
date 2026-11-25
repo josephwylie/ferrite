@@ -200,6 +200,7 @@ fn aim_sheet_at(view: &Entity<CockpitView>, dest: &Path, cx: &mut gpui::VisualTe
 }
 
 /// `selector` drawn, once box's Server answers what it waits on.
+#[track_caller]
 fn drawn(cx: &mut gpui::VisualTestContext, selector: &str) {
     until(cx, |cx| debug_bounds(cx, selector.to_string()).is_some());
 }
