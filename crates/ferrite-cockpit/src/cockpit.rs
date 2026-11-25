@@ -9,6 +9,7 @@ mod attachments;
 mod background_dialog_view;
 mod background_work;
 pub(crate) mod beside;
+mod board_layouts;
 mod branch_reads;
 mod browser;
 #[cfg(feature = "browser-smoke")]
@@ -497,9 +498,6 @@ pub struct CockpitView {
     /// Frames each open card has waited for its trigger's or Pane's
     /// geometry, by trigger key (`card_corner`); none once it has some.
     card_waits: std::cell::RefCell<std::collections::HashMap<String, u8>>,
-    /// A seam being dragged: the board, the seam, and the tree as it
-    /// stands mid-drag — persisted on release, never per move.
-    seam_drag: Option<SeamDrag>,
     /// The board's bounds as the last frame laid it out: what an act (a
     /// seam press, a drop) measures in when it has no window to measure.
     board: std::cell::Cell<layout::Rect>,
@@ -510,10 +508,9 @@ pub struct CockpitView {
     /// is live (`drop_target`), so a drag that leaves the window leaves no
     /// sheet behind.
     file_drop_over: Option<PaneIdentity>,
-    /// Boards whose arrangement includes a reader slot, as the operator
-    /// left them. Session-only: a reader's place is remembered here until
-    /// quit.
-    board_layouts: std::collections::HashMap<Board, Tree>,
+    /// Each board's arrangement as the operator left it, and the seam
+    /// being dragged (`board_layouts`).
+    board_layouts: board_layouts::BoardLayouts,
     /// Every board slot's size as this frame laid it out, for the ghost a
     /// drag of it shows. Written while the board draws.
     slot_sizes: std::cell::RefCell<std::collections::HashMap<Leaf, (f32, f32)>>,
@@ -698,13 +695,6 @@ impl Preferences {
             setup_home: None,
         }
     }
-}
-
-/// A seam mid-drag.
-struct SeamDrag {
-    board: Board,
-    seam: SeamId,
-    tree: Tree,
 }
 
 /// The board laid out by a split tree: the shown Pane's, while it has a
@@ -1312,11 +1302,10 @@ impl CockpitView {
             card_waits: Default::default(),
             head_parent_room: Default::default(),
             facts: Facts::with_auto_title(prefs.settings.auto_title),
-            seam_drag: None,
             board: std::cell::Cell::new(layout::Rect::default()),
             drop_preview: None,
             file_drop_over: None,
-            board_layouts: std::collections::HashMap::new(),
+            board_layouts: Default::default(),
             slot_sizes: Default::default(),
             dragging: None,
             unsent: drafts::Unsent::load(&prefs.dir),
@@ -2725,11 +2714,6 @@ impl CockpitView {
         }
     }
 
-    /// A board's tree as it should draw right now: the one mid-drag, else
-    /// the operator's arrangement fitted to what is open — the Pane, and
-    /// its reader slot while a document is open or sliding shut. A reader
-    /// the tree has not placed yet opens beside its Pane, on the right.
-    /// Every slot is at rest here: `slid_tree` draws a slide.
     /// The slot `leaf` stands for on `board`: its Pane, or the reader slot
     /// its Thread has open. None for a leaf of neither. Only the board can
     /// say: a leaf is a bare id, and two machines' Threads share them.
@@ -2743,51 +2727,16 @@ impl CockpitView {
         (reader_leaf(owner) == leaf).then_some(Slot::Reader(owner))
     }
 
+    /// A board's tree as it should draw right now (`BoardLayouts::tree`),
+    /// its readers the shown Panes' with a document open or sliding shut.
     fn board_tree(&self, board: Board, cx: &gpui::App) -> Option<Tree> {
-        if let Some(drag) = self.seam_drag.as_ref().filter(|drag| drag.board == board) {
-            return Some(drag.tree.clone());
-        }
-        let readers: Vec<ThreadKey> = self
-            .visible_indices(cx)
-            .into_iter()
-            .filter(|index| self.has_reader(*index))
-            .filter_map(|index| self.panes[index].thread())
-            .collect();
-        let base = self.board_layouts.get(&board).cloned().unwrap_or_default();
-        let mut panes = vec![pane_leaf(board.0)];
-        let readers: Vec<(Leaf, Leaf)> = readers
-            .into_iter()
-            .map(|owner| (pane_leaf(PaneIdentity::Thread(owner)), reader_leaf(owner)))
-            .filter(|(owner, _)| panes.contains(owner))
-            .collect();
-        let mut tree = base;
-        let wanted: std::collections::BTreeSet<Leaf> = panes
-            .iter()
-            .copied()
-            .chain(readers.iter().map(|(_, reader)| *reader))
-            .collect();
-        for stale in tree
-            .leaves()
-            .into_iter()
-            .filter(|leaf| !wanted.contains(leaf))
-        {
-            tree.remove(stale);
-        }
-        panes.retain(|leaf| !tree.contains(*leaf));
-        for leaf in panes {
-            tree.insert(leaf);
-        }
-        for (owner, reader) in readers {
-            if !tree.contains(reader) {
-                tree.split_share(owner, Edge::Right, reader, READER_SHARE);
-            }
-        }
-        Some(tree)
-    }
-
-    /// Keep an arrangement the operator made on a board, for the session.
-    fn commit_board(&mut self, board: Board, tree: Tree) {
-        self.board_layouts.insert(board, tree);
+        Some(self.board_layouts.tree(board, || {
+            self.visible_indices(cx)
+                .into_iter()
+                .filter(|index| self.has_reader(*index))
+                .filter_map(|index| self.panes[index].thread())
+                .collect()
+        }))
     }
 
     /// The shown Pane's rect on the board, in window coordinates — from the
@@ -3183,9 +3132,9 @@ impl CockpitView {
                     .map(|step| if *step { '1' } else { '0' })
                     .collect::<String>()
             ));
-            let dragging = self.seam_drag.as_ref().is_some_and(|drag| {
-                drag.board == on && members.iter().any(|member| member.id == drag.seam)
-            });
+            let dragging = self
+                .board_layouts
+                .holds_seam(on, members.iter().map(|member| &member.id));
             // The line spans the union of the set's bands, along its axis.
             let line_w = ferrite_ui::theme::SEAM_LINE_W;
             let line = match seam.axis {
@@ -3336,7 +3285,7 @@ impl CockpitView {
         let Some(tree) = self.board_tree(board, cx) else {
             return;
         };
-        self.seam_drag = Some(SeamDrag { board, seam, tree });
+        self.board_layouts.begin_seam_drag(board, seam, tree);
         cx.notify();
     }
 
@@ -3354,24 +3303,16 @@ impl CockpitView {
             x: f32::from(position.x),
             y: f32::from(position.y),
         };
-        let Some(drag) = self.seam_drag.as_mut() else {
-            return;
-        };
-        if drag
-            .tree
-            .drag_linked(&drag.seam, bounds, pointer, ferrite_ui::theme::BOARD_SEAM)
-        {
+        if self.board_layouts.drag_seam(bounds, pointer) {
             cx.notify();
         }
     }
 
     /// The release: the dragged tree persists, once.
     fn end_seam_drag(&mut self, cx: &mut Context<Self>) {
-        let Some(drag) = self.seam_drag.take() else {
-            return;
-        };
-        self.commit_board(drag.board, drag.tree);
-        cx.notify();
+        if self.board_layouts.end_seam_drag() {
+            cx.notify();
+        }
     }
 
     /// A slot dragged over another: what a release here would do, for the
@@ -3438,7 +3379,7 @@ impl CockpitView {
             Zone::Split(edge) => tree.split(target, edge, source),
         };
         if changed {
-            self.commit_board(board, tree);
+            self.board_layouts.commit(board, tree);
         }
         cx.notify();
     }
@@ -7307,7 +7248,7 @@ impl CockpitView {
                     .update(cx, |nav, cx| nav.set_hovered(inside, cx));
                 view.nav_pointer_moved(event.position, event.dragging(), cx);
                 view.panel_pointer_moved(event.position, event.dragging(), cx);
-                if view.seam_drag.is_some() {
+                if view.board_layouts.seam_held() {
                     if event.dragging() {
                         view.drag_seam(event.position, window, cx);
                     } else {

@@ -580,7 +580,7 @@ impl CockpitView {
     /// `tree` as this frame draws it: each sliding review as far in as it
     /// is (`Tree::reveal`). A seam drag draws its tree as it is.
     pub(super) fn slid_tree(&self, mut tree: Tree, bounds: layout::Rect) -> Tree {
-        if self.seam_drag.is_some() {
+        if self.board_layouts.seam_held() {
             return tree;
         }
         let reveals: Vec<(super::Leaf, f32)> = self
