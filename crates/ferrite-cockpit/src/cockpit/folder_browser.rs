@@ -625,7 +625,7 @@ impl Render for FolderBrowser {
             .flex()
             .flex_col()
             .gap(px(SPACE_1))
-            .child(project_editor::path_field(
+            .child(ferrite_ui::field::path_field(
                 self.label.clone(),
                 line,
                 !self.held && self.focus_handle(cx).is_focused(window),

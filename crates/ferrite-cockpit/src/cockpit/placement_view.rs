@@ -775,7 +775,7 @@ impl PlacementView {
             .track_scroll(&self.scroll)
             .child(self.dest.clone())
             .child(
-                project_editor::prefixed_field(
+                ferrite_ui::field::prefixed_field(
                     if matches!(self.stage, Stage::Done { .. }) {
                         "Copied to"
                     } else {

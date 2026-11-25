@@ -306,7 +306,7 @@ impl CoordinatorView {
                     .w_full()
                     .max_w(px(560.))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(crate::project_editor::text_field(
+                    .child(ferrite_ui::field::text_field(
                         "Ask, delegate, or change how work happens".into(),
                         field,
                         focused,

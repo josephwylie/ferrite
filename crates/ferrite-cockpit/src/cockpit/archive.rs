@@ -227,7 +227,7 @@ impl Render for ArchiveView {
             .child(
                 div()
                     .debug_selector(|| "factory-archive-search".into())
-                    .child(crate::project_editor::text_field(
+                    .child(ferrite_ui::field::text_field(
                         "Search titles and instructions".into(),
                         search,
                         focused,

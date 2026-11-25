@@ -102,7 +102,7 @@ impl DirectionView {
                     cx.emit(DirectionEvent::Answering);
                 }))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(crate::project_editor::text_field(
+                .child(ferrite_ui::field::text_field(
                     "Your answer".into(),
                     composer,
                     focused,

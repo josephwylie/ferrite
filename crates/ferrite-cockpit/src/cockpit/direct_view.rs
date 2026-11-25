@@ -256,7 +256,7 @@ impl DirectView {
             .id(key)
             .debug_selector(move || key.to_string())
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(crate::project_editor::text_field(
+            .child(ferrite_ui::field::text_field(
                 label_text.into(),
                 self.field.clone(),
                 focused,
