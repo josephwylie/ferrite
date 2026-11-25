@@ -59,9 +59,6 @@ pub(super) struct FolderBrowser {
     /// A new folder's name, while one is being named.
     naming: Option<Entity<Composer>>,
     scroll: UniformListScrollHandle,
-    /// The folder shown is held, while a copy goes into it: the line takes
-    /// no keys and the rows no presses, all drawn quiet.
-    held: bool,
 }
 
 /// The line moved: to another folder, or by a keystroke.
@@ -137,7 +134,6 @@ impl FolderBrowser {
             makes: None,
             naming: None,
             scroll: UniformListScrollHandle::new(),
-            held: false,
         };
         browser.edited(cx);
         browser
@@ -148,17 +144,6 @@ impl FolderBrowser {
     pub(super) fn making(mut self, note: impl Into<SharedString>) -> Self {
         self.makes = Some(note.into());
         self
-    }
-
-    /// Hold the folder shown, or let it go.
-    pub(super) fn hold(&mut self, held: bool, cx: &mut Context<Self>) {
-        if self.held == held {
-            return;
-        }
-        self.held = held;
-        self.naming = None;
-        self.cursor = None;
-        cx.notify();
     }
 
     fn line(cx: &mut Context<Self>) -> Entity<Composer> {
@@ -198,11 +183,9 @@ impl FolderBrowser {
             .is_some_and(|naming| naming.read(cx).focus_handle(cx).is_focused(window))
     }
 
-    /// Show `folder`, `/` last, unless the folder shown is held.
+    /// Show `folder`, `/` last.
     fn go(&mut self, folder: String, cx: &mut Context<Self>) {
-        if !self.held {
-            self.field.update(cx, |field, cx| field.set(folder, cx));
-        }
+        self.field.update(cx, |field, cx| field.set(folder, cx));
     }
 
     /// Show `folder`, as the browser's own move rather than the operator's.
@@ -334,6 +317,21 @@ impl FolderBrowser {
         }
     }
 
+    /// Whether the folder shown holds an entry called `name`: None until
+    /// it is read, or while it cannot be; never for one not there yet.
+    pub(super) fn has(&self, name: &str) -> Option<bool> {
+        if self.made.contains(&self.shown) {
+            return Some(false);
+        }
+        let listing = self.listed.get(&self.shown)?.as_ref().ok()?;
+        Some(listing.entries.iter().any(|entry| entry.name == name))
+    }
+
+    /// The Machine's home as its Server spells it, once read.
+    pub(super) fn home(&self) -> Option<PathBuf> {
+        Some(self.listed.get(HOME)?.as_ref().ok()?.path.clone())
+    }
+
     /// Ask the Machine where its home is, for `tilde`.
     pub(super) fn ask_home(&mut self, cx: &mut Context<Self>) {
         self.list(HOME.into(), cx);
@@ -435,7 +433,7 @@ impl FolderBrowser {
             return cx.propagate();
         }
         let rows = self.rows.len();
-        if rows == 0 || self.held {
+        if rows == 0 {
             return;
         }
         let last = rows as isize - 1;
@@ -476,9 +474,6 @@ impl FolderBrowser {
     /// Name a folder in the one shown, made by what goes into it: a row
     /// under its folders.
     pub(super) fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.held {
-            return;
-        }
         let naming = match &self.naming {
             Some(naming) => naming.clone(),
             None => Self::line(cx),
@@ -571,7 +566,6 @@ impl FolderBrowser {
                     icon,
                     label.into(),
                     self.cursor == Some(at),
-                    self.held,
                     cx,
                 )
                 .debug_selector(move || selector.clone())
@@ -590,15 +584,6 @@ impl Render for FolderBrowser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use ferrite_ui::theme::*;
         let note = self.note(cx);
-        let line = if self.held {
-            ferrite_ui::components::text_ui()
-                .truncate()
-                .text_color(gpui::rgb(INK_SUBTLE))
-                .child(self.typed(cx).to_string())
-                .into_any_element()
-        } else {
-            self.field.clone().into_any_element()
-        };
         let naming = self.naming.clone().map(|naming| {
             let focused = naming.read(cx).focus_handle(cx).is_focused(window);
             let empty = naming.read(cx).text().is_empty();
@@ -627,8 +612,8 @@ impl Render for FolderBrowser {
             .gap(px(SPACE_1))
             .child(project_editor::path_field(
                 self.label.clone(),
-                line,
-                !self.held && self.focus_handle(cx).is_focused(window),
+                self.field.clone(),
+                self.focus_handle(cx).is_focused(window),
             ))
             .child(
                 div()

@@ -17,6 +17,7 @@ use crate::{
     animation::cubic_bezier,
     button::{Button, ButtonVariants as _},
     h_flex,
+    progress::Progress,
     styled::toast_shadow,
     v_flex,
 };
@@ -118,6 +119,19 @@ impl From<(TypeId, ElementId)> for NotificationId {
     }
 }
 
+/// Ferrite's patch: how far what a notification follows has come, read
+/// each time its card is drawn ([`Notification::progress`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct NotificationProgress {
+    /// Done out of 100; None while it cannot say, and the bar runs to and
+    /// fro.
+    pub value: Option<f32>,
+    /// The line under the bar, the actions at its end.
+    pub caption: SharedString,
+}
+
+type ActionBuilder = Rc<dyn Fn(&mut Notification, &mut Window, &mut Context<Notification>) -> Button>;
+
 /// A notification element.
 pub struct Notification {
     /// The id is used make the notification unique.
@@ -133,7 +147,9 @@ pub struct Notification {
     placement: Option<Anchor>,
     delivery: Option<NotificationDelivery>,
     autohide: bool,
-    action_builder: Option<Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>) -> Button>>,
+    /// Ferrite's patch: one or more, side by side.
+    action_builders: Vec<ActionBuilder>,
+    progress_builder: Option<Rc<dyn Fn(&mut Window, &mut App) -> NotificationProgress>>,
     content_builder: Option<Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>) -> AnyElement>>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     on_close: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
@@ -197,7 +213,8 @@ impl Notification {
             placement: None,
             delivery: None,
             autohide: true,
-            action_builder: None,
+            action_builders: Vec::new(),
+            progress_builder: None,
             content_builder: None,
             on_click: None,
             on_close: None,
@@ -354,15 +371,28 @@ impl Notification {
         self
     }
 
-    /// Set the action button of the notification.
+    /// Add an action button to the notification. Ferrite's patch: each
+    /// one added sits after the last.
     ///
     /// When an action is set, the notification will not autohide.
     pub fn action<F>(mut self, action: F) -> Self
     where
         F: Fn(&mut Self, &mut Window, &mut Context<Self>) -> Button + 'static,
     {
-        self.action_builder = Some(Rc::new(action));
+        self.action_builders.push(Rc::new(action));
         self.autohide = false;
+        self
+    }
+
+    /// Ferrite's patch: a bar under the words, and a caption under it with
+    /// the actions at its end, both read from `progress` each time the card
+    /// is drawn, so the card follows what it reports without being pushed
+    /// again.
+    pub fn progress(
+        mut self,
+        progress: impl Fn(&mut Window, &mut App) -> NotificationProgress + 'static,
+    ) -> Self {
+        self.progress_builder = Some(Rc::new(progress));
         self
     }
 
@@ -418,10 +448,23 @@ impl Render for Notification {
             .content_builder
             .clone()
             .map(|builder| builder(self, window, cx));
-        let action = self
-            .action_builder
+        let actions: Vec<Button> = self
+            .action_builders
             .clone()
-            .map(|builder| builder(self, window, cx).small());
+            .into_iter()
+            .map(|builder| builder(self, window, cx).small())
+            .collect();
+        let actions = (!actions.is_empty()).then(|| {
+            h_flex()
+                .debug_selector(|| "notification-action".into())
+                .flex_shrink_0()
+                .gap_1()
+                .children(actions)
+        });
+        let progress = self
+            .progress_builder
+            .clone()
+            .map(|builder| builder(window, cx));
 
         let transition_status = self.transition_status;
         let closing = transition_status == ToastTransitionStatus::Ending;
@@ -490,15 +533,40 @@ impl Render for Notification {
                         )
                     })
                     .when_some(content, |this, content| this.child(content))
-                    // Ferrite's patch: the press goes under the words, which
-                    // keep the card's whole width.
-                    .when_some(action, |this, action| {
-                        this.child(
-                            h_flex()
-                                .debug_selector(|| "notification-action".into())
+                    // Ferrite's patch: a bar under the words, its caption
+                    // under it with the presses at its end.
+                    .map(|this| match progress {
+                        Some(progress) => this.child(
+                            v_flex()
                                 .pt_2()
-                                .child(action),
-                        )
+                                .gap_1p5()
+                                .child(
+                                    div().debug_selector(|| "notification-progress".into()).child(
+                                        Progress::new("notification-progress")
+                                            .small()
+                                            .value(progress.value.unwrap_or_default())
+                                            .loading(progress.value.is_none()),
+                                    ),
+                                )
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .debug_selector(|| "notification-caption".into())
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(progress.caption),
+                                        )
+                                        .children(actions),
+                                ),
+                        ),
+                        // Ferrite's patch: the press goes under the words,
+                        // which keep the card's whole width.
+                        None => this.children(actions.map(|actions| actions.pt_2())),
                     }),
             )
             .child(
@@ -1245,6 +1313,53 @@ mod tests {
             card.right() - message.right() <= px(32.),
             "{message:?} stops short of {card:?}'s end"
         );
+    }
+
+    /// Ferrite's patch: a toast that follows something draws a bar under its
+    /// title and a caption under the bar with the presses at its end, read
+    /// again each time it is drawn: it follows without being pushed again.
+    #[gpui::test]
+    fn a_progress_card_reads_how_far_each_time_it_is_drawn(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_global(Theme::default()));
+        let (root, cx) = cx.add_window_view(|window, cx| TestRoot {
+            list: cx.new(|cx| NotificationList::new(window, cx)),
+            other_focus: cx.focus_handle(),
+        });
+        let done = Rc::new(Cell::new(1.));
+        let list = root.read_with(cx, |root, _| root.list.clone());
+        list.update_in(cx, |list, window, cx| {
+            let done = done.clone();
+            list.push(
+                Notification::new()
+                    .title("Copying to wsl")
+                    .progress(move |_, _| NotificationProgress {
+                        value: Some(done.get()),
+                        caption: format!("{}%", done.get()).into(),
+                    })
+                    .action(|_, _, _| Button::new("show").label("Show"))
+                    .action(|_, _, _| Button::new("stop").label("Stop"))
+                    .autohide(false),
+                window,
+                cx,
+            );
+        });
+        cx.background_executor
+            .advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        let title = cx.debug_bounds("notification-title").expect("a title");
+        let bar = cx.debug_bounds("notification-progress").expect("a bar");
+        let caption = cx.debug_bounds("notification-caption").expect("a caption");
+        let actions = cx.debug_bounds("notification-action").expect("the presses");
+        assert!(bar.top() >= title.bottom(), "{bar:?} under {title:?}");
+        assert!(caption.top() >= bar.bottom(), "{caption:?} under {bar:?}");
+        assert!(actions.left() >= caption.right(), "{actions:?} after {caption:?}");
+        assert!(actions.top() < caption.bottom(), "{actions:?} on {caption:?}'s line");
+        let note = list.read_with(cx, |list, _| list.notifications()[0].clone());
+        done.set(100.);
+        note.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let longer = cx.debug_bounds("notification-caption").expect("a caption");
+        assert!(longer.size.width > caption.size.width, "{longer:?} still says 10%");
     }
 
     /// A stack's element id must not depend on how many other placements are

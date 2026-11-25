@@ -28,7 +28,7 @@ pub use background_work::{
 pub use composer::model_label;
 pub use composer::{
     attach_button, composer_footer, composer_row_limit, env_machine, env_strip, env_word,
-    mode_chip, model_effort_chip, offers_import, ModelChip, permission_mode_label, queued_close, queued_count,
+    mode_chip, model_effort_chip, offers_import, ChipMark, ModelChip, permission_mode_label, queued_close, queued_count,
     primary_actions, queued_edit, queued_send_now, queued_sends_now, queued_takes_back, send_button,
     stop_button,
     toolbar_chip, ComposerControls, PrimaryActions,
@@ -1139,7 +1139,7 @@ pub fn hero_project(label: SharedString, switcher: bool) -> Stateful<Div> {
 /// Pane its label cuts first.
 pub fn band_chip(
     slot: usize,
-    mark: &'static str,
+    mark: ChipMark,
     label: SharedString,
     focused: bool,
 ) -> Stateful<Div> {

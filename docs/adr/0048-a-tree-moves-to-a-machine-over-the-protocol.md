@@ -267,24 +267,34 @@ Windows window.
      onto this computer it sends the file here. One no longer here says
      "Gone from this computer" on either side and asks for no upload;
      put back, its Retry sends it;
-  2. none, and P is on this computer: the setup sheet (`PlacementView`).
-     Where the copy goes is chosen by browsing E, never by typing a path
-     (though one can be typed): see **The folder browser** below. The copy
-     goes to `<folder browsed>/<name>`, its name P's folder name until
-     edited ("Copies to"). P's git-ignored entries are listed with their
-     sizes, unticked; a folder git ignores whole is one row, nothing in it
-     listed apart, and ticked it carries all it holds; past 20, the rest
-     are one row, "and N more", that ticks them all. Worktrees inside P
+  2. none, and P is on this computer: the copy card (`PlacementView`).
+     It opens on one line, where the copy goes under `~/`, the folder
+     muted and the name in ink, with "Change…" beside it, which opens
+     **The folder browser** below in place. The browser opens by itself
+     only when that is in doubt: the folder could not be read, so the
+     browser went home, or the name is taken there by what the copy would
+     not resume. Where the copy goes is chosen by browsing E, never by
+     typing a path (though one can be typed). The copy goes to
+     `<folder browsed>/<name>`, its name P's folder name until edited
+     ("Copies to"). Under it, "Include files git ignores": one tick, none,
+     some (a dash) or all, with how many and their size, and a press
+     ticks all from none or some and none from all. Under that each entry
+     has its own tick and size, unticked, scrolling inside the card; a
+     folder git ignores whole is one row, nothing in it listed apart, and
+     ticked it carries all it holds; past 20, the rest are one row, "and N
+     more", that ticks them all. The button says how much goes: "Copy
+     2.2 GB". Worktrees inside P
      are never copied nor listed, and the sheet says so; a P that is
      itself a linked worktree is refused, since its `.git` names a path
      here, and the sheet names the folder of its main checkout where that
      `.git` file leads to one. Copy
      runs on a thread of its own over a connection of its own
-     (`Cockpit::tree`), with its progress and Cancel. Then the window
+     (`Cockpit::tree`), as an entry of the window's copies (below). Then
+     the window
      registers the destination on E, names a Project made there as P is
      named, so both read as one Project (one there before keeps its name,
      as the registry's answer says), keeps a Placement, and chooses the
-     new Project on the Draft;
+     new Project on the Draft, while it is still an unsent Draft on P;
   3. none, and P is on another Machine: the Project card on E (a folder
      dialog when E is this computer), which chooses what it makes on the
      Draft.
@@ -339,8 +349,9 @@ Windows window.
   through `.` or `..` (`placement::refuse_destination`).
 - **A file that changes or cannot be read** during the copy is left by its
   name, sent once more, and if it still cannot be, listed when the copy is
-  in: the sheet stays up on Done to list it under Not copied, "Left as it
-  was", each with why: "in use here", "unreadable on E" or "changed on
+  in: the card's last face lists it under Not copied, "Left as it was",
+  and with the card gone, the toast says how many ("1 item not copied")
+  and its Show opens the card on them. Each is listed with why: "in use here", "unreadable on E" or "changed on
   E". An entry E cannot make is listed there too: "a link outside the
   Project, not made on E", "a link to nothing on E, not made", "a name E
   cannot hold", or "not made on E:" and the reason. More than three alike
@@ -370,24 +381,50 @@ Windows window.
   ("connecting", "sign in", "not set up", "offline"). A press on it opens
   Connections; the arrows pass over it, as over every dimmed row.
 - **The Draft's "Add project…"** opens the card on the Draft's Machine.
-- **The sheet is one state machine**: `Choosing → Listing { count } →
-  Copying { progress } → Registering → Done { skipped } | Failed { reason }`,
-  with `Occupied` after `Listing` when a first copy finds the destination
-  holding something, and `Cancelled` from `Listing` or `Copying`. Listing
-  counts the files as it goes, and Cancel stops it there too. While a copy
-  runs a press outside the card does nothing, and ✕, Esc and Cancel are
-  one act: the copy stops, the sheet stays and says it can be resumed.
-  Through a first copy its button stays Copy; only a resume's reads
-  Resume. Retry from a failure copies again. A failure is said in the
-  operator's words: "The connection to E was lost. Resume finishes the
-  copy once it is back." when the connection went, else the folder that
-  could not be written and why, under `~/`: "Can't write in
-  ~/projects/app: permission denied." From Copy on, where the copy goes is
-  held: the browser, the copy's name and the ticks take no press or key
-  until it stops. How it stands is a two-line slot under "Copies to",
-  whole in its tooltip, there in every stage. Over a draft the card, as
-  the Project card on a Machine, is one size in every stage, centred in
-  the room above the band and never reaching it.
+- **A copy is one entry of the window's copies** (`Copies`, by Project
+  and Machine, one at a time for each), a state machine: `Listing { files }
+  → Copying { sent, total, file } → Finishing → Done { took, not copied }
+  | Failed { reason } | Cancelled`, with `Occupied` after `Listing` when a
+  first copy finds the destination holding something. The card, a toast
+  and the Draft's environment chip are three views of it; none keeps a
+  copy's state of its own. Copy again, or the chip, for a copy under way
+  opens the card on it.
+- **The card has three faces.** Choosing (above). Copying: the same card
+  resizes to the compact width with the sheet's motion (`DIALOG_IN`),
+  "Copying to E" over "P → ~/folder", a bar, "134 MB of 2.2 GB" with
+  "11 MB/s · about 3 min left", and the file being sent on one muted line,
+  cut in its middle. While the files are listed the bar runs with no end
+  and the line counts them, "Listing files… 18,402". Copied: "Copied to
+  E", "2.2 GB in 3 min 40 s" and Not copied, with Done. The card is as
+  tall as what it shows, centred in the room above the band and never
+  reaching it; the browser takes that room whole.
+- **The rate and the time left** are one pure function of what was heard
+  when (`copies::meter`, tested on a clock of its own): the rate is what
+  was sent over the last five seconds, so a copy that stalls slows to
+  nothing; the time left shows after three seconds of sending, said as a
+  person says it ("less than a minute", "about 3 min", past ten minutes to
+  the nearest five), and another shows only once it has held three
+  seconds, so it never jumps.
+- **Only Cancel stops a copy.** ✕, Esc, a press outside the card and
+  "Continue in background" let the card go and the copy go on. Cancel
+  keeps what was sent for its Resume and says so. While the card is gone
+  a toast that does not hide by itself says "Copying to E", a thin bar,
+  "38% · about 3 min left" and Show, which brings the card back; closing
+  it does not stop the copy. The Draft's chip shows a ring and the
+  percentage, and its press brings the card back too.
+- **A copy that ends with the card gone still says so.** A toast "Copied
+  to E", whether or not the progress toast was closed, with P and how
+  much in how long; with the window in the background, the chime and the
+  system notification too (Settings › Notifications), whose click opens
+  the card. A Draft that has since moved or been sent stays where it is,
+  and the toast offers "Start a chat there". A failure turns the toast
+  into its reason with Show and Resume (or Retry).
+- **A failure is said in the operator's words**: "The connection to E was
+  lost." when the connection went, with Resume once it is back, else the
+  folder that could not be written and why, under `~/`: "Can't write in
+  ~/projects/app: permission denied." Through a first copy its button
+  reads Copy; only a resume's reads Resume. Retry from a failure copies
+  again.
 - `CONTEXT.md`'s Draft entry and ADR 0045's line on the strip over the
   Composer say the environment is a choice until the first send.
 

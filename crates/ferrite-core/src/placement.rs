@@ -334,6 +334,38 @@ pub fn size(root: &Path, path: &str) -> u64 {
     walk(&root.join(path))
 }
 
+/// The bytes of the files under `root` but those at `skip` (paths under
+/// it, as [`ignored`] and [`worktrees`] give them), links not followed.
+pub fn size_but(root: &Path, skip: &[String]) -> u64 {
+    let skip: BTreeSet<&str> = skip.iter().map(String::as_str).collect();
+    fn walk(path: &Path, relative: &str, skip: &BTreeSet<&str>) -> u64 {
+        if skip.contains(relative) {
+            return 0;
+        }
+        let Ok(meta) = fs::symlink_metadata(path) else {
+            return 0;
+        };
+        if !meta.is_dir() {
+            return meta.len();
+        }
+        let Ok(entries) = fs::read_dir(path) else {
+            return 0;
+        };
+        entries
+            .flatten()
+            .map(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let relative = match relative {
+                    "" => name,
+                    folder => format!("{folder}/{name}"),
+                };
+                walk(&entry.path(), &relative, skip)
+            })
+            .sum()
+    }
+    walk(root, "", &skip)
+}
+
 /// What git prints for `args` in the checkout at `root`, or None when it
 /// fails. Without git's optional locks, as the Engine's reads run: an agent
 /// may be committing in that checkout.
@@ -632,12 +664,16 @@ pub struct CopyJob<'a> {
 }
 
 /// How a copy stands as it goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Copying {
     /// The Project's files being listed: this many so far.
     Listing(usize),
-    /// Sent, the copy kept as unfinished until it ends.
-    Sending(Progress),
+    /// Sent, the copy kept as unfinished until it ends: how far, and the
+    /// file the last bytes were of.
+    Sending {
+        progress: Progress,
+        file: Option<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -748,7 +784,12 @@ fn pass(
     let (left, changed) = left_there(&here, &there);
     let held: Vec<String> = copy.skip.iter().cloned().chain(left).collect();
     let steps = tree::plan(&here, &there, &held);
-    let mut sending = |sent| progress(Copying::Sending(sent));
+    let mut sending = |sent: tree::Sending| {
+        progress(Copying::Sending {
+            progress: sent.progress,
+            file: sent.file.map(str::to_string),
+        })
+    };
     let sent = tree::send(checkout, &steps, &root, exchange, &mut sending, cancel)?;
     Ok(Copied::Sent {
         sent: sent.with_problems(here, there),

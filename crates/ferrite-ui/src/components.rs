@@ -1638,6 +1638,60 @@ pub fn icon_button_as(
         .child(icons::icon(glyph, glyph_size, theme::INK_STRONG).text_color(ink))
 }
 
+// --------------------------------------------------------------- progress
+
+/// How far something has come, as a bar across what holds it: the kit's
+/// `Progress` at one size, the one bar Ferrite draws. A toast that follows
+/// something draws the same control through the kit's own slot
+/// (`Notification::progress`). `done` is out of 1; None runs the bar to
+/// and fro while there is nothing to measure yet.
+pub fn progress_bar(id: impl Into<ElementId>, done: Option<f32>) -> gpui::component::progress::Progress {
+    gpui::component::progress::Progress::new(id)
+        .small()
+        .value(done.unwrap_or_default() * 100.)
+        .loading(done.is_none())
+}
+
+/// `fraction` of a turn round a ring `size` across, in `ink` on its
+/// track: the plan-usage ring, and a draft's environment chip while its
+/// Project is copied.
+pub fn progress_ring(size: f32, fraction: f32, ink: Hsla) -> Div {
+    let track: Hsla = rgb(theme::USAGE_POP_TRACK).into();
+    div().flex_shrink_0().size(px(size)).child(
+        gpui::canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let stroke = px(theme::CONTEXT_RING_STROKE);
+                let r = (bounds.size.width.min(bounds.size.height) - stroke) / 2.;
+                let c = bounds.center();
+                let at = |turn: f32| {
+                    let a = std::f32::consts::TAU * turn - std::f32::consts::FRAC_PI_2;
+                    gpui::point(c.x + r * a.cos(), c.y + r * a.sin())
+                };
+                let arc = |from: f32, to: f32| {
+                    let mut path = gpui::PathBuilder::stroke(stroke);
+                    path.move_to(at(from));
+                    // Two halves at most, so no arc spans a full turn.
+                    let mid = (from + to) / 2.;
+                    for end in [mid, to] {
+                        path.arc_to(gpui::point(r, r), px(0.), false, true, at(end));
+                    }
+                    path.build().ok()
+                };
+                if let Some(path) = arc(0., 1.) {
+                    window.paint_path(path, track);
+                }
+                if fraction > 0.005 {
+                    if let Some(path) = arc(0., fraction.min(1.)) {
+                        window.paint_path(path, ink);
+                    }
+                }
+            },
+        )
+        .size_full(),
+    )
+}
+
 // ------------------------------------------------------------------ menus
 
 /// One menu row's content.

@@ -27,6 +27,7 @@ fn the_sheet_aims_the_copy_by_browsing_the_machines_folders(cx: &mut TestAppCont
     tick(cx);
     let draft = focused_draft(&view, cx);
     pick_on(&view, ENVIRONMENT, "box", cx);
+    browse(cx);
     drawn(cx, "folder-row:work");
     assert!(debug_bounds(cx, "folder-row:play".into()).is_some());
     assert!(
@@ -144,6 +145,7 @@ fn a_folder_that_cannot_be_read_says_so_in_place(cx: &mut TestAppContext) {
     tick(cx);
     pick_on(&view, ENVIRONMENT, "box", cx);
     until(cx, |cx| sheet(&view, cx).is_some());
+    browse(cx);
     let line = sheet_line(&view, cx);
     let missing = format!("{}/missing/", projects.display());
     line.update(cx, |line, cx| line.set(missing.clone(), cx));
@@ -160,8 +162,8 @@ fn a_folder_that_cannot_be_read_says_so_in_place(cx: &mut TestAppContext) {
 }
 
 /// A projects folder box does not have yet is where the copy goes all the
-/// same: the browser opens on it, says the copy makes it, and the copy
-/// does.
+/// same, so the browser stays shut: opened, it is on that folder and says
+/// the copy makes it, and the copy does.
 #[gpui::test]
 fn a_projects_folder_the_machine_lacks_is_made_by_the_copy(cx: &mut TestAppContext) {
     let base = resolved_dir("env-no-projects");
@@ -183,6 +185,10 @@ fn a_projects_folder_the_machine_lacks_is_made_by_the_copy(cx: &mut TestAppConte
     tick(cx);
     let draft = focused_draft(&view, cx);
     pick_on(&view, ENVIRONMENT, "box", cx);
+    drawn(cx, "placement-destination");
+    settles(cx);
+    assert!(debug_bounds(cx, "folder-browser-new".into()).is_none(), "shut while where it goes is sure");
+    browse(cx);
     drawn(cx, "folder-browser-new");
     let line = sheet_line(&view, cx);
     assert_eq!(text_in(&line, cx), format!("{}/", missing.display()), "not home");
@@ -213,6 +219,7 @@ fn the_sheet_is_finished_with_the_arrows_and_enter(cx: &mut TestAppContext) {
     tick(cx);
     let draft = focused_draft(&view, cx);
     pick_on(&view, ENVIRONMENT, "box", cx);
+    browse(cx);
     drawn(cx, "folder-row:work");
     drawn(cx, "placement-ignored:.env");
     let line = sheet_line(&view, cx);
@@ -245,6 +252,7 @@ fn tab_finishes_a_folder_name_or_moves_on(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
     tick(cx);
     pick_on(&view, ENVIRONMENT, "box", cx);
+    browse(cx);
     drawn(cx, "folder-row:work");
     let line = sheet_line(&view, cx);
     let focus = line.read_with(cx, |line, cx| line.focus_handle(cx));
@@ -279,6 +287,7 @@ fn a_folder_of_thousands_draws_only_the_rows_in_view(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
     tick(cx);
     pick_on(&view, ENVIRONMENT, "box", cx);
+    browse(cx);
     drawn(cx, "folder-row:f00000");
     assert!(debug_bounds(cx, "folder-row:f19999".into()).is_none(), "out of view, not drawn");
     let line = sheet_line(&view, cx);

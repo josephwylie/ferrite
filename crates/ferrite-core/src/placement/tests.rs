@@ -211,6 +211,12 @@ fn what_git_ignores_is_listed_each_directory_whole_with_its_size() {
     );
     assert_eq!(size(&root, "target"), 305);
     assert_eq!(ignored(&scratch("not-git")), []);
+    // What a copy sends but the entries it leaves out: the rest of the
+    // folder, `.git` and `.gitignore` included.
+    let skip: Vec<String> = listed.iter().map(|entry| entry.path.clone()).collect();
+    let rest = size_but(&root, &skip);
+    assert_eq!(rest, size_but(&root, &[]) - 305 - 3 - 6 - 2);
+    assert_eq!(rest, size(&root, ".git") + 19 + 13);
 }
 
 /// A linked worktree's `.git` names its repository by a path of this
@@ -542,7 +548,11 @@ fn half_copied(dir: &Path, files: usize) -> BTreeSet<String> {
     let stopped = copy(&job, &mut Local::cancelling(&cancel, 3), &mut |copying| heard.push(copying), &cancel)
         .expect_err("cancelled part way");
     assert_eq!(stopped.error.kind(), io::ErrorKind::Interrupted);
-    assert!(heard.iter().any(|copying| matches!(copying, Copying::Sending(_))));
+    // Each reading names the file its last bytes were of.
+    assert!(heard.iter().any(|copying| matches!(
+        copying,
+        Copying::Sending { file: Some(file), .. } if file.starts_with("file-")
+    )));
     assert_eq!(unfinished(&kept, &source), [dest.clone()], "kept as unfinished");
     let landed = holds(&dest);
     assert!(!landed.is_empty() && landed.len() < files, "part of it landed: {landed:?}");

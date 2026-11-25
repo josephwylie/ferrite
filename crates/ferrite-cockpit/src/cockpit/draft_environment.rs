@@ -2,9 +2,11 @@
 //! runs on, a choice until its first send. A draft's machine is its
 //! Project's (ADR 0045), so choosing another environment chooses the
 //! Project's counterpart there (`placement::counterpart`), or makes one:
-//! a Project of this computer is copied there by the setup sheet
-//! (`PlacementView`), and a machine's Project gets the Project card there.
+//! a Project of this computer is copied there (`Copies`, chosen on the
+//! setup sheet, `PlacementView`), and a machine's Project gets the Project
+//! card there.
 
+use super::copies::CopyKey;
 use super::menu_rows::Environment;
 use super::placement_view::{PlacementEvent, PlacementView, Placing};
 use super::*;
@@ -286,7 +288,7 @@ impl CockpitView {
     }
 
     /// The setup sheet: copy the draft's Project, of this computer, to the
-    /// machine picked.
+    /// machine picked; or the copy there under way, one at a time.
     fn open_placement(&mut self, lookup: Lookup, cx: &mut Context<Self>) {
         let Some(project) = self.cockpit.read(cx).project(lookup.from) else {
             return;
@@ -296,6 +298,7 @@ impl CockpitView {
         };
         let placing = Placing {
             draft: lookup.draft,
+            project: lookup.from,
             title: project.title.clone().into(),
             root: project.root.clone(),
             machine: lookup.to,
@@ -303,9 +306,24 @@ impl CockpitView {
             projects_dir: self.projects_dir(lookup.to),
             kept,
         };
-        let model = self.cockpit.clone();
-        let band = self.band_of(lookup.draft);
-        let sheet = cx.new(|cx| PlacementView::new(model, placing, band, cx));
+        self.open_placing(placing, cx);
+    }
+
+    /// The card on the copy of `key`, the copy as it began.
+    pub(super) fn show_copy(&mut self, key: CopyKey, cx: &mut Context<Self>) {
+        if self.placement_sheet(cx).is_some_and(|sheet| sheet.read(cx).key() == key) {
+            return;
+        }
+        let placing = self.copies.read(cx).get(key).map(|copy| copy.order.placing.clone());
+        if let Some(placing) = placing {
+            self.open_placing(placing, cx);
+        }
+    }
+
+    fn open_placing(&mut self, placing: Placing, cx: &mut Context<Self>) {
+        let (model, copies) = (self.cockpit.clone(), self.copies.clone());
+        let band = self.band_of(placing.draft);
+        let sheet = cx.new(|cx| PlacementView::new(model, copies, placing, band, cx));
         cx.subscribe(&sheet, Self::on_placement_event).detach();
         self.show_sheet(sheets::Sheet::Placement(sheet), cx);
     }
@@ -322,45 +340,52 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match event {
-            PlacementEvent::Place { dest } => self.place_copy(&sheet, dest, cx),
-            PlacementEvent::Closed => {
-                self.hide_sheet(cx);
+            PlacementEvent::Closed => self.placement_closed(&sheet, cx),
+            PlacementEvent::Use => {
+                let key = sheet.read(cx).key();
+                if self.copies.update(cx, |copies, cx| copies.use_as_it_is(key, cx)) {
+                    self.place_copy(key, cx);
+                }
             }
         }
     }
 
-    /// The sheet's folder is on its machine: register it there as a
+    /// The card went: how the copy it showed ended has been seen.
+    pub(super) fn placement_closed(&mut self, sheet: &Entity<PlacementView>, cx: &mut Context<Self>) {
+        let key = sheet.read(cx).key();
+        self.copies.update(cx, |copies, cx| copies.forget(key, cx));
+        self.hide_sheet(cx);
+    }
+
+    /// The copy of `key` is on its machine: register it there as a
     /// Project, and the window carries on while its Server answers. A
     /// Project made now takes the name of the one it copies, so the two read
     /// as one; one that was there, however its folder was spelled, keeps
     /// its own.
-    fn place_copy(
-        &mut self,
-        sheet: &Entity<PlacementView>,
-        dest: &std::path::Path,
-        cx: &mut Context<Self>,
-    ) {
-        let placing = sheet.read(cx).placing.clone();
+    pub(super) fn place_copy(&mut self, key: CopyKey, cx: &mut Context<Self>) {
+        let Some(order) = self.copies.read(cx).get(key).map(|copy| copy.order.clone()) else {
+            return;
+        };
+        let (machine, title, dest) = (key.machine, order.placing.title, order.target);
         let there: std::collections::HashSet<_> = self
             .cockpit
             .read(cx)
-            .registry(placing.machine)
+            .registry(machine)
             .reading()
             .projects()
             .iter()
             .map(|project| project.id)
             .collect();
-        let registered = self.cockpit.update(cx, |cockpit, _| {
-            cockpit.register_project(placing.machine, dest)
-        });
-        let (sheet, dest) = (sheet.clone(), dest.to_path_buf());
+        let registered = self
+            .cockpit
+            .update(cx, |cockpit, _| cockpit.register_project(machine, &dest));
         self.when_answered(
             registered,
             move |view, registered, cx| match registered {
                 Ok(project) if !there.contains(&project.project()) => {
-                    view.name_copy(sheet, placing, dest, project, cx)
+                    view.name_copy(key, title, dest, project, cx)
                 }
-                registered => view.copy_registered(sheet, placing, dest, registered, cx),
+                registered => view.copy_registered(key, dest, registered, cx),
             },
             cx,
         );
@@ -370,44 +395,47 @@ impl CockpitView {
     /// keeps its folder's name, and the copy goes on.
     fn name_copy(
         &mut self,
-        sheet: Entity<PlacementView>,
-        placing: Placing,
+        key: CopyKey,
+        title: SharedString,
         dest: PathBuf,
         project: ProjectKey,
         cx: &mut Context<Self>,
     ) {
         let named = self
             .cockpit
-            .update(cx, |cockpit, _| cockpit.rename_project(project, &placing.title));
+            .update(cx, |cockpit, _| cockpit.rename_project(project, &title));
         self.when_answered(
             named,
             move |view, named, cx| {
                 if let Err(error) = named {
-                    ferrite_core::log!("the copy of {} kept its folder's name: {error}", placing.title);
+                    ferrite_core::log!("the copy of {title} kept its folder's name: {error}");
                 }
-                view.copy_registered(sheet, placing, dest, Ok(project), cx)
+                view.copy_registered(key, dest, Ok(project), cx)
             },
             cx,
         );
     }
 
     /// The copy is a Project on its machine: keep where it came from, its
-    /// counterpart whatever git says of either, and choose it on the
-    /// draft. The sheet stays up only to list what it left.
+    /// counterpart whatever git says of either, and choose it on the draft
+    /// that asked for it, while that is still an unsent draft on the
+    /// Project copied.
     fn copy_registered(
         &mut self,
-        sheet: Entity<PlacementView>,
-        placing: Placing,
+        key: CopyKey,
         dest: PathBuf,
         registered: std::io::Result<ProjectKey>,
         cx: &mut Context<Self>,
     ) {
+        let Some(placing) = self.copies.read(cx).get(key).map(|copy| copy.order.placing.clone()) else {
+            return;
+        };
         let project = match registered {
             Ok(project) => project,
             Err(error) => {
-                sheet.update(cx, |sheet, cx| {
-                    sheet.failed(format!("Not added: {error}"), cx)
-                });
+                let reason = format!("Not added: {error}");
+                self.copies.update(cx, |copies, cx| copies.failed(key, reason, cx));
+                self.tell_copy(key, cx);
                 return;
             }
         };
@@ -426,9 +454,18 @@ impl CockpitView {
                 placing.root.display()
             );
         }
-        self.rebind_draft(placing.draft, project, cx);
-        let stays = sheet.update(cx, |sheet, cx| sheet.placed(cx));
-        if !stays && self.placement_sheet(cx).as_ref() == Some(&sheet) {
+        let moves = self
+            .index_of(placing.draft)
+            .and_then(|index| self.panes[index].draft())
+            .is_some_and(|draft| draft.binding.project() == key.project);
+        if moves {
+            self.rebind_draft(placing.draft, project, cx);
+        }
+        if self.copies.update(cx, |copies, cx| copies.done(key, project, moves, cx)) {
+            self.tell_copy(key, cx);
+        } else if self.placement_sheet(cx).is_some_and(|sheet| sheet.read(cx).key() == key) {
+            // Used as it was: nothing was copied, so the card has nothing
+            // to show.
             self.hide_sheet(cx);
         }
     }

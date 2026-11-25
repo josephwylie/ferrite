@@ -17,6 +17,8 @@ mod composer_footer;
 mod columns;
 mod composer_menu;
 mod context_menu;
+mod copies;
+mod copy_toasts;
 pub(crate) mod coordinator;
 pub(crate) mod decisions;
 mod delegates;
@@ -590,6 +592,10 @@ pub struct CockpitView {
     server_bands: server::ServerBands,
     /// The operator's setup kept in sync with each Machine (ADR 0048).
     setup_sync: Entity<setup_sync::SetupSync>,
+    /// Every copy of a Project of this computer to a Machine (ADR 0048 §2),
+    /// and the toasts that follow them.
+    copies: Entity<copies::Copies>,
+    copy_toasts: copy_toasts::CopyToasts,
     /// Whether the window has said `settings.json` could not be used.
     unreadable_told: bool,
     /// The operator's commands running, and what they and the keys have
@@ -1246,6 +1252,8 @@ impl CockpitView {
         let setup_sync = cx.new(|_| {
             setup_sync::SetupSync::new(prefs.setup_home.clone(), prefs.dir.clone(), cockpit.clone())
         });
+        let copies = cx.new(|_| copies::Copies::new(cockpit.clone()));
+        cx.observe(&copies, |_, _, cx| cx.notify()).detach();
         let composer_menu = cx.new(|_| composer_menu::ComposerMenuView::default());
         // Whether a Composer's key context is the menu's follows the menu.
         cx.observe(&composer_menu, |view, _, cx| view.sync_composer_floats(cx))
@@ -1384,6 +1392,8 @@ impl CockpitView {
             ferrite_update: Default::default(),
             server_bands: Default::default(),
             setup_sync,
+            copies,
+            copy_toasts: Default::default(),
             unreadable_told: false,
             user_commands: Default::default(),
             leave_asked: false,
@@ -2229,6 +2239,7 @@ impl CockpitView {
         if let Some(sheet) = self.placement_sheet(cx) {
             sheet.update(cx, |sheet, cx| sheet.poll(cx));
         }
+        self.poll_copies(cx);
         self.poll_environment_lookup(cx);
         self.poll_machine_repo(cx);
         self.tick_setup_sync(cx);
@@ -4106,10 +4117,9 @@ impl CockpitView {
             connections.update(cx, |connections, cx| connections.cancel(cx));
             return;
         }
-        // The setup sheet's esc is its Cancel: a copy under way stops, and
-        // the sheet stays to say so.
+        // The setup sheet's esc closes it; a copy it shows carries on.
         if let Some(sheet) = self.placement_sheet(cx) {
-            sheet.update(cx, |sheet, cx| sheet.cancel(cx));
+            sheet.update(cx, |sheet, cx| sheet.dismiss(cx));
             return;
         }
         if self.hide_sheet(cx) {
@@ -5308,7 +5318,16 @@ impl CockpitView {
                 }
                 return;
             }
-            pane::BandChip::Environment => self.environment_menu_rows(draft, cx),
+            // While the draft's Project is being copied, the chip shows
+            // the copy.
+            pane::BandChip::Environment => {
+                let copying = self.copies.read(cx).running_of(draft.binding.project());
+                if let Some((key, _)) = copying {
+                    self.show_copy(key, cx);
+                    return;
+                }
+                self.environment_menu_rows(draft, cx)
+            }
             pane::BandChip::Project => self.project_menu_rows(draft, cx),
             pane::BandChip::Workspace => self.workspace_menu_rows(draft, cx),
         };
@@ -5761,12 +5780,23 @@ impl CockpitView {
         // environment to choose, else a word for a machine.
         let machine = draft.binding.project().machine();
         let environment = self.environment_chip_shown(cx).then(|| {
+            // A copy of the draft's Project under way: where to, and how far.
+            let copying = self.copies.read(cx).running_of(draft.binding.project());
+            if let Some((key, copy)) = copying {
+                let name = self.environment_name(key.machine, cx);
+                let done = copy.phase.done();
+                let label = match done {
+                    Some(done) => format!("{name} {}%", (done * 100.).floor()).into(),
+                    None => name,
+                };
+                return (pane::BandChip::Environment, 2, pane::ChipMark::Ring(done.unwrap_or_default()), label);
+            }
             let mark = if self.elsewhere(machine, cx) {
                 ferrite_ui::icons::SERVER
             } else {
                 ferrite_ui::icons::LAPTOP
             };
-            (pane::BandChip::Environment, 2, mark, self.environment_name(machine, cx))
+            (pane::BandChip::Environment, 2, pane::ChipMark::Icon(mark), self.environment_name(machine, cx))
         });
         let word = environment
             .is_none()
@@ -5777,13 +5807,13 @@ impl CockpitView {
             (
                 pane::BandChip::Project,
                 0,
-                ferrite_ui::icons::FOLDER,
+                pane::ChipMark::Icon(ferrite_ui::icons::FOLDER),
                 pane::band_chip_label(&project_title),
             ),
             (
                 pane::BandChip::Workspace,
                 1,
-                workspace_mark,
+                pane::ChipMark::Icon(workspace_mark),
                 pane::band_chip_label(&workspace_label),
             ),
         ]);
@@ -6961,6 +6991,7 @@ impl CockpitView {
         self.present_ferrite_update(window, cx);
         self.present_server(window, cx);
         self.present_setup_sync(window, cx);
+        self.present_copies(window, cx);
         self.present_restart(window, cx);
         self.present_unreadable_settings(window, cx);
         self.present_user_commands(window, cx);
@@ -8656,7 +8687,7 @@ impl CockpitView {
     /// (the click handler's doing) and lands on what it was about, in
     /// place, on whichever machine.
     pub(crate) fn open_system_notification(&mut self, tag: &str, cx: &mut Context<Self>) {
-        if self.open_task_notification(tag, cx) {
+        if self.open_task_notification(tag, cx) || self.open_copy_notification(tag, cx) {
             return;
         }
         // Its entry stays: read now, the next pump takes it out of the

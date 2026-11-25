@@ -309,9 +309,8 @@ impl CockpitView {
             }
             Sheet::NewTask(sheet) => self.new_task_gone(&sheet, cx),
             Sheet::Direct(sheet) => self.direct_gone(&sheet, cx),
-            // A copy goes with its sheet: nothing would register it.
-            Sheet::Placement(sheet) => sheet.update(cx, |sheet, _| sheet.stop()),
-            Sheet::ProjectEditor(_) | Sheet::BackgroundDialog(_) => {}
+            // A copy outlives its card: the window keeps it (`Copies`).
+            Sheet::Placement(_) | Sheet::ProjectEditor(_) | Sheet::BackgroundDialog(_) => {}
         }
     }
 
@@ -335,22 +334,29 @@ impl CockpitView {
                 let sheet = sheet.read(cx);
                 self.direct_inputs(sheet.project, &sheet.task, cx).is_none()
             }
-            Some(Sheet::Placement(sheet)) => self
-                .index_of(sheet.read(cx).placing.draft)
-                .and_then(|index| self.panes[index].draft())
-                .is_none(),
+            // A card on a copy stays whatever became of its draft.
+            Some(Sheet::Placement(sheet)) => {
+                let sheet = sheet.read(cx);
+                !sheet.shows_a_copy(cx)
+                    && self
+                        .index_of(sheet.placing.draft)
+                        .and_then(|index| self.panes[index].draft())
+                        .is_none()
+            }
         };
         if gone {
             self.hide_sheet(cx);
         }
     }
 
-    /// A press outside the card closes the sheet, unless it is copying:
-    /// only its own Cancel stops a copy.
+    /// A press outside the card closes the sheet; a copy it shows carries
+    /// on.
     pub(super) fn on_sheets_event(&mut self, _: Entity<Sheets>, _: &Dismissed, cx: &mut Context<Self>) {
-        if self.placement_sheet(cx).is_some_and(|sheet| sheet.read(cx).busy()) {
-            return;
+        match self.placement_sheet(cx) {
+            Some(sheet) => self.placement_closed(&sheet, cx),
+            None => {
+                self.hide_sheet(cx);
+            }
         }
-        self.hide_sheet(cx);
     }
 }

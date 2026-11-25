@@ -12,7 +12,10 @@ use ferrite_ui::components;
 use ferrite_ui::sheet;
 use ferrite_ui::theme::*;
 
-const WIDTH: f32 = 600.;
+pub const WIDTH: f32 = 600.;
+/// A card that reports rather than asks (the setup sheet's progress and
+/// what a copy did): as wide as the Background work sheet.
+pub const COMPACT_WIDTH: f32 = BACKGROUND_DIALOG_W;
 /// The sheet sizes to its content up to here; past it the body scrolls. A
 /// machine's folder browser and the rows around it fit under it.
 const MAX_HEIGHT: f32 = 640.;
@@ -48,7 +51,7 @@ pub fn steady_card_over(viewport_h: f32, band_top: Option<f32>) -> Div {
 /// How tall a card over a draft whose band starts `band_top` down a window
 /// `viewport_h` tall may be, and how far it is lifted to stay clear of the
 /// band: not at all with no band, or too little room above it.
-fn room(viewport_h: f32, band_top: Option<f32>) -> (f32, f32) {
+pub fn room(viewport_h: f32, band_top: Option<f32>) -> (f32, f32) {
     let room = band_top
         .map(|top| top - SPACE_2)
         .filter(|room| (LEAST_ROOM..viewport_h).contains(room));
@@ -142,6 +145,42 @@ pub fn prefixed_field(
     )
 }
 
+/// A path shown rather than typed, in a field's box with no label: the
+/// folder it is in as `prefix` in `INK_SUBTLE`, cut from its start, then
+/// `name` in `INK_STRONG`, and `action` at the box's end.
+pub fn shown_path(prefix: SharedString, name: SharedString, action: impl IntoElement) -> Div {
+    div()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_2))
+        .h(px(FORM_CONTROL_H))
+        .pl(px(FORM_FIELD_PAD_X))
+        .pr(px(SPACE_1))
+        .rounded(px(R_CONTROL))
+        .border_1()
+        .border_color(paint::FIELD_RING)
+        .child(
+            div()
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(
+                    components::text_ui()
+                        .flex_shrink_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis_start()
+                        .text_color(rgb(INK_SUBTLE))
+                        .child(prefix),
+                )
+                .child(components::text_ui().flex_shrink_0().child(name)),
+        )
+        .child(div().flex_shrink_0().child(action))
+}
+
 /// Any one-line field on a sheet in the name row's face.
 pub fn text_field(
     label: SharedString,
@@ -220,14 +259,12 @@ fn field(
 /// One row of a folder browser, the Files tree's row (`FILES_ROW_H`, its
 /// mark in a chevron-wide column, `FS_LABEL` in `INK_STRONG`) as the shared
 /// press: a folder to go into, or `..` out of one. The row the arrows rest
-/// on is `paint::SELECTED`, as the tree's open file is. A `held` row takes
-/// no press and its name is `INK_SUBTLE`.
+/// on is `paint::SELECTED`, as the tree's open file is.
 pub fn folder_row(
     id: impl Into<gpui::ElementId>,
     mark: &'static str,
     label: SharedString,
     cursor: bool,
-    held: bool,
     cx: &App,
 ) -> Button {
     let rest = if cursor {
@@ -236,8 +273,6 @@ pub fn folder_row(
         Paint(TRANSPARENT)
     };
     components::form_button_on(id, rest, cx)
-        .disabled(held)
-        .when(held, |row| row.cursor_default())
         .w_full()
         .h(px(FILES_ROW_H))
         .p_0()
@@ -250,7 +285,7 @@ pub fn folder_row(
                     .truncate()
                     .text_size(px(FS_LABEL))
                     .line_height(px(LH_UI))
-                    .text_color(rgb(if held { INK_SUBTLE } else { INK_STRONG }))
+                    .text_color(rgb(INK_STRONG))
                     .child(label),
             ),
         )
@@ -364,7 +399,7 @@ const ADD_GROUP: &str = "project-add-directory";
 /// with dark ink.
 pub fn primary_button(
     id: impl Into<gpui::ElementId>,
-    label: &'static str,
+    label: impl Into<SharedString>,
     disabled: bool,
     cx: &App,
 ) -> Button {

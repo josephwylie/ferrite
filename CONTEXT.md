@@ -381,6 +381,14 @@ destination: it sends what is not there, and leaves each file someone else
 changed there as it is and lists it; it removes nothing (ADR 0048).
 _Avoid_: partial copy, interrupted sync, half copy.
 
+**Copy to a Machine**
+One run of copying a Project of this computer to a Machine, one at a time
+for each Project and Machine. The window keeps it from Copy until the
+operator has seen how it ended. Its card, a toast and the Draft's
+environment chip all show it, and only Cancel stops it: the card closed,
+it runs on (ADR 0048).
+_Avoid_: transfer, upload, sync job.
+
 **Setup sync**
 The operator's agent setup (skills, commands, agents, instructions, rules,
 hooks, output styles, plugins, settings and sign-ins) kept the same on this
