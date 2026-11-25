@@ -1221,6 +1221,7 @@ fn every_folder_a_sync_makes_is_the_owners_alone_whatever_the_umask() {
     let world = World::new("owner-only-folders");
     let (mine, far) = (world.home("here"), world.home("machine"));
     seed(&mine);
+    put(&mine, ".agents/skills/shared/SKILL.md", "# Shared\n");
     put(&far, ".codex/prompts/deep/plan.md", "Plan it.
 ");
     sync(&world.job(&mine, "far"), &far);
@@ -1228,8 +1229,9 @@ fn every_folder_a_sync_makes_is_the_owners_alone_whatever_the_umask() {
     for path in [
         ".claude/skills",
         ".claude/skills/deploy/scripts",
-        ".claude/plugins/cache/market/tool/1.0",
-        ".claude/plugins/marketplaces/market/.git",
+        ".codex/skills/lint",
+        ".agents/skills",
+        ".agents/skills/shared",
     ] {
         assert_eq!(bits(&far, path), 0o700, "{path} on the Machine");
     }
