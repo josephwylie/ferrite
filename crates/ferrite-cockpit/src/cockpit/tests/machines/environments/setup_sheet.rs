@@ -5,6 +5,7 @@
 //! only its Resume changes what it left there.
 
 use super::*;
+use crate::cockpit::copies::Phase;
 use ferrite_core::sound::Sound;
 
 /// The draft's composer text.
@@ -301,6 +302,7 @@ fn a_copy_cancelled_part_way_is_resumed_and_keeps_what_was_put_there_since(cx: &
     until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
     assert!(debug_bounds(cx, "placement-use".into()).is_none(), "never used as it is");
     drawn(cx, "placement-skipped");
+    settles(cx);
     assert_eq!(
         text_of(cx, "placement-skipped").as_deref(),
         Some("main.rs \u{b7} changed on box")
@@ -320,8 +322,9 @@ fn a_copy_cancelled_part_way_is_resumed_and_keeps_what_was_put_there_since(cx: &
 /// clear of the draft's band, and holds the keys. A press outside the
 /// card, esc, the close button and Continue in background each let the
 /// card go and the copy go on, followed by a toast and by the draft's
-/// chip, a ring and how far; the toast's Show and the chip bring the card
-/// back. Only Cancel stops the copy, and its Resume finishes it.
+/// chip, a ring and how far; the toast's Show and the copy's Machine on
+/// the chip bring the card back. Only Cancel stops the copy, and its
+/// Resume finishes it.
 #[gpui::test]
 fn the_card_goes_and_the_copy_goes_on_until_cancel(cx: &mut TestAppContext) {
     bind_production_keys(cx);
@@ -385,16 +388,16 @@ fn the_card_goes_and_the_copy_goes_on_until_cancel(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("escape");
     assert!(sheet(&view, cx).is_none() && copy_runs(&view, cx), "esc lets the card go");
 
-    press(cx, ENVIRONMENT);
-    assert!(sheet(&view, cx).is_some(), "the chip brings the card back");
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    assert!(sheet(&view, cx).is_some(), "the chip's box brings the card back");
     press(cx, "placement-close");
     assert!(sheet(&view, cx).is_none() && copy_runs(&view, cx), "the close button lets it go");
 
-    press(cx, ENVIRONMENT);
+    pick_on(&view, ENVIRONMENT, "box", cx);
     press(cx, "placement-background");
     assert!(sheet(&view, cx).is_none() && copy_runs(&view, cx), "Continue in background lets it go");
 
-    press(cx, ENVIRONMENT);
+    pick_on(&view, ENVIRONMENT, "box", cx);
     press(cx, "placement-cancel");
     BOX_SLOW.store(false, Ordering::SeqCst);
     assert!(!copy_runs(&view, cx), "Cancel stops it");
@@ -671,8 +674,8 @@ fn a_file_in_use_while_copying_is_left_behind_and_listed(cx: &mut TestAppContext
     copying_part_way(&projects.join("app"), cx);
     press(cx, "placement-background");
     BOX_SLOW.store(false, Ordering::SeqCst);
-    until(cx, |cx| text_of(cx, "notification-title").is_some_and(|said| said.contains("Copied to box")));
-    assert_eq!(text_of(cx, "notification-message").as_deref(), Some("app \u{b7} 1 item not copied"));
+    until(cx, |cx| text_of(cx, "notification-title").is_some_and(|said| said.contains("Copied app to box")));
+    assert_eq!(text_of(cx, "notification-message").as_deref(), Some("1 item not copied"));
     assert_eq!(
         draft_project(&view, draft, cx).machine(),
         on_box,
@@ -817,6 +820,7 @@ fn another_projects_unfinished_copy_is_left_to_it(cx: &mut TestAppContext) {
     aim_sheet_at(&view, &dest, cx);
     press(cx, "placement-copy");
     drawn(cx, "placement-occupied");
+    settles(cx);
     assert_eq!(
         text_of(cx, "placement-occupied").as_deref(),
         Some("app holds an unfinished copy of app. Nothing there is changed.")
@@ -1004,7 +1008,7 @@ fn a_copy_finishing_unwatched_still_says_so(cx: &mut TestAppContext) {
     until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
     on_toast(cx, "notification-title");
     assert!(
-        text_of(cx, "notification-title").is_some_and(|said| said.contains("Copied to box")),
+        text_of(cx, "notification-title").is_some_and(|said| said.contains("Copied app to box")),
         "{:?}",
         text_of(cx, "notification-title")
     );
@@ -1024,7 +1028,7 @@ fn a_copy_finishing_unwatched_still_says_so(cx: &mut TestAppContext) {
     drawn(cx, "placement-copied");
     press(cx, "placement-done");
     assert!(sheet(&view, cx).is_none());
-    assert!(!text_of(cx, "notification-title").is_some_and(|said| said.contains("Copied to box")), "seen");
+    assert!(!text_of(cx, "notification-title").is_some_and(|said| said.contains("Copied app to box")), "seen");
 }
 
 /// A copy that fails with its card closed turns its toast into why, with
@@ -1059,7 +1063,7 @@ fn a_copy_failing_unwatched_says_why_and_resumes_from_its_toast(cx: &mut TestApp
     box_down(true);
     BOX_SLOW.store(false, Ordering::SeqCst);
     on_toast(cx, "copy-toast-again");
-    assert!(text_of(cx, "notification-title").is_some_and(|said| said.contains("Not copied to box")));
+    assert!(text_of(cx, "notification-title").is_some_and(|said| said.contains("Copy of app to box stopped")));
     assert!(
         text_of(cx, "notification-message").is_some_and(|said| said.contains("The connection to box was lost.")),
         "the plain reason: {:?}",
@@ -1091,4 +1095,260 @@ fn a_copy_failing_unwatched_says_why_and_resumes_from_its_toast(cx: &mut TestApp
     assert_eq!(draft_project(&view, chat, cx).machine(), on_box, "a chat on the copy");
     settles(cx);
     assert!(debug_bounds(cx, "copy-toast-chat".into()).is_none(), "seen");
+}
+
+/// box turned off, or on, in Settings › Connections.
+fn toggle_box(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    let connections = connections_view(view, cx);
+    view.update(cx, |view, cx| {
+        view.on_connections_event(connections, &ConnectionsEvent::Toggle(box_machine().target), cx)
+    });
+    tick(cx);
+}
+
+/// box as the window holds it now: another `MachineId` each time it is
+/// turned on.
+fn box_now(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<MachineId> {
+    let saved = ferrite_core::MachineKey(Some(box_machine().target));
+    view.read_with(cx, |view, cx| view.cockpit.read(cx).machine_saved_as(&saved))
+}
+
+/// box turned off mid-copy stops the copy at once and says so in plain
+/// words, with Resume, on its toast and its card; turned on again, box is
+/// held anew, and the card's Resume finishes the copy there.
+#[gpui::test]
+fn a_machine_turned_off_mid_copy_stops_it_and_resume_finishes_once_it_is_on(cx: &mut TestAppContext) {
+    toasts_rest(cx);
+    let base = resolved_dir("env-off");
+    let projects = base.join("projects");
+    let (mut core, _fake, machines, _agents) = two_machines_keeping_projects_in("env-off", &projects);
+    let source = project_folder(&base.join("here/app"), None);
+    let big = vec![5u8; 4 << 20];
+    std::fs::write(source.join("big.bin"), &big).unwrap();
+    let mine = registered_here(&mut core, &source);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    let draft = focused_draft(&view, cx);
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    drawn(cx, "placement-ignored:.env");
+    let dest = projects.join("app");
+    copying_part_way(&dest, cx);
+    press(cx, "placement-background");
+    on_toast(cx, "copy-toast-show");
+
+    toggle_box(&view, cx);
+    assert_eq!(box_now(&view, cx), None, "box is off");
+    assert!(!copy_runs(&view, cx), "its copy stops at once");
+    BOX_SLOW.store(false, Ordering::SeqCst);
+    on_toast(cx, "copy-toast-again");
+    assert_eq!(text_of(cx, "notification-message").as_deref(), Some("box was turned off."));
+    assert_eq!(text_of(cx, "copy-toast-again").as_deref(), Some("Resume"));
+    press(cx, "copy-toast-show");
+    drawn(cx, "placement-failed");
+    assert_eq!(
+        text_of(cx, "placement-failed").as_deref(),
+        Some("box was turned off. Resume finishes the copy once it is back.")
+    );
+    for said in [text_of(cx, "placement-card"), text_of(cx, "notification-message")] {
+        assert!(!said.unwrap_or_default().contains("held"), "no jargon");
+    }
+
+    toggle_box(&view, cx);
+    let on_box = box_now(&view, cx).expect("box is on again");
+    until(cx, |cx| view.read_with(cx, |view, cx| attached(view.cockpit.read(cx), on_box)));
+    // Out of Settings, the chip's box opens the copy as box is now.
+    view.update(cx, |view, cx| view.hide_sheet(cx));
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    drawn(cx, "placement-ignored:.env");
+    settles(cx);
+    assert_eq!(
+        text_of(cx, "placement-failed").as_deref(),
+        Some("box was turned off. Resume finishes the copy.")
+    );
+    press(cx, "placement-resume");
+    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
+    assert_eq!(std::fs::read(dest.join("big.bin")).unwrap(), big);
+    assert_eq!(roots_on(&view, on_box, cx), [dest.clone()]);
+}
+
+/// A copy whose files all landed, only adding it on box failing, is no
+/// dead end: it says so plainly, and its Resume only adds it, copying
+/// nothing again.
+#[gpui::test]
+fn a_copy_that_landed_but_was_not_added_resumes_by_adding_it(cx: &mut TestAppContext) {
+    let base = resolved_dir("env-unadded");
+    let projects = base.join("projects");
+    let (mut core, _fake, machines, _agents) = two_machines_keeping_projects_in("env-unadded", &projects);
+    let on_box = machines.held(1).unwrap();
+    let source = project_folder(&base.join("here/app"), None);
+    let mine = registered_here(&mut core, &source);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    let draft = focused_draft(&view, cx);
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    drawn(cx, "placement-ignored:.env");
+    // box cannot keep what it registers: its registry cannot be written.
+    let jammed = settings_dir("env-unadded").join("box").join("registry.json.tmp");
+    std::fs::create_dir_all(&jammed).unwrap();
+    press(cx, "placement-copy");
+    drawn(cx, "placement-failed");
+    let said = text_of(cx, "placement-failed").unwrap();
+    assert!(said.starts_with("Copied, but not added on box: "), "{said}");
+    assert!(!said.contains("os error"), "{said}");
+    assert!(debug_bounds(cx, "placement-resume".into()).is_some(), "its Resume adds it");
+    assert_eq!(draft_project(&view, draft, cx), mine);
+    assert!(roots_on(&view, on_box, cx).is_empty());
+
+    std::fs::remove_dir_all(&jammed).unwrap();
+    press(cx, "placement-resume");
+    let adding = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            let copies = view.copies.read(cx);
+            let (_, copy) = copies.iter().next().expect("the copy");
+            matches!(copy.phase, Phase::Finishing { .. } | Phase::Done(_))
+        })
+    };
+    assert!(adding(cx), "added, nothing listed or sent again");
+    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
+    assert_eq!(roots_on(&view, on_box, cx), [projects.join("app")]);
+    drawn(cx, "placement-where");
+}
+
+/// A copy that ends while the window is in the background tells the
+/// system, its card up or not; the notification is taken back once the
+/// operator, back in the window, has the card show how it ended.
+#[gpui::test]
+fn a_copy_ending_behind_the_window_notifies_with_its_card_up_until_seen(cx: &mut TestAppContext) {
+    toasts_rest(cx);
+    let base = resolved_dir("env-behind");
+    let projects = base.join("projects");
+    let (mut core, _fake, machines, _agents) = two_machines_keeping_projects_in("env-behind", &projects);
+    let on_box = machines.held(1).unwrap();
+    let source = project_folder(&base.join("here/app"), None);
+    std::fs::write(source.join("big.bin"), vec![9u8; 4 << 20]).unwrap();
+    let mine = registered_here(&mut core, &source);
+    cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    let draft = focused_draft(&view, cx);
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    drawn(cx, "placement-ignored:.env");
+    copying_part_way(&projects.join("app"), cx);
+    assert!(sheet(&view, cx).is_some(), "the card is up");
+
+    cx.deactivate_window();
+    BOX_SLOW.store(false, Ordering::SeqCst);
+    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
+    drawn(cx, "placement-copied");
+    settles(cx);
+    let tag = copy_tag(&view, cx);
+    let posted = |cx: &mut gpui::VisualTestContext| {
+        cx.delivered_system_notifications()
+            .iter()
+            .any(|notification| notification.tag.as_ref() == tag)
+    };
+    assert!(posted(cx), "the window away, the system says so, card or no card");
+
+    cx.update(|window, _| window.activate_window());
+    settles(cx);
+    assert!(!posted(cx), "seen on the card, taken back");
+}
+
+/// While the draft's copy runs it is not sent: no Send, its first send
+/// starts no Thread, and its band says why beside the copy's percentage.
+/// Once the copy is in, the draft is there, and Send is back.
+#[gpui::test]
+fn a_draft_waiting_on_its_copy_is_sent_there_once_it_is_in(cx: &mut TestAppContext) {
+    toasts_rest(cx);
+    let base = resolved_dir("env-waits");
+    let projects = base.join("projects");
+    let (mut core, _fake, machines, _agents) = two_machines_keeping_projects_in("env-waits", &projects);
+    let on_box = machines.held(1).unwrap();
+    let source = project_folder(&base.join("here/app"), None);
+    std::fs::write(source.join("big.bin"), vec![9u8; 4 << 20]).unwrap();
+    let mine = registered_here(&mut core, &source);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    let draft = focused_draft(&view, cx);
+    let composer = view.read_with(cx, |view, _| view.panes[view.index_of(draft).unwrap()].composer.clone());
+    composer.update(cx, |composer, cx| composer.set("hello".into(), cx));
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    drawn(cx, "placement-ignored:.env");
+    copying_part_way(&projects.join("app"), cx);
+    press(cx, "placement-background");
+    settles(cx);
+
+    assert_eq!(text_of(cx, "band-copy-waits").as_deref(), Some("Send once copied"));
+    let chip = debug_bounds(cx, ENVIRONMENT.into()).unwrap();
+    let note = debug_bounds(cx, "band-copy-waits".into()).unwrap();
+    assert!(note.left() >= chip.right() && note.top() < chip.bottom(), "beside the chip");
+    assert!(debug_bounds(cx, "composer-send".into()).is_none(), "no Send while the copy runs");
+    view.update(cx, |view, cx| view.bootstrap_draft(cx));
+    tick(cx);
+    assert_eq!(draft_project(&view, draft, cx), mine, "still a draft, here");
+    assert_eq!(draft_text(&view, draft, cx), "hello");
+
+    BOX_SLOW.store(false, Ordering::SeqCst);
+    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
+    settles(cx);
+    assert!(debug_bounds(cx, "band-copy-waits".into()).is_none());
+    assert!(debug_bounds(cx, "composer-send".into()).is_some(), "Send is back, there");
+    assert_eq!(draft_text(&view, draft, cx), "hello");
+}
+
+/// The chip of a draft waiting on its copy ticks the copy's Machine, with
+/// how far, and its own environment sends here instead: picked, the draft
+/// is sent here on purpose, and the copy carries on without it.
+#[gpui::test]
+fn a_draft_waiting_on_its_copy_can_still_be_sent_here(cx: &mut TestAppContext) {
+    toasts_rest(cx);
+    let base = resolved_dir("env-here-instead");
+    let projects = base.join("projects");
+    let (mut core, _fake, machines, _agents) = two_machines_keeping_projects_in("env-here-instead", &projects);
+    let on_box = machines.held(1).unwrap();
+    let source = project_folder(&base.join("here/app"), None);
+    std::fs::write(source.join("big.bin"), vec![9u8; 4 << 20]).unwrap();
+    let mine = registered_here(&mut core, &source);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    let draft = focused_draft(&view, cx);
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    drawn(cx, "placement-ignored:.env");
+    copying_part_way(&projects.join("app"), cx);
+    press(cx, "placement-background");
+    settles(cx);
+
+    press(cx, ENVIRONMENT);
+    until(cx, |cx| view.read_with(cx, |view, _| view.band_menu().is_some()));
+    let rows = band_rows(&view, cx);
+    let row = |name: &str| rows.iter().find(|row| row.0 == name).cloned().unwrap();
+    let on = row("box");
+    assert!(on.1.starts_with("copying ") && on.1.ends_with('%') && on.2, "{on:?}");
+    assert_eq!(row("Local"), ("Local".into(), "send here instead".into(), false, false));
+    view.update(cx, |view, cx| view.close_popup(cx));
+    pick_on(&view, ENVIRONMENT, "Local", cx);
+    settles(cx);
+    assert!(debug_bounds(cx, "band-copy-waits".into()).is_none());
+    assert!(copy_runs(&view, cx), "the copy carries on");
+    view.update(cx, |view, cx| {
+        let composer = view.panes[view.index_of(draft).unwrap()].composer.clone();
+        composer.update(cx, |composer, cx| composer.set("hello".into(), cx));
+    });
+    settles(cx);
+    assert!(debug_bounds(cx, "composer-send".into()).is_some(), "Send, here");
+
+    BOX_SLOW.store(false, Ordering::SeqCst);
+    on_toast(cx, "copy-toast-chat");
+    assert_eq!(draft_project(&view, draft, cx), mine, "it stays here");
+    assert!(roots_on(&view, on_box, cx).contains(&projects.join("app")));
 }

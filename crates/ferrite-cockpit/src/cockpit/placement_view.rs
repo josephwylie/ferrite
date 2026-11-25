@@ -9,7 +9,7 @@
 //! stopped part way is unfinished (`placement::unfinished`): the sheet
 //! opens on it, and only its Resume goes there.
 
-use super::copies::{self, Copies, CopyKey, Order, Phase};
+use super::copies::{self, Again, Copies, CopyKey, Order, Phase};
 use super::draft_environment::Band;
 use super::folder_browser::{FolderBrowser, Moved};
 use super::*;
@@ -36,7 +36,11 @@ pub(crate) struct Placing {
     pub(crate) project: ProjectKey,
     pub(crate) title: SharedString,
     pub(crate) root: PathBuf,
+    /// The Machine as the window held it when this was asked: a copy
+    /// starts on it as the window holds it then (`Copies::start`).
     pub(crate) machine: ferrite_core::MachineId,
+    /// The Machine as it is saved, which a copy is known by.
+    pub(crate) saved_as: ferrite_core::MachineKey,
     pub(crate) machine_name: SharedString,
     /// The Machine's projects folder, where the browser opens.
     pub(crate) projects_dir: String,
@@ -49,7 +53,7 @@ impl Placing {
     pub(crate) fn key(&self) -> CopyKey {
         CopyKey {
             project: self.project,
-            machine: self.machine,
+            machine: self.saved_as.clone(),
         }
     }
 }
@@ -60,6 +64,8 @@ pub(crate) enum PlacementEvent {
     Closed,
     /// Add the folder the copy found occupied as it is, copying nothing.
     Use,
+    /// Add the copy whose files all landed and only adding it failed.
+    Add,
 }
 
 impl EventEmitter<PlacementEvent> for PlacementView {}
@@ -142,7 +148,7 @@ impl PlacementView {
         band: Option<Band>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let order = copies.read(cx).get(placing.key()).map(|copy| copy.order.clone());
+        let order = copies.read(cx).get(&placing.key()).map(|copy| copy.order.clone());
         let (folder, leaf) = match &order {
             Some(order) => split_dest(&order.dest),
             None => (
@@ -245,7 +251,7 @@ impl PlacementView {
 
     /// The copy the card shows, while the window has one.
     fn copy<'a>(&self, cx: &'a App) -> Option<&'a copies::Entry> {
-        self.copies.read(cx).get(self.key())
+        self.copies.read(cx).get(&self.key())
     }
 
     fn face(&self, cx: &App) -> Face {
@@ -310,8 +316,18 @@ impl PlacementView {
     }
 
     /// Whether the copy goes where an unfinished copy of the Project is:
-    /// it resumes that one.
+    /// it resumes that one, or only adds it once all of it landed. Where
+    /// the last copy went, that copy says, whether or not the Machine can
+    /// be read now.
     fn resumes(&self, cx: &App) -> bool {
+        let dest = self.destination(cx);
+        let stopped = self.copy(cx).filter(|copy| copy.order.dest == dest).map(|copy| &copy.phase);
+        if matches!(
+            stopped,
+            Some(Phase::Failed { again: Again::Resume | Again::Add { .. }, .. } | Phase::Cancelled { resumable: true })
+        ) {
+            return true;
+        }
         let target = self.target(cx);
         self.unfinished.contains(&target) || self.copy(cx).is_some_and(|copy| copy.unfinished.contains(&target))
     }
@@ -336,7 +352,7 @@ impl PlacementView {
     /// unfinished.
     fn let_go(&mut self, cx: &mut Context<Self>) {
         let key = self.key();
-        if let Some(unfinished) = self.copies.update(cx, |copies, cx| copies.forget(key, cx)) {
+        if let Some(unfinished) = self.copies.update(cx, |copies, cx| copies.forget(&key, cx)) {
             for path in unfinished {
                 if !self.unfinished.contains(&path) {
                     self.unfinished.push(path);
@@ -431,14 +447,21 @@ impl PlacementView {
             return;
         }
         let resumes = self.resumes(cx);
+        // Again where the last copy went, as the Machine spelled it then: a
+        // card opened while the Machine was off cannot spell it.
+        let (target, home) = match self.copy(cx).filter(|copy| copy.order.dest == dest) {
+            Some(copy) => (copy.order.target.clone(), copy.order.home.clone()),
+            None => (self.target(cx), self.dest.read(cx).home()),
+        };
         self.let_go(cx);
         let order = Order {
             placing: self.placing.clone(),
-            target: self.target(cx),
+            target,
             dest,
             skip: self.kept_here(),
             resumes,
-            home: self.dest.read(cx).home(),
+            home,
+            waits: true,
         };
         self.browsing = false;
         self.copies.update(cx, |copies, cx| copies.start(order, cx));
@@ -448,7 +471,7 @@ impl PlacementView {
     /// Stop the copy under way; what it sent stays, for its Resume.
     fn stop(&mut self, cx: &mut Context<Self>) {
         let key = self.key();
-        self.copies.update(cx, |copies, cx| copies.cancel(key, cx));
+        self.copies.update(cx, |copies, cx| copies.cancel(&key, cx));
         // The copy may have made its folder by now.
         self.dest.update(cx, |dest, cx| dest.relist(cx));
     }
@@ -468,11 +491,13 @@ impl PlacementView {
         }
     }
 
-    /// The primary button while choosing: what is there used, or a copy.
+    /// The primary button while choosing: what is there used, a copy that
+    /// all landed added, or a copy.
     fn primary(&mut self, cx: &mut Context<Self>) {
         match self.copy(cx).map(|copy| &copy.phase) {
             Some(Phase::Occupied { of: None }) => cx.emit(PlacementEvent::Use),
             Some(Phase::Occupied { .. }) => {}
+            Some(Phase::Failed { again: Again::Add { .. }, .. }) => cx.emit(PlacementEvent::Add),
             _ => self.start(cx),
         }
     }

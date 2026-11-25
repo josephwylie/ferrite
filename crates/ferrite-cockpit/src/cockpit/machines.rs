@@ -274,6 +274,7 @@ impl CockpitView {
         for machine in &gone {
             self.terminals.update(cx, |terminals, cx| terminals.let_go(*machine, cx));
         }
+        self.stop_copies_to(&gone, cx);
         self.forget_projects_of(&gone, cx);
         let reheld = self.panel.hold(self.cockpit.read(cx));
         for rehold in &reheld {
@@ -291,6 +292,21 @@ impl CockpitView {
         });
         self.sync_panes(cx);
         cx.notify();
+    }
+
+    /// The window let go of `gone`: each copy to one stops at once, saying
+    /// whether its Machine was turned off or removed, for its Resume.
+    fn stop_copies_to(&mut self, gone: &[ferrite_core::MachineId], cx: &mut Context<Self>) {
+        let saved = &self.prefs.settings.machines;
+        let removed = |key: &ferrite_core::MachineKey| {
+            key.0
+                .as_ref()
+                .is_some_and(|target| !saved.iter().any(|machine| machine.target == *target))
+        };
+        let stopped = self.copies.update(cx, |copies, cx| copies.machines_went(gone, removed, cx));
+        for key in &stopped {
+            self.tell_copy(key, cx);
+        }
     }
 
     /// The window let go of `gone`: a Project of theirs names nothing it

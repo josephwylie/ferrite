@@ -6,7 +6,7 @@
 //! setup sheet, `PlacementView`), and a machine's Project gets the Project
 //! card there.
 
-use super::copies::CopyKey;
+use super::copies::{self, CopyKey};
 use super::menu_rows::Environment;
 use super::placement_view::{PlacementEvent, PlacementView, Placing};
 use super::*;
@@ -81,6 +81,24 @@ impl Heard {
     }
 }
 
+/// Why a draft waiting on its copy has no Send, beside the copy's chip.
+pub(super) fn copy_waits_note() -> Div {
+    div()
+        .flex()
+        .items_center()
+        .min_w_0()
+        .flex_shrink(1.)
+        .h(px(ferrite_ui::theme::FOOTER_CHIP_H))
+        .px(px(ferrite_ui::theme::FOOTER_CHIP_PAD_X))
+        .debug_selector(|| "band-copy-waits".into())
+        .child(
+            ferrite_ui::components::text_ui()
+                .truncate()
+                .text_color(gpui::rgb(ferrite_ui::theme::INK_SUBTLE))
+                .child("Send once copied"),
+        )
+}
+
 /// Why the window cannot run a draft on a machine now, when it cannot.
 fn unreached(server: Option<ServerState>) -> Option<SharedString> {
     let Some(ServerState::Detached { attention, .. }) = server else {
@@ -131,15 +149,47 @@ impl CockpitView {
             .collect()
     }
 
-    /// The environment chip's rows for `draft`.
-    pub(super) fn environment_menu_rows(&self, draft: &pane::DraftBinding, cx: &App) -> Vec<Row> {
-        menu_rows::environment_rows(&self.environments(cx), draft)
+    /// The copy the draft in Pane `index` waits on, while it runs: the
+    /// draft is sent there once it is in.
+    pub(super) fn waited_on<'a>(&self, index: usize, cx: &'a App) -> Option<(&'a CopyKey, &'a copies::Entry)> {
+        let pane = self.panes.get(index)?;
+        let project = pane.draft()?.binding.project();
+        self.copies.read(cx).waited_on_by(pane.identity, project)
+    }
+
+    /// The environment chip's rows for `draft`, in Pane `pane`: while it
+    /// waits on a copy, the copy's Machine is ticked and says how far, and
+    /// its own sends it here instead.
+    pub(super) fn environment_menu_rows(&self, pane: PaneIdentity, draft: &pane::DraftBinding, cx: &App) -> Vec<Row> {
+        let copies = self.copies.read(cx);
+        let copying = copies
+            .waited_on_by(pane, draft.binding.project())
+            .and_then(|(key, copy)| {
+                let machine = self.cockpit.read(cx).machine_saved_as(&key.machine)?;
+                let detail = match copy.phase.done() {
+                    Some(done) => format!("copying {}%", (done * 100.).floor()),
+                    None => "copying".into(),
+                };
+                Some((machine, SharedString::from(detail)))
+            });
+        menu_rows::environment_rows(&self.environments(cx), draft, copying)
     }
 
     /// The focused draft runs on `to` instead: its Project's counterpart
     /// there, once both machines say which repository each Project is.
+    /// While it waits on a copy, the copy's Machine brings the copy's card
+    /// back, and any other lets the draft go, the copy carrying on.
     pub(super) fn pick_environment(&mut self, to: MachineId, cx: &mut Context<Self>) {
-        let Some(pane) = self.panes.get(self.focused(cx)) else {
+        let index = self.focused(cx);
+        let waited_on = self.waited_on(index, cx).map(|(key, _)| key.clone());
+        if let Some(key) = waited_on {
+            if self.cockpit.read(cx).saved_as(to) == Some(&key.machine) {
+                self.show_copy(&key, cx);
+                return;
+            }
+            self.copies.update(cx, |copies, cx| copies.let_draft_go(&key, cx));
+        }
+        let Some(pane) = self.panes.get(index) else {
             return;
         };
         let Some(from) = pane.draft().map(|draft| draft.binding.project()) else {
@@ -296,12 +346,16 @@ impl CockpitView {
         let Some(kept) = self.machine_dir(lookup.to, cx) else {
             return;
         };
+        let Some(saved_as) = self.cockpit.read(cx).saved_as(lookup.to).cloned() else {
+            return;
+        };
         let placing = Placing {
             draft: lookup.draft,
             project: lookup.from,
             title: project.title.clone().into(),
             root: project.root.clone(),
             machine: lookup.to,
+            saved_as,
             machine_name: self.environment_name(lookup.to, cx),
             projects_dir: self.projects_dir(lookup.to),
             kept,
@@ -309,15 +363,19 @@ impl CockpitView {
         self.open_placing(placing, cx);
     }
 
-    /// The card on the copy of `key`, the copy as it began.
-    pub(super) fn show_copy(&mut self, key: CopyKey, cx: &mut Context<Self>) {
-        if self.placement_sheet(cx).is_some_and(|sheet| sheet.read(cx).key() == key) {
+    /// The card on the copy of `key`, the copy as it began, on its Machine
+    /// as the window holds it now.
+    pub(super) fn show_copy(&mut self, key: &CopyKey, cx: &mut Context<Self>) {
+        if self.placement_sheet(cx).is_some_and(|sheet| sheet.read(cx).key() == *key) {
             return;
         }
-        let placing = self.copies.read(cx).get(key).map(|copy| copy.order.placing.clone());
-        if let Some(placing) = placing {
-            self.open_placing(placing, cx);
+        let Some(mut placing) = self.copies.read(cx).get(key).map(|copy| copy.order.placing.clone()) else {
+            return;
+        };
+        if let Some(machine) = self.cockpit.read(cx).machine_saved_as(&key.machine) {
+            placing.machine = machine;
         }
+        self.open_placing(placing, cx);
     }
 
     fn open_placing(&mut self, placing: Placing, cx: &mut Context<Self>) {
@@ -339,21 +397,22 @@ impl CockpitView {
         event: &PlacementEvent,
         cx: &mut Context<Self>,
     ) {
+        let key = sheet.read(cx).key();
         match event {
             PlacementEvent::Closed => self.placement_closed(&sheet, cx),
             PlacementEvent::Use => {
-                let key = sheet.read(cx).key();
-                if self.copies.update(cx, |copies, cx| copies.use_as_it_is(key, cx)) {
-                    self.place_copy(key, cx);
+                if self.copies.update(cx, |copies, cx| copies.use_as_it_is(&key, cx)) {
+                    self.place_copy(&key, cx);
                 }
             }
+            PlacementEvent::Add => self.copy_again(&key, cx),
         }
     }
 
     /// The card went: how the copy it showed ended has been seen.
     pub(super) fn placement_closed(&mut self, sheet: &Entity<PlacementView>, cx: &mut Context<Self>) {
         let key = sheet.read(cx).key();
-        self.copies.update(cx, |copies, cx| copies.forget(key, cx));
+        self.copies.update(cx, |copies, cx| copies.forget(&key, cx));
         self.hide_sheet(cx);
     }
 
@@ -362,11 +421,17 @@ impl CockpitView {
     /// Project made now takes the name of the one it copies, so the two read
     /// as one; one that was there, however its folder was spelled, keeps
     /// its own.
-    pub(super) fn place_copy(&mut self, key: CopyKey, cx: &mut Context<Self>) {
+    pub(super) fn place_copy(&mut self, key: &CopyKey, cx: &mut Context<Self>) {
         let Some(order) = self.copies.read(cx).get(key).map(|copy| copy.order.clone()) else {
             return;
         };
-        let (machine, title, dest) = (key.machine, order.placing.title, order.target);
+        let Some(machine) = self.cockpit.read(cx).machine_saved_as(&key.machine) else {
+            let reason = copies::turned_off(&order.placing.machine_name);
+            self.copies.update(cx, |copies, cx| copies.unadded(key, reason, true, cx));
+            self.tell_copy(key, cx);
+            return;
+        };
+        let (key, title, dest) = (key.clone(), order.placing.title, order.target);
         let there: std::collections::HashSet<_> = self
             .cockpit
             .read(cx)
@@ -385,7 +450,7 @@ impl CockpitView {
                 Ok(project) if !there.contains(&project.project()) => {
                     view.name_copy(key, title, dest, project, cx)
                 }
-                registered => view.copy_registered(key, dest, registered, cx),
+                registered => view.copy_registered(&key, dest, registered, cx),
             },
             cx,
         );
@@ -410,7 +475,7 @@ impl CockpitView {
                 if let Err(error) = named {
                     ferrite_core::log!("the copy of {title} kept its folder's name: {error}");
                 }
-                view.copy_registered(key, dest, Ok(project), cx)
+                view.copy_registered(&key, dest, Ok(project), cx)
             },
             cx,
         );
@@ -418,23 +483,39 @@ impl CockpitView {
 
     /// The copy is a Project on its machine: keep where it came from, its
     /// counterpart whatever git says of either, and choose it on the draft
-    /// that asked for it, while that is still an unsent draft on the
-    /// Project copied.
+    /// that asked for it, while that waits on it, an unsent draft on the
+    /// Project copied. An answer for a copy no longer being added (its
+    /// Machine went meanwhile) counts for nothing.
     fn copy_registered(
         &mut self,
-        key: CopyKey,
+        key: &CopyKey,
         dest: PathBuf,
         registered: std::io::Result<ProjectKey>,
         cx: &mut Context<Self>,
     ) {
-        let Some(placing) = self.copies.read(cx).get(key).map(|copy| copy.order.placing.clone()) else {
+        if !self.copies.read(cx).finishing(key) {
+            return;
+        }
+        let Some(order) = self.copies.read(cx).get(key).map(|copy| copy.order.clone()) else {
             return;
         };
+        let placing = order.placing;
         let project = match registered {
             Ok(project) => project,
             Err(error) => {
-                let reason = format!("Not added: {error}");
-                self.copies.update(cx, |copies, cx| copies.failed(key, reason, cx));
+                let machine = &placing.machine_name;
+                let (reason, when_back) = match self.cockpit.read(cx).server(placing.machine) {
+                    None => (copies::turned_off(machine), true),
+                    Some(ServerState::Attached { .. }) => (
+                        format!(
+                            "Copied, but not added on {machine}: {}.",
+                            copies::words::plainly(&error.to_string())
+                        ),
+                        false,
+                    ),
+                    Some(_) => (format!("The connection to {machine} was lost."), true),
+                };
+                self.copies.update(cx, |copies, cx| copies.unadded(key, reason, when_back, cx));
                 self.tell_copy(key, cx);
                 return;
             }
@@ -454,16 +535,17 @@ impl CockpitView {
                 placing.root.display()
             );
         }
-        let moves = self
-            .index_of(placing.draft)
-            .and_then(|index| self.panes[index].draft())
-            .is_some_and(|draft| draft.binding.project() == key.project);
+        let moves = order.waits
+            && self
+                .index_of(placing.draft)
+                .and_then(|index| self.panes[index].draft())
+                .is_some_and(|draft| draft.binding.project() == key.project);
         if moves {
             self.rebind_draft(placing.draft, project, cx);
         }
         if self.copies.update(cx, |copies, cx| copies.done(key, project, moves, cx)) {
             self.tell_copy(key, cx);
-        } else if self.placement_sheet(cx).is_some_and(|sheet| sheet.read(cx).key() == key) {
+        } else if self.placement_sheet(cx).is_some_and(|sheet| sheet.read(cx).key() == *key) {
             // Used as it was: nothing was copied, so the card has nothing
             // to show.
             self.hide_sheet(cx);

@@ -458,8 +458,16 @@ pub(super) struct Environment {
 
 /// A draft's environment chip's rows: each environment on, `draft`'s
 /// ticked, one the window cannot reach dimmed with why (its pick opens
-/// Connections), then `Add environment…`.
-pub(super) fn environment_rows(environments: &[Environment], draft: &pane::DraftBinding) -> Vec<Row> {
+/// Connections), then `Add environment…`. While the draft waits on a copy
+/// (`copying`: to where, and how far in words), that Machine is ticked
+/// instead, and the draft's own says it sends here instead.
+pub(super) fn environment_rows(
+    environments: &[Environment],
+    draft: &pane::DraftBinding,
+    copying: Option<(ferrite_core::MachineId, SharedString)>,
+) -> Vec<Row> {
+    let here = draft.binding.project().machine();
+    let ticked = copying.as_ref().map_or(here, |(to, _)| *to);
     let mut rows: Vec<Row> = environments
         .iter()
         .map(|environment| {
@@ -467,10 +475,16 @@ pub(super) fn environment_rows(environments: &[Environment], draft: &pane::Draft
                 None => BandChoice::Environment(environment.machine),
                 Some(_) => BandChoice::Connections,
             };
+            let detail = match (&copying, &environment.unreached) {
+                (_, Some(why)) => why.clone(),
+                (Some((to, how_far)), None) if *to == environment.machine => how_far.clone(),
+                (Some(_), None) if environment.machine == here => "send here instead".into(),
+                _ => SharedString::default(),
+            };
             let mut row = band_row(
                 environment.name.clone(),
-                environment.unreached.clone().unwrap_or_default(),
-                draft.binding.project().machine() == environment.machine,
+                detail,
+                ticked == environment.machine,
                 choice,
             );
             row.row.inert = environment.unreached.is_some();

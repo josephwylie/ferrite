@@ -13,6 +13,8 @@ use ferrite_client::cockpit::ServerState;
 use ferrite_core::chunked::Cancellation;
 use ferrite_core::placement::{self, Copied, Copying};
 use ferrite_core::tree::{Connect, Stopped};
+use ferrite_core::MachineKey;
+use gpui::App;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -26,11 +28,13 @@ use meter::Meter;
 #[cfg(test)]
 mod tests;
 
-/// Which copy: of a Project of this computer, to a Machine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Which copy: of a Project of this computer, to a Machine as it is
+/// saved. Turned off and on again, a Machine is held under another
+/// `MachineId`, and its copies are still its own.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct CopyKey {
     pub(crate) project: ProjectKey,
-    pub(crate) machine: MachineId,
+    pub(crate) machine: MachineKey,
 }
 
 impl CopyKey {
@@ -55,6 +59,10 @@ pub(crate) struct Order {
     /// The Machine's home as its Server spells it, once known: a path in
     /// it is said under `~/`.
     pub(crate) home: Option<PathBuf>,
+    /// The draft that asked for it waits on it: it cannot be sent while
+    /// the copy runs, and moves there once the copy is added. Picking
+    /// another environment on its chip lets it go.
+    pub(crate) waits: bool,
 }
 
 /// Where a copy is. One at a time, so the card, the toast and the chip
@@ -63,7 +71,9 @@ pub(crate) enum Phase {
     /// The Project's files being listed, this many so far, and the
     /// destination looked at, before anything is sent there.
     Listing { files: usize },
-    /// `sent` of `total` bytes there, the last of them of `file`.
+    /// `sent` of `total` bytes there, the last of them of `file`: of
+    /// everything the copy carries, what was there before it counting as
+    /// sent.
     Copying {
         sent: u64,
         total: u64,
@@ -72,10 +82,10 @@ pub(crate) enum Phase {
         /// How fast, and how long it has left, as `meter` last read.
         reading: Reading,
     },
-    /// Copied, `bytes` sent; the window is adding it on the Machine. What
-    /// could not be read here, was changed there or could not be made
-    /// there stays as it was. `used`: nothing was copied, what was there
-    /// is added as it is.
+    /// Copied, `bytes` the copy's whole size; the window is adding it on
+    /// the Machine. What could not be read here, was changed there or
+    /// could not be made there stays as it was. `used`: nothing was
+    /// copied, what was there is added as it is.
     Finishing {
         bytes: u64,
         skipped: NotCopied,
@@ -86,15 +96,36 @@ pub(crate) enum Phase {
     /// nothing was sent. `of`, when it is another Project's unfinished
     /// copy: that Project's folder name.
     Occupied { of: Option<String> },
-    /// Why it stopped, whether what it sent is kept for a Resume, and
-    /// whether it waits on the Machine coming back.
+    /// Why it stopped, what its Resume or Retry does, and whether it waits
+    /// on the Machine coming back.
     Failed {
         reason: SharedString,
-        resumable: bool,
+        again: Again,
         when_back: bool,
     },
     /// The operator stopped it. What it sent stays, for its Resume.
     Cancelled { resumable: bool },
+}
+
+/// What a stopped copy's Resume or Retry does.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Again {
+    /// Copy from the start: nothing it sent is kept.
+    Retry,
+    /// Send what is not there yet.
+    Resume,
+    /// Everything landed and only adding it failed: add it.
+    Add { bytes: u64, skipped: NotCopied },
+}
+
+impl Again {
+    /// The button's word.
+    pub(crate) fn verb(&self) -> &'static str {
+        match self {
+            Again::Retry => "Retry",
+            Again::Resume | Again::Add { .. } => "Resume",
+        }
+    }
 }
 
 impl Phase {
@@ -119,6 +150,7 @@ impl Phase {
 /// What a finished copy did.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Summary {
+    /// The copy's whole size, what an earlier run sent included.
     pub(crate) bytes: u64,
     /// From Copy to the Project being there.
     pub(crate) took: Duration,
@@ -171,7 +203,7 @@ pub(super) enum Heard {
 }
 
 /// What the window does about a copy that moved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Landed {
     /// The folder is there: add it as a Project on the Machine.
     Sent(CopyKey),
@@ -245,7 +277,7 @@ impl Entry {
                 self.run = None;
                 self.phase = Phase::Failed {
                     reason: format!("Can't reach {}.", self.order.placing.machine_name).into(),
-                    resumable: unfinished.contains(&target),
+                    again: again_for(unfinished.contains(&target)),
                     when_back: true,
                 };
                 self.unfinished = unfinished;
@@ -269,8 +301,13 @@ impl Entry {
                             lines: words::not_copied(&sent, &changed, &machine),
                             entries: sent.problems.len() + sent.unmade.len() + changed.len(),
                         };
+                        // The whole copy, as its readings counted it.
+                        let bytes = match self.phase {
+                            Phase::Copying { total, .. } => total,
+                            _ => sent.bytes,
+                        };
                         self.phase = Phase::Finishing {
-                            bytes: sent.bytes,
+                            bytes,
                             skipped,
                             used: false,
                         };
@@ -281,7 +318,7 @@ impl Entry {
                         let lost = cut_off(&stopped.error) || !attached;
                         Phase::Failed {
                             reason: self.stopped(&stopped.error, lost).into(),
-                            resumable,
+                            again: again_for(resumable),
                             when_back: lost,
                         }
                     }
@@ -293,6 +330,62 @@ impl Entry {
 
     fn key(&self) -> CopyKey {
         self.order.placing.key()
+    }
+
+    /// The copy stops at once because its Machine went, `why` in the
+    /// operator's words: what it sent stays for its Resume, and one whose
+    /// files all landed is just added. False when it was not running.
+    pub(super) fn machine_went(&mut self, why: String) -> bool {
+        let again = match &self.phase {
+            Phase::Finishing { .. } => return self.unadded(why, true),
+            Phase::Copying { .. } => Again::Resume,
+            Phase::Listing { .. } => again_for(self.order.resumes),
+            _ => return false,
+        };
+        if let Some(run) = self.run.take() {
+            run.cancel.cancel();
+        }
+        self.phase = Phase::Failed {
+            reason: why.into(),
+            again,
+            when_back: true,
+        };
+        true
+    }
+
+    /// Adding the copy on its Machine failed, for `reason`: its files are
+    /// all there, so its Resume only adds it.
+    pub(super) fn unadded(&mut self, reason: String, when_back: bool) -> bool {
+        let Phase::Finishing { bytes, skipped, used } = &mut self.phase else {
+            return false;
+        };
+        let again = match used {
+            true => Again::Retry,
+            false => Again::Add {
+                bytes: *bytes,
+                skipped: std::mem::take(skipped),
+            },
+        };
+        self.phase = Phase::Failed {
+            reason: reason.into(),
+            again,
+            when_back,
+        };
+        true
+    }
+
+    /// A Resume of a copy whose files all landed: it is added again, as
+    /// it was when it finished.
+    fn add_again(&mut self) -> bool {
+        let Phase::Failed { again: Again::Add { bytes, skipped }, .. } = &mut self.phase else {
+            return false;
+        };
+        self.phase = Phase::Finishing {
+            bytes: *bytes,
+            skipped: std::mem::take(skipped),
+            used: false,
+        };
+        true
     }
 
     /// Why the copy ended with nothing added, in the operator's words: the
@@ -338,6 +431,19 @@ impl Entry {
     }
 }
 
+/// Why a copy to `machine` stopped, or cannot go now.
+pub(crate) fn turned_off(machine: &str) -> String {
+    format!("{machine} was turned off.")
+}
+
+/// What a copy that stopped does again: Resume what it kept, else Retry.
+fn again_for(resumable: bool) -> Again {
+    match resumable {
+        true => Again::Resume,
+        false => Again::Retry,
+    }
+}
+
 /// `path`, as the Machine spells it, under `~/` where it is in `home`.
 pub(super) fn tilde(home: Option<&Path>, path: &Path) -> String {
     match home.and_then(|home| path.strip_prefix(home).ok()) {
@@ -375,60 +481,116 @@ impl Copies {
         }
     }
 
-    pub(crate) fn get(&self, key: CopyKey) -> Option<&Entry> {
+    pub(crate) fn get(&self, key: &CopyKey) -> Option<&Entry> {
         self.entries
             .iter()
-            .find_map(|(at, entry)| (*at == key).then_some(entry))
+            .find_map(|(at, entry)| (at == key).then_some(entry))
     }
 
-    fn get_mut(&mut self, key: CopyKey) -> Option<&mut Entry> {
+    fn get_mut(&mut self, key: &CopyKey) -> Option<&mut Entry> {
         self.entries
             .iter_mut()
-            .find_map(|(at, entry)| (*at == key).then_some(entry))
+            .find_map(|(at, entry)| (at == key).then_some(entry))
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (CopyKey, &Entry)> {
-        self.entries.iter().map(|(key, entry)| (*key, entry))
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&CopyKey, &Entry)> {
+        self.entries.iter().map(|(key, entry)| (key, entry))
     }
 
-    /// The copy of `project` that runs, to whichever Machine.
-    pub(crate) fn running_of(&self, project: ProjectKey) -> Option<(CopyKey, &Entry)> {
-        self.iter()
-            .find(|(key, entry)| key.project == project && entry.phase.live())
+    /// The copy the draft in Pane `draft`, on `project`, waits on while it
+    /// runs.
+    pub(crate) fn waited_on_by(&self, draft: PaneIdentity, project: ProjectKey) -> Option<(&CopyKey, &Entry)> {
+        self.iter().find(|(key, entry)| {
+            key.project == project && entry.phase.live() && entry.order.waits && entry.order.placing.draft == draft
+        })
     }
 
-    /// Copy as `order` says, unless a copy of its Project to its Machine
-    /// runs: one at a time for each. One that ended goes.
-    pub(crate) fn start(&mut self, order: Order, cx: &mut Context<Self>) {
+    /// The draft that asked for the copy of `key` waits on it no longer:
+    /// it is sent where it is.
+    pub(crate) fn let_draft_go(&mut self, key: &CopyKey, cx: &mut Context<Self>) {
+        if let Some(entry) = self.get_mut(key) {
+            entry.order.waits = false;
+            cx.notify();
+        }
+    }
+
+    /// The Machine saved as `saved`, as the window holds it now: none while
+    /// it is turned off.
+    fn held(&self, saved: &MachineKey, cx: &App) -> Option<MachineId> {
+        self.cockpit.read(cx).machine_saved_as(saved)
+    }
+
+    /// Whether the Machine the copy of `key` goes to can take it now: on,
+    /// and its Server answering.
+    pub(crate) fn back(&self, key: &CopyKey, cx: &App) -> bool {
+        self.held(&key.machine, cx).is_some_and(|machine| {
+            matches!(self.cockpit.read(cx).server(machine), Some(ServerState::Attached { .. }))
+        })
+    }
+
+    /// Copy as `order` says, to its Machine as the window holds it now,
+    /// unless a copy of its Project to its Machine runs: one at a time for
+    /// each. One that ended goes.
+    pub(crate) fn start(&mut self, mut order: Order, cx: &mut Context<Self>) {
         let key = order.placing.key();
-        if self.get(key).is_some_and(|entry| entry.phase.live()) {
+        if self.get(&key).is_some_and(|entry| entry.phase.live()) {
             return;
         }
-        let machine = order.placing.machine;
-        let connect = self.cockpit.update(cx, |cockpit, _| cockpit.tree(machine));
-        let run = spawn(&order, connect);
-        let entry = Entry::new(order, Some(run), cx.background_executor().now());
+        let now = cx.background_executor().now();
+        let entry = match self.held(&key.machine, cx) {
+            Some(machine) => {
+                order.placing.machine = machine;
+                let connect = self.cockpit.update(cx, |cockpit, _| cockpit.tree(machine));
+                let run = spawn(&order, connect);
+                Entry::new(order, Some(run), now)
+            }
+            None => {
+                let again = again_for(order.resumes);
+                let mut entry = Entry::new(order, None, now);
+                entry.phase = Phase::Failed {
+                    reason: turned_off(&entry.order.placing.machine_name).into(),
+                    again,
+                    when_back: true,
+                };
+                entry
+            }
+        };
         self.entries.retain(|(at, _)| *at != key);
         self.entries.push((key, entry));
         self.tick_while_copying(cx);
         cx.notify();
     }
 
-    /// The copy of `key` that stopped, again: it finishes what it kept.
-    pub(crate) fn again(&mut self, key: CopyKey, cx: &mut Context<Self>) {
-        let Some(entry) = self.get(key).filter(|entry| !entry.phase.live()) else {
-            return;
-        };
+    /// The copy of `key` that stopped, again: Resume finishes what it
+    /// kept, Retry starts over, each on its Machine as it is now. One
+    /// whose files all landed is only added: the window adds it
+    /// (`Landed::Sent`).
+    pub(crate) fn again(&mut self, key: &CopyKey, cx: &mut Context<Self>) -> Option<Landed> {
+        let machine = self.held(&key.machine, cx);
+        let entry = self.get_mut(key).filter(|entry| !entry.phase.live())?;
+        if let Phase::Failed { again: Again::Add { .. }, reason, when_back } = &mut entry.phase {
+            let Some(machine) = machine else {
+                *reason = turned_off(&entry.order.placing.machine_name).into();
+                *when_back = true;
+                cx.notify();
+                return None;
+            };
+            entry.order.placing.machine = machine;
+            entry.add_again();
+            cx.notify();
+            return Some(Landed::Sent(key.clone()));
+        }
         let mut order = entry.order.clone();
         order.resumes = matches!(
             entry.phase,
-            Phase::Failed { resumable: true, .. } | Phase::Cancelled { resumable: true }
+            Phase::Failed { again: Again::Resume, .. } | Phase::Cancelled { resumable: true }
         );
         self.start(order, cx);
+        None
     }
 
     /// Stop the copy of `key`; what it sent stays, for its Resume.
-    pub(crate) fn cancel(&mut self, key: CopyKey, cx: &mut Context<Self>) {
+    pub(crate) fn cancel(&mut self, key: &CopyKey, cx: &mut Context<Self>) {
         let Some(entry) = self.get_mut(key) else {
             return;
         };
@@ -442,13 +604,42 @@ impl Copies {
         cx.notify();
     }
 
+    /// Each copy running to one of `gone`, Machines turned off or removed
+    /// (`removed` says which), stops at once and says so: the copies to
+    /// tell of.
+    pub(crate) fn machines_went(
+        &mut self,
+        gone: &[MachineId],
+        removed: impl Fn(&MachineKey) -> bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<CopyKey> {
+        let mut stopped = Vec::new();
+        for (key, entry) in &mut self.entries {
+            if !gone.contains(&entry.order.placing.machine) {
+                continue;
+            }
+            let name = &entry.order.placing.machine_name;
+            let why = match removed(&key.machine) {
+                true => format!("{name} was removed."),
+                false => turned_off(name),
+            };
+            if entry.machine_went(why) {
+                stopped.push(key.clone());
+            }
+        }
+        if !stopped.is_empty() {
+            cx.notify();
+        }
+        stopped
+    }
+
     /// Let go of how the copy of `key` ended, once the operator has seen
     /// it; one that runs stays. What it found unfinished comes back.
-    pub(crate) fn forget(&mut self, key: CopyKey, cx: &mut Context<Self>) -> Option<Vec<PathBuf>> {
+    pub(crate) fn forget(&mut self, key: &CopyKey, cx: &mut Context<Self>) -> Option<Vec<PathBuf>> {
         let at = self
             .entries
             .iter()
-            .position(|(at, entry)| *at == key && !entry.phase.live())?;
+            .position(|(at, entry)| at == key && !entry.phase.live())?;
         let (_, entry) = self.entries.remove(at);
         cx.notify();
         Some(entry.unfinished)
@@ -457,7 +648,7 @@ impl Copies {
     /// The folder at the destination is added as it is, copying nothing:
     /// the copy of `key` found it occupied, by nothing of another
     /// Project's.
-    pub(crate) fn use_as_it_is(&mut self, key: CopyKey, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn use_as_it_is(&mut self, key: &CopyKey, cx: &mut Context<Self>) -> bool {
         let Some(entry) = self.get_mut(key) else {
             return false;
         };
@@ -473,10 +664,17 @@ impl Copies {
         true
     }
 
+    /// Whether the copy of `key` is being added on its Machine: what the
+    /// Machine answers of that counts only then.
+    pub(crate) fn finishing(&self, key: &CopyKey) -> bool {
+        self.get(key)
+            .is_some_and(|entry| matches!(entry.phase, Phase::Finishing { .. }))
+    }
+
     /// The copy of `key` is `project` on its Machine, the draft that asked
     /// for it `moved` there or not. False when it copied nothing, using
     /// what was there: it goes, with nothing to tell.
-    pub(crate) fn done(&mut self, key: CopyKey, project: ProjectKey, moved: bool, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn done(&mut self, key: &CopyKey, project: ProjectKey, moved: bool, cx: &mut Context<Self>) -> bool {
         let now = cx.background_executor().now();
         let Some(entry) = self.get_mut(key) else {
             return false;
@@ -487,7 +685,7 @@ impl Copies {
         let (bytes, skipped, used) = (*bytes, std::mem::take(skipped), *used);
         cx.notify();
         if used {
-            self.entries.retain(|(at, _)| *at != key);
+            self.entries.retain(|(at, _)| at != key);
             return false;
         }
         entry.phase = Phase::Done(Summary {
@@ -500,18 +698,12 @@ impl Copies {
         true
     }
 
-    /// The copy of `key` could not be added on its Machine, for `reason`.
-    pub(crate) fn failed(&mut self, key: CopyKey, reason: String, cx: &mut Context<Self>) {
-        let Some(entry) = self.get_mut(key) else {
-            return;
-        };
-        entry.run = None;
-        entry.phase = Phase::Failed {
-            reason: reason.into(),
-            resumable: false,
-            when_back: false,
-        };
-        cx.notify();
+    /// The copy of `key` could not be added on its Machine, for `reason`,
+    /// `when_back` once the Machine is: its Resume only adds it.
+    pub(crate) fn unadded(&mut self, key: &CopyKey, reason: String, when_back: bool, cx: &mut Context<Self>) {
+        if self.get_mut(key).is_some_and(|entry| entry.unadded(reason, when_back)) {
+            cx.notify();
+        }
     }
 
     /// Hear each copy's thread: where each is now, and what the window
@@ -522,7 +714,10 @@ impl Copies {
         let mut landed = Vec::new();
         let mut moved = false;
         for (key, entry) in &mut self.entries {
-            let attached = matches!(cockpit.server(key.machine), Some(ServerState::Attached { .. }));
+            let attached = matches!(
+                cockpit.server(entry.order.placing.machine),
+                Some(ServerState::Attached { .. })
+            );
             loop {
                 let Some(run) = &entry.run else {
                     break;
@@ -535,10 +730,10 @@ impl Copies {
                         if matches!(entry.phase, Phase::Listing { .. } | Phase::Copying { .. }) {
                             entry.phase = Phase::Failed {
                                 reason: "The copy stopped.".into(),
-                                resumable: false,
+                                again: Again::Retry,
                                 when_back: false,
                             };
-                            landed.push(Landed::Ended(*key));
+                            landed.push(Landed::Ended(key.clone()));
                         }
                         moved = true;
                         break;

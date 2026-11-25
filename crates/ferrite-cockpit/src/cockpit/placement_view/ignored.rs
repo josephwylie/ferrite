@@ -120,7 +120,7 @@ impl PlacementView {
             rows.push(row(
                 ("placement-ignored", split),
                 "placement-ignored-more".into(),
-                format!("and {} more", rest.len()),
+                format!("and {} more", count(rest.len())),
                 ticked,
                 size,
                 true,

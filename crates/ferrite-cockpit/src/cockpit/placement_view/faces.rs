@@ -66,12 +66,14 @@ impl PlacementView {
                     })),
             )
         });
+        // A card on a copy that stopped has nothing left to cancel.
+        let dismiss = if self.shows_a_copy(cx) { "Close" } else { "Cancel" };
         let right = div()
             .flex()
             .items_center()
             .gap(px(SPACE_2))
             .child(
-                components::ghost_button("placement-dismiss", "Cancel", cx)
+                components::ghost_button("placement-dismiss", dismiss, cx)
                     .debug_selector(|| "placement-dismiss".into())
                     .on_click(cx.listener(|sheet: &mut Self, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
@@ -129,10 +131,11 @@ impl PlacementView {
                     "placement-cancelled",
                 ),
                 (None, Some((_, Phase::Failed { reason, when_back, .. }))) => (
-                    match (when_back, resumes) {
-                        (false, _) => reason.to_string(),
-                        (true, true) => format!("{reason} Resume finishes the copy once it is back."),
-                        (true, false) => format!("{reason} Try again once it is back."),
+                    match (when_back, self.copies.read(cx).back(&self.key(), cx), resumes) {
+                        (false, ..) | (true, true, false) => reason.to_string(),
+                        (true, true, true) => format!("{reason} Resume finishes the copy."),
+                        (true, false, true) => format!("{reason} Resume finishes the copy once it is back."),
+                        (true, false, false) => format!("{reason} Try again once it is back."),
                     },
                     BLOCKED,
                     "placement-failed",
@@ -172,7 +175,7 @@ impl PlacementView {
         };
         let mut content = column()
             .child(
-                note(format!("{} \u{2192} {}", self.placing.title, self.going_to(copy)))
+                note(format!("{} \u{2192} {}", self.placing.title, copy.order.dest))
                     .truncate()
                     .debug_selector(|| "placement-route".into()),
             )
@@ -258,19 +261,29 @@ impl PlacementView {
         (head, content, project_editor::footer(div(), right))
     }
 
-    /// What the copy did: how much in how long, and what stayed as it was.
+    /// What the copy did: where the Project is now, how much in how long,
+    /// whether the chat runs there, and what stayed as it was.
     pub(super) fn result(&self, cx: &mut Context<Self>) -> Drawn {
-        let head = project_editor::head(
-            format!("Copied to {}", self.placing.machine_name).into(),
-            self.close(cx),
-        );
+        let machine = &self.placing.machine_name;
+        let head = project_editor::head(format!("Copied to {machine}").into(), self.close(cx));
         let mut content = column();
-        if let Some(Phase::Done(summary)) = self.copy(cx).map(|copy| &copy.phase) {
-            content = content.child(
-                components::text_ui()
-                    .debug_selector(|| "placement-copied".into())
-                    .child(format!("{} in {}", bytes(summary.bytes), took(summary.took))),
-            );
+        if let Some((copy, Phase::Done(summary))) = self.copy(cx).map(|copy| (copy, &copy.phase)) {
+            content = content
+                .child(
+                    components::text_ui()
+                        .debug_selector(|| "placement-where".into())
+                        .child(format!("{} is at {} on {machine}", self.placing.title, copy.order.dest)),
+                )
+                .child(
+                    note(format!("{} in {}", bytes(summary.bytes), took(summary.took)))
+                        .debug_selector(|| "placement-copied".into()),
+                )
+                .when(summary.moved, |content| {
+                    content.child(
+                        note(format!("This chat now runs on {machine}."))
+                            .debug_selector(|| "placement-moved".into()),
+                    )
+                });
             if !summary.skipped.lines.is_empty() {
                 content = content
                     .child(project_editor::section_label("Not copied", "Left as it was"))
@@ -289,17 +302,6 @@ impl PlacementView {
                 sheet.dismiss(cx);
             }));
         (head, content, project_editor::footer(div(), done))
-    }
-
-    /// The folder the copy goes in under `~/`, or the copy's own folder
-    /// when it is named other than the Project.
-    fn going_to(&self, copy: &copies::Entry) -> String {
-        let (folder, name) = split_dest(&copy.order.dest);
-        if name == leaf(&self.placing) {
-            folder.trim_end_matches('/').to_string()
-        } else {
-            copy.order.dest.clone()
-        }
     }
 }
 

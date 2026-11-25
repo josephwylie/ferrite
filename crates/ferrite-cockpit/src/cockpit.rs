@@ -5318,16 +5318,7 @@ impl CockpitView {
                 }
                 return;
             }
-            // While the draft's Project is being copied, the chip shows
-            // the copy.
-            pane::BandChip::Environment => {
-                let copying = self.copies.read(cx).running_of(draft.binding.project());
-                if let Some((key, _)) = copying {
-                    self.show_copy(key, cx);
-                    return;
-                }
-                self.environment_menu_rows(draft, cx)
-            }
+            pane::BandChip::Environment => self.environment_menu_rows(identity, draft, cx),
             pane::BandChip::Project => self.project_menu_rows(draft, cx),
             pane::BandChip::Workspace => self.workspace_menu_rows(draft, cx),
         };
@@ -5672,6 +5663,10 @@ impl CockpitView {
         let (Some(draft), Some(id)) = (pane.draft(), pane.identity.draft()) else {
             return;
         };
+        // It runs where its copy goes, once the copy is in.
+        if self.waited_on(self.focused(cx), cx).is_some() {
+            return;
+        }
         let binding = draft.binding.clone();
         let composer = pane.composer.clone();
         if !self.admit_files(self.focused(cx), cx) {
@@ -5779,11 +5774,11 @@ impl CockpitView {
         // Where the draft runs: a chip while there is more than one
         // environment to choose, else a word for a machine.
         let machine = draft.binding.project().machine();
+        let waits = self.waited_on(index, cx).is_some();
         let environment = self.environment_chip_shown(cx).then(|| {
-            // A copy of the draft's Project under way: where to, and how far.
-            let copying = self.copies.read(cx).running_of(draft.binding.project());
-            if let Some((key, copy)) = copying {
-                let name = self.environment_name(key.machine, cx);
+            // The copy the draft waits on: where to, and how far.
+            if let Some((_, copy)) = self.waited_on(index, cx) {
+                let name = copy.order.placing.machine_name.clone();
                 let done = copy.phase.done();
                 let label = match done {
                     Some(done) => format!("{name} {}%", (done * 100.).floor()).into(),
@@ -5844,7 +5839,12 @@ impl CockpitView {
                 )
                 .into_any_element()
             });
-        word.into_iter().chain(chips).collect()
+        let mut chips: Vec<AnyElement> = word.into_iter().chain(chips).collect();
+        if waits {
+            // Beside the copy's percentage, why Send is not there.
+            chips.insert(1, draft_environment::copy_waits_note().into_any_element());
+        }
+        chips
     }
 
     /// The focused draft's model chip (#29), where a live Thread's stands
@@ -6014,7 +6014,12 @@ impl CockpitView {
         Some(pane::ComposerControls {
             attach: Some(attach),
             stop: composer_footer::stop_button(index, running, line_empty, cx),
-            send: composer_footer::send_button(index, running, line_empty, cx),
+            // A draft waiting on its copy is sent once the copy is in.
+            send: if self.waited_on(index, cx).is_some() {
+                None
+            } else {
+                composer_footer::send_button(index, running, line_empty, cx)
+            },
             footer: Some(pane::composer_footer(model, words, ring).into_any_element()),
             env: env
                 .filter(|chips: &Vec<AnyElement>| !chips.is_empty())

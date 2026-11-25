@@ -17,6 +17,7 @@ fn order(resumes: bool) -> Order {
             title: "app".into(),
             root: "/here/app".into(),
             machine: ProjectKey::fixture(1, ProjectId(0)).machine(),
+            saved_as: MachineKey(Some("box".into())),
             machine_name: "box".into(),
             projects_dir: "~/Projects".into(),
             kept: "/kept/box".into(),
@@ -26,6 +27,7 @@ fn order(resumes: bool) -> Order {
         skip: Vec::new(),
         resumes,
         home: Some("/home/me".into()),
+        waits: true,
     }
 }
 
@@ -156,7 +158,7 @@ fn a_copy_that_stops_says_why_in_the_operators_words() {
     );
     assert!(matches!(
         &copy.phase,
-        Phase::Failed { reason, resumable: false, when_back: true } if reason == "Can't reach box."
+        Phase::Failed { reason, again: Again::Retry, when_back: true } if reason == "Can't reach box."
     ));
 
     let mut copy = Entry::new(order(false), None, now);
@@ -164,7 +166,7 @@ fn a_copy_that_stops_says_why_in_the_operators_words() {
     copy.hear(stopped(io::ErrorKind::BrokenPipe.into()), now, true);
     assert!(matches!(
         &copy.phase,
-        Phase::Failed { reason, resumable: true, when_back: true }
+        Phase::Failed { reason, again: Again::Resume, when_back: true }
             if reason == "The connection to box was lost."
     ));
 
@@ -177,4 +179,64 @@ fn a_copy_that_stops_says_why_in_the_operators_words() {
     let mut copy = Entry::new(order(false), None, now);
     copy.hear(stopped(io::Error::other("x: Disk full")), now, false);
     assert_eq!(copy.why().as_deref(), Some("The connection to box was lost."));
+}
+
+#[test]
+fn a_resumed_copy_is_done_at_its_whole_size() {
+    let now = Instant::now();
+    let mut copy = Entry::new(order(true), None, now);
+    // A resume finds 40 of the 100 bytes there from its first reading.
+    copy.hear(sending(40, 100, "a"), now, true);
+    copy.hear(sending(100, 100, "b"), now + Duration::from_secs(1), true);
+    let heard = Heard::Copied {
+        copied: Ok(Copied::Sent {
+            sent: Sent {
+                bytes: 60,
+                ..Sent::default()
+            },
+            changed: Vec::new(),
+        }),
+        unfinished: Vec::new(),
+    };
+    copy.hear(heard, now + Duration::from_secs(1), true);
+    assert!(
+        matches!(copy.phase, Phase::Finishing { bytes: 100, .. }),
+        "the whole copy, not what this run sent"
+    );
+}
+
+#[test]
+fn a_machine_that_goes_stops_its_copy_for_a_resume_that_only_adds_what_landed() {
+    let now = Instant::now();
+    let mut copy = Entry::new(order(false), None, now);
+    copy.hear(sending(5, 10, "a"), now, true);
+    assert!(copy.machine_went("box was turned off.".into()));
+    assert!(matches!(
+        &copy.phase,
+        Phase::Failed { reason, again: Again::Resume, when_back: true } if reason == "box was turned off."
+    ));
+    assert!(!copy.machine_went("box was removed.".into()), "it stopped already");
+
+    let mut copy = Entry::new(order(false), None, now);
+    let heard = Heard::Copied {
+        copied: Ok(Copied::Sent {
+            sent: Sent {
+                bytes: 10,
+                ..Sent::default()
+            },
+            changed: vec!["notes.md".into()],
+        }),
+        unfinished: Vec::new(),
+    };
+    copy.hear(heard, now, true);
+    assert!(copy.machine_went("box was turned off.".into()));
+    let Phase::Failed { again: Again::Add { bytes, skipped }, .. } = &copy.phase else {
+        panic!("all of it landed: its Resume only adds it");
+    };
+    assert_eq!((*bytes, skipped.entries), (10, 1));
+    assert_eq!(Again::Add { bytes: 0, skipped: NotCopied::default() }.verb(), "Resume");
+    assert!(copy.add_again());
+    assert!(matches!(copy.phase, Phase::Finishing { bytes: 10, used: false, .. }));
+    assert!(copy.unadded("Copied, but not added on box: no space.".into(), false));
+    assert!(matches!(copy.phase, Phase::Failed { again: Again::Add { .. }, when_back: false, .. }));
 }
