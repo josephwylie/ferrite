@@ -137,7 +137,7 @@ fn a_finished_thread_needs_you_until_it_is_seen(cx: &mut TestAppContext) {
         assert!(notifications.attention(threads[1].thread()), "off the screen");
         assert!(!notifications.attention(threads[0].thread()));
         assert!(
-            view.toasts.read(cx).needs_you.toasts().is_empty(),
+            view.toasts.read(cx).needs_you().toasts().is_empty(),
             "with the nav open, a finish toasts nothing"
         );
     });
@@ -260,7 +260,7 @@ fn a_finish_on_the_focused_pane_is_read_at_once_and_never_toasts(cx: &mut TestAp
     });
     view.read_with(cx, |view, cx| {
         assert!(
-            view.toasts.read(cx).needs_you.toasts().is_empty(),
+            view.toasts.read(cx).needs_you().toasts().is_empty(),
             "no toast for the Pane in view"
         );
     });
@@ -305,7 +305,7 @@ fn contract_request_attention_toasts_once_and_cancellation_removes_it(cx: &mut T
     let (core, fake) = cockpit("request-toast-contract", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let toasts = |cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| view.toasts.read(cx).needs_you.toasts().len())
+        view.read_with(cx, |view, cx| view.toasts.read(cx).needs_you().toasts().len())
     };
     let request = |name: &str| SessionEvent::DecisionRequested {
         decision: ferrite_core::Decision {
@@ -355,7 +355,7 @@ fn contract_request_attention_toasts_once_and_cancellation_removes_it(cx: &mut T
     ring(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).unread(), 2);
-        assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1, "one toast per Thread");
+        assert_eq!(view.toasts.read(cx).needs_you().toasts().len(), 1, "one toast per Thread");
     });
     for name in ["AskUserQuestion", "Bash"] {
         fake.streams.borrow()[off].send(cancelled(name)).unwrap();
@@ -370,39 +370,6 @@ fn contract_request_attention_toasts_once_and_cancellation_removes_it(cx: &mut T
             view.chimed,
             [Sound::NeedsYou, Sound::NeedsYou],
             "each toast rang once; the brief request never did"
-        );
-    });
-}
-
-/// ADR 0017: a toast goes on its own, a request's after 8s.
-#[gpui::test]
-fn a_request_toast_expires(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("request-toast-expiry", 2);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    let off = view.read_with(cx, |view, cx| {
-        view.cockpit
-            .read(cx)
-            .threads()
-            .into_iter()
-            .position(|thread| Some(thread) != view.focused_thread(cx))
-            .unwrap()
-    });
-    fake.streams.borrow()[off].send(decision("waits")).unwrap();
-    tick(cx);
-    ring(cx);
-    assert_eq!(
-        view.read_with(cx, |view, cx| view.toasts.read(cx).needs_you.toasts().len()),
-        1
-    );
-    cx.executor()
-        .advance_clock(ferrite_nav::notifications::NEEDS_YOU_TOAST);
-    tick(cx);
-    view.read_with(cx, |view, cx| {
-        assert!(view.toasts.read(cx).needs_you.toasts().is_empty(), "it went on its own");
-        assert_eq!(
-            view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).unread(),
-            1,
-            "the request still waits in the Inbox"
         );
     });
 }
@@ -427,7 +394,7 @@ fn a_request_off_the_board_posts_while_the_window_is_frontmost(cx: &mut TestAppC
     ring(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.cockpit.read(cx).window_active());
-        assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1);
+        assert_eq!(view.toasts.read(cx).needs_you().toasts().len(), 1);
     });
     assert_eq!(
         cx.delivered_system_notifications()
@@ -518,7 +485,7 @@ fn clicking_a_request_s_system_notification_opens_it(cx: &mut TestAppContext) {
         assert_eq!(view.focused(cx), 1, "the click landed on its Thread");
         let request = view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).reading().decisions().next().unwrap();
         assert!(request.read);
-        assert!(view.toasts.read(cx).needs_you.toasts().is_empty());
+        assert!(view.toasts.read(cx).needs_you().toasts().is_empty());
     });
     assert!(
         tags(cx).is_empty(),
@@ -612,7 +579,7 @@ fn settings_silence_sounds_and_system_notifications(cx: &mut TestAppContext) {
     tick(cx);
     ring(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1);
+        assert_eq!(view.toasts.read(cx).needs_you().toasts().len(), 1);
         assert!(view.chimed.is_empty(), "Claude is muted");
     });
     assert!(cx.delivered_system_notifications().is_empty());
@@ -840,7 +807,7 @@ fn inbox_followup_returns_to_work_and_repeated_finishes_stay_one_row(cx: &mut Te
     });
     tick(cx);
     assert!(
-        view.read_with(cx, |view, cx| view.toasts.read(cx).needs_you.toasts().is_empty()),
+        view.read_with(cx, |view, cx| view.toasts.read(cx).needs_you().toasts().is_empty()),
         "watched results never alert"
     );
 }
@@ -1070,7 +1037,7 @@ fn snooze_expiry_returns_threads_without_an_alert(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.needs_you_rows(cx).len(), 1);
-        assert!(view.toasts.read(cx).needs_you.toasts().is_empty());
+        assert!(view.toasts.read(cx).needs_you().toasts().is_empty());
     });
 }
 
@@ -1121,4 +1088,82 @@ fn custom_snooze_keeps_invalid_input_and_closes_when_leaving_inbox(cx: &mut Test
     cx.simulate_keystrokes("cmd-i");
     tick(cx);
     assert!(view.read_with(cx, |view, cx| view.nav_view.read(cx).snooze.is_none()));
+}
+
+/// What the window says of each standing alert's place, answered alert by
+/// alert in one question: in view only while the window is frontmost and
+/// the alert's Thread is on the board.
+#[gpui::test]
+fn the_window_says_which_standing_alerts_are_in_view(cx: &mut TestAppContext) {
+    use ferrite_nav::notifications::{Alert, RowTarget};
+    // Solo on the first Thread: the second is off the board.
+    let (core, _fake) = cockpit("toast-in-view", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let (shown, off) = view.read_with(cx, |view, cx| {
+        let shown = view.focused_thread(cx).expect("a Thread shown");
+        let threads = view.cockpit.read(cx).threads();
+        (shown, threads.into_iter().find(|thread| *thread != shown).unwrap())
+    });
+    let alert = |thread: ThreadKey| Alert {
+        target: RowTarget::Thread(thread.thread()),
+        thread,
+    };
+    let asked = ferrite_nav::toasts::Asked {
+        presented: Default::default(),
+        standing: vec![alert(shown), alert(off)],
+        due: Vec::new(),
+    };
+    let in_view = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            let tending = view.toast_tending(&asked, cx);
+            tending.standing.iter().map(|standing| standing.in_view).collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(in_view(cx), [true, false], "frontmost: the board's Thread, not the other");
+    cx.deactivate_window();
+    tick(cx);
+    assert_eq!(in_view(cx), [false, false], "in the background: neither");
+}
+
+/// Opening a request from its toast takes that toast down at once, before
+/// its machine answers or the toasts tend again, and only that toast.
+#[gpui::test]
+fn opening_a_request_takes_only_its_toast_down_at_once(cx: &mut TestAppContext) {
+    use ferrite_nav::notifications::RowTarget;
+    let (core, fake) = cockpit("toast-drop", 3);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let off: Vec<usize> = view.read_with(cx, |view, cx| {
+        let shown = view.focused_thread(cx);
+        let threads = view.cockpit.read(cx).threads();
+        (0..threads.len()).filter(|at| Some(threads[*at]) != shown).collect()
+    });
+    for (at, name) in off.iter().zip(["one", "two"]) {
+        fake.streams.borrow()[*at].send(decision(name)).unwrap();
+    }
+    tick(cx);
+    ring(cx);
+    let alerts = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            let toasts = view.toasts.read(cx).needs_you().toasts();
+            toasts.iter().map(|toast| toast.alert.clone()).collect::<Vec<_>>()
+        })
+    };
+    let standing = alerts(cx);
+    assert_eq!(standing.len(), 2, "a toast for each request");
+    let RowTarget::Decision(id) = standing[0].target.clone() else {
+        panic!("a request's toast: {:?}", standing[0]);
+    };
+    let machine = standing[0].thread.machine();
+    // Read within the same update: before the machine answers, and before
+    // the notify the open makes has the toasts tend.
+    let left = view.update(cx, |view, cx| {
+        view.notice_verb(Verb::OpenDecision(machine, id), cx);
+        let toasts = view.toasts.read(cx).needs_you().toasts();
+        toasts.iter().map(|toast| toast.alert.clone()).collect::<Vec<_>>()
+    });
+    assert_eq!(left, [standing[1].clone()], "only the one opened went, at once");
+    cx.run_until_parked();
+    assert_eq!(alerts(cx), [standing[1].clone()], "and it stays gone");
 }

@@ -221,7 +221,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   again when the agent edits the file, while the Changes read in the
   scope the operator picks, when the Surface opens or Refresh is pressed.
   A gone Thread's folds, hunks and scroll go with it.
-- **The toasts are the fourteenth.** `ToastsView` (`cockpit/toasts.rs`)
+- **The toasts are the fourteenth.** `ToastsView` (`ferrite_nav::toasts`
+  since the 2026-11-25 amendment; the root's side is `cockpit/toasts.rs`)
   owns the Inbox's alerts (`NeedsYou`): what it heard of each machine,
   what waits out its delay, the toasts standing and the system
   notifications posted, and the toast fading out. Its render is the toast
@@ -1444,6 +1445,17 @@ Cockpit, and each of its tests opened a Cockpit window.
   and takes 4-5 s in `ferrite-nav` (6-8 s with the Cockpit's typecheck
   after it); one of its tests takes 0.02-0.14 s in its own window, against
   0.2-0.75 s in a Cockpit window.
+- **The toasts.** `ToastsView` is `ferrite_nav::toasts`, over two reads
+  (`ToastSources`). A tend asks one question (`Source<Tending, Asked>`):
+  it says each machine's watermark, the alerts standing and those whose
+  delay is up, and the root answers what each machine said since, whether
+  each alert still wants the operator and is in view, and whether each
+  due one chimes and what it posts. The float reads its newest toast's
+  row (`Source<Row, Alert>`). The view no longer holds the model: the
+  root hands it its wakes (`watch`: the root's notify and the model's
+  `Arrived`, which stays the Cockpit's), and it keeps its own clock.
+  `Posting`, a system notification's words, is `ferrite_nav`'s, since
+  the view hands it to the root to post.
 
 ## Precedent
 

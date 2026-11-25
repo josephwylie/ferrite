@@ -8,36 +8,11 @@
 //! captures, GPUI's own notification centre carries it instead, under the same
 //! tag and with the same click.
 
-use std::path::PathBuf;
 use std::rc::Rc;
 
 use ferrite_focus_notify::NotificationDecision;
+use ferrite_nav::notifications::Posting;
 use gpui::App;
-
-/// One alert as a system notification.
-// GPUI's centre reads the row's words alone; the rest is alerter's.
-#[cfg_attr(
-    not(all(target_os = "macos", not(any(test, feature = "visual-reference")))),
-    allow(dead_code)
-)]
-#[derive(Clone)]
-pub struct Posting {
-    /// Its identity: a newer posting with the tag replaces it, and a click
-    /// reports it.
-    pub tag: String,
-    /// A live request (blocked) rather than a finished turn (done).
-    pub needs_you: bool,
-    /// The row's state word (`needs you`, `done`, `failed`).
-    pub word: &'static str,
-    /// The row's title: the Thread, named by its machine when off screen.
-    pub title: String,
-    /// The row's detail: the request, or the turn's answer.
-    pub detail: String,
-    /// The provider the Thread runs on.
-    pub agent: Option<String>,
-    /// The Thread's directory on this computer.
-    pub cwd: Option<PathBuf>,
-}
 
 /// Whether an alert that rang becomes a system notification: focus-notify's
 /// rule, which skips it only while its Thread's Pane is focused and the window

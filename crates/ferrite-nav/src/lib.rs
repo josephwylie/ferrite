@@ -29,10 +29,10 @@
 //!
 //! Out of the Cockpit, in a crate of its own: the nav's elements, the
 //! Inbox's rows and toasts (`notifications`), and the views beside the nav
-//! (the empty board). Each view owns its own state, reads what it draws of
-//! the window through a `Source` (`ferrite_ui::source`) and says what the
-//! operator asks as an event (ADR 0041). Nothing here names the Cockpit, so
-//! an edit to one builds and tests without it.
+//! (the empty board, the toasts). Each view owns its own state, reads what
+//! it draws of the window through a `Source` (`ferrite_ui::source`) and
+//! says what the operator asks as an event (ADR 0041). Nothing here names
+//! the Cockpit, so an edit to one builds and tests without it.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -60,6 +60,7 @@ pub mod empty_board;
 pub mod flip;
 pub mod list;
 pub mod notifications;
+pub mod toasts;
 pub use card::{card_hover, card_key};
 #[cfg(any(test, feature = "test-support"))]
 pub use card::status_label;
@@ -1268,6 +1269,16 @@ pub mod testing {
         pub(super) static DRAWN_CARDS: RefCell<HashMap<ThreadKey, DrawnCard>> =
             RefCell::new(HashMap::new());
         pub(super) static DRAWN_HOVER_CARD: RefCell<Vec<String>> = RefCell::default();
+        static TOAST_RENDERS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn built_toasts() {
+        TOAST_RENDERS.with(|renders| renders.set(renders.get() + 1));
+    }
+
+    /// How many times the toast float has been built on this thread.
+    pub fn toast_renders() -> usize {
+        TOAST_RENDERS.with(Cell::get)
     }
 
     /// The lines under the title of the hover detail last drawn: what it

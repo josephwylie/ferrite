@@ -281,12 +281,7 @@ impl CockpitView {
         if !reheld.is_empty() {
             self.reopen_put_away_drafts(cx);
         }
-        self.toasts.update(cx, |toasts, cx| {
-            for machine in &gone {
-                toasts.needs_you.forget(*machine);
-            }
-            toasts.look_again(cx);
-        });
+        self.toasts.update(cx, |toasts, cx| toasts.forget(&gone, cx));
         self.sync_panes(cx);
         cx.notify();
     }

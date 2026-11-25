@@ -294,7 +294,7 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
             inbox_before,
             "nothing reaches the Inbox"
         );
-        assert!(view.toasts.read(cx).needs_you.toasts().is_empty());
+        assert!(view.toasts.read(cx).needs_you().toasts().is_empty());
     });
     assert_eq!(
         cx.delivered_system_notifications()

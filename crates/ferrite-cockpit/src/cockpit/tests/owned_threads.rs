@@ -39,7 +39,7 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
     });
 
     let toasts = |cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| view.toasts.read(cx).needs_you.toasts().len())
+        view.read_with(cx, |view, cx| view.toasts.read(cx).needs_you().toasts().len())
     };
     fake.streams.borrow()[2]
         .send(decision("perm_worker"))

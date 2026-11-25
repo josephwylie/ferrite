@@ -2226,7 +2226,7 @@ fn a_machines_decision_rings_once_and_opens_in_place(cx: &mut TestAppContext) {
     let view = shown(&root, cx);
     ring(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.toasts.read(cx).needs_you.toasts().is_empty(), "held when first heard");
+        assert!(view.toasts.read(cx).needs_you().toasts().is_empty(), "held when first heard");
         assert!(view.chimed.is_empty());
     });
 
@@ -2237,7 +2237,7 @@ fn a_machines_decision_rings_once_and_opens_in_place(cx: &mut TestAppContext) {
     ring(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.chimed, [Sound::NeedsYou], "once");
-        let toasts = view.toasts.read(cx).needs_you.toasts();
+        let toasts = view.toasts.read(cx).needs_you().toasts();
         assert_eq!(toasts.len(), 1);
         assert_eq!(toasts[0].alert.thread, theirs);
         let row = view
@@ -2296,7 +2296,7 @@ fn a_toast_press_opens_its_machines_thread_in_place(cx: &mut TestAppContext) {
     ring(cx);
     ring(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1, "it toasts");
+        assert_eq!(view.toasts.read(cx).needs_you().toasts().len(), 1, "it toasts");
         assert!(view.chimed.is_empty(), "Claude is muted");
     });
 
@@ -3419,4 +3419,55 @@ fn local_environment_switch_preserves_unreadable_settings(cx: &mut TestAppContex
         assert!(view.prefs.settings.local_environment_enabled);
     });
     assert_eq!(std::fs::read(&path).unwrap(), b"not json");
+}
+
+/// Letting box go forgets what the toasts heard of it: its toast and its
+/// Notices' watermark go with it, while this computer's toast and
+/// watermark stay.
+#[gpui::test]
+fn letting_a_machine_go_forgets_only_its_toasts(cx: &mut TestAppContext) {
+    let (mut core, fake, machines, agents) = two_machines("forget-toasts", 2);
+    let here = core.threads();
+    let (mine, local) = (here[0].machine(), here[1]);
+    let on_box = machines.held(1).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    core.focus_thread(here[0]);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    until(cx, |cx| view.read_with(cx, |view, cx| view.attached(on_box, cx)));
+    ring(cx);
+    // A turn fails on box and on this computer, each off the board.
+    view.update(cx, |view, cx| {
+        let _ = view.cockpit.update(cx, |cockpit, _| cockpit.send(theirs, "go".into()));
+    });
+    agents.say(0, SessionEvent::TextDelta { text: "working\n\n".into() });
+    until(cx, |cx| running(&view, theirs, cx));
+    let failed = || SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Error("rate limited".into()),
+        cost_usd: None,
+    };
+    agents.say(0, failed());
+    fake.streams.borrow()[1].send(failed()).unwrap();
+    let heard = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            let needs_you = view.toasts.read(cx).needs_you();
+            let mut toasts: Vec<_> = needs_you.toasts().iter().map(|toast| toast.alert.thread).collect();
+            toasts.sort();
+            (toasts, needs_you.presented(on_box), needs_you.presented(mine))
+        })
+    };
+    until(cx, |cx| {
+        ring(cx);
+        heard(cx).0.len() == 2
+    });
+    let (toasts, box_mark, mark) = heard(cx);
+    let mut both = vec![theirs, local];
+    both.sort();
+    assert_eq!(toasts, both, "a toast of each machine stands");
+    assert!(box_mark.is_some() && mark.is_some(), "each machine's Notices heard");
+
+    view.update(cx, |view, cx| {
+        view.prefs.settings.machines.clear();
+        view.machines_changed(cx);
+    });
+    assert_eq!(heard(cx), (vec![local], None, mark), "box's toast and watermark went");
 }

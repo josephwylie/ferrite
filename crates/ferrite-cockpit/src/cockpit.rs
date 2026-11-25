@@ -140,7 +140,7 @@ use gpui::{
 
 use crate::facts::Facts;
 use ferrite_nav as nav;
-use ferrite_nav::notifications::{Handle, NeedsYou, Row as NoticeRow, RowTarget, Verb};
+use ferrite_nav::notifications::{Row as NoticeRow, RowTarget, Verb};
 use ferrite_pane::composer::{Composer, Edited, OpenSource};
 use ferrite_pane::link_target::{LinkTarget, Open};
 use ferrite_pane::decision;
@@ -457,7 +457,7 @@ pub struct CockpitView {
     /// The pull request reader: the Panel's PR Surface and the PRs' detail.
     pull_request: Entity<panel::pull_request::PullRequestView>,
     /// The Inbox's alerts and the toast float that shows them.
-    pub(crate) toasts: Entity<toasts::ToastsView>,
+    pub(crate) toasts: Entity<ferrite_nav::toasts::ToastsView>,
     native_copy: Option<String>,
     nav_collapsed: bool,
     nav_auto_fold: std::cell::Cell<bool>,
@@ -961,7 +961,6 @@ pub(crate) mod drawn {
         static PANES: RefCell<HashMap<PaneIdentity, Pane>> = RefCell::new(HashMap::new());
         static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
         static NAV_RENDERS: Cell<usize> = const { Cell::new(0) };
-        static TOAST_RENDERS: Cell<usize> = const { Cell::new(0) };
         static HEAD_RENDERS: Cell<usize> = const { Cell::new(0) };
         static HEARINGS: Cell<usize> = const { Cell::new(0) };
         static NAV_ROWS: RefCell<HashMap<ThreadKey, String>> = RefCell::new(HashMap::new());
@@ -1000,10 +999,6 @@ pub(crate) mod drawn {
         NAV_RENDERS.with(|renders| renders.set(renders.get() + 1));
     }
 
-    pub(crate) fn built_toasts() {
-        TOAST_RENDERS.with(|renders| renders.set(renders.get() + 1));
-    }
-
     pub(crate) fn built_head() {
         HEAD_RENDERS.with(|renders| renders.set(renders.get() + 1));
     }
@@ -1026,7 +1021,7 @@ pub(crate) mod drawn {
 
     /// How many times the toast float has been built on this thread.
     pub(crate) fn toast_renders() -> usize {
-        TOAST_RENDERS.with(Cell::get)
+        ferrite_nav::testing::toast_renders()
     }
 
     pub(crate) fn record_row(key: ThreadKey, row: String) {
@@ -1278,7 +1273,7 @@ impl CockpitView {
         // The root draws its card into its own frame, so each change
         // redraws the window.
         cx.observe(&file_surface, |_, _, cx| cx.notify()).detach();
-        let toasts = cx.new(|cx| toasts::ToastsView::new(cockpit_weak.clone(), cockpit.clone(), cx));
+        let toasts = Self::new_toasts(&cockpit, cx);
         let decisions = cx.new(|_| decisions::DecisionsView::default());
         // A card's pick lives in its Pane's forms, and the root draws the
         // cards into its transcripts, so each change redraws the window.
@@ -8565,7 +8560,7 @@ impl CockpitView {
         alert: &ferrite_nav::notifications::Alert,
         now: std::time::SystemTime,
         cx: &gpui::App,
-    ) -> Option<crate::system_notifications::Posting> {
+    ) -> Option<ferrite_nav::notifications::Posting> {
         let row = self.alert_row(alert, now, cx)?;
         let cockpit = self.cockpit.read(cx);
         let machine = alert.thread.machine();
@@ -8577,7 +8572,7 @@ impl CockpitView {
             .flatten()
             .and_then(|open| open.workspace())
             .map(|binding| binding.cwd().to_path_buf());
-        Some(crate::system_notifications::Posting {
+        Some(ferrite_nav::notifications::Posting {
             tag: system_tag(&saved_as, alert.thread.thread()),
             needs_you: alert.needs_you(),
             word: row.word(),
@@ -8610,7 +8605,7 @@ impl CockpitView {
         }
         // Its entry stays: read now, the next pump takes it out of the
         // notification centre with the rest.
-        let posted = self.toasts.read(cx).needs_you.posted.get(tag).cloned();
+        let posted = self.toasts.read(cx).needs_you().posted.get(tag).cloned();
         if let Some(alert) = posted {
             self.notice_verb(alert.open_verb(), cx);
         }

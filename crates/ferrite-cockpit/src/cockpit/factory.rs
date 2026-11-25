@@ -1397,7 +1397,7 @@ impl CockpitView {
         {
             let saved_as = self.cockpit.read(cx).saved_as(machine).cloned().unwrap_or_default();
             crate::system_notifications::post(
-                crate::system_notifications::Posting {
+                ferrite_nav::notifications::Posting {
                     tag: task_tag(&saved_as, &task),
                     needs_you: status.needs_you(),
                     word: status.word(),
