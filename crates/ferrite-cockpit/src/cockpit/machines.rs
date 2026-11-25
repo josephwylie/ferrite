@@ -181,8 +181,8 @@ impl CockpitView {
 
     /// Settings, on Connections.
     pub(super) fn open_connections(&mut self, cx: &mut Context<Self>) {
-        self.show_settings(cx).update(cx, |settings, _| {
-            settings.page = settings::PageKey::Connections;
+        self.show_settings(cx).update(cx, |settings, cx| {
+            settings.show(settings::PageKey::Connections, cx);
         });
     }
 
@@ -221,13 +221,11 @@ impl CockpitView {
             machines.machine(machines.listed_as(machine)?).cloned()
         });
         let settings = self.show_settings(cx);
-        settings.update(cx, |settings, _| settings.page = settings::PageKey::Connections);
+        settings.update(cx, |settings, cx| settings.show(settings::PageKey::Connections, cx));
         if let Some(saved) = saved {
-            // Once this view's update is done: the editor reads it.
-            let connections = settings.read(cx).connections.clone();
-            window.defer(cx, move |window, cx| {
-                connections.update(cx, |connections, cx| connections.edit(Some(saved), window, cx));
-            });
+            let connections = settings.read(cx).connections().clone();
+            let dir = self.prefs.dir.clone();
+            connections.update(cx, |connections, cx| connections.edit(Some(saved), &dir, window, cx));
         }
     }
 
@@ -379,4 +377,10 @@ pub(super) fn wanted(alert: &Alert, view: &CockpitView, cx: &App) -> Option<bool
     }
     let notifications = view.cockpit.read(cx).notifications(machine);
     Some(alert.target.wants(notifications.reading()))
+}
+
+/// What a folder of `machine` holds, asked of its Server through `model`:
+/// a folder browser's `List` (ADR 0026).
+pub(super) fn folders_on(model: Entity<Cockpit>, machine: MachineId) -> ferrite_settings::folder_browser::List {
+    std::rc::Rc::new(move |path, cx| model.update(cx, |cockpit, _| cockpit.list_dir(machine, path)))
 }

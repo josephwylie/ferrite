@@ -155,27 +155,6 @@ fn the_project_card_edits_an_existing_project(cx: &mut TestAppContext) {
     });
 }
 
-/// The card is a card, not a title bar: whatever the head says, the
-/// body under it has to be on screen.
-#[gpui::test]
-fn the_project_card_draws_its_body(cx: &mut TestAppContext) {
-    let (core, _) = cockpit("project-card-body", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.open_project_creator(cx));
-    cx.run_until_parked();
-
-    let card = cx
-        .debug_bounds("project-editor-card")
-        .expect("the card is up");
-    let add = cx
-        .debug_bounds("project-add-directory")
-        .expect("the add-directory control is on screen");
-    assert!(
-        add.size.height > px(0.) && card.contains(&add.origin),
-        "the body is inside the card, not clipped under it:              card {card:?}, button {add:?}"
-    );
-}
-
 /// With no Thread to go by, a draft opened while the nav names a
 /// Project starts on that Project, so the Thread it becomes runs in
 /// that Project's directories rather than the launch one's.

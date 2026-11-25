@@ -906,7 +906,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 view.cli_versions = Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into()));
                 view.toggle_settings(cx);
                 if let Some(settings) = view.settings_sheet(cx) {
-                    settings.update(cx, |settings, _| settings.page = page);
+                    settings.update(cx, |settings, cx| settings.show(page, cx));
                 }
             });
             (scene, setup)
@@ -916,13 +916,8 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, window, cx| {
                 view.cli_versions = Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into()));
                 view.toggle_settings(cx);
-                let search = cx.new(|cx| {
-                    gpui::component::input::InputState::new(window, cx)
-                        .placeholder("Search")
-                        .default_value("codex")
-                });
                 if let Some(settings) = view.settings_sheet(cx) {
-                    settings.update(cx, |settings, _| settings.search = Some(search));
+                    settings.update(cx, |settings, cx| settings.search("codex", window, cx));
                 }
             });
             (scene, setup)

@@ -31,7 +31,6 @@
   "crates/ferrite-cockpit/src/cockpit/panel/sections.rs": 2,
   "crates/ferrite-cockpit/src/cockpit/panel/strip.rs": 9,
   "crates/ferrite-cockpit/src/cockpit/popups.rs": 1,
-  "crates/ferrite-cockpit/src/cockpit/project_editor_view.rs": 1,
   "crates/ferrite-cockpit/src/cockpit/prs_view.rs": 5,
   "crates/ferrite-cockpit/src/cockpit/sheets.rs": 1,
   "crates/ferrite-cockpit/src/cockpit/side_chat_view.rs": 1,
@@ -70,6 +69,7 @@
   "crates/ferrite-pane/src/transcript/reply.rs": 1,
   "crates/ferrite-pane/src/visual/card.rs": 1,
   "crates/ferrite-review/src/lib.rs": 14,
+  "crates/ferrite-settings/src/project_editor.rs": 1,
   "crates/ferrite-terminal/src/view.rs": 1,
   "crates/ferrite-tools/src/changes.rs": 4
 }

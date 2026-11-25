@@ -12,25 +12,10 @@ use ferrite_client::cockpit::ServerState;
 use ferrite_core::machine::Failure;
 use ferrite_core::placement::{self, Across, Placement};
 use ferrite_core::protocol::Repositories;
+use ferrite_pane::band::Band;
 use gpui::App;
-use std::cell::Cell;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::mpsc::{Receiver, TryRecvError};
-
-/// The band over a draft's Composer, where its Pane was last laid out: a
-/// sheet opened for the draft keeps its card clear of it
-/// (`ferrite_ui::form::card_over`).
-#[derive(Clone)]
-pub(super) struct Band(Rc<Cell<pane::PaneGeometry>>);
-
-impl Band {
-    /// Where the band's top edge is, once the draft has been laid out.
-    pub(super) fn top(&self) -> Option<f32> {
-        let composer = self.0.get().composer?;
-        Some(f32::from(composer.top()) - ferrite_ui::theme::ENV_STRIP_H)
-    }
-}
 
 /// A pick of another environment for a draft, waiting for both machines
 /// to say which repository each of their Projects is.
@@ -230,7 +215,7 @@ impl CockpitView {
     /// The band of the draft in Pane `draft`, while it is one.
     pub(super) fn band_of(&self, draft: PaneIdentity) -> Option<Band> {
         let pane = &self.panes[self.index_of(draft)?];
-        pane.draft().map(|_| Band(pane.geometry.clone()))
+        pane.draft().map(|_| Band::new(pane.geometry.clone()))
     }
 
     /// Where `machine`'s own files are kept here; none for this computer.

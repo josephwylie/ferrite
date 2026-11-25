@@ -2363,6 +2363,7 @@ dependencies = [
  "ferrite-review",
  "ferrite-reviewr",
  "ferrite-server",
+ "ferrite-settings",
  "ferrite-terminal",
  "ferrite-tools",
  "ferrite-ui",
@@ -2541,6 +2542,17 @@ dependencies = [
  "tokio-tungstenite 0.28.0",
  "ureq",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ferrite-settings"
+version = "0.4.0"
+dependencies = [
+ "ferrite-core",
+ "ferrite-frame",
+ "ferrite-pane",
+ "ferrite-ui",
+ "gpui-kit",
 ]
 
 [[package]]

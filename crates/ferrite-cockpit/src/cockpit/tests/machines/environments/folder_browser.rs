@@ -1,5 +1,6 @@
-//! The setup sheet's browser of a Machine's folders: walked with the
-//! mouse or the keys, however many folders it holds.
+//! The setup sheet's browser of a Machine's folders, on a Machine's
+//! Server: walked with the mouse or the keys. The browser on its own is
+//! ferrite-settings' (`folder_browser`).
 
 use super::*;
 
@@ -128,37 +129,6 @@ fn a_copy_named_dot_is_refused(cx: &mut TestAppContext) {
     assert!(debug_bounds(cx, "placement-occupied".into()).is_none(), "nothing was asked of box");
 }
 
-/// A folder box cannot read says so where its rows would be, and the
-/// sheet goes on: `..` leads out of it.
-#[gpui::test]
-fn a_folder_that_cannot_be_read_says_so_in_place(cx: &mut TestAppContext) {
-    let base = resolved_dir("env-unread");
-    let projects = base.join("projects");
-    let (mut core, _fake, machines, _agents) =
-        two_machines_keeping_projects_in("env-unread", &projects);
-    let source = project_folder(&base.join("here/app"), None);
-    let mine = registered_here(&mut core, &source);
-    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
-    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
-    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
-    tick(cx);
-    pick_on(&view, ENVIRONMENT, "box", cx);
-    until(cx, |cx| sheet(&view, cx).is_some());
-    let line = sheet_line(&view, cx);
-    let missing = format!("{}/missing/", projects.display());
-    line.update(cx, |line, cx| line.set(missing.clone(), cx));
-    drawn(cx, "folder-browser-unread");
-    assert!(
-        text_of(cx, "folder-browser-unread")
-            .is_some_and(|said| said.starts_with(&format!("{missing} cannot be read"))),
-        "it names the folder"
-    );
-    assert_eq!(text_in(&line, cx), missing, "and stays where it was typed");
-    press(cx, "folder-row-up");
-    assert_eq!(text_in(&line, cx), format!("{}/", projects.display()));
-    assert!(debug_bounds(cx, "folder-browser-unread".into()).is_none());
-}
-
 /// A projects folder box does not have yet is where the copy goes all the
 /// same: the browser opens on it, says the copy makes it, and the copy
 /// does.
@@ -258,34 +228,4 @@ fn tab_finishes_a_folder_name_or_moves_on(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("tab");
     tick(cx);
     assert!(!cx.update(|window, _| focus.is_focused(window)), "nothing to finish: Tab moves on");
-}
-
-/// A folder of twenty thousand folders draws only the rows in view, and
-/// the arrows reach the last of them.
-#[gpui::test]
-fn a_folder_of_thousands_draws_only_the_rows_in_view(cx: &mut TestAppContext) {
-    bind_production_keys(cx);
-    let base = resolved_dir("env-thousands");
-    let projects = base.join("projects");
-    let (mut core, _fake, machines, _agents) =
-        two_machines_keeping_projects_in("env-thousands", &projects);
-    for at in 0..20_000 {
-        std::fs::create_dir(projects.join(format!("f{at:05}"))).unwrap();
-    }
-    let source = project_folder(&base.join("here/app"), None);
-    let mine = registered_here(&mut core, &source);
-    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
-    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
-    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
-    tick(cx);
-    pick_on(&view, ENVIRONMENT, "box", cx);
-    drawn(cx, "folder-row:f00000");
-    assert!(debug_bounds(cx, "folder-row:f19999".into()).is_none(), "out of view, not drawn");
-    let line = sheet_line(&view, cx);
-    let focus = line.read_with(cx, |line, cx| line.focus_handle(cx));
-    cx.update(|window, cx| window.focus(&focus, cx));
-    tick(cx);
-    cx.simulate_keystrokes("up");
-    drawn(cx, "folder-row:f19999");
-    assert!(debug_bounds(cx, "folder-row:f00000".into()).is_none());
 }

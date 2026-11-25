@@ -9,8 +9,8 @@
 //! `PlacementEvent`, and the Cockpit registers it and chooses it on the
 //! draft.
 
-use super::draft_environment::Band;
-use super::folder_browser::{FolderBrowser, Moved};
+use ferrite_pane::band::Band;
+use ferrite_settings::folder_browser::{FolderBrowser, Moved};
 use super::*;
 use ferrite_core::chunked::{Cancellation, Progress};
 use ferrite_core::placement::{self, Copied, Copying, Ignored};
@@ -160,8 +160,7 @@ impl PlacementView {
     ) -> Self {
         let dest = cx.new(|cx| {
             FolderBrowser::new(
-                model.clone(),
-                placing.machine,
+                super::machines::folders_on(model.clone(), placing.machine),
                 format!("Folder on {}", placing.machine_name).into(),
                 format!("{}/", placing.projects_dir.trim_end_matches('/')),
                 cx,
