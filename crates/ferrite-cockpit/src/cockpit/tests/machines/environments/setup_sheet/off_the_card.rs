@@ -7,7 +7,9 @@ use super::*;
 
 /// A copy of app to box under way, its card sent to the background, with
 /// the draft in Pane `draft` waiting on it, held part way by box till the
-/// hold lets go.
+/// hold lets go. Its big file is what is left once box holds: without
+/// it, the window may send all of a small Project before box lands
+/// `.gitignore`, and the card says it is adding it rather than copying.
 fn copy_under_way<'a>(
     name: &str,
     cx: &'a mut TestAppContext,
@@ -17,7 +19,9 @@ fn copy_under_way<'a>(
     let projects = base.join("projects");
     let (mut core, _fake, machines, _agents) = two_machines_keeping_projects_in(name, &projects);
     let on_box = machines.held(1).unwrap();
-    let mine = registered_here(&mut core, &project_folder(&base.join("here/app"), None));
+    let source = project_folder(&base.join("here/app"), None);
+    std::fs::write(source.join("big.bin"), vec![9u8; 4 << 20]).unwrap();
+    let mine = registered_here(&mut core, &source);
     cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
