@@ -50,6 +50,6 @@ fn copy_diagnostics_puts_the_report_on_the_clipboard(cx: &mut TestAppContext) {
     assert!(report.contains("--- ferrite.log, last"), "{report}");
     assert!(report.contains("--- server.log, last"), "{report}");
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.settings_sheet(cx).unwrap().read(cx).copied, Some("Diagnostics"))
+        assert_eq!(view.settings_sheet(cx).unwrap().read(cx).copied(), Some("Diagnostics"))
     });
 }

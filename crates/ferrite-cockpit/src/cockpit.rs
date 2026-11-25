@@ -150,6 +150,7 @@ use ferrite_ui::menu;
 use ferrite_pane::select::TranscriptText;
 use ferrite_ui::frame::settings;
 use ferrite_ui::pointer::{Pointer, PointerPressed};
+use ferrite_ui::provider::effort_title;
 pub use history::{GoBack, GoForward};
 pub use tools::{GoToFile, ToggleChanges, ToggleFileTree, ToggleFiles, ToggleTerminal};
 
@@ -3683,10 +3684,7 @@ impl CockpitView {
             this.update(cx, |view, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(report));
                 if let Some(settings) = view.settings_sheet(cx) {
-                    settings.update(cx, |settings, cx| {
-                        settings.copied = Some("Diagnostics");
-                        cx.notify();
-                    });
+                    settings.update(cx, |settings, cx| settings.diagnostics_copied(cx));
                 }
                 cx.notify();
             })
@@ -3857,20 +3855,6 @@ impl CockpitView {
             review.update(cx, |review, cx| review.set_reading(reading, cx));
         }
         cx.notify();
-    }
-
-    /// Route every toolkit field through the same save and session-default path.
-    fn setting_change<T: 'static>(
-        &self,
-        cx: &Context<Self>,
-        write: impl Fn(&mut ferrite_core::settings::Settings, T) + 'static,
-    ) -> impl Fn(T, &mut gpui::App) + 'static {
-        let view = cx.entity().downgrade();
-        move |value, cx| {
-            let _ = view.update(cx, |view, cx| {
-                view.change_settings(|settings| write(settings, value), cx);
-            });
-        }
     }
 
     /// Ask the system for a sound file, and play it from now on.
@@ -6631,28 +6615,6 @@ fn plugins(
         }
     }
     plugins
-}
-
-/// A Settings group for one Provider: its name, led by its logomark in
-/// brand colour.
-fn provider_group(provider: Provider) -> settings::Group {
-    let (mark, ink) = ferrite_ui::provider::mark(provider);
-    settings::Group::new(Some(ferrite_ui::provider::title(provider))).mark(mark, ink)
-}
-
-/// An effort level as a person says it: `xhigh` is "Extra high", the
-/// rest capitalized.
-fn effort_title(effort: &str) -> String {
-    match effort {
-        "xhigh" => "Extra high".to_string(),
-        other => {
-            let mut chars = other.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        }
-    }
 }
 
 /// What each rung buys, in the words the providers' own menus use.

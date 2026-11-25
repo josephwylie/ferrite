@@ -1397,6 +1397,23 @@ Cockpit, and each of its tests opened a Cockpit window.
   one-line edit to the Terminal, to its tests green and a typecheck, took
   17-27 s through the Cockpit and takes 8-12 s in `ferrite-tools`; a
   Terminal test takes about 0.2 s, against 1.2-1.9 s.
+- **Settings.** The Project card, its folder browser, Connections and
+  the Settings sheet are `ferrite_settings`' (`project_editor`,
+  `folder_browser`, `connections`, `sheet`), which builds and tests
+  without the Cockpit. The sheet was one the root built rows for: its
+  rows are the sheet's now, built from values (`SettingsInputs`: the
+  settings, the machine's defaults or what stands in for them, the
+  Server's standing, the update's line), and each edit is said as one
+  (`SettingsEvent::Change` over `Settings`, `Defaults` over the
+  machine's defaults), which the root saves where it lives. A press
+  that asks in a window (Restart, Stop, Update) carries the window it
+  was pressed in. Connections reads each environment as the window
+  reaches it (`Reached`), a value of its own, not the client's
+  `ServerState`. The folder browser asks a Machine through a `List`. A
+  one-line edit to the Project card, to its tests green, took 14 s
+  through the Cockpit and takes 5 s in `ferrite-settings`; a card test
+  took 1.26 s on average in a Cockpit window and takes 0.09 s in its
+  own.
 
 ## Precedent
 

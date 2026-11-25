@@ -718,7 +718,7 @@ fn a_revoked_session_asks_to_sign_in_and_opens_its_pairing(cx: &mut TestAppConte
     tick(cx);
     view.read_with(cx, |view, cx| {
         let settings = view.sheets.read(cx).settings().expect("Settings opened");
-        assert!(settings.read(cx).connections.read(cx).editing(), "on box's pairing");
+        assert!(settings.read(cx).connections().read(cx).editing(), "on box's pairing");
     });
     let dialog = cx
         .update(|window, _| window.debug_text("connection-dialog"))
@@ -1162,7 +1162,7 @@ fn add_project_with_no_machine_reached_offers_to_connect_one(cx: &mut TestAppCon
     cx.simulate_keystrokes("enter");
     tick(cx);
     let sheet = view.read_with(cx, |view, cx| view.settings_sheet(cx).expect("Settings"));
-    assert_eq!(sheet.read_with(cx, |sheet, _| sheet.page), settings::PageKey::Connections);
+    assert_eq!(sheet.read_with(cx, |sheet, _| sheet.page()), settings::PageKey::Connections);
 }
 
 /// The machine pick goes back a step, to the palette it was opened from
@@ -3115,39 +3115,29 @@ fn a_machine_that_cannot_save_its_defaults_says_so(cx: &mut TestAppContext) {
     tick(cx);
     let more = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
     cx.simulate_click(more, gpui::Modifiers::none());
-    let says = |group: &super::settings::Group| {
-        group
-            .rows
-            .iter()
-            .any(|row| row.words.iter().any(|word| word.contains("Not saved on box")))
-    };
-    let unsaved = |cx: &mut gpui::VisualTestContext| {
-        view.update(cx, |view, cx| {
-            (
-                says(&view.machine_group(cx)),
-                view.permission_groups(cx).iter().any(says),
-            )
-        })
-    };
-    until(cx, |cx| unsaved(cx).0);
-    assert!(unsaved(cx).1, "the Permissions page says it too");
+    // Said on each page that shows the defaults: the sheet's own test.
+    until(cx, |cx| says_of_defaults(&view, cx, "Not saved on box"));
     until(cx, |cx| {
         view.read_with(cx, |view, cx| view.factory_limit(cx)) == Some(5)
     });
     std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+/// Whether the window says `words` of the machine's defaults, in their
+/// place or beside them, as Settings draws it.
 #[cfg(unix)]
-fn says_in_machine_group(
+fn says_of_defaults(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
     words: &str,
 ) -> bool {
-    view.update(cx, |view, cx| {
-        view.machine_group(cx)
-            .rows
+    view.read_with(cx, |view, cx| {
+        let inputs = view.settings_inputs(cx);
+        inputs
+            .unsaved
             .iter()
-            .any(|row| row.words.iter().any(|word| word.contains(words)))
+            .chain(inputs.defaults.as_ref().err())
+            .any(|said| said.contains(words))
     })
 }
 
@@ -3164,14 +3154,14 @@ fn a_failed_read_that_later_lands_is_not_an_unsaved_edit(cx: &mut TestAppContext
         view.environment.defaults = None;
         view.ask_server_defaults(cx);
     });
-    until(cx, |cx| says_in_machine_group(&view, cx, "Could not read them"));
+    until(cx, |cx| says_of_defaults(&view, cx, "Could not read them"));
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
     view.update(cx, |view, cx| view.ask_server_defaults(cx));
     until(cx, |cx| {
         view.read_with(cx, |view, cx| view.shown_defaults(cx).is_some())
     });
     tick(cx);
-    assert!(!says_in_machine_group(&view, cx, "Not saved"));
+    assert!(!says_of_defaults(&view, cx, "Not saved"));
 }
 
 /// An edit that saves after one was refused takes the refusal away.
@@ -3192,7 +3182,7 @@ fn a_saved_edit_clears_an_earlier_refusal(cx: &mut TestAppContext) {
     tick(cx);
     let more = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
     cx.simulate_click(more, gpui::Modifiers::none());
-    until(cx, |cx| says_in_machine_group(&view, cx, "Not saved on box"));
+    until(cx, |cx| says_of_defaults(&view, cx, "Not saved on box"));
     until(cx, |cx| {
         view.read_with(cx, |view, cx| view.factory_limit(cx)) == Some(5)
     });
@@ -3201,7 +3191,7 @@ fn a_saved_edit_clears_an_earlier_refusal(cx: &mut TestAppContext) {
     until(cx, |_| {
         Settings::load(&remote).is_ok_and(|written| written.factory_tasks_at_once == 6)
     });
-    until(cx, |cx| !says_in_machine_group(&view, cx, "Not saved"));
+    until(cx, |cx| !says_of_defaults(&view, cx, "Not saved"));
 }
 
 /// box — an Engine of its own standing in for it — with an edited file of
@@ -3393,7 +3383,7 @@ fn open_connections_opens_settings_on_connections(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         assert!(view.settings_open(cx), "Settings opens");
         let sheet = view.settings_sheet(cx).unwrap();
-        assert_eq!(sheet.read(cx).page, settings::PageKey::Connections, "on Connections");
+        assert_eq!(sheet.read(cx).page(), settings::PageKey::Connections, "on Connections");
     });
 }
 

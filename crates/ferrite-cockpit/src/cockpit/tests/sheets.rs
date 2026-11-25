@@ -118,7 +118,7 @@ fn closing_settings_drops_the_connection_editor(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.settings_sheet(cx)
             .unwrap()
-            .update(cx, |_, cx| cx.emit(settings_view::SettingsEvent::Closed))
+            .update(cx, |_, cx| cx.emit(ferrite_settings::sheet::SettingsEvent::Closed))
     });
     tick(cx);
     dropped(&connections, cx, "the close button");

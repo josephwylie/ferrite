@@ -106,29 +106,6 @@ fn a_connection_save_failure_keeps_the_form_and_runtime_unchanged(cx: &mut TestA
     assert_eq!(std::fs::read(blocked).unwrap(), b"keep");
 }
 
-#[gpui::test]
-fn leaving_the_connections_page_drops_the_connection_editor(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("connection-page-leave", 1);
-    bind_production_keys(cx);
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    tick(cx);
-    cx.simulate_keystrokes("cmd-,");
-    tick(cx);
-    let click = |selector: &'static str, cx: &mut gpui::VisualTestContext| {
-        let hit = cx.debug_bounds(selector).expect(selector).center();
-        cx.simulate_click(hit, gpui::Modifiers::none());
-        tick(cx);
-    };
-    click("settings-page-connections", cx);
-    click("connection-add", cx);
-    assert!(cx.debug_bounds("connection-dialog").is_some());
-    click("settings-page-about", cx);
-    click("settings-page-connections", cx);
-    assert!(cx.debug_bounds("connection-dialog").is_none(), "another page dropped the editor");
-    assert!(cx.debug_bounds("connection-add").is_some());
-}
-
 /// Behaviour's sidebar hint names the key this platform binds to the
 /// sidebar toggle, drawn as keys: `⌘B` on macOS, `⌃B` on Windows.
 #[gpui::test]
@@ -279,30 +256,17 @@ fn reconnect_leaves_search_and_rejects_another_saved_target(cx: &mut TestAppCont
         view.prefs.settings.machines = saved.clone();
         view.settings_sheet(cx)
             .unwrap()
-            .read(cx)
-            .search
-            .clone()
-            .unwrap()
-            .update(cx, |search, cx| {
-                search.set_value("first.example", window, cx)
-            });
+            .update(cx, |sheet, cx| sheet.search("first.example", window, cx));
     });
     connections_view(&view, cx).update_in(cx, |connections, window, cx| {
         connections.edit(Some(saved[0].clone()), window, cx)
     });
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.settings_sheet(cx).unwrap().read(cx).page, settings::PageKey::Connections);
-        assert!(view
-            .settings_sheet(cx)
-            .unwrap()
-            .read(cx)
-            .search
-            .as_ref()
-            .unwrap()
-            .read(cx)
-            .value()
-            .is_empty());
+        assert_eq!(view.settings_sheet(cx).unwrap().read(cx).page(), settings::PageKey::Connections);
     });
+    tick(cx);
+    let search = cx.update(|window, _| window.debug_text("settings-search")).expect("the search field");
+    assert!(!search.iter().any(|said| said.contains("first.example")), "the search ended: {search:?}");
     tick(cx);
     let fields = connection_fields(&view, cx);
     cx.update(|window, cx| {
@@ -441,12 +405,11 @@ fn a_right_click_summons_the_menu_and_delete_takes_two_presses(cx: &mut TestAppC
     });
 }
 
-/// With the sheet itself focused, as it opens, ↓ and ↑ step the
-/// sidebar's pages and hold at the ends; a path in About copies whole
-/// on a click and shows its check until the sheet closes; reopening
-/// starts on the first page again.
+/// The window gives the sheet the keyboard as it opens, so ↓ steps its
+/// pages at once; and each opening is a sheet of its own, on the first
+/// page with nothing copied.
 #[gpui::test]
-fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
+fn settings_opens_with_the_keyboard_and_afresh_each_time(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("settings-keys", 1);
     bind_production_keys(cx);
     let (root, cx) = cx.add_window_view(|window, cx| {
@@ -465,49 +428,117 @@ fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
-    let page = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.settings_sheet(cx).unwrap().read(cx).page);
+    let sheet = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.settings_sheet(cx).unwrap());
+    let page = |cx: &mut gpui::VisualTestContext| sheet(cx).read_with(cx, |sheet, _| sheet.page());
     assert_eq!(page(cx), settings::PageKey::NewThreads);
     cx.simulate_keystrokes("down");
     tick(cx);
     assert_eq!(page(cx), settings::PageKey::Permissions);
-    assert!(cx.debug_bounds("settings-codex-sandbox").is_some());
-    assert!(cx.debug_bounds("settings-provider-0").is_none());
     cx.simulate_keystrokes("down down down down down down");
     tick(cx);
-    assert_eq!(page(cx), settings::PageKey::About, "held at the foot");
-    cx.simulate_keystrokes("up");
-    tick(cx);
-    assert_eq!(page(cx), settings::PageKey::Labs);
-    assert!(cx.debug_bounds("settings-linked-machines").is_some());
-    cx.simulate_keystrokes("up up up up");
-    tick(cx);
-    assert_eq!(page(cx), settings::PageKey::Behaviour);
-    cx.simulate_keystrokes("down down down down down");
-    tick(cx);
-
     let threads = cx
         .debug_bounds("settings-fact-Threads")
         .expect("About lists the threads directory")
         .center();
     cx.simulate_click(threads, gpui::Modifiers::none());
     tick(cx);
-    let dir = view.read_with(cx, |view, cx| {
-        assert_eq!(view.settings_sheet(cx).unwrap().read(cx).copied, Some("Threads"));
-        view.prefs.dir.join("threads").display().to_string()
-    });
-    assert_eq!(
-        cx.read_from_clipboard().and_then(|item| item.text()),
-        Some(dir),
-        "the whole path, never the ~ form"
-    );
+    let first = sheet(cx);
+    assert_eq!(first.read_with(cx, |sheet, _| sheet.copied()), Some("Threads"));
     assert!(view.read_with(cx, |view, cx| view.settings_open(cx)));
 
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
+    assert_ne!(sheet(cx), first, "a sheet of its own");
     assert_eq!(page(cx), settings::PageKey::NewThreads);
-    view.read_with(cx, |view, cx| assert_eq!(view.settings_sheet(cx).unwrap().read(cx).copied, None));
+    assert_eq!(sheet(cx).read_with(cx, |sheet, _| sheet.copied()), None);
+}
+
+/// The sheet draws what the window has (`settings_inputs`), and the
+/// window answers what it asks (`on_settings_event`): this computer's
+/// text size, its defaults, its CLIs, its paths, its build and its
+/// update; an edit saved, a default changed where it lives, a step
+/// taken.
+#[gpui::test]
+fn the_settings_sheet_reads_and_answers_the_window(cx: &mut TestAppContext) {
+    use ferrite_core::settings::{ReadingSize, Settings};
+    let (core, _fake) = cockpit("settings-wiring", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    view.update(cx, |view, cx| {
+        view.prefs.settings.reading_size = ReadingSize::nearest(18);
+        view.prefs.settings.factory_tasks_at_once = 5;
+        view.prefs.ferrite_updates = true;
+        view.cli_versions = Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into()));
+        view.show_settings(cx);
+    });
+    tick(cx);
+    let text = |selector: &str, cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, _| window.debug_text(selector))
+            .unwrap_or_else(|| panic!("nothing drawn as {selector}"))
+            .join(" ")
+    };
+    let click = |selector: &'static str, cx: &mut gpui::VisualTestContext| {
+        let hit = cx.debug_bounds(selector).unwrap_or_else(|| panic!("{selector}")).center();
+        cx.simulate_click(hit, gpui::Modifiers::none());
+        cx.run_until_parked();
+    };
+    // The card is the sheet's height: a row low on a page is found.
+    let seek = |query: &'static str, cx: &mut gpui::VisualTestContext| {
+        let sheet = view.read_with(cx, |view, cx| view.settings_sheet(cx).expect("Settings is up"));
+        sheet.update_in(cx, |sheet, window, cx| sheet.search(query, window, cx));
+        cx.run_until_parked();
+    };
+    let place = view.read_with(cx, |view, cx| view.machine_place(cx));
+    seek("Applies to", cx);
+    assert!(text("settings-card", cx).contains(place.as_ref()), "Applies to {place}");
+    seek("Text size", cx);
+    assert_eq!(text("settings-text-size-value", cx), "18px");
+    click("settings-text-size-1", cx);
+    seek("Tasks working at once", cx);
+    assert_eq!(text("settings-factory-limit-value", cx), "5", "the machine's defaults");
+    click("settings-factory-limit-1", cx);
+    seek("Name threads automatically", cx);
+    click("settings-auto-title", cx);
+    let saved = view.read_with(cx, |view, _| Settings::load(&view.prefs.dir).unwrap());
+    assert_eq!(saved.reading_size, ReadingSize::nearest(18).step(1));
+    assert_eq!(saved.factory_tasks_at_once, 6, "a step of the machine's own");
+    assert!(!saved.auto_title, "a default, changed where it lives");
+    seek("Tasks working at once", cx);
+    assert_eq!(text("settings-factory-limit-value", cx), "6", "and drawn again");
+
+    click("settings-page-server", cx);
+    assert!(
+        text("settings-card", cx).contains("This window runs without a separate server"),
+        "{}",
+        text("settings-card", cx)
+    );
+    assert!(cx.debug_bounds("settings-server-restart").is_none(), "no server of its own to restart");
+    // Each CLI's row, found by the version the window gave it.
+    for (version, row) in [("2.3.1 (Claude Code)", "Claude CLI"), ("codex-cli 0.61.0", "Codex CLI")] {
+        seek(version, cx);
+        assert!(text("settings-card", cx).contains(row), "{version}: {}", text("settings-card", cx));
+    }
+    click("settings-page-about", cx);
+    let about = text("settings-card", cx);
+    let version = format!("{} · dev", env!("CARGO_PKG_VERSION"));
+    assert!(about.contains(&version), "{version}: {about}");
+    let threads = view.read_with(cx, |view, _| view.prefs.dir.join("threads").display().to_string());
+    click("settings-fact-Threads", cx);
+    assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()), Some(threads), "the window's own directory");
+    click("settings-copy-diagnostics", cx);
+    let report = cx.read_from_clipboard().and_then(|item| item.text()).unwrap_or_default();
+    assert!(report.starts_with("Ferrite diagnostics\n"), "{report}");
+    assert!(text("settings-copy-diagnostics", cx).contains("Copied"));
+    assert!(cx.debug_bounds("settings-update-ferrite").is_some(), "a build that updates itself");
+    view.update(cx, |view, cx| {
+        view.prefs.ferrite_updates = false;
+        cx.notify();
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("settings-update-ferrite").is_none(), "one that does not");
 }
 
 /// cmd-, opens the Settings panel and escape closes it; a chip press
@@ -805,7 +836,7 @@ fn a_toast_stands_over_the_settings_sheet(cx: &mut TestAppContext) {
     // window's right edge, where toasts hang.
     view.update(cx, |view, cx| {
         let sheet = view.settings_sheet(cx).expect("Settings is up");
-        sheet.update(cx, |sheet, _| sheet.page = settings::PageKey::Connections);
+        sheet.update(cx, |sheet, cx| sheet.show(settings::PageKey::Connections, cx));
         cx.notify();
     });
     tick(cx);

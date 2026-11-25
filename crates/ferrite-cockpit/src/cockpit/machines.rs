@@ -181,8 +181,8 @@ impl CockpitView {
 
     /// Settings, on Connections.
     pub(super) fn open_connections(&mut self, cx: &mut Context<Self>) {
-        self.show_settings(cx).update(cx, |settings, _| {
-            settings.page = settings::PageKey::Connections;
+        self.show_settings(cx).update(cx, |settings, cx| {
+            settings.show(settings::PageKey::Connections, cx);
         });
     }
 
@@ -221,10 +221,10 @@ impl CockpitView {
             machines.machine(machines.listed_as(machine)?).cloned()
         });
         let settings = self.show_settings(cx);
-        settings.update(cx, |settings, _| settings.page = settings::PageKey::Connections);
+        settings.update(cx, |settings, cx| settings.show(settings::PageKey::Connections, cx));
         if let Some(saved) = saved {
             // Once this view's update is done: the editor reads it.
-            let connections = settings.read(cx).connections.clone();
+            let connections = settings.read(cx).connections().clone();
             window.defer(cx, move |window, cx| {
                 connections.update(cx, |connections, cx| connections.edit(Some(saved), window, cx));
             });

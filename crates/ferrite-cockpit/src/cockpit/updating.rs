@@ -1,7 +1,8 @@
 //! Ferrite's own update in the window (`crate::ferrite_update`, ADR 0023):
 //! the checks and the download off the UI thread, the restart offered —
-//! now when no agent is working, else once they all are idle — the
-//! Settings rows, and What's New on the first launch of a new release.
+//! now when no agent is working, else once they all are idle — what
+//! Settings › About says of it, and What's New on the first launch of a
+//! new release.
 
 use super::*;
 use crate::ferrite_update::{State, CHECK_EVERY, FIRST_CHECK_AFTER, IDLE_POLL, VERSION};
@@ -145,38 +146,6 @@ impl CockpitView {
             }
             State::Checking | State::Downloading { .. } => {}
         }
-    }
-
-    /// Settings › About's rows for Ferrite's own update: where it stands,
-    /// with the one button that moves it on, and the automatic checks.
-    /// None in a build that does not update itself.
-    pub(super) fn ferrite_update_rows(&self, cx: &Context<Self>) -> Vec<settings::Row> {
-        if !self.prefs.ferrite_updates {
-            return Vec::new();
-        }
-        let busy = self.in_flight_here(cx);
-        let (detail, button) = self.ferrite_update.describe(busy.as_deref());
-        let view = cx.entity().downgrade();
-        vec![
-            settings::action(
-                "settings-update-ferrite",
-                "Updates",
-                detail,
-                SharedString::default(),
-                button,
-                move |window, cx| {
-                    let _ = view.update(cx, |view, cx| view.press_ferrite_update(window, cx));
-                },
-            ),
-            settings::toggle(
-                "settings-check-for-updates",
-                "Check for updates automatically",
-                "Look for a newer Ferrite every few hours and download it. It installs \
-                 when Ferrite restarts, which waits for your agents.",
-                self.prefs.settings.check_for_updates,
-                self.setting_change(cx, |s, v| s.check_for_updates = v),
-            ),
-        ]
     }
 
     /// The release just downloaded, offered once as a toast, and the

@@ -31,6 +31,21 @@ pub fn cli(provider: Provider) -> &'static str {
     }
 }
 
+/// An effort rung as a person says it, in a menu or a Settings row:
+/// `xhigh` is "Extra high", the rest capitalized.
+pub fn effort_title(effort: &str) -> String {
+    match effort {
+        "xhigh" => "Extra high".to_string(),
+        other => {
+            let mut chars = other.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+    }
+}
+
 /// Its logomark and brand ink: the one place brand colour is allowed.
 pub fn mark(provider: Provider) -> (&'static str, u32) {
     match provider {

@@ -64,7 +64,7 @@ impl CockpitView {
 
     /// Connections, while Settings is up.
     pub(crate) fn connections(&self, cx: &App) -> Option<Entity<ConnectionsView>> {
-        Some(self.settings_sheet(cx)?.read(cx).connections.clone())
+        Some(self.settings_sheet(cx)?.read(cx).connections().clone())
     }
 
     pub(super) fn on_connections_event(

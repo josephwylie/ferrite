@@ -1052,8 +1052,8 @@ fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     view.update(cx, |view, cx| {
-        view.show_settings(cx).update(cx, |settings, _| {
-            settings.page = settings::PageKey::Server;
+        view.show_settings(cx).update(cx, |settings, cx| {
+            settings.show(settings::PageKey::Server, cx);
         });
         cx.notify();
     });
