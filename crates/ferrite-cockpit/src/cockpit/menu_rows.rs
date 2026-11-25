@@ -226,7 +226,7 @@ pub(super) fn command_rows(commands: &[ferrite_core::SessionCommand], filter: &s
     let mut scored: Vec<(i64, pane::MenuRow)> = commands
         .iter()
         .filter_map(|command| {
-            let (score, matched) = crate::fuzzy::matches(filter, &command.name)?;
+            let (score, matched) = ferrite_ui::fuzzy::matches(filter, &command.name)?;
             Some((
                 score,
                 pane::MenuRow {
@@ -264,7 +264,7 @@ pub(super) fn mention_rows(files: &[String], filter: &str) -> Vec<pane::MenuRow>
     let mut scored: Vec<(i64, pane::MenuRow)> = files
         .iter()
         .filter_map(|file| {
-            let (score, matched) = crate::fuzzy::matches(filter, file)?;
+            let (score, matched) = ferrite_ui::fuzzy::matches(filter, file)?;
             // A directory ends in `/`: its name is the last segment with
             // that slash, its directory everything before.
             let stem = file.strip_suffix('/').unwrap_or(file);
@@ -360,7 +360,7 @@ pub(super) fn local_row(
     detail: &'static str,
     inert: bool,
 ) -> Option<pane::MenuRow> {
-    let (_, matched) = crate::fuzzy::matches(filter, name)?;
+    let (_, matched) = ferrite_ui::fuzzy::matches(filter, name)?;
     Some(pane::MenuRow {
         insert: SharedString::from(name),
         name: SharedString::from(name),

@@ -1,7 +1,7 @@
 //! A Project's Factory in the window (ADR 0037, #220): its nav entry, its
 //! board of Tasks in the board's place, a Task's panel beside the columns,
 //! and the alerts a Task raises. Its Workflows surface is `workflows.rs`
-//! (#221), and its New task sheet `new_task_view.rs`.
+//! (#221), and its New task sheet `ferrite_factory::new_task`.
 //!
 //! The Factory runs in the Server (`ferrite_engine::factory`): the window
 //! draws the board the Server publishes and sends commands through
@@ -134,7 +134,7 @@ pub(crate) struct FactoryView {
     /// What the last command said back (a refusal, a worktree kept).
     pub(crate) note: Option<SharedString>,
     /// The New task sheet as it was closed, for when it opens again.
-    pub(super) kept: Option<super::new_task_view::KeptNewTask>,
+    pub(super) kept: Option<ferrite_factory::new_task::KeptNewTask>,
     /// The columns' sideways scroll, and the open Task, its column and how
     /// many columns fit when it last brought that column into view.
     columns: gpui::ScrollHandle,
@@ -149,12 +149,12 @@ pub(crate) struct FactoryView {
     /// The open Factory picker's rows.
     pub(crate) picks: Vec<(ferrite_ui::menu::Item, super::workflows::Pick)>,
     /// Answers, rework and redirects being written, and their sheets.
-    pub(crate) direction: Entity<super::direction::DirectionView>,
+    pub(crate) direction: Entity<ferrite_factory::direction::DirectionView>,
     /// The Coordinator surface's field before the Coordinator runs (#224).
     pub(crate) coordinator: Entity<super::coordinator::CoordinatorView>,
     /// How Tasks start (#225): what the GitHub login listed for its
     /// pickers.
-    pub(crate) starts: Entity<super::starts::StartsView>,
+    pub(crate) starts: Entity<ferrite_factory::starts::StartsView>,
     /// The Archive (#226): its search and the earlier Worker being read.
     pub(crate) archive: Entity<ferrite_factory::archive::ArchiveView>,
     /// Whether the Archive shows in the board's place.
@@ -224,7 +224,7 @@ impl TaskCard {
                 None => factory_board::agent_label(&task.agent),
             },
             outcome: task.outcome().map(str::to_string),
-            pr: super::delivery::card_line(task),
+            pr: ferrite_factory::delivery::card_line(task),
         }
     }
 }
@@ -693,7 +693,7 @@ impl FactoryView {
         if task.status.deletable() && !archived {
             let task = id.clone();
             actions = actions.child(
-                crate::project_editor::destructive_button("task-delete", "Delete", false, cx)
+                ferrite_ui::form::destructive_button("task-delete", "Delete", false, cx)
                     .debug_selector(|| "task-delete".into())
                     .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                         cx.emit(FactoryEvent::Command(TaskAction::Delete { task: task.clone() }))
@@ -820,8 +820,8 @@ impl FactoryView {
                             .map(|reason| line("Why", reason).debug_selector(|| "task-why".into())),
                     )
                     .child(line("Status", task.status.word().to_string()))
-                    .children(super::direction::says(task).then(|| self.direction.clone()))
-                    .children(super::delivery::task_delivery(task, cx))
+                    .children(ferrite_factory::direction::says(task).then(|| self.direction.clone()))
+                    .children(ferrite_factory::delivery::task_delivery(task, cx))
                     .into_any_element()
             }
             TaskTab::Activity => {
@@ -1168,7 +1168,7 @@ impl CockpitView {
             view.note = None;
             view.revealed.set(None);
             view.direction
-                .update(cx, |direction, _| direction.answering = false);
+                .update(cx, |direction, _| direction.set_answering(false));
         });
         self.ensure_answer(task, cx);
         cx.notify();

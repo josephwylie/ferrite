@@ -3,7 +3,21 @@
 //! draft's problems, the outline of Steps with their routes, and the empty
 //! state. The Factory head's surface tabs are the Factory view's.
 
-use super::*;
+use ferrite_core::factory_board::{Approver, Destination, RouteKind, Step};
+use gpui::component::Disableable as _;
+use gpui::prelude::*;
+use gpui::{
+    div, px, rgb, AnyElement, ClickEvent, Context, Div, MouseButton, MouseDownEvent, SharedString,
+    Window,
+};
+
+use super::pickers::{model_name, template_picks};
+use super::{
+    provider_mark, Inspected, StepDrag, StepDragPreview, WorkflowsEvent, WorkflowsInputs,
+    WorkflowsView, OUTLINE_W,
+};
+use crate::field::Field;
+use crate::picker::Trigger;
 
 impl WorkflowsView {
     /// The Workflows surface: its head, the draft's problems, the outline
@@ -122,7 +136,7 @@ impl WorkflowsView {
                 })),
             )
             .child(
-                crate::project_editor::primary_button(
+                ferrite_ui::form::primary_button(
                     "workflow-save",
                     if unsaved { "Save" } else { "Saved" },
                     save_disabled,
@@ -224,7 +238,7 @@ impl WorkflowsView {
                 cx.listener(move |_, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     cx.emit(WorkflowsEvent::Picks {
-                        picks: CockpitView::template_picks(),
+                        picks: template_picks(),
                         trigger: trigger.clone(),
                         at: event.position,
                     });
@@ -475,10 +489,7 @@ impl WorkflowsView {
         let more_id = step.id.clone();
         let more_key = format!("{key}-more");
         let more = Trigger::default();
-        let drag = StepDrag {
-            step: step.id.clone(),
-            name: SharedString::from(name.clone()),
-        };
+        let drag = StepDrag::new(step.id.clone(), SharedString::from(name.clone()));
         let select = id.clone();
         div()
             .id(SharedString::from(key.clone()))
@@ -656,27 +667,4 @@ impl WorkflowsView {
             )
             .into_any_element()
     }
-}
-
-/// A Workflows field drawn: its label over its Composer, ringed while it
-/// has the keyboard; a press on it calls `pressed` first.
-pub(crate) fn field_input(
-    field: &Field,
-    label: &'static str,
-    composer: Entity<Composer>,
-    focused: bool,
-    pressed: impl Fn(&MouseDownEvent, &mut Window, &mut gpui::App) + 'static,
-) -> AnyElement {
-    let key = field.key();
-    div()
-        .id(SharedString::from(key.clone()))
-        .debug_selector(move || key.clone())
-        .capture_any_mouse_down(pressed)
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(if field.prose() {
-            ferrite_ui::field::text_area(label.into(), composer, focused, "factory-field-focused")
-        } else {
-            ferrite_ui::field::text_field(label.into(), composer, focused, "factory-field-focused")
-        })
-        .into_any_element()
 }

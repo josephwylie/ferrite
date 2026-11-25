@@ -4245,6 +4245,7 @@ mod tests {
             ("menu.rs", include_str!("menu.rs")),
             ("components.rs", include_str!("components.rs")),
             ("field.rs", include_str!("field.rs")),
+            ("form.rs", include_str!("form.rs")),
             ("keymap.rs", include_str!("keymap.rs")),
             ("scrollbar.rs", include_str!("scrollbar.rs")),
             ("lib.rs", include_str!("lib.rs")),

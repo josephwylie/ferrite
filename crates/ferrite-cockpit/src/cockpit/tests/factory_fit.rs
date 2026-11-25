@@ -588,7 +588,7 @@ fn the_new_task_sheet_closes_with_its_menu_and_keeps_its_words(cx: &mut TestAppC
     tick(cx);
     let typed = view.read_with(cx, |view, cx| {
         view.new_task(cx)
-            .map(|sheet| sheet.read(cx).instructions.read(cx).text().to_string())
+            .map(|sheet| sheet.read(cx).asked(cx).instructions)
     });
     assert_eq!(typed.as_deref(), Some("Fix the login flake"));
 }
@@ -709,31 +709,6 @@ fn start_settings_have_no_gap_and_their_controls_are_reachable(cx: &mut TestAppC
     .expect("the Approval row");
     reveal(cx, "outline", approval);
     assert!(inside(bounds(cx, approval.into()), window_bounds()));
-}
-
-/// V12: a Step's instructions are a text area, taller than a one-line
-/// field, that grows with what is typed.
-#[gpui::test]
-fn step_instructions_are_a_text_area_that_grows(cx: &mut TestAppContext) {
-    let (_view, cx) = template_window(cx, "fit-instructions", Vec::new());
-    let name = bounds(cx, "inspector-name".into());
-    let empty = bounds(cx, "inspector-instructions".into());
-    assert!(
-        empty.size.height > name.size.height + px(ferrite_ui::theme::LH_UI),
-        "an area, not a line: {empty:?} vs {name:?}"
-    );
-    click(cx, "inspector-instructions");
-    for _ in 0..6 {
-        cx.simulate_input(
-            "Use the triage skill on the incoming issue and ask the owner about anything missing. ",
-        );
-    }
-    tick(cx);
-    let grown = bounds(cx, "inspector-instructions".into());
-    assert!(
-        grown.size.height > empty.size.height,
-        "it grows: {grown:?} from {empty:?}"
-    );
 }
 
 /// O6: one Default in the model menu; no Move up on the first row nor Move

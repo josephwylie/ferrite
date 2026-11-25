@@ -15,7 +15,7 @@ impl PlacementView {
     /// Where the copy goes and what goes. The browser opens only when asked
     /// (Change…), or when where the copy would go is in doubt.
     pub(super) fn choose(&self, window: &Window, cx: &mut Context<Self>) -> Drawn {
-        let head = project_editor::head(
+        let head = ferrite_ui::form::head(
             format!("Copy {} to {}", self.placing.title, self.placing.machine_name).into(),
             self.close(cx),
         );
@@ -84,7 +84,7 @@ impl PlacementView {
                     })),
             )
             .children((!removed).then(|| self.primary_button(cx)));
-        (head, content, project_editor::footer(left, right))
+        (head, content, ferrite_ui::form::footer(left, right))
     }
 
     /// Choosing's completing button: Copy and what it sends, Resume where
@@ -105,7 +105,7 @@ impl PlacementView {
             Some(Phase::Failed { .. }) => ("Retry".into(), "placement-retry", unready),
             _ => (copy(), "placement-copy", unready),
         };
-        project_editor::primary_button("placement-confirm", verb, disabled, cx)
+        ferrite_ui::form::primary_button("placement-confirm", verb, disabled, cx)
             .debug_selector(move || selector.into())
             .on_click(cx.listener(|sheet: &mut Self, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -161,7 +161,7 @@ impl PlacementView {
     /// at what pace, and the file it is on.
     pub(super) fn progress(&self, cx: &mut Context<Self>) -> Drawn {
         let machine = self.placing.machine_name.clone();
-        let head = project_editor::head(format!("Copying to {machine}").into(), self.close(cx));
+        let head = ferrite_ui::form::head(format!("Copying to {machine}").into(), self.close(cx));
         let Some(copy) = self.copy(cx) else {
             return (head, column(), div());
         };
@@ -250,7 +250,7 @@ impl PlacementView {
                         sheet.dismiss(cx);
                     })),
             );
-        (head, content, project_editor::footer(div(), right))
+        (head, content, ferrite_ui::form::footer(div(), right))
     }
 
     /// What the copy did, under the check of a finish: where the Project is
@@ -285,16 +285,16 @@ impl PlacementView {
                 });
             if !summary.skipped.lines.is_empty() {
                 content = content
-                    .child(project_editor::section_label("Not copied", "Left as it was"))
+                    .child(ferrite_ui::form::section_label("Not copied", "Left as it was"))
                     .child(
-                        project_editor::directory_list(
+                        ferrite_ui::form::directory_list(
                             summary.skipped.lines.iter().map(|line| note(line.clone())),
                         )
                         .debug_selector(|| "placement-skipped".into()),
                     );
             }
         }
-        let done = project_editor::primary_button("placement-confirm", "Done", false, cx)
+        let done = ferrite_ui::form::primary_button("placement-confirm", "Done", false, cx)
             .debug_selector(|| "placement-done".into())
             .on_click(cx.listener(|sheet: &mut Self, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -316,13 +316,13 @@ impl PlacementView {
             .gap(px(SPACE_2))
             .children(chat)
             .child(done);
-        (head, content, project_editor::footer(div(), right))
+        (head, content, ferrite_ui::form::footer(div(), right))
     }
 }
 
 /// How many characters of the file being sent fit on its line: the
 /// compact card's width inside its padding and edge.
-const FILE_CELLS: usize = ((project_editor::COMPACT_WIDTH - 2.0 * MODAL_PAD - 2.0) / (FS_UI * CODE_ADVANCE)) as usize;
+const FILE_CELLS: usize = ((ferrite_ui::form::COMPACT_WIDTH - 2.0 * MODAL_PAD - 2.0) / (FS_UI * CODE_ADVANCE)) as usize;
 
 /// A face's column: its rows a half row apart.
 fn column() -> Div {

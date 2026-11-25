@@ -400,7 +400,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   Coordinator surface, and last the shell, `FactoryView` itself, with
   the Task panel and the board.
 - **Direction is the twenty-third, the Factory's second slice.**
-  `DirectionView` (`cockpit/direction.rs`) owns what a Factory's Tasks
+  `DirectionView` (`ferrite_factory::direction` since the 2026-11-25
+  amendment; the root's side is `cockpit/direction.rs`) owns what a Factory's Tasks
   are being told: each Task's answer box, made once, whether the open
   one holds the keyboard, and each Task's Rework and Direct this task
   sheets as last closed (`KeptDirection`), which a sheet takes as it
@@ -419,7 +420,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   the Factory: Starts, the Workflows editor, the Coordinator surface and
   the shell.
 - **Starts is the twenty-fourth, the Factory's third slice.**
-  `StartsView` (`cockpit/starts.rs`) owns what a Factory keeps of how a
+  `StartsView` (`ferrite_factory::starts` since the 2026-11-25 amendment;
+  the root's side is `cockpit/starts.rs`) owns what a Factory keeps of how a
   Workflow's Tasks start (#225): the repositories and each repository's
   labels the GitHub login listed for a GitHub start's pickers, with the
   lists still out and why one could not be read. The Factory holds it, as
@@ -441,7 +443,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   Thread. Left of the Factory: the Workflows editor, the Coordinator
   surface and the shell.
 - **The Workflows editor is the twenty-fifth, the Factory's fourth
-  slice.** `WorkflowsView` (`cockpit/workflows/editor.rs`) owns
+  slice.** `WorkflowsView` (`ferrite_factory::workflows` since the
+  2026-11-25 amendment; the root's side is `cockpit/workflows/editor.rs`) owns
   what the editor has chosen and what is being typed in it: the Workflow
   and Step shown, what the inspector shows (`Inspected`: a Step, the
   approval settings or the start, one at a time, so only its outline row
@@ -459,7 +462,7 @@ that happened to touch it, and nothing in the code said whose a field was.
   switch, the draft's problems and the catalog they were found against,
   each Provider's models, the shown Step's Provider's installed skills,
   and the starts' view, which draws the start. The outline's keys read the same inputs
-  through a weak handle to the root, so a second key before the next
+  through the same read of the root, so a second key before the next
   frame reads the draft the first one left. The focus pump hands the
   keyboard to the chosen field, else the outline. It emits
   `WorkflowsEvent`: a field typed in, whose text the root sends to the
@@ -1358,6 +1361,23 @@ Cockpit, and each of its tests opened a Cockpit window.
   `Source` where it is, in the Cockpit, until the background work's own
   crate exists. The other root handles (19 files) move one view at a
   time, each keeping its handle until it does.
+- **The Factory's leaves follow.** The New task sheet, the Rework and
+  Direct this task sheets, a Task's say in its Overview, the start's
+  inspector and the Workflows editor are `ferrite_factory`'s, each over a
+  `Source` the root makes over itself. A sheet asks for its Project and
+  what it is on (`NewTaskQuery`, `DirectQuery`), the editor for the
+  Workflow and Step it chose (`WorkflowsQuery`). A picker's rows travel as
+  the Factory's own `Pick`, now `ferrite_factory::picker`'s; a sheet's
+  form and the menus' fuzzy filter are `ferrite_ui`'s, since the
+  Settings' sheets and the Files' tree draw and filter with them too. The
+  Factory itself (`FactoryView`) stays: the root draws its board, handing
+  it the Coordinator's and a Worker's Pane to lay out, which a read cannot
+  carry, and it holds the Coordinator's view, still the Cockpit's.
+  Measured on the start's inspector (Windows, warm build, two other
+  workers building): a one-line edit, to its tests green, took 27-39 s
+  through the Cockpit and takes 11-18 s in `ferrite-factory`; one of its
+  tests takes 0.02-0.1 s in its own window, against 0.3-1.5 s in a
+  Cockpit window.
 - **Measured** on Windows (i9-14900KF, warm build, the machine idle): a
   one-line edit to the Archive, to its tests green and a typecheck, took
   16-17 s through the Cockpit and takes 4 s in `ferrite-factory` (6-8 s

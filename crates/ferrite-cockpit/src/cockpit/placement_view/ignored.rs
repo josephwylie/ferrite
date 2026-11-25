@@ -156,7 +156,7 @@ impl PlacementView {
                         .on_click(cx.listener(|sheet: &mut Self, _: &bool, _, cx| sheet.tick_all(cx))),
                 )
                 .child(note(total).debug_selector(|| "placement-ignored-total".into()));
-            section = section.child(header).child(project_editor::directory_list(rows));
+            section = section.child(header).child(ferrite_ui::form::directory_list(rows));
         }
         if !self.worktrees.is_empty() {
             section = section.child(

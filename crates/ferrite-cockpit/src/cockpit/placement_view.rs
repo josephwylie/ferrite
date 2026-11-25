@@ -621,10 +621,10 @@ impl PlacementView {
     ) -> Option<ferrite_ui::sheet::Drawn> {
         let face = self.face(cx);
         let band_top = self.band.as_ref().and_then(Band::top);
-        let (room, lift) = project_editor::room(f32::from(window.viewport_size().height), band_top);
+        let (room, lift) = ferrite_ui::form::room(f32::from(window.viewport_size().height), band_top);
         let width = match face {
-            Face::Choose => project_editor::WIDTH,
-            Face::Progress | Face::Result => project_editor::COMPACT_WIDTH,
+            Face::Choose => ferrite_ui::form::WIDTH,
+            Face::Progress | Face::Result => ferrite_ui::form::COMPACT_WIDTH,
         };
         let (width, height) = self.size.frame(width, room, window, cx);
         let (head, content, footer) = match face {
@@ -632,7 +632,7 @@ impl PlacementView {
             Face::Progress => self.progress(cx),
             Face::Result => self.result(cx),
         };
-        let body = project_editor::body()
+        let body = ferrite_ui::form::body()
             .flex_grow(1.)
             .debug_selector(|| "placement-body".into())
             .track_scroll(&self.scroll)

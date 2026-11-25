@@ -331,7 +331,7 @@ fn filter<'a>(rows: &'a [SheetRow], query: &str) -> Vec<(&'a SheetRow, Vec<Range
     rows.iter()
         .filter_map(|row| {
             let context = format!("{} {}", row.place.title(), row.keys);
-            crate::fuzzy::palette_match(query, row.label, &context).map(|lit| (row, lit))
+            ferrite_ui::fuzzy::palette_match(query, row.label, &context).map(|lit| (row, lit))
         })
         .collect()
 }

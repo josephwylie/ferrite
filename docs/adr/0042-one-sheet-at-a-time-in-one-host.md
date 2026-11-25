@@ -46,7 +46,8 @@ their openers. Two of the five had no Escape.
   transcript stops the same work. A dialog whose Thread is no longer open
   closes.
 - **The New task sheet is the fourth.** `NewTaskView`
-  (`cockpit/new_task_view.rs`) owns its instructions and PR fields, which
+  (`ferrite_factory::new_task` since ADR 0041's 2026-11-25 amendment;
+  the root's side is `cockpit/new_task.rs`) owns its instructions and PR fields, which
   of them holds the keyboard, the process chosen, the request that makes a
   second Start the same Task, and a refusal. It emits `NewTaskEvent`:
   start, open the Process menu, close. Starting the Task stays the
@@ -55,7 +56,9 @@ their openers. Two of the five had no Escape.
   and a menu it opened closes before it.
 - **A Task's Rework or Direct this task sheet is the fifth.** The two
   kinds share a Task, one text field, a card and their close, so they are
-  one view, `DirectView` (`cockpit/direct_view.rs`), and one `Sheet` variant.
+  one view, `DirectView` (`ferrite_factory::direct` since ADR 0041's
+  2026-11-25 amendment; the root's side is `cockpit/direct.rs`), and one
+  `Sheet` variant.
   Which of the two it is, with what it chooses (the Rework's recipient;
   the Step a redirect sends to, the Steps it skips, what follows), is its
   `Choice`. It owns its Task, its field, which holds the keyboard, and

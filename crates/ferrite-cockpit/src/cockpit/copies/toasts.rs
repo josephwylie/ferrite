@@ -228,7 +228,7 @@ impl Copies {
                     let (project, key) = (summary.project, key.clone());
                     toast.action(move |_, _, cx| {
                         let (copies, key) = (copies.clone(), key.clone());
-                        project_editor::primary_button("copy-toast-chat", "Start a chat there", false, cx)
+                        ferrite_ui::form::primary_button("copy-toast-chat", "Start a chat there", false, cx)
                             .debug_selector(|| "copy-toast-chat".into())
                             .on_click(move |_, _, cx| asks(&copies, CopyEvent::Chat(key.clone(), project), cx))
                     })

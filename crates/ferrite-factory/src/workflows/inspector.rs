@@ -3,7 +3,17 @@
 //! or the start's, which the starts' own view draws. What a press asks it
 //! says as a `WorkflowsEvent`.
 
-use super::*;
+use ferrite_core::factory_board::{Approver, Destination, Step, StepChange};
+use gpui::prelude::*;
+use gpui::{
+    div, px, rgb, AnyElement, ClickEvent, Context, MouseButton, MouseDownEvent, SharedString,
+    Window,
+};
+
+use super::pickers::{effort_picks, model_picks, provider_picks};
+use super::{skill_matches, Inspected, WorkflowsEvent, WorkflowsInputs, WorkflowsView, SKILL_ROWS};
+use crate::field::Field;
+use crate::picker::{Pick, Trigger};
 
 impl WorkflowsView {
     /// The inspector: the chosen Step's name, instructions, skills,
@@ -426,7 +436,7 @@ impl WorkflowsView {
             )
             .child(
                 div().pt(px(SPACE_2)).child(
-                    crate::project_editor::destructive_button(
+                    ferrite_ui::form::destructive_button(
                         "inspector-delete",
                         "Delete agent",
                         false,
@@ -452,7 +462,7 @@ impl WorkflowsView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use super::direction::{picker_button, segmented};
+        use crate::picker::{picker_button, segmented};
         use ferrite_ui::theme::*;
         let chooser = |selector: &'static str,
                        text: String,
