@@ -7,7 +7,7 @@
 //! removes or writes over on either side goes to that side's trash, not
 //! away. Both sides scan by the same [`TABLE`], or the Machine refuses the
 //! scan and nothing moves, and a base is read only by the table that wrote
-//! it.
+//! it. One sync of a home runs at a time, whichever Machine it is with.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
@@ -26,8 +26,6 @@ use crate::tree::{self, Asked, Entry, Exchange, Manifest, Problem, Reply, Reques
 /// The state a Machine and this computer last agreed on, in the Machine's
 /// own folder of this computer's settings.
 pub const BASE: &str = "setup-sync.json";
-/// Held while a sync of that Machine is under way, by any process.
-const LOCK: &str = "setup-sync.lock";
 /// Where each conflict's losing copy is kept, in Ferrite's settings folder.
 pub const CONFLICTS: &str = "sync-conflicts";
 /// How far the files pulled here are asked ahead of the replies.
@@ -60,10 +58,10 @@ pub struct Job {
 
 impl Job {
     /// A whole sync of `home` with the Machine `target` names, whose base,
-    /// conflicts and trash are kept in `settings_dir`.
+    /// conflicts, trash and lock are kept in `settings_dir`.
     pub fn for_machine(home: Home, settings_dir: &Path, target: &str) -> Self {
         Self {
-            home: home.with_trash_in(settings_dir),
+            home: home.with_settings_in(settings_dir),
             dir: crate::machine::dir(settings_dir, target),
             conflicts: settings_dir.join(CONFLICTS),
             allow_removals: false,
@@ -111,7 +109,8 @@ pub enum Outcome {
     Synced(Synced),
     /// Nothing was done: the plan removed too much.
     Stopped(Valve),
-    /// Another sync of this Machine was under way: this one did nothing.
+    /// Another sync of this home, to any Machine, or an install in it was
+    /// under way: this one did nothing, and is asked again later.
     Busy,
 }
 
@@ -152,7 +151,7 @@ pub struct Kept {
 }
 
 /// A chosen key both sides held differently: the `winner`'s value is on
-/// both now, and the other side's was `was`, said and not kept.
+/// both now, and the other side's was `was`, kept in that side's trash.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Replaced {
     pub path: String,
@@ -173,24 +172,19 @@ pub struct Valve {
 }
 
 /// Sync `job`'s setup with the Machine `there` reaches. `planned` hears
-/// how many entries the sync moves or removes, once it knows.
+/// how many entries the sync moves or removes, once it knows. The home is
+/// held from the first scan to the base, so one sync of it runs at a time,
+/// to whichever Machine: one that finds it held is busy.
 pub fn run(
     job: &Job,
     there: &mut dyn Exchange,
     planned: &mut dyn FnMut(usize),
     cancel: &Cancellation,
 ) -> io::Result<Outcome> {
+    let Some(_held) = job.home.hold()? else {
+        return Ok(Outcome::Busy);
+    };
     fs::create_dir_all(&job.dir).map_err(|error| tree::at(&job.dir, error))?;
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(job.dir.join(LOCK))?;
-    match lock.try_lock() {
-        Ok(()) => {}
-        Err(fs::TryLockError::WouldBlock) => return Ok(Outcome::Busy),
-        Err(fs::TryLockError::Error(error)) => return Err(error),
-    }
     let base = base(&job.dir);
     let unread = job.unread();
     let (mut here, mut far) = if job.only_if_changed_here {

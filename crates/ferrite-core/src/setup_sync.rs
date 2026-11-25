@@ -16,6 +16,7 @@ use crate::provider::Provider;
 mod installs;
 mod keys;
 mod links;
+mod lock;
 mod portable;
 mod reconcile;
 mod run;

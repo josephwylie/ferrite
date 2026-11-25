@@ -4,7 +4,10 @@
 //! on a side, that side's next scan, the one that ends the sync, runs its
 //! tools' installers on a thread of its own, one run at a time, for the
 //! plugins of marketplaces that travel alone: what a tool bundles, Claude's
-//! `@builtin` for one, is never missing.
+//! `@builtin` for one, is never missing. A run holds the side's home as a
+//! sync does, so no tool rewrites a file a sync is writing: on the side
+//! whose sync it is, it begins once that sync lets go. A scan waits for a
+//! run once at most, and each tool is stopped once it runs too long.
 //!
 //! - Claude installs nothing by itself: each plugin set on that it has not
 //!   installed is `claude plugin install`ed, after `claude plugin
@@ -30,12 +33,13 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::keys::{self, plain};
+use super::lock::Lock;
 use super::store::{private_dirs, write_over};
 use super::Format;
 use crate::provider::Provider;
@@ -65,11 +69,12 @@ pub trait Installer: Send + Sync {
     fn run(&self, tool: Provider, words: &[&str]) -> io::Result<()>;
 }
 
-/// Where a side's agents keep their files.
+/// Where a side's agents keep their files, and what holds that side's home.
 #[derive(Clone)]
 pub(super) struct Folders {
     pub claude: PathBuf,
     pub codex: PathBuf,
+    pub lock: Arc<Lock>,
 }
 
 /// One side's installs of the plugins chosen there.
@@ -84,6 +89,10 @@ pub struct Installs {
 #[derive(Default)]
 struct State {
     running: bool,
+    /// The run under way waits for its home, which a sync holds.
+    blocked: bool,
+    /// A scan waited for the run under way: no other waits for it again.
+    waited: bool,
     /// An earlier start left a failure and this one has not run yet: its
     /// first scan tries again.
     retry: bool,
@@ -127,13 +136,14 @@ impl Installs {
     }
 
     /// What a scan says of the installs: the run under way waited for,
-    /// then one for what was wanted since, each for at most `within`; then
-    /// each plugin that failed and is still on and not installed. What a
-    /// run finds failed stands until the next run.
+    /// then one for what was wanted since, both within `within` of the
+    /// scan's start; then each plugin that failed and is still on and not
+    /// installed. What a run finds failed stands until the next run.
     pub(super) fn settled(self: &Arc<Self>, folders: &Folders, within: Duration) -> Vec<(String, String)> {
-        self.wait(within);
+        let until = Instant::now() + within;
+        self.wait(until);
         self.start(folders);
-        self.wait(within);
+        self.wait(until);
         let failed = self.lock().failed.clone();
         if failed.is_empty() {
             return Vec::new();
@@ -143,19 +153,35 @@ impl Installs {
     }
 
     /// Run the installers for `folders` on a thread of their own, when one
-    /// is wanted and none is under way.
+    /// is wanted and none is under way. The run holds the side's home while
+    /// it runs: a sync holding it now is let go first.
     fn start(self: &Arc<Self>, folders: &Folders) {
         let mut state = self.lock();
         let retry = std::mem::take(&mut state.retry);
         if state.running || !(read(&self.kept).wanted || retry) {
             return;
         }
+        let held = match folders.lock.try_hold() {
+            Ok(held) => held,
+            Err(error) => {
+                state.retry = retry;
+                state.failed = missing(folders).into_iter().map(|plugin| (plugin, error.to_string())).collect();
+                return;
+            }
+        };
         self.keep(|kept| kept.wanted = false);
         state.running = true;
+        state.blocked = held.is_none();
+        state.waited = false;
         drop(state);
         let (installs, of) = (self.clone(), folders.clone());
         let spawned = std::thread::Builder::new().name("setup-sync-installs".into()).spawn(move || {
-            let failed = installs.install(&of);
+            let held = held.map_or_else(|| of.lock.hold(), Ok);
+            installs.lock().blocked = false;
+            let failed = match &held {
+                Ok(_) => installs.install(&of),
+                Err(error) => missing(&of).into_iter().map(|plugin| (plugin, error.to_string())).collect(),
+            };
             let mut state = installs.lock();
             installs.keep(|kept| kept.failed = failed.clone());
             state.failed = failed;
@@ -165,6 +191,7 @@ impl Installs {
         if let Err(error) = spawned {
             let mut state = self.lock();
             state.running = false;
+            state.blocked = false;
             state.failed = missing(folders).into_iter().map(|plugin| (plugin, error.to_string())).collect();
             self.keep(|kept| kept.wanted = true);
         }
@@ -251,9 +278,17 @@ impl Installs {
         };
     }
 
-    /// Wait for the run under way, if any, to end, for at most `within`.
-    fn wait(&self, within: Duration) {
-        let state = self.lock();
+    /// Wait for the run under way, if any, to end, until `until` at most:
+    /// by the first scan that finds it, never by another, and not while it
+    /// waits for its home, which a sync holds and lets go only once its
+    /// scans are done.
+    fn wait(&self, until: Instant) {
+        let mut state = self.lock();
+        if !state.running || state.blocked || state.waited {
+            return;
+        }
+        state.waited = true;
+        let within = until.saturating_duration_since(Instant::now());
         let waited = self.idle.wait_timeout_while(state, within, |state| state.running);
         drop(waited.unwrap_or_else(PoisonError::into_inner));
     }

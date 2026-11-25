@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 
 use super::installs::{Folders, Installs};
 use super::links::{self, Places};
+use super::lock::{Held, Lock, LOCK};
 use super::portable::{self, Spelling};
 use super::{keys, Format, Item, Key, Source, CLAUDE_KEYCHAIN, ITEMS, LEFT_OUT};
 use crate::chunked::{self, CHUNK_SIZE};
@@ -66,6 +67,8 @@ pub struct Home {
     installs: Option<Arc<Installs>>,
     /// Where what a sync removes or writes over here goes.
     trash: Arc<Trash>,
+    /// Held by whatever writes this side's setup, one at a time.
+    lock: Arc<Lock>,
 }
 
 /// A side's trash: what a sync removes or writes over there, in a folder
@@ -147,7 +150,7 @@ impl Home {
         let codex = var("CODEX_HOME").map(under);
         let claude = var("CLAUDE_CONFIG_DIR").map(under);
         let keychain = cfg!(target_os = "macos") && account.as_ref().is_some_and(|account| *account == root);
-        let mut home = Self::at(root, codex).with_trash_in(&crate::server::settings_dir());
+        let mut home = Self::at(root, codex).with_settings_in(&crate::server::settings_dir());
         if let Some(claude) = claude {
             home = home.with_claude(claude);
         }
@@ -166,25 +169,37 @@ impl Home {
     }
 
     /// A home at `root` whose sign-ins are files, with Codex's at `codex`
-    /// or in `root`, nothing to install plugins with, and its trash in
-    /// `.ferrite` there, as a Ferrite of that home keeps it.
+    /// or in `root`, nothing to install plugins with, and its trash and
+    /// lock in `.ferrite` there, as a Ferrite of that home keeps them.
     pub fn at(root: PathBuf, codex: Option<PathBuf>) -> Self {
+        let settings = root.join(".ferrite");
         Self {
             claude: root.join(".claude"),
             claude_json: root.join(".claude.json"),
             codex: codex.unwrap_or_else(|| root.join(".codex")),
-            trash: Trash::at(root.join(".ferrite").join(TRASH)),
+            trash: Trash::at(settings.join(TRASH)),
+            lock: Lock::at(settings.join(LOCK)),
             root,
             keychain: None,
             installs: None,
         }
     }
 
-    /// What a sync removes or writes over here kept in the trash of
-    /// `settings`, a Ferrite settings folder, a trash of its own.
-    pub fn with_trash_in(mut self, settings: &Path) -> Self {
+    /// This side's Ferrite settings folder at `settings`: what a sync
+    /// removes or writes over here is kept in its trash, and the home is
+    /// held by its lock. A view of the home of its own: a sync through it
+    /// holds the home for its own writes alone.
+    pub fn with_settings_in(mut self, settings: &Path) -> Self {
         self.trash = Trash::at(settings.join(TRASH));
+        self.lock = Lock::at(settings.join(LOCK));
         self
+    }
+
+    /// This home held for one sync through this view of it, from its first
+    /// scan to its base: `None` while another sync, an install or a write
+    /// holds it, in this process or another.
+    pub(super) fn hold(&self) -> io::Result<Option<Held>> {
+        self.lock.sync()
     }
 
     /// Where the last sync moved what it removed or wrote over here, when
@@ -193,9 +208,9 @@ impl Home {
         self.trash.used()
     }
 
-    /// Where this side's tools keep what they install.
-    fn folders(&self) -> Folders {
-        Folders { claude: self.claude.clone(), codex: self.codex.clone() }
+    /// Where this side's tools keep what they install, and what holds it.
+    pub(super) fn folders(&self) -> Folders {
+        Folders { claude: self.claude.clone(), codex: self.codex.clone(), lock: self.lock.clone() }
     }
 
     /// Claude's folder at `dir`, as `CLAUDE_CONFIG_DIR` puts it, its
@@ -542,6 +557,7 @@ impl Home {
     /// Put `received`, a whole file synced to disk, where `place` says,
     /// what it writes over copied to this side's trash first.
     pub(crate) fn place(&self, place: &Place, received: &Path) -> io::Result<()> {
+        let _held = self.lock.write()?;
         match &place.how {
             How::Rename { at, new } => {
                 let mode = match place.mode {
@@ -594,6 +610,7 @@ impl Home {
             return Err(not_setup(path));
         };
         self.writable(path)?;
+        let _held = self.lock.write()?;
         let root = self.physical(item.path);
         private_dirs(&root)?;
         let at = tree::inside(&root, rest)?;
@@ -622,6 +639,7 @@ impl Home {
         let At::In(..) = self::item(&to)? else {
             return Err(not_setup(&to));
         };
+        let _held = self.lock.write()?;
         let root = self.physical(item.path);
         private_dirs(&root)?;
         let at = links::resolved(&tree::inside(&root, rest)?);
@@ -645,6 +663,7 @@ impl Home {
     /// sign-in is refused: no sync removes one, so none is ever in the
     /// trash.
     pub(crate) fn remove(&self, path: &str) -> io::Result<bool> {
+        let _held = self.lock.write()?;
         match item(path)? {
             At::Whole(Item { source: Source::Credential(_), .. }) => Err(kept_sign_in(path)),
             At::Key(Item { source: Source::Keys { format, keys }, .. }, key) => {

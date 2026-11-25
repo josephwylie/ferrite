@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use super::*;
@@ -114,7 +114,8 @@ fn aged(home: &Home, path: &str, seconds_ago: u64) {
     fs::File::options().write(true).open(at).unwrap().set_modified(when).unwrap();
 }
 
-/// Every file under `home`, by its path, with what it holds.
+/// Every file under `home` but Ferrite's own folder, by its path, with
+/// what it holds.
 fn files(home: &Home) -> BTreeMap<String, String> {
     fn walk(dir: &Path, prefix: &str, into: &mut BTreeMap<String, String>) {
         for entry in fs::read_dir(dir).unwrap() {
@@ -130,6 +131,7 @@ fn files(home: &Home) -> BTreeMap<String, String> {
     }
     let mut into = BTreeMap::new();
     walk(home.root(), "", &mut into);
+    into.retain(|path, _| !path.starts_with(".ferrite/"));
     into
 }
 
@@ -932,8 +934,8 @@ fn a_sync_that_finds_another_under_way_is_busy_not_failed() {
     let world = World::new("busy");
     let (mine, far) = (world.home("here"), world.home("machine"));
     let job = world.job(&mine, "far");
-    fs::create_dir_all(&job.dir).unwrap();
-    let held = fs::File::create(job.dir.join("setup-sync.lock")).unwrap();
+    fs::create_dir_all(world.root.join("settings")).unwrap();
+    let held = fs::File::create(world.root.join("settings").join("setup-sync.lock")).unwrap();
     held.lock().unwrap();
     let outcome = run(&job, &mut Machine::new(&far), &mut |_| {}, &Cancellation::default()).unwrap();
     assert_eq!(outcome, Outcome::Busy);
@@ -2150,4 +2152,127 @@ fn a_file_holding_a_chosen_key_twice_is_held_and_never_written() {
         let said: Vec<_> = synced.problems.iter().map(|problem| (problem.path.as_str(), problem.side)).collect();
         assert_eq!(said, [(".claude/settings.json", Side::There)], "round {round}");
     }
+}
+
+/// An installer that says when it begins and runs until it is told to
+/// end, as one cloning over a slow line does.
+struct Slow {
+    began: Mutex<mpsc::Sender<()>>,
+    end: Mutex<mpsc::Receiver<()>>,
+}
+
+impl Slow {
+    /// It, what hears it begin, and what ends it.
+    fn new() -> (Self, mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (began, heard) = mpsc::channel();
+        let (end, ended) = mpsc::channel();
+        (Self { began: Mutex::new(began), end: Mutex::new(ended) }, heard, end)
+    }
+}
+
+impl Installer for Slow {
+    fn run(&self, _: crate::provider::Provider, _: &[&str]) -> io::Result<()> {
+        let _ = self.began.lock().unwrap().send(());
+        let _ = self.end.lock().unwrap().recv();
+        Err(io::Error::other("it was stopped"))
+    }
+}
+
+/// Claude's settings with a plugin on, of a marketplace Claude does not
+/// know yet: its install begins with `marketplace add`.
+const TURNED_ON: &str = r#"{"enabledPlugins": {"pstack@cursor-plugins": true}, "extraKnownMarketplaces": {"cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}}}}"#;
+
+/// The verifier's run, a hub and two Machines: all three agree on
+/// CLAUDE.md, then each Machine edits it. The sync to the second Machine
+/// holds the hub from its scan on, so the first Machine's sync is busy,
+/// and once it tries again it sees both edits and keeps the other copy.
+/// Before, it took its edit to the hub, and the second sync wrote over
+/// it from what it scanned before, unsaid.
+#[test]
+fn one_sync_of_a_home_runs_at_a_time_whichever_machine_it_is_with() {
+    let world = World::new("one-at-a-time");
+    let (mine, a, b) = (world.home("here"), world.home("a"), world.home("b"));
+    put(&mine, ".claude/CLAUDE.md", "v0\n");
+    sync(&world.job(&mine, "a"), &a);
+    sync(&world.job(&mine, "b"), &b);
+    put(&a, ".claude/CLAUDE.md", "v1, from a\n");
+    put(&b, ".claude/CLAUDE.md", "v2, from b\n");
+
+    let (scanned, heard) = mpsc::channel();
+    let (go, waits) = mpsc::channel::<()>();
+    let to_b = World { root: world.root.clone() }.job(&mine, "b");
+    let machine_b = b.clone();
+    let second = std::thread::spawn(move || {
+        let mut there = Machine::new(&machine_b);
+        let mut paused = false;
+        there.before = Box::new(move |request| {
+            if !paused && matches!(request, Request::Read { .. }) {
+                paused = true;
+                let _ = scanned.send(());
+                let _ = waits.recv();
+            }
+        });
+        run(&to_b, &mut there, &mut |_| {}, &Cancellation::default())
+    });
+    heard.recv().unwrap();
+    let first = run(&world.job(&mine, "a"), &mut Machine::new(&a), &mut |_| {}, &Cancellation::default());
+    go.send(()).unwrap();
+    let second = second.join().unwrap().unwrap();
+    assert_eq!(first.unwrap(), Outcome::Busy, "the first Machine's sync ran while the second's held the hub");
+    assert!(matches!(&second, Outcome::Synced(synced) if synced.pulled == 1), "{second:?}");
+    assert_eq!(read(&mine, ".claude/CLAUDE.md").as_deref(), Some("v2, from b\n"));
+
+    let again = sync(&world.job(&mine, "a"), &a);
+    let said: Vec<&str> = again.conflicts.iter().map(|kept| kept.path.as_str()).collect();
+    assert_eq!(said, [".claude/CLAUDE.md"], "{again:?}");
+    let mut both = [fs::read_to_string(&again.conflicts[0].kept).unwrap(), read(&mine, ".claude/CLAUDE.md").unwrap()];
+    both.sort();
+    assert_eq!(both, ["v1, from a\n", "v2, from b\n"]);
+}
+
+/// Claude's `marketplace add` writes its whole settings file from what it
+/// read seconds before: an install holds its home while it runs, so a sync
+/// of that home is busy until it ends and never writes the file under it.
+#[test]
+fn a_sync_is_busy_while_an_install_runs_in_its_home() {
+    let world = World::new("install-holds");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    put(&mine, ".claude/settings.json", TURNED_ON);
+    put(&far, ".claude/CLAUDE.md", "From the Machine.\n");
+    let job = world.job(&mine, "far");
+    let (slow, began, end) = Slow::new();
+    let installs = Installs::new(slow, &world.root.join("settings"));
+    installs.changed();
+    let home = job.home.clone().with_installs(installs);
+    let scan = std::thread::spawn(move || home.scan(&[]));
+    began.recv().unwrap();
+    let busy = run(&job, &mut Machine::new(&far), &mut |_| {}, &Cancellation::default());
+    end.send(()).unwrap();
+    scan.join().unwrap();
+    assert_eq!(busy.unwrap(), Outcome::Busy, "a sync ran while Claude's installer was writing the settings");
+    let synced = sync(&job, &far);
+    assert_eq!(read(&mine, ".claude/CLAUDE.md").as_deref(), Some("From the Machine.\n"), "{synced:?}");
+}
+
+/// A tool that hangs is stopped in its time, and no scan waits for it
+/// again and again: the first scan that finds a run under way waits for
+/// it, within its time, and every later scan goes on.
+#[test]
+fn a_scan_waits_once_for_an_install_under_way_and_the_next_goes_on() {
+    let world = World::new("install-waited-once");
+    let home = world.home("here");
+    put(&home, ".claude/settings.json", TURNED_ON);
+    let (slow, began, end) = Slow::new();
+    let installs = Installs::new(slow, &home.root().join(".ferrite"));
+    installs.changed();
+    let within = Duration::from_secs(1);
+    let first = std::time::Instant::now();
+    installs.settled(&home.folders(), within);
+    began.recv().unwrap();
+    assert!(first.elapsed() >= within, "the scan that began the run waited for it: {:?}", first.elapsed());
+    let second = std::time::Instant::now();
+    installs.settled(&home.folders(), within);
+    let waited = second.elapsed();
+    end.send(()).unwrap();
+    assert!(waited < within / 2, "a later scan waited for the same run again: {waited:?}");
 }
