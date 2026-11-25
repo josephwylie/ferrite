@@ -120,10 +120,13 @@ What stays is held unsaid, as an own value is.
 - **The first sync** unions `Each` entries, so two sides that each turned a
   plugin on both keep both. A key both sides hold differently, with no base,
   takes this computer's value. No conflict copy is kept (the old value is
-  in that side's trash), and the toast says what it was: "`model` in ~/.claude/settings.json was set differently on wsl. It is
-  this computer's on both now. It was "sonnet" on wsl." With a base, of two
-  changes the newer wins, by the file's modification time, and the toast
-  says the same.
+  in that side's trash), and the toast says what it was and where it went:
+  "Claude's model was set differently on wsl. It is this computer's on both
+  now. It was "sonnet" on wsl, kept in its sync-trash folder." With a base,
+  of two changes the newer wins, by the file's modification time, and the
+  toast says the same. A toast names a key by what it sets and for which
+  tool, and a file by what it is ("the skill both-edit", "the command
+  team", "CLAUDE.md"), with a path only where nothing plainer names it.
 
 ## Text
 
@@ -132,7 +135,8 @@ with each CR before an LF left out. Two sides compare by it when both have
 one, so `CLAUDE.md` with CRLF on Windows and LF on Linux is the same file.
 The bytes are sent as they are: an edit made on Windows reaches Linux with
 its CRLF. A file that is not UTF-8 has no `text` and compares by its bytes.
-Only a Setup scan computes it.
+Only a Setup scan computes it. A file's hash another kind of scan kept, with
+no `text`, is not taken by a Setup scan: the file is read again.
 
 ## Links
 
@@ -142,7 +146,9 @@ folder in the table's paths: `.claude/skills/x -> ../../.agents/skills/x`.
 The other side makes the link to where that folder is in its own home,
 from the link's folder, as a tree makes one (`tree::make_link`, ADR 0048):
 a symlink on Unix, a junction on Windows, which needs no privilege. Links
-are made after every file, so the target is there first. A link to a
+are made after every file, so the target is there first. A link whose
+target changed on one side is made anew on the other, its old link moved to
+that side's trash. A link to a
 file, or out of the table, is followed and listed as before, and nothing
 is written through it (`Hold::Linked`): Windows makes a file link only for
 some accounts, and a copy in its place would fight the link on the next
@@ -182,9 +188,11 @@ must install it. Prototyped in homes of their own, with no sign-in:
   operator's `"autoUpdate": true`.
 
 So the side a sync writes a plugin or marketplace key to runs the
-installers (`Installs`) at its next scan, the one that ends the sync, so
-no installer writes a file the sync is still writing. Only a plugin of a
-marketplace that travels is ever missing:
+installers (`Installs`) at its next scan, the one that ends the sync. A run
+holds the side's home while it runs (see One sync at a time), so no
+installer writes a file a sync is writing: on the hub, a run its own sync
+wanted begins once that sync lets go, and says what failed at the next
+sync. Only a plugin of a marketplace that travels is ever missing:
 
 - **Claude**: each plugin on and not in `plugins/installed_plugins.json`.
   `claude plugin marketplace add -- <source>` runs when
@@ -196,9 +204,16 @@ marketplace that travels is ever missing:
 
 Each name handed over is a letter or a digit, then letters, digits, `.`,
 `_` and `-`, and each source a GitHub `owner/repo` or a URL as above. Any
-other is a failure, never run. A run is on a thread of its own, one at a
-time, and never on the pump. A scan waits up to 120 s for it, so the sync
-that turned a plugin on says what failed, as a problem at
+other is a failure, never run. Nothing a command starts may ask anyone
+anything: git under it is told never to prompt (`GIT_TERMINAL_PROMPT=0`,
+`GCM_INTERACTIVE=never`), and a command still running after 120 s is
+stopped with all it started, a failure in plain words: "Claude Code's
+installer did not finish in 2 minutes, so it was stopped". A run is on a
+thread of its own, one at a time, and never on the pump. The first scan
+that finds a run under way waits for it, up to 120 s from the scan's start;
+no other scan waits for that run, and none waits while the run waits for
+its home. So the sync that turned a plugin on says what failed, as a
+problem at
 `.claude/plugins/<plugin>` or `.codex/plugins/<plugin>`. The row counts
 them as plugins, apart from paths, and names the side as the toast does:
 "pstack could not be installed on this computer: …". A failure stands
@@ -214,6 +229,20 @@ the tool reads itself. The runner is core's. What runs `claude` and
 `codex` is the engine's (`providers::plugin_installs`), which finds each
 the way a Session does, and each process that syncs a home hands it in:
 the window, `ferrite setup sync` and the Server.
+
+## One sync at a time
+
+A home has one writer at a time, by any process: a file lock,
+`setup-sync.lock`, in that side's Ferrite settings folder. A sync holds its
+home from its first scan to its base, whichever Machine it is with. Syncs
+to two Machines ran side by side before: one scanned the hub, the other
+took its Machine's edit to the hub, and the first then wrote its own over
+it, unsaid. Now a sync that finds the home held does nothing and is busy,
+and the window asks it again 3 s later, so the syncs queue. An install
+holds the home while it runs, and each write a Machine is asked for holds
+it for that write, so a hub's write waits for the Machine's own install. A
+sync's own writes go through the view of the home it holds, and take
+nothing more.
 
 ## The table's version
 
@@ -284,10 +313,14 @@ Windows refuses spelled `_`.
   each sync on the other.
 - **The installers are the tools' CLIs.** They need the network and
   `claude` or `codex` on the side's PATH. A side without one says so on the
-  row. A run that hangs holds the scan 120 s at most, and later scans say
-  what it found. Claude's `marketplace add` writes the whole settings file
-  from what it read as it began. A key the operator changes on that side
-  in those seconds can be lost, as when they run it themselves.
+  row. A command that hangs is stopped after 120 s, and only the first scan
+  that finds it waits. Claude's `marketplace add` writes the whole settings
+  file from what it read as it began. No sync writes that file meanwhile,
+  but a key the operator changes on that side in those seconds can be
+  lost, as when they run it themselves.
+- **Syncs queue.** With two Machines, the second waits for the first, a
+  few seconds more on each change, and a sync waits for an install under
+  way in its home. On the hub, what an install found shows one sync later.
 - **A link out of the table is still followed.** A skills folder kept in a
   dotfiles checkout keeps syncing, at the cost of its contents travelling
   as files.

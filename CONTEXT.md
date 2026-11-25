@@ -402,7 +402,9 @@ differ with none agreed wait for the operator to pick one, and a sign-in is
 never removed: a side signed out takes the other's. A sync that would
 remove most of an item, or all of one, waits for "Sync anyway". What a sync
 removes or writes over on either side is kept in that side's trash for 14
-days. Both sides must sync by the same table, or the row says which Ferrite
+days. One sync of a home runs at a time, whichever Machine it is with, and
+an install there holds the home as a sync does; a sync that finds it held
+tries again a few seconds later. Both sides must sync by the same table, or the row says which Ferrite
 to update, and a base another table wrote is read as none (ADR 0048, ADR
 0050).
 _Avoid_: dotfile sync, backup.
