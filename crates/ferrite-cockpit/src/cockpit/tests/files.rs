@@ -4,10 +4,9 @@
 //! tabs row, and remote files through the production adapter. What the
 //! view draws and does on its own is `ferrite_tools::files`' to test.
 use super::*;
-use crate::cockpit::context_menu::Submenu;
 use crate::cockpit::panel::Opener;
 use crate::cockpit::surfaces::SurfaceId;
-use crate::cockpit::tools::{FilesSub, FilesVerb};
+use crate::cockpit::tools::FilesVerb;
 use ferrite_tools::changes::Diff;
 
 fn files_window<'a>(
@@ -286,6 +285,9 @@ fn a_file_the_preview_opens_opens_here_instead(cx: &mut TestAppContext) {
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Files));
 }
 
+/// A tree row's menu is the window's: its `Copy ›` opens the copy rows,
+/// whose `Relative path` puts the row's path on the clipboard, and its
+/// `Attach as context` puts the file in the Composer.
 #[gpui::test]
 fn a_rows_menu_opens_in_the_window_and_attach_reaches_the_composer(cx: &mut TestAppContext) {
     let (view, thread, _checkout, cx) = files_window("files-menu", cx);
@@ -298,8 +300,11 @@ fn a_rows_menu_opens_in_the_window_and_attach_reaches_the_composer(cx: &mut Test
     assert!(cx.debug_bounds("files-row-0").is_some());
     assert!(cx.debug_bounds("files-row-1").is_none(), "only lib.rs matches");
     let row = cx.debug_bounds("files-row-0").unwrap();
-    cx.simulate_mouse_down(row.center(), gpui::MouseButton::Right, gpui::Modifiers::none());
-    tick(cx);
+    let open_menu = |cx: &mut gpui::VisualTestContext| {
+        cx.simulate_mouse_down(row.center(), gpui::MouseButton::Right, gpui::Modifiers::none());
+        tick(cx);
+    };
+    open_menu(cx);
     view.read_with(cx, |view, _| {
         let menu = view.context_menu().expect("the row's menu");
         let names: Vec<_> = menu
@@ -310,10 +315,18 @@ fn a_rows_menu_opens_in_the_window_and_attach_reaches_the_composer(cx: &mut Test
             .collect();
         assert_eq!(names, ["Attach as context", "Copy", "Show in Finder"]);
     });
-    view.read_with(cx, |view, cx| {
-        let sub = view.context_submenu_rows_for_test(MenuTarget::File(thread), Submenu::Files(FilesSub::Copy), cx);
-        assert_eq!(sub.len(), 3, "Absolute path, Relative path, Filename");
-    });
+    let copy = cx.debug_bounds("context-menu-row-1").expect("Copy");
+    cx.simulate_mouse_move(copy.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let relative = cx.debug_bounds("context-submenu-row-1").expect("the pointer opens Copy's rows");
+    cx.simulate_click(relative.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(std::path::Path::new("src").join("lib.rs").to_string_lossy().into_owned()),
+        "Copy › Relative path copies the row's path"
+    );
+    open_menu(cx);
     let attach = cx.debug_bounds("context-menu-row-0").expect("Attach as context");
     cx.simulate_click(attach.center(), gpui::Modifiers::none());
     tick(cx);
