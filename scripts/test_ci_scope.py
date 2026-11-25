@@ -52,6 +52,10 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(select(self.packages, ["crates/ferrite-factory/src/archive.rs"])["packages"],
                          ["ferrite", "ferrite-cockpit", "ferrite-factory"])
 
+    def test_tools_select_the_window_that_makes_them(self):
+        self.assertEqual(select(self.packages, ["crates/ferrite-tools/src/remote_files.rs"])["packages"],
+                         ["ferrite", "ferrite-cockpit", "ferrite-tools"])
+
     def test_core_selects_transitive_consumers(self):
         result = select(self.packages, ["crates/ferrite-core/src/browser.rs"])
         self.assertIn("ferrite-terminal", result["packages"])
@@ -346,9 +350,9 @@ renamed = { package = "helper", path = "crates/helper" }
         with self.assertRaisesRegex(ValueError, "Untracked in-tree path dependency.*workspace.exclude"):
             select(workspace(self.root), ["README.md"])
 
-    def test_transitive_frame_review_and_factory_cockpit_edges_are_forbidden(self):
+    def test_transitive_frame_review_factory_and_tools_cockpit_edges_are_forbidden(self):
         self.write_package("helper", '[dev-dependencies]\nwindow = { package = "ferrite-cockpit", path = "../ferrite-cockpit" }\n')
-        for source in ["ferrite-frame", "ferrite-review", "ferrite-factory"]:
+        for source in ["ferrite-frame", "ferrite-review", "ferrite-factory", "ferrite-tools"]:
             with self.subTest(source=source):
                 self.write_package(source, '[dependencies]\nhelper = { path = "../helper" }\n')
                 with self.assertRaisesRegex(ValueError, f"{source} -> helper -> ferrite-cockpit"):

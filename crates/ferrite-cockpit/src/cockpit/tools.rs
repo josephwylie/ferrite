@@ -15,6 +15,7 @@ use ferrite_core::ThreadKey;
 mod changes;
 mod editor;
 mod files;
+mod remote_files;
 mod save;
 mod terminal;
 mod tree;

@@ -2364,6 +2364,7 @@ dependencies = [
  "ferrite-reviewr",
  "ferrite-server",
  "ferrite-terminal",
+ "ferrite-tools",
  "ferrite-ui",
  "futures",
  "gpui-base",
@@ -2550,6 +2551,15 @@ dependencies = [
  "ferrite-ui",
  "gpui-kit",
  "libc",
+]
+
+[[package]]
+name = "ferrite-tools"
+version = "0.4.0"
+dependencies = [
+ "ferrite-core",
+ "futures",
+ "gpui-kit",
 ]
 
 [[package]]

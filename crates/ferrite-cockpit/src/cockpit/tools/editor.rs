@@ -41,7 +41,7 @@ use gpui::{
     MouseMoveEvent, Pixels, Render, SharedString, StyledText, TextLayout, UTF16Selection, Window,
 };
 
-use super::files::remote_files::{self, RemoteFiles};
+use ferrite_tools::remote_files::{self, RemoteFiles};
 use super::save::{self, Outcome, SaveState};
 use ferrite_core::file_operations::Reply as FileReply;
 

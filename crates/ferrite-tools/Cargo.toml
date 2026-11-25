@@ -1,0 +1,24 @@
+[package]
+name = "ferrite-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ferrite's tools Surfaces (ADR 0039): Files, Changes and the Terminal, each reading the window through a Source"
+
+[lib]
+doctest = false
+
+[features]
+# The readings and fixtures the Cockpit's own tests reach for.
+test-support = []
+
+[dependencies]
+ferrite-core = { path = "../ferrite-core" }
+# The kit facade keeps the renderer, native platform and components on one
+# compatible stack. Keep the gpui import name for derives and existing code.
+gpui = { package = "gpui-kit", version = "=0.6.0" }
+# A remote file operation's answer. Already in the tree via gpui.
+futures = "0.3"
+
+[dev-dependencies]
+gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
