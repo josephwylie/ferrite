@@ -665,6 +665,22 @@ impl Copies {
         })
     }
 
+    /// Each copy whose draft's Pane is `closed` waits for no draft. One
+    /// that stopped stays, seen or not, its card a pick away on any chip's
+    /// menu (`environment_menu_rows`), until the operator closes it.
+    pub(crate) fn drafts_closed(&mut self, closed: impl Fn(PaneIdentity) -> bool, cx: &mut Context<Self>) {
+        let mut let_go = false;
+        for (_, entry) in &mut self.entries {
+            if entry.order.waits && closed(entry.order.placing.draft) {
+                entry.order.waits = false;
+                let_go = true;
+            }
+        }
+        if let_go {
+            cx.notify();
+        }
+    }
+
     /// The draft that asked for the copy of `key` waits on it no longer:
     /// it is sent where the operator picked. How a copy that stopped
     /// ended, seen already, goes with it.

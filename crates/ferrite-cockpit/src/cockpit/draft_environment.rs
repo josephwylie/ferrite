@@ -606,11 +606,15 @@ impl CockpitView {
         }
     }
 
-    /// The window's copies, drawn again as they move and doing what their
-    /// toasts ask.
+    /// The window's copies, drawn again as they move, an environment menu
+    /// open with them, and doing what their toasts ask.
     pub(super) fn copies_of_window(cockpit: Entity<Cockpit>, cx: &mut Context<Self>) -> Entity<copies::Copies> {
         let copies = cx.new(|_| copies::Copies::new(cockpit));
-        cx.observe(&copies, |_, _, cx| cx.notify()).detach();
+        cx.observe(&copies, |view, _, cx| {
+            view.environment_menu_follows(cx);
+            cx.notify()
+        })
+        .detach();
         cx.subscribe(&copies, |view, _, event, cx| match event {
             CopyEvent::Show(key) => view.show_copy(key, cx),
             CopyEvent::Again(key) => view.copy_again(key, cx),
@@ -620,13 +624,37 @@ impl CockpitView {
         copies
     }
 
-    /// Hear the copies, and do what each that moved asks of the window.
+    /// An environment menu open reads the copies as they are now: the row
+    /// of each says what its chip and toast say.
+    fn environment_menu_follows(&mut self, cx: &mut Context<Self>) {
+        let Some(open) = self.band_menu().filter(|open| open.kind.chip == pane::BandChip::Environment) else {
+            return;
+        };
+        let pane = open.pane;
+        let Some(draft) = self.panes.iter().find(|at| at.identity == pane).and_then(|at| at.draft()) else {
+            return;
+        };
+        let rows = self.environment_menu_rows(pane, draft, cx);
+        if let Some(open) = self.band_menu_mut() {
+            let chosen = open.rows.get(open.selected).map(|row| row.consequence.clone());
+            open.selected = chosen
+                .and_then(|chosen| rows.iter().position(|row| row.consequence == chosen))
+                .unwrap_or(0);
+            open.rows = rows;
+        }
+    }
+
+    /// Hear the copies, and do what each that moved asks of the window. A
+    /// copy whose draft's Pane closed waits for no draft.
     pub(super) fn poll_copies(&mut self, cx: &mut Context<Self>) {
         let landed = self.copies.update(cx, |copies, cx| copies.poll(cx));
         for landed in landed {
             self.copy_landed(landed, cx);
         }
     }
+        let open: Vec<PaneIdentity> = self.panes.iter().map(|pane| pane.identity).collect();
+        self.copies
+            .update(cx, |copies, cx| copies.drafts_closed(|draft| !open.contains(&draft), cx));
 
     /// Do what a copy that moved asks of the window.
     fn copy_landed(&mut self, landed: copies::Landed, cx: &mut Context<Self>) {

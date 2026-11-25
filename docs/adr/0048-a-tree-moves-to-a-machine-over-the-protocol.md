@@ -444,11 +444,15 @@ Windows window.
   ladder). Leaving the app while a copy runs asks first ("Copying P to
   E. Leaving stops it; Resume finishes it later.").
 - **A copy is always a pick away.** Every Draft's environment chip lists
-  each copy under way after its environments, "Copying P to E" and how
-  far, the Draft's own Project first; a pick opens its card. The chip
-  stands whenever a copy runs, since its Machine is on, so with the toast
-  closed and the Draft gone or sent here the copy is still reached; a new
-  Draft (⌘N) is its home when there is no other.
+  each copy the window keeps after its environments, the Draft's own
+  Project first: "Copying P to E" and how far, "Copied P to E" and done,
+  or "Copy of P to E" and stopped; a pick opens its card. The menu open
+  reads each as it is now, as the chip and the toast do. The chip stands
+  whenever a copy runs, since its Machine is on, so with the toast closed
+  and the Draft gone or sent here the copy is still reached; a new Draft
+  (⌘N) is its home when there is no other. A copy whose Draft's Pane
+  closes waits for no Draft; one that stopped stays listed until the
+  operator closes its card.
 - **The Draft waits on its copy until it is in.** While it runs, the
   Draft's chip shows a ring and the percentage, "Send once copied"
   stands beside it, and there is no Send: a first send starts nothing.

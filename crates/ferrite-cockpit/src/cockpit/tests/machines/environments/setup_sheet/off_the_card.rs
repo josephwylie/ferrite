@@ -91,6 +91,35 @@ fn an_open_environment_menu_is_drawn_over_a_toast(cx: &mut TestAppContext) {
     assert_eq!(pressed.get(), 0, "the press was the menu's, not the toast's");
 }
 
+/// The environment chip's menu, open while a copy moves, reads the copy
+/// as it is now, as its chip and its toast do: under way, then done.
+#[gpui::test]
+fn an_open_environment_menu_follows_the_copy(cx: &mut TestAppContext) {
+    let (view, _draft, _mine, _on_box, _dest, cx) = copy_under_way("env-menu-follows", cx);
+    // The draft is sent here: the copy carries on, on every chip's menu.
+    pick_on(&view, ENVIRONMENT, "Local", cx);
+    settles(cx);
+    press(cx, ENVIRONMENT);
+    until(cx, |cx| view.read_with(cx, |view, _| view.band_menu().is_some()));
+    let copy_row = |cx: &mut gpui::VisualTestContext| {
+        band_rows(&view, cx)
+            .into_iter()
+            .find(|row| row.0.ends_with("app to box"))
+            .map(|row| (row.0, row.1))
+    };
+    let opened = copy_row(cx);
+    assert!(
+        opened.as_ref().is_some_and(|(name, how)| name == "Copying app to box" && how.ends_with('%')),
+        "{opened:?}"
+    );
+
+    BOX_SLOW.store(false, Ordering::SeqCst);
+    until(cx, |cx| copy_is(&view, cx, |phase| matches!(phase, Phase::Done(_))));
+    settles(cx);
+    assert!(view.read_with(cx, |view, _| view.band_menu().is_some()), "the menu stays open");
+    assert_eq!(copy_row(cx), Some(("Copied app to box".into(), "done".into())), "the row says it is done");
+}
+
 /// A copy done whose toast went by itself, the operator elsewhere, is not
 /// let go: the system's notification stays, and every chip's menu lists
 /// the copy until the operator opens it. Its card offers the chat there,
@@ -136,4 +165,37 @@ fn a_copy_whose_toast_went_by_itself_stays_until_the_operator_acts(cx: &mut Test
     let chat = focused_draft(&view, cx);
     assert_eq!(draft_project(&view, chat, cx).machine(), on_box, "a chat on the copy");
     assert!(!copy_is(&view, cx, |_| true), "the chat lets it go");
+}
+
+/// A copy that stopped while its draft waited on it, the draft's Pane then
+/// closed with no pick, waits for no draft: it is a pick away on any
+/// chip's menu, as stopped, with its Resume, until the operator closes
+/// its card.
+#[gpui::test]
+fn a_stopped_copy_whose_draft_closed_is_still_a_pick_away(cx: &mut TestAppContext) {
+    let (view, draft, mine, _on_box, _dest, cx) = copy_under_way("env-draft-closed", cx);
+    box_down(true);
+    BOX_SLOW.store(false, Ordering::SeqCst);
+    on_toast(cx, "copy-toast-again");
+    close_toast(cx);
+    assert_eq!(text_of(cx, "band-copy-waits").as_deref(), Some("Copy stopped"));
+
+    view.update(cx, |view, cx| view.close_pane(draft, cx));
+    until(cx, |cx| view.read_with(cx, |view, _| view.index_of(draft).is_none()));
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    assert_ne!(focused_draft(&view, cx), draft, "another draft");
+    settles(cx);
+    assert!(debug_bounds(cx, "band-copy-waits".into()).is_none(), "no draft waits on it");
+    let rows = environment_rows(&view, cx);
+    assert!(
+        rows.iter().any(|row| row.0 == "Copy of app to box" && row.1 == "stopped"),
+        "the stopped copy is a pick away: {rows:?}"
+    );
+    pick_on(&view, ENVIRONMENT, "Copy of app to box", cx);
+    drawn(cx, "placement-failed");
+    assert!(debug_bounds(cx, "placement-resume".into()).is_some(), "its Resume");
+    press(cx, "placement-dismiss");
+    assert!(!copy_is(&view, cx, |_| true), "closed, it goes");
+    box_down(false);
 }
