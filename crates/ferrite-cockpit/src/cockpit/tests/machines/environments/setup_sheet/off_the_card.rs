@@ -1,7 +1,7 @@
 //! A copy followed off its card (ADR 0048 §2): its toast, drawn under
-//! every menu the operator opens and letting the copy go only when the
-//! operator closes it, and its row on every environment chip's menu, which
-//! reads the copy as it is now.
+//! every menu the operator opens and letting the copy go when the operator
+//! closes it, or by going itself once nothing is left to do or see, and its
+//! row on every environment chip's menu, which reads the copy as it is now.
 
 use super::*;
 
@@ -118,10 +118,11 @@ fn an_open_environment_menu_follows_the_copy(cx: &mut TestAppContext) {
     assert_eq!(copy_row(cx), Some(("Copied app to box".into(), "done".into())), "the row says it is done");
 }
 
-/// A copy done whose toast went by itself, the operator elsewhere, is not
-/// let go: the system's notification stays, and every chip's menu lists
-/// the copy until the operator opens it. Its card offers the chat there,
-/// which lets it go.
+/// A copy done whose draft did not move there, its toast gone by itself
+/// with the operator elsewhere, is not let go: the system's notification
+/// stays, and every chip's menu lists the copy, under its own heading,
+/// until the operator opens it. Its card offers the chat there, which lets
+/// it go.
 #[gpui::test]
 fn a_copy_whose_toast_went_by_itself_stays_until_the_operator_acts(cx: &mut TestAppContext) {
     let (view, _draft, _mine, on_box, dest, held, cx) = copy_under_way("env-lapsed", cx);
@@ -155,6 +156,13 @@ fn a_copy_whose_toast_went_by_itself_stays_until_the_operator_acts(cx: &mut Test
         rows.iter().any(|row| row.0 == "Copied app to box" && row.1 == "done"),
         "the copy is a pick away: {rows:?}"
     );
+    let names: Vec<&str> = rows.iter().map(|row| row.0.as_str()).collect();
+    assert_eq!(
+        names,
+        ["Local", "box", "Add environment…", "Copies", "Copied app to box"],
+        "the copy under its own heading, after the environments"
+    );
+    assert!(rows[3].3, "the heading is no pick: {rows:?}");
     pick_on(&view, ENVIRONMENT, "Copied app to box", cx);
     drawn(cx, "placement-chat");
     settles(cx);

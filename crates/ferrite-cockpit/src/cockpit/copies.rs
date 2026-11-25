@@ -109,7 +109,8 @@ pub(crate) enum Phase {
         when_back: bool,
     },
     /// The operator stopped it. What it sent stays, for its Resume.
-    Cancelled { again: Again },
+    /// `reached`: how far it was then, out of 1, once that could be said.
+    Cancelled { again: Again, reached: Option<f32> },
 }
 
 /// What a stopped copy's Resume or Retry does.
@@ -156,7 +157,7 @@ impl Phase {
     pub(crate) fn again(&self) -> Option<&Again> {
         match self {
             Phase::Failed { again, .. } => again.as_ref(),
-            Phase::Cancelled { again } => Some(again),
+            Phase::Cancelled { again, .. } => Some(again),
             _ => None,
         }
     }
@@ -402,7 +403,7 @@ impl Entry {
             }
             _ => again_for(resumable),
         };
-        if let Phase::Failed { again: Some(was), .. } | Phase::Cancelled { again: was } = &mut self.phase {
+        if let Phase::Failed { again: Some(was), .. } | Phase::Cancelled { again: was, .. } = &mut self.phase {
             *was = again;
         }
     }
@@ -468,7 +469,11 @@ impl Entry {
         if !self.stop() {
             return false;
         }
-        self.phase = Phase::Cancelled { again };
+        let reached = match self.phase {
+            Phase::Copying { total, .. } if total > 0 => self.phase.done(),
+            _ => None,
+        };
+        self.phase = Phase::Cancelled { again, reached };
         true
     }
 
@@ -522,12 +527,15 @@ impl Entry {
         let machine = &self.order.placing.machine_name;
         Some(match &self.phase {
             Phase::Occupied { .. } => (self.why()?, true),
-            Phase::Cancelled { again } => (
-                match again {
-                    Again::Retry => "Copy cancelled before anything was sent.".into(),
-                    Again::Resume | Again::Add { .. } => {
-                        "Copy cancelled. Resume finishes it from where it stopped.".into()
-                    }
+            Phase::Cancelled { again, reached } => (
+                match (again, reached) {
+                    (Again::Retry, _) => "Copy cancelled before anything was sent.".into(),
+                    // Whole percents, never rounded up to what is not there.
+                    (_, Some(reached)) => format!(
+                        "Copy cancelled at {}%. Resume finishes it.",
+                        (reached * 100.).floor() as u32
+                    ),
+                    (_, None) => "Copy cancelled. Resume finishes it.".into(),
                 },
                 false,
             ),

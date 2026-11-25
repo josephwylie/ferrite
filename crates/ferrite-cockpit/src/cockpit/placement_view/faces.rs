@@ -20,7 +20,14 @@ impl PlacementView {
             self.close(cx),
         );
         let removed = self.removed(cx);
-        let mut content = column();
+        // How a copy that stopped stands leads the card; what is said of
+        // where it would go stands under that.
+        let (lead, under) = match self.stage_line(cx) {
+            Some((line, true)) => (Some(line), None),
+            Some((line, false)) => (None, Some(line)),
+            None => (None, None),
+        };
+        let mut content = column().children(lead);
         content = if self.browsing && !removed {
             content.child(self.dest.clone()).child(
                 ferrite_ui::field::prefixed_field(
@@ -52,7 +59,7 @@ impl PlacementView {
                 .debug_selector(|| "placement-destination".into()),
             )
         };
-        content = content.children(self.stage_line(cx));
+        content = content.children(under);
         content = match &self.entries {
             None => content.child(
                 note("Reading what git ignores").debug_selector(|| "placement-listing".into()),
@@ -114,47 +121,53 @@ impl PlacementView {
     }
 
     /// How the last copy here ended, or why none can go, when there is
-    /// anything to say: two lines at most, whole in its tooltip. A copy
-    /// that stopped says it as its toast does (`copies::Entry::standing`).
-    fn stage_line(&self, cx: &App) -> Option<gpui::Stateful<Div>> {
+    /// anything to say: two lines at most, whole in its tooltip, and
+    /// whether it leads the card. A copy that stopped, cancelled or failed
+    /// or its Machine back, says it as its toast does
+    /// (`copies::Entry::standing`), first and in the ink of what is read
+    /// (a failure's red); what is said of the destination (taken, refused,
+    /// an unfinished copy there) stands under it.
+    fn stage_line(&self, cx: &App) -> Option<(gpui::Stateful<Div>, bool)> {
         let back = self.copies.read(cx).back(&self.key(), cx);
         let standing = self
             .copy(cx)
             .and_then(|copy| Some((copy.standing(back)?, &copy.phase)));
-        let (text, ink, selector): (String, u32, &'static str) = match (self.refusal.as_ref().or(self.unfit.as_ref()), standing) {
-            (Some(refusal), _) => (refusal.to_string(), BLOCKED, "placement-refusal"),
-            (None, Some(((text, failed), phase))) => (
-                text,
-                if failed { BLOCKED } else { INK_SUBTLE },
-                match phase {
-                    Phase::Occupied { .. } => "placement-occupied",
-                    Phase::Cancelled { .. } => "placement-cancelled",
-                    _ => "placement-failed",
-                },
-            ),
-            _ if self.resumes(cx) => (
-                format!("An unfinished copy of {} is here.", self.placing.title),
-                INK_SUBTLE,
-                "placement-unfinished",
-            ),
-            _ => return None,
-        };
-        let text = SharedString::from(text);
-        Some(
-            div()
-                .id("placement-stage")
-                .debug_selector(|| "placement-stage".into())
-                .flex_shrink_0()
-                .min_w_0()
-                .tooltip(ferrite_ui::menu::tooltip(text.clone()))
-                .child(
-                    components::text_ui()
-                        .line_clamp(2)
-                        .text_color(gpui::rgb(ink))
-                        .debug_selector(move || selector.into())
-                        .child(text),
+        let (text, ink, selector, leads): (String, u32, &'static str, bool) =
+            match (self.refusal.as_ref().or(self.unfit.as_ref()), standing) {
+                (Some(refusal), _) => (refusal.to_string(), BLOCKED, "placement-refusal", false),
+                (None, Some(((text, _), Phase::Occupied { .. }))) => (text, BLOCKED, "placement-occupied", false),
+                (None, Some(((text, failed), phase))) => (
+                    text,
+                    if failed { BLOCKED } else { INK_STRONG },
+                    match phase {
+                        Phase::Cancelled { .. } => "placement-cancelled",
+                        _ => "placement-failed",
+                    },
+                    true,
                 ),
-        )
+                _ if self.resumes(cx) => (
+                    format!("An unfinished copy of {} is here.", self.placing.title),
+                    INK_SUBTLE,
+                    "placement-unfinished",
+                    false,
+                ),
+                _ => return None,
+            };
+        let text = SharedString::from(text);
+        let line = div()
+            .id("placement-stage")
+            .debug_selector(|| "placement-stage".into())
+            .flex_shrink_0()
+            .min_w_0()
+            .tooltip(ferrite_ui::menu::tooltip(text.clone()))
+            .child(
+                components::text_ui()
+                    .line_clamp(2)
+                    .text_color(gpui::rgb(ink))
+                    .debug_selector(move || selector.into())
+                    .child(text),
+            );
+        Some((line, leads))
     }
 
     /// How far the copy is: where it goes, the bar, how much of how much
@@ -262,7 +275,10 @@ impl PlacementView {
         let mark = div()
             .debug_selector(|| "placement-done-mark".into())
             .child(ferrite_ui::icons::icon(ferrite_ui::icons::CHECK_CIRCLE, ICON_BUTTON_GLYPH, RUNNING));
-        let head = ferrite_ui::sheet::sheet_head_marked(mark, format!("Copied to {machine}"), self.close(cx));
+        // Named as its toast names it.
+        let title = format!("Copied {} to {machine}", self.placing.title);
+        let head = ferrite_ui::sheet::sheet_head_marked(mark, title, self.close(cx))
+            .debug_selector(|| "placement-done-head".into());
         let mut content = column();
         let mut moved = true;
         if let Some((copy, Phase::Done(summary))) = self.copy(cx).map(|copy| (copy, &copy.phase)) {

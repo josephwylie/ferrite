@@ -3,7 +3,9 @@
 //! toast for how it ended. Each reads the copy as it is drawn; none keeps
 //! a copy's state. A toast for a copy done goes by itself unless it left
 //! something as it was; one for a copy that stopped stays until it is
-//! closed. Only the operator closing a toast lets go of its copy: one that
+//! closed. A copy is remembered while it leaves the operator something to
+//! do or see: the operator closing its toast lets it go, and so does its
+//! toast going by itself once its draft moved there. Otherwise one that
 //! went by itself leaves the copy, its system notification and its card
 //! (the chip's menu lists it) as they were. What a toast's buttons ask of
 //! the window is a `CopyEvent`.
@@ -262,13 +264,24 @@ impl Copies {
     }
 
     /// The `pushed`th toast of the copy of `key` went by itself, a copy
-    /// done's: none comes back, and the copy stays to be seen, on its card.
+    /// done's: none comes back. A copy whose draft moved there and that
+    /// left nothing as it was leaves the operator nothing to do or see, so
+    /// it goes with its toast, any system notification of it left to the
+    /// system; one that offers a chat there, or lists what it left, stays
+    /// to be seen, on its card.
     fn toast_gone(&mut self, key: &CopyKey, pushed: u64, cx: &mut Context<Self>) {
-        if self.toasts.up.get(key).is_some_and(|up| *up == (Kind::Done, pushed)) {
-            self.toasts.up.remove(key);
-            self.toasts.lapsed.insert(key.clone());
-            cx.notify();
+        if !self.toasts.up.get(key).is_some_and(|up| *up == (Kind::Done, pushed)) {
+            return;
         }
+        self.toasts.up.remove(key);
+        let done_with = |phase: &Phase| matches!(phase, Phase::Done(summary) if summary.moved && summary.skipped.entries == 0);
+        if self.get(key).is_some_and(|copy| done_with(&copy.phase)) {
+            self.toasts.posted.remove(key);
+            self.forget(key, cx);
+        } else {
+            self.toasts.lapsed.insert(key.clone());
+        }
+        cx.notify();
     }
 
     /// The operator closed the `pushed`th toast of the copy of `key`: the

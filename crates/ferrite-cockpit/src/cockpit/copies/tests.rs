@@ -373,21 +373,27 @@ fn a_copy_is_cancelled_or_added_never_both() {
     let now = Instant::now();
     let mut copy = Entry::new(order(false), Some(run()), now);
     assert!(copy.cancel());
-    assert!(matches!(copy.phase, Phase::Cancelled { again: Again::Retry }), "nothing was sent");
+    assert!(matches!(copy.phase, Phase::Cancelled { again: Again::Retry, .. }), "nothing was sent");
     assert_eq!(copy.standing(false), Some(("Copy cancelled before anything was sent.".into(), false)));
 
     let mut copy = Entry::new(order(false), Some(run()), now);
-    copy.hear(sending(5, 10, "a"), now, true);
+    copy.hear(sending(5, 12, "a"), now, true);
     assert!(copy.cancel());
     assert!(cancelled(&copy));
-    assert!(matches!(copy.phase, Phase::Cancelled { again: Again::Resume }), "what it sent stays");
+    assert!(matches!(copy.phase, Phase::Cancelled { again: Again::Resume, .. }), "what it sent stays");
     assert!(!copy.cancel(), "it stopped already");
     copy.hear(stopped(io::ErrorKind::Interrupted.into()), now, true);
-    assert!(matches!(copy.phase, Phase::Cancelled { again: Again::Resume }), "it stopped part way");
+    assert!(matches!(copy.phase, Phase::Cancelled { again: Again::Resume, .. }), "it stopped part way");
     assert_eq!(
         copy.standing(false),
-        Some(("Copy cancelled. Resume finishes it from where it stopped.".into(), false))
+        Some(("Copy cancelled at 41%. Resume finishes it.".into(), false)),
+        "how far it got, never rounded up"
     );
+
+    // A resume cancelled while it lists cannot say how far it got.
+    let mut copy = Entry::new(order(true), Some(run()), now);
+    assert!(copy.cancel());
+    assert_eq!(copy.standing(false), Some(("Copy cancelled. Resume finishes it.".into(), false)));
 
     let going = run();
     let ended = going.cancel.clone();

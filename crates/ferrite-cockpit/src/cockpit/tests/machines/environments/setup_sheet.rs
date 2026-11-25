@@ -47,6 +47,22 @@ fn copy_runs(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bo
     view.read_with(cx, |view, cx| view.copies.read(cx).iter().any(|(_, copy)| copy.phase.live()))
 }
 
+/// The card on a copy cancelled part way says how far it got, as the other
+/// stopped copies say how they stand: first, over where it goes, not
+/// between that and what git ignores.
+#[track_caller]
+fn cancelled_part_way(cx: &mut gpui::VisualTestContext) {
+    let said = text_of(cx, "placement-cancelled").unwrap_or_default();
+    let reached = said
+        .strip_prefix("Copy cancelled at ")
+        .and_then(|rest| rest.strip_suffix("%. Resume finishes it."))
+        .and_then(|percent| percent.parse::<u32>().ok());
+    assert!(reached.is_some_and(|percent| percent < 100), "the card says how far it got: {said:?}");
+    let stage = debug_bounds(cx, "placement-stage".into()).expect("how it stands");
+    let dest = debug_bounds(cx, "placement-destination".into()).expect("where it goes");
+    assert!(stage.bottom() <= dest.top(), "it leads the card: {stage:?} over {dest:?}");
+}
+
 /// The tag of the system's notification of the one copy.
 fn copy_tag(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> String {
     view.read_with(cx, |view, cx| view.copies.read(cx).iter().next().expect("a copy").0.tag())
@@ -266,10 +282,7 @@ fn a_copy_cancelled_part_way_is_resumed_and_keeps_what_was_put_there_since(cx: &
     held.let_go();
     assert!(sheet(&view, cx).is_some(), "Cancel stops the copy, not the sheet");
     assert!(!copy_runs(&view, cx));
-    assert_eq!(
-        text_of(cx, "placement-cancelled").as_deref(),
-        Some("Copy cancelled. Resume finishes it from where it stopped.")
-    );
+    cancelled_part_way(cx);
     assert!(debug_bounds(cx, "placement-resume".into()).is_some());
     assert_eq!(
         ferrite_core::placement::unfinished(&box_dir(&view, cx), &source),
@@ -426,10 +439,7 @@ fn the_card_goes_and_the_copy_goes_on_until_cancel(cx: &mut TestAppContext) {
     held.let_go();
     assert!(!copy_runs(&view, cx), "Cancel stops it");
     assert_eq!(leaving(cx), None, "nothing is cut off by leaving now");
-    assert_eq!(
-        text_of(cx, "placement-cancelled").as_deref(),
-        Some("Copy cancelled. Resume finishes it from where it stopped.")
-    );
+    cancelled_part_way(cx);
     assert_eq!(draft_project(&view, draft, cx), mine, "the draft stays");
     // Back on choosing, the card reads the Project again before Resume.
     drawn(cx, "placement-ignored:.env");
@@ -1364,7 +1374,8 @@ fn a_copy_ending_behind_the_window_notifies_with_its_card_up_until_seen(cx: &mut
 
 /// While the draft's copy runs it is not sent: no Send, its first send
 /// starts no Thread, and its band says why beside the copy's percentage.
-/// Once the copy is in, the draft is there, and Send is back.
+/// Once the copy is in, the draft is there, and Send is back; the copy,
+/// leaving nothing to do or see, is forgotten when its toast goes.
 #[gpui::test]
 fn a_draft_waiting_on_its_copy_is_sent_there_once_it_is_in(cx: &mut TestAppContext) {
     toasts_rest(cx);
@@ -1404,16 +1415,20 @@ fn a_draft_waiting_on_its_copy_is_sent_there_once_it_is_in(cx: &mut TestAppConte
     assert!(debug_bounds(cx, "band-copy-waits".into()).is_none());
     assert!(debug_bounds(cx, "composer-send".into()).is_some(), "Send is back, there");
     assert_eq!(draft_text(&view, draft, cx), "hello");
-    // All of it went well: its toast goes by itself, though the copy stays
-    // a pick away until the operator closes it.
+    // All of it went well and the draft is there: nothing is left to do or
+    // see, so the copy goes with its toast, which goes by itself.
     assert!(text_of(cx, "notification-title").is_some_and(|said| said.contains("Copied app to box")));
     leap(cx, Duration::from_secs(6));
     settles(cx);
     assert!(debug_bounds(cx, "notification-card".into()).is_none(), "the toast went");
-    pick_on(&view, ENVIRONMENT, "Copied app to box", cx);
-    drawn(cx, "placement-done-mark");
-    press(cx, "placement-done");
-    view.read_with(cx, |view, cx| assert!(view.copies.read(cx).iter().next().is_none(), "closed, it goes"));
+    view.read_with(cx, |view, cx| assert!(view.copies.read(cx).iter().next().is_none(), "the copy went with it"));
+    press(cx, ENVIRONMENT);
+    until(cx, |cx| view.read_with(cx, |view, _| view.band_menu().is_some()));
+    let rows = band_rows(&view, cx);
+    assert!(
+        rows.iter().all(|row| !row.0.contains("app to box") && row.0 != "Copies"),
+        "no chip's menu lists it: {rows:?}"
+    );
 }
 
 /// The chip of a draft waiting on its copy ticks the copy's Machine, with
@@ -1487,6 +1502,11 @@ fn a_draft_waiting_on_its_copy_can_still_be_sent_here(cx: &mut TestAppContext) {
     let key = view.read_with(cx, |view, cx| view.copies.read(cx).iter().next().expect("the copy").0.clone());
     view.update(cx, |view, cx| view.show_copy(&key, cx));
     drawn(cx, "placement-done-mark");
+    assert_eq!(
+        text_of(cx, "placement-done-head").as_deref(),
+        Some("Copied app to box"),
+        "the card names the Project as its toast does"
+    );
     drawn(cx, "placement-chat");
     press(cx, "placement-done");
     assert!(sheet(&view, cx).is_none());

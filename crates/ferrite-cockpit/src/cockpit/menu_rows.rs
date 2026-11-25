@@ -483,8 +483,8 @@ pub(super) struct KeptCopy {
 /// Connections). While the draft waits on a copy (`waited`), that
 /// Machine is ticked instead and says how far, a row of its own while it
 /// is off or gone, its pick the copy's card; the draft's own says it
-/// sends here instead. Then each other copy the window keeps (`kept`), its
-/// pick its card, and `Add environment…`.
+/// sends here instead. Then `Add environment…`, and under a `Copies`
+/// heading each other copy the window keeps (`kept`), its pick its card.
 pub(super) fn environment_rows(
     environments: &[Environment],
     draft: &pane::DraftBinding,
@@ -519,17 +519,20 @@ pub(super) fn environment_rows(
     if let Some(waited) = waited.filter(|waited| waited.machine.is_none()) {
         rows.push(band_row(waited.name, waited.detail, true, BandChoice::Copy(waited.copy)));
     }
-    rows.extend(
-        kept
-            .into_iter()
-            .map(|copy| band_row(copy.name, copy.detail, false, BandChoice::Copy(copy.copy))),
-    );
     rows.push(band_row(
         SharedString::from("Add environment…"),
         SharedString::default(),
         false,
         BandChoice::Connections,
     ));
+    if !kept.is_empty() {
+        rows.push(note_row("Copies"));
+    }
+    rows.extend(
+        kept
+            .into_iter()
+            .map(|copy| band_row(copy.name, copy.detail, false, BandChoice::Copy(copy.copy))),
+    );
     rows
 }
 
