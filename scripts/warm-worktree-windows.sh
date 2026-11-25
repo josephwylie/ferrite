@@ -29,6 +29,23 @@ if command -v rustup >/dev/null; then
   rustup override set "$toolchain" --path "$HERE" >/dev/null
 fi
 
+# A worktree on another volume than the main checkout (a tool that keeps its
+# worktrees elsewhere) would get every byte of the build on that volume: a
+# clone needs both ends on one ReFS volume. So its `target` becomes a
+# junction to a directory beside the main checkout's worktrees, and the copy
+# below is a clone again. Remove that directory with the worktree. Volumes
+# are asked of Windows: a Dev Drive mounted in a folder has no drive letter.
+volume() {
+  powershell.exe -NoProfile -Command \
+    "(Get-Volume -FilePath '$(cygpath -w "$1")').UniqueId" 2>/dev/null | tr -d '\r'
+}
+if [ ! -e "$HERE/target" ] && [ "$(volume "$HERE")" != "$(volume "$MAIN")" ]; then
+  held="$(dirname "$MAIN")/.worktrees/$(basename "$MAIN")/_targets/$(basename "$HERE")"
+  mkdir -p "$held"
+  MSYS_NO_PATHCONV=1 cmd.exe /c mklink /J \
+    "$(cygpath -w "$HERE/target")" "$(cygpath -w "$held")" >/dev/null
+fi
+
 # Cargo writes `C:\\Users\\...`, read here as `C:/Users/...`.
 build_dir() {
   (cd "$1" && cargo metadata --no-deps --format-version 1 2>/dev/null) |
