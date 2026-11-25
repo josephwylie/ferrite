@@ -98,7 +98,7 @@ pub(crate) struct WorkflowsInputs {
     /// What the inspector says of them.
     pub(super) skills_note: String,
     /// The start's settings, drawn by their own view.
-    pub(super) starts: Entity<super::super::starts::StartsView>,
+    pub(super) starts: Entity<ferrite_factory::starts::StartsView>,
 }
 
 impl WorkflowsInputs {

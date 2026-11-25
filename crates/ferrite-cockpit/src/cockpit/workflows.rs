@@ -23,11 +23,11 @@ use ferrite_core::protocol::{Done, WorkflowAction};
 use ferrite_pane::composer::{Composer, Edited, Role};
 use gpui::component::Disableable as _;
 
+pub(crate) use ferrite_factory::field::{field_input, Field};
 mod editor;
 pub(crate) use editor::{Inspected, WorkflowsEvent, WorkflowsInputs, WorkflowsView};
 mod inspector;
 mod outline;
-pub(crate) use outline::field_input;
 mod pickers;
 pub(crate) use ferrite_factory::picker::Trigger;
 pub(crate) use pickers::{model_choices, model_chosen, model_name};
@@ -48,48 +48,6 @@ pub(crate) enum Surface {
     Coordinator,
     Board,
     Workflows,
-}
-
-/// A text field of the editor.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Field {
-    WorkflowName(WorkflowId),
-    StepName(WorkflowId, StepId),
-    Instructions(WorkflowId, StepId),
-    /// The skills picker's search.
-    SkillSearch,
-    /// Agent approval's decision instructions (#222).
-    ApprovalInstructions(WorkflowId),
-    /// What each scheduled run's Task is told (#225).
-    ScheduleInstructions(WorkflowId),
-    /// A GitHub start's extra instructions for every Task.
-    ExtraInstructions(WorkflowId),
-}
-
-impl Field {
-    /// Instructions, written as prose in a text area that grows.
-    pub(crate) fn prose(&self) -> bool {
-        matches!(
-            self,
-            Field::Instructions(..)
-                | Field::ApprovalInstructions(_)
-                | Field::ScheduleInstructions(_)
-                | Field::ExtraInstructions(_)
-        )
-    }
-
-    /// Its selector.
-    pub(crate) fn key(&self) -> String {
-        match self {
-            Field::WorkflowName(_) => "workflow-name".into(),
-            Field::StepName(..) => "inspector-name".into(),
-            Field::Instructions(..) => "inspector-instructions".into(),
-            Field::SkillSearch => "skill-search".into(),
-            Field::ApprovalInstructions(_) => "approval-instructions".into(),
-            Field::ScheduleInstructions(_) => "start-schedule-instructions".into(),
-            Field::ExtraInstructions(_) => "start-extra-instructions".into(),
-        }
-    }
 }
 
 /// What a Factory picker's row does.
@@ -123,7 +81,7 @@ pub(crate) enum Pick {
     /// Where the Workflow sends rework.
     ReworkGoesTo(Destination),
     /// A "Tasks start" setting (#225).
-    Start(super::starts::StartPick),
+    Start(ferrite_factory::starts::StartPick),
     /// The Coordinator's Provider, model or effort (#224).
     Coordinator(super::coordinator::CoordinatorPick),
 }

@@ -657,26 +657,3 @@ impl WorkflowsView {
             .into_any_element()
     }
 }
-
-/// A Workflows field drawn: its label over its Composer, ringed while it
-/// has the keyboard; a press on it calls `pressed` first.
-pub(crate) fn field_input(
-    field: &Field,
-    label: &'static str,
-    composer: Entity<Composer>,
-    focused: bool,
-    pressed: impl Fn(&MouseDownEvent, &mut Window, &mut gpui::App) + 'static,
-) -> AnyElement {
-    let key = field.key();
-    div()
-        .id(SharedString::from(key.clone()))
-        .debug_selector(move || key.clone())
-        .capture_any_mouse_down(pressed)
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(if field.prose() {
-            ferrite_ui::field::text_area(label.into(), composer, focused, "factory-field-focused")
-        } else {
-            ferrite_ui::field::text_field(label.into(), composer, focused, "factory-field-focused")
-        })
-        .into_any_element()
-}

@@ -154,7 +154,7 @@ pub(crate) struct FactoryView {
     pub(crate) coordinator: Entity<super::coordinator::CoordinatorView>,
     /// How Tasks start (#225): what the GitHub login listed for its
     /// pickers.
-    pub(crate) starts: Entity<super::starts::StartsView>,
+    pub(crate) starts: Entity<ferrite_factory::starts::StartsView>,
     /// The Archive (#226): its search and the earlier Worker being read.
     pub(crate) archive: Entity<ferrite_factory::archive::ArchiveView>,
     /// Whether the Archive shows in the board's place.
