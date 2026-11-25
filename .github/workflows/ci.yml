@@ -299,7 +299,7 @@ jobs:
   # keys a cache by job id, so the halves, which build the same programs,
   # share one.
   windows-tests:
-    name: Windows tests (${{ matrix.partition }}/2)
+    name: Windows tests
     needs: scope
     # A change to the staging scripts alone selects no package.
     if: ${{ needs.scope.outputs.windows == 'true' && needs.scope.outputs.packages != '' }}
