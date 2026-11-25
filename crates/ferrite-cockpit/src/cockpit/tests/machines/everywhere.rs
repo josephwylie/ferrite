@@ -5,6 +5,7 @@
 use super::*;
 
 /// Pump until `done`, failing with `what` if it never is.
+#[track_caller]
 fn until_said(
     cx: &mut gpui::VisualTestContext,
     what: &str,
