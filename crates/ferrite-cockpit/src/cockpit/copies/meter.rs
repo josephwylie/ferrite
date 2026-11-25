@@ -41,6 +41,18 @@ impl Left {
             Left::Hours((seconds / 3600.0).round().max(1.0) as u64)
         }
     }
+
+    /// Where it is among the times a person says, one step apart: less
+    /// than a minute, each minute to nine, each five to fifty-five, each
+    /// hour.
+    fn step(self) -> u64 {
+        match self {
+            Left::UnderAMinute => 0,
+            Left::Minutes(minutes) if minutes < 10 => minutes,
+            Left::Minutes(minutes) => 8 + minutes / 5,
+            Left::Hours(hours) => 19 + hours,
+        }
+    }
 }
 
 impl fmt::Display for Left {
@@ -70,8 +82,8 @@ pub(crate) struct Meter {
     heard: VecDeque<(Instant, u64)>,
     /// The time left shown.
     shown: Option<Left>,
-    /// Another time left heard, and since when, until it holds.
-    next: Option<(Option<Left>, Instant)>,
+    /// Since when the time left heard has not been the one shown.
+    differs: Option<Instant>,
 }
 
 impl Meter {
@@ -91,8 +103,9 @@ impl Meter {
     /// The rate and the time left at `now`, of a copy of `total` bytes. The
     /// rate is the bytes sent over the last `SPAN`, so a copy that stalls
     /// slows to nothing rather than holding its last pace. The time left
-    /// shows once the copy has gone `FIRST_LEFT`, and another shows only
-    /// once it has held for `HOLD`.
+    /// shows once the copy has gone `FIRST_LEFT`, and another only once
+    /// the one shown has been wrong for `HOLD`, unless it says too little by
+    /// more than a step.
     pub(crate) fn read(&mut self, now: Instant, total: u64) -> Reading {
         let rate = self.rate(now);
         let gone = self.began.map(|began| now.saturating_duration_since(began));
@@ -134,21 +147,19 @@ impl Meter {
     }
 
     /// `heard`, once it has held: a first time left shows at once, another
-    /// only once it has held for `HOLD`.
+    /// once the one shown has been wrong for `HOLD`, the latest heard then.
+    /// One that would say too little by more than a step shows at once: a
+    /// copy that slows is never said to end much sooner than it will.
     fn hold(&mut self, heard: Option<Left>, now: Instant) -> Option<Left> {
-        if heard == self.shown || self.shown.is_none() {
-            self.shown = heard;
-            self.next = None;
+        if heard == self.shown {
+            self.differs = None;
             return self.shown;
         }
-        match self.next {
-            Some((next, since)) if next == heard => {
-                if now.saturating_duration_since(since) >= HOLD {
-                    self.shown = heard;
-                    self.next = None;
-                }
-            }
-            _ => self.next = Some((heard, now)),
+        let since = *self.differs.get_or_insert(now);
+        let under = matches!((self.shown, heard), (Some(shown), Some(heard)) if shown.step() + 1 < heard.step());
+        if self.shown.is_none() || under || now.saturating_duration_since(since) >= HOLD {
+            self.shown = heard;
+            self.differs = None;
         }
         self.shown
     }
@@ -258,6 +269,57 @@ mod tests {
         steady(&mut meter, &clock, 0.0, 10.0);
         meter.heard(clock.at(10.5), 0);
         assert_eq!(meter.read(clock.at(10.6), 10 * MB), Reading::default());
+    }
+
+    #[test]
+    fn a_copy_that_slows_down_is_never_said_to_end_much_sooner_than_it_will() {
+        let clock = Clock(Instant::now());
+        let mut meter = Meter::default();
+        let total = 2000 * MB;
+        // 10 MB/s for ten seconds, then slowing to 150 KB/s over a minute.
+        let rate = |at: f64| match at {
+            at if at < 10.0 => 10.0 * MB as f64,
+            at => 10.0 * MB as f64 * 0.015_f64.powf(((at - 10.0) / 60.0).min(1.0)),
+        };
+        let (mut at, mut sent) = (0.0, 0.0);
+        let mut shown = Vec::new();
+        while at <= 90.0 {
+            meter.heard(clock.at(at), sent as u64);
+            for tick in 0..5 {
+                let reading = meter.read(clock.at(at + f64::from(tick) * 0.1), total);
+                let (Some(rate), Some(left)) = (reading.rate.filter(|&rate| rate > 0), reading.left) else {
+                    continue;
+                };
+                let truly = Left::of((total - sent as u64) as f64 / rate as f64);
+                assert!(
+                    left.step() + 1 >= truly.step(),
+                    "at {at} s: says {left}, the meter heard {truly}"
+                );
+                if shown.last() != Some(&left) {
+                    shown.push(left);
+                }
+            }
+            sent += rate(at) * 0.5;
+            at += 0.5;
+        }
+        assert!(shown.len() > 3, "it follows the slowdown: {shown:?}");
+        assert!(matches!(shown.last(), Some(Left::Hours(_))), "{shown:?}");
+    }
+
+    #[test]
+    fn a_time_left_counts_its_steps_as_it_is_said() {
+        let said = [
+            Left::UnderAMinute,
+            Left::Minutes(1),
+            Left::Minutes(9),
+            Left::Minutes(10),
+            Left::Minutes(15),
+            Left::Minutes(55),
+            Left::Hours(1),
+            Left::Hours(2),
+        ];
+        let steps: Vec<u64> = said.iter().map(|left| left.step()).collect();
+        assert_eq!(steps, [0, 1, 9, 10, 11, 19, 20, 21]);
     }
 
     #[test]
