@@ -9,3 +9,5 @@
 #     name = "cockpit::tests::machines::everywhere::every_row_and_palette_verb_reaches_its_threads_machine"
 #     reason = "waits out doorbell::until's 120 s bound on a loaded runner"
 #     owner = "<GitHub login>"
+#
+# scripts/tangle.json counts the entries, so quarantining a test raises it.
