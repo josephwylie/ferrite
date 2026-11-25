@@ -1,0 +1,123 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\taffy\Cargo.toml
+workspace: C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\taffy\Cargo.toml
+workspace: C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\Cargo.toml
+   Compiling ferrite-core v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-core)
+warning: function `sign_in_script` is never used
+   --> crates\ferrite-core\src\machine.rs:736:4
+    |
+736 | fn sign_in_script(name: &str, target: &str, control: &Path) -> String {
+    |    ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `scratch` is never used
+   --> crates\ferrite-core\src\user_commands.rs:264:8
+    |
+264 |     fn scratch(name: &str) -> std::path::PathBuf {
+    |        ^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `command` is never used
+   --> crates\ferrite-core\src\user_commands.rs:274:8
+    |
+274 |     fn command(run: Run) -> UserCommand {
+    |        ^^^^^^^
+
+warning: `ferrite-core` (lib) generated 1 warning
+warning: `ferrite-core` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.78s
+────────────
+ Nextest run ID fa413fd5-ab5d-4686-a61b-5aac3a5e3704 with nextest profile: default
+    Starting 86 tests across 2 binaries (564 tests skipped)
+        PASS [   0.089s] ( 1/86) ferrite-core setup_sync::store::tests::windows_reads_the_home_from_userprofile_before_home
+        PASS [   0.088s] ( 2/86) ferrite-core setup_sync::reconcile::tests::a_file_on_only_one_side_goes_to_the_other_and_the_first_sync_removes_nothing
+        PASS [   0.092s] ( 3/86) ferrite-core setup_sync::reconcile::tests::nothing_is_written_through_a_link_and_the_linked_side_wins_a_conflict
+        PASS [   0.096s] ( 4/86) ferrite-core setup_sync::reconcile::tests::the_base_keeps_what_the_sides_still_differ_on
+        PASS [   0.178s] ( 5/86) ferrite-core setup_sync::store::tests::a_moved_claude_folder_has_its_own_keychain_service
+        PASS [   0.181s] ( 6/86) ferrite-core setup_sync::store::tests::a_ferrite_on_its_own_store_in_the_accounts_real_home_never_syncs_it
+        PASS [   0.183s] ( 7/86) ferrite-core setup_sync::reconcile::tests::what_a_side_could_not_list_is_held_and_no_folder_holding_it_is_removed
+        PASS [   0.268s] ( 8/86) ferrite-core setup_sync::store::tests::what_a_tool_derives_is_no_path_of_the_table_and_a_chosen_key_is
+        PASS [   0.272s] ( 9/86) ferrite-core setup_sync::store::tests::what_a_sync_keeps_aside_is_in_folders_a_file_browser_shows
+        PASS [   0.359s] (10/86) ferrite-core setup_sync::reconcile::tests::a_removed_folder_goes_whole_unless_something_in_it_changed_on_the_other_side
+        PASS [   0.362s] (11/86) ferrite-core setup_sync::tests::a_base_another_table_wrote_is_no_base_and_the_sync_removes_nothing
+        PASS [   0.434s] (12/86) ferrite-core setup_sync::reconcile::tests::both_changed_to_the_same_bytes_is_nothing
+        PASS [   0.568s] (13/86) ferrite-core setup_sync::reconcile::tests::a_sign_in_is_never_removed_and_a_side_without_one_takes_the_others
+        PASS [   0.572s] (14/86) ferrite-core setup_sync::reconcile::tests::every_pair_of_what_each_side_did_to_a_file
+        PASS [   0.577s] (15/86) ferrite-core setup_sync::reconcile::tests::of_two_edits_the_newer_wins_and_a_tie_goes_to_this_computer
+        PASS [   0.581s] (16/86) ferrite-core setup_sync::reconcile::tests::a_folder_kept_deep_down_keeps_each_folder_that_holds_it
+        PASS [   0.585s] (17/86) ferrite-core setup_sync::installs::tests::a_problem_names_the_plugin_that_did_not_install_and_its_tool
+        PASS [   0.589s] (18/86) ferrite-core setup_sync::keys::tests::a_name_a_path_cannot_hold_is_spelled_so_it_can_and_read_back
+        PASS [   0.594s] (19/86) ferrite-core setup_sync::portable::tests::a_hook_command_finds_the_home_anywhere_in_it_in_either_spelling
+        PASS [   0.598s] (20/86) ferrite-core setup_sync::portable::tests::only_where_a_path_starts_is_the_home_rewritten
+        PASS [   0.602s] (21/86) ferrite-core setup_sync::portable::tests::a_longer_name_with_a_space_is_not_the_home
+        PASS [   0.607s] (22/86) ferrite-core setup_sync::reconcile::tests::a_file_and_a_folder_at_one_path_are_held_with_all_under_it
+        PASS [   0.611s] (23/86) ferrite-core setup_sync::reconcile::tests::a_folder_against_a_link_goes_only_when_it_holds_what_the_link_leads_to
+        PASS [   0.616s] (24/86) ferrite-core setup_sync::keys::tests::a_key_is_carried_alike_however_its_file_orders_or_spells_it
+        PASS [   0.620s] (25/86) ferrite-core setup_sync::keys::tests::a_toml_key_is_written_with_its_comments_and_the_order_of_the_rest_kept
+        PASS [   0.624s] (26/86) ferrite-core setup_sync::portable::tests::what_is_not_json_comes_back_as_it_was
+        PASS [   0.628s] (27/86) ferrite-core setup_sync::portable::tests::a_plugin_path_goes_from_windows_to_linux_and_back_unchanged
+        PASS [   0.632s] (28/86) ferrite-core setup_sync::portable::tests::windows_reads_its_home_in_any_case_and_either_separator
+        PASS [   0.636s] (29/86) ferrite-core setup_sync::keys::tests::a_json_key_is_written_with_every_other_byte_of_the_file_as_it_was
+        PASS [   0.640s] (30/86) ferrite-core setup_sync::links::tests::a_link_is_spelled_from_its_folder_and_read_back_to_where_it_points
+        PASS [   0.644s] (31/86) ferrite-core setup_sync::portable::tests::a_list_rewrites_only_the_entry_at_the_home
+        PASS [   0.648s] (32/86) ferrite-core setup_sync::reconcile::tests::a_link_itself_may_be_removed_never_what_lies_through_it
+        PASS [   0.598s] (33/86) ferrite-core setup_sync::tests::a_file_holding_a_chosen_key_twice_is_held_and_never_written
+        PASS [   0.344s] (34/86) ferrite-core setup_sync::tests::a_name_this_computer_cannot_hold_is_held_alone
+        PASS [   0.357s] (35/86) ferrite-core setup_sync::tests::a_path_outside_the_table_is_refused_by_the_far_side
+        PASS [   0.172s] (36/86) ferrite-core setup_sync::tests::a_server_from_before_the_table_reads_a_setup_root_by_one_as_a_root_it_does_not_know
+        PASS [   0.693s] (37/86) ferrite-core setup_sync::tests::a_failed_install_is_tried_again_at_the_next_start_and_not_before
+        PASS [   0.226s] (38/86) ferrite-core setup_sync::tests::a_plugin_key_a_sync_wrote_is_installed_by_the_next_scan_of_any_process
+        PASS [   0.626s] (39/86) ferrite-core setup_sync::tests::a_file_whose_text_differs_only_in_line_ends_is_the_same_on_both_sides
+        PASS [   0.549s] (40/86) ferrite-core setup_sync::tests::a_keychain_sign_in_goes_to_a_file_and_comes_back_to_the_keychain
+        PASS [   0.197s] (41/86) ferrite-core setup_sync::tests::a_sync_that_finds_another_under_way_is_busy_not_failed
+        PASS [   0.282s] (42/86) ferrite-core setup_sync::tests::a_plugin_name_claude_would_read_as_an_option_is_never_handed_to_it
+        PASS [   0.262s] (43/86) ferrite-core setup_sync::tests::a_temporary_file_a_crash_left_beside_the_settings_is_swept
+        PASS [   0.330s] (44/86) ferrite-core setup_sync::tests::a_plugin_and_a_server_each_side_added_are_kept_on_both
+        PASS [   0.344s] (45/86) ferrite-core setup_sync::tests::a_sync_is_busy_while_an_install_runs_in_its_home
+        PASS [   0.218s] (46/86) ferrite-core setup_sync::tests::codex_config_new_from_a_side_without_bits_is_owner_only
+        PASS [   0.435s] (47/86) ferrite-core setup_sync::tests::a_preference_the_sides_hold_differently_takes_this_computers_at_the_first_sync_and_the_newer_after
+        PASS [   0.757s] (48/86) ferrite-core setup_sync::tests::a_link_whose_target_changed_on_one_side_is_made_anew_on_the_other
+        PASS [   0.598s] (49/86) ferrite-core setup_sync::tests::a_plugin_a_sync_turns_on_is_installed_once_and_one_that_will_not_install_is_said
+        PASS [   0.849s] (50/86) ferrite-core setup_sync::tests::a_json_file_that_does_not_read_is_held_and_the_rest_syncs
+        PASS [   0.353s] (51/86) ferrite-core setup_sync::tests::an_mcp_server_that_runs_what_another_side_may_not_have_stays_unsaid
+        PASS [   0.418s] (52/86) ferrite-core setup_sync::tests::adding_a_marketplace_leaves_the_operators_entry_for_it_as_it_was
+        PASS [   0.492s] (53/86) ferrite-core setup_sync::tests::a_sync_a_change_here_started_never_reads_the_keychain
+        PASS [   0.586s] (54/86) ferrite-core setup_sync::tests::a_sign_in_read_mid_write_waits_for_the_next_sync_unsaid
+        PASS [   0.224s] (55/86) ferrite-core setup_sync::tests::two_ferrites_whose_tables_differ_move_nothing
+        PASS [   0.180s] (56/86) ferrite-core setup_sync::tests::what_an_older_table_synced_is_never_removed_by_this_one
+        PASS [   1.106s] (57/86) ferrite-core setup_sync::tests::a_folder_against_a_link_is_held_unless_the_link_loses_nothing
+        PASS [   0.503s] (58/86) ferrite-core setup_sync::tests::hooks_output_styles_and_the_status_line_sync_and_claude_config_dir_moves_claude
+        PASS [   0.608s] (59/86) ferrite-core setup_sync::tests::claudes_own_plugins_are_never_missing_and_one_turned_on_is_installed
+        PASS [   0.562s] (60/86) ferrite-core setup_sync::tests::codex_carries_a_remote_marketplace_by_its_source_and_never_a_bundled_or_local_one
+        PASS [   0.658s] (61/86) ferrite-core setup_sync::tests::claudes_settings_carry_only_the_keys_the_table_names
+        PASS [   0.354s] (62/86) ferrite-core setup_sync::tests::what_a_file_browser_leaves_in_a_folder_never_travels
+        PASS [   0.804s] (63/86) ferrite-core setup_sync::tests::a_sync_a_change_here_started_carries_what_changed_there_too
+        PASS [   0.235s] (64/86) ferrite-core setup_sync::tests::with_no_base_a_line_end_difference_never_moves_even_from_an_old_base
+        PASS [   0.641s] (65/86) ferrite-core setup_sync::tests::codex_fetches_each_marketplace_a_sync_names_that_it_has_no_copy_of
+        PASS [   0.897s] (66/86) ferrite-core setup_sync::tests::a_sign_in_is_never_in_an_error_or_an_outcome
+        PASS [   0.855s] (67/86) ferrite-core setup_sync::tests::an_item_behind_a_link_to_nothing_removes_nothing_and_says_why
+        PASS [   0.935s] (68/86) ferrite-core setup_sync::tests::a_sync_that_would_remove_most_of_a_side_stops_until_told_to_go_on
+        PASS [   0.940s] (69/86) ferrite-core setup_sync::tests::an_edit_an_addition_and_a_removal_on_either_side_reach_the_other
+        PASS [   0.716s] (70/86) ferrite-core setup_sync::tests::removing_a_linked_folder_takes_the_link_never_what_it_points_at_both_ways
+        PASS [   0.645s] (71/86) ferrite-core setup_sync::tests::the_first_sync_lands_everything_and_nothing_outside_the_table
+        PASS [   0.884s] (72/86) ferrite-core setup_sync::tests::one_sync_of_a_home_runs_at_a_time_whichever_machine_it_is_with
+        PASS [   1.192s] (73/86) ferrite-core setup_sync::tests::a_scan_waits_once_for_an_install_under_way_and_the_next_goes_on
+        PASS [   1.687s] (74/86) ferrite-core setup_sync::tests::a_file_that_changes_while_it_crosses_is_left_to_the_next_sync
+        PASS [   0.951s] (75/86) ferrite-core setup_sync::tests::of_two_edits_the_newer_wins_and_the_other_is_kept_aside
+        PASS [   0.803s] (76/86) ferrite-core setup_sync::tests::what_a_sync_removes_or_replaces_on_either_side_is_kept_in_that_sides_trash
+        PASS [   0.859s] (77/86) ferrite-core setup_sync::tests::two_sign_ins_with_none_agreed_wait_for_the_operator
+        PASS [   1.077s] (78/86) ferrite-core setup_sync::tests::no_sign_in_is_ever_put_in_the_trash_or_kept_as_a_conflict
+        PASS [   0.904s] (79/86) ferrite-core setup_sync::tests::the_first_tables_base_and_the_folders_it_made_of_links_lose_nothing
+        PASS [   0.985s] (80/86) ferrite-core setup_sync::tests::signing_out_on_either_side_signs_it_back_in_and_nothing_stops
+        PASS [   1.322s] (81/86) ferrite-core setup_sync::tests::a_windows_home_and_a_linux_home_share_what_the_operator_chose_and_nothing_else
+        PASS [   1.068s] (82/86) ferrite-core setup_sync::tests::the_hub_carries_one_machines_change_to_another
+        PASS [   1.375s] (83/86) ferrite-core setup_sync::tests::losing_every_skill_stops_though_other_skills_outnumber_them_and_what_goes_here_is_kept_in_the_trash
+        PASS [   2.270s] (84/86) ferrite-core setup_sync::tests::a_pull_of_hundreds_of_files_lands_whole
+        PASS [   3.691s] (85/86) ferrite-core setup_sync::tests::a_conflict_cut_short_keeps_one_copy
+        PASS [   3.993s] (86/86) ferrite-core setup_sync::tests::a_sync_cut_short_at_any_request_is_finished_by_the_next
+────────────
+     Summary [   4.612s] 86 tests run: 86 passed, 564 skipped

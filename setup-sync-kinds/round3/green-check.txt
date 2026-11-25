@@ -1,0 +1,315 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\taffy\Cargo.toml
+workspace: C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\Cargo.toml
+    Checking ferrite-core v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-core)
+warning: method `as_event_status` is never used
+  --> crates\ferrite-focus-notify\src\focus.rs:36:8
+   |
+34 | impl Status {
+   | ----------- method in this implementation
+35 |     /// The status as upstream's events spell it.
+36 |     fn as_event_status(self) -> &'static str {
+   |        ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-focus-notify` (lib) generated 1 warning
+warning: `ferrite-focus-notify` (lib test) generated 1 warning (1 duplicate)
+warning: function `sign_in_script` is never used
+   --> crates\ferrite-core\src\machine.rs:736:4
+    |
+736 | fn sign_in_script(name: &str, target: &str, control: &Path) -> String {
+    |    ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `scratch` is never used
+   --> crates\ferrite-core\src\user_commands.rs:264:8
+    |
+264 |     fn scratch(name: &str) -> std::path::PathBuf {
+    |        ^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `command` is never used
+   --> crates\ferrite-core\src\user_commands.rs:274:8
+    |
+274 |     fn command(run: Run) -> UserCommand {
+    |        ^^^^^^^
+
+warning: `ferrite-core` (lib test) generated 2 warnings
+warning: `ferrite-core` (lib) generated 1 warning
+    Checking ferrite-engine v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-engine)
+    Checking ferrite-ui v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-ui)
+warning: unused import: `connect`
+ --> crates\ferrite-engine\src\connection\tests.rs:5:35
+  |
+5 | use ferrite_core::link::{address, connect, listen, Client};
+  |                                   ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+    Checking ferrite-terminal v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-terminal)
+    Checking ferrite-frame v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-frame)
+    Checking ferrite-client v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-client)
+    Checking ferrite-server v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-server)
+warning: method `text` is never used
+   --> crates\ferrite-terminal\src\session.rs:237:19
+    |
+ 51 | impl Terminal {
+    | ------------- method in this implementation
+...
+237 |     pub(crate) fn text(&self) -> String {
+    |                   ^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-terminal` (lib test) generated 1 warning
+    Checking ferrite-pane v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-pane)
+warning: function `scratch` is never used
+   --> crates\ferrite-engine\src\providers\discover.rs:219:8
+    |
+219 |     fn scratch(name: &str) -> PathBuf {
+    |        ^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-engine` (lib test) generated 2 warnings (run `cargo fix --lib -p ferrite-engine --tests` to apply 1 suggestion)
+warning: unused import: `super::*`
+ --> crates\ferrite-server\src\remote\tests.rs:1:5
+  |
+1 | use super::*;
+  |     ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `approved_workflow` is never used
+   --> crates\ferrite-server\src\tests\factory\recovery.rs:138:4
+    |
+138 | fn approved_workflow(harness: &Harness, project: &str) -> String {
+    |    ^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-server` (lib test) generated 2 warnings (run `cargo fix --lib -p ferrite-server --tests` to apply 1 suggestion)
+    Checking ferrite-cockpit v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-cockpit)
+warning: type `cockpit::context_menu::MenuTarget` is more private than the item `cockpit::menu_button::Door::target`
+  --> crates\ferrite-cockpit\src\cockpit\menu_button.rs:23:5
+   |
+23 |     pub target: MenuTarget,
+   |     ^^^^^^^^^^^^^^^^^^^^^^ field `cockpit::menu_button::Door::target` is reachable at visibility `pub(crate)`
+   |
+note: but type `cockpit::context_menu::MenuTarget` is only usable at visibility `pub(in crate::cockpit)`
+  --> crates\ferrite-cockpit\src\cockpit\context_menu.rs:14:1
+   |
+14 | pub(super) enum MenuTarget {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: `#[warn(private_interfaces)]` on by default
+
+warning: type `cockpit::context_menu::MenuTarget` is more private than the item `cockpit::menu_button::Door::new`
+  --> crates\ferrite-cockpit\src\cockpit\menu_button.rs:28:5
+   |
+28 |     pub(crate) fn new(target: MenuTarget, edge: Edge) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ associated function `cockpit::menu_button::Door::new` is reachable at visibility `pub(crate)`
+   |
+note: but type `cockpit::context_menu::MenuTarget` is only usable at visibility `pub(in crate::cockpit)`
+  --> crates\ferrite-cockpit\src\cockpit\context_menu.rs:14:1
+   |
+14 | pub(super) enum MenuTarget {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `focus_answer` is never used
+   --> crates\ferrite-cockpit\src\cockpit\direction.rs:556:19
+    |
+487 | impl CockpitView {
+    | ---------------- method in this implementation
+...
+556 |     pub(crate) fn focus_answer(&mut self, cx: &mut Context<Self>) {
+    |                   ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `keyboard_label` is never used
+   --> crates\ferrite-cockpit\src\cockpit\panel\controls.rs:277:19
+    |
+270 | impl CockpitView {
+    | ---------------- method in this implementation
+...
+277 |     pub(crate) fn keyboard_label(&self, window: &Window, cx: &App) -> Option<SharedString> {
+    |                   ^^^^^^^^^^^^^^
+
+warning: variants `Dismiss`, `DismissDecision`, and `MarkAllRead` are never constructed
+  --> crates\ferrite-cockpit\src\notifications.rs:42:5
+   |
+37 | pub enum Verb {
+   |          ---- variants in this enum
+...
+42 |     Dismiss(MachineId, NoticeId),
+   |     ^^^^^^^
+...
+46 |     DismissDecision(MachineId, DecisionNoticeId),
+   |     ^^^^^^^^^^^^^^^
+...
+49 |     MarkAllRead,
+   |     ^^^^^^^^^^^
+   |
+   = note: `Verb` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `cursor` and `cursor_thread` are never read
+   --> crates\ferrite-cockpit\src\notifications.rs:379:9
+    |
+376 | pub struct NeedsYou {
+    |            -------- fields in this struct
+...
+379 |     pub cursor: usize,
+    |         ^^^^^^
+380 |     cursor_thread: RefCell<Option<ThreadKey>>,
+    |     ^^^^^^^^^^^^^
+
+warning: methods `reset_cursor`, `cursor_at`, and `select_cursor` are never used
+   --> crates\ferrite-cockpit\src\notifications.rs:402:12
+    |
+390 | impl NeedsYou {
+    | ------------- methods in this implementation
+...
+402 |     pub fn reset_cursor(&mut self) {
+    |            ^^^^^^^^^^^^
+...
+408 |     pub fn cursor_at(&self, rows: &[Row]) -> usize {
+    |            ^^^^^^^^^
+...
+417 |     pub fn select_cursor(&mut self, at: usize, rows: &[Row]) {
+    |            ^^^^^^^^^^^^^
+
+warning: `ferrite-cockpit` (lib) generated 7 warnings
+    Checking ferrite v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite)
+warning: unused import: `std::path::PathBuf`
+ --> crates\ferrite-cockpit\src\cockpit\tools\save.rs:9:5
+  |
+9 | use std::path::PathBuf;
+  |     ^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `Output`, `Run`, and `UserCommand`
+ --> crates\ferrite-cockpit\src\cockpit\tests\user_commands.rs:4:35
+  |
+4 | use ferrite_core::user_commands::{Output, Run, UserCommand};
+  |                                   ^^^^^^  ^^^  ^^^^^^^^^^^
+
+warning: unused variable: `thread`
+   --> crates\ferrite-cockpit\src\cockpit\tests\panel_persistence.rs:128:9
+    |
+128 |     let thread = view.update(cx, |view, cx| {
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_thread`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `run` is never used
+  --> crates\ferrite-cockpit\src\cockpit\tests\user_commands.rs:21:4
+   |
+21 | fn run(view: &Entity<CockpitView>, index: usize, cx: &mut gpui::VisualTestContext) {
+   |    ^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused `ferrite_client::cockpit::Ask` that must be used
+   --> crates\ferrite-cockpit\src\cockpit\tests\pr_watching.rs:196:5
+    |
+196 | /     view.update(cx, |view, cx| {
+197 | |         view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "go".into()))
+198 | |     });
+    | |______^
+    |
+    = note: an ask's answer is the only word of how it went
+    = note: `#[warn(unused_must_use)]` (part of `#[warn(unused)]`) on by default
+help: use `let _ = ...` to ignore the resulting value
+    |
+196 |     let _ = view.update(cx, |view, cx| {
+    |     +++++++
+
+warning: unused `ferrite_client::cockpit::Ask` that must be used
+   --> crates\ferrite-cockpit\src\cockpit\tests\queued_prompts.rs:183:9
+    |
+183 |         view.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, "earlier queued".into()));
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: an ask's answer is the only word of how it went
+help: use `let _ = ...` to ignore the resulting value
+    |
+183 |         let _ = view.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, "earlier queued".into()));
+    |         +++++++
+
+warning: unused `ferrite_client::cockpit::Ask` that must be used
+   --> crates\ferrite-cockpit\src\cockpit\tests\queued_prompts.rs:184:9
+    |
+184 |         view.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, "edit queued".into()));
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: an ask's answer is the only word of how it went
+help: use `let _ = ...` to ignore the resulting value
+    |
+184 |         let _ = view.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, "edit queued".into()));
+    |         +++++++
+
+warning: `ferrite-cockpit` (lib test) generated 11 warnings (4 duplicates) (run `cargo fix --lib -p ferrite-cockpit --tests` to apply 3 suggestions)
+warning: unused dependency `serde`
+  --> crates\ferrite-focus-notify\Cargo.toml:14:1
+   |
+14 | serde = { version = "1", features = ["derive"] }
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `serde`
+warning: unused dependency `serde_json`
+  --> crates\ferrite-focus-notify\Cargo.toml:15:1
+   |
+15 | serde_json = "1"
+   | ^^^^^^^^^^^^^^^^
+   |
+help: consider removing the dependency on `serde_json`
+warning: `ferrite-focus-notify` (manifest) generated 2 warnings
+warning: unused dependency `gpui_platform`
+   --> vendor\gpui-base\Cargo.toml:157:57
+    |
+157 | [target.'cfg(not(target_family = "wasm"))'.dependencies.gpui_platform]
+    |                                                         ^^^^^^^^^^^^^^
+    |
+    = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `gpui_platform`
+warning: unused dependency `syntect`
+   --> vendor\gpui-base\Cargo.toml:127:15
+    |
+127 | [dependencies.syntect]
+    |               ^^^^^^^^
+    |
+help: consider removing the dependency on `syntect`
+warning: `gpui-base` (manifest) generated 2 warnings
+warning: unused dependency `enum-iterator`
+   --> vendor\gpui-component\Cargo.toml:262:15
+    |
+262 | [dependencies.enum-iterator]
+    |               ^^^^^^^^^^^^^^
+    |
+    = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `enum-iterator`
+warning: `gpui-component` (manifest) generated 1 warning
+warning: unused dependency `gpui`
+  --> vendor\gpui-pre-macos\Cargo.toml:52:15
+   |
+52 | [dependencies.gpui]
+   |               ^^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `gpui`
+warning: `gpui-pre-macos` (manifest) generated 1 warning
+warning: unused dependency `windows-registry`
+   --> vendor\gpui-pre-windows\Cargo.toml:214:57
+    |
+214 | [target.'cfg(target_os = "windows")'.build-dependencies.windows-registry]
+    |                                                         ^^^^^^^^^^^^^^^^^
+    |
+    = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `windows-registry`
+warning: `gpui-pre-windows` (manifest) generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 29.93s

@@ -1,0 +1,166 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\taffy\Cargo.toml
+workspace: C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\taffy\Cargo.toml
+workspace: C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\Cargo.toml
+   Compiling ferrite-core v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-core)
+warning: function `sign_in_script` is never used
+   --> crates\ferrite-core\src\machine.rs:736:4
+    |
+736 | fn sign_in_script(name: &str, target: &str, control: &Path) -> String {
+    |    ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `scratch` is never used
+   --> crates\ferrite-core\src\user_commands.rs:264:8
+    |
+264 |     fn scratch(name: &str) -> std::path::PathBuf {
+    |        ^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `command` is never used
+   --> crates\ferrite-core\src\user_commands.rs:274:8
+    |
+274 |     fn command(run: Run) -> UserCommand {
+    |        ^^^^^^^
+
+warning: `ferrite-core` (lib) generated 1 warning
+warning: `ferrite-core` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.36s
+────────────
+ Nextest run ID 37e5d941-0e45-45b7-acec-f1aa659d143e with nextest profile: default
+    Starting 6 tests across 2 binaries (644 tests skipped)
+        FAIL [   2.551s] (1/6) ferrite-core tree::scan::tests::a_setup_listing_hashes_the_text_a_plain_listing_kept_no_hash_of
+  stdout ───
+
+    running 1 test
+    test tree::scan::tests::a_setup_listing_hashes_the_text_a_plain_listing_kept_no_hash_of ... FAILED
+
+    failures:
+
+    failures:
+        tree::scan::tests::a_setup_listing_hashes_the_text_a_plain_listing_kept_no_hash_of
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 600 filtered out; finished in 0.01s
+
+  stderr ───
+
+    thread 'tree::scan::tests::a_setup_listing_hashes_the_text_a_plain_listing_kept_no_hash_of' (64212) panicked at crates\ferrite-core\src\tree\scan.rs:562:9:
+    assertion `left == right` failed: Manifest { entries: {"SKILL.md": File { size: 9, sha256: "15c4e4c657a7a17fa70fe4e80256ef892e1c239d2e45a0c4a609228b6d423479", mode: None, modified: Some(1795602469977), text: None }}, problems: {}, links: {} }
+      left: None
+     right: Some("74daeff849609b74a42500aff45eb6229a086907ab1b2badae4c29ed4fc10e3c")
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   2.562s] (2/6) ferrite-core setup_sync::tests::a_sync_that_finds_another_under_way_is_busy_not_failed
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::a_sync_that_finds_another_under_way_is_busy_not_failed ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::a_sync_that_finds_another_under_way_is_busy_not_failed
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 600 filtered out; finished in 2.31s
+
+  stderr ───
+
+    thread 'setup_sync::tests::a_sync_that_finds_another_under_way_is_busy_not_failed' (44280) panicked at crates\ferrite-core\src\setup_sync\tests.rs:941:5:
+    assertion `left == right` failed
+      left: Synced(Synced { pushed: 0, pulled: 0, removed_here: 0, removed_there: 0, conflicts: [], replaced: [], held: {}, problems: [], trashed: None })
+     right: Busy
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   3.847s] (3/6) ferrite-core setup_sync::tests::a_link_whose_target_changed_on_one_side_is_made_anew_on_the_other
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::a_link_whose_target_changed_on_one_side_is_made_anew_on_the_other ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::a_link_whose_target_changed_on_one_side_is_made_anew_on_the_other
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 600 filtered out; finished in 2.77s
+
+  stderr ───
+
+    thread 'setup_sync::tests::a_link_whose_target_changed_on_one_side_is_made_anew_on_the_other' (44704) panicked at crates\ferrite-core\src\setup_sync\tests.rs:139:87:
+    called `Result::unwrap()` on an `Err` value: Custom { kind: Other, error: Stuck { path: ".claude/skills/tool", side: There, error: Custom { kind: Other, error: "C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\54036\\ferrite-setup-sync-link-moved\\machine\\.agents\\skills\\old: entity already exists" } } }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   6.559s] (4/6) ferrite-core setup_sync::tests::a_scan_waits_once_for_an_install_under_way_and_the_next_goes_on
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::a_scan_waits_once_for_an_install_under_way_and_the_next_goes_on ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::a_scan_waits_once_for_an_install_under_way_and_the_next_goes_on
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 600 filtered out; finished in 5.47s
+
+  stderr ───
+
+    thread 'setup_sync::tests::a_scan_waits_once_for_an_install_under_way_and_the_next_goes_on' (76172) panicked at crates\ferrite-core\src\setup_sync\tests.rs:2282:5:
+    a later scan waited for the same run again: 2.020501s
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [  14.660s] (5/6) ferrite-core setup_sync::tests::a_sync_is_busy_while_an_install_runs_in_its_home
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::a_sync_is_busy_while_an_install_runs_in_its_home ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::a_sync_is_busy_while_an_install_runs_in_its_home
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 600 filtered out; finished in 6.57s
+
+  stderr ───
+
+    thread 'setup_sync::tests::a_sync_is_busy_while_an_install_runs_in_its_home' (14984) panicked at crates\ferrite-core\src\setup_sync\tests.rs:2257:5:
+    assertion `left == right` failed: a sync ran while Claude's installer was writing the settings
+      left: Synced(Synced { pushed: 2, pulled: 1, removed_here: 0, removed_there: 0, conflicts: [], replaced: [], held: {}, problems: [], trashed: None })
+     right: Busy
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [  14.665s] (6/6) ferrite-core setup_sync::tests::one_sync_of_a_home_runs_at_a_time_whichever_machine_it_is_with
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::one_sync_of_a_home_runs_at_a_time_whichever_machine_it_is_with ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::one_sync_of_a_home_runs_at_a_time_whichever_machine_it_is_with
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 600 filtered out; finished in 13.96s
+
+  stderr ───
+
+    thread 'setup_sync::tests::one_sync_of_a_home_runs_at_a_time_whichever_machine_it_is_with' (53500) panicked at crates\ferrite-core\src\setup_sync\tests.rs:2226:5:
+    assertion `left == right` failed: the first Machine's sync ran while the second's held the hub
+      left: Synced(Synced { pushed: 0, pulled: 1, removed_here: 0, removed_there: 0, conflicts: [], replaced: [], held: {}, problems: [], trashed: Some("C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\41924\\ferrite-setup-sync-one-at-a-time\\settings\\sync-trash\\20261125-205854-899") })
+     right: Busy
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [  19.268s] 6 tests run: 0 passed, 6 failed, 644 skipped
+        FAIL [   2.551s] (1/6) ferrite-core tree::scan::tests::a_setup_listing_hashes_the_text_a_plain_listing_kept_no_hash_of
+        FAIL [   2.562s] (2/6) ferrite-core setup_sync::tests::a_sync_that_finds_another_under_way_is_busy_not_failed
+        FAIL [   3.847s] (3/6) ferrite-core setup_sync::tests::a_link_whose_target_changed_on_one_side_is_made_anew_on_the_other
+        FAIL [   6.559s] (4/6) ferrite-core setup_sync::tests::a_scan_waits_once_for_an_install_under_way_and_the_next_goes_on
+        FAIL [  14.660s] (5/6) ferrite-core setup_sync::tests::a_sync_is_busy_while_an_install_runs_in_its_home
+        FAIL [  14.665s] (6/6) ferrite-core setup_sync::tests::one_sync_of_a_home_runs_at_a_time_whichever_machine_it_is_with
+error: test run failed

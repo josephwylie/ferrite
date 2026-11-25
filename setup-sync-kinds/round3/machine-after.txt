@@ -1,0 +1,18 @@
+.ferrite/setup-sync.lock
+.ferrite/sync-trash/20261125-211313-805/claude/settings.json#model
+.ferrite/sync-trash/20261125-211313-805/claude/skills/both-edit/SKILL.md
+.ferrite/sync-trash/20261125-211313-805/codex/config.toml#model
+.ferrite/sync-trash/20261125-211313-805/claude/settings.json#model: "sonnet"
+.ferrite/sync-trash/20261125-211313-805/claude/skills/both-edit/SKILL.md: # Both edit
+
+The version ferrite-wsl wrote.
+
+.ferrite/sync-trash/20261125-211313-805/codex/config.toml#model: "gpt-6.2-sol"
+# Both edit
+
+The version this computer wrote.
+{
+  "model": "opus"
+}
+model = "gpt-6.2-astra"
+

@@ -1,0 +1,5 @@
+hub (fv run home, Ferrite settings folder) after the first sync:
+./setup-sync.lock
+./sync-conflicts/20261125-211313-795/claude/skills/both-edit/SKILL.md   (ferrite-wsl's copy)
+home/.claude/skills/both-edit/SKILL.md: The version this computer wrote.
+home/.claude/settings.json: {"model": "opus"}
