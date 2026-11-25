@@ -19,23 +19,26 @@
 //! and a key that shows another Thread alike hand it to the new Thread's
 //! Composer, and only a move in a Thread's own Panel is kept for it.
 //!
-//! A stop is registered on the shared `PanelFocus` by whichever view draws
-//! it, the root or a child view rendered after it. So the row is finished
-//! only once the whole frame is drawn, and every reader sees the row of the
-//! last finished frame, never one half drawn.
+//! The root registers each stop on the shared `PanelFocus`: the head's as
+//! it draws them, then the body's as the body's view declares them, before
+//! that view draws (Files' file tabs, `FilesView::tab_stops`). The view
+//! reads its stops' handles with what else it draws, and never writes the
+//! row. The PR reader, still the Cockpit's, registers its own as it
+//! renders, after the root. So the row is finished only once the whole
+//! frame is drawn, and every reader sees the row of the last finished
+//! frame, never one half drawn.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use ferrite_ui::components::{icon_button, IconSize};
-use gpui::component::button::Button;
 use gpui::prelude::*;
-use gpui::{App, FocusHandle, Role, SharedString, Window};
+use gpui::{App, FocusHandle, SharedString, Window};
 
 use super::*;
 use crate::cockpit::surfaces::PrTab;
+pub(crate) use ferrite_ui::stop::{focusable, icon_stop, Semantics};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PanelControl {
@@ -49,73 +52,6 @@ pub(crate) enum PanelControl {
     PrPrimary,
     PrMore,
     PrView(PrTab),
-}
-
-/// What assistive technology and a test are told of a stop.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Semantics {
-    pub name: SharedString,
-    pub role: Role,
-    pub selected: Option<bool>,
-}
-
-impl Semantics {
-    pub(crate) fn button(name: impl Into<SharedString>) -> Self {
-        Self {
-            name: name.into(),
-            role: Role::Button,
-            selected: None,
-        }
-    }
-
-    pub(crate) fn tab(name: impl Into<SharedString>, selected: bool) -> Self {
-        Self {
-            name: name.into(),
-            role: Role::Tab,
-            selected: Some(selected),
-        }
-    }
-}
-
-/// A stop made focusable: its handle, a tab stop that shows the focus ring
-/// to the keyboard only, its role, name and selection. A press with the
-/// pointer leaves the keyboard where it was, as the head's controls always
-/// have.
-pub(in crate::cockpit) fn focusable<E: StatefulInteractiveElement>(
-    element: E,
-    handle: &FocusHandle,
-    semantics: &Semantics,
-) -> E {
-    let element = stop(element, handle)
-        .role(semantics.role)
-        .aria_label(semantics.name.clone());
-    match semantics.selected {
-        Some(selected) => element.aria_selected(selected),
-        None => element,
-    }
-}
-
-/// A stop that is the shared icon button, named as `semantics` say; the
-/// button gives itself its role and name.
-pub(in crate::cockpit) fn icon_stop(
-    id: &'static str,
-    glyph: &'static str,
-    size: IconSize,
-    handle: &FocusHandle,
-    semantics: &Semantics,
-    cx: &App,
-) -> Button {
-    debug_assert_eq!(semantics.role, Role::Button);
-    stop(icon_button(id, glyph, size, semantics.name.clone(), cx), handle)
-}
-
-fn stop<E: InteractiveElement>(element: E, handle: &FocusHandle) -> E {
-    element
-        .track_focus(handle)
-        .tab_stop(true)
-        .key_context(ferrite_ui::keymap::PANEL_CONTROL)
-        .focus_visible(ferrite_ui::components::control_focus)
-        .capture_any_mouse_down(|_, window, _| window.prevent_default())
 }
 
 /// The Panel's row of stops and the keyboard's memory of them, shared by
@@ -203,6 +139,19 @@ impl PanelFocus {
 
     pub(crate) fn handle(&self, control: &PanelControl) -> Option<FocusHandle> {
         self.handles.borrow().get(control).cloned()
+    }
+
+    /// The handles of the stops `key` names, by its key: what a body view
+    /// draws the stops it declared with.
+    pub(crate) fn handles<K: Eq + std::hash::Hash>(
+        &self,
+        key: impl Fn(&PanelControl) -> Option<K>,
+    ) -> HashMap<K, FocusHandle> {
+        self.handles
+            .borrow()
+            .iter()
+            .filter_map(|(control, handle)| Some((key(control)?, handle.clone())))
+            .collect()
     }
 
     fn position(&self, control: &PanelControl) -> Option<usize> {
@@ -532,12 +481,37 @@ impl CockpitView {
     }
 
     /// Close `path`'s file tab: the keyboard goes to the file that takes
-    /// its place, else back to the Panel's own tab.
+    /// its place, else back to the Panel's own tab. A tab with an edit to
+    /// write keeps the keyboard until the write lands and it goes
+    /// (`file_tab_closed`).
     fn close_file_tab(&mut self, thread: ThreadKey, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
         let Some(at) = self.files.read(cx).tab_index(thread, path) else {
             return;
         };
         self.files.update(cx, |files, cx| files.close_tab(thread, at, cx));
+        if self.files.read(cx).tab_index(thread, path).is_none() {
+            self.focus_file_tab_successor(thread, at, window, cx);
+        }
+    }
+
+    /// A file tab that waited to close is gone: if the keyboard stayed on
+    /// it, it goes on as from a tab closed at once.
+    pub(in crate::cockpit) fn file_tab_closed(
+        &mut self,
+        thread: ThreadKey,
+        path: &Path,
+        at: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.panel.focus.focused(window) == Some(PanelControl::FileTab(path.to_path_buf())) {
+            self.focus_file_tab_successor(thread, at, window, cx);
+        }
+    }
+
+    /// The keyboard to the file tab now `at`, else the last, else the
+    /// Panel's own Files tab.
+    fn focus_file_tab_successor(&mut self, thread: ThreadKey, at: usize, window: &mut Window, cx: &mut Context<Self>) {
         let files = self.files.read(cx);
         let next = files
             .tab_count(thread)

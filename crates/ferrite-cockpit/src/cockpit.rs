@@ -73,7 +73,6 @@ use rename::{rename_field, RenameTarget};
 mod snooze;
 pub(crate) mod starts;
 mod surfaces;
-mod tab_scroll;
 mod toasts;
 pub(crate) mod subagents;
 pub(crate) mod tools;
@@ -1258,7 +1257,7 @@ impl CockpitView {
         let empty_board = cx.new(|cx| empty_board::EmptyBoardView::new(cockpit_weak.clone(), cx));
         cx.subscribe(&prs, Self::on_prs_event).detach();
         let side_chat = cx.new(|_| side_chat_view::SideChatView::new(cockpit_weak.clone()));
-        let files = cx.new(|_| tools::FilesView::new(cockpit_weak.clone()));
+        let files = Self::new_files(cx);
         let terminals = Self::new_terminals(cx);
         let changes = Self::new_changes(cx);
         // The root draws the diffs into its own frame (`changes_pane`), so

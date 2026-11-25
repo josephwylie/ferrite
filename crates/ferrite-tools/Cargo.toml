@@ -3,14 +3,14 @@ name = "ferrite-tools"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Ferrite's tools Surfaces (ADR 0039): Changes, the Terminal and Files' remote checkout, each reading the window through a Source"
+description = "Ferrite's tools Surfaces (ADR 0039): Files, Changes and the Terminal, each reading the window through a Source"
 
 [lib]
 doctest = false
 
 [features]
 # The readings and fixtures the Cockpit's own tests reach for.
-test-support = []
+test-support = ["ferrite-pane/test-support"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
@@ -27,6 +27,11 @@ ferrite-reviewr = { path = "../ferrite-reviewr" }
 gpui = { package = "gpui-kit", version = "=0.6.0" }
 # A remote file operation's answer. Already in the tree via gpui.
 futures = "0.3"
+# Files' saved tabs (files.json) and the editor's settings in them.
+serde = { workspace = true }
+serde_json = { workspace = true }
+# A local file opened in its own app (`Open`).
+url = "2"
 
 [dev-dependencies]
 # `ThreadKey::fixture`: a Thread with no Cockpit behind it.
@@ -34,3 +39,7 @@ ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
 # The tests open each view in a window of its own (`ferrite_ui::testing`).
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
 ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
+ferrite-pane = { path = "../ferrite-pane", features = ["test-support"] }
+# The test programs' own temporary folder (ferrite-core/src/test_temp.rs).
+ctor = "1"
+libc = "0.2"

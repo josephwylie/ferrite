@@ -153,7 +153,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   Thread, as a closed tab keeps its state. The root reads the diff of
   the PRs' open PR as soon as Code shows, so a PR opened on Code never
   draws an empty view. A Project's pull request diffs are not freed yet.
-- **Files is the tenth.** `FilesView` (`cockpit/tools/files.rs`) owns
+- **Files is the tenth.** `FilesView` (`ferrite_tools::files` since the
+  2026-11-25 amendment; the root's side is `cockpit/tools/files.rs`) owns
   every Thread's Files: the tree with the folders it listed, git's colours
   and on a machine its last listing, the filter field, the open tabs with
   their editors, readings and find bars, the editor settings the `⋯` menu
@@ -161,10 +162,13 @@ that happened to touch it, and nothing in the code said whose a field was.
   out. It keeps a gone Thread's Files while a buffer holds an edit the
   disk does not have, so auto save still writes it, a quit flushes it and
   leaving names it. One view for the window, like the Terminal's. The
-  Panel draws it as the Files Surface's body, and the file tabs are stops
-  it registers on the Panel's row. It reads the Thread, whether the tree
-  fits beside the editor, the `⋯` Menu button and the diffs read (for
-  `Show changes`) through `files_inputs`. It emits `FilesEvent`: a file
+  Panel draws it as the Files Surface's body. The file tabs are stops of
+  the Panel's row that the view declares (`tab_stops`) and the root
+  enters as it draws the body, handing each tab its handle back. It reads
+  the Thread, whether the tree fits beside the editor, the `⋯` Menu
+  button, the tabs' handles and the diffs read (for `Show changes`)
+  through a `Source` the root makes over `files_inputs`. It emits
+  `FilesEvent`: a file
   opened from the tree, `Show changes`, Attach, ⌘P, a menu, the `⋯`.
   A file opened from the tree goes through the root's `open_in_files`,
   the one way into a tab, since opening shows the Surface; a local image
@@ -172,8 +176,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   as its Surface opens, since that needs the checkout, the machine and
   the saved tabs. It saves them (`WorkingSets`, files.json) and tells the
   view each frame to settle a rendered file's find. A remote read or
-  write still asks the root's Cockpit, after the frame, through the weak
-  handle `RemoteFiles` holds. A Pane's file preview hands a checkout's
+  write goes through the window's `Submit` that `RemoteFiles` holds. A
+  Pane's file preview hands a checkout's
   text file to `open_in_files` (`redirect_previews_to_files`).
 - **Background work is the eleventh.** `BackgroundView`
   (`cockpit/background_work.rs`) owns every Thread's background work as
@@ -1390,10 +1394,7 @@ Cockpit, and each of its tests opened a Cockpit window.
   read elsewhere is dropped). A Menu button a feature crate draws is a
   `ferrite_ui::components::MenuDoor`, its press an event the root maps to
   its own `Door`. What both sides read went to the lowest crate both use:
-  `ferrite_pane::hunks`, `ferrite_ui::answer`, `PrTarget` in core. Files
-  stays in the Cockpit: it registers its tab stops in the Panel's
-  `PanelFocus` as it draws, a write to the root from draw, so it moves
-  once the Panel's focus row is declared rather than registered. A
+  `ferrite_pane::hunks`, `ferrite_ui::answer`, `PrTarget` in core. A
   one-line edit to the Terminal, to its tests green and a typecheck, took
   17-27 s through the Cockpit and takes 8-12 s in `ferrite-tools`; a
   Terminal test takes about 0.2 s, against 1.2-1.9 s.
@@ -1414,6 +1415,26 @@ Cockpit, and each of its tests opened a Cockpit window.
   through the Cockpit and takes 5 s in `ferrite-settings`; a card test
   took 1.26 s on average in a Cockpit window and takes 0.09 s in its
   own.
+- **Files follows, its stops declared.** The Panel's keyboard row is the
+  window's: its order is the head's stops, then the body's. Files used
+  to register its tab stops in the root's `PanelFocus` as it drew, a
+  write to the root from draw. Now the view declares them
+  (`FilesView::tab_stops`: each tab's file and what it says), the root
+  enters them in the row as it draws the body, and the view reads each
+  tab's handle back through its `Source` and draws the tab with it. A
+  stop's look and semantics (`Semantics`, `focusable`, `icon_stop`) are
+  `ferrite_ui::stop`'s, and the tabs row's scroll is
+  `ferrite_ui::tab_scroll`'s, since the Panel's own tabs scroll with it.
+  A rendered file's find is `ferrite_pane::preview`'s, since a Pane's
+  preview finds with it too. The ⋯ and a row's menus stay the root's: the
+  view gives their rows as its own `Row`, which the root maps to its
+  verbs. A feature with stops of its own (the PR reader) declares them
+  the same way when it moves. Measured on Files (Windows, warm build,
+  other workers building): a one-line edit, to its tests green, took
+  18-48 s through the Cockpit and takes 10-32 s in `ferrite-tools`
+  (14-40 s with the Cockpit's typecheck after it); a Files test takes
+  0.6-0.8 s in its own window on average, against 2.0-11.9 s in a
+  Cockpit window.
 
 ## Precedent
 

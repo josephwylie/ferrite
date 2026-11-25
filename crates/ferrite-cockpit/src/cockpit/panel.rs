@@ -51,7 +51,7 @@ pub(crate) use controls::{PanelControl, PanelFocus, Semantics};
 pub(crate) use pull_request::PrAction;
 pub(crate) use strip::Opener;
 #[cfg(test)]
-pub(crate) use super::tab_scroll::tab_scroll_step;
+pub(crate) use ferrite_ui::tab_scroll::tab_scroll_step;
 pub(crate) use strip::soft_key_cap;
 
 /// The panel's own state on the cockpit.
@@ -60,7 +60,7 @@ pub(crate) struct Panel {
     persistence: persistence::Persistence,
     pub(crate) working_sets: super::tools::WorkingSets,
     /// The head row's tabs' own horizontal scroll.
-    pub(crate) tabs_scroll: super::tab_scroll::TabScroll,
+    pub(crate) tabs_scroll: ferrite_ui::tab_scroll::TabScroll,
     /// The window's width as of the last frame, what the floors and the
     /// maximized width are reckoned from.
     window_w: f32,
@@ -874,7 +874,10 @@ impl CockpitView {
                     .into_any_element()
             }
             Some(SurfaceId::File(_) | SurfaceId::Browser) => padded(self.panel_preview(owner, cx)),
-            Some(SurfaceId::Files) => self.files.clone().into_any_element(),
+            Some(SurfaceId::Files) => {
+                self.register_files_stops(thread, cx);
+                self.files.clone().into_any_element()
+            }
             Some(SurfaceId::Changes) => filled(self.changes_pane(ferrite_tools::changes::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(_)) => filled(self.terminals.clone().into_any_element()),
             Some(SurfaceId::SideChat(_)) => filled(self.side_chat.clone().into_any_element()),

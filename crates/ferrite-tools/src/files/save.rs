@@ -5,12 +5,12 @@
 pub(crate) use ferrite_core::file_operations::{fingerprint, replace_file, Fingerprint};
 use std::io;
 use std::path::Path;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::path::PathBuf;
 
 /// Where the buffer stands against the disk.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SaveState {
+pub enum SaveState {
     /// Nothing to report: opened, or edited since the last result.
     Idle,
     /// A write of this edit revision is in flight.

@@ -21,7 +21,7 @@
 
 use super::*;
 use crate::cockpit::menu_button::{Door, Edge};
-use crate::cockpit::tab_scroll::{self, Side};
+use ferrite_ui::tab_scroll::{self, Side};
 use ferrite_ui::components::{IconSize, Tip as _};
 use ferrite_ui::icons::{self, icon};
 
