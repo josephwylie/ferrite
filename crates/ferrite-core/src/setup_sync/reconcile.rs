@@ -283,7 +283,7 @@ impl<'a> Held<'a> {
 /// one that `is`.
 fn within(path: &str, is: impl Fn(&str) -> bool) -> bool {
     let file = file_of(path);
-    is(path) || is(file) || file.match_indices('/').any(|(at, _)| is(&path[..at]))
+    is(path) || is(file) || file.match_indices('/').any(|(at, _)| is(&file[..at]))
 }
 
 fn paths<'a>(base: &'a Manifest, here: &'a Manifest, there: &'a Manifest) -> BTreeSet<&'a str> {

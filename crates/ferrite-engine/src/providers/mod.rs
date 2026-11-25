@@ -435,6 +435,8 @@ impl Session for CodexSession {
     }
 }
 pub use claude::discovery::list as claude_sessions;
+/// What installs the Claude plugins a setup sync turns on (ADR 0050).
+pub use claude::plugins::installs as claude_plugin_installs;
 pub use resume::{ResumeFailure, ResumeRefused};
 /// Each Provider's title filler, beside its Session — the titler runs
 /// whichever the Thread's Provider is.

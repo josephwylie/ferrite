@@ -65,7 +65,7 @@ pub trait Keychain: Send + Sync {
 impl Home {
     /// This process's: the home directory Claude Code and Codex read, with
     /// `.claude` and `.codex` where `CLAUDE_CONFIG_DIR` and `CODEX_HOME`
-    /// put them, and the `claude` a Session runs to install plugins. A
+    /// put them, and nothing to install plugins with (`with_installs`). A
     /// Ferrite on a Store of its own (`FERRITE_STORE`, a test or an
     /// isolated run) is refused unless every folder it would sync is in a
     /// home of its own, not the account's real one, so it never syncs the
@@ -84,7 +84,7 @@ impl Home {
         let codex = var("CODEX_HOME").map(under);
         let claude = var("CLAUDE_CONFIG_DIR").map(under);
         let keychain = cfg!(target_os = "macos") && account.as_ref().is_some_and(|account| *account == root);
-        let mut home = Self::at(root, codex).with_installs(Installs::claude());
+        let mut home = Self::at(root, codex);
         if let Some(claude) = claude {
             home = home.with_claude(claude);
         }

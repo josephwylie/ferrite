@@ -17,13 +17,14 @@
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use base64::Engine as _;
 
 use super::links::link;
 use super::{at, canonical, check_path, holds, local, scan, windows_name, Manifest, Refusal, Reply, Request, Root};
 use crate::chunked::{self, CHUNK_SIZE};
-use crate::setup_sync::{Home, Place, TABLE};
+use crate::setup_sync::{Home, Installs, Place, TABLE};
 
 /// At most this many files are written at once on one connection.
 pub(crate) const MOST_WRITES: usize = 4;
@@ -55,6 +56,9 @@ pub struct Session {
     /// The setup the Setup root names: this process's home directory's
     /// unless given.
     home: Option<Home>,
+    /// What installs the Claude plugins a write to this process's home
+    /// turns on.
+    installs: Option<Arc<Installs>>,
 }
 
 /// A scan not yet read to its last page.
@@ -76,6 +80,7 @@ impl Default for Session {
             writes: chunked::Incoming::new(MOST_WRITES),
             scanned: None,
             home: None,
+            installs: None,
         }
     }
 }
@@ -89,6 +94,15 @@ impl Session {
         }
     }
 
+    /// Ops on the Setup root work on this process's home, and what a
+    /// write there turns on in Claude is installed by `installs`.
+    pub fn installing(installs: Arc<Installs>) -> Self {
+        Self {
+            installs: Some(installs),
+            ..Self::default()
+        }
+    }
+
     pub fn expire(&mut self) {
         self.writes.expire();
     }
@@ -96,7 +110,10 @@ impl Session {
     fn home(&mut self) -> io::Result<&Home> {
         let home = match self.home.take() {
             Some(home) => home,
-            None => Home::from_env()?,
+            None => match self.installs.clone() {
+                Some(installs) => Home::from_env()?.with_installs(installs),
+                None => Home::from_env()?,
+            },
         };
         Ok(self.home.insert(home))
     }

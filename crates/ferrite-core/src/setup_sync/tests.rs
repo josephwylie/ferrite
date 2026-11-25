@@ -1406,10 +1406,6 @@ fn a_server_from_before_the_table_reads_a_setup_root_by_one_as_a_root_it_does_no
     #[derive(Debug, PartialEq, serde::Deserialize)]
     #[serde(tag = "kind", rename_all = "snake_case")]
     enum Shipped {
-        Path {
-            #[allow(dead_code)]
-            path: PathBuf,
-        },
         Setup,
         #[serde(other)]
         Unknown,

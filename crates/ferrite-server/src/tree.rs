@@ -31,7 +31,7 @@ impl Lane {
         let going = gone.clone();
         std::thread::spawn(move || {
             ferrite_core::spawn::serve_the_operator();
-            let mut session = Session::default();
+            let mut session = Session::installing(ferrite_engine::providers::claude_plugin_installs());
             loop {
                 match asks.recv_timeout(EXPIRY) {
                     Ok((request, operation)) => {

@@ -29,8 +29,9 @@ const TICK_MS: u64 = 16;
 /// `ferrite --headless`: the production window on this Store's Server,
 /// drawn off-screen and driven only by the Server's `window.*` actions.
 /// It runs until it is stopped. Remote images load through `http`, as the
-/// app's do.
-pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
+/// app's do, and the Claude plugins a setup sync turns on are installed by
+/// `installs`.
+pub fn run(http: Arc<dyn gpui::http_client::HttpClient>, installs: Arc<ferrite_core::setup_sync::Installs>) {
     // Never the operator's Store: a driven window on it would let any API
     // caller type into their Threads and answer their Decisions.
     throwaway("FERRITE_STORE", "");
@@ -78,7 +79,11 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
         whats_new: None,
         unreadable,
         keys_refused,
-        setup_home: Some(ferrite_core::setup_sync::Home::from_env().map_err(|error| error.to_string())),
+        setup_home: Some(
+            ferrite_core::setup_sync::Home::from_env()
+                .map(|home| home.with_installs(installs))
+                .map_err(|error| error.to_string()),
+        ),
     };
     let mut driver = Driver::open(cx, |cx| {
         CockpitView::new_with_machines(core, provider, prefs, Some(machines), cx)

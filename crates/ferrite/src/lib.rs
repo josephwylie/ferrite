@@ -187,7 +187,7 @@ pub fn launch() {
     // (`ferrite_cockpit::headless`, ADR 0038).
     #[cfg(feature = "headless")]
     if std::env::args().nth(1).as_deref() == Some("--headless") {
-        ferrite_cockpit::headless::run(http_client());
+        ferrite_cockpit::headless::run(http_client(), ferrite_engine::providers::claude_plugin_installs());
         return;
     }
     // The operator's settings live beside the store (`~/.ferrite`), and
@@ -418,6 +418,11 @@ pub fn launch() {
                                     keys_refused: keys_refused.clone(),
                                     setup_home: (!browser_smoke).then(|| {
                                         ferrite_core::setup_sync::Home::from_env()
+                                            .map(|home| {
+                                                home.with_installs(
+                                                    ferrite_engine::providers::claude_plugin_installs(),
+                                                )
+                                            })
                                             .map_err(|error| error.to_string())
                                     }),
                                 },

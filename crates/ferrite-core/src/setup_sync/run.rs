@@ -572,14 +572,12 @@ fn take_here(
     while !pulls.waiting.is_empty() {
         pulls.hear()?;
     }
-    let left = std::mem::take(&mut pulls.left);
-    drop(pulls);
     for (path, entry) in &taken {
         if let Entry::Symlink { target } = entry {
             job.home.link(path, target).map_err(|error| named(path, Side::Here, error))?;
         }
     }
-    Ok(left)
+    Ok(pulls.left)
 }
 
 /// Files read from the Machine into this computer's setup, a chunk at a

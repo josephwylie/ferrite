@@ -7,18 +7,16 @@
 //! that Claude has not installed, with `claude plugin`, off the thread that
 //! wrote the key and one run at a time. A failure is said by each scan of
 //! that side until a later write tries again. Nothing is ever uninstalled:
-//! a plugin turned off is a key set false, which Claude reads itself.
+//! a plugin turned off is a key set false, which Claude reads itself. What
+//! runs `claude` is the engine's (`Installer`), which knows where it is.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::Path;
-use std::process::Stdio;
-use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use serde_json::Value;
-
-use crate::provider::Provider;
 
 /// Where a scan names a plugin that could not be installed:
 /// `.claude/plugins/<plugin>@<marketplace>`, the derived folder the plugin
@@ -54,13 +52,6 @@ impl Installs {
             state: Mutex::default(),
             idle: Condvar::new(),
         })
-    }
-
-    /// This process's, through the `claude` a Session would run: one for
-    /// every Home of the process, so what failed is said by any later scan.
-    pub(super) fn claude() -> Arc<Self> {
-        static ONE: OnceLock<Arc<Installs>> = OnceLock::new();
-        ONE.get_or_init(|| Self::new(Claude)).clone()
     }
 
     /// A plugin or marketplace key of the Claude whose folder is `claude`
@@ -202,42 +193,6 @@ fn source(source: &Value) -> Option<String> {
     }
 }
 
-/// The `claude` a Session would run.
-struct Claude;
-
-impl Installer for Claude {
-    fn run(&self, words: &[&str]) -> io::Result<()> {
-        let program = crate::providers::discover::program(Provider::Claude);
-        let output = crate::spawn::agent(&program)
-            .arg("plugin")
-            .args(words)
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|error| match error.kind() {
-                io::ErrorKind::NotFound => io::Error::other("Claude Code is not installed there"),
-                _ => error,
-            })?;
-        if output.status.success() {
-            return Ok(());
-        }
-        Err(io::Error::other(said(&output.stdout, &output.stderr)))
-    }
-}
-
-/// What `claude plugin … --json` said went wrong: the message of its last
-/// line of JSON, else its last line.
-fn said(stdout: &[u8], stderr: &[u8]) -> String {
-    let lines = |bytes: &[u8]| String::from_utf8_lossy(bytes).lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_string).collect::<Vec<_>>();
-    let (out, err) = (lines(stdout), lines(stderr));
-    let message = out
-        .iter()
-        .rev()
-        .find_map(|line| serde_json::from_str::<Value>(line).ok()?["message"].as_str().map(str::to_string));
-    message
-        .or_else(|| err.last().or(out.last()).map(|line| line.trim_start_matches(['✘', ' ']).to_string()))
-        .unwrap_or_else(|| "Claude's installer failed".into())
-}
-
 impl std::fmt::Debug for Installs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Installs")
@@ -249,10 +204,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn what_claudes_installer_said_is_its_message() {
-        let failed = br#"{"command":"install","outcome":"failed","plugin":"pstack@cursor-plugins","message":"Plugin \"pstack\" not found in marketplace \"cursor-plugins\"."}"#;
-        assert_eq!(said(failed, b""), r#"Plugin "pstack" not found in marketplace "cursor-plugins"."#);
-        assert_eq!(said(b"", "\u{2718} Failed to add marketplace: no such repo\n".as_bytes()), "Failed to add marketplace: no such repo");
+    fn a_marketplace_is_added_from_the_source_its_settings_name() {
         let github = serde_json::json!({"source": "github", "repo": "cursor/plugins"});
         assert_eq!(source(&github).as_deref(), Some("cursor/plugins"));
         assert_eq!(source(&serde_json::json!({"source": "npm", "package": "x"})), None);

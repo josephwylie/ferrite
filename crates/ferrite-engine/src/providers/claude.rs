@@ -12,6 +12,7 @@ mod drafts;
 mod file_search;
 mod mcp;
 mod menu;
+pub(super) mod plugins;
 mod queue;
 mod rewind;
 mod shell_output;

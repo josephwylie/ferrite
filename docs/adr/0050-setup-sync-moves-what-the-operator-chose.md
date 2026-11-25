@@ -141,7 +141,10 @@ what failed, as a problem at `.claude/plugins/<plugin>`. The row reads
 "pstack could not be installed on wsl: …" until a later write installs it.
 The hub does the same for itself after a pull. There is no new protocol op.
 Nothing is ever uninstalled: a plugin turned off is a key set false, which
-Claude reads itself.
+Claude reads itself. The runner is core's. What runs `claude` is the
+engine's (`providers::claude_plugin_installs`), which finds it the way a
+Session does, and each process that syncs a home hands it in: the window,
+`ferrite setup sync` and the Server.
 
 ## The table's version
 
