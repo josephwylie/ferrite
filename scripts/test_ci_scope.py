@@ -95,6 +95,11 @@ class SelectionTests(unittest.TestCase):
                 self.assertEqual(result["packages"], self.ferrite)
                 self.assertEqual(result["vendored"], self.vendored)
                 self.assertTrue(result["checks"])
+        # An input no rule knows may be one only the packaged run reads.
+        for path in [".github/actions/setup/action.yml", "resources/icon.ico", "assets/logo.png", ".gitattributes",
+                     "new-build-input", "crates/removed/src/lib.rs", "packaging/Ferrite.entitlements"]:
+            with self.subTest(path=path):
+                self.assertTrue(select(self.packages, [path])["browser"])
 
     def test_scripts_no_check_here_runs_select_nothing(self):
         # The scope job runs its own tests on every event; other workflows
@@ -214,7 +219,12 @@ class SelectionTests(unittest.TestCase):
                  "crates/ferrite-core/src/browser_annotations.rs", "crates/ferrite-pane/src/visual/engine.rs",
                  "crates/ferrite-pane/src/annotation_editor.rs", "crates/ferrite/src/lib.rs", "crates/ferrite-ui/Cargo.toml",
                  "Cargo.lock", "vendor/gpui-pre/src/window.rs", "scripts/install-app.sh", "scripts/probe-browser-window.py",
-                 "scripts/patches/agent-browser-0.41.2-ferrite.patch", ".github/workflows/browser-window.yml"]
+                 "scripts/patches/agent-browser-0.41.2-ferrite.patch", ".github/workflows/browser-window.yml",
+                 # Each can break the macOS pass alone.
+                 "crates/ferrite/assets/app-icon.png", "Cargo.toml", "crates/ferrite-pane/src/visual/web/cef/input.rs",
+                 "crates/ferrite-pane/src/visual/web/cef/handlers.rs", "crates/ferrite-pane/src/visual/browser_control/native.rs",
+                 "crates/ferrite-pane/src/visual/web/cef/profile.rs", "scripts/browser_resources.py",
+                 "vendor/gpui-base/src/macos_accessibility.rs"]
         for path in paths:
             with self.subTest(path=path):
                 self.assertTrue(select(self.packages, [path])["browser"])

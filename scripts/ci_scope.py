@@ -271,7 +271,8 @@ def rule(path: str) -> str | None:
 # the Browser, the app crate, the GPUI stack, dependencies, the packaging
 # scripts, and any line naming the `cef` or `browser-smoke` feature. ci.yml
 # compiles both features on every PR, so a caller's change that breaks gated
-# code fails there, and main runs the packaged browser after every merge.
+# code fails there. Main runs the packaged browser after merges (a newer merge
+# replaces a run still waiting) and every night.
 BROWSER_FILES = {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", ".github/workflows/browser-window.yml",
                  "scripts/ci_scope.py", "scripts/install-app.sh", "scripts/stage-windows.ps1", "scripts/copy-chromium-windows.ps1"}
 BROWSER_INPUTS = ("vendor/", ".cargo/", "scripts/patches/", "crates/ferrite/", "crates/ferrite-pane/src/visual/",
@@ -292,7 +293,6 @@ def select(packages: dict[str, Package], paths: list[str], full: bool = False, b
     selected = set()
     inputs = {SHARED} if full or not paths else set()
     reasons = {"full run or unavailable change list"} if inputs else set()
-    browser = browser or not paths or any(map(browser_input, paths))
     for path in paths:
         owners = {name for name, package in packages.items() if package.reads(path)}
         selects = rule(path) or (None if owners else UNCLASSIFIED)
@@ -302,6 +302,8 @@ def select(packages: dict[str, Package], paths: list[str], full: bool = False, b
         if selects not in (None, NOTHING):
             inputs.add(selects)
             reasons.add(f"{selects}: {path}")
+    # An input no rule knows may be one only the packaged run reads.
+    browser = browser or not paths or UNCLASSIFIED in inputs or any(map(browser_input, paths))
     if inputs & {SHARED, UNCLASSIFIED, VENDORED}:
         selected = set(packages)
     else:

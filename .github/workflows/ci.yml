@@ -290,13 +290,24 @@ jobs:
           require 'macOS checks' "$CHECKS" "$CHECKS_RESULT"
           require 'Vendored tests' "$VENDORED" "$VENDORED_RESULT"
 
-  windows:
-    name: Windows (DirectX 11)
+  # The Windows work is three jobs that run at once: the tests in two halves,
+  # and the builds. Windows runners are not the scarce ones (the account
+  # runs five macOS jobs at once), and running the tests, not building
+  # them, took most of the one job: about 12 of its 22 minutes on main. Each
+  # half builds every test program and runs every other test (nextest's
+  # --partition), so together they run what the one job ran. They are two
+  # jobs, not a matrix, so the gate below reads each one's result; the
+  # second takes the first's steps.
+  windows-tests-1:
+    name: Windows tests (1/2)
     needs: scope
-    if: ${{ needs.scope.outputs.windows == 'true' }}
+    # A change to the staging scripts alone selects no package.
+    if: ${{ needs.scope.outputs.windows == 'true' && needs.scope.outputs.packages != '' }}
     runs-on: windows-latest
     timeout-minutes: 60
-    steps:
+    env:
+      PARTITION: 1
+    steps: &windows-test-steps
       # Committed wire fixtures are parsed byte-for-byte; keep checkout literal.
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
@@ -326,14 +337,14 @@ jobs:
         with:
           # Bumped so main saves a cache that holds the CEF builds' output.
           prefix-key: v1-rust
+          # The halves build the same programs, so they share one cache.
+          shared-key: windows-tests
           workspaces: ${{ env.DEV_DRIVE_WORKSPACE }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Install nextest
         uses: taiki-e/install-action@nextest
-      # A change to the staging scripts alone selects no package.
       - name: Test affected workspace packages (synthetic engine)
-        if: needs.scope.outputs.packages != ''
         shell: bash
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         env:
@@ -344,11 +355,9 @@ jobs:
           quarantined=$(python scripts/quarantine.py)
           # Retries as on macOS above: this runner fails a different
           # timing-dependent test on most runs.
-          cargo nextest run "${args[@]}" --profile ci -E "not ($quarantined)" --locked --no-fail-fast --retries 2 --status-level all --final-status-level flaky
-      # Like the tests above, these need a package: with no -p, nextest
-      # would build the default members.
+          cargo nextest run "${args[@]}" --partition "count:$PARTITION/2" --profile ci -E "not ($quarantined)" --locked --no-fail-fast --retries 2 --status-level all --final-status-level flaky
       - name: Test the quarantined tests, which never fail the job
-        if: ${{ !cancelled() && needs.scope.outputs.packages != '' }}
+        if: ${{ !cancelled() }}
         continue-on-error: true
         shell: bash
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
@@ -359,18 +368,58 @@ jobs:
           if [ "$quarantined" = 'none()' ]; then echo 'No test is quarantined.'; exit 0; fi
           args=()
           for package in $PACKAGES; do args+=(-p "$package"); done
-          cargo nextest run "${args[@]}" --profile quarantine -E "$quarantined" --locked --no-fail-fast --no-tests=pass
+          cargo nextest run "${args[@]}" --partition "count:$PARTITION/2" --profile quarantine -E "$quarantined" --locked --no-fail-fast --no-tests=pass
       - name: Summarize the test reports
-        if: ${{ !cancelled() && needs.scope.outputs.packages != '' }}
+        if: ${{ !cancelled() }}
         shell: bash
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: python scripts/junit_summary.py target/nextest/*/junit.xml >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the test reports
-        if: ${{ !cancelled() && needs.scope.outputs.packages != '' }}
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: junit-windows-${{ github.run_attempt }}
+          name: junit-windows-${{ env.PARTITION }}-${{ github.run_attempt }}
           path: ${{ env.DEV_DRIVE_WORKSPACE }}/target/nextest/*/junit.xml
+
+  windows-tests-2:
+    name: Windows tests (2/2)
+    needs: scope
+    if: ${{ needs.scope.outputs.windows == 'true' && needs.scope.outputs.packages != '' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      PARTITION: 2
+    steps: *windows-test-steps
+
+  windows-checks:
+    name: Windows checks
+    needs: scope
+    if: ${{ needs.scope.outputs.windows == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      # On a Dev Drive, as the tests above.
+      - uses: samypr100/setup-dev-drive@v4
+        with:
+          drive-size: 40GB
+          workspace-copy: true
+          env-mapping: |
+            CARGO_HOME,{{ DEV_DRIVE }}/.cargo
+            RUSTUP_HOME,{{ DEV_DRIVE }}/.rustup
+      - uses: dtolnay/rust-toolchain@stable
+      # Pinned for Windows' long rustc commands; see the tests above.
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.16.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+          workspaces: ${{ env.DEV_DRIVE_WORKSPACE }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
       - name: Build app
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: cargo build -p ferrite --locked
@@ -389,6 +438,37 @@ jobs:
         shell: pwsh
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: scripts/tests/windows-stage.ps1
+
+  # The required check for the Windows jobs, as macOS (Metal) is for the
+  # macOS ones: it fails when the scope job or a job it needs failed, and it
+  # is skipped only when the scope job succeeded and selected no Windows
+  # check in so many words.
+  windows:
+    name: Windows (DirectX 11)
+    needs: [scope, windows-tests-1, windows-tests-2, windows-checks]
+    if: ${{ !cancelled() && !(needs.scope.result == 'success' && needs.scope.outputs.windows == 'false') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the selected Windows jobs
+        env:
+          SCOPE: ${{ needs.scope.result }}
+          WINDOWS: ${{ needs.scope.outputs.windows }}
+          PACKAGES: ${{ needs.scope.outputs.packages }}
+          TESTS_1_RESULT: ${{ needs.windows-tests-1.result }}
+          TESTS_2_RESULT: ${{ needs.windows-tests-2.result }}
+          CHECKS_RESULT: ${{ needs.windows-checks.result }}
+        run: |
+          test "$SCOPE" = success
+          test "$WINDOWS" = true
+          test "$CHECKS_RESULT" = success
+          for result in "$TESTS_1_RESULT" "$TESTS_2_RESULT"; do
+            if [ -n "$PACKAGES" ]; then
+              test "$result" = success
+            else
+              test "$result" = skipped
+            fi
+          done
+          if [ -z "$PACKAGES" ]; then echo 'Windows tests: no package selected, intentionally skipped.'; fi
 
   verification:
     name: Verification decisions
