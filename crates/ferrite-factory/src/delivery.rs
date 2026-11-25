@@ -3,13 +3,15 @@
 //! current one is, the evidence kept apart by kind (an older revision's
 //! said as such), and why a completed Task's worktree stayed.
 
-use super::direction::section;
-use ferrite_factory::direct::meta;
-use super::*;
 use ferrite_core::factory_board::{self, EvidenceKind, Status, Task};
+use gpui::prelude::*;
+use gpui::{div, px, rgb, AnyElement, ClickEvent, Context, Div, SharedString};
+
+use crate::direct::meta;
+use crate::direction::section;
 
 /// The PR's line on a card: `acme/widgets#12 · revision 2`.
-pub(crate) fn card_line(task: &Task) -> Option<String> {
+pub fn card_line(task: &Task) -> Option<String> {
     let pr = task.delivery.pr.as_ref()?;
     let mut line = pr.label();
     if let Some(now) = pr.current() {
@@ -24,7 +26,7 @@ pub(crate) fn card_line(task: &Task) -> Option<String> {
 }
 
 /// What Approve is given for: the current revision, said with its head.
-pub(crate) fn approving_line(task: &Task) -> Option<String> {
+pub fn approving_line(task: &Task) -> Option<String> {
     let pr = task.delivery.pr.as_ref()?;
     Some(match pr.current() {
         Some(now) => format!(
@@ -51,7 +53,7 @@ fn sentence_case(text: &str) -> String {
 
 /// The evidence, each item with its kind, who gave it and its revision;
 /// one about an older revision is dimmed and says so.
-pub(crate) fn evidence_list(task: &Task) -> Div {
+pub fn evidence_list(task: &Task) -> Div {
     use ferrite_ui::theme::*;
     let now = task.revision_now();
     let mut list = div()
@@ -105,7 +107,7 @@ pub(crate) fn evidence_list(task: &Task) -> Div {
 
 /// The Overview's PR section, the evidence (Ready to approve shows
 /// its own) and why the worktree stayed.
-pub(super) fn task_delivery<V: 'static>(task: &Task, cx: &mut Context<V>) -> Vec<AnyElement> {
+pub fn task_delivery<V: 'static>(task: &Task, cx: &mut Context<V>) -> Vec<AnyElement> {
     use ferrite_ui::theme::*;
     let mut out = Vec::new();
     if let Some(pr) = &task.delivery.pr {

@@ -66,8 +66,8 @@ impl CockpitView {
         let sheet = direction.update(cx, |direction, cx| {
             // The sheet's field takes the keyboard; the answer box does not
             // have it back once the sheet closes.
-            direction.answering = false;
-            let kept = direction.kept.entry(task.clone()).or_default();
+            direction.set_answering(false);
+            let kept = direction.kept(&task);
             cx.new(|cx| DirectView::new(inputs, project, task, sheet, kept, cx))
         });
         cx.subscribe(&sheet, Self::on_direct_event).detach();
@@ -87,7 +87,7 @@ impl CockpitView {
         };
         direction.update(cx, |direction, cx| {
             let sheet = sheet.read(cx);
-            sheet.keep(direction.kept.entry(sheet.task().clone()).or_default(), cx);
+            sheet.keep(direction.kept(sheet.task()), cx);
         });
     }
 

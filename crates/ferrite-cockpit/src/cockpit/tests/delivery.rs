@@ -108,7 +108,7 @@ fn the_panel_shows_the_pr_its_revisions_and_which_was_approved(cx: &mut TestAppC
     view.read_with(cx, |view, cx| {
         let task = view.open_task_now(cx).unwrap();
         assert_eq!(
-            crate::cockpit::delivery::card_line(task).as_deref(),
+            ferrite_factory::delivery::card_line(task).as_deref(),
             Some("acme/widgets#12 \u{b7} revision 2")
         );
     });
@@ -135,7 +135,7 @@ fn ready_to_approve_says_the_revision_approved(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         let task = view.open_task_now(cx).unwrap();
         assert_eq!(
-            crate::cockpit::delivery::approving_line(task).as_deref(),
+            ferrite_factory::delivery::approving_line(task).as_deref(),
             Some("You approve acme/widgets#12 at revision 2 (head 2222222).")
         );
     });

@@ -149,7 +149,7 @@ pub(crate) struct FactoryView {
     /// The open Factory picker's rows.
     pub(crate) picks: Vec<(ferrite_ui::menu::Item, super::workflows::Pick)>,
     /// Answers, rework and redirects being written, and their sheets.
-    pub(crate) direction: Entity<super::direction::DirectionView>,
+    pub(crate) direction: Entity<ferrite_factory::direction::DirectionView>,
     /// The Coordinator surface's field before the Coordinator runs (#224).
     pub(crate) coordinator: Entity<super::coordinator::CoordinatorView>,
     /// How Tasks start (#225): what the GitHub login listed for its
@@ -224,7 +224,7 @@ impl TaskCard {
                 None => factory_board::agent_label(&task.agent),
             },
             outcome: task.outcome().map(str::to_string),
-            pr: super::delivery::card_line(task),
+            pr: ferrite_factory::delivery::card_line(task),
         }
     }
 }
@@ -820,8 +820,8 @@ impl FactoryView {
                             .map(|reason| line("Why", reason).debug_selector(|| "task-why".into())),
                     )
                     .child(line("Status", task.status.word().to_string()))
-                    .children(super::direction::says(task).then(|| self.direction.clone()))
-                    .children(super::delivery::task_delivery(task, cx))
+                    .children(ferrite_factory::direction::says(task).then(|| self.direction.clone()))
+                    .children(ferrite_factory::delivery::task_delivery(task, cx))
                     .into_any_element()
             }
             TaskTab::Activity => {
@@ -1168,7 +1168,7 @@ impl CockpitView {
             view.note = None;
             view.revealed.set(None);
             view.direction
-                .update(cx, |direction, _| direction.answering = false);
+                .update(cx, |direction, _| direction.set_answering(false));
         });
         self.ensure_answer(task, cx);
         cx.notify();

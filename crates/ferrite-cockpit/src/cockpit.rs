@@ -20,7 +20,6 @@ mod context_menu;
 pub(crate) mod coordinator;
 pub(crate) mod decisions;
 mod delegates;
-mod delivery;
 mod destination;
 mod details;
 mod direct;
