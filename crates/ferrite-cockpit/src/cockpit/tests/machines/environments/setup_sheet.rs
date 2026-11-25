@@ -1375,7 +1375,8 @@ fn a_copy_ending_behind_the_window_notifies_with_its_card_up_until_seen(cx: &mut
 /// While the draft's copy runs it is not sent: no Send, its first send
 /// starts no Thread, and its band says why beside the copy's percentage.
 /// Once the copy is in, the draft is there, and Send is back; the copy,
-/// leaving nothing to do or see, is forgotten when its toast goes.
+/// leaving nothing to do or see, is forgotten when its toast goes, and the
+/// system's notification of it, the window away, goes with it.
 #[gpui::test]
 fn a_draft_waiting_on_its_copy_is_sent_there_once_it_is_in(cx: &mut TestAppContext) {
     toasts_rest(cx);
@@ -1386,6 +1387,7 @@ fn a_draft_waiting_on_its_copy_is_sent_there_once_it_is_in(cx: &mut TestAppConte
     let source = project_folder(&base.join("here/app"), None);
     std::fs::write(source.join("big.bin"), vec![9u8; 4 << 20]).unwrap();
     let mine = registered_here(&mut core, &source);
+    cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
     view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
@@ -1409,12 +1411,20 @@ fn a_draft_waiting_on_its_copy_is_sent_there_once_it_is_in(cx: &mut TestAppConte
     assert_eq!(draft_project(&view, draft, cx), mine, "still a draft, here");
     assert_eq!(draft_text(&view, draft, cx), "hello");
 
+    cx.deactivate_window();
     held.let_go();
     until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
     settles(cx);
     assert!(debug_bounds(cx, "band-copy-waits".into()).is_none());
     assert!(debug_bounds(cx, "composer-send".into()).is_some(), "Send is back, there");
     assert_eq!(draft_text(&view, draft, cx), "hello");
+    let tag = copy_tag(&view, cx);
+    let posted = |cx: &mut gpui::VisualTestContext| {
+        cx.delivered_system_notifications()
+            .iter()
+            .any(|notification| notification.tag.as_ref() == tag)
+    };
+    assert!(posted(cx), "the window away, the system says so too");
     // All of it went well and the draft is there: nothing is left to do or
     // see, so the copy goes with its toast, which goes by itself.
     assert!(text_of(cx, "notification-title").is_some_and(|said| said.contains("Copied app to box")));
@@ -1422,6 +1432,7 @@ fn a_draft_waiting_on_its_copy_is_sent_there_once_it_is_in(cx: &mut TestAppConte
     settles(cx);
     assert!(debug_bounds(cx, "notification-card".into()).is_none(), "the toast went");
     view.read_with(cx, |view, cx| assert!(view.copies.read(cx).iter().next().is_none(), "the copy went with it"));
+    assert!(!posted(cx), "and its notification, which had nothing left to open");
     press(cx, ENVIRONMENT);
     until(cx, |cx| view.read_with(cx, |view, _| view.band_menu().is_some()));
     let rows = band_rows(&view, cx);
