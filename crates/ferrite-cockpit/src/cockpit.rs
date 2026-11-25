@@ -42,10 +42,7 @@ use self::menu_rows::*;
 mod machines;
 mod menu_button;
 mod connections_view;
-mod nav_chrome;
 mod nav_keys;
-mod nav_list;
-mod nav_pick;
 mod nav_undo;
 mod nav_view;
 mod palette;
@@ -68,8 +65,8 @@ mod sheets;
 mod side_chat_view;
 mod rename;
 mod returns;
-use rename::{rename_field, RenameTarget};
-mod snooze;
+use ferrite_ui::components::rename_field;
+use rename::RenameTarget;
 pub(crate) mod starts;
 mod surfaces;
 mod toasts;
@@ -477,7 +474,7 @@ pub struct CockpitView {
     /// The nav, a view of its own (ADR 0041): it owns its list's motion,
     /// scroll, keyboard, search, picks and undo notice, and asks the
     /// Cockpit for the rest through `NavEvent`.
-    nav_view: Entity<nav_view::NavView>,
+    nav_view: Entity<ferrite_nav::view::NavView>,
     /// The Cockpit hearing each view that has an event enum of its own
     /// (ADR 0041), from its first frame.
     view_events: Option<Vec<gpui::Subscription>>,
@@ -596,7 +593,7 @@ pub struct CockpitView {
     leave_asked: bool,
     /// What the last nav act has to say (a failed Park, a refused
     /// rename).
-    nav_notice: nav_list::Notice,
+    nav_notice: nav_view::Notice,
     /// The chimes that would have played (`chime`).
     #[cfg(test)]
     pub(crate) chimed: Vec<Sound>,
@@ -960,7 +957,6 @@ pub(crate) mod drawn {
     thread_local! {
         static PANES: RefCell<HashMap<PaneIdentity, Pane>> = RefCell::new(HashMap::new());
         static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
-        static NAV_RENDERS: Cell<usize> = const { Cell::new(0) };
         static HEAD_RENDERS: Cell<usize> = const { Cell::new(0) };
         static HEARINGS: Cell<usize> = const { Cell::new(0) };
         static NAV_ROWS: RefCell<HashMap<ThreadKey, String>> = RefCell::new(HashMap::new());
@@ -993,10 +989,6 @@ pub(crate) mod drawn {
 
     pub(crate) fn record_pane(identity: PaneIdentity, pane: Pane) {
         PANES.with(|panes| panes.borrow_mut().insert(identity, pane));
-    }
-
-    pub(crate) fn built_nav() {
-        NAV_RENDERS.with(|renders| renders.set(renders.get() + 1));
     }
 
     pub(crate) fn built_head() {
@@ -1040,7 +1032,7 @@ pub(crate) mod drawn {
 
     /// How many times the nav has been built on this thread.
     pub(crate) fn nav_renders() -> usize {
-        NAV_RENDERS.with(Cell::get)
+        ferrite_nav::testing::nav_renders()
     }
 
     /// The nav row for `key` as last drawn: its status, unread, tail and
@@ -1288,6 +1280,8 @@ impl CockpitView {
         let browser_review = cx.new(|_| browser::BrowserReviewView::default());
         // And a retained annotation's review, in the page's place.
         cx.observe(&browser_review, |_, _, cx| cx.notify()).detach();
+        let popups = popups::Popups::default();
+        let nav_view = Self::new_nav(&cockpit, popups.triggers(), cx);
         let mut view = Self {
             cockpit: cockpit.clone(),
             browsers: Default::default(),
@@ -1328,7 +1322,7 @@ impl CockpitView {
             toasts,
             native_copy: None,
             nav_filter: None,
-            nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, cockpit, cx)),
+            nav_view,
             view_events: None,
             activation: None,
             composer_menu,
@@ -1337,7 +1331,7 @@ impl CockpitView {
             environment_lookup: None,
             checkouts: Default::default(),
             rename: Default::default(),
-            popups: Default::default(),
+            popups,
             panel,
             panel_empty_focus: cx.focus_handle(),
             panel_keys: cx.focus_handle(),

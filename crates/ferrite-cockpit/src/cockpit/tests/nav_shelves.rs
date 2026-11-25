@@ -133,7 +133,7 @@ fn a_resorted_card_slides_and_a_parked_one_leaves_a_ghost(cx: &mut TestAppContex
                 .read(cx)
                 .motion
                 .borrow()
-                .offset(super::super::nav_list::NavKey::Card(moving), now)
+                .offset(ferrite_nav::view::NavKey::Card(moving), now)
         })
     };
     leap(cx, Duration::from_millis(400));
@@ -294,7 +294,15 @@ fn the_foot_offers_undo_for_a_park(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("nav-undo-notice").is_none());
     view.update(cx, |view, cx| view.park_listed(&[threads[1]], cx));
     tick(cx);
-    assert!(cx.debug_bounds("nav-undo-notice").is_some(), "Parked, Undo ⌘Z");
+    // Faded in, it names the key it is bound to.
+    cx.executor()
+        .advance_clock(Duration::from_millis(ferrite_ui::theme::MOTION_UNDO_NOTICE_MS));
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    let chord = if cfg!(target_os = "macos") { "⌘Z" } else { "⌃Z" };
+    let words = cx.update(|window, _| window.debug_text("nav-undo-notice"));
+    let words: Vec<String> = words.expect("the notice").iter().map(ToString::to_string).collect();
+    assert_eq!(words, [format!("Parked, Undo {chord}")]);
     view.read_with(cx, |view, _| {
         assert!(view.facts.parked().contains(&threads[1]))
     });
@@ -549,7 +557,7 @@ fn a_resize_does_not_send_shelf_rows_travelling(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.set_shelf_open(nav::Shelf::Parked, true, cx));
     tick(cx);
     leap(cx, Duration::from_millis(400));
-    let key = super::super::nav_list::NavKey::Slim(threads[0]);
+    let key = ferrite_nav::view::NavKey::Slim(threads[0]);
     let travel = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             let now = cx.background_executor().now();

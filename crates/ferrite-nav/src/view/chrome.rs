@@ -1,28 +1,33 @@
-//! The nav's chrome, wired (`nav::chrome`): the search row — the inline
+//! The nav's chrome, wired (`crate::chrome`): the search row — the inline
 //! field and its results, the Filter menu (a Project to filter by), Add
 //! project and New thread — and the foot — Settings, Pull
 //! requests, Usage, the undo notice behind ⌘Z, free disk and the update
 //! door.
 
-use super::menu_button::{Door, Edge};
-use super::nav_view::{NavEvent, NavInputs, NavView};
-use super::*;
-use ferrite_nav::{chrome, NavTooltip};
+use ferrite_core::ThreadKey;
+use ferrite_pane::composer::{Composer, Edited, Role};
 use ferrite_ui::components::{icon_button, IconSize};
 use ferrite_ui::icons;
-use ferrite_pane::composer::{Composer, Edited, Role};
 use ferrite_ui::theme::{MOTION_UNDO_NOTICE_MS, NAV_UNDO_SHOWN_MS};
+use gpui::prelude::*;
+use gpui::{
+    AnyElement, ClickEvent, Context, Div, Entity, Focusable, MouseButton, MouseDownEvent,
+    SharedString, Stateful, Window,
+};
+
+use super::{NavEvent, NavInputs, NavMenu, NavView};
+use crate::{chrome, NavTooltip};
 
 /// What the last Park or Snooze did, which ⌘Z takes back while its notice
 /// stands.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NavUndo {
+pub struct NavUndo {
     pub act: UndoAct,
     pub at: std::time::Instant,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum UndoAct {
+pub enum UndoAct {
     Parked(Vec<ThreadKey>),
     Snoozed(ThreadKey),
 }
@@ -67,41 +72,19 @@ pub(super) fn search_line(cx: &mut Context<NavView>) -> Entity<Composer> {
     line
 }
 
-impl CockpitView {
-    /// The Filter menu's rows: every Project, the scoped one checked. The
-    /// same repository on two machines is two Projects: another machine's
-    /// wears T3 Code's `ProjectEnvironmentBadge`, an icon whose tooltip
-    /// says where it is.
-    pub(super) fn filter_rows(&self, cx: &gpui::App) -> Vec<Option<(menu::Item, MenuVerb)>> {
-        let mut rows = vec![Some((
-            menu::Item::new("All projects").checked(self.nav_filter.is_none()),
-            MenuVerb::FilterProject(None),
-        ))];
-        rows.extend(self.every_project(cx).into_iter().map(|(key, project, _)| {
-            let item = menu::Item::new(project.title.clone()).checked(self.nav_filter == Some(key));
-            let item = match self.machine_label(key.machine(), cx) {
-                Some(machine) => item.mark(ferrite_ui::icons::SERVER, format!("On {machine}")),
-                None => item,
-            };
-            Some((item, MenuVerb::FilterProject(Some(key))))
-        }));
-        rows
-    }
-}
-
 impl NavView {
     /// The field holds text: the list gives way to its results.
-    pub(super) fn searching(&self, cx: &gpui::App) -> bool {
+    pub fn searching(&self, cx: &gpui::App) -> bool {
         !self.search.read(cx).text().trim().is_empty()
     }
 
     /// The Threads whose title holds the field's words, case aside: the
     /// list's, in its order, then the parked ones.
-    pub(super) fn search_matches<'a>(
+    pub fn search_matches<'a>(
         &self,
-        state: &'a nav::NavState,
+        state: &'a crate::NavState,
         cx: &gpui::App,
-    ) -> Vec<&'a nav::ThreadRow> {
+    ) -> Vec<&'a crate::ThreadRow> {
         let words = self.search.read(cx).text().trim().to_lowercase();
         state
             .open_rows()
@@ -114,7 +97,7 @@ impl NavView {
     /// Thread's place now, wherever live updates have moved it. A Thread
     /// that has left the results, or none picked yet, falls to the first
     /// result, and that result is then the pick.
-    fn search_cursor(&self, matches: &[&nav::ThreadRow]) -> Option<usize> {
+    fn search_cursor(&self, matches: &[&crate::ThreadRow]) -> Option<usize> {
         let at = self
             .search_pick
             .get()
@@ -146,28 +129,22 @@ impl NavView {
                     window.focus(&line.focus_handle(cx), cx);
                 }),
             )
-            .on_action(cx.listener(|nav, _: &nav::SearchNext, _, cx| nav.step_search(1, cx)))
-            .on_action(cx.listener(|nav, _: &nav::SearchPrevious, _, cx| nav.step_search(-1, cx)))
-            .on_action(cx.listener(|nav, _: &nav::Open, _, cx| nav.open_search_cursor(cx)))
-            .on_action(cx.listener(|nav, _: &nav::CloseView, window, cx| {
+            .on_action(cx.listener(|nav, _: &crate::SearchNext, _, cx| nav.step_search(1, cx)))
+            .on_action(cx.listener(|nav, _: &crate::SearchPrevious, _, cx| nav.step_search(-1, cx)))
+            .on_action(cx.listener(|nav, _: &crate::Open, _, cx| nav.open_search_cursor(cx)))
+            .on_action(cx.listener(|nav, _: &crate::CloseView, window, cx| {
                 nav.clear_search(cx);
                 window.blur(cx);
             }));
-        let filter = inputs.doors.button(
+        let filter = self.door(
             chrome::filter_button(inputs.filtered.as_deref(), cx),
-            Door::new(MenuTarget::NavFilter, Edge::Right),
+            NavMenu::Filter,
             "Filter by project",
+            inputs,
             cx,
         );
         let factory = inputs.factory.map(|needs_you| {
-            inputs
-                .doors
-                .button(
-                    chrome::factory_button(needs_you, cx),
-                    Door::new(MenuTarget::NavFactory, Edge::Left),
-                    "Factory",
-                    cx,
-                )
+            self.door(chrome::factory_button(needs_you, cx), NavMenu::Factory, "Factory", inputs, cx)
                 .into_any_element()
         });
         let add = icon_button("nav-add-project", icons::FOLDER_PLUS, IconSize::Standard, "Add project", cx)
@@ -178,9 +155,9 @@ impl NavView {
             }));
         let new = icon_button("nav-new-thread", icons::SQUARE_PEN, IconSize::Standard, "New thread", cx)
             .nav_action_tooltip("New thread", "cockpit::NewThread")
-            .on_click(cx.listener(|_, _: &ClickEvent, window, cx| {
+            .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                window.dispatch_action(Box::new(NewThread), cx);
+                cx.emit(NavEvent::NewThread);
             }));
         chrome::search_row(
             field,
@@ -195,7 +172,7 @@ impl NavView {
     /// one lit, or `No threads found`.
     pub(super) fn search_results(
         &self,
-        state: &nav::NavState,
+        state: &crate::NavState,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let matches = self.search_matches(state, cx);
@@ -208,7 +185,7 @@ impl NavView {
                 let thread = row.key;
                 let age = row
                     .activity_at
-                    .map(|at| nav::card_age(at, wall))
+                    .map(|at| crate::card_age(at, wall))
                     .unwrap_or_default();
                 let lit = cursor == Some(at);
                 chrome::result_row(row, age, lit)
@@ -220,16 +197,16 @@ impl NavView {
             })
             .collect();
         let body = if rows.is_empty() {
-            ferrite_nav::list::empty("nav-no-results", "No threads found", None)
+            crate::list::empty("nav-no-results", "No threads found", None)
                 .into_any_element()
         } else {
             chrome::results(rows).into_any_element()
         };
-        nav::list_scroll(&self.scroll).child(body)
+        crate::list_scroll(&self.scroll).child(body)
     }
 
     /// ↑ / ↓ in the field: the highlight moves, stopping at the ends.
-    pub(super) fn step_search(&mut self, by: isize, cx: &mut Context<Self>) {
+    pub fn step_search(&mut self, by: isize, cx: &mut Context<Self>) {
         let Some(inputs) = self.inputs().cloned() else {
             return;
         };
@@ -244,7 +221,7 @@ impl NavView {
     }
 
     /// ⏎ in the field: the highlighted result opens.
-    pub(super) fn open_search_cursor(&mut self, cx: &mut Context<Self>) {
+    pub fn open_search_cursor(&mut self, cx: &mut Context<Self>) {
         let Some(inputs) = self.inputs().cloned() else {
             return;
         };
@@ -256,14 +233,14 @@ impl NavView {
 
     /// Esc in the field, or its clear button: the field empties and the
     /// list comes back.
-    pub(super) fn clear_search(&mut self, cx: &mut Context<Self>) {
+    pub fn clear_search(&mut self, cx: &mut Context<Self>) {
         self.search.update(cx, |line, cx| line.set(String::new(), cx));
         self.search_pick.set(None);
         cx.notify();
     }
 
     /// Whether the search field has the keyboard.
-    pub(super) fn search_focused(&self, window: &Window, cx: &gpui::App) -> bool {
+    pub fn search_focused(&self, window: &Window, cx: &gpui::App) -> bool {
         self.search.focus_handle(cx).is_focused(window)
     }
 
@@ -326,7 +303,7 @@ impl NavView {
 
     /// Stand the undo notice for `act`, fading out after
     /// `NAV_UNDO_SHOWN_MS`.
-    pub(super) fn offer_undo(&mut self, act: UndoAct, cx: &mut Context<Self>) {
+    pub fn offer_undo(&mut self, act: UndoAct, cx: &mut Context<Self>) {
         let at = cx.background_executor().now();
         let undo = NavUndo { act, at };
         self.undo = Some(undo.clone());

@@ -27,7 +27,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   borrowed passes those values in instead of having the feature read them.
   The nav and the toast float read their own instead, and hear the
   model (below).
-- **The nav is the first slice.** `NavView` (`cockpit/nav_view.rs`) owns
+- **The nav is the first slice.** `NavView` (`ferrite_nav::view` since
+  the 2026-11-25 amendment; the root's side is `cockpit/nav_view.rs`) owns
   the nav's own state: its motion, scroll and viewport, keyboard focus and
   cursor, hover, search, picks and Park sweep, and Undo. It emits
   `NavEvent`. What the rest of the window also decides stays on the root:
@@ -1456,6 +1457,28 @@ Cockpit, and each of its tests opened a Cockpit window.
   `Arrived`, which stays the Cockpit's), and it keeps its own clock.
   `Posting`, a system notification's words, is `ferrite_nav`'s, since
   the view hands it to the root to post.
+- **The nav.** `NavView` is `ferrite_nav::view`, with its list, keys,
+  search, picks, Snooze field and foot (`view/`), over three reads
+  (`NavSources`). `Source<Vec<Listed>>` says each open Thread's section;
+  the view notes when each came into it and asks `Source<NavLook,
+  NavAsked>` with those arrivals, and the root answers what it draws
+  (`NavInputs`) and the factories. A hover card's model is a read of the
+  model (`Source<SharedString, (ThreadKey, Provider)>`). The open menu
+  and the button holding it come as `NavMenu`, which the root maps to its
+  `MenuTarget`; a press says `NavEvent::Menu` or `Door`, and the root
+  hangs the menu and picks its edge. Where a menu button stands is
+  draw-time geometry: as it builds each button the view asks `door`, a
+  factory the root makes once over the popup slot's triggers, for that
+  menu's `MenuDoor`, bound to its menu alone, as the Terminal's is. A
+  factory, not a door in the inputs, since a row's Snooze button comes
+  and goes with the row. The machine notices (`MachineNotice`) and their
+  reconnect grace are the view's; the rename field's look is
+  `ferrite_ui::components::rename_field`, which the board's title
+  rename shares. The root keeps what the rest of the window decides: the list
+  and its order (`listed_threads`, `thread_order`), the notice, the
+  shelves' folds, the Filter and Snooze rows, a Park's undo
+  (`nav_undo.rs`) and the keys that move focus to the list
+  (`nav_keys.rs`).
 
 ## Precedent
 

@@ -508,9 +508,10 @@ fn focusing_a_worker_by_id_opens_its_tasks_worker_tab(cx: &mut TestAppContext) {
     });
 }
 
-/// New thread gives the board back from the Factory even when the draft it
-/// focuses is the one that already stood there, as in a store where no
-/// Thread was ever opened: the draft is what the operator asked to see.
+/// New thread (the nav's button) gives the board back from the Factory
+/// even when the draft it focuses is the one that already stood there, as
+/// in a store where no Thread was ever opened: the draft is what the
+/// operator asked to see.
 #[gpui::test]
 fn new_thread_leaves_the_factory_for_the_draft_that_stood(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("factory-new-thread", 0);
@@ -524,7 +525,8 @@ fn new_thread_leaves_the_factory_for_the_draft_that_stood(cx: &mut TestAppContex
     view.update(cx, |view, cx| view.open_factory(project, cx));
     tick(cx);
     assert!(view.read_with(cx, |view, _| view.factory().is_some()));
-    cx.dispatch_action(NewThread);
+    let new = cx.debug_bounds("nav-new-thread").expect("the nav's New thread");
+    cx.simulate_click(new.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(!view.destination_shown(), "the board is back");

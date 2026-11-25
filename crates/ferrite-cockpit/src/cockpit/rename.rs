@@ -65,36 +65,3 @@ impl Rename {
         (!title.trim().is_empty()).then_some((thread, title))
     }
 }
-
-/// A rename editor with its keys beside it while it edits: `↵ save · esc
-/// cancel` in mono `INK_SUBTLE`, the `·` in structure ink. The keys live
-/// here, where they act, rather than on the menu row that opened it.
-pub(super) fn rename_field(editor: Entity<Composer>, hint: bool) -> Div {
-    let text = "↵ save · esc cancel";
-    let at = text.find(" · ").unwrap_or(0);
-    let hint_text = ferrite_ui::components::text_meta()
-        .debug_selector(|| "rename-hint".into())
-        .flex_shrink_0()
-        .font_family(ferrite_ui::theme::FONT_CODE)
-        .child(gpui::StyledText::new(text).with_highlights(vec![(
-            at..at + " · ".len(),
-            gpui::HighlightStyle {
-                color: Some(rgb(ferrite_ui::theme::TEXT_FAINT).into()),
-                ..Default::default()
-            },
-        )]));
-    div()
-        .flex()
-        .items_center()
-        .gap(px(ferrite_ui::theme::SPACE_2))
-        .min_w_0()
-        .flex_1()
-        .child(
-            div()
-                .debug_selector(|| "rename-field".into())
-                .min_w_0()
-                .flex_1()
-                .child(editor),
-        )
-        .children(hint.then_some(hint_text))
-}

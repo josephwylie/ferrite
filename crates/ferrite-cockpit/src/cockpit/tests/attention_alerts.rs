@@ -1167,3 +1167,38 @@ fn opening_a_request_takes_only_its_toast_down_at_once(cx: &mut TestAppContext) 
     cx.run_until_parked();
     assert_eq!(alerts(cx), [standing[1].clone()], "and it stays gone");
 }
+
+/// A custom Snooze the field reads is asked of the window and kept: the
+/// Thread's reminder is the time typed, and the field closes as the
+/// machine answers.
+#[gpui::test]
+fn a_custom_snooze_is_kept_as_typed(cx: &mut TestAppContext) {
+    let (core, _) = cockpit("snooze-custom-kept", 1);
+    let thread = core.threads()[0];
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.nav_view.update(cx, |nav, cx| nav.edit_snooze(thread, window, cx))
+        })
+    });
+    tick(cx);
+    view.update(cx, |view, cx| {
+        let line = view.nav_view.read(cx).snooze_line().unwrap().clone();
+        line.update(cx, |line, cx| line.set("3h".into(), cx));
+    });
+    let asked = ferrite_core::clock::system_time();
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| view.read_with(cx, |view, cx| view.nav_view.read(cx).snooze.is_none()));
+    let answered = ferrite_core::clock::system_time();
+    let reminder = view.read_with(cx, |view, cx| {
+        view.cockpit.read(cx).thread(thread).and_then(|open| open.snooze()).map(|snooze| snooze.until)
+    });
+    let hours = Duration::from_secs(3 * 60 * 60);
+    let reminder = reminder.expect("its reminder is kept");
+    assert!(
+        reminder >= asked + hours && reminder <= answered + hours,
+        "three hours from when it was asked: {reminder:?}"
+    );
+}

@@ -8,67 +8,6 @@ fn sorted_threads(core: &Cockpit) -> Vec<ThreadKey> {
     threads
 }
 
-/// A Thread's row is its card (sidebar.md §3): a 78px box with its
-/// checkout line — 8 + 20, 4, 20, 2, 16 + 8 — its content 10px in, and a
-/// card with nothing for line 3 hugs its two lines (60). Cards pitch at
-/// their 2px item padding.
-#[gpui::test]
-fn a_thread_card_is_three_lines_in_a_fixed_box(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{NAV_CARD_H, NAV_CARD_H_SHORT, NAV_ROW_PAD_X};
-    let (core, _) = cockpit("nav-card-box", 2);
-    let threads = sorted_threads(&core);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    hide_panel(&view, cx);
-    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    tick(cx);
-    without_checkouts(&view, cx);
-    view.update(cx, |view, cx| {
-        view.facts.set_branches(vec![(
-            threads[0],
-            Some(ferrite_core::checkout::BranchStatus {
-                branch: Some("t3/improve-sidebar-architecture".into()),
-                ..Default::default()
-            }),
-        )]);
-        view.notify_part(parts::Part::Nav, cx);
-    });
-    tick(cx);
-    let at = |cx: &mut gpui::VisualTestContext, name: &str, thread: ThreadKey| {
-        let key: &'static str = format!("{name}-{}", thread.thread().get()).leak();
-        cx.debug_bounds(key).unwrap_or_else(|| panic!("{key} drawn"))
-    };
-    let card = at(cx, "nav-thread", threads[0]);
-    let line1 = at(cx, "nav-card-line1", threads[0]);
-    let line2 = at(cx, "nav-card-line2", threads[0]);
-    let line3 = at(cx, "nav-card-line3", threads[0]);
-    let title = at(cx, "nav-title", threads[0]);
-    assert_eq!(card.size.height, px(NAV_CARD_H));
-    assert_eq!(line1.top() - card.top(), px(8.0), "8px over line 1");
-    assert_eq!(line1.size.height, px(20.0));
-    assert_eq!(line2.top() - line1.bottom(), px(4.0));
-    assert_eq!(line2.size.height, px(20.0));
-    assert_eq!(line3.top() - line2.bottom(), px(2.0));
-    assert_eq!(line3.size.height, px(16.0));
-    assert_eq!(card.bottom() - line3.bottom(), px(8.0), "8px under line 3");
-    assert!(
-        (title.left() - (card.left() + px(NAV_ROW_PAD_X))).abs() < px(0.5),
-        "the title 10px in: {title:?} in {card:?}"
-    );
-    let bare = at(cx, "nav-thread", threads[1]);
-    assert_eq!(bare.size.height, px(NAV_CARD_H_SHORT), "no checkout: it hugs");
-    let key: &'static str = format!("nav-card-line3-{}", threads[1].thread().get()).leak();
-    assert!(cx.debug_bounds(key).is_none());
-    let (upper, lower) = if card.top() < bare.top() {
-        (card, bare)
-    } else {
-        (bare, card)
-    };
-    assert!(
-        lower.top() - upper.bottom() >= px(4.0),
-        "2px item padding above and below each card"
-    );
-}
-
 /// Under the pointer a card's status gives way to its strip — Snooze and
 /// Park — at once; Snooze opens the Snooze menu, and the strip stays up
 /// while that menu is open; Park parks the Thread.
@@ -884,62 +823,6 @@ fn f2_renames_the_cursors_card(cx: &mut TestAppContext) {
         )),
         "the card's title is the rename field"
     );
-}
-
-/// The list fades at whichever edge has rows past it, 12px deep, never
-/// slicing a row against the head or the foot: the foot while rows remain
-/// below, the top once it has scrolled, and neither edge with nothing past
-/// it.
-#[gpui::test]
-fn the_list_fades_at_the_edges_rows_pass(cx: &mut TestAppContext) {
-    let (core, _) = cockpit("nav-edge-fades", 24);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    hide_panel(&view, cx);
-    cx.simulate_resize(gpui::size(px(1000.), px(320.)));
-    cx.run_until_parked();
-    let shows = |cx: &mut gpui::VisualTestContext, id: &'static str| cx.debug_bounds(id).is_some();
-    assert!(shows(cx, "nav-fade-foot"), "rows below: the foot fades");
-    assert_eq!(
-        cx.debug_bounds("nav-fade-foot").unwrap().size.height,
-        px(ferrite_ui::theme::NAV_EDGE_FADE)
-    );
-    assert!(!shows(cx, "nav-fade-top"), "at the top: nothing above");
-    let wheel = |cx: &mut gpui::VisualTestContext, y: f32| {
-        cx.simulate_event(gpui::ScrollWheelEvent {
-            position: gpui::point(px(100.), px(200.)),
-            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(y))),
-            ..Default::default()
-        });
-        cx.run_until_parked();
-    };
-    wheel(cx, -40.);
-    assert!(shows(cx, "nav-fade-top"), "scrolled: the top fades");
-    assert!(shows(cx, "nav-fade-foot"));
-    wheel(cx, -40_000.);
-    assert!(shows(cx, "nav-fade-top"));
-    assert!(!shows(cx, "nav-fade-foot"), "at the end: nothing below");
-}
-
-/// A list scrolled in a short window and grown back until it fits has
-/// nothing above it: its top fade goes with the frame that clamps the
-/// scroll, whatever the render before it read.
-#[gpui::test]
-fn a_list_grown_back_to_fit_drops_its_top_fade(cx: &mut TestAppContext) {
-    let (core, _) = cockpit("nav-fade-grown", 6);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    hide_panel(&view, cx);
-    cx.simulate_resize(gpui::size(px(1000.), px(320.)));
-    cx.run_until_parked();
-    cx.simulate_event(gpui::ScrollWheelEvent {
-        position: gpui::point(px(100.), px(200.)),
-        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-40_000.))),
-        ..Default::default()
-    });
-    cx.run_until_parked();
-    assert!(cx.debug_bounds("nav-fade-top").is_some(), "scrolled: the top fades");
-    cx.simulate_resize(gpui::size(px(1000.), px(1200.)));
-    cx.run_until_parked();
-    assert!(cx.debug_bounds("nav-fade-top").is_none(), "it all fits: no fade stays");
 }
 
 /// Claude's `Pinned`: the row menu's `Pin` puts a Thread's card at the
