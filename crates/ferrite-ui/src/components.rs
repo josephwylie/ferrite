@@ -223,6 +223,61 @@ impl MenuButton for gpui::Stateful<Div> {
     }
 }
 
+/// A menu button as the window has it this frame, for a view that draws
+/// the button and leaves its menu to the window (ADR 0043): whether its
+/// menu is up from it, and where its bounds go for the menu to hang from.
+pub struct MenuDoor {
+    up: bool,
+    record: Box<dyn FnOnce(gpui::Bounds<gpui::Pixels>, &mut Window, &mut App)>,
+}
+
+impl MenuDoor {
+    pub fn new(
+        up: bool,
+        record: impl FnOnce(gpui::Bounds<gpui::Pixels>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            up,
+            record: Box::new(record),
+        }
+    }
+
+    /// `face` as the button: `press` asks for its menu, or to shut it, and
+    /// `tip` is its tooltip while the menu is shut.
+    pub fn button<F: MenuButton>(
+        self,
+        face: F,
+        tip: impl Into<SharedString>,
+        press: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> F {
+        let tip = tip.into();
+        face.menu_button(
+            self.up,
+            move |mut face| {
+                face.interactivity().tooltip(crate::menu::tooltip(tip));
+                face
+            },
+            self.record,
+            press,
+        )
+    }
+}
+
+/// A Surface's own row of tools under the Panel's head: `SURFACE_BAR_H`
+/// tall, a hairline under it.
+pub fn surface_bar() -> Div {
+    use theme::*;
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(SPACE_1))
+        .h(px(SURFACE_BAR_H))
+        .px(px(SIDE_CHAT_INSET))
+        .border_b(px(HAIRLINE_W))
+        .border_color(paint::LINE)
+}
+
 /// A row's context menu, as a right click opens one on macOS: `press` runs
 /// as the right button goes down, given where, and the press goes no
 /// further, so a row under it opens no menu of its own.

@@ -41,10 +41,8 @@ use std::rc::Rc;
 
 use gpui::WeakEntity;
 
-#[path = "remote_files.rs"]
-pub(in crate::cockpit::tools) mod remote_files;
 use ferrite_core::file_operations::Reply as FileReply;
-use remote_files::RemoteFiles;
+use ferrite_tools::remote_files::{self, RemoteFiles};
 
 use ferrite_pane::composer::{Composer, Role};
 use ferrite_pane::preview::{open_original, reading_markup, Body as DocBody};
@@ -53,7 +51,7 @@ use ferrite_ui::components::{icon_button, IconSize, Tip as _};
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::theme::{self};
 
-use super::changes::ChangesView;
+use ferrite_tools::changes::ChangesView;
 use super::editor::{self, Editor};
 use super::save::SaveState;
 use super::tree::{FileTree, Row, Status};
@@ -323,13 +321,17 @@ impl CockpitView {
         let Some(root) = self.thread_path(thread, cx) else {
             return;
         };
+        let window = cx.weak_entity();
         let cockpit = self.cockpit.read(cx);
-        let machine = cockpit.bridge(thread.machine()).cloned();
+        let remote = cockpit.bridge(thread.machine()).cloned().map(|bridge| {
+            let submit = super::remote_files::submit(window, thread.machine(), bridge);
+            RemoteFiles::new(root.clone(), submit)
+        });
         let stored = cockpit
             .saved(thread)
             .and_then(|saved| self.panel.working_sets.get(&saved).cloned());
         self.files
-            .update(cx, |files, cx| files.make(thread, root, machine, stored, cx));
+            .update(cx, |files, cx| files.make(thread, root, remote, stored, cx));
     }
 
     /// ⌘P: the Files Surface shows, and the tree's filter takes the
@@ -535,19 +537,16 @@ impl FilesView {
     }
 
     /// `thread`'s Files, rooted at its checkout `root`, read through
-    /// `machine` when its Thread is on another machine, with the tabs and
+    /// `remote` when its Thread is on another machine, with the tabs and
     /// settings `stored` kept.
     fn make(
         &mut self,
         thread: ThreadKey,
         root: PathBuf,
-        machine: Option<std::sync::Arc<ferrite_core::machine::Bridge>>,
+        remote: Option<RemoteFiles>,
         stored: Option<WorkingSet>,
         cx: &mut Context<Self>,
     ) {
-        let remote = machine.map(|bridge| {
-            RemoteFiles::new(root.clone(), self.cockpit.clone(), thread.machine(), bridge)
-        });
         let filter = cx.new(|cx| {
             let mut field = Composer::new(cx);
             field.set_role(Role::Field(Some(FILTER_CONTEXT)), cx);
@@ -1361,7 +1360,7 @@ impl FilesView {
                 cx,
             )
         };
-        super::surface_bar()
+        ferrite_ui::components::surface_bar()
             .child(
                 div()
                     .flex()

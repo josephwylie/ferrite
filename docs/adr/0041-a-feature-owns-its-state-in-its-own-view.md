@@ -1364,6 +1364,19 @@ Cockpit, and each of its tests opened a Cockpit window.
   with the Cockpit's typecheck after it). One Archive or dialog test
   takes about 0.02 s in its own window, against 0.2-0.4 s in a Cockpit
   window.
+- **The tools.** `ferrite-tools` holds Files' `RemoteFiles` (over the
+  window's `Submit`), the Terminal (`Source<TerminalInputs>`) and Changes
+  (`Source<Origin, Diff>`: where the window reads a diff now, so an answer
+  read elsewhere is dropped). A Menu button a feature crate draws is a
+  `ferrite_ui::components::MenuDoor`, its press an event the root maps to
+  its own `Door`. What both sides read went to the lowest crate both use:
+  `ferrite_pane::hunks`, `ferrite_ui::answer`, `PrTarget` in core. Files
+  stays in the Cockpit: it registers its tab stops in the Panel's
+  `PanelFocus` as it draws, a write to the root from draw, so it moves
+  once the Panel's focus row is declared rather than registered. A
+  one-line edit to the Terminal, to its tests green and a typecheck, took
+  17-27 s through the Cockpit and takes 8-12 s in `ferrite-tools`; a
+  Terminal test takes about 0.2 s, against 1.2-1.9 s.
 
 ## Precedent
 

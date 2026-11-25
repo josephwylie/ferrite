@@ -94,7 +94,7 @@ impl CockpitView {
             .update(cx, |cockpit, _| cockpit.pull_request(thread.machine(), &path));
         cx.spawn(async move |this, cx| {
             // A read that failed is `gh` with nothing to say: no label.
-            let reading = beside::answered(answer, cx).await.ok().flatten();
+            let reading = ferrite_ui::answer::answered(answer, cx).await.ok().flatten();
             this.update(cx, |view, cx| view.pr_landed(thread, reading, cx))
                 .ok();
         })

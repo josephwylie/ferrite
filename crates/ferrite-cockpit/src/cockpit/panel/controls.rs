@@ -599,7 +599,7 @@ impl CockpitView {
                 let Some(number) = self.pr_snapshot(thread, cx).map(|pr| pr.number) else {
                     return;
                 };
-                let target = super::pr_read::PrTarget::thread(thread, number);
+                let target = ferrite_core::pull_request::PrTarget::thread(thread, number);
                 return self.toggle_door(super::pull_request::pr_more_door(target), cx);
             }
             _ => return,

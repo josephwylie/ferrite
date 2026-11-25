@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use ferrite_core::{MachineId, MachineKey, SavedThread, ThreadId, ThreadKey};
+use ferrite_core::{MachineId, MachineKey, Rehold, SavedThread, ThreadId, ThreadKey};
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// What one tab shows. Singletons per Thread, then one per resource.
@@ -375,23 +375,6 @@ pub(crate) struct Surfaces {
     /// that machine again (`Rehold`).
     let_go: HashMap<MachineKey, MachineId>,
     revision: u64,
-}
-
-/// A machine the window holds again, after it let go of it: held as `now`,
-/// it was `was`. A machine's Thread ids are its Store's, which a new attach
-/// does not change, so what the window keeps by a Thread's key moves to
-/// the same Thread's new key.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Rehold {
-    pub(crate) was: MachineId,
-    pub(crate) now: MachineId,
-}
-
-impl Rehold {
-    /// `thread`'s key now, when it was a Thread of the machine let go.
-    pub(crate) fn key(self, thread: ThreadKey) -> Option<ThreadKey> {
-        (thread.machine() == self.was).then(|| thread.held_again(self.now))
-    }
 }
 
 impl Surfaces {

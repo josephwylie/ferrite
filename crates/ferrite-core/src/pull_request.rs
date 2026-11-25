@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::{ProjectKey, ThreadKey};
+
 /// The branch's pull request, as the forge reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullRequest {
@@ -254,6 +256,46 @@ fn rollup_state(runs: &[Check]) -> CheckState {
         return CheckState::Passing;
     }
     CheckState::Pending
+}
+
+/// Whose repository a PR number is read in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PrSource {
+    Thread(ThreadKey),
+    Project(ProjectKey),
+}
+
+impl PrSource {
+    /// The machine the repository is on, whose forge CLI reads it.
+    pub fn machine(self) -> crate::MachineId {
+        match self {
+            Self::Thread(thread) => thread.machine(),
+            Self::Project(project) => project.machine(),
+        }
+    }
+}
+
+/// A pull request as a PR tab or the PRs destination names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PrTarget {
+    pub source: PrSource,
+    pub number: u64,
+}
+
+impl PrTarget {
+    pub fn thread(thread: ThreadKey, number: u64) -> Self {
+        Self {
+            source: PrSource::Thread(thread),
+            number,
+        }
+    }
+
+    pub fn project(project: ProjectKey, number: u64) -> Self {
+        Self {
+            source: PrSource::Project(project),
+            number,
+        }
+    }
 }
 
 /// What the Server's watching holds of a Thread, as every window reads it

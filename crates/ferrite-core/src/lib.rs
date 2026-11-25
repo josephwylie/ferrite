@@ -90,7 +90,7 @@ pub use session_event::{
     UsageScope,
 };
 pub use thread::{
-    DelegatedFrom, MachineId, MachineKey, ProjectKey, SavedThread, ThreadId, ThreadKey,
+    DelegatedFrom, MachineId, MachineKey, ProjectKey, Rehold, SavedThread, ThreadId, ThreadKey,
     ThreadOwner,
 };
 

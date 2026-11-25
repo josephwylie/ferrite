@@ -41,7 +41,7 @@ impl CockpitView {
         self.facts.acted(self.cockpit.read(cx), thread);
         cx.notify();
         cx.spawn(async move |this, cx| {
-            if let Err(error) = beside::answered(answer, cx).await {
+            if let Err(error) = ferrite_ui::answer::answered(answer, cx).await {
                 this.update(cx, |view, cx| {
                     view.nav_notice.problem(error.to_string());
                     cx.notify();

@@ -42,7 +42,8 @@ mod sections;
 mod strip;
 pub(in crate::cockpit) mod controls;
 
-use super::surfaces::{Close, CloseSelection, PrTab, Rehold, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
+use super::surfaces::{Close, CloseSelection, PrTab, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
+use ferrite_core::Rehold;
 use ferrite_ui::icons::{self, icon};
 use super::*;
 
@@ -281,10 +282,10 @@ impl CockpitView {
                 }
                 self.ensure_files(thread, cx);
             }
-            SurfaceId::Changes => self.ensure_diff(tools::Diff::Changes(thread), cx),
+            SurfaceId::Changes => self.ensure_diff(ferrite_tools::changes::Diff::Changes(thread), cx),
             SurfaceId::Overview => self.refresh_context(thread, cx),
             SurfaceId::PullRequest(number) => {
-                self.read_pr_snapshot(pr_read::PrTarget::thread(thread, *number), true, cx)
+                self.read_pr_snapshot(ferrite_core::pull_request::PrTarget::thread(thread, *number), true, cx)
             }
             _ => {}
         }
@@ -522,7 +523,7 @@ impl CockpitView {
         self.pull_request.update(cx, |reader, _| reader.disarm_unless(shown));
         let board = self.prs.read(cx).open();
         if let Some((target, PrTab::Code)) = board {
-            self.ensure_diff(tools::Diff::PullRequest(target), cx);
+            self.ensure_diff(ferrite_tools::changes::Diff::PullRequest(target), cx);
         }
         self.panel.window_w = f32::from(window.viewport_size().width);
         self.tend_tab_pick(window, cx);
@@ -532,13 +533,13 @@ impl CockpitView {
                 Some(SurfaceId::Files) => {
                     self.ensure_files(thread, cx);
                 }
-                Some(SurfaceId::Changes) => self.ensure_diff(tools::Diff::Changes(thread), cx),
+                Some(SurfaceId::Changes) => self.ensure_diff(ferrite_tools::changes::Diff::Changes(thread), cx),
                 Some(SurfaceId::PullRequest(number)) => {
-                    let target = pr_read::PrTarget::thread(thread, number);
+                    let target = ferrite_core::pull_request::PrTarget::thread(thread, number);
                     self.read_pr_snapshot(target, false, cx);
                     let tab = self.panel.surfaces.get(thread).map(|state| state.pr_tab(number));
                     if tab == Some(PrTab::Code) {
-                        self.ensure_diff(tools::Diff::PullRequest(target), cx);
+                        self.ensure_diff(ferrite_tools::changes::Diff::PullRequest(target), cx);
                     }
                 }
                 _ => {}
@@ -874,7 +875,7 @@ impl CockpitView {
             }
             Some(SurfaceId::File(_) | SurfaceId::Browser) => padded(self.panel_preview(owner, cx)),
             Some(SurfaceId::Files) => self.files.clone().into_any_element(),
-            Some(SurfaceId::Changes) => filled(self.changes_pane(tools::Diff::Changes(thread), cx).into_any_element()),
+            Some(SurfaceId::Changes) => filled(self.changes_pane(ferrite_tools::changes::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(_)) => filled(self.terminals.clone().into_any_element()),
             Some(SurfaceId::SideChat(_)) => filled(self.side_chat.clone().into_any_element()),
             Some(SurfaceId::PullRequest(_)) => filled(self.pull_request.clone().into_any_element()),

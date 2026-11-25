@@ -18,7 +18,7 @@ use ferrite_engine::providers::Session;
 use ferrite_engine::store::Store;
 
 use super::panel::Opener;
-use super::tools::Diff;
+use ferrite_tools::changes::Diff;
 use super::CockpitView;
 use crate::headless::Driver;
 
@@ -158,10 +158,10 @@ fn case(name: &str) -> String {
     };
     let diff = Diff::Changes(thread);
     let (wrap, fold, expand) = if open {
-        let wrap = timed(&mut driver, &|view, cx| view.changes.update(cx, |changes, cx| changes.run_verb(diff, super::tools::ChangesVerb::ToggleWrap, cx)));
-        timed(&mut driver, &|view, cx| view.changes.update(cx, |changes, cx| changes.run_verb(diff, super::tools::ChangesVerb::ToggleWrap, cx)));
-        let fold = timed(&mut driver, &|view, cx| view.changes.update(cx, |changes, cx| changes.run_verb(diff, super::tools::ChangesVerb::CollapseAll, cx)));
-        let expand = timed(&mut driver, &|view, cx| view.changes.update(cx, |changes, cx| changes.run_verb(diff, super::tools::ChangesVerb::ExpandAll, cx)));
+        let wrap = timed(&mut driver, &|view, cx| view.changes.update(cx, |changes, cx| changes.run_verb(diff, ferrite_tools::changes::Verb::ToggleWrap, cx)));
+        timed(&mut driver, &|view, cx| view.changes.update(cx, |changes, cx| changes.run_verb(diff, ferrite_tools::changes::Verb::ToggleWrap, cx)));
+        let fold = timed(&mut driver, &|view, cx| view.changes.update(cx, |changes, cx| changes.run_verb(diff, ferrite_tools::changes::Verb::CollapseAll, cx)));
+        let expand = timed(&mut driver, &|view, cx| view.changes.update(cx, |changes, cx| changes.run_verb(diff, ferrite_tools::changes::Verb::ExpandAll, cx)));
         (wrap, fold, expand)
     } else {
         (0., 0., 0.)
