@@ -1,12 +1,15 @@
 //! The tools behind the Panel's Surfaces (ADR 0039), out of the Cockpit:
-//! Changes, the Terminal, and the checkout on another machine that Files
-//! reads. Each owns its own state, reads what it draws of the window
+//! Files, Changes, the Terminal, and the checkout on another machine that
+//! Files reads. Each owns its own state, reads what it draws of the window
 //! through a `Source` (`ferrite_ui::source`) and says what the operator
 //! asks as an event (ADR 0041). Nothing here names the Cockpit, so an edit
-//! to one builds and tests without it. Files itself is still the
-//! Cockpit's: it registers its tab stops in the Panel's focus row as it
-//! draws (ADR 0041's 2026-11-25 amendment).
+//! to one builds and tests without it.
+
+#[cfg(test)]
+#[path = "../../ferrite-core/src/test_temp.rs"]
+mod test_temp;
 
 pub mod changes;
+pub mod files;
 pub mod remote_files;
 pub mod terminal;

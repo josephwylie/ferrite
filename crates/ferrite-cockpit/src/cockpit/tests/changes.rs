@@ -368,12 +368,12 @@ fn a_refused_stage_names_its_file_and_git_and_a_retry_stages_it(cx: &mut TestApp
 
 /// A Thread whose checkout has `files` files of twenty lines, each with
 /// its every other line edited since the commit: each file is taller than
-/// the window.
+/// the window. The checkout comes back too.
 fn window_of_files<'a>(
     name: &str,
     files: usize,
     cx: &'a mut TestAppContext,
-) -> (Entity<CockpitView>, ThreadKey, &'a mut gpui::VisualTestContext) {
+) -> (Entity<CockpitView>, ThreadKey, std::path::PathBuf, &'a mut gpui::VisualTestContext) {
     let base = scratch(name);
     let repo = repo_in(&base);
     let body = |file: usize, edited: bool| -> String {
@@ -396,7 +396,7 @@ fn window_of_files<'a>(
     cx.simulate_resize(gpui::size(px(1900.), px(900.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    (view, thread, cx)
+    (view, thread, repo, cx)
 }
 
 fn file_head(at: usize, cx: &mut gpui::VisualTestContext) -> Option<gpui::Bounds<gpui::Pixels>> {
@@ -424,7 +424,7 @@ fn first_head_in_view(files: usize, cx: &mut gpui::VisualTestContext) -> (usize,
 
 #[gpui::test]
 fn a_refresh_keeps_the_place_in_the_list(cx: &mut TestAppContext) {
-    let (view, thread, cx) = window_of_files("changes-refresh-place", 30, cx);
+    let (view, thread, _repo, cx) = window_of_files("changes-refresh-place", 30, cx);
     opened(&view, thread, cx);
     scroll_down(2_000., cx);
     let (at, top) = first_head_in_view(30, cx);
@@ -440,13 +440,18 @@ fn a_refresh_keeps_the_place_in_the_list(cx: &mut TestAppContext) {
     assert_eq!(first_head_in_view(30, cx), (at, top), "and through the agent's reread");
 }
 
-/// A Files tab's `Show changes` brings its file into view, unfolded.
+/// A Files tab's `Show changes`, pressed, brings its file into view
+/// unfolded, though it is folded far down the list.
 #[gpui::test]
 fn show_changes_brings_a_file_far_down_the_list_into_view(cx: &mut TestAppContext) {
-    let (view, thread, cx) = window_of_files("changes-show", 30, cx);
+    let (view, thread, repo, cx) = window_of_files("changes-show", 30, cx);
     opened(&view, thread, cx);
     view.update(cx, |view, cx| view.changes.update(cx, |changes, cx| changes.toggle_fold_for_test(Diff::Changes(thread), "f025.rs", cx)));
-    view.update(cx, |view, cx| view.show_changes_of(thread, "f025.rs", cx));
+    view.update(cx, |view, cx| view.open_in_files(thread, repo.join("f025.rs"), None, true, cx));
+    tick(cx);
+    assert!(cx.debug_bounds("changes").is_none(), "Files shows in the Panel");
+    let link = cx.debug_bounds("files-show-changes").expect("f025.rs's tab offers Show changes");
+    cx.simulate_click(link.center(), gpui::Modifiers::none());
     tick(cx);
     tick(cx);
     let list = cx.debug_bounds("changes-scroll").unwrap();

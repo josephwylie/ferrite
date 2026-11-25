@@ -730,7 +730,7 @@ pub const PANEL_EMPTY: &str = "PanelEmpty";
 /// One control of the Panel's head or a pull request's header
 /// (`cockpit/panel/controls.rs`).
 pub const PANEL_CONTROL: &str = "PanelControl";
-/// The Files editor's key context (`cockpit/tools/editor.rs`).
+/// The Files editor's key context (`ferrite_tools::files::editor`).
 pub const FILE_EDITOR: &str = "FileEditor";
 /// The Terminal grid's key context (`ferrite_terminal::KEY_CONTEXT`'s first
 /// word).

@@ -144,6 +144,21 @@ pub(super) enum MenuVerb {
     DetailsReset,
 }
 
+/// A Files menu's rows as the window's: its verbs and submenus, and
+/// `Show in Finder` the window's own `Reveal`.
+fn files_rows(rows: Vec<Option<(menu::Item, ferrite_tools::files::Row)>>) -> Vec<Option<(menu::Item, MenuVerb)>> {
+    use ferrite_tools::files::Row;
+    rows.into_iter()
+        .map(|row| {
+            row.map(|(item, row)| match row {
+                Row::Verb(verb) => (item, MenuVerb::Files(verb)),
+                Row::Sub(sub) => (item, MenuVerb::Submenu(Submenu::Files(sub))),
+                Row::Reveal => (item, MenuVerb::Reveal),
+            })
+        })
+        .collect()
+}
+
 /// A parent row's submenu.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Submenu {
@@ -428,9 +443,9 @@ impl CockpitView {
                 }));
             }
             MenuTarget::File(thread) => {
-                rows = tools::FilesView::row_rows(self.elsewhere(thread.machine(), cx))
+                rows = files_rows(tools::FilesView::row_rows(self.elsewhere(thread.machine(), cx)))
             }
-            MenuTarget::FilesMore(thread) => rows = self.files.read(cx).more_rows(thread),
+            MenuTarget::FilesMore(thread) => rows = files_rows(self.files.read(cx).more_rows(thread)),
             MenuTarget::ChangesScope(diff) => {
                 use ferrite_tools::changes::Row;
                 rows = (self.changes.read(cx).scope_rows(diff).into_iter())
@@ -657,9 +672,13 @@ impl CockpitView {
             ],
             (Submenu::Snooze, MenuTarget::Thread(_) | MenuTarget::Pane(_)) => self.snooze_rows(),
             (Submenu::Snooze, _) => Vec::new(),
-            (Submenu::Files(sub), MenuTarget::File(thread) | MenuTarget::FilesMore(thread)) => {
-                self.files.read(cx).sub_rows(thread, sub)
-            }
+            (Submenu::Files(sub), MenuTarget::File(thread) | MenuTarget::FilesMore(thread)) => self
+                .files
+                .read(cx)
+                .sub_rows(thread, sub)
+                .into_iter()
+                .map(|(item, verb)| (item, MenuVerb::Files(verb)))
+                .collect(),
             (Submenu::Files(_), _) => Vec::new(),
             (Submenu::Changes(_), MenuTarget::ChangesScope(diff)) => (self.changes.read(cx).branch_rows(diff).into_iter())
                 .map(|(item, verb)| (item, MenuVerb::Changes(verb)))

@@ -2570,6 +2570,7 @@ dependencies = [
 name = "ferrite-tools"
 version = "0.4.0"
 dependencies = [
+ "ctor",
  "ferrite-core",
  "ferrite-pane",
  "ferrite-reviewr",
@@ -2577,6 +2578,10 @@ dependencies = [
  "ferrite-ui",
  "futures",
  "gpui-kit",
+ "libc",
+ "serde",
+ "serde_json",
+ "url",
 ]
 
 [[package]]

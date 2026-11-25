@@ -13,19 +13,19 @@ use gpui::component::button::Button;
 use gpui::prelude::*;
 use gpui::{px, ScrollHandle, ScrollWheelEvent, Window};
 
-use ferrite_ui::components::{icon_button_as, IconSize, IconState};
-use ferrite_ui::icons;
-use ferrite_ui::motion::{self, Tween};
-use ferrite_ui::theme::*;
+use crate::components::{icon_button_as, IconSize, IconState};
+use crate::icons;
+use crate::motion::{self, Tween};
+use crate::theme::*;
 
 /// How far a chevron scrolls a row showing `visible` of its tabs.
-pub(crate) fn tab_scroll_step(visible: f32) -> f32 {
+pub fn tab_scroll_step(visible: f32) -> f32 {
     (visible * SURFACE_TAB_SCROLL_SHARE).max(SURFACE_TAB_SCROLL_MIN)
 }
 
 /// Which end of the row a chevron stands at.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Side {
+pub enum Side {
     Left,
     Right,
 }
@@ -54,7 +54,7 @@ impl Side {
 }
 
 #[derive(Default)]
-pub(crate) struct TabScroll {
+pub struct TabScroll {
     handle: ScrollHandle,
     /// The ease to where a chevron sent the row, until the frame that lands
     /// it lets it go.
@@ -115,7 +115,7 @@ impl TabScroll {
     /// wider than the row would be without the slots, which the viewport,
     /// the most it scrolls and the slots' own width recover whichever state
     /// the last frame drew.
-    pub(crate) fn settle(&self, cx: &gpui::App) {
+    pub fn settle(&self, cx: &gpui::App) {
         let slots = if self.slotted.get() { 2. * SURFACE_PLUS } else { 0. };
         self.slotted.set(self.most() > slots + 0.5);
         match self.revealing.take() {
@@ -142,7 +142,7 @@ impl TabScroll {
     /// Whether the row is mid-ease or owes a reveal the frame that checks
     /// its aim: the frame must be drawn again. Read once a frame, it asks
     /// for each such frame once.
-    pub(crate) fn running(&self, cx: &gpui::App) -> bool {
+    pub fn running(&self, cx: &gpui::App) -> bool {
         let due = match self.revealing.get() {
             Some(reveal) if reveal.stage == Stage::Drawn => {
                 self.revealing.set(Some(Reveal { stage: Stage::Due, ..reveal }));
@@ -157,14 +157,14 @@ impl TabScroll {
 
     /// A chevron's press: the row eases `side`ward by `tab_scroll_step` of
     /// what shows.
-    pub(crate) fn ease(&self, side: Side, cx: &gpui::App) {
+    pub fn ease(&self, side: Side, cx: &gpui::App) {
         let visible = f32::from(self.handle.bounds().size.width);
         self.ease_to(self.at() + side.toward() * tab_scroll_step(visible), cx);
     }
 
     /// The keyboard came to `stop`, drawn in the row: the row eases until
     /// it shows whole, as a chevron's press would have brought it.
-    pub(crate) fn ease_into_view(&self, stop: gpui::Bounds<gpui::Pixels>, cx: &gpui::App) {
+    pub fn ease_into_view(&self, stop: gpui::Bounds<gpui::Pixels>, cx: &gpui::App) {
         let view = self.handle.bounds();
         let at = self.at();
         let to = if stop.left() < view.left() {
@@ -202,7 +202,7 @@ impl TabScroll {
 
     /// The wheel's vertical turn scrolls the row sideways, and stops a
     /// chevron's ease. Whether it did.
-    pub(crate) fn wheel(&self, event: &ScrollWheelEvent, window: &Window) -> bool {
+    pub fn wheel(&self, event: &ScrollWheelEvent, window: &Window) -> bool {
         let delta = event.delta.pixel_delta(window.line_height());
         if delta.y.abs() <= delta.x.abs() {
             return false;
@@ -214,7 +214,7 @@ impl TabScroll {
     }
 
     /// Bring child `ix` of the row into view when it is next drawn.
-    pub(crate) fn reveal(&self, ix: usize) {
+    pub fn reveal(&self, ix: usize) {
         self.tween.set(None);
         self.aim(ix, Stage::Asked);
     }
@@ -230,12 +230,12 @@ impl TabScroll {
     }
 
     /// Whether the chevron slots stand at the row's ends.
-    pub(crate) fn overflowing(&self) -> bool {
+    pub fn overflowing(&self) -> bool {
         self.slotted.get()
     }
 
     /// Whether there is more to show past `side`.
-    pub(crate) fn more(&self, side: Side) -> bool {
+    pub fn more(&self, side: Side) -> bool {
         match side {
             Side::Left => self.at() > 0.5,
             Side::Right => self.at() < self.most() - 0.5,
@@ -247,7 +247,7 @@ impl TabScroll {
 /// and calling `press` while the row has more that way, disabled and named
 /// `…-spent` while it has not. Either way a press on it never reaches the
 /// title bar beneath. `None` while the row does not overflow.
-pub(crate) fn chevron(
+pub fn chevron(
     prefix: &str,
     side: Side,
     scroll: &TabScroll,
