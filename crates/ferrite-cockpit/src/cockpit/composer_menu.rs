@@ -729,12 +729,16 @@ fn command_menu(pane: PaneIdentity, filter: &str, standalone: bool, listed: List
 
 impl CockpitView {
     /// Derive the Composer menu afresh from the focused line. A band menu
-    /// reads the line itself (`sync_band_rows`).
+    /// reads the line itself (`sync_band_rows`). Under a sheet, the
+    /// palette or the shortcuts the board is not the operator's: the menu
+    /// stays shut there whatever moves the line or lists its commands, and
+    /// the first edit once they go opens it again.
     pub(super) fn sync_menu(&mut self, cx: &mut Context<Self>) {
         if self.band_menu().is_some() {
             return;
         }
-        let inputs = self.composer_menu_inputs(cx);
+        let covered = self.sheet_up(cx) || self.sheet_float_open();
+        let inputs = if covered { None } else { self.composer_menu_inputs(cx) };
         self.composer_menu
             .clone()
             .update(cx, |menu, cx| menu.derive(inputs, cx));

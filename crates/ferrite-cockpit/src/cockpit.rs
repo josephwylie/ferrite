@@ -3929,7 +3929,7 @@ impl CockpitView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
-        if self.panes.get(self.focused(cx)).is_some_and(|pane| !pane.composer.read(cx).comment_valid(cx)) {
+        if self.panes.get(self.focused(cx)).map(|pane| pane.composer.clone()).is_some_and(|line| line.update(cx, |line, cx| line.holds_send(window, cx))) {
             return;
         }
         // The card's ↵ is its confirm — but in a machine's folder browser,
