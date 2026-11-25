@@ -18,19 +18,30 @@ fn connection_fields(
         .expect("the connection editor is open")
 }
 
-/// Connections in the window (`ferrite_settings::connections` has the
-/// page's own tests): it is the sheet's Connections page, Escape cancels
-/// its editor before it closes Settings, and a finished setup is saved
-/// once, in Settings' file.
+/// Connections in the window, with the key table launch binds
+/// (`ferrite_settings::connections` has the page's own tests). It is the
+/// sheet's Connections page. A pairing URL pasted over the host field
+/// fills the host and the code: the paste is the field's, and the
+/// Composer takes none of it (on Windows ctrl-v is also the Composer's
+/// paste and the window's). Escape cancels the editor and then closes
+/// Settings. A finished setup is asked of the window once: its answer
+/// ends the editor, and it is saved in Settings' file.
 #[gpui::test]
-fn connections_cancel_with_escape_and_save_a_ready_setup_once(cx: &mut TestAppContext) {
+fn connections_take_a_paste_cancel_with_escape_and_save_a_ready_setup_once(cx: &mut TestAppContext) {
     use ferrite_core::machine::{setup::Event, Machine};
+    use ferrite_ui::keymap::{bindings, PLATFORM};
     let (core, _fake) = cockpit("connection-editor", 1);
-    bind_production_keys(cx);
+    cx.update(|cx| {
+        // As launch binds them: this platform's table, Windows' on Windows.
+        ferrite_pane::pane::init_components(cx);
+        let table = ferrite_frame::keys::load(bindings(PLATFORM), cx);
+        cx.bind_keys(table);
+    });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(800.), px(600.)));
     tick(cx);
-    cx.simulate_keystrokes("cmd-,");
+    let settings_key = PLATFORM.chord(",");
+    cx.simulate_keystrokes(&settings_key);
     tick(cx);
     let click = |selector: &'static str, cx: &mut gpui::VisualTestContext| {
         let hit = cx.debug_bounds(selector).expect(selector).center();
@@ -40,6 +51,22 @@ fn connections_cancel_with_escape_and_save_a_ready_setup_once(cx: &mut TestAppCo
     click("settings-page-connections", cx);
     click("connection-add", cx);
     assert!(cx.debug_bounds("connection-dialog").is_some());
+    let fields = connection_fields(&view, cx);
+    cx.simulate_input("https://backend.example.com");
+    tick(cx);
+    cx.simulate_keystrokes(&PLATFORM.chord("a"));
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+            "https://backend.example.com/pair#code=0123456789abcdef0123456789abcdef&server=fedcba9876543210fedcba9876543210".into(),
+        ))
+    });
+    cx.simulate_keystrokes(&PLATFORM.chord("v"));
+    tick(cx);
+    view.read_with(cx, |_, cx| {
+        assert_eq!(fields.remote_host.read(cx).value().as_ref(), "https://backend.example.com");
+        assert_eq!(fields.pairing_code.read(cx).value().as_ref(), "0123456789abcdef0123456789abcdef");
+    });
+    assert_eq!(composer_text(&view, cx), "", "the Composer takes none of the paste");
     cx.simulate_keystrokes("escape");
     tick(cx);
     view.read_with(cx, |view, cx| {
@@ -47,14 +74,28 @@ fn connections_cancel_with_escape_and_save_a_ready_setup_once(cx: &mut TestAppCo
         assert!(!view.connections(cx).unwrap().read(cx).editing());
     });
     assert!(cx.debug_bounds("connection-add").is_some());
-
-    click("connection-add", cx);
-    let machine = Machine::new("ready.example");
-    connections_view(&view, cx).update(cx, |connections, cx| {
-        connections.setup_event(Event::Ready(machine.clone()), cx);
-        connections.setup_event(Event::Ready(machine.clone()), cx);
-    });
+    cx.simulate_keystrokes("escape");
     tick(cx);
+    assert!(!view.read_with(cx, |view, cx| view.settings_open(cx)), "a second Escape closes Settings");
+
+    cx.simulate_keystrokes(&settings_key);
+    tick(cx);
+    click("settings-page-connections", cx);
+    click("connection-add", cx);
+    let connections = connections_view(&view, cx);
+    let heard = ferrite_ui::testing::record(cx, &connections, ferrite_settings::connections::ConnectionsEvent::clone);
+    let machine = Machine::new("ready.example");
+    // As the attempt's poll says it: once a frame, the window answering
+    // between.
+    for _ in 0..2 {
+        connections.update(cx, |connections, cx| connections.setup_event(Event::Ready(machine.clone()), cx));
+        tick(cx);
+    }
+    let ready = heard.take();
+    assert!(
+        matches!(&ready[..], [ferrite_settings::connections::ConnectionsEvent::Ready { machine: asked, replacing: None }] if *asked == machine),
+        "asked once: {ready:?}"
+    );
     view.read_with(cx, |view, cx| {
         assert!(!view.connections(cx).unwrap().read(cx).editing());
         assert_eq!(view.prefs.settings.machines, vec![machine.clone()]);
@@ -183,8 +224,9 @@ fn a_ready_setup_replaces_the_environment_it_edits_and_keeps_its_warning(
     view.update(cx, |view, _| {
         view.prefs.settings.machines = vec![saved.clone(), other.clone()];
     });
+    let dir = view.read_with(cx, |view, _| view.prefs.dir.clone());
     connections_view(&view, cx).update_in(cx, |connections, window, cx| {
-        connections.edit(Some(saved.clone()), window, cx)
+        connections.edit(Some(saved.clone()), &dir, window, cx)
     });
     tick(cx);
     let ready = Machine {
@@ -258,8 +300,9 @@ fn reconnect_leaves_search_and_rejects_another_saved_target(cx: &mut TestAppCont
             .unwrap()
             .update(cx, |sheet, cx| sheet.search("first.example", window, cx));
     });
+    let dir = view.read_with(cx, |view, _| view.prefs.dir.clone());
     connections_view(&view, cx).update_in(cx, |connections, window, cx| {
-        connections.edit(Some(saved[0].clone()), window, cx)
+        connections.edit(Some(saved[0].clone()), &dir, window, cx)
     });
     view.read_with(cx, |view, cx| {
         assert_eq!(view.settings_sheet(cx).unwrap().read(cx).page(), settings::PageKey::Connections);

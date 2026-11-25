@@ -8,7 +8,7 @@
 //! and answers (`answered`, `refused`, `added`, `removed`, `warn`); what
 //! it asks of the sheet, as a `PageEvent`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use ferrite_core::machine::{self, auth, remote, setup, Machine};
@@ -230,8 +230,17 @@ impl ConnectionsView {
     }
 
     /// Never called while the window is being updated: it reads it.
-    fn inputs(&self, cx: &App) -> ConnectionsInputs {
-        self.inputs.read(&(), cx).unwrap_or_default()
+    /// None once the window has gone, or has no environments to say.
+    fn inputs(&self, cx: &App) -> Option<ConnectionsInputs> {
+        self.inputs.read(&(), cx)
+    }
+
+    /// The editor, opened by a press of the page's own: on `machine`, as
+    /// the window says it. With no window, none opens.
+    fn edit_here(&mut self, machine: Option<Machine>, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ConnectionsInputs { dir, .. }) = self.inputs(cx) {
+            self.edit(machine, &dir, window, cx);
+        }
     }
 
     /// An environment is being added, or set up again.
@@ -296,14 +305,18 @@ impl ConnectionsView {
         cx.notify();
     }
 
+    /// The editor, open on `machine` to set it up again, or on a new
+    /// environment. `dir` is where the window's settings live, which
+    /// spells a link's target; it is given, so the window can open the
+    /// editor while it is being updated.
     pub fn edit(
         &mut self,
         machine: Option<Machine>,
+        dir: &Path,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         cx.emit(PageEvent::Editing);
-        let dir = self.inputs(cx).dir;
         let mode = if machine.as_ref().is_some_and(|machine| !machine.is_link()) {
             ConnectionMode::Ssh
         } else {
@@ -317,7 +330,7 @@ impl ConnectionsView {
         let remote_host = machine
             .as_ref()
             .filter(|machine| machine.is_link())
-            .map(|machine| machine.display_target(&dir))
+            .map(|machine| machine.display_target(dir))
             .unwrap_or_default();
         let mut field = |value: String, placeholder: &'static str| {
             let field = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
@@ -552,6 +565,11 @@ impl ConnectionsView {
         cx.notify();
     }
 
+    /// The environments the window saves; none once it has gone.
+    fn saved(&self, cx: &App) -> Vec<Machine> {
+        self.inputs(cx).map(|inputs| inputs.saved).unwrap_or_default()
+    }
+
     /// The discovered hosts the SSH host field matches, less those saved.
     fn hosts_matching(&self, saved: &[Machine], cx: &App) -> Vec<machine::hosts::Host> {
         let Some(editor) = &self.editor else {
@@ -574,7 +592,7 @@ impl ConnectionsView {
                 .flatten()
         });
         if let Some(host) = highlighted
-            .and_then(|at| self.hosts_matching(&self.inputs(cx).saved, cx).get(at).cloned())
+            .and_then(|at| self.hosts_matching(&self.saved(cx), cx).get(at).cloned())
         {
             self.choose_host(host.alias.into(), window, cx);
         } else {
@@ -664,7 +682,7 @@ impl ConnectionsView {
         {
             return;
         }
-        let hosts = self.hosts_matching(&self.inputs(cx).saved, cx);
+        let hosts = self.hosts_matching(&self.saved(cx), cx);
         if modifiers == gpui::Modifiers::secondary_key() {
             if let Some(at) = key.parse::<usize>().ok().filter(|at| (1..=9).contains(at)) {
                 if let Some(host) = hosts.get(at - 1) {
@@ -700,7 +718,14 @@ impl ConnectionsView {
     }
 
     fn submit(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let ConnectionsInputs { dir, saved, .. } = self.inputs(cx);
+        let Some(ConnectionsInputs { dir, saved, .. }) = self.inputs(cx) else {
+            // No window to save a setup in: the edit ends, and no attempt
+            // starts.
+            if self.editor.take().is_some() {
+                cx.notify();
+            }
+            return;
+        };
         let Some(editor) = self.editor.as_mut() else {
             return;
         };
@@ -1003,7 +1028,7 @@ impl ConnectionsView {
         let hosts = self.hosts_matching(saved, cx);
         let Some(editor) = self.editor.as_mut() else {
             return settings::ConnectionForm::Closed {
-                open: action(cx, |view, window, cx| view.edit(None, window, cx)),
+                open: action(cx, |view, window, cx| view.edit_here(None, window, cx)),
                 error: self.error.clone().map(Into::into),
             };
         };
@@ -1122,19 +1147,23 @@ impl ConnectionsView {
         }
     }
 
-    /// The Connections page's groups, for the Settings sheet.
+    /// The Connections page's groups, for the Settings sheet: none once
+    /// the window has gone.
     pub fn groups(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<settings::Group> {
-        let ConnectionsInputs {
+        let Some(ConnectionsInputs {
             dir,
             saved,
             local_enabled,
             switchable,
             listed,
-        } = self.inputs(cx);
+        }) = self.inputs(cx)
+        else {
+            return Vec::new();
+        };
         let local = connection_row(settings::ConnectionRow {
             name: "Local environment".into(),
             target: "".into(),
@@ -1203,7 +1232,7 @@ impl ConnectionsView {
                     label: label.into(),
                     enabled: self.editor.is_none(),
                     act: action(cx, move |view, window, cx| {
-                        view.edit(Some(machine.clone()), window, cx);
+                        view.edit_here(Some(machine.clone()), window, cx);
                         // Its session is gone: the editor waits for a code.
                         if !revoked {
                             view.submit(window, cx);
@@ -1220,7 +1249,7 @@ impl ConnectionsView {
                     label: "Save".into(),
                     enabled: self.editor.is_none(),
                     act: action(cx, move |view, window, cx| {
-                        view.edit(Some(saving.clone()), window, cx);
+                        view.edit_here(Some(saving.clone()), window, cx);
                         view.submit(window, cx);
                     }),
                 });
@@ -1236,7 +1265,7 @@ impl ConnectionsView {
                     enabled: !changing,
                     act: action(cx, move |view, window, cx| {
                         if !reconnect.enabled {
-                            view.edit(Some(reconnect.clone()), window, cx);
+                            view.edit_here(Some(reconnect.clone()), window, cx);
                             view.submit(window, cx);
                             return;
                         }
@@ -1677,7 +1706,7 @@ mod tests {
     #[gpui::test]
     fn composing_text_neither_submits_nor_closes(cx: &mut TestAppContext) {
         let (page, _kept, cx) = open(ConnectionsInputs::default(), cx);
-        page.update_in(cx, |page, window, cx| page.edit(None, window, cx));
+        page.update_in(cx, |page, window, cx| page.edit(None, Path::new(""), window, cx));
         settle(cx);
         let fields = fields(&page, cx);
         cx.update(|window, cx| {
@@ -1703,7 +1732,7 @@ mod tests {
     #[gpui::test]
     fn a_pairing_url_typed_keeps_its_prefix(cx: &mut TestAppContext) {
         let (page, _kept, cx) = open(ConnectionsInputs::default(), cx);
-        page.update_in(cx, |page, window, cx| page.edit(None, window, cx));
+        page.update_in(cx, |page, window, cx| page.edit(None, Path::new(""), window, cx));
         settle(cx);
         let fields = fields(&page, cx);
         let url = "https://backend.example.com/pair#code=0123456789abcdef0123456789abcdef&server=fedcba9876543210fedcba9876543210";
@@ -1732,7 +1761,7 @@ mod tests {
     #[gpui::test]
     fn a_pairing_url_pasted_fills_host_and_code(cx: &mut TestAppContext) {
         let (page, _kept, cx) = open(ConnectionsInputs::default(), cx);
-        page.update_in(cx, |page, window, cx| page.edit(None, window, cx));
+        page.update_in(cx, |page, window, cx| page.edit(None, Path::new(""), window, cx));
         settle(cx);
         let fields = fields(&page, cx);
         cx.simulate_input("https://backend.example.com");
@@ -1811,7 +1840,7 @@ mod tests {
         let saved = Machine { enabled: false, ..box_machine() };
         let (page, _kept, cx) = open(with(vec![Listed { machine: saved.clone(), ..listed(Reached::Off) }]), cx);
         let heard = record(cx, &page, ConnectionsEvent::clone);
-        page.update_in(cx, |page, window, cx| page.edit(Some(saved.clone()), window, cx));
+        page.update_in(cx, |page, window, cx| page.edit(Some(saved.clone()), Path::new(""), window, cx));
         settle(cx);
         let ready = Machine { enabled: true, ..saved.clone() };
         page.update(cx, |page, cx| {
@@ -1832,7 +1861,7 @@ mod tests {
         let note = groups(&page, cx).into_iter().find(|group| group.title == Some("Environments")).and_then(|group| group.note);
         assert_eq!(note.as_deref(), Some("Host key added."), "the setup's warning stays");
 
-        page.update_in(cx, |page, window, cx| page.edit(Some(saved.clone()), window, cx));
+        page.update_in(cx, |page, window, cx| page.edit(Some(saved.clone()), Path::new(""), window, cx));
         page.update(cx, |page, cx| page.setup_event(Event::Ready(ready), cx));
         page.update(cx, |page, cx| page.added(Err("Environment not saved: denied. Try again.".into()), cx));
         settle(cx);
@@ -1884,7 +1913,7 @@ mod tests {
         let (page, kept, cx) = open(with(vec![listed(Reached::Online)]), cx);
         let heard = record(cx, &page, ConnectionsEvent::clone);
         assert_eq!(verb(&page, "connection-toggle-1", cx).label.as_ref(), "Disconnect");
-        page.update_in(cx, |page, window, cx| page.edit(None, window, cx));
+        page.update_in(cx, |page, window, cx| page.edit(None, Path::new(""), window, cx));
         press_verb(&page, "connection-toggle-1", cx);
         assert!(!page.read_with(cx, |page, _| page.editing()));
         assert_eq!(heard.take(), [ConnectionsEvent::Toggle("me@box".into())]);
@@ -2117,8 +2146,9 @@ mod tests {
         assert!(!shown.on && !shown.toggle.enabled, "refused: drawn off, taking no press");
     }
 
-    /// The page draws the environments as the window has them now, and
-    /// none once the window has gone.
+    /// The page draws the environments as the window has them now. Once
+    /// the window has gone it draws nothing and opens no editor, and an
+    /// editor open then ends at its submit, starting no setup.
     #[gpui::test]
     fn the_page_reads_the_window(cx: &mut TestAppContext) {
         let (page, kept, cx) = open(with(vec![]), cx);
@@ -2130,10 +2160,20 @@ mod tests {
         settle(cx);
         assert_eq!(rows(&page, cx).len(), 2);
         assert!(cx.update(|window, _| window.debug_text("settings-card")).unwrap().join(" ").contains("box"), "the window's notify redraws it");
+        page.update_in(cx, |page, window, cx| page.edit(None, Path::new(""), window, cx));
+        let typed = fields(&page, cx);
+        cx.update(|window, cx| {
+            typed.remote_host.update(cx, |field, cx| field.set_value("https://backend.example.com", window, cx));
+            typed.pairing_code.update(cx, |field, cx| field.set_value("0123456789abcdef0123456789abcdef", window, cx));
+        });
         let gone = kept.downgrade();
         drop(kept);
         cx.run_until_parked();
         assert!(gone.upgrade().is_none());
-        assert_eq!(rows(&page, cx).len(), 1, "no window: no environments");
+        assert!(groups(&page, cx).is_empty(), "no window: nothing drawn");
+        page.update_in(cx, |page, window, cx| page.submit(window, cx));
+        assert!(!page.read_with(cx, |page, _| page.editing()), "no window to save it in: the edit ends, and no setup starts");
+        page.update_in(cx, |page, window, cx| page.edit_here(None, window, cx));
+        assert!(!page.read_with(cx, |page, _| page.editing()), "and none opens");
     }
 }

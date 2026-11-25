@@ -223,11 +223,9 @@ impl CockpitView {
         let settings = self.show_settings(cx);
         settings.update(cx, |settings, cx| settings.show(settings::PageKey::Connections, cx));
         if let Some(saved) = saved {
-            // Once this view's update is done: the editor reads it.
             let connections = settings.read(cx).connections().clone();
-            window.defer(cx, move |window, cx| {
-                connections.update(cx, |connections, cx| connections.edit(Some(saved), window, cx));
-            });
+            let dir = self.prefs.dir.clone();
+            connections.update(cx, |connections, cx| connections.edit(Some(saved), &dir, window, cx));
         }
     }
 

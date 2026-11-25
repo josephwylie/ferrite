@@ -697,10 +697,20 @@ fn a_revoked_session_asks_to_sign_in_and_opens_its_pairing(cx: &mut TestAppConte
         name: "box".into(),
         ..Machine::new("ferrite-link:00112233445566778899aabbccddeeff")
     };
-    let mut machines = Machines::new(reach("revoked", revoked), &[link], None, true);
+    let mut machines = Machines::new(reach("revoked", revoked), &[link.clone()], None, true);
     machines.beside(&mut core);
     let on_box = machines.held(1).unwrap();
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    // The link's host is kept where the window's settings live: the
+    // editor spells it from there.
+    let dir = view.read_with(cx, |view, _| view.prefs.dir.clone());
+    let profile = ferrite_core::machine::dir(&dir, &link.target).join("link.json");
+    std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+    std::fs::write(
+        &profile,
+        r#"{"origin":"https://box.example.com","server_id":"00112233445566778899aabbccddeeff","credential":"box"}"#,
+    )
+    .unwrap();
     until(cx, |cx| connection(&view, 1, cx) == Connection::Attention);
     tick(cx);
     assert_eq!(machine_notices(&view, cx), ["Sign in to box"]);
@@ -725,6 +735,11 @@ fn a_revoked_session_asks_to_sign_in_and_opens_its_pairing(cx: &mut TestAppConte
         .expect("its dialog");
     assert!(dialog.iter().any(|line| line == "Sign in to box"), "{dialog:?}");
     assert!(!dialog.iter().any(|line| line == "SSH"), "a link stays a link: {dialog:?}");
+    let host = cx
+        .update(|window, _| window.debug_text("connection-remote-host"))
+        .unwrap_or_default()
+        .join(" ");
+    assert!(host.contains("https://box.example.com"), "its host, as the window keeps it: {host}");
     let row = connection_groups(&view, cx)
         .into_iter()
         .flat_map(|group| group.rows)
@@ -3096,19 +3111,18 @@ fn two_quick_edits_to_a_machines_defaults_both_land(cx: &mut TestAppContext) {
     });
 }
 
-/// A machine that cannot write its file says so in both groups that show
-/// its defaults, beside the values it kept.
-#[cfg(unix)]
+/// A machine that cannot write its file says so beside the values it
+/// kept: the window gives Settings the kept values and the refusal, so
+/// both are drawn.
 #[gpui::test]
 fn a_machine_that_cannot_save_its_defaults_says_so(cx: &mut TestAppContext) {
     use ferrite_core::settings::Settings;
-    use std::os::unix::fs::PermissionsExt;
     let there = Settings {
         factory_tasks_at_once: 5,
         ..Default::default()
     };
     let (view, cx, remote) = settings_on_a_machine(cx, "rd-readonly", &there);
-    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let blocked = refuse_writes(&remote);
     let search = cx.debug_bounds("settings-search").unwrap();
     cx.simulate_click(search.center(), gpui::Modifiers::none());
     cx.simulate_input("at once");
@@ -3116,28 +3130,32 @@ fn a_machine_that_cannot_save_its_defaults_says_so(cx: &mut TestAppContext) {
     let more = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
     cx.simulate_click(more, gpui::Modifiers::none());
     // Said on each page that shows the defaults: the sheet's own test.
-    until(cx, |cx| says_of_defaults(&view, cx, "Not saved on box"));
-    until(cx, |cx| {
-        view.read_with(cx, |view, cx| view.factory_limit(cx)) == Some(5)
-    });
-    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o755)).unwrap();
+    until(cx, |cx| matches!(defaults_said(&view, cx), (Ok(5), Some(said)) if said.contains("Not saved on box")));
+    std::fs::remove_dir(blocked).unwrap();
 }
 
-/// Whether the window says `words` of the machine's defaults, in their
-/// place or beside them, as Settings draws it.
-#[cfg(unix)]
-fn says_of_defaults(
+/// The machine's settings in `remote` can be read but not written: the
+/// file a write is made in first is a folder. What to remove to let
+/// writes through again.
+fn refuse_writes(remote: &std::path::Path) -> std::path::PathBuf {
+    let blocked = remote.join(format!("{}.tmp", ferrite_core::settings::Settings::FILE));
+    std::fs::create_dir_all(&blocked).unwrap();
+    blocked
+}
+
+/// What the window gives Settings of the machine's defaults: the factory
+/// limit it shows, or what stands in for the values; and what it says
+/// beside them.
+fn defaults_said(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
-    words: &str,
-) -> bool {
+) -> (Result<usize, String>, Option<String>) {
     view.read_with(cx, |view, cx| {
         let inputs = view.settings_inputs(cx);
-        inputs
-            .unsaved
-            .iter()
-            .chain(inputs.defaults.as_ref().err())
-            .any(|said| said.contains(words))
+        (
+            inputs.defaults.map(|defaults| defaults.factory_tasks_at_once).map_err(|said| said.to_string()),
+            inputs.unsaved.map(|said| said.to_string()),
+        )
     })
 }
 
@@ -3154,44 +3172,39 @@ fn a_failed_read_that_later_lands_is_not_an_unsaved_edit(cx: &mut TestAppContext
         view.environment.defaults = None;
         view.ask_server_defaults(cx);
     });
-    until(cx, |cx| says_of_defaults(&view, cx, "Could not read them"));
+    until(cx, |cx| matches!(defaults_said(&view, cx), (Err(said), None) if said.contains("Could not read them")));
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
     view.update(cx, |view, cx| view.ask_server_defaults(cx));
     until(cx, |cx| {
         view.read_with(cx, |view, cx| view.shown_defaults(cx).is_some())
     });
     tick(cx);
-    assert!(!says_of_defaults(&view, cx, "Not saved"));
+    assert!(matches!(defaults_said(&view, cx), (Ok(_), None)), "the values, and nothing said beside them");
 }
 
 /// An edit that saves after one was refused takes the refusal away.
-#[cfg(unix)]
 #[gpui::test]
 fn a_saved_edit_clears_an_earlier_refusal(cx: &mut TestAppContext) {
     use ferrite_core::settings::Settings;
-    use std::os::unix::fs::PermissionsExt;
     let there = Settings {
         factory_tasks_at_once: 5,
         ..Default::default()
     };
     let (view, cx, remote) = settings_on_a_machine(cx, "rd-resave", &there);
-    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let blocked = refuse_writes(&remote);
     let search = cx.debug_bounds("settings-search").unwrap();
     cx.simulate_click(search.center(), gpui::Modifiers::none());
     cx.simulate_input("at once");
     tick(cx);
     let more = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
     cx.simulate_click(more, gpui::Modifiers::none());
-    until(cx, |cx| says_of_defaults(&view, cx, "Not saved on box"));
-    until(cx, |cx| {
-        view.read_with(cx, |view, cx| view.factory_limit(cx)) == Some(5)
-    });
-    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o755)).unwrap();
+    until(cx, |cx| matches!(defaults_said(&view, cx), (Ok(5), Some(said)) if said.contains("Not saved on box")));
+    std::fs::remove_dir(blocked).unwrap();
     cx.simulate_click(more, gpui::Modifiers::none());
     until(cx, |_| {
         Settings::load(&remote).is_ok_and(|written| written.factory_tasks_at_once == 6)
     });
-    until(cx, |cx| !says_of_defaults(&view, cx, "Not saved"));
+    until(cx, |cx| matches!(defaults_said(&view, cx), (Ok(6), None)));
 }
 
 /// box — an Engine of its own standing in for it — with an edited file of

@@ -1029,9 +1029,10 @@ fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
 }
 
 /// Settings › Server's Restart answers its press: the restart is under
-/// way, or why it is not, on screen. Its act once reached for its window by
-/// the window's handle from inside the press, while gpui had the window
-/// out for the event, so every press did nothing at all.
+/// way, or why it is not, on screen. The page offers Start at login only
+/// in a released build, as the window says. Restart's act once reached
+/// for its window by the window's handle from inside the press, while
+/// gpui had the window out for the event, so every press did nothing.
 #[gpui::test]
 fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
     let dir = scratch("restart-press");
@@ -1058,6 +1059,11 @@ fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
         cx.notify();
     });
     tick(cx);
+    assert_eq!(
+        cx.debug_bounds("settings-start-at-login").is_some(),
+        !crate::DEV,
+        "Start at login is a released build's: the window says which this is"
+    );
     let restart = cx
         .debug_bounds("settings-server-restart")
         .expect("Settings › Server offers Restart");

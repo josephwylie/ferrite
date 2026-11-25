@@ -1402,7 +1402,7 @@ mod tests {
         cx.simulate_input("Diagnostics");
         cx.run_until_parked();
         let connections = sheet.read_with(cx, |sheet, _| sheet.connections().clone());
-        connections.update_in(cx, |connections, window, cx| connections.edit(None, window, cx));
+        connections.update_in(cx, |connections, window, cx| connections.edit(None, std::path::Path::new(""), window, cx));
         cx.run_until_parked();
         assert_eq!(page(&sheet, cx), PageKey::Connections, "the editor shows its page");
         assert!(shows(cx, "connection-dialog"));

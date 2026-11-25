@@ -95,7 +95,8 @@ fn closing_settings_drops_the_connection_editor(cx: &mut TestAppContext) {
         });
         tick(cx);
         let connections = connections_view(&view, cx);
-        connections.update_in(cx, |connections, window, cx| connections.edit(None, window, cx));
+        let dir = view.read_with(cx, |view, _| view.prefs.dir.clone());
+        connections.update_in(cx, |connections, window, cx| connections.edit(None, &dir, window, cx));
         tick(cx);
         assert!(connections.read_with(cx, |connections, _| connections.editing()));
         connections
