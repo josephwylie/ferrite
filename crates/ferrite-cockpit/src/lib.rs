@@ -24,7 +24,6 @@ mod notifications;
 pub mod palette;
 mod pr;
 mod project_editor;
-mod review;
 pub mod shortcuts;
 mod status;
 mod system_notifications;

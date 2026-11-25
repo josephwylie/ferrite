@@ -1,0 +1,31 @@
+[package]
+name = "ferrite-review"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ferrite's Review slot: herdr-reviewr's review drawn beside a Thread (ADR 0021)"
+
+[lib]
+doctest = false
+
+[features]
+# The reference scenes' staged states (`ReviewView::stage_*`). The
+# Cockpit's `visual-reference` feature turns this on.
+visual-reference = []
+
+[dependencies]
+ferrite-core = { path = "../ferrite-core" }
+# The theme, components and menus, and how a PR review's verdict reads.
+ferrite-ui = { path = "../ferrite-ui" }
+# The Composer a comment waits in, the diff cells and find.
+ferrite-pane = { path = "../ferrite-pane" }
+# herdr-reviewr's review core, vendored: the slot's rows and comments
+# (ADR 0021).
+ferrite-reviewr = { path = "../ferrite-reviewr" }
+# The kit facade keeps the renderer, native platform and components on one
+# compatible stack. Keep the gpui import name for derives and existing code.
+gpui = { package = "gpui-kit", version = "=0.6.0" }
+
+[dev-dependencies]
+# The tests draw the Review in a window of its own and drive its keys.
+gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }

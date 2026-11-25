@@ -43,6 +43,10 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(select(self.packages, ["crates/ferrite-frame/src/lib.rs"])["packages"],
                          ["ferrite", "ferrite-cockpit", "ferrite-frame"])
 
+    def test_review_selects_the_window_that_lays_it_out(self):
+        self.assertEqual(select(self.packages, ["crates/ferrite-review/src/lib.rs"])["packages"],
+                         ["ferrite", "ferrite-cockpit", "ferrite-review"])
+
     def test_core_selects_transitive_consumers(self):
         result = select(self.packages, ["crates/ferrite-core/src/browser.rs"])
         self.assertIn("ferrite-terminal", result["packages"])
@@ -54,7 +58,7 @@ class SelectionTests(unittest.TestCase):
     def test_engine_selects_the_server_the_app_and_the_tests_that_run_it(self):
         result = select(self.packages, ["crates/ferrite-engine/src/engine.rs"])["packages"]
         self.assertEqual(result, ["ferrite", "ferrite-client", "ferrite-cockpit", "ferrite-engine", "ferrite-frame",
-                                  "ferrite-pane", "ferrite-server"])
+                                  "ferrite-pane", "ferrite-review", "ferrite-server"])
 
     def test_server_selects_the_app_and_the_tests_that_run_it(self):
         self.assertEqual(select(self.packages, ["crates/ferrite-server/src/calls.rs"])["packages"],
@@ -219,11 +223,14 @@ renamed = { package = "helper", path = "crates/helper" }
         with self.assertRaisesRegex(ValueError, "Untracked in-tree path dependency.*workspace.exclude"):
             select(workspace(self.root), ["README.md"])
 
-    def test_transitive_frame_cockpit_edge_is_forbidden(self):
-        self.write_package("ferrite-frame", '[dependencies]\nhelper = { path = "../helper" }\n')
+    def test_transitive_frame_and_review_cockpit_edges_are_forbidden(self):
         self.write_package("helper", '[dev-dependencies]\nwindow = { package = "ferrite-cockpit", path = "../ferrite-cockpit" }\n')
-        with self.assertRaisesRegex(ValueError, "ferrite-frame -> helper -> ferrite-cockpit"):
-            check_boundaries(workspace(self.root))
+        for source in ["ferrite-frame", "ferrite-review"]:
+            with self.subTest(source=source):
+                self.write_package(source, '[dependencies]\nhelper = { path = "../helper" }\n')
+                with self.assertRaisesRegex(ValueError, f"{source} -> helper -> ferrite-cockpit"):
+                    check_boundaries(workspace(self.root))
+                self.write_package(source)
 
     def test_window_chain_takes_the_server_only_for_its_tests(self):
         self.write_package("ferrite-server")

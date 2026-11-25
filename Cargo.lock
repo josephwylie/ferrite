@@ -2359,6 +2359,7 @@ dependencies = [
  "ferrite-focus-notify",
  "ferrite-frame",
  "ferrite-pane",
+ "ferrite-review",
  "ferrite-reviewr",
  "ferrite-server",
  "ferrite-terminal",
@@ -2466,6 +2467,17 @@ dependencies = [
  "tungstenite 0.24.0",
  "url",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ferrite-review"
+version = "0.4.0"
+dependencies = [
+ "ferrite-core",
+ "ferrite-pane",
+ "ferrite-reviewr",
+ "ferrite-ui",
+ "gpui-kit",
 ]
 
 [[package]]

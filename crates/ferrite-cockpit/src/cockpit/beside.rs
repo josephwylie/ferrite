@@ -35,7 +35,7 @@
 //! the pull request, every file or a base comes back here to be read.
 
 use super::*;
-use crate::review::{
+use ferrite_review::{
     BasePicked, BasesAsked, CommitPicked, FileOpened, FilesAsked, MenuAsked, PrAsked, ReviewView,
     ScopePicked, Searched,
 };
@@ -702,7 +702,7 @@ impl CockpitView {
                     view.close_review(index, cx);
                 }
             }))
-            .on_action(cx.listener(move |view, _: &crate::review::Close, _, cx| {
+            .on_action(cx.listener(move |view, _: &ferrite_review::Close, _, cx| {
                 if let Some(index) = view.pane_for(owner) {
                     view.close_review(index, cx);
                 }
