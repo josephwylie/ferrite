@@ -20,20 +20,13 @@ use std::collections::HashMap;
 
 use gpui::WeakEntity;
 
-use super::direct_view::{Choice, KeptDirection};
 use super::*;
+use ferrite_factory::direct::{meta, read, Choice, DirectSheet, KeptDirection, TaskPick};
 use ferrite_core::factory_board::{
-    self, Approver, Destination, Override, Status, StepId, Task, TaskId, ThenReturn,
+    self, Approver, Destination, Override, Status, Task, TaskId, ThenReturn,
 };
 use ferrite_core::protocol::TaskAction;
 use ferrite_pane::composer::{Composer, Role};
-
-/// Which of a Task's two sheets: Rework, or Direct this task.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DirectSheet {
-    Rework,
-    Redirect,
-}
 
 /// A Factory's say state: what is being written to its Tasks.
 pub(crate) struct DirectionView {
@@ -386,68 +379,6 @@ pub(super) fn says(task: &Task) -> bool {
         || (task.workflow.is_some() && task.status != Status::Completed)
 }
 
-/// What a press of one of the sheets' choosers sets.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum TaskPick {
-    ReworkTo(Destination),
-    RedirectTo(StepId),
-}
-
-/// The chooser face for any view, `press` given where its rows go.
-pub(crate) fn picker_button<V: 'static>(
-    selector: &'static str,
-    text: String,
-    flagged: bool,
-    press: impl Fn(&mut V, super::workflows::Trigger, Point<Pixels>, &mut Context<V>) + 'static,
-    cx: &mut Context<V>,
-) -> gpui::component::button::Button {
-    let look = ferrite_ui::controls::Look {
-        flagged,
-        full_width: true,
-        disabled: false,
-    };
-    let trigger = super::workflows::Trigger::default();
-    ferrite_ui::controls::chooser(selector, "", text.into(), look, cx)
-        .debug_selector(move || {
-            if flagged {
-                format!("{selector}-flagged")
-            } else {
-                selector.to_string()
-            }
-        })
-        .relative()
-        .child(trigger.probe())
-        .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
-            cx.stop_propagation();
-            press(view, trigger.clone(), event.position(), cx);
-        }))
-}
-
-/// Two or more choices side by side, full width: the shared segments, the
-/// chosen one selected as `{selector}-{at}-on`.
-pub(crate) fn segmented<V: 'static, T: Copy + PartialEq + 'static>(
-    selector: &'static str,
-    chosen: T,
-    options: &[(T, &'static str)],
-    pick: impl Fn(&mut V, T, &mut Context<V>) + Clone + 'static,
-    cx: &mut Context<V>,
-) -> Div {
-    let mut track =
-        ferrite_ui::controls::segments(true).debug_selector(move || selector.to_string());
-    for (at, (value, word)) in options.iter().enumerate() {
-        let value = *value;
-        let on = value == chosen;
-        let key = format!("{selector}-{at}{}", if on { "-on" } else { "" });
-        let pick = pick.clone();
-        track = track.child(
-            ferrite_ui::controls::segment((selector, at), *word, on, true, cx)
-                .debug_selector(move || key.clone())
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| pick(view, value, cx))),
-        );
-    }
-    track
-}
-
 /// A section of the Task's Overview: its label over its content.
 pub(super) fn section(selector: &'static str, title: impl Into<SharedString>) -> Div {
     use ferrite_ui::theme::*;
@@ -466,22 +397,6 @@ pub(super) fn section(selector: &'static str, title: impl Into<SharedString>) ->
                 .text_color(rgb(INK_SUBTLE))
                 .child(title.into()),
         )
-}
-
-pub(super) fn meta(text: impl Into<SharedString>) -> Div {
-    use ferrite_ui::theme::*;
-    div()
-        .text_size(px(FS_META))
-        .text_color(rgb(INK_SUBTLE))
-        .child(text.into())
-}
-
-/// How a Destination reads as a rework recipient or what follows approval.
-pub(super) fn read(task: &Task, to: &Destination) -> String {
-    match &task.workflow {
-        Some(run) => run.definition.route_label("", to),
-        None => to.word(),
-    }
 }
 
 impl CockpitView {
@@ -612,16 +527,6 @@ impl CockpitView {
             return;
         };
         self.direct_command(TaskAction::Approve { task }, cx);
-    }
-
-    /// The sheet up and its Task as the board has it now, with what the
-    /// sheet holds: its Task, its text trimmed and its choice.
-    fn direct_send(&self, cx: &gpui::App) -> Option<(TaskId, String, Choice)> {
-        let sheet = self.direct_sheet(cx)?;
-        let sheet = sheet.read(cx);
-        self.direct_inputs(sheet.project, &sheet.task, cx)?;
-        let text = sheet.field.read(cx).text().trim().to_string();
-        Some((sheet.task.clone(), text, sheet.choice.clone()))
     }
 
     /// A send taken: the sheet closes and what it held is spent.

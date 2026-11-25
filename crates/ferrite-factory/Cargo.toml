@@ -24,3 +24,5 @@ ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
 # The tests open each view in a window of its own (`ferrite_ui::testing`).
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
 ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
+# A Task as the Server would publish it, for the sheets that draw one.
+serde_json = { workspace = true }

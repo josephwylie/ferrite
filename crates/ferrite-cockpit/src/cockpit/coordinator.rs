@@ -156,7 +156,7 @@ impl CoordinatorView {
                         .max_w(px(ferrite_ui::theme::SETTINGS_MENU_MAX_W))
                         .child({
                             let picks = std::rc::Rc::new(coordinator_picks(inputs, which));
-                            super::direction::picker_button(
+                            ferrite_factory::picker::picker_button(
                                 selector,
                                 text,
                                 false,

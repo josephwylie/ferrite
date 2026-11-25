@@ -3,7 +3,8 @@
 //! current one is, the evidence kept apart by kind (an older revision's
 //! said as such), and why a completed Task's worktree stayed.
 
-use super::direction::{meta, section};
+use super::direction::section;
+use ferrite_factory::direct::meta;
 use super::*;
 use ferrite_core::factory_board::{self, EvidenceKind, Status, Task};
 

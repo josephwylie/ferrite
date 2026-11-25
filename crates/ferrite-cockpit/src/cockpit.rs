@@ -23,7 +23,7 @@ mod delegates;
 mod delivery;
 mod destination;
 mod details;
-mod direct_view;
+mod direct;
 pub(crate) mod direction;
 mod draft_commands;
 mod draft_environment;

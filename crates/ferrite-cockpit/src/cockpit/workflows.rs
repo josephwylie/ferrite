@@ -113,7 +113,7 @@ pub(crate) enum Pick {
     /// The New task sheet's process: one-off, or a Workflow.
     Process(Option<WorkflowId>),
     /// A choice on a Task's Rework or Direct this task sheet (#222).
-    Task(super::direction::TaskPick),
+    Task(ferrite_factory::direct::TaskPick),
     /// Who approves the shown Workflow's results.
     Approver(Approver),
     /// The Step that decides agent approval.

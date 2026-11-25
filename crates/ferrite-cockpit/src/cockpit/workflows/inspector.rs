@@ -452,7 +452,7 @@ impl WorkflowsView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use super::direction::{picker_button, segmented};
+        use ferrite_factory::picker::{picker_button, segmented};
         use ferrite_ui::theme::*;
         let chooser = |selector: &'static str,
                        text: String,
