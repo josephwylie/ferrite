@@ -197,7 +197,7 @@ fn the_footer_opens_the_prs_from_an_empty_board(cx: &mut TestAppContext) {
     lands(cx, "prs-row-7");
     assert!(shows(cx, "prs-row-3"), "its rows");
     world.view.read_with(cx, |view, cx| {
-        assert_eq!(view.prs.read(cx).project, Some(world.project))
+        assert_eq!(view.prs.read(cx).project(), Some(world.project))
     });
 }
 
@@ -211,48 +211,8 @@ fn the_footer_opens_the_prs_from_a_thread_without_one(cx: &mut TestAppContext) {
     assert!(shows(cx, "prs-board"), "opened without a PR on the branch");
     lands(cx, "prs-row-3");
     world.view.read_with(cx, |view, cx| {
-        assert_ne!(view.prs.read(cx).project, Some(world.project))
+        assert_ne!(view.prs.read(cx).project(), Some(world.project))
     });
-}
-
-/// A PR is chosen from the list by its number, whatever the checkout is on,
-/// and shows as its tab does: Markdown for the prose, the thread's code
-/// context, its resolved mark, its reply, its failed check, and a way past
-/// the cap.
-#[gpui::test]
-fn a_listed_pr_shows_whole_with_its_review_threads(cx: &mut TestAppContext) {
-    let (_world, cx) = world("prs-detail", 0, two_rows(), false, cx);
-    click(cx, "nav-pull-requests");
-    lands(cx, "prs-row-7");
-    click(cx, "prs-row-7");
-    assert!(shows(cx, "prs-detail"));
-    lands(cx, "pr-body");
-    let title = debug_bounds(cx, "pr-title".into()).unwrap();
-    let tabs = debug_bounds(cx, "pr-views".into()).unwrap();
-    assert!(
-        title.bottom() <= tabs.top(),
-        "PR identity stays above the views"
-    );
-    assert!(
-        shows(cx, "pr-tab-Code"),
-        "published Code is available without a checkout branch"
-    );
-    assert!(!shows(cx, "pr-primary"), "no actions: they are a Thread's");
-
-    click(cx, "pr-tab-Timeline");
-    lands(cx, "pr-snippet-0");
-    assert!(
-        shows(cx, "pr-title"),
-        "PR identity remains visible on Timeline"
-    );
-    assert!(shows(cx, "pr-snippet-0"), "the thread's code context");
-    assert!(shows(cx, "pr-resolved-0"), "resolved");
-    assert!(!shows(cx, "pr-resolved-1"));
-    assert!(shows(cx, "pr-reply-0-0"), "its nested reply");
-    assert!(
-        shows(cx, "pr-more-comments"),
-        "the cap, with the way past it"
-    );
 }
 
 #[gpui::test]
@@ -311,112 +271,6 @@ fn a_project_pr_opened_on_code_reads_its_diff(cx: &mut TestAppContext) {
     click(cx, "prs-row-3");
     until(cx, |cx| read(3, cx) == Some(0));
     assert_eq!(read(7, cx), Some(1), "the PR left keeps what it read");
-}
-
-/// A review shows its verdict whether or not it has words, and a failed
-/// check opens its run.
-#[gpui::test]
-fn a_pr_shows_each_review_verdict_and_its_failed_checks_run(cx: &mut TestAppContext) {
-    let (_world, cx) = world("prs-verdicts", 0, two_rows(), false, cx);
-    click(cx, "nav-pull-requests");
-    lands(cx, "prs-row-7");
-    click(cx, "prs-row-7");
-    lands(cx, "pr-body");
-
-    click(cx, "pr-tab-Timeline");
-    lands(cx, "pr-verdict-2");
-    assert!(
-        shows(cx, "pr-comment-2"),
-        "the approval stands with no body"
-    );
-    assert!(
-        shows(cx, "pr-verdict-3"),
-        "changes requested, with its words"
-    );
-    assert!(!shows(cx, "pr-verdict-0"), "a finding has no verdict");
-
-    click(cx, "pr-tab-Summary");
-    lands(cx, "pr-check-0");
-    assert_eq!(cx.opened_url(), None);
-    click(cx, "pr-check-0");
-    assert_eq!(cx.opened_url().as_deref(), Some("https://ci.example/run/9"));
-}
-
-/// Leaving a PR's detail returns to the list as it was: its filter, its
-/// marked row, and where it was scrolled.
-#[gpui::test]
-fn back_from_a_pr_returns_to_the_list_as_it_was_left(cx: &mut TestAppContext) {
-    let rows: Vec<WirePrRow> = (1..=40)
-        .map(|n| row(n + 100, &format!("Change {n}"), WirePrState::Open))
-        .chain([row(7, "Keep rows tall", WirePrState::Open)])
-        .collect();
-    let (world, cx) = world("prs-retained", 0, rows, false, cx);
-    click(cx, "nav-pull-requests");
-    lands(cx, "prs-rows");
-    click(cx, "prs-filter-All");
-    lands(cx, "prs-rows");
-    world.view.update(cx, |view, cx| {
-        view.prs
-            .read(cx)
-            .scroll
-            .set_offset(gpui::point(px(0.), px(-300.)));
-        cx.notify();
-    });
-    tick(cx);
-    let at = world
-        .view
-        .read_with(cx, |view, cx| view.prs.read(cx).scroll.offset());
-    assert!(at.y < px(0.), "scrolled");
-    world.view.update(cx, |view, cx| {
-        view.prs.update(cx, |prs, cx| prs.open_detail(7, cx))
-    });
-    tick(cx);
-    assert!(shows(cx, "prs-detail") && !shows(cx, "prs-rows"));
-    click(cx, "prs-back");
-    assert!(shows(cx, "prs-rows"), "the list again");
-    world.view.read_with(cx, |view, cx| {
-        let prs = view.prs.read(cx);
-        assert_eq!(prs.filter, WirePrFilter::All, "its filter");
-        assert_eq!(prs.selected, Some(7), "its marked row");
-        assert_eq!(prs.scroll.offset(), at, "its scroll");
-    });
-}
-
-/// A list the cap held back says so, with the way to the rest.
-#[gpui::test]
-fn a_capped_list_says_so(cx: &mut TestAppContext) {
-    let (_world, cx) = world("prs-capped", 0, two_rows(), true, cx);
-    click(cx, "nav-pull-requests");
-    lands(cx, "prs-more");
-}
-
-/// A list that cannot be read says why and offers Retry, which reads again.
-#[gpui::test]
-fn a_failed_list_offers_retry(cx: &mut TestAppContext) {
-    let (world, cx) = world("prs-failed", 0, two_rows(), false, cx);
-    world.view.update(cx, |view, cx| {
-        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_pr_list(
-            world.path.clone(),
-            WirePrFilter::Open,
-            ReviewPullRequests {
-                list: Err("Rate limit reached".into()),
-                unread: Some(WirePrUnread::RateLimited),
-            },
-        ))
-    });
-    click(cx, "nav-pull-requests");
-    lands(cx, "prs-failed");
-    assert!(!shows(cx, "prs-row-7"));
-    world.view.update(cx, |view, cx| {
-        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_pr_list(
-            world.path.clone(),
-            WirePrFilter::Open,
-            list_of(two_rows(), false),
-        ))
-    });
-    click(cx, "prs-retry");
-    lands(cx, "prs-row-7");
-    assert!(!shows(cx, "prs-failed"));
 }
 
 fn set_list(world: &World, list: ReviewPullRequests, cx: &mut gpui::VisualTestContext) {
@@ -515,63 +369,6 @@ fn a_pr_opened_again_is_read_again_and_follows_the_forge(cx: &mut TestAppContext
     );
     assert!(shows(cx, "pr-body"));
     assert!(shows(cx, "pr-pill"));
-}
-
-/// A merged PR says it is merged and does not offer to merge; an open one
-/// says whether it can. Its state shows in the destination as in a tab.
-#[gpui::test]
-fn a_merged_pr_shows_its_state_and_no_merge_line(cx: &mut TestAppContext) {
-    let (world, cx) = world("prs-merged", 0, two_rows(), false, cx);
-    let mut merged = full_pr();
-    merged.state = WirePrState::Merged;
-    world.view.update(cx, |view, cx| {
-        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_forge_numbered(
-            world.path.clone(),
-            7,
-            ReviewPullRequest {
-                noun: "PR".into(),
-                pr: Ok(merged),
-                unread: None,
-            },
-        ))
-    });
-    click(cx, "nav-pull-requests");
-    lands(cx, "prs-row-7");
-    click(cx, "prs-row-7");
-    lands(cx, "pr-body");
-    assert!(shows(cx, "pr-pill"), "its state");
-    assert!(!shows(cx, "pr-merge"), "merged: nothing to merge");
-}
-
-/// The list and the detail answer the keyboard alone: ↑ ↓ mark a row, ⏎
-/// opens it, esc goes back to the list, then closes the view.
-#[gpui::test]
-fn the_prs_view_is_walked_by_keys(cx: &mut TestAppContext) {
-    let (world, cx) = world("prs-keys", 0, two_rows(), false, cx);
-    click(cx, "nav-pull-requests");
-    lands(cx, "prs-row-3");
-    let marked = |cx: &mut gpui::VisualTestContext| {
-        world.view.read_with(cx, |view, cx| view.prs.read(cx).selected)
-    };
-    cx.simulate_keystrokes("down");
-    assert_eq!(marked(cx), Some(7), "the first row");
-    cx.simulate_keystrokes("down");
-    assert_eq!(marked(cx), Some(3));
-    cx.simulate_keystrokes("down");
-    assert_eq!(marked(cx), Some(3), "held at the last");
-    cx.simulate_keystrokes("up");
-    assert_eq!(marked(cx), Some(7));
-    cx.simulate_keystrokes("enter");
-    tick(cx);
-    assert!(shows(cx, "prs-detail"));
-    lands(cx, "pr-body");
-    cx.simulate_keystrokes("escape");
-    tick(cx);
-    assert!(shows(cx, "prs-rows"), "esc goes back to the list");
-    assert_eq!(marked(cx), Some(7), "on the row it left");
-    cx.simulate_keystrokes("escape");
-    tick(cx);
-    assert!(!shows(cx, "prs-board"), "esc again closes the view");
 }
 
 /// On a Thread whose branch has a PR the footer keeps opening that PR in
@@ -679,14 +476,17 @@ fn a_foreign_pr_with_the_same_number_keeps_its_repository(cx: &mut TestAppContex
     });
 }
 
-/// Another Project chosen in the scope bar reads its own list, and the row
-/// marked on the last one is let go: ⏎ opens nothing until a row is marked.
+/// The scope offers the window's Projects: one chosen reads its own
+/// list from its repository.
 #[gpui::test]
-fn choosing_another_project_reads_its_list_and_lets_the_mark_go(cx: &mut TestAppContext) {
+fn the_scope_offers_the_windows_projects_and_reads_the_one_chosen(cx: &mut TestAppContext) {
     let (world, cx) = world("prs-scope", 1, two_rows(), false, cx);
+    world.view.update(cx, |view, cx| {
+        view.cockpit
+            .update(cx, |cockpit, _| cockpit.fixture_pr_list(world.path.clone(), WirePrFilter::Open, list_of(vec![row(9, "Its own", WirePrState::Open)], false)))
+    });
     click(cx, "nav-pull-requests");
     lands(cx, "prs-row-3");
-    cx.simulate_keystrokes("down");
     click(
         cx,
         &format!(
@@ -695,31 +495,8 @@ fn choosing_another_project_reads_its_list_and_lets_the_mark_go(cx: &mut TestApp
             world.project.project().get()
         ),
     );
-    lands(cx, "prs-row-7");
-    cx.simulate_keystrokes("enter");
-    tick(cx);
-    assert!(!shows(cx, "prs-detail"), "no row marked on the new list");
-    cx.simulate_keystrokes("down");
-    cx.simulate_keystrokes("enter");
-    tick(cx);
-    assert!(shows(cx, "prs-detail"), "a row marked again opens");
-}
-
-/// A state filter reads that state's list, and an empty one says so.
-#[gpui::test]
-fn a_filter_reads_its_own_list(cx: &mut TestAppContext) {
-    let (world, cx) = world("prs-filter-empty", 0, two_rows(), false, cx);
-    world.view.update(cx, |view, cx| {
-        view.cockpit
-            .update(cx, |cockpit, _| cockpit.fixture_pr_list(world.path.clone(), WirePrFilter::Closed, list_of(Vec::new(), false)))
-    });
-    click(cx, "nav-pull-requests");
-    lands(cx, "prs-row-7");
-    click(cx, "prs-filter-Closed");
-    lands(cx, "prs-empty");
-    assert!(!shows(cx, "prs-row-7"));
-    click(cx, "prs-filter-Open");
-    lands(cx, "prs-row-7");
+    lands(cx, "prs-row-9");
+    assert!(!shows(cx, "prs-row-3"), "the chosen Project's list, not the last one's");
 }
 
 /// With no Project, the view says so and offers to add one.

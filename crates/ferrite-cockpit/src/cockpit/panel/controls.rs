@@ -37,7 +37,7 @@ use gpui::prelude::*;
 use gpui::{App, FocusHandle, SharedString, Window};
 
 use super::*;
-use crate::cockpit::surfaces::PrTab;
+use ferrite_prs::PrTab;
 pub(crate) use ferrite_ui::stop::{focusable, icon_stop, Semantics};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

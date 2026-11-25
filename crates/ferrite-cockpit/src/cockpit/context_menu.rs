@@ -132,7 +132,7 @@ pub(super) enum MenuVerb {
     FilterProject(Option<ProjectKey>),
     OpenFactory(ProjectKey),
     /// A pull request Surface's row.
-    Pr(panel::PrAction),
+    Pr(ferrite_prs::pull_request::PrAction),
     /// A PR link's rows (`MenuTarget::PrLink`): open it by a door, copy
     /// its forge address, or watch it for changes (`true`) or stop.
     PrOpen(Open),

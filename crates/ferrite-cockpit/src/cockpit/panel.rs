@@ -36,19 +36,18 @@ mod persistence;
 pub(crate) mod hunks;
 pub(crate) mod preview;
 pub(in crate::cockpit) mod pr_action;
-pub(in crate::cockpit) mod pr_read;
 pub(in crate::cockpit) mod pull_request;
 mod sections;
 mod strip;
 pub(in crate::cockpit) mod controls;
 
-use super::surfaces::{Close, CloseSelection, PrTab, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
+use ferrite_prs::PrTab;
+use super::surfaces::{Close, CloseSelection, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
 use ferrite_core::Rehold;
 use ferrite_ui::icons::{self, icon};
 use super::*;
 
 pub(crate) use controls::{PanelControl, PanelFocus, Semantics};
-pub(crate) use pull_request::PrAction;
 pub(crate) use strip::Opener;
 #[cfg(test)]
 pub(crate) use ferrite_ui::tab_scroll::tab_scroll_step;

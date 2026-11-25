@@ -36,7 +36,7 @@ impl CockpitView {
         } else if self.prs_shown() {
             let prs = self.prs.read(cx);
             let project = prs
-                .project
+                .project()
                 .and_then(|project| self.cockpit.read(cx).project(project))
                 .map(|project| SharedString::from(project.title.clone()));
             parts.extend(prs.head(project));

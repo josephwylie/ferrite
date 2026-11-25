@@ -434,7 +434,7 @@ pub struct CockpitView {
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
     /// Every Thread's side chat, a body of the Panel.
-    side_chat: Entity<side_chat_view::SideChatView>,
+    side_chat: Entity<ferrite_prs::side_chat::SideChatView>,
     /// Drafts sent while a Session was starting, kept whole until it takes
     /// the prompt or hands it back.
     held_sends: sends::HeldSends,
@@ -452,7 +452,7 @@ pub struct CockpitView {
     /// Every diff read: a Thread's Changes and each pull request's Code.
     changes: Entity<ferrite_tools::changes::ChangesView>,
     /// The pull request reader: the Panel's PR Surface and the PRs' detail.
-    pull_request: Entity<panel::pull_request::PullRequestView>,
+    pull_request: Entity<ferrite_prs::pull_request::PullRequestView>,
     /// The Inbox's alerts and the toast float that shows them.
     pub(crate) toasts: Entity<ferrite_nav::toasts::ToastsView>,
     native_copy: Option<String>,
@@ -615,7 +615,7 @@ pub struct CockpitView {
     /// What stands in the board's place: the Factory or the PRs.
     destination: Option<destination::Destination>,
     /// The PRs destination, kept as it was left while another view shows.
-    prs: Entity<prs_view::PrsView>,
+    prs: Entity<ferrite_prs::prs::PrsView>,
     /// The Tasks whose needs-you toast stands, and the state it announced.
     task_toasts: std::collections::HashMap<(MachineId, String), ferrite_core::factory_board::Status>,
     /// The empty board: its selected row and the list's own focus.
@@ -7080,7 +7080,7 @@ impl CockpitView {
         } else if let Some(focus) = self.factory_focus(window, cx) {
             focus
         } else if !self.rename.is_open() && self.prs_shown() {
-            self.prs.read(cx).focus.clone()
+            self.prs.read(cx).focus().clone()
         } else if !self.rename.is_open() && self.empty_board_shown(cx) {
             self.empty_board.read(cx).focus().clone()
         } else {

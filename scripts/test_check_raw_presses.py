@@ -9,7 +9,7 @@ from check_raw_presses import main
 
 ROOT = Path(__file__).resolve().parents[1]
 FEATURE_CRATES = ["ferrite", "ferrite-cockpit", "ferrite-frame", "ferrite-pane", "ferrite-review", "ferrite-factory",
-                  "ferrite-tools", "ferrite-nav", "ferrite-settings", "ferrite-terminal"]
+                  "ferrite-tools", "ferrite-nav", "ferrite-settings", "ferrite-prs", "ferrite-terminal"]
 
 
 def press(file: str, line: int, column: int = 10) -> str:
