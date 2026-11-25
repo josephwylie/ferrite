@@ -47,7 +47,8 @@ impl CockpitView {
         }
     }
 
-    fn copy_landed(&mut self, landed: Landed, cx: &mut Context<Self>) {
+    /// Do what a copy that moved asks of the window.
+    pub(super) fn copy_landed(&mut self, landed: Landed, cx: &mut Context<Self>) {
         match landed {
             Landed::Sent(key) => self.place_copy(&key, cx),
             Landed::Ended(key) => self.tell_copy(&key, cx),

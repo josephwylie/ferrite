@@ -338,13 +338,7 @@ impl Entry {
     /// window not having heard it yet, counts. False when it was not
     /// running.
     pub(super) fn machine_went(&mut self, why: String, now: Instant) -> bool {
-        let mut ended = false;
-        if let Some(run) = self.run.take() {
-            run.cancel.cancel();
-            for heard in run.hear.try_iter() {
-                ended |= self.hear(heard, now, false).is_some();
-            }
-        }
+        let ended = self.stop(now, false).is_some();
         let again = match &self.phase {
             Phase::Finishing { .. } => return self.unadded(why, true),
             Phase::Copying { .. } => Again::Resume,
@@ -358,6 +352,32 @@ impl Entry {
             when_back: true,
         };
         true
+    }
+
+    /// The operator stops the copy while it runs: what it sent stays, for
+    /// its Resume. One that ended before its thread heard the stop ends as
+    /// it did, and what the window does about that comes back.
+    pub(super) fn cancel(&mut self, now: Instant) -> Option<Landed> {
+        let ended = self.stop(now, true);
+        if ended.is_none() {
+            self.phase = Phase::Cancelled {
+                resumable: self.order.resumes || matches!(self.phase, Phase::Copying { .. }),
+            };
+        }
+        ended
+    }
+
+    /// Stop the copy's thread, first hearing what it said that the window
+    /// has not, the Machine `attached` or not: how that ended the copy,
+    /// when it did.
+    fn stop(&mut self, now: Instant, attached: bool) -> Option<Landed> {
+        let run = self.run.take()?;
+        run.cancel.cancel();
+        let mut ended = None;
+        for heard in run.hear.try_iter() {
+            ended = self.hear(heard, now, attached).or(ended);
+        }
+        ended
     }
 
     /// Adding the copy on its Machine failed, for `reason`: its files are
@@ -596,19 +616,14 @@ impl Copies {
         None
     }
 
-    /// Stop the copy of `key`; what it sent stays, for its Resume.
-    pub(crate) fn cancel(&mut self, key: &CopyKey, cx: &mut Context<Self>) {
-        let Some(entry) = self.get_mut(key) else {
-            return;
-        };
-        let Some(run) = entry.run.take() else {
-            return;
-        };
-        run.cancel.cancel();
-        entry.phase = Phase::Cancelled {
-            resumable: entry.order.resumes || matches!(entry.phase, Phase::Copying { .. }),
-        };
+    /// Stop the copy of `key` (`Entry::cancel`): what the window does about
+    /// one that ended first comes back.
+    pub(crate) fn cancel(&mut self, key: &CopyKey, cx: &mut Context<Self>) -> Option<Landed> {
+        let now = cx.background_executor().now();
+        let entry = self.get_mut(key).filter(|entry| entry.run.is_some())?;
+        let ended = entry.cancel(now);
         cx.notify();
+        ended
     }
 
     /// Each copy running to one of `gone`, Machines turned off or removed

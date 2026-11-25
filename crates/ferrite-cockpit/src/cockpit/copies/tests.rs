@@ -241,21 +241,21 @@ fn a_machine_that_goes_stops_its_copy_for_a_resume_that_only_adds_what_landed() 
     assert!(matches!(copy.phase, Phase::Failed { again: Again::Add { .. }, when_back: false, .. }));
 }
 
-#[test]
-fn what_a_copy_said_before_its_machine_went_counts() {
-    let now = Instant::now();
-    let run = |said: Vec<Heard>| {
-        let (heard, hear) = ferrite_core::doorbell::channel();
-        for said in said {
-            let _ = heard.send(said);
-        }
-        Run {
-            hear,
-            cancel: Cancellation::default(),
-        }
-    };
-    // All of it landed, and the window had not heard so yet.
-    let landed = Heard::Copied {
+/// A copy's thread that said `said`, none of it heard yet.
+fn run(said: Vec<Heard>) -> Run {
+    let (heard, hear) = ferrite_core::doorbell::channel();
+    for said in said {
+        let _ = heard.send(said);
+    }
+    Run {
+        hear,
+        cancel: Cancellation::default(),
+    }
+}
+
+/// All of the copy landed: 10 bytes.
+fn landed() -> Heard {
+    Heard::Copied {
         copied: Ok(Copied::Sent {
             sent: Sent {
                 bytes: 10,
@@ -264,8 +264,14 @@ fn what_a_copy_said_before_its_machine_went_counts() {
             changed: Vec::new(),
         }),
         unfinished: Vec::new(),
-    };
-    let mut copy = Entry::new(order(false), Some(run(vec![sending(10, 10, "a"), landed])), now);
+    }
+}
+
+#[test]
+fn what_a_copy_said_before_its_machine_went_counts() {
+    let now = Instant::now();
+    // All of it landed, and the window had not heard so yet.
+    let mut copy = Entry::new(order(false), Some(run(vec![sending(10, 10, "a"), landed()])), now);
     copy.hear(sending(5, 10, "a"), now, true);
     assert!(copy.machine_went("box was turned off.".into(), now));
     assert!(
@@ -285,4 +291,20 @@ fn what_a_copy_said_before_its_machine_went_counts() {
         &copy.phase,
         Phase::Failed { reason, again: Again::Resume, when_back: true } if reason == "box was turned off."
     ));
+}
+
+#[test]
+fn a_copy_that_landed_before_its_cancel_was_heard_is_added() {
+    let now = Instant::now();
+    let mut copy = Entry::new(order(false), Some(run(vec![sending(5, 10, "a")])), now);
+    assert_eq!(copy.cancel(now), None);
+    assert!(
+        matches!(copy.phase, Phase::Cancelled { resumable: true }),
+        "it had sent: what it sent stays for its Resume"
+    );
+
+    let mut copy = Entry::new(order(false), Some(run(vec![sending(10, 10, "a"), landed()])), now);
+    let key = copy.key();
+    assert_eq!(copy.cancel(now), Some(Landed::Sent(key)), "the window adds it");
+    assert!(matches!(copy.phase, Phase::Finishing { bytes: 10, .. }));
 }

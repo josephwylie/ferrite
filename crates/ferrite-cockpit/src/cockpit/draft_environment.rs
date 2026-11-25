@@ -406,6 +406,7 @@ impl CockpitView {
                 }
             }
             PlacementEvent::Add => self.copy_again(&key, cx),
+            PlacementEvent::Landed(landed) => self.copy_landed(landed.clone(), cx),
         }
     }
 

@@ -9,7 +9,7 @@
 //! stopped part way is unfinished (`placement::unfinished`): the sheet
 //! opens on it, and only its Resume goes there.
 
-use super::copies::{self, Again, Copies, CopyKey, Order, Phase};
+use super::copies::{self, Again, Copies, CopyKey, Landed, Order, Phase};
 use super::draft_environment::Band;
 use super::folder_browser::{FolderBrowser, Moved};
 use super::*;
@@ -66,6 +66,9 @@ pub(crate) enum PlacementEvent {
     Use,
     /// Add the copy whose files all landed and only adding it failed.
     Add,
+    /// The copy ended before it heard the operator stop it: do what that
+    /// asks.
+    Landed(Landed),
 }
 
 impl EventEmitter<PlacementEvent> for PlacementView {}
@@ -471,7 +474,9 @@ impl PlacementView {
     /// Stop the copy under way; what it sent stays, for its Resume.
     fn stop(&mut self, cx: &mut Context<Self>) {
         let key = self.key();
-        self.copies.update(cx, |copies, cx| copies.cancel(&key, cx));
+        if let Some(landed) = self.copies.update(cx, |copies, cx| copies.cancel(&key, cx)) {
+            cx.emit(PlacementEvent::Landed(landed));
+        }
         // The copy may have made its folder by now.
         self.dest.update(cx, |dest, cx| dest.relist(cx));
     }
