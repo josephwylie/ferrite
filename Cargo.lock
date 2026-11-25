@@ -2356,6 +2356,7 @@ dependencies = [
  "ferrite-client",
  "ferrite-core",
  "ferrite-engine",
+ "ferrite-factory",
  "ferrite-focus-notify",
  "ferrite-frame",
  "ferrite-pane",
@@ -2423,6 +2424,16 @@ dependencies = [
  "serde_json",
  "ureq",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ferrite-factory"
+version = "0.4.0"
+dependencies = [
+ "ferrite-core",
+ "ferrite-pane",
+ "ferrite-ui",
+ "gpui-kit",
 ]
 
 [[package]]

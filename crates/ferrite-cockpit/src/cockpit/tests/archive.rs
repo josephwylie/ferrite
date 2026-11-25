@@ -2,6 +2,9 @@
 //! the board for the Archive, Clear asks for it at once, the Archive is
 //! searched and an archived Task opens read-only with its activity and
 //! Worker history; an unreadable Factory store is said on the board.
+//! The Archive's list on its own (its rows, its search and what it emits)
+//! is `ferrite-factory`'s to test, and what a search matches is core's
+//! (`Task::matches`); these are the window's journeys through it.
 #[allow(unused_imports)]
 use super::*;
 use ferrite_core::factory_board::{Board, Status, Task};
@@ -133,12 +136,6 @@ fn the_archive_is_searched_and_opens_a_task_read_only(cx: &mut TestAppContext) {
         shows(cx, "factory-archive-t-1"),
         "found by its instructions"
     );
-    view.update(cx, |view, cx| view.set_archive_search("deploy", cx));
-    tick(cx);
-    assert!(!shows(cx, "factory-archive-t-1"));
-    assert!(shows(cx, "factory-archive-empty"));
-    view.update(cx, |view, cx| view.set_archive_search("FLAKY LOGIN", cx));
-    tick(cx);
 
     click(cx, "factory-archive-t-1");
     assert!(shows(cx, "task-panel"));

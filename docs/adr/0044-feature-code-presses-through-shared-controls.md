@@ -18,11 +18,11 @@ in a document did not stop them, so the build enforces the rule.
 ## Decision
 
 - **The rule.** Each feature crate (`ferrite`, `ferrite-cockpit`,
-  `ferrite-frame`, `ferrite-pane`, `ferrite-review`, `ferrite-terminal`)
-  carries the same `clippy.toml`. Its `disallowed-methods` lists GPUI's
-  press methods, so clippy flags each raw press and names this ADR.
-  `ferrite-ui` has no such file: it is where presses are built. A test
-  keeps the six files identical.
+  `ferrite-frame`, `ferrite-pane`, `ferrite-review`, `ferrite-factory`,
+  `ferrite-terminal`) carries the same `clippy.toml`. Its
+  `disallowed-methods` lists GPUI's press methods, so clippy flags each
+  raw press and names this ADR. `ferrite-ui` has no such file: it is where
+  presses are built. A test keeps the seven files identical.
 - **What is on the list.** The lint sees which method is called, not
   why. So the list is every method that puts a press handler on the
   element itself: `on_click`, `on_aux_click`, `on_mouse_down`,

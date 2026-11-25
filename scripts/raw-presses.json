@@ -1,6 +1,6 @@
 {
   "crates/ferrite-cockpit/src/cockpit.rs": 8,
-  "crates/ferrite-cockpit/src/cockpit/archive.rs": 3,
+  "crates/ferrite-cockpit/src/cockpit/archive.rs": 2,
   "crates/ferrite-cockpit/src/cockpit/background_dialog_view.rs": 2,
   "crates/ferrite-cockpit/src/cockpit/background_work.rs": 2,
   "crates/ferrite-cockpit/src/cockpit/beside.rs": 1,
@@ -50,6 +50,7 @@
   "crates/ferrite-cockpit/src/notifications.rs": 2,
   "crates/ferrite-cockpit/src/palette.rs": 3,
   "crates/ferrite-cockpit/src/shortcuts.rs": 1,
+  "crates/ferrite-factory/src/archive.rs": 1,
   "crates/ferrite-frame/src/settings.rs": 2,
   "crates/ferrite-frame/src/settings/connections.rs": 4,
   "crates/ferrite-frame/src/titlebar.rs": 3,
