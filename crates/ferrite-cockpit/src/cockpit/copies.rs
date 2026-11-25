@@ -334,17 +334,24 @@ impl Entry {
 
     /// The copy stops at once because its Machine went, `why` in the
     /// operator's words: what it sent stays for its Resume, and one whose
-    /// files all landed is just added. False when it was not running.
-    pub(super) fn machine_went(&mut self, why: String) -> bool {
+    /// files all landed is just added. What its thread said before, the
+    /// window not having heard it yet, counts. False when it was not
+    /// running.
+    pub(super) fn machine_went(&mut self, why: String, now: Instant) -> bool {
+        let mut ended = false;
+        if let Some(run) = self.run.take() {
+            run.cancel.cancel();
+            for heard in run.hear.try_iter() {
+                ended |= self.hear(heard, now, false).is_some();
+            }
+        }
         let again = match &self.phase {
             Phase::Finishing { .. } => return self.unadded(why, true),
             Phase::Copying { .. } => Again::Resume,
             Phase::Listing { .. } => again_for(self.order.resumes),
-            _ => return false,
+            Phase::Failed { again, .. } if ended => again.clone(),
+            _ => return ended,
         };
-        if let Some(run) = self.run.take() {
-            run.cancel.cancel();
-        }
         self.phase = Phase::Failed {
             reason: why.into(),
             again,
@@ -613,6 +620,7 @@ impl Copies {
         removed: impl Fn(&MachineKey) -> bool,
         cx: &mut Context<Self>,
     ) -> Vec<CopyKey> {
+        let now = cx.background_executor().now();
         let mut stopped = Vec::new();
         for (key, entry) in &mut self.entries {
             if !gone.contains(&entry.order.placing.machine) {
@@ -623,7 +631,7 @@ impl Copies {
                 true => format!("{name} was removed."),
                 false => turned_off(name),
             };
-            if entry.machine_went(why) {
+            if entry.machine_went(why, now) {
                 stopped.push(key.clone());
             }
         }

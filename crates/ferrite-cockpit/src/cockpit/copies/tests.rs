@@ -210,12 +210,12 @@ fn a_machine_that_goes_stops_its_copy_for_a_resume_that_only_adds_what_landed() 
     let now = Instant::now();
     let mut copy = Entry::new(order(false), None, now);
     copy.hear(sending(5, 10, "a"), now, true);
-    assert!(copy.machine_went("box was turned off.".into()));
+    assert!(copy.machine_went("box was turned off.".into(), now));
     assert!(matches!(
         &copy.phase,
         Phase::Failed { reason, again: Again::Resume, when_back: true } if reason == "box was turned off."
     ));
-    assert!(!copy.machine_went("box was removed.".into()), "it stopped already");
+    assert!(!copy.machine_went("box was removed.".into(), now), "it stopped already");
 
     let mut copy = Entry::new(order(false), None, now);
     let heard = Heard::Copied {
@@ -229,7 +229,7 @@ fn a_machine_that_goes_stops_its_copy_for_a_resume_that_only_adds_what_landed() 
         unfinished: Vec::new(),
     };
     copy.hear(heard, now, true);
-    assert!(copy.machine_went("box was turned off.".into()));
+    assert!(copy.machine_went("box was turned off.".into(), now));
     let Phase::Failed { again: Again::Add { bytes, skipped }, .. } = &copy.phase else {
         panic!("all of it landed: its Resume only adds it");
     };
@@ -239,4 +239,50 @@ fn a_machine_that_goes_stops_its_copy_for_a_resume_that_only_adds_what_landed() 
     assert!(matches!(copy.phase, Phase::Finishing { bytes: 10, used: false, .. }));
     assert!(copy.unadded("Copied, but not added on box: no space.".into(), false));
     assert!(matches!(copy.phase, Phase::Failed { again: Again::Add { .. }, when_back: false, .. }));
+}
+
+#[test]
+fn what_a_copy_said_before_its_machine_went_counts() {
+    let now = Instant::now();
+    let run = |said: Vec<Heard>| {
+        let (heard, hear) = ferrite_core::doorbell::channel();
+        for said in said {
+            let _ = heard.send(said);
+        }
+        Run {
+            hear,
+            cancel: Cancellation::default(),
+        }
+    };
+    // All of it landed, and the window had not heard so yet.
+    let landed = Heard::Copied {
+        copied: Ok(Copied::Sent {
+            sent: Sent {
+                bytes: 10,
+                ..Sent::default()
+            },
+            changed: Vec::new(),
+        }),
+        unfinished: Vec::new(),
+    };
+    let mut copy = Entry::new(order(false), Some(run(vec![sending(10, 10, "a"), landed])), now);
+    copy.hear(sending(5, 10, "a"), now, true);
+    assert!(copy.machine_went("box was turned off.".into(), now));
+    assert!(
+        matches!(
+            &copy.phase,
+            Phase::Failed { reason, again: Again::Add { bytes: 10, .. }, when_back: true }
+                if reason == "box was turned off."
+        ),
+        "its Resume only adds it"
+    );
+
+    // It stopped on its own just before: the Machine going is why.
+    let ended = stopped(io::ErrorKind::BrokenPipe.into());
+    let mut copy = Entry::new(order(false), Some(run(vec![sending(5, 10, "a"), ended])), now);
+    assert!(copy.machine_went("box was turned off.".into(), now), "it is told");
+    assert!(matches!(
+        &copy.phase,
+        Phase::Failed { reason, again: Again::Resume, when_back: true } if reason == "box was turned off."
+    ));
 }
