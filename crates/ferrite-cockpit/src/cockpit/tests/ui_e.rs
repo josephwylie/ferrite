@@ -75,13 +75,13 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
         !shown.intersects(&toast),
         "{toast:?} covers the panel {shown:?}"
     );
-    assert_eq!(
-        cx.update(|_, cx| gpui::component::Theme::global(cx)
-            .notification
-            .margins
-            .right),
-        px(right),
-        "the kit's toasts keep to the same column"
+    // The kit's toasts are not this float: they stand on the Composer's
+    // right edge (`toast_home`, ADR 0048 §2).
+    let composer = cx.debug_bounds("composer-block").expect("the Composer");
+    let kit_right = cx.update(|_, cx| gpui::component::Theme::global(cx).notification.margins.right);
+    assert!(
+        (window.width - kit_right - composer.right()).abs() <= px(1.),
+        "the kit's toasts stand on the Composer's right edge: margin {kit_right:?}, Composer {composer:?}"
     );
 }
 
