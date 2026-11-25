@@ -147,7 +147,7 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
             .step("s-4")
             .unwrap()
             .clone();
-        view.drop_step(&StepDrag::of(&reviewer), 0, cx);
+        view.drop_step(&StepDrag::new(reviewer.id.clone(), reviewer.name.clone().into()), 0, cx);
     });
     tick(cx);
     assert_eq!(
@@ -474,7 +474,7 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
     click(cx, "inspector-instructions");
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.factory().unwrap().read(cx).editor.read(cx).focused,
+            view.factory().unwrap().read(cx).editor.read(cx).focused().cloned(),
             Some(instructions.clone())
         );
     });

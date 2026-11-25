@@ -1,16 +1,63 @@
-//! The Factory's pickers and choices: a chooser whose rows open in the
-//! window's menu, two or more choices side by side, and where a picker's
-//! trigger was last drawn, so the window's menu hangs under it rather than
-//! over it. A view draws the probe inside its trigger and says the
-//! `Trigger` with what it asks; the window reads its bounds as it opens
-//! the menu.
+//! The Factory's pickers and choices: what a picker's row does (`Pick`),
+//! a chooser whose rows open in the window's menu, two or more choices
+//! side by side, and where a picker's trigger was last drawn, so the
+//! window's menu hangs under it rather than over it. A view draws the
+//! probe inside its trigger and says the `Trigger` with what it asks; the
+//! window reads its bounds as it opens the menu.
 
 use std::cell::Cell;
 use std::rc::Rc;
 
+use ferrite_core::factory_board::{Approver, Destination, RouteKind, StepId, Template, WorkflowId};
+use ferrite_core::provider::Provider;
 use gpui::component::button::Button;
 use gpui::prelude::*;
 use gpui::{Bounds, ClickEvent, Context, Div, Pixels, Point};
+
+/// What a Factory picker's row does.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pick {
+    Select(WorkflowId),
+    Create(Template),
+    Route {
+        step: StepId,
+        kind: RouteKind,
+        to: Destination,
+    },
+    Provider(StepId, Provider),
+    /// Empty: the Provider's default.
+    Model(StepId, String),
+    Effort(StepId, String),
+    MoveUp(StepId),
+    MoveDown(StepId),
+    AddAfter(StepId),
+    Delete(StepId),
+    /// The New task sheet's process: one-off, or a Workflow.
+    Process(Option<WorkflowId>),
+    /// A choice on a Task's Rework or Direct this task sheet (#222).
+    Task(crate::direct::TaskPick),
+    /// Who approves the shown Workflow's results.
+    Approver(Approver),
+    /// The Step that decides agent approval.
+    Decider(StepId),
+    /// What runs once approved.
+    AfterApproval(Destination),
+    /// Where the Workflow sends rework.
+    ReworkGoesTo(Destination),
+    /// A "Tasks start" setting (#225).
+    Start(crate::starts::StartPick),
+    /// The Coordinator's Provider, model or effort (#224).
+    Coordinator(CoordinatorPick),
+}
+
+/// A choice on the Coordinator's settings.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CoordinatorPick {
+    Provider(Provider),
+    /// Empty: the Provider's default.
+    Model(String),
+    Effort(String),
+}
 
 /// Where a picker's trigger was last drawn, so its menu hangs under it
 /// rather than over it.

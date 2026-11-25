@@ -81,7 +81,7 @@ fn the_coordinator_is_empty_until_the_operator_speaks(cx: &mut TestAppContext) {
             .position(|(_, pick)| {
                 *pick
                     == crate::cockpit::workflows::Pick::Coordinator(
-                        crate::cockpit::coordinator::CoordinatorPick::Provider(Provider::Codex),
+                        ferrite_factory::picker::CoordinatorPick::Provider(Provider::Codex),
                     )
             })
             .unwrap()

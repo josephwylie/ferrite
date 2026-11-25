@@ -88,7 +88,7 @@ impl CockpitView {
     /// The start's settings are what the inspector shows.
     pub(crate) fn start_shown(&self, cx: &gpui::App) -> bool {
         self.factory()
-            .is_some_and(|view| view.read(cx).editor.read(cx).inspected == Inspected::Start)
+            .is_some_and(|view| view.read(cx).editor.read(cx).inspected() == Inspected::Start)
     }
 
     /// Show the shown Workflow's start in the inspector.

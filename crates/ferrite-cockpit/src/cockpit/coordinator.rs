@@ -19,6 +19,7 @@ use super::workflows::Pick;
 use super::*;
 use ferrite_core::factory_board::{Act, Agent, Proposal, ProposalId, ProposalStatus, TaskId};
 use ferrite_core::protocol::{CoordinatorAction, Done};
+use ferrite_factory::picker::CoordinatorPick;
 use ferrite_pane::composer::{Composer, Role};
 
 /// The proposals' column beside the conversation.
@@ -446,15 +447,6 @@ impl CoordinatorView {
             .child(actions)
             .into_any_element()
     }
-}
-
-/// A choice on the Coordinator's settings.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum CoordinatorPick {
-    Provider(Provider),
-    /// Empty: the Provider's default.
-    Model(String),
-    Effort(String),
 }
 
 impl CockpitView {
