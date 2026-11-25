@@ -39,6 +39,39 @@ class Package:
     # features, for what a release build links (`shipped`).
     edges: dict[str, Edge] = field(default_factory=dict)
     features: dict[str, list[str]] = field(default_factory=dict)
+    # Files outside its folder that its sources embed, from the root.
+    embeds: tuple[str, ...] = ()
+
+    def reads(self, path: str) -> bool:
+        """Whether a change to `path` changes what this package builds or tests."""
+        return path.startswith((self.directory + "/", *self.embeds))
+
+    @property
+    def run(self) -> str:
+        """The test run its class puts it in."""
+        return next(run for folder, run in CLASSES.items() if self.directory.startswith(folder))
+
+
+# Where a member's tests run, by its folder: Ferrite's crates on every
+# platform, the vendored framework crates on macOS only, in their own run
+# with test features. A member in no class fails, so a new kind of crate
+# is placed on purpose.
+CLASSES = {"crates/": "packages", "vendor/": "vendored"}
+
+# A file a Rust source embeds or takes as a module, by its literal path or a
+# `concat!`'s first piece. Each is relative to the source's folder.
+EMBED = re.compile(r'(?:\binclude(?:_str|_bytes)?!\(\s*(?:concat!\(\s*)?|#\[path\s*=\s*)"([^"]+)"')
+
+
+def embedded(root: Path, directory: Path) -> tuple[str, ...]:
+    """The files outside `directory` that its Rust sources embed."""
+    found = set()
+    for source in directory.rglob("*.rs"):
+        for literal in EMBED.findall(source.read_text(errors="replace")):
+            target = (source.parent / literal).resolve()
+            if target.is_relative_to(root) and not target.is_relative_to(directory):
+                found.add(target.relative_to(root).as_posix())
+    return tuple(sorted(found))
 
 
 def workspace(root: Path) -> dict[str, Package]:
@@ -91,8 +124,11 @@ def workspace(root: Path) -> dict[str, Package]:
                             spec.get("default-features", True) or (edge is not None and edge.default_features),
                             frozenset(spec.get("features", [])) | (edge.features if edge else frozenset()),
                         )
-        packages[name] = Package(directory.relative_to(root).as_posix(), frozenset(dependencies), frozenset(runtime),
-                                 edges, data.get("features", {}))
+        relative = directory.relative_to(root).as_posix()
+        if not relative.startswith(tuple(CLASSES)):
+            raise ValueError(f"Workspace member in no class: {name} ({relative}). Give its folder a class in CLASSES.")
+        packages[name] = Package(relative, frozenset(dependencies), frozenset(runtime), edges, data.get("features", {}),
+                                 embedded(root, directory))
     if not packages:
         raise ValueError("Workspace has no packages")
     return packages
@@ -180,11 +216,51 @@ def shipped(package: Package, requested: frozenset[str]) -> list[tuple[str, froz
     return links
 
 
-# These inputs affect packaging or dependency resolution outside workspace edges.
-# Vendored crates are tested on macOS only, in their own run with test features.
-VENDOR = "vendor/"
-SHARED_INPUTS = (VENDOR, "scripts/", "assets/", "resources/", ".cargo/", ".config/", ".github/workflows/")
-SHARED_FILES = {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml"}
+# What a path selects in ci.yml, beyond the members that read it.
+SHARED = "shared input"  # every package and check, the vendored ones too
+UNCLASSIFIED = "unclassified input"  # as a shared input
+VENDORED = "read by a vendored crate"  # as vendored code: its dependants are not workspace edges
+CHECKS = "macOS checks input"  # the app build, visual-reference, CEF and raw-press checks
+WINDOWS = "Windows checks input"  # the Windows checks, which run on main and on a full-ci PR
+NOTHING = "no check here"
+
+# The first rule naming a path decides what it selects: a file, a folder
+# (ending in "/"), or a file type at the root ("*.md"). A path no rule
+# names and no member reads is unclassified.
+RULES = (
+    # Cargo's, the toolchain's and nextest's inputs, this workflow, and the
+    # selector deciding what a change runs. Vendored members reach Ferrite
+    # through crates.io packages such as gpui-kit, so their dependants are
+    # not workspace edges.
+    ("Cargo.toml", SHARED), ("Cargo.lock", SHARED), ("rust-toolchain", SHARED), ("rust-toolchain.toml", SHARED),
+    (".cargo/", SHARED), (".config/", SHARED), ("vendor/", SHARED), (".github/workflows/ci.yml", SHARED),
+    ("scripts/ci_scope.py", SHARED),
+    # A script a check here runs, or one it reads or calls, selects that
+    # check. Every script ci.yml names needs its own rule, since the folder
+    # rule below selects nothing.
+    ("scripts/check_raw_presses.py", CHECKS), ("scripts/raw-presses.json", CHECKS),
+    ("scripts/tests/windows-stage.ps1", WINDOWS), ("scripts/stage-windows.ps1", WINDOWS),
+    ("scripts/copy-chromium-windows.ps1", WINDOWS),
+    # The scope job runs its own tests for every change. Other workflows
+    # select themselves by their paths, the packaged browser by
+    # `browser_input`, and the release by its tag.
+    ("scripts/", NOTHING), (".github/workflows/", NOTHING),
+    ("docs/", NOTHING), ("skills/", NOTHING), ("*.md", NOTHING),
+)
+
+
+def rule(path: str) -> str | None:
+    for pattern, selects in RULES:
+        if pattern.endswith("/"):
+            named = path.startswith(pattern)
+        elif pattern.startswith("*"):
+            named = "/" not in path and path.endswith(pattern[1:])
+        else:
+            named = path == pattern
+        if named:
+            return selects
+    return None
+
 
 # The packaged browser run (browser-window.yml) holds scarce macOS runners for
 # most of an hour, so a PR runs it only for the inputs it alone sees whole:
@@ -194,7 +270,7 @@ SHARED_FILES = {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.to
 # code fails there, and main runs the packaged browser after every merge.
 BROWSER_FILES = {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", ".github/workflows/browser-window.yml",
                  "scripts/ci_scope.py", "scripts/install-app.sh", "scripts/stage-windows.ps1", "scripts/copy-chromium-windows.ps1"}
-BROWSER_INPUTS = (VENDOR, ".cargo/", "scripts/patches/", "crates/ferrite/", "crates/ferrite-pane/src/visual/",
+BROWSER_INPUTS = ("vendor/", ".cargo/", "scripts/patches/", "crates/ferrite/", "crates/ferrite-pane/src/visual/",
                   "crates/ferrite-pane/src/annotation_editor")
 CEF_GATE = re.compile(r'feature\s*=\s*"(cef|browser-smoke)"')
 
@@ -204,31 +280,25 @@ def browser_input(path: str) -> bool:
             or (path.startswith(("crates/", "scripts/")) and "browser" in path))
 
 
-def select(packages: dict[str, Package], paths: list[str], full: bool = False, browser: bool = False) -> dict:
+def select(packages: dict[str, Package], paths: list[str], full: bool = False, browser: bool = False,
+           windows: bool = False) -> dict:
+    """What ci.yml checks for a change to `paths`. `full` selects everything
+    and Windows; `windows` runs the Windows checks for what is selected."""
     check_boundaries(packages)
     selected = set()
-    reasons = set()
-    all_packages = full or not paths
+    inputs = {SHARED} if full or not paths else set()
+    reasons = {"full run or unavailable change list"} if inputs else set()
     browser = browser or not paths or any(map(browser_input, paths))
-    if all_packages:
-        reasons.add("full run or unavailable change list")
     for path in paths:
-        # Before ownership: vendored members reach Ferrite through crates.io
-        # packages such as gpui-kit, so their dependants are not workspace edges.
-        if path in SHARED_FILES or path.startswith(SHARED_INPUTS):
-            all_packages = True
-            reasons.add(f"shared build or packaging input: {path}")
-            continue
-        # Crate fixtures, Markdown included, can be embedded at compile time.
-        owners = {name for name, package in packages.items() if path.startswith(package.directory + "/")}
-        if owners:
-            selected.update(owners)
-        elif path.startswith("docs/") or ("/" not in path and path.endswith(".md")):
-            continue
-        else:
-            all_packages = True
-            reasons.add(f"unclassified input: {path}")
-    if all_packages:
+        owners = {name for name, package in packages.items() if package.reads(path)}
+        selects = rule(path) or (None if owners else UNCLASSIFIED)
+        if selects in (None, NOTHING) and any(packages[name].run == "vendored" for name in owners):
+            selects = VENDORED
+        selected.update(owners)
+        if selects not in (None, NOTHING):
+            inputs.add(selects)
+            reasons.add(f"{selects}: {path}")
+    if inputs & {SHARED, UNCLASSIFIED, VENDORED}:
         selected = set(packages)
     else:
         while True:
@@ -237,15 +307,40 @@ def select(packages: dict[str, Package], paths: list[str], full: bool = False, b
             if expanded == selected:
                 break
             selected = expanded
+    runs ={run: [] for run in CLASSES.values()}
+    for name in sorted(selected):
+        runs[packages[name].run].append(name)
+    checks = bool(runs["packages"]) or CHECKS in inputs
+    windows = (full or windows) and (bool(runs["packages"]) or WINDOWS in inputs)
     return {
-        "code": bool(selected),
+        "code": bool(selected) or checks or windows,
         "browser": browser,
-        "full": full,
-        "packages": sorted(name for name in selected if not packages[name].directory.startswith(VENDOR)),
-        "vendored": sorted(name for name in selected if packages[name].directory.startswith(VENDOR)),
+        "checks": checks,
+        "windows": windows,
+        **runs,
         "decisions": {name: name in selected for name in sorted(packages)},
-        "reasons": sorted(reasons) or ["workspace dependency closure" if selected else "documentation only"],
+        "reasons": sorted(reasons) or ["workspace dependency closure" if selected else "nothing this workflow checks changed"],
     }
+
+
+def succeeds(root: Path, *args: str) -> bool:
+    return subprocess.run(["git", *args], cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def comparison(root: Path, head: str, base: str | None, checked: list[str]) -> str | None:
+    """What to compare `head` with, or None to check everything. A PR's
+    `base` must share history with `head`. A push to main takes the newest
+    `checked` commit, whose run succeeded, that `head` descends from: a change
+    whose run was cancelled or failed is checked again. A first push has none,
+    and a forced one can leave them all behind."""
+    if base:
+        return base if succeeds(root, "merge-base", base, head) else None
+    if not checked:
+        return None
+    tip = subprocess.run(["git", "rev-parse", f"{head}^{{commit}}"], cwd=root, check=True,
+                         capture_output=True, text=True).stdout.strip()
+    return next((commit for commit in checked
+                 if commit != tip and succeeds(root, "merge-base", "--is-ancestor", commit, head)), None)
 
 
 def changed_paths(root: Path, base: str, head: str) -> list[str]:
@@ -270,22 +365,27 @@ def changes_cef_gate(root: Path, base: str, head: str) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--base", help="Compare against this Git revision's merge base")
+    since = parser.add_mutually_exclusive_group()
+    since.add_argument("--base", help="Compare against this Git revision's merge base")
+    since.add_argument("--checked", nargs="*", default=[], metavar="COMMIT",
+                       help="Commits whose run on main succeeded, newest first: compare against the first HEAD descends from")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--full", action="store_true", help="Select every package and Windows CI")
+    parser.add_argument("--windows", action="store_true", help="Run the Windows checks for what is selected")
     parser.add_argument("--browser", action="store_true", help="Select the packaged browser checks")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
-    if (args.base and args.base.startswith("-")) or args.head.startswith("-"):
+    if any(revision.startswith("-") for revision in [args.base or "", args.head, *args.checked]):
         parser.error("Git revisions cannot start with a dash")
     root = args.root.resolve()
-    paths = changed_paths(root, args.base, args.head) if args.base else []
-    browser = args.browser or (bool(args.base) and changes_cef_gate(root, args.base, args.head))
-    result = select(workspace(root), paths, full=args.full or not args.base, browser=browser)
+    base = comparison(root, args.head, args.base, args.checked)
+    paths = changed_paths(root, base, args.head) if base else []
+    browser = args.browser or (bool(base) and changes_cef_gate(root, base, args.head))
+    result = select(workspace(root), paths, full=args.full or not base, browser=browser, windows=args.windows)
     print(json.dumps(result, indent=2))
     if args.github_output:
         with args.github_output.open("a") as output:
-            for name in ("code", "browser", "full"):
+            for name in ("code", "browser", "checks", "windows"):
                 output.write(f"{name}={str(result[name]).lower()}\n")
             for name in ("packages", "vendored"):
                 output.write(f"{name}={' '.join(result[name])}\n")
