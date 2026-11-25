@@ -221,6 +221,27 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(result["checks"])
                 self.assertFalse(result["browser"])
 
+    def test_a_pr_runs_the_packaged_macos_pass_only_for_what_no_other_pass_reads(self):
+        # The Windows pass checks every Browser input; the macOS pass, the
+        # macOS bundle and platform code and this workflow. Main runs both.
+        for path in ["scripts/install-app.sh", ".github/workflows/browser-window.yml", "vendor/gpui-pre-macos/src/window.rs",
+                     "crates/ferrite-pane/src/visual/web/cef/macos.rs", "crates/ferrite-pane/src/visual/web/cef/nsapp.rs"]:
+            with self.subTest(path=path):
+                result = select(self.packages, [path])
+                self.assertTrue(result["browser"])
+                self.assertTrue(result["browser_macos"])
+        for path in ["crates/ferrite-cockpit/src/cockpit/browser.rs", "crates/ferrite/src/lib.rs", "Cargo.lock",
+                     "crates/ferrite-pane/src/visual/web/cef.rs", "vendor/gpui-pre/src/window.rs", "scripts/probe-browser-window.py"]:
+            with self.subTest(path=path):
+                result = select(self.packages, [path])
+                self.assertTrue(result["browser"])
+                self.assertFalse(result["browser_macos"])
+        self.assertFalse(select(self.packages, ["crates/ferrite-server/src/lib.rs"])["browser_macos"])
+        # The label, and a push (no change list), run both passes.
+        labelled = select(self.packages, ["crates/ferrite-server/src/lib.rs"], browser_macos=True)
+        self.assertTrue(labelled["browser"] and labelled["browser_macos"])
+        self.assertTrue(select(self.packages, [])["browser_macos"])
+
     def test_full_ci_selects_windows_and_the_label_selects_the_packaged_browser(self):
         path = ["crates/ferrite-ui/src/lib.rs"]
         full = select(self.packages, path, full=True)
@@ -422,8 +443,8 @@ renamed = { package = "helper", path = "crates/helper" }
             main()
         result = json.loads(stdout.getvalue())
         self.assertEqual(result["packages"], ["ferrite-cockpit", "ferrite-core", "ferrite-engine", "ferrite-frame"])
-        self.assertEqual(output.read_text(), "code=true\nbrowser=true\nchecks=true\nwindows=true\npackages=ferrite-cockpit "
-                         "ferrite-core ferrite-engine ferrite-frame\nvendored=\n")
+        self.assertEqual(output.read_text(), "code=true\nbrowser=true\nbrowser_macos=true\nchecks=true\nwindows=true\n"
+                         "packages=ferrite-cockpit ferrite-core ferrite-engine ferrite-frame\nvendored=\n")
 
     def test_a_member_in_no_class_fails(self):
         (self.root / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/*", "tools/helper"]\n')
@@ -536,7 +557,8 @@ renamed = { package = "helper", path = "crates/helper" }
         with patch.object(sys, "argv", ["ci_scope.py", "--root", str(self.root), "--base", edited, "--github-output", str(output)]), \
                 contextlib.redirect_stdout(io.StringIO()):
             main()
-        self.assertIn("browser=true\n", output.read_text())
+        self.assertIn("browser=true\nbrowser_macos=false\n", output.read_text())
+        self.assertEqual(self.scope("--base", edited, "--browser")["browser_macos"], "true")
 
 
 if __name__ == "__main__":
