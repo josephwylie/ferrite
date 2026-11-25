@@ -411,10 +411,13 @@ Windows window.
   "Copying to E" over "P → ~/projects/app", a bar, "134 MB of 2.2 GB" with
   "11 MB/s · about 3 min left", and the file being sent on one muted line,
   cut in its middle. While the files are listed the bar runs with no end
-  and the line counts them, "Listing files… 18,402". Copied: "Copied to
-  E", "P is at ~/projects/app on E", "2.2 GB in 3 min 40 s", "This chat
-  now runs on E." when the Draft moved, and Not copied, with Done. A
-  stopped copy's card reads Close and Resume (or Retry). The card is as
+  and the line counts them, "Listing files… 18,402". Copied: "Copied P to
+  E", as its toast says, "P is at ~/projects/app on E", "2.2 GB in 3 min
+  40 s", "This chat now runs on E." when the Draft moved, and Not copied,
+  with Done. A stopped copy's card leads with how it stopped, in the ink
+  of what is read (a failure's in red), over where it goes: "Copy
+  cancelled at 42%. Resume finishes it.", and reads Close and Resume (or
+  Retry). The card is as
   tall as what it shows, centred in the room above the band and never
   reaching it.
 - **The rate and the time left** are one pure function of what was heard
@@ -438,10 +441,12 @@ Windows window.
   it does not stop the copy. Toasts standing together (two copies under
   way) each show whole, one above the other. **Where toasts stand:** the
   kit's toasts stand over the Composer of the board's lower right Pane,
-  their right edge on its box's and their foot just over its stack, or
-  just over a Decision or a failed turn's Retry at the transcript's foot
-  when they would reach it and no sheet is up, never over the Pane's
-  head; with no Composer there, in the board's lower right corner
+  their right edge on its box's and their foot just over its stack. They
+  rise only when they would cover what the operator answers at the
+  transcript's foot, a Decision's card or a failed turn's Retry, in view
+  and with no sheet up: then their foot stands just over it, never over
+  the Pane's head unless only that keeps Allow and Deny clear. With no
+  Composer there, they stand in the board's lower right corner
   (`toast_home`). A sheet holds the keys and the pointer, so the row
   under it waits and the toasts stay home rather than rise into its
   card. So they read
@@ -449,10 +454,14 @@ Windows window.
   Details card open, a sheet up), and never cover an answer the operator
   owes. They draw over any sheet and under every menu (ADR 0043's
   ladder), edged as every float is (`FLOAT_EDGE`), so one over a sheet's
-  card reads as its own card. Leaving the app while a copy runs asks first ("Copying P to
+  card reads as its own card. Since the board's menus (a message's, a
+  Decision's, a citation's comment, the Composer's) draw over sheets too,
+  a sheet or the palette coming up closes them first: no menu outlives
+  the surface it belongs to. Leaving the app while a copy runs asks first ("Copying P to
   E. Leaving stops it; Resume finishes it later.").
 - **A copy is always a pick away.** Every Draft's environment chip lists
-  each copy the window keeps after its environments, the Draft's own
+  each copy the window keeps under a "Copies" heading of its own, after
+  its environments and "Add environment…", the Draft's own
   Project first: "Copying P to E" and how far, "Copied P to E" and done,
   or "Copy of P to E" and stopped; a pick opens its card. The menu open
   reads each as it is now, as the chip and the toast do. The chip stands
@@ -477,10 +486,12 @@ Windows window.
   P to E", whether or not the progress toast was closed, with how much in
   how long, which goes by itself as other toasts do unless it left items
   as they were; one for a copy that stopped stays until it is closed.
-  Only the operator closing a toast, or acting on it, lets the copy go: a
-  toast that went by itself leaves the copy, its system notification and
-  its row on the chip as they were, so "Start a chat there" is still on
-  its card. With the window in the background, the chime and the system
+  A finished copy is kept only while it leaves the operator something to
+  do or see: the operator closing its toast, or acting on it, lets it go,
+  and so does its toast going by itself once its Draft moved there and it
+  left nothing as it was. Otherwise a toast that went by itself leaves the
+  copy, its system notification and its row on the chip as they were, so
+  "Start a chat there" or what it left is still on its card. With the window in the background, the chime and the system
   notification too (Settings › Notifications), card up or not, whose
   click opens the card; it is taken back once the operator, in the
   window, has the card or a toast show how the copy ended. A Draft that
