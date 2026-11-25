@@ -358,7 +358,7 @@ pub(crate) fn unholdable(far: &mut Manifest, here: &Manifest, names: Names) {
     let mut held: BTreeMap<String, String> = BTreeMap::new();
     if names == Names::Windows {
         for path in far.entries.keys().filter(|path| super::chosen(path).is_none()) {
-            if let Some(name) = path.split('/').find(|name| !windows_name(name)) {
+            if let Some(name) = path.split('/').find(|name| !tree::windows_name(name)) {
                 held.entry(path.clone()).or_insert_with(|| format!("this computer cannot hold the name `{name}`"));
             }
         }
@@ -389,19 +389,6 @@ pub(crate) fn unholdable(far: &mut Manifest, here: &Manifest, names: Names) {
             far.problems.insert(path, why);
         }
     }
-}
-
-/// Whether Windows can hold a file named `name`.
-fn windows_name(name: &str) -> bool {
-    const DEVICES: &[&str] = &["con", "prn", "aux", "nul"];
-    let stem = name.split('.').next().unwrap_or(name).trim_end().to_lowercase();
-    let numbered = |prefix: &str| {
-        stem.strip_prefix(prefix)
-            .is_some_and(|digit| digit.len() == 1 && digit.chars().all(|c| c.is_ascii_digit() && c != '0'))
-    };
-    let device = DEVICES.contains(&stem.as_str()) || numbered("com") || numbered("lpt");
-    let refused = name.chars().any(|c| c < ' ' || "<>:\"\\|?*".contains(c));
-    !(device || refused || name.ends_with('.') || name.ends_with(' '))
 }
 
 /// `action`, with two sign-ins that differ settled as the operator chose.

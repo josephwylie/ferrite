@@ -104,14 +104,17 @@ Only a Setup scan computes it.
 
 ## Links
 
-A link inside a tree whose target lies in an item of the table is listed as
-a link (`Entry::Symlink`), with its target as the path from its folder in
-the table's paths: `.claude/skills/x -> ../../.agents/skills/x`. The other
-side makes the link to where that place is in its own home, relative where
-both sit under one root. On Windows it makes a symlink, or a junction when
-Windows lets the account make no symlink. Links are made after every file,
-so the target is there first. A link out of the table is followed and
-listed as before, and nothing is written through it (`Hold::Linked`).
+A link inside a tree whose target is a folder in a tree of the table is
+listed as a link (`Entry::Symlink`), with its target as the path from its
+folder in the table's paths: `.claude/skills/x -> ../../.agents/skills/x`.
+The other side makes the link to where that folder is in its own home,
+from the link's folder, as a tree makes one (`tree::make_link`, ADR 0048):
+a symlink on Unix, a junction on Windows, which needs no privilege. Links
+are made after every file, so the target is there first. A link to a
+file, or out of the table, is followed and listed as before, and nothing
+is written through it (`Hold::Linked`): Windows makes a file link only for
+some accounts, and a copy in its place would fight the link on the next
+sync.
 
 ## Installing what was chosen
 
@@ -196,6 +199,8 @@ Windows refuses spelled `_`.
 - **A link out of the table is still followed.** A skills folder kept in a
   dotfiles checkout keeps syncing, at the cost of its contents travelling
   as files.
-- **A file link on Windows** needs a symlink, which Windows lets only some
-  accounts make. A folder link falls back to a junction. A file link that
-  cannot be made fails that sync, and says where.
+- **A file link travels as its file.** Only a link to a folder is made
+  again as a link. A link to a file is followed, so the other side gets a
+  copy, and an edit there is held as written through a link here.
+- **A junction holds its folder's whole path.** Moving the home on
+  Windows breaks each skill's junction, and a scan says so.

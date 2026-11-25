@@ -318,11 +318,11 @@ impl Home {
         Ok(())
     }
 
-    /// Where each item a link may point at is on this computer.
+    /// Where each tree a link may point into is on this computer.
     fn places(&self) -> Places {
         let places = ITEMS
             .iter()
-            .filter(|item| matches!(item.source, Source::Tree { .. } | Source::File { .. }))
+            .filter(|item| matches!(item.source, Source::Tree { .. }))
             .filter(|item| !self.linked(item, None))
             .map(|item| (links::resolved(&self.physical(item.path)), *item))
             .collect();
@@ -521,31 +521,33 @@ impl Home {
     }
 
     /// Make `path`, in a tree, a link to `target`, the path from its folder
-    /// to a place the table names, as its sender listed it: whether it was
-    /// not so already. The link is made to where that place is here, from
-    /// its folder where it can be; on Windows a junction when Windows makes
-    /// no symlink for this account.
+    /// to a folder in the table, as its sender listed it: whether it was not
+    /// so already. The link is made to where that folder is here, from the
+    /// link's folder, as a tree makes one: a junction on Windows.
     pub(crate) fn link(&self, path: &str, target: &str) -> io::Result<bool> {
         let At::In(item, rest) = item(path)? else {
             return Err(not_setup(path));
         };
         self.writable(path)?;
         let to = links::joined(path, target).ok_or_else(|| invalid(format!("{target} is not a place Setup sync makes a link to")))?;
-        if !matches!(self::item(&to)?, At::In(..) | At::Whole(Item { source: Source::File { .. }, .. })) {
+        let At::In(..) = self::item(&to)? else {
             return Err(not_setup(&to));
-        }
+        };
         let root = self.physical(item.path);
         private_dirs(&root)?;
-        let at = tree::inside(&root, rest)?;
+        let at = links::resolved(&tree::inside(&root, rest)?);
         if fs::symlink_metadata(&at).is_ok_and(|meta| meta.file_type().is_symlink())
             && self.places().target(&at, path).as_deref() == Some(target)
         {
             return Ok(false);
         }
-        let place = self.physical(&to);
-        let from = at.parent().unwrap_or(&root);
-        links::make_link(&links::relative(from, &place).unwrap_or_else(|| place.clone()), &place, &at).map_err(|error| tree::at(&at, error))?;
-        Ok(true)
+        let place = links::resolved(&self.physical(&to));
+        if !place.is_dir() {
+            return Err(tree::at(&place, io::Error::other("there is no folder there to link to")));
+        }
+        let (under, spelled) = links::relative(at.parent().unwrap_or(&root), &place)
+            .ok_or_else(|| tree::at(&place, io::Error::other("it is on another drive than the link")))?;
+        tree::make_link(&under, &at, &spelled).map_err(|why| tree::at(&at, unmade(why)))
     }
 
     /// Remove `path`, and all under it: whether it was there.
@@ -898,6 +900,17 @@ fn through_link(path: &str) -> io::Error {
 
 fn kept_sign_in(path: &str) -> io::Error {
     invalid(format!("{path} is a sign-in, and Setup sync never removes one"))
+}
+
+/// Why a link could not be made, in words.
+fn unmade(why: tree::Refusal) -> io::Error {
+    io::Error::other(match why {
+        tree::Refusal::LeadsOut => "it would lead out of the folder it is in".to_string(),
+        tree::Refusal::LeadsNowhere => "it would lead to nothing here".to_string(),
+        tree::Refusal::Name => "this computer cannot hold its name".to_string(),
+        tree::Refusal::Failed { error } => error,
+        tree::Refusal::Unknown => "it could not be made".to_string(),
+    })
 }
 
 fn not_setup(path: &str) -> io::Error {

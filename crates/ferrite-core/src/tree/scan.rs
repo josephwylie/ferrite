@@ -54,7 +54,7 @@ pub(super) fn sweeping(root: &Path, skip: &[String]) -> io::Result<Manifest> {
 }
 
 /// One tree of the operator's setup: [`sweeping`], but a symlink whose
-/// target `inside` names is listed as a link to that, and every other is
+/// target `as_link` names is listed as a link to that, and every other is
 /// followed and listed as what it points to, its path kept in the
 /// manifest's `links`; each file's modification time and text hash are
 /// listed; and every directory called one of `left_out`, at any depth, is
@@ -64,13 +64,13 @@ pub(crate) fn setup(
     root: &Path,
     skip: &[String],
     left_out: &[&str],
-    inside: &dyn Fn(&Path) -> Option<String>,
+    as_link: &dyn Fn(&Path) -> Option<String>,
 ) -> io::Result<Manifest> {
     let listing = Listing {
         sweep: true,
         follow: true,
         left_out,
-        inside: Some(inside),
+        as_link: Some(as_link),
     };
     list(root, skip, listing, &mut |_| Ok(()))
 }
@@ -82,7 +82,7 @@ struct Listing<'a> {
     left_out: &'a [&'a str],
     /// The target a link at a path of this computer is listed with, when it
     /// is listed as a link and not followed.
-    inside: Option<&'a dyn Fn(&Path) -> Option<String>>,
+    as_link: Option<&'a dyn Fn(&Path) -> Option<String>>,
 }
 
 fn list(
@@ -208,7 +208,7 @@ impl Walk<'_> {
                     target: if cfg!(windows) { target.replace('\\', "/") } else { target },
                 }));
             }
-            if let Some(target) = self.listing.inside.and_then(|inside| inside(&entry.path())) {
+            if let Some(target) = self.listing.as_link.and_then(|as_link| as_link(&entry.path())) {
                 return Ok(Some(Entry::Symlink { target }));
             }
             meta = self.followed(dir, &entry.path())?;

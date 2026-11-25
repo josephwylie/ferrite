@@ -1,11 +1,12 @@
-//! Links in the operator's setup (ADR 0050). A link to a place the table
-//! names is an entry of its own, its target the path from its folder to
+//! Links in the operator's setup (ADR 0050). A link to a folder in the
+//! table is an entry of its own, its target the path from its folder to
 //! that place in the table's paths, so a skill linked into another folder
 //! of the setup is linked there on every side, however each side spells
-//! its home. A link out of the table is followed, as it was.
+//! its home. It is made as a tree makes a link (`tree::make_link`): a
+//! junction on Windows, which needs no privilege. A link to a file, or out
+//! of the table, is followed, as it was.
 
 use std::fs;
-use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use super::store::in_table;
@@ -16,8 +17,8 @@ pub(super) struct Places(pub(super) Vec<(PathBuf, Item)>);
 
 impl Places {
     /// What the link at `link`, the setup path `path`, is listed with: the
-    /// path from its folder to the place the table names that it points
-    /// at, `None` when it points out of the table.
+    /// path from its folder to the folder in the table that it points at,
+    /// `None` when it points at a file or out of the table.
     pub(super) fn target(&self, link: &Path, path: &str) -> Option<String> {
         let literal = fs::read_link(link).ok()?;
         let literal = dunce::simplified(&literal);
@@ -25,7 +26,7 @@ impl Places {
             true => literal.to_path_buf(),
             false => resolved(link.parent()?).join(literal),
         };
-        let pointed = dunce::canonicalize(&pointed).unwrap_or_else(|_| lexical(&pointed));
+        let pointed = dunce::canonicalize(&pointed).ok().filter(|pointed| pointed.is_dir())?;
         let (place, item) = self
             .0
             .iter()
@@ -113,63 +114,20 @@ pub(super) fn joined(path: &str, target: &str) -> Option<String> {
     Some(names.join("/")).filter(|to| !to.is_empty())
 }
 
-/// The path from the folder `from` to `to`, both of this computer: `None`
-/// when they share no root, as two Windows drives do not.
-pub(super) fn relative(from: &Path, to: &Path) -> Option<PathBuf> {
+/// The folder `from` and `to`, both of this computer, lie in, and the path
+/// from `from` to `to` in it, `/` between its names: `None` when they share
+/// no root, as two Windows drives do not.
+pub(super) fn relative(from: &Path, to: &Path) -> Option<(PathBuf, String)> {
     let (from, to) = (lexical(from), lexical(to));
-    let mut from_parts = from.components().peekable();
-    let mut to_parts = to.components().peekable();
-    if from_parts.peek() != to_parts.peek() {
+    let shared = from.components().zip(to.components()).take_while(|(one, other)| one == other).count();
+    if shared == 0 {
         return None;
     }
-    while from_parts.peek().is_some() && from_parts.peek() == to_parts.peek() {
-        from_parts.next();
-        to_parts.next();
-    }
-    let up = from_parts.map(|_| Component::ParentDir);
-    Some(up.chain(to_parts).collect())
+    let down = slashed(&to.components().skip(shared).collect::<PathBuf>())?;
+    let up = std::iter::repeat_n("..", from.components().count() - shared);
+    let path = up.chain(Some(down.as_str()).filter(|down| !down.is_empty())).collect::<Vec<_>>().join("/");
+    Some((from.components().take(shared).collect(), path))
 }
-
-/// Make `at` a link to `target`, which names `place`, here.
-#[cfg(unix)]
-pub(super) fn make_link(target: &Path, _: &Path, at: &Path) -> io::Result<()> {
-    std::os::unix::fs::symlink(target, at)
-}
-
-/// Make `at` a link to `target`, which names `place`, here: a symlink when
-/// Windows lets this account make one, else a junction to a folder, which
-/// it always does.
-#[cfg(windows)]
-pub(super) fn make_link(target: &Path, place: &Path, at: &Path) -> io::Result<()> {
-    use crate::spawn::NoConsoleWindow as _;
-    let folder = !place.is_file();
-    let made = match folder {
-        true => std::os::windows::fs::symlink_dir(target, at),
-        false => std::os::windows::fs::symlink_file(target, at),
-    };
-    match made {
-        Err(error) if folder && error.raw_os_error() == Some(1314) => {
-            let output = std::process::Command::new("cmd")
-                .args(["/C", "mklink", "/J"])
-                .arg(at)
-                .arg(place)
-                .stdin(std::process::Stdio::null())
-                .no_console_window()
-                .output()?;
-            match output.status.success() {
-                true => Ok(()),
-                false => Err(io::Error::other(String::from_utf8_lossy(&output.stderr).trim().to_string())),
-            }
-        }
-        made => made,
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(super) fn make_link(_: &Path, _: &Path, _: &Path) -> io::Result<()> {
-    Err(io::Error::new(io::ErrorKind::Unsupported, "this computer makes no links"))
-}
-
 
 #[cfg(test)]
 mod tests {
@@ -183,6 +141,6 @@ mod tests {
         assert_eq!(joined(".claude/skills/shared", "../../../etc/passwd"), None);
         let home = Path::new("/home/me");
         let at = relative(&home.join(".claude/skills"), &home.join(".agents/skills/shared"));
-        assert_eq!(at, Some(PathBuf::from("../../.agents/skills/shared")));
+        assert_eq!(at, Some((home.to_path_buf(), "../../.agents/skills/shared".to_string())));
     }
 }

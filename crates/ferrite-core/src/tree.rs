@@ -26,6 +26,7 @@ mod serve;
 mod tests;
 
 pub use scan::{scan, scan_watched};
+pub(crate) use links::link as make_link;
 pub(crate) use scan::{millis, mode, setup as scan_setup, Text};
 pub(crate) use serve::{inside, permissions, remove as remove_entry, set_mode, MOST_WRITES};
 pub use serve::Session;
@@ -336,6 +337,7 @@ impl Step {
                 sha256: sha256.clone(),
                 mode: *mode,
                 modified: None,
+                text: None,
             }),
             Step::Link { target, .. } => Some(Entry::Symlink { target: target.clone() }),
         }
