@@ -134,7 +134,7 @@ fn skill_matches(skill: &ferrite_core::SessionCommand, filter: &str) -> bool {
     filter.is_empty()
         || skill.name.to_lowercase().contains(&filter)
         || skill.description.to_lowercase().contains(&filter)
-        || crate::fuzzy::matches(&filter, &skill.name).is_some()
+        || ferrite_ui::fuzzy::matches(&filter, &skill.name).is_some()
 }
 
 /// A command the provider lists that is a skill.

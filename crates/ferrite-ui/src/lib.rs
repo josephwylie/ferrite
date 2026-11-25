@@ -7,6 +7,7 @@ pub mod face;
 pub mod field;
 pub mod form;
 pub mod frame;
+pub mod fuzzy;
 pub mod icons;
 pub mod keymap;
 pub mod loops_overlay;

@@ -629,7 +629,7 @@ fn filter(rows: &[Row], query: &str, scope: PaletteScope, tab: Tab) -> Vec<Shown
         .filter(|(_, row)| tab.keeps(row.section))
         .filter(|(_, row)| row.passes(status))
         .filter_map(|(index, row)| {
-            crate::fuzzy::palette_match(query, &row.name, &row.context)
+            ferrite_ui::fuzzy::palette_match(query, &row.name, &row.context)
                 .map(|lit| Shown { row: index, lit })
         })
         .collect()

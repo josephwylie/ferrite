@@ -201,7 +201,7 @@ fn ranked(rows: &[Row], query: &str, favourites: &[FavouriteModel]) -> Vec<usize
             let haystack = format!("{name} {}", ferrite_ui::provider::word(choice.provider));
             let mut score = 0;
             for word in &words {
-                score += crate::fuzzy::matches(word, &haystack)?.0;
+                score += ferrite_ui::fuzzy::matches(word, &haystack)?.0;
             }
             if is_favourite(favourites, row) {
                 score += 24;
