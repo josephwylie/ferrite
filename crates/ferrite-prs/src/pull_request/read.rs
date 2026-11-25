@@ -152,7 +152,7 @@ impl PrReads {
     }
 
     /// `target` read as `pr`, as a fixture world has it.
-    #[cfg(any(test, feature = "visual-reference"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn install(&mut self, target: PrTarget, pr: WirePr) {
         self.reads.insert(
             target,
@@ -172,7 +172,7 @@ impl PrReads {
         self.reads.retain(|target, _| keep(target));
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn held_for_test(&self, thread: ferrite_core::ThreadKey) -> usize {
         use ferrite_core::pull_request::PrSource;
         self.reads.keys().filter(|target| target.source == PrSource::Thread(thread)).count()

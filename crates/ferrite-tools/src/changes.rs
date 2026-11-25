@@ -469,6 +469,32 @@ pub struct ChangesInputs {
     pub more: MenuDoor,
 }
 
+/// A diff drawn as a view of its own, for a view of another crate to hold
+/// as its child: the PR reader's Code. Which diff it shows, and what it
+/// draws of the window with it, it reads through its `Source`; the diff
+/// itself is the Changes' (`pane`).
+pub struct ChangesPane {
+    changes: Entity<ChangesView>,
+    shown: Source<(Diff, ChangesInputs)>,
+}
+
+impl ChangesPane {
+    pub fn new(changes: Entity<ChangesView>, shown: Source<(Diff, ChangesInputs)>) -> Self {
+        Self { changes, shown }
+    }
+}
+
+impl Render for ChangesPane {
+    fn render(&mut self, _: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        match self.shown.read(&(), cx) {
+            Some((diff, inputs)) => self
+                .changes
+                .update(cx, |changes, cx| changes.pane(diff, inputs, cx)),
+            None => div(),
+        }
+    }
+}
+
 /// What the Changes ask of the window.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChangesEvent {

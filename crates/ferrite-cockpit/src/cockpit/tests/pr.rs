@@ -279,7 +279,8 @@ fn the_pr_row_and_the_plus_menu_open_one_pr_surface(cx: &mut TestAppContext) {
 /// when another tab shows and the PR's comes back.
 #[gpui::test]
 fn the_pr_surface_keeps_its_view(cx: &mut TestAppContext) {
-    use crate::cockpit::surfaces::{PrTab, SurfaceId};
+    use crate::cockpit::surfaces::SurfaceId;
+    use ferrite_prs::PrTab;
     let (view, thread, _fake, cx) = with_pr(
         "pr-surface-views",
         ferrite_core::protocol::WirePrState::Open,
@@ -313,83 +314,6 @@ fn the_pr_surface_keeps_its_view(cx: &mut TestAppContext) {
         cx.debug_bounds("pr-write-guide").is_some(),
         "no guide yet: the way to ask"
     );
-}
-
-/// Choosing another view fades the body in once; choosing the one already
-/// shown, or an unrelated update, plays nothing.
-#[gpui::test]
-fn a_pr_view_fades_in_once_when_the_view_changes(cx: &mut TestAppContext) {
-    let (view, thread, _fake, cx) = with_pr(
-        "pr-surface-fade",
-        ferrite_core::protocol::WirePrState::Open,
-        cx,
-    );
-    view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
-    tick(cx);
-    let picked = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| view.pull_request.read(cx).picked())
-    };
-    assert_eq!(picked(&view, cx), None, "opening the Surface plays nothing");
-    click("pr-tab-Timeline", cx);
-    let at = picked(&view, cx);
-    assert!(at.is_some(), "a new view fades in");
-    click("pr-tab-Timeline", cx);
-    assert_eq!(picked(&view, cx), at, "the same view again does not replay");
-    view.update(cx, |_, cx| cx.notify());
-    tick(cx);
-    assert_eq!(picked(&view, cx), at, "an unrelated update does not replay");
-}
-
-/// An open PR's primary action is Merge, which asks once more before it
-/// hands the merge to the agent; a merged one shows its pill instead, and
-/// its `⋯` offers what a merged PR can still take.
-#[gpui::test]
-fn merge_asks_twice_and_a_merged_pr_shows_its_pill(cx: &mut TestAppContext) {
-    use ferrite_core::protocol::WirePrState;
-    let (view, thread, fake, cx) = with_pr("pr-surface-merge", WirePrState::Open, cx);
-    view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
-    tick(cx);
-    assert!(cx.debug_bounds("pr-pill").is_none());
-    let before = fake.sent.borrow().len();
-    click("pr-primary", cx);
-    assert_eq!(fake.sent.borrow().len(), before, "armed, not sent");
-    click("pr-primary", cx);
-    let sent = fake.sent.borrow().clone();
-    assert_eq!(sent.len(), before + 1, "{sent:?}");
-    assert!(sent.last().unwrap().contains("gh pr merge 48"));
-
-    view.update(cx, |view, cx| {
-        view.fixture_pr_snapshot(thread, snapshot(WirePrState::Merged), cx);
-        cx.notify();
-    });
-    tick(cx);
-    assert!(cx.debug_bounds("pr-pill").is_some(), "merged: the pill");
-    assert!(
-        cx.debug_bounds("pr-primary").is_none(),
-        "in the action's place"
-    );
-    assert!(
-        cx.debug_bounds("pr-merge").is_none(),
-        "merged: nothing to merge"
-    );
-    let rows: Vec<String> = view.read_with(cx, |view, cx| {
-        view.context_rows(MenuTarget::PrMore(
-            ferrite_core::pull_request::PrTarget::thread(thread, 48),
-        ), cx)
-        .into_iter()
-        .flatten()
-        .map(|(item, _)| item.label.to_string())
-        .collect()
-    });
-    for row in [
-        "Explain this PR",
-        "Revert changes",
-        "Delete branch",
-        "Copy link",
-    ] {
-        assert!(rows.contains(&row.to_string()), "{row} in {rows:?}");
-    }
-    assert!(!rows.contains(&"Merge now".to_string()));
 }
 
 /// The nav's reading says the PR merged (the agent ran `gh pr merge`): the
@@ -523,7 +447,8 @@ fn a_restored_tab_for_another_pr_keeps_its_identity(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_thread_pr_restored_on_code_reads_its_diff(cx: &mut TestAppContext) {
     use ferrite_core::pull_request::PrTarget;
-    use crate::cockpit::surfaces::{PrTab, SurfaceAction, SurfaceId, Surfaces};
+    use crate::cockpit::surfaces::{SurfaceAction, SurfaceId, Surfaces};
+    use ferrite_prs::PrTab;
     use ferrite_tools::changes::Diff;
     use ferrite_core::protocol::WirePrState;
     let (mut core, _fake, checkout) = bound_cockpit("pr-restored-code", Provider::Claude);
@@ -557,44 +482,6 @@ fn a_thread_pr_restored_on_code_reads_its_diff(cx: &mut TestAppContext) {
         view.changes.read(cx).files_read(Diff::PullRequest(PrTarget::thread(thread, 48)))
     });
     assert_eq!(read, Some(1), "the restored Code view reads its diff");
-}
-
-#[gpui::test]
-fn pr_header_metadata_stays_visible_across_tabs(cx: &mut TestAppContext) {
-    use ferrite_core::protocol::WirePrState;
-    let (view, thread, _fake, cx) = with_pr("pr-header-metadata", WirePrState::Open, cx);
-    view.update(cx, |view, cx| {
-        view.open_pr_surface(thread, cx);
-        let mut pr = snapshot(WirePrState::Open);
-        pr.author = Some("ada".into());
-        pr.updated_at = Some("2026-11-15T08:00:00Z".into());
-        pr.changed_files = Some(3);
-        pr.additions = Some(12);
-        pr.deletions = Some(2);
-        view.fixture_pr_snapshot(thread, pr, cx);
-    });
-    tick(cx);
-    for tab in [
-        "pr-tab-Summary",
-        "pr-tab-Timeline",
-        "pr-tab-Guide",
-        "pr-tab-Code",
-    ] {
-        click(tab, cx);
-        for selector in [
-            "pr-title",
-            "pr-author",
-            "pr-updated",
-            "pr-files",
-            "pr-additions",
-            "pr-deletions",
-        ] {
-            assert!(
-                cx.debug_bounds(selector).is_some(),
-                "{selector} missing on {tab}"
-            );
-        }
-    }
 }
 
 /// Published Code keeps its own content and leaves local Changes as it was.
@@ -659,7 +546,7 @@ fn a_prs_code_view_reads_the_published_diff(cx: &mut TestAppContext) {
 fn the_pr_surface_is_worked_from_the_keyboard(cx: &mut TestAppContext) {
     use super::panel_focus::{activate, focused_control, press};
     use crate::cockpit::panel::{PanelControl, Semantics};
-    use crate::cockpit::surfaces::PrTab;
+    use ferrite_prs::PrTab;
     let (view, thread, _fake, cx) =
         with_pr("pr-keys", ferrite_core::protocol::WirePrState::Open, cx);
     view.update(cx, |view, cx| view.open_pr_surface(thread, cx));

@@ -419,7 +419,7 @@ keeps its name, its directory and the shared modules.
 | `ferrite-client` | the window model | only under `test-support` (`cockpit::in_process`), an optional dependency |
 | `ferrite-cockpit` | the window | only under `demo` (on with `headless` and `visual-reference`), an optional dependency |
 | `ferrite-pane`, `ferrite-frame` | the window's parts | in their tests only, through `ferrite-client`'s fixture |
-| `ferrite-ui`, `ferrite-terminal`, `ferrite-factory`, `ferrite-tools`, `ferrite-nav`, `ferrite-settings` | the window's parts | never |
+| `ferrite-ui`, `ferrite-terminal`, `ferrite-factory`, `ferrite-tools`, `ferrite-nav`, `ferrite-settings`, `ferrite-prs` | the window's parts | never |
 
 - No re-export shim: each path names the crate that owns its item. In the
   engine, `crate::<shared module>` is `ferrite_core::`. Elsewhere,

@@ -64,6 +64,10 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(select(self.packages, ["crates/ferrite-settings/src/folder_browser.rs"])["packages"],
                          ["ferrite", "ferrite-cockpit", "ferrite-settings"])
 
+    def test_prs_selects_the_window_that_makes_its_views(self):
+        self.assertEqual(select(self.packages, ["crates/ferrite-prs/src/side_chat.rs"])["packages"],
+                         ["ferrite", "ferrite-cockpit", "ferrite-prs"])
+
     def test_core_selects_transitive_consumers(self):
         result = select(self.packages, ["crates/ferrite-core/src/browser.rs"])
         self.assertIn("ferrite-terminal", result["packages"])
@@ -75,7 +79,7 @@ class SelectionTests(unittest.TestCase):
     def test_engine_selects_the_server_the_app_and_the_tests_that_run_it(self):
         result = select(self.packages, ["crates/ferrite-engine/src/engine.rs"])["packages"]
         self.assertEqual(result, ["ferrite", "ferrite-client", "ferrite-cockpit", "ferrite-engine", "ferrite-factory",
-                                  "ferrite-frame", "ferrite-nav", "ferrite-pane", "ferrite-review",
+                                  "ferrite-frame", "ferrite-nav", "ferrite-pane", "ferrite-prs", "ferrite-review",
                                   "ferrite-server", "ferrite-settings", "ferrite-tools"])
 
     def test_server_selects_the_app_and_the_tests_that_run_it(self):
@@ -369,9 +373,10 @@ renamed = { package = "helper", path = "crates/helper" }
         with self.assertRaisesRegex(ValueError, "Untracked in-tree path dependency.*workspace.exclude"):
             select(workspace(self.root), ["README.md"])
 
-    def test_transitive_frame_review_factory_tools_nav_and_settings_cockpit_edges_are_forbidden(self):
+    def test_transitive_feature_crate_cockpit_edges_are_forbidden(self):
         self.write_package("helper", '[dev-dependencies]\nwindow = { package = "ferrite-cockpit", path = "../ferrite-cockpit" }\n')
-        for source in ["ferrite-frame", "ferrite-review", "ferrite-factory", "ferrite-tools", "ferrite-nav", "ferrite-settings"]:
+        for source in ["ferrite-frame", "ferrite-review", "ferrite-factory", "ferrite-tools", "ferrite-nav",
+                       "ferrite-settings", "ferrite-prs"]:
             with self.subTest(source=source):
                 self.write_package(source, '[dependencies]\nhelper = { path = "../helper" }\n')
                 with self.assertRaisesRegex(ValueError, f"{source} -> helper -> ferrite-cockpit"):

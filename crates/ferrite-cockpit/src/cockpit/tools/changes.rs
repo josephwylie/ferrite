@@ -38,19 +38,25 @@ impl CockpitView {
         }
     }
 
-    /// `diff` as the Changes draw it, wherever it shows: the Panel's
-    /// Changes Surface, a pull request's Code.
+    /// `diff` as the Changes draw it in the Panel's Changes Surface. A
+    /// pull request's Code is drawn by a view of its own
+    /// (`ferrite_tools::changes::ChangesPane`), which its reader holds.
     pub(in crate::cockpit) fn changes_pane(&self, diff: Diff, cx: &mut Context<Self>) -> Div {
+        let inputs = self.changes_inputs(diff);
+        self.changes
+            .update(cx, |changes, cx| changes.pane(diff, inputs, cx))
+    }
+
+    /// What `diff` draws of the window: its branch names and its `⋯`.
+    pub(in crate::cockpit) fn changes_inputs(&self, diff: Diff) -> ChangesInputs {
         let thread = diff.local_thread();
-        let inputs = ChangesInputs {
+        ChangesInputs {
             head: thread.and_then(|thread| self.thread_branch(thread)),
             default_branch: thread
                 .and_then(|thread| self.facts.get(thread))
                 .and_then(|facts| facts.default_branch.clone()),
             more: self.doors().door(MenuTarget::ChangesMore(diff)),
-        };
-        self.changes
-            .update(cx, |changes, cx| changes.pane(diff, inputs, cx))
+        }
     }
 
     /// `diff`, made and read the first time it is asked for.
