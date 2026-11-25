@@ -389,8 +389,9 @@ One run of copying a Project of this computer to a Machine, one at a time
 for each Project and Machine, the Machine as it is saved (turned off and on
 again, its copies are still its own). The window keeps it from Copy until
 the operator has seen how it ended, and one that stopped short while its
-Draft waits on it. Its card, a toast and every Draft's environment chip
-all show it. Cancel, or its Machine turned off or removed, stops it; the
+Draft waits on it; a toast that went by itself is not seeing it. Its card,
+a toast and every Draft's environment chip all show it. Cancel, or its
+Machine turned off or removed, stops it; the
 card closed, it runs on. A Machine removed takes it with it: it can never
 go again (ADR 0048).
 _Avoid_: transfer, upload, sync job.

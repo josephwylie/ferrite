@@ -465,7 +465,10 @@ Windows window.
   P to E", whether or not the progress toast was closed, with how much in
   how long, which goes by itself as other toasts do unless it left items
   as they were; one for a copy that stopped stays until it is closed.
-  With the window in the background, the chime and the system
+  Only the operator closing a toast, or acting on it, lets the copy go: a
+  toast that went by itself leaves the copy, its system notification and
+  its row on the chip as they were, so "Start a chat there" is still on
+  its card. With the window in the background, the chime and the system
   notification too (Settings › Notifications), card up or not, whose
   click opens the card; it is taken back once the operator, in the
   window, has the card or a toast show how the copy ended. A Draft that

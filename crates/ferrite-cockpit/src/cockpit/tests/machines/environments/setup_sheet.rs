@@ -1403,12 +1403,16 @@ fn a_draft_waiting_on_its_copy_is_sent_there_once_it_is_in(cx: &mut TestAppConte
     assert!(debug_bounds(cx, "band-copy-waits".into()).is_none());
     assert!(debug_bounds(cx, "composer-send".into()).is_some(), "Send is back, there");
     assert_eq!(draft_text(&view, draft, cx), "hello");
-    // All of it went well: its toast goes by itself.
+    // All of it went well: its toast goes by itself, though the copy stays
+    // a pick away until the operator closes it.
     assert!(text_of(cx, "notification-title").is_some_and(|said| said.contains("Copied app to box")));
     leap(cx, Duration::from_secs(6));
     settles(cx);
     assert!(debug_bounds(cx, "notification-card".into()).is_none(), "the toast went");
-    view.read_with(cx, |view, cx| assert!(view.copies.read(cx).iter().next().is_none(), "and the copy with it"));
+    pick_on(&view, ENVIRONMENT, "Copied app to box", cx);
+    drawn(cx, "placement-done-mark");
+    press(cx, "placement-done");
+    view.read_with(cx, |view, cx| assert!(view.copies.read(cx).iter().next().is_none(), "closed, it goes"));
 }
 
 /// The chip of a draft waiting on its copy ticks the copy's Machine, with

@@ -470,9 +470,9 @@ pub(super) struct Waited {
     pub(super) copy: super::copies::CopyKey,
 }
 
-/// A copy under way, as a chip's menu lists it: what it copies where, and
-/// how far.
-pub(super) struct UnderWay {
+/// A copy the window keeps, as a chip's menu lists it: what it copies
+/// where, and how it stands (how far, done or stopped).
+pub(super) struct KeptCopy {
     pub(super) name: SharedString,
     pub(super) detail: SharedString,
     pub(super) copy: super::copies::CopyKey,
@@ -483,13 +483,13 @@ pub(super) struct UnderWay {
 /// Connections). While the draft waits on a copy (`waited`), that
 /// Machine is ticked instead and says how far, a row of its own while it
 /// is off or gone, its pick the copy's card; the draft's own says it
-/// sends here instead. Then each other copy `under_way`, its pick its
-/// card, and `Add environment…`.
+/// sends here instead. Then each other copy the window keeps (`kept`), its
+/// pick its card, and `Add environment…`.
 pub(super) fn environment_rows(
     environments: &[Environment],
     draft: &pane::DraftBinding,
     waited: Option<Waited>,
-    under_way: Vec<UnderWay>,
+    kept: Vec<KeptCopy>,
 ) -> Vec<Row> {
     let here = draft.binding.project().machine();
     let ticked = waited.as_ref().map_or(Some(here), |waited| waited.machine);
@@ -520,7 +520,7 @@ pub(super) fn environment_rows(
         rows.push(band_row(waited.name, waited.detail, true, BandChoice::Copy(waited.copy)));
     }
     rows.extend(
-        under_way
+        kept
             .into_iter()
             .map(|copy| band_row(copy.name, copy.detail, false, BandChoice::Copy(copy.copy))),
     );

@@ -163,9 +163,9 @@ impl CockpitView {
     /// The environment chip's rows for `draft`, in Pane `pane`: while it
     /// waits on a copy, the copy's Machine is ticked and says how far or
     /// that the copy stopped, off or removed by now or not, and its own
-    /// sends it here instead. Then every other copy under way, this
-    /// Project's first: a copy is always a pick away, its toast closed and
-    /// its draft gone.
+    /// sends it here instead. Then every other copy the window keeps, under
+    /// way, done or stopped, this Project's first: a copy is always a pick
+    /// away, its toast closed and its draft gone.
     pub(super) fn environment_menu_rows(&self, pane: PaneIdentity, draft: &pane::DraftBinding, cx: &App) -> Vec<Row> {
         let copies = self.copies.read(cx);
         let project = draft.binding.project();
@@ -179,25 +179,29 @@ impl CockpitView {
             },
             copy: key.clone(),
         });
-        let mut under_way: Vec<_> = copies
+        let mut kept: Vec<_> = copies
             .iter()
-            .filter(|(key, copy)| copy.phase.live() && waited.as_ref().is_none_or(|waited| waited.copy != **key))
+            .filter(|(key, _)| waited.as_ref().is_none_or(|waited| waited.copy != **key))
             .map(|(key, copy)| {
-                let detail = match copy.phase.done() {
-                    Some(done) => format!("{}%", (done * 100.).floor()),
-                    None => "listing files".into(),
+                let (title, machine) = (&copy.order.placing.title, &copy.order.placing.machine_name);
+                let (name, detail) = match (&copy.phase, copy.phase.done()) {
+                    (copies::Phase::Done(_), _) => (format!("Copied {title} to {machine}"), "done".into()),
+                    (phase, Some(done)) if phase.live() => {
+                        (format!("Copying {title} to {machine}"), format!("{}%", (done * 100.).floor()))
+                    }
+                    (phase, None) if phase.live() => (format!("Copying {title} to {machine}"), "listing files".into()),
+                    _ => (format!("Copy of {title} to {machine}"), "stopped".into()),
                 };
-                let name = format!("Copying {} to {}", copy.order.placing.title, copy.order.placing.machine_name);
-                (key.project != project, menu_rows::UnderWay {
+                (key.project != project, menu_rows::KeptCopy {
                     name: name.into(),
                     detail: detail.into(),
                     copy: key.clone(),
                 })
             })
             .collect();
-        under_way.sort_by_key(|(elsewhere, _)| *elsewhere);
-        let under_way = under_way.into_iter().map(|(_, copy)| copy).collect();
-        menu_rows::environment_rows(&self.environments(cx), draft, waited, under_way)
+        kept.sort_by_key(|(elsewhere, _)| *elsewhere);
+        let kept = kept.into_iter().map(|(_, copy)| copy).collect();
+        menu_rows::environment_rows(&self.environments(cx), draft, waited, kept)
     }
 
     /// The focused draft runs on `to` instead: its Project's counterpart
@@ -436,14 +440,16 @@ impl CockpitView {
     }
 
     /// The card went: how the copy it showed ended has been seen. A copy
-    /// done that its draft did not move to stays a moment more: its toast
-    /// still offers a chat there.
+    /// done that its draft did not move to stays a moment more while its
+    /// toast still offers a chat there.
     pub(super) fn placement_closed(&mut self, sheet: &Entity<PlacementView>, cx: &mut Context<Self>) {
         let key = sheet.read(cx).key();
-        let offers_chat = matches!(
-            self.copies.read(cx).get(&key).map(|copy| &copy.phase),
-            Some(copies::Phase::Done(summary)) if !summary.moved
-        );
+        let copies = self.copies.read(cx);
+        let offers_chat = !copies.lapsed(&key)
+            && matches!(
+                copies.get(&key).map(|copy| &copy.phase),
+                Some(copies::Phase::Done(summary)) if !summary.moved
+            );
         if !offers_chat {
             self.copies.update(cx, |copies, cx| copies.forget(&key, cx));
         }

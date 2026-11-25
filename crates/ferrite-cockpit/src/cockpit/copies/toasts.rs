@@ -3,7 +3,10 @@
 //! toast for how it ended. Each reads the copy as it is drawn; none keeps
 //! a copy's state. A toast for a copy done goes by itself unless it left
 //! something as it was; one for a copy that stopped stays until it is
-//! closed. What a toast's buttons ask of the window is a `CopyEvent`.
+//! closed. Only the operator closing a toast lets go of its copy: one that
+//! went by itself leaves the copy, its system notification and its card
+//! (the chip's menu lists it) as they were. What a toast's buttons ask of
+//! the window is a `CopyEvent`.
 
 use super::words::{bytes, count, took};
 use super::*;
@@ -47,6 +50,9 @@ pub(super) struct Toasts {
     /// Copies whose end the system's notification told, until the
     /// operator has seen it in the window.
     posted: HashSet<CopyKey>,
+    /// Copies done whose toast went by itself: none comes back while the
+    /// copy stays as it is.
+    lapsed: HashSet<CopyKey>,
 }
 
 impl Copies {
@@ -54,6 +60,12 @@ impl Copies {
     /// taken back once the window shows it (`present`).
     pub(crate) fn posted(&mut self, key: &CopyKey) {
         self.toasts.posted.insert(key.clone());
+    }
+
+    /// Whether the toast of how the copy of `key` ended went by itself:
+    /// none offers what its card does any more.
+    pub(crate) fn lapsed(&self, key: &CopyKey) -> bool {
+        self.toasts.lapsed.contains(key)
     }
 
     /// The copy a system notification tagged `tag` told of.
@@ -79,9 +91,16 @@ impl Copies {
             .map(|(key, _)| key.clone())
             .collect();
         self.toasts.closed.retain(|key| running.contains(key));
+        let done: HashSet<CopyKey> = self
+            .iter()
+            .filter(|(_, copy)| matches!(copy.phase, Phase::Done(_)))
+            .map(|(key, _)| key.clone())
+            .collect();
+        self.toasts.lapsed.retain(|key| done.contains(key));
         let wanted: HashMap<CopyKey, Kind> = self
             .iter()
             .filter(|(key, copy)| carded.as_ref() != Some(*key) && !copy.seen())
+            .filter(|(key, _)| !self.toasts.lapsed.contains(*key))
             .filter_map(|(key, copy)| {
                 let kind = match &copy.phase {
                     phase if phase.live() => (!self.toasts.closed.contains(key)).then_some(Kind::Progress)?,
@@ -145,13 +164,19 @@ impl Copies {
         let copy = self.get(key)?;
         let (title, machine) = (&copy.order.placing.title, &copy.order.placing.machine_name);
         let copies = cx.weak_entity();
-        let closed = (copies.clone(), key.clone());
+        let (dismissed, gone) = ((copies.clone(), key.clone()), (copies.clone(), key.clone()));
         let toast = Notification::new()
             .id1::<CopyToast>(key.tag())
-            .on_close(move |_, cx| {
-                let (copies, key) = &closed;
+            .on_dismiss(move |_, cx| {
+                let (copies, key) = &dismissed;
                 copies
-                    .update(cx, |copies, cx| copies.toast_closed(key, pushed, cx))
+                    .update(cx, |copies, cx| copies.toast_dismissed(key, pushed, cx))
+                    .ok();
+            })
+            .on_close(move |_, cx| {
+                let (copies, key) = &gone;
+                copies
+                    .update(cx, |copies, cx| copies.toast_gone(key, pushed, cx))
                     .ok();
             });
         // A button that asks `event` of the window.
@@ -209,7 +234,8 @@ impl Copies {
                     })
                 };
                 // A press on it does not keep a toast that says all went
-                // well: it goes as the kit's toasts go.
+                // well: it goes as the kit's toasts go, its copy kept
+                // (`toast_gone`).
                 toast.autohide(left == 0)
             }
             Kind::Failed { back } => {
@@ -235,9 +261,19 @@ impl Copies {
         })
     }
 
+    /// The `pushed`th toast of the copy of `key` went by itself, a copy
+    /// done's: none comes back, and the copy stays to be seen, on its card.
+    fn toast_gone(&mut self, key: &CopyKey, pushed: u64, cx: &mut Context<Self>) {
+        if self.toasts.up.get(key).is_some_and(|up| *up == (Kind::Done, pushed)) {
+            self.toasts.up.remove(key);
+            self.toasts.lapsed.insert(key.clone());
+            cx.notify();
+        }
+    }
+
     /// The operator closed the `pushed`th toast of the copy of `key`: the
     /// copy runs on unfollowed, or how it ended has been seen.
-    fn toast_closed(&mut self, key: &CopyKey, pushed: u64, cx: &mut Context<Self>) {
+    fn toast_dismissed(&mut self, key: &CopyKey, pushed: u64, cx: &mut Context<Self>) {
         let Some((kind, up)) = self.toasts.up.get(key).copied() else {
             return;
         };

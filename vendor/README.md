@@ -216,13 +216,18 @@ Patches (each change marked "Ferrite's patch"):
   the ease-out quart. Upstream hard-codes a 400ms rise from 96px and a 200ms
   rise out. The list's lifecycle clock reads the same `DefaultToastMotion`
   (`src/notification.rs`).
+- `Notification::on_dismiss` (`src/notification.rs`) hears only the operator
+  closing a toast (its close button, a middle-click, a click), never one going
+  by itself or removed by its owner: what a toast reports can then outlive a
+  toast that timed out. Upstream's `on_close` hears every close alike.
 - `Button::tooltip_builder` (`src/button/button.rs`) sets the button's tooltip
   view, so a kit button wears Ferrite's measured tooltip
   (`ferrite_ui::menu::tooltip`) rather than the kit's default. Upstream keeps
   the field but sets it only from `tooltip(text)`.
 
 Cargo applies them through the root `[patch.crates-io]`. Remove a patch when
-upstream lets an app set the card's motion, or a button's tooltip view.
+upstream lets an app set the card's motion, tell an operator's close from a
+timeout, or set a button's tooltip view.
 
 Test-only changes, so the unit tests build from the published crate (CI runs
 them): the published crate's tests read files from upstream's monorepo

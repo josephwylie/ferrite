@@ -153,6 +153,11 @@ pub struct Notification {
     content_builder: Option<Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>) -> AnyElement>>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     on_close: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    /// Ferrite's patch: called as the operator's close ends, before
+    /// `on_close` (`Notification::on_dismiss`).
+    on_dismiss: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    /// Ferrite's patch: the close under way is the operator's (`dismiss`).
+    dismissed: bool,
     transition_status: ToastTransitionStatus,
     /// Ferrite's patch: the card's height as last laid out, the distance it
     /// slides in. The stack item holding it has no definite height, so a
@@ -218,6 +223,8 @@ impl Notification {
             content_builder: None,
             on_click: None,
             on_close: None,
+            on_dismiss: None,
+            dismissed: false,
             transition_status: ToastTransitionStatus::Starting,
             card_height: Rc::default(),
         }
@@ -371,6 +378,16 @@ impl Notification {
         self
     }
 
+    /// Ferrite's patch: set the callback for the operator closing the
+    /// notification (its close button, a middle-click, a click on one with
+    /// [`Notification::on_click`], or [`Notification::dismiss`]), called
+    /// before [`Notification::on_close`]. Never called when it goes by
+    /// itself (autohide) or its owner removes it.
+    pub fn on_dismiss(mut self, on_dismiss: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_dismiss = Some(Rc::new(on_dismiss));
+        self
+    }
+
     /// Add an action button to the notification. Ferrite's patch: each
     /// one added sits after the last.
     ///
@@ -399,6 +416,7 @@ impl Notification {
     /// Dismiss the notification.
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let _ = window;
+        self.dismissed = true;
         cx.emit(DismissRequest);
     }
 
@@ -418,6 +436,9 @@ impl Notification {
 
     fn complete_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.emit(DismissEvent);
+        if let Some(on_dismiss) = self.on_dismiss.clone().filter(|_| self.dismissed) {
+            on_dismiss(window, cx);
+        }
         if let Some(on_close) = self.on_close.clone() {
             on_close(window, cx);
         }
@@ -1253,6 +1274,46 @@ mod tests {
             Notification::new().id.system_tag(),
             Notification::new().id.system_tag()
         );
+    }
+
+    /// Ferrite's patch: `on_dismiss` hears the operator's close alone, never
+    /// a toast going by itself or its owner removing it; `on_close` hears
+    /// all three.
+    #[gpui::test]
+    fn only_the_operators_close_is_a_dismiss(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_global(Theme::default()));
+        let (root, cx) = cx.add_window_view(|window, cx| TestRoot {
+            list: cx.new(|cx| NotificationList::new(window, cx)),
+            other_focus: cx.focus_handle(),
+        });
+        let list = root.read_with(cx, |root, _| root.list.clone());
+        let heard = Rc::new(std::cell::RefCell::new(Vec::<(&str, &str)>::new()));
+        for (name, autohide) in [("timed", true), ("removed", false), ("closed", false)] {
+            let (dismissed, closed) = (heard.clone(), heard.clone());
+            let note = Notification::new()
+                .id1::<FooKind>(name)
+                .title(name)
+                .autohide(autohide)
+                .on_dismiss(move |_, _| dismissed.borrow_mut().push(("dismiss", name)))
+                .on_close(move |_, _| closed.borrow_mut().push(("close", name)));
+            list.update_in(cx, |list, window, cx| list.push(note, window, cx));
+        }
+        let id = |name: &'static str| NotificationId::from((TypeId::of::<FooKind>(), ElementId::from(name)));
+        cx.background_executor.advance_clock(Duration::from_secs(6));
+        cx.run_until_parked();
+        flush_dismiss(cx);
+        assert_eq!(*heard.borrow(), [("close", "timed")], "gone by itself");
+
+        list.update_in(cx, |list, window, cx| list.close(id("removed"), window, cx));
+        flush_dismiss(cx);
+        assert_eq!(heard.borrow()[1..], [("close", "removed")], "removed by its owner");
+
+        let closing = list.read_with(cx, |list, _| list.notifications.get(&id("closed")).cloned());
+        closing
+            .expect("still up")
+            .update_in(cx, |note, window, cx| note.dismiss(window, cx));
+        flush_dismiss(cx);
+        assert_eq!(heard.borrow()[2..], [("dismiss", "closed"), ("close", "closed")], "the operator's");
     }
 
     /// Ferrite's patch: a long title wraps short of the close button, which
