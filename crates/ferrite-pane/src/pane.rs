@@ -138,10 +138,33 @@ pub struct PaneGeometry {
     /// queue, the shelf), the box, and its footer. None while the Pane has
     /// no Composer (a subagent's transcript runs to its foot).
     pub stack: Option<gpui::Bounds<gpui::Pixels>>,
-    /// The row the operator answers at the transcript's foot (a Decision,
-    /// a failed turn's Retry), as last drawn, while there is one
-    /// (`cockpit::transcript_tail`).
-    pub answers: Option<gpui::Bounds<gpui::Pixels>>,
+    /// What the operator answers at the transcript's foot, as last drawn.
+    pub answers: Answers,
+}
+
+/// What the operator answers at a transcript's foot, as last drawn: a
+/// Decision's cards, or a failed turn's Retry. Cleared as the row after
+/// the transcript's last draws again (`cockpit::transcript_tail`), and
+/// filled as what it holds is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Answers {
+    /// The cards, or the Retry.
+    pub cards: Option<gpui::Bounds<gpui::Pixels>>,
+    /// Their buttons, Allow and Deny: what must stay in sight. None where
+    /// the whole card is.
+    pub buttons: Option<gpui::Bounds<gpui::Pixels>>,
+}
+
+impl Answers {
+    /// `cards` joins what is answered.
+    pub fn with_cards(self, cards: gpui::Bounds<gpui::Pixels>) -> Self {
+        Self { cards: Some(self.cards.map_or(cards, |had| had.union(&cards))), ..self }
+    }
+
+    /// `buttons` join the buttons.
+    pub fn with_buttons(self, buttons: gpui::Bounds<gpui::Pixels>) -> Self {
+        Self { buttons: Some(self.buttons.map_or(buttons, |had| had.union(&buttons))), ..self }
+    }
 }
 
 /// View ownership stays with a Subject even while its transcript is hidden.

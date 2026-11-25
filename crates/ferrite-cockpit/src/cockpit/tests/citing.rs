@@ -921,6 +921,27 @@ fn citation_comment_limit_blocks_save_send_and_outside_dismissal(cx: &mut TestAp
     assert_eq!(replies(&view, cx)[0].text, "");
 }
 
+/// Settings coming up closes the comment popover, which draws over a
+/// sheet, its words kept as a press outside keeps them: a press where its
+/// Cancel stood reaches Settings and takes nothing back.
+#[gpui::test]
+fn a_comment_popover_goes_as_settings_comes_up(cx: &mut TestAppContext) {
+    let (view, cx) = conversation("cite-under-settings", cx, PARAGRAPHS);
+    cite_alpha(&view, cx);
+    open_comment(cx, 0);
+    cx.simulate_input("kept");
+    let cancel = cx.debug_bounds("cite-cancel").expect("Cancel");
+
+    cx.dispatch_action(OpenSettings);
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| view.settings_sheet(cx).is_some()), "Settings is up");
+    assert!(cx.debug_bounds("cite-panel").is_none(), "the popover went with the board");
+    assert_eq!(replies(&view, cx)[0].text, "kept", "its words are kept");
+    cx.simulate_click(cancel.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(replies(&view, cx)[0].text, "kept", "no Cancel took them back");
+}
+
 #[gpui::test]
 fn command_enter_saves_the_comment_and_sends_the_prompt(cx: &mut TestAppContext) {
     let (view, sent, cx) = conversation_sent("cite-comment-send", cx, PARAGRAPHS);

@@ -169,6 +169,12 @@ impl DecisionsView {
         self.forms.get(&pane)
     }
 
+    /// Close every Pane's Decision menus.
+    pub(super) fn close_menus(&mut self, cx: &mut Context<Self>) {
+        self.forms.values().for_each(RequestForms::close_menus);
+        cx.notify();
+    }
+
     /// `handle` was answered: what its card kept goes.
     pub(super) fn forget(&mut self, pane: PaneIdentity, handle: &DecisionHandle) {
         if let Some(forms) = self.forms.get(&pane) {
@@ -587,7 +593,9 @@ impl CockpitView {
         index: usize,
         cx: &App,
     ) -> Option<ferrite_pane::transcript::TranscriptTail> {
-        Some(card_tail(self.decision_cards(index, false, false, cx)?))
+        let cards = self.decision_cards(index, false, false, cx)?;
+        let kept_in = Some(self.panes[index].geometry.clone());
+        Some(card_tail(subagents::Cards { kept_in, ..cards }))
     }
 
     /// The head's provider and its context word: the sandbox its provider

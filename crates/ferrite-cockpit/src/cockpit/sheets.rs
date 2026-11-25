@@ -232,7 +232,8 @@ impl CockpitView {
     }
 
     /// Put `sheet` up in place of whatever was. The popup up goes too, as
-    /// does the ring on a draft's band: the keyboard is the sheet's.
+    /// do the board's menus and the ring on a draft's band: the keyboard is
+    /// the sheet's.
     pub(super) fn show_sheet(&mut self, sheet: Sheet, cx: &mut Context<Self>) {
         if let Some(replaced) = self.sheets.update(cx, |sheets, cx| sheets.show(sheet, cx)) {
             self.sheet_gone(replaced, cx);
@@ -241,6 +242,7 @@ impl CockpitView {
             draft.band_focus = None;
         }
         self.close_popup(cx);
+        self.close_board_menus(cx);
         cx.notify();
     }
 

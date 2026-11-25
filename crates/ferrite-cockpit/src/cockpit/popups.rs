@@ -272,6 +272,23 @@ impl CockpitView {
         true
     }
 
+    /// Close every menu the board's Panes hold open themselves: a
+    /// transcript row's, a Decision's allow menu, a reply's comment and the
+    /// Composer's `/`/`@` menu. They draw over the toasts, so over a sheet
+    /// too (`ferrite_ui::layer`): what comes up over the board (a sheet,
+    /// the palette, the shortcuts) closes them, and none outlives the board
+    /// it was opened on.
+    pub(super) fn close_board_menus(&mut self, cx: &mut Context<Self>) {
+        self.close_composer_menu(cx);
+        self.decisions.update(cx, |decisions, cx| decisions.close_menus(cx));
+        for pane in &self.panes {
+            if let Some(transcript) = pane.transcript() {
+                transcript.update(cx, |transcript, cx| transcript.close_menus(cx));
+            }
+            pane.composer.update(cx, |composer, cx| composer.close_comment(cx));
+        }
+    }
+
     /// Escape on the popup up: the mode menu inside the model picker shuts
     /// first, then the popup. Whether anything did.
     pub(super) fn dismiss_popup(&mut self, cx: &mut Context<Self>) -> bool {

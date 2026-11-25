@@ -2865,9 +2865,10 @@ pub const TOAST_BOX_RIGHT: f32 = SPACE_4;
 pub const TOAST_TOP: f32 = SPACE_2;
 /// The kit's toasts (a copy's, a setup sync's) stand over the Composer of
 /// the board's lower right Pane, the newest lowest: their right edge on
-/// the Composer box's, their foot `TOAST_TOP` over its band, or over the
-/// row the operator answers at the transcript's foot (a Decision, a failed
-/// turn's Retry) when they would reach it (`cockpit::toasts::toast_home`).
+/// the Composer box's, their foot `TOAST_TOP` over its band, or over what
+/// the operator answers at the transcript's foot (a Decision's card, a
+/// failed turn's Retry) when they would cover it
+/// (`cockpit::toasts::toast_home`).
 /// They never move for a sheet. With no Composer there, they stand
 /// `TOAST_FOOT` over the window's foot, `TOAST_BOX_RIGHT` in from the
 /// board's right edge, clear of where a draft's Composer and band would
@@ -2877,9 +2878,6 @@ pub const TOAST_FOOT: f32 =
 /// A kit toast at its tallest: its title, a bar or two lines, and the
 /// caption row its buttons end.
 pub const TOAST_KIT_H: f32 = 112.0;
-/// How far over their foot the kit's toasts reach, standing together: as
-/// many as stand at once (`notification.max_items`), `TOAST_GAP` apart.
-pub const TOAST_REACH: f32 = 3.0 * TOAST_KIT_H + 2.0 * TOAST_GAP;
 pub const TOAST_QUICK_GAP: f32 = SPACE_2;
 /// **The palette** (command search, ⌘K; SPEC §5.8), measured off the
 /// Claude app's own ⌘K search at 1x (2026-11-03): a `PALETTE_W` dialog

@@ -5,7 +5,7 @@
 use super::*;
 use gpui::component::notification::Notification;
 use gpui::component::WindowExt as _;
-use ferrite_ui::theme::TOAST_TOP;
+use ferrite_ui::theme::{TOAST_TOP, TOAST_W};
 
 /// A window of one Thread with the app's keys, 1440 by 900, its toasts
 /// at rest, and the Fake its agent speaks through.
@@ -94,7 +94,8 @@ fn a_toast_stands_clear_of_a_waiting_decision(cx: &mut TestAppContext) {
     let island = bounds(cx, "question-island".into());
     let actions = bounds(cx, "decision-actions".into());
     assert!(
-        island.bottom() > field.top() - px(TOAST_TOP) - card.size.height,
+        island.bottom() > field.top() - px(TOAST_TOP) - card.size.height
+            && island.right() > field.right() - px(TOAST_W),
         "the Decision at {island:?} waits where a toast over the Composer at {field:?} would stand"
     );
     assert!(!card.intersects(&island), "the toast at {card:?} covers the Decision at {island:?}");
@@ -104,6 +105,26 @@ fn a_toast_stands_clear_of_a_waiting_decision(cx: &mut TestAppContext) {
     cx.simulate_click(actions.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(pressed.get(), 0, "a press on Allow or Deny is the Decision's");
+}
+
+/// What the toast rose over, scrolled out of sight, no longer holds it
+/// up: it is home again over the Composer.
+#[gpui::test]
+fn a_decision_scrolled_away_lets_the_toast_home(cx: &mut TestAppContext) {
+    let (view, fake, cx) = board("toast-decision-away", cx);
+    let said: String = (0..60).map(|line| format!("Line {line} of what the agent read.\n\n")).collect();
+    fake.streams.borrow()[0].send(SessionEvent::TextDelta { text: said }).unwrap();
+    fake.streams.borrow()[0].send(decision("perm_01")).unwrap();
+    tick(cx);
+    toast("Copying app to box", cx);
+    let (risen, field) = toast_and_box(cx);
+    assert!(risen.bottom() < field.top() - px(TOAST_TOP), "the premise: the toast at {risen:?} rose");
+    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().expect("its transcript"));
+    transcript.update(cx, |transcript, cx| transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx));
+    settles(cx);
+    assert!(debug_bounds(cx, "question-island".into()).is_none(), "the Decision is out of sight");
+    let (card, field) = toast_and_box(cx);
+    on_the_composer(card, field, "the Decision scrolled away");
 }
 
 /// A sheet up holds the pointer and the keys, so the Decision under it is

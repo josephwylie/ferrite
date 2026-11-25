@@ -117,7 +117,6 @@ impl CockpitView {
         let connections = view.read(cx).connections().clone();
         cx.subscribe(&connections, Self::on_connections_event).detach();
         self.show_sheet(sheets::Sheet::Settings(view.clone()), cx);
-        self.close_composer_menu(cx);
         if self.cli_versions.is_none() {
             self.probe_cli_versions(cx);
         }

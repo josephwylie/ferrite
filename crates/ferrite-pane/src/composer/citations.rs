@@ -260,6 +260,17 @@ impl Composer {
         true
     }
 
+    /// Close the comment popover as a press outside it does, its words kept
+    /// on the reply: something came up over the board. Words over the
+    /// limit, which no press outside could close on, go.
+    pub fn close_comment(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.citations.editing.is_some() && !self.dismiss_comment(cx) {
+            self.citations.editing = None;
+            self.citations.source_anchor = None;
+            cx.refresh_windows();
+        }
+    }
+
     pub fn save_comment(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> bool {
         if self
             .citations

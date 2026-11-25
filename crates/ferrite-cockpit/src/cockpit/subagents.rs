@@ -58,6 +58,13 @@ impl RequestForms {
         self.1.borrow_mut().entry(handle.clone()).or_default().menu = open;
     }
 
+    /// Close every Decision's split-button menu.
+    pub(super) fn close_menus(&self) {
+        for cursor in self.1.borrow_mut().values_mut() {
+            cursor.menu = false;
+        }
+    }
+
     /// `handle`'s amend note, while it is open.
     pub(super) fn note(
         &self,
@@ -670,6 +677,7 @@ impl CockpitView {
             narrow: false,
             inset: theme::tx_inset_at(0., true),
             requests,
+            kept_in: None,
         })
     }
 
@@ -925,6 +933,10 @@ pub(super) struct Cards {
     pub(super) inset: f32,
     /// The requests shown, each with whether its agent works on meanwhile.
     pub(super) requests: Vec<(PendingDecision, bool)>,
+    /// The Pane whose transcript's foot the cards stand at: they keep
+    /// where they are drawn, and their buttons, in its geometry
+    /// (`toast_home`).
+    pub(super) kept_in: Option<Rc<Cell<ferrite_pane::pane::PaneGeometry>>>,
 }
 
 /// Ask the cockpit to draw again (a pick that lives in the Pane's forms):
@@ -989,6 +1001,24 @@ impl Cards {
             }
         }
         hasher.finish()
+    }
+
+    /// A request's card in its frame (`request_frame`). At a transcript's
+    /// foot the card keeps where it is drawn (`kept_in`).
+    fn frame(&self, card: AnyElement, overlay: bool) -> Div {
+        let frame = request_frame(card, overlay, self.narrow, self.inset);
+        let Some(geometry) = self.kept_in.clone() else {
+            return frame;
+        };
+        // The card is the frame's last child, under the pill that names the
+        // wait.
+        frame.on_children_prepainted(move |children, _, _| {
+            if let Some(&card) = children.last() {
+                let kept = geometry.get();
+                let answers = kept.answers.with_cards(card);
+                geometry.set(ferrite_pane::pane::PaneGeometry { answers, ..kept });
+            }
+        })
     }
 
     /// A press that asks the window for `event`.
@@ -1343,23 +1373,24 @@ impl Cards {
                 })
                 .into_any_element()
         });
-        children.push(
-            decision::section(decision::approval_actions(
-                deny.into_any_element(),
-                allow.into_any_element(),
-                more.into_any_element(),
-                menu,
-                stacked,
-            ))
-            .into_any_element(),
+        let mut actions = decision::approval_actions(
+            deny.into_any_element(),
+            allow.into_any_element(),
+            more.into_any_element(),
+            menu,
+            stacked,
         );
-        request_frame(
-            decision::approval_card(serial, children),
-            self.overlay,
-            self.narrow,
-            self.inset,
-        )
-        .into_any_element()
+        // Allow and Deny: what must stay in sight at a transcript's foot.
+        if let Some(geometry) = self.kept_in.clone() {
+            actions = ferrite_ui::components::on_bounds(actions, move |at, _, _| {
+                let kept = geometry.get();
+                let answers = kept.answers.with_buttons(at);
+                geometry.set(ferrite_pane::pane::PaneGeometry { answers, ..kept });
+            });
+        }
+        children.push(decision::section(actions).into_any_element());
+        self.frame(decision::approval_card(serial, children), self.overlay)
+            .into_any_element()
     }
 
     /// The amend note (⇥, D-6): the one-line field under the options. ⏎
@@ -1687,13 +1718,8 @@ impl Cards {
             ]))
             .into_any_element(),
         );
-        request_frame(
-            decision::card(handle.serial, children),
-            self.overlay,
-            self.narrow,
-            self.inset,
-        )
-        .into_any_element()
+        self.frame(decision::card(handle.serial, children), self.overlay)
+            .into_any_element()
     }
 
     /// A request finished outside Ferrite (`External`), or one it cannot
@@ -1764,13 +1790,8 @@ impl Cards {
             decision::section(decision::error_line("could not send", error)).into_any_element()
         }));
         children.push(decision::section(decision::footer(actions)).into_any_element());
-        request_frame(
-            decision::card(handle.serial, children),
-            self.overlay,
-            self.narrow,
-            self.inset,
-        )
-        .into_any_element()
+        self.frame(decision::card(handle.serial, children), self.overlay)
+            .into_any_element()
     }
 
     /// A question (D-8): the form, in the Decision's row grammar — the `?`
@@ -2057,7 +2078,7 @@ impl Cards {
             ]))
             .into_any_element(),
         );
-        request_frame(decision::card(handle.serial, children), overlay, self.narrow, self.inset)
+        self.frame(decision::card(handle.serial, children), overlay)
             .into_any_element()
     }
 }
