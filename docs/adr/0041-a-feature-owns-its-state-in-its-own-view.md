@@ -368,12 +368,13 @@ that happened to touch it, and nothing in the code said whose a field was.
   ⌘⏎ from across the room too. The open Decision is core's, and its reply
   error the Pane's. A gone Thread's rules go with it.
 - **The empty board is the twenty-first.** `EmptyBoardView`
-  (`cockpit/empty_board.rs`) owns the home's selected row and its list's
+  (`ferrite_nav::empty_board` since the 2026-11-25 amendment; the root's
+  side is `cockpit/empty_board.rs`) owns the home's selected row and its list's
   focus; its keys (↑ ↓ ⏎ under `EmptyBoard`) answer on its own element,
   as the PRs' do. The root holds it for the window's life, so the row
   stays where it was left at the next visit. It reads the CLIs' versions,
   the ways to start that would do something now and the Threads used last
-  through `empty_board_inputs`. It emits `EmptyBoardEvent`: a way to
+  (each as its nav row names it) through `empty_board_inputs`. It emits `EmptyBoardEvent`: a way to
   start's action, which the root dispatches, or a recent Thread, which the
   root focuses when a Pane shows it and brings back when none does.
   Whether it shows (no Pane on the board), the probe of the CLIs' versions,
@@ -1435,6 +1436,14 @@ Cockpit, and each of its tests opened a Cockpit window.
   (14-40 s with the Cockpit's typecheck after it); a Files test takes
   0.6-0.8 s in its own window on average, against 2.0-11.9 s in a
   Cockpit window.
+
+- **The nav's crate.** `ferrite-nav` holds the empty board
+  (`Source<EmptyBoardInputs>`; a recent Thread comes as the fields of its
+  nav row it draws, its mark, name and Project). A one-line edit to it,
+  to its tests green and a typecheck, took 15-18 s through the Cockpit
+  and takes 4-5 s in `ferrite-nav` (6-8 s with the Cockpit's typecheck
+  after it); one of its tests takes 0.02-0.14 s in its own window, against
+  0.2-0.75 s in a Cockpit window.
 
 ## Precedent
 

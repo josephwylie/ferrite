@@ -622,7 +622,7 @@ pub struct CockpitView {
     /// The Tasks whose needs-you toast stands, and the state it announced.
     task_toasts: std::collections::HashMap<(MachineId, String), ferrite_core::factory_board::Status>,
     /// The empty board: its selected row and the list's own focus.
-    empty_board: Entity<empty_board::EmptyBoardView>,
+    empty_board: Entity<ferrite_nav::empty_board::EmptyBoardView>,
     /// Each Thread's reader slot (its Review) sliding open or shut
     /// (`beside.rs`).
     reader_slides: beside::ReaderSlides,
@@ -1250,7 +1250,7 @@ impl CockpitView {
         let sheets = cx.new(|_| sheets::Sheets::default());
         cx.subscribe(&sheets, Self::on_sheets_event).detach();
         let prs = cx.new(|cx| prs_view::PrsView::new(cockpit_weak.clone(), cx));
-        let empty_board = cx.new(|cx| empty_board::EmptyBoardView::new(cockpit_weak.clone(), cx));
+        let empty_board = Self::new_empty_board(cx);
         cx.subscribe(&prs, Self::on_prs_event).detach();
         let side_chat = cx.new(|_| side_chat_view::SideChatView::new(cockpit_weak.clone()));
         let files = Self::new_files(cx);
@@ -7096,7 +7096,7 @@ impl CockpitView {
         } else if !self.rename.is_open() && self.prs_shown() {
             self.prs.read(cx).focus.clone()
         } else if !self.rename.is_open() && self.empty_board_shown(cx) {
-            self.empty_board.read(cx).focus.clone()
+            self.empty_board.read(cx).focus().clone()
         } else {
             wanted
         };
@@ -7814,13 +7814,6 @@ impl CockpitView {
         if moved {
             cx.notify();
         }
-    }
-
-    /// A bound action's first keystroke as a shortcut spells it, from this
-    /// platform's key table: `cmd-shift-n` → `cmd-shift-N`, which
-    /// `components::key_combo` draws tight with glyph modifiers, `⌘⇧N`.
-    fn key_label(action: &str) -> Option<SharedString> {
-        ferrite_ui::components::bound_chord(action).map(SharedString::from)
     }
 
     /// A board slot as a drop target for a reader dragged by its head: the

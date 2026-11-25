@@ -52,57 +52,6 @@ fn the_solo_thread_is_named_by_the_view_head_and_meters_no_plan(cx: &mut TestApp
     );
 }
 
-/// Closing the last Pane leaves a board that says how to start, and the
-/// first new Thread takes its place.
-#[gpui::test]
-fn the_empty_cockpit_says_how_to_start(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("empty-board", 1);
-    cx.update(|cx| {
-        cx.bind_keys([
-            KeyBinding::new("cmd-w", CloseThread, None),
-            KeyBinding::new("cmd-n", NewThread, None),
-        ]);
-    });
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-    assert!(cx.debug_bounds("empty-board").is_none());
-    cx.simulate_keystrokes("cmd-w");
-    tick(cx);
-    view.read_with(cx, |view, _| assert!(view.panes.is_empty()));
-    assert!(cx.debug_bounds("empty-board").is_some());
-    cx.simulate_keystrokes("cmd-n");
-    tick(cx);
-    assert!(cx.debug_bounds("empty-board").is_none());
-}
-
-/// The empty board's keys come from the platform's own key table and read
-/// as glyphs: `⌘N`, `⌘⇧N`, `⌘O`, `⌘G`, `⌘K` (rule 2.11.4, F-13).
-#[test]
-fn the_empty_board_spells_keys_from_the_key_table() {
-    let (primary, glyph) = match ferrite_ui::keymap::PLATFORM {
-        ferrite_ui::keymap::Platform::Mac => ("cmd", "\u{2318}"),
-        ferrite_ui::keymap::Platform::Windows => ("ctrl", "\u{2303}"),
-    };
-    let spelled = |action: &str| {
-        CockpitView::key_label(action).map(|keys| ferrite_ui::components::key_glyphs(&keys))
-    };
-    assert_eq!(
-        CockpitView::key_label("cockpit::NewThread").as_deref(),
-        Some(format!("{primary}-N").as_str())
-    );
-    assert_eq!(spelled("cockpit::NewThread"), Some(format!("{glyph}N")));
-    assert_eq!(
-        CockpitView::key_label("cockpit::NewWorktreeThread").as_deref(),
-        Some(format!("{primary}-shift-N").as_str())
-    );
-    assert_eq!(
-        spelled("cockpit::NewWorktreeThread"),
-        Some(format!("{glyph}\u{21e7}N"))
-    );
-    assert_eq!(spelled("cockpit::ReopenThread"), Some(format!("{glyph}O")));
-    assert_eq!(spelled("palette::Toggle"), Some(format!("{glyph}K")));
-}
-
 // ---------------------------------------------------------------- P4 board
 
 /// The transcript column sits `tx_inset_at` in from the Pane's edges

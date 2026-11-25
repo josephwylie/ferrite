@@ -1,0 +1,26 @@
+[package]
+name = "ferrite-nav"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ferrite's nav (ADR 0040) and what stands beside it: the empty board, each reading the window through a Source"
+
+[lib]
+doctest = false
+
+[dependencies]
+ferrite-core = { path = "../ferrite-core" }
+# The theme, components and keys, and the Source a view reads through.
+ferrite-ui = { path = "../ferrite-ui" }
+# A Thread's status mark.
+ferrite-pane = { path = "../ferrite-pane" }
+# The kit facade keeps the renderer, native platform and components on one
+# compatible stack. Keep the gpui import name for derives and existing code.
+gpui = { package = "gpui-kit", version = "=0.6.0" }
+
+[dev-dependencies]
+# `ThreadKey::fixture`: a Thread with no Cockpit behind it.
+ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
+# The tests open each view in a window of its own (`ferrite_ui::testing`).
+gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
+ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }

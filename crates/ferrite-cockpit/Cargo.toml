@@ -68,6 +68,9 @@ ferrite-factory = { path = "../ferrite-factory" }
 # The tools Surfaces (ADR 0039), which the cockpit makes over itself and
 # draws in the Panel.
 ferrite-tools = { path = "../ferrite-tools" }
+# The nav and what stands beside it (ADR 0040), which the cockpit makes over
+# itself and lays out beside the board.
+ferrite-nav = { path = "../ferrite-nav" }
 # The Settings views and the Project card, which the cockpit makes over
 # itself and lays on its sheet.
 ferrite-settings = { path = "../ferrite-settings" }

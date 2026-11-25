@@ -2359,6 +2359,7 @@ dependencies = [
  "ferrite-factory",
  "ferrite-focus-notify",
  "ferrite-frame",
+ "ferrite-nav",
  "ferrite-pane",
  "ferrite-review",
  "ferrite-reviewr",
@@ -2453,6 +2454,16 @@ dependencies = [
 
 [[package]]
 name = "ferrite-frame"
+version = "0.4.0"
+dependencies = [
+ "ferrite-core",
+ "ferrite-pane",
+ "ferrite-ui",
+ "gpui-kit",
+]
+
+[[package]]
+name = "ferrite-nav"
 version = "0.4.0"
 dependencies = [
  "ferrite-core",
