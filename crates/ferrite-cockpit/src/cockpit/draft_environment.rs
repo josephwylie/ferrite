@@ -564,11 +564,7 @@ impl CockpitView {
             local_root: placing.root.clone(),
             remote_root,
         };
-        // Added, it is unfinished no longer, though its run was stopped
-        // as it landed.
-        let kept = placement::finished(&placing.kept, &placing.root, &order.target)
-            .and_then(|()| placement::place(&placing.kept, placed));
-        if let Err(error) = kept {
+        if let Err(error) = placement::place(&placing.kept, placed) {
             ferrite_core::log!("the placement of {} was not kept: {error}", placing.root.display());
             let reason = format!(
                 "Copied to {}, but this computer could not keep where it went: {}.",

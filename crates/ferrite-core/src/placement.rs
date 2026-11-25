@@ -82,10 +82,7 @@ fn begun(dir: &Path, copy: Unfinished) -> io::Result<()> {
     write_list(&dir.join(UNFINISHED), &known)
 }
 
-/// The copy of the Project at `local_root` to `remote_root`, on the
-/// Machine whose files are in `dir`, is unfinished no longer: it is done,
-/// or added there as a Project.
-pub fn finished(dir: &Path, local_root: &Path, remote_root: &Path) -> io::Result<()> {
+fn finished(dir: &Path, local_root: &Path, remote_root: &Path) -> io::Result<()> {
     let mut known: Vec<Unfinished> = read_list(&dir.join(UNFINISHED));
     let before = known.len();
     known.retain(|old| !(old.local_root == local_root && old.remote_root == remote_root));
@@ -706,10 +703,10 @@ const COUNTED: usize = 250;
 /// anything. What could not be read as it was listed is sent once more,
 /// and what still could not is in the answer's problems. Once done, or
 /// stopped before anything landed, the copy is no longer kept as
-/// unfinished; one done as `cancel` stopped it, all of it landed but
-/// never added, still is, so the run after it resumes it ([`finished`]
-/// once it is added). A run waits for the one before it to the same
-/// destination to end ([`Going`]).
+/// unfinished. It is cancelled or done, never both: a cancel heard after
+/// the last request, while its replies come, stops it all the same. A run
+/// waits for the one before it to the same destination to end
+/// ([`Going`]).
 pub fn copy(
     copy: &CopyJob,
     exchange: &mut dyn Exchange,
@@ -722,12 +719,13 @@ pub fn copy(
     let _going = Going::to(copy, cancel)?;
     let checkout = Checkout::of(copy.source);
     let resumed = unfinished(copy.kept, copy.source).contains(&copy.dest.to_path_buf());
-    let first = pass(copy, &checkout, exchange, progress, cancel).map_err(|stopped| {
+    let ended_short = |stopped: Stopped| {
         if !resumed && stopped.took_nothing() {
             let _ = finished(copy.kept, copy.source, copy.dest);
         }
         stopped
-    })?;
+    };
+    let first = pass(copy, &checkout, exchange, progress, cancel).map_err(&ended_short)?;
     let Copied::Sent { mut sent, mut changed } = first else {
         return Ok(first);
     };
@@ -740,10 +738,11 @@ pub fn copy(
             (sent, changed) = (added(sent, then), now);
         }
     }
-    if cancel.check().is_ok() {
-        if let Err(error) = finished(copy.kept, copy.source, copy.dest) {
-            return Err(Stopped { error, sent });
-        }
+    if let Err(error) = cancel.end() {
+        return Err(ended_short(Stopped { error, sent }));
+    }
+    if let Err(error) = finished(copy.kept, copy.source, copy.dest) {
+        return Err(Stopped { error, sent });
     }
     Ok(Copied::Sent { sent, changed })
 }

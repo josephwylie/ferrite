@@ -428,7 +428,11 @@ Windows window.
   slows is never said to end much sooner than it will.
 - **Only Cancel stops a copy.** ✕, Esc, a press outside the card and
   "Continue in background" let the card go and the copy go on. Cancel
-  keeps what was sent for its Resume and says so. While the card is gone
+  keeps what was sent for its Resume and says so. A copy is cancelled or
+  done, never both (`Cancellation::end`): one that has asked all it sends
+  and waits on the last replies stops as any other and stays unfinished,
+  and a Cancel once all of it landed comes too late and changes nothing,
+  so the copy is added. While the card is gone
   a toast that does not hide by itself says "Copying P to E", a thin bar,
   "38% · about 3 min left" and Show, which brings the card back; closing
   it does not stop the copy. Toasts standing together (two copies under
@@ -494,13 +498,10 @@ Windows window.
   the copy." A connection lost reads the same way once E has been seen
   gone and answers again; one whose Server never went is never said to
   be back. A Machine removed takes its copies with it: "E was removed.",
-  no Resume, no Retry, no Change…, only Close. A copy stopped goes on
-  being heard until its thread ends, so how it truly ended counts: one
-  whose files all landed as it was cancelled or its Machine went keeps
-  its record and them, with what it left as it was, and its Resume only
-  adds it, never finding its own files there as Occupied
-  (`placement::copy` clears the record only for a run not cancelled, and
-  the window once it adds the copy, `placement::finished`). So does one
+  no Resume, no Retry, no Change…, only Close. A copy whose Machine went
+  goes on being heard until its thread ends, so how it truly ended
+  counts: one whose files had all landed keeps them, with what it left as
+  it was, and its Resume only adds it, never copying again. So does one
   that landed but could not be added on E ("Copied, but not added on E:
   …"), and one added whose Placement this computer could not keep
   ("Copied to E, but this computer could not keep where it went: …"):

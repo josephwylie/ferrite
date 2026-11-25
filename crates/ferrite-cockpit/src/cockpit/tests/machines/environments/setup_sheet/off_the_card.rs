@@ -6,20 +6,18 @@
 use super::*;
 
 /// A copy of app to box under way, its card sent to the background, with
-/// the draft in Pane `draft` waiting on it. `big.bin` makes it long enough
-/// to stop part way.
+/// the draft in Pane `draft` waiting on it, held part way by box till the
+/// hold lets go.
 fn copy_under_way<'a>(
     name: &str,
     cx: &'a mut TestAppContext,
-) -> (Entity<CockpitView>, PaneIdentity, ProjectKey, MachineId, PathBuf, &'a mut gpui::VisualTestContext) {
+) -> (Entity<CockpitView>, PaneIdentity, ProjectKey, MachineId, PathBuf, BoxHeld, &'a mut gpui::VisualTestContext) {
     toasts_rest(cx);
     let base = resolved_dir(name);
     let projects = base.join("projects");
     let (mut core, _fake, machines, _agents) = two_machines_keeping_projects_in(name, &projects);
     let on_box = machines.held(1).unwrap();
-    let source = project_folder(&base.join("here/app"), None);
-    std::fs::write(source.join("big.bin"), vec![9u8; 4 << 20]).unwrap();
-    let mine = registered_here(&mut core, &source);
+    let mine = registered_here(&mut core, &project_folder(&base.join("here/app"), None));
     cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
@@ -29,10 +27,10 @@ fn copy_under_way<'a>(
     pick_on(&view, ENVIRONMENT, "box", cx);
     drawn(cx, "placement-ignored:.env");
     let dest = projects.join("app");
-    copying_part_way(&dest, cx);
+    let held = copying_part_way(&dest, cx);
     press(cx, "placement-background");
     on_toast(cx, "copy-toast-show");
-    (view, draft, mine, on_box, dest, cx)
+    (view, draft, mine, on_box, dest, held, cx)
 }
 
 /// The rows of the environment chip's menu, opened and shut again.
@@ -95,7 +93,7 @@ fn an_open_environment_menu_is_drawn_over_a_toast(cx: &mut TestAppContext) {
 /// as it is now, as its chip and its toast do: under way, then done.
 #[gpui::test]
 fn an_open_environment_menu_follows_the_copy(cx: &mut TestAppContext) {
-    let (view, _draft, _mine, _on_box, _dest, cx) = copy_under_way("env-menu-follows", cx);
+    let (view, _draft, _mine, _on_box, _dest, held, cx) = copy_under_way("env-menu-follows", cx);
     // The draft is sent here: the copy carries on, on every chip's menu.
     pick_on(&view, ENVIRONMENT, "Local", cx);
     settles(cx);
@@ -113,7 +111,7 @@ fn an_open_environment_menu_follows_the_copy(cx: &mut TestAppContext) {
         "{opened:?}"
     );
 
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     until(cx, |cx| copy_is(&view, cx, |phase| matches!(phase, Phase::Done(_))));
     settles(cx);
     assert!(view.read_with(cx, |view, _| view.band_menu().is_some()), "the menu stays open");
@@ -126,13 +124,13 @@ fn an_open_environment_menu_follows_the_copy(cx: &mut TestAppContext) {
 /// which lets it go.
 #[gpui::test]
 fn a_copy_whose_toast_went_by_itself_stays_until_the_operator_acts(cx: &mut TestAppContext) {
-    let (view, _draft, _mine, on_box, dest, cx) = copy_under_way("env-lapsed", cx);
+    let (view, _draft, _mine, on_box, dest, held, cx) = copy_under_way("env-lapsed", cx);
     // The draft is sent here: the copy, once in, offers a chat there.
     pick_on(&view, ENVIRONMENT, "Local", cx);
     settles(cx);
 
     cx.deactivate_window();
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     until(cx, |cx| roots_on(&view, on_box, cx).contains(&dest));
     on_toast(cx, "copy-toast-chat");
     let tag = copy_tag(&view, cx);
@@ -173,9 +171,9 @@ fn a_copy_whose_toast_went_by_itself_stays_until_the_operator_acts(cx: &mut Test
 /// its card.
 #[gpui::test]
 fn a_stopped_copy_whose_draft_closed_is_still_a_pick_away(cx: &mut TestAppContext) {
-    let (view, draft, mine, _on_box, _dest, cx) = copy_under_way("env-draft-closed", cx);
+    let (view, draft, mine, _on_box, _dest, held, cx) = copy_under_way("env-draft-closed", cx);
     box_down(true);
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     on_toast(cx, "copy-toast-again");
     close_toast(cx);
     assert_eq!(text_of(cx, "band-copy-waits").as_deref(), Some("Copy stopped"));

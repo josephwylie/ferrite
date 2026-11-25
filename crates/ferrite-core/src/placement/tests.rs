@@ -444,13 +444,14 @@ fn status_there(root: &Path, name: &str) -> String {
 }
 
 /// A Server in this process, each reply heard in the order asked. It
-/// cancels `cancel` once `begun` files have been begun.
+/// cancels `cancel` once `after` of the requests `counts` picks have
+/// been asked.
 struct Local {
     session: Session,
     replies: VecDeque<(u64, io::Result<Reply>)>,
     next: u64,
-    begun: usize,
-    cancel: Option<(Cancellation, usize)>,
+    counted: usize,
+    cancel: Option<(Cancellation, fn(&Request) -> bool, usize)>,
     refuse: bool,
     /// Refuses every link, as a Windows Server did before it made them.
     refuse_links: bool,
@@ -462,16 +463,26 @@ impl Local {
             session: Session::default(),
             replies: VecDeque::new(),
             next: 0,
-            begun: 0,
+            counted: 0,
             cancel: None,
             refuse: false,
             refuse_links: false,
         }
     }
 
+    /// One that cancels `cancel` once `after` files have been begun.
     fn cancelling(cancel: &Cancellation, after: usize) -> Self {
         Self {
-            cancel: Some((cancel.clone(), after)),
+            cancel: Some((cancel.clone(), |request| matches!(request, Request::Begin { .. }), after)),
+            ..Self::new()
+        }
+    }
+
+    /// One that cancels `cancel` once `after` files have been finished:
+    /// with the last, the copy has asked all it sends.
+    fn cancelling_once_finished(cancel: &Cancellation, after: usize) -> Self {
+        Self {
+            cancel: Some((cancel.clone(), |request| matches!(request, Request::Finish { .. }), after)),
             ..Self::new()
         }
     }
@@ -487,10 +498,10 @@ impl Local {
 
 impl Exchange for Local {
     fn ask(&mut self, request: Request) -> io::Result<Asked> {
-        if matches!(request, Request::Begin { .. }) {
-            self.begun += 1;
-            if let Some((cancel, after)) = &self.cancel {
-                if self.begun >= *after {
+        if let Some((cancel, counts, after)) = &self.cancel {
+            if counts(&request) {
+                self.counted += 1;
+                if self.counted >= *after {
                     cancel.cancel();
                 }
             }
@@ -558,6 +569,35 @@ fn half_copied(dir: &Path, files: usize) -> BTreeSet<String> {
     let landed = holds(&dest);
     assert!(!landed.is_empty() && landed.len() < files, "part of it landed: {landed:?}");
     landed
+}
+
+/// A copy cancelled once it has asked all it sends, while the replies
+/// come, is stopped all the same: kept as unfinished, as the sheet says,
+/// and its Resume finds all of it there.
+#[test]
+fn a_copy_cancelled_as_its_last_replies_come_stays_unfinished() {
+    let dir = scratch("cancelled-last");
+    let (source, dest, kept) = (dir.join("app"), dir.join("there/app"), dir.join("machine"));
+    fs::create_dir_all(&source).unwrap();
+    for at in 0..3 {
+        fs::write(source.join(format!("file-{at}.txt")), format!("{at}")).unwrap();
+    }
+    let job = CopyJob {
+        source: &source,
+        dest: &dest,
+        skip: &[],
+        kept: &kept,
+    };
+    let cancel = Cancellation::default();
+    let stopped = copy(&job, &mut Local::cancelling_once_finished(&cancel, 3), &mut |_| {}, &cancel)
+        .expect_err("cancelled before it was done");
+    assert_eq!(stopped.error.kind(), io::ErrorKind::Interrupted);
+    assert_eq!(holds(&dest), holds(&source), "all of it landed");
+    assert_eq!(unfinished(&kept, &source), [dest.clone()], "kept as unfinished");
+
+    let (resumed, changed) = sent(copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap());
+    assert_eq!((resumed.written, changed), (0, Vec::<String>::new()), "nothing left to send");
+    assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "finished");
 }
 
 /// A copy stopped part way is kept as unfinished, on this computer, from
@@ -712,56 +752,6 @@ fn a_copy_that_lands_nothing_is_not_kept_as_unfinished() {
     assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new());
 }
 
-/// A `Local` that cancels the copy as it asks for its last file to be
-/// finished: a cancel that comes after everything was asked.
-struct CancelsAtFinish {
-    local: Local,
-    cancel: Cancellation,
-}
-
-impl Exchange for CancelsAtFinish {
-    fn ask(&mut self, request: Request) -> io::Result<Asked> {
-        if matches!(request, Request::Finish { .. }) {
-            self.cancel.cancel();
-        }
-        self.local.ask(request)
-    }
-
-    fn answer(&mut self, asked: Asked) -> io::Result<Reply> {
-        self.local.answer(asked)
-    }
-}
-
-/// A copy cancelled once everything was asked lands all the same, and
-/// stays unfinished until it is added: the run after it, a Resume, finds
-/// it its own and finishes it, sending nothing, rather than taking it for
-/// someone else's.
-#[test]
-fn a_copy_that_lands_as_it_is_cancelled_is_resumed_not_found_occupied() {
-    let dir = scratch("lands-as-cancelled");
-    let (source, dest, kept) = (dir.join("app"), dir.join("there/app"), dir.join("machine"));
-    fs::create_dir_all(&source).unwrap();
-    fs::write(source.join("main.rs"), "fn main() {}").unwrap();
-    let job = CopyJob {
-        source: &source,
-        dest: &dest,
-        skip: &[],
-        kept: &kept,
-    };
-    let cancel = Cancellation::default();
-    let mut exchange = CancelsAtFinish {
-        local: Local::new(),
-        cancel: cancel.clone(),
-    };
-    let (landed, _) = sent(copy(&job, &mut exchange, &mut |_| {}, &cancel).expect("it landed"));
-    assert_eq!(landed.written, 1);
-    assert_eq!(unfinished(&kept, &source), [dest.clone()], "unfinished until it is added");
-
-    let (resumed, changed) = sent(copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap());
-    assert_eq!((resumed.written, changed.len()), (0, 0), "{resumed:?}");
-    assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "finished");
-}
-
 /// A `Local` that at its first Begin cancels the copy, says so on `held`,
 /// and goes on only once `gate` opens: a copy cancelled before anything it
 /// asked was taken, slow to end.
@@ -770,11 +760,13 @@ struct Held {
     cancel: Cancellation,
     held: std::sync::mpsc::Sender<()>,
     gate: std::sync::mpsc::Receiver<()>,
+    began: bool,
 }
 
 impl Exchange for Held {
     fn ask(&mut self, request: Request) -> io::Result<Asked> {
-        if matches!(request, Request::Begin { .. }) && self.local.begun == 0 {
+        if matches!(request, Request::Begin { .. }) && !self.began {
+            self.began = true;
             self.cancel.cancel();
             let _ = self.held.send(());
             let _ = self.gate.recv();
@@ -820,6 +812,7 @@ fn a_run_cancelled_before_anything_landed_never_undoes_the_next_ones_unfinished_
         cancel: cancel.clone(),
         held,
         gate,
+        began: false,
     };
     let first = std::thread::spawn(run(Box::new(first), cancel));
     holding.recv().unwrap();

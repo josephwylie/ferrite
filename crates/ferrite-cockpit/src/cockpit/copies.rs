@@ -378,9 +378,10 @@ impl Entry {
 
     /// What the copy's thread said after the window stopped it: how the
     /// copy truly ended, which its Resume follows. One whose files had all
-    /// landed is only added on its Resume, with what it left as it was;
-    /// one that left part of it there resumes; one that left nothing
-    /// starts over. Once its Machine was removed nothing it says counts.
+    /// landed before the stop came is only added on its Resume, with what
+    /// it left as it was; one that left part of it there resumes; one that
+    /// left nothing starts over. Once its Machine was removed nothing it
+    /// says counts.
     fn hear_late(&mut self, heard: Heard) {
         let (copied, unfinished) = match heard {
             Heard::Copying(Copying::Sending { progress, .. }) => {
@@ -456,24 +457,26 @@ impl Entry {
 
     /// The operator stops the copy while it lists or sends: what it sent
     /// stays, for its Resume. What its thread still says counts
-    /// (`hear_late`). False when it was doing neither.
+    /// (`hear_late`). False when it was doing neither, or when all of it
+    /// had landed by then: too late, it is added.
     pub(super) fn cancel(&mut self) -> bool {
         let again = match self.phase {
             Phase::Copying { .. } => Again::Resume,
             Phase::Listing { .. } => again_for(self.order.resumes),
             _ => return false,
         };
-        self.stop();
+        if !self.stop() {
+            return false;
+        }
         self.phase = Phase::Cancelled { again };
         true
     }
 
     /// Tell the copy's thread to stop. The window hears it on until it
-    /// ends.
-    fn stop(&mut self) {
-        if let Some(run) = &self.run {
-            run.cancel.cancel();
-        }
+    /// ends. False when its work was done by then (`Cancellation`): how it
+    /// went is on its way.
+    fn stop(&mut self) -> bool {
+        self.run.as_ref().is_none_or(|run| run.cancel.cancel())
     }
 
     /// Adding the copy on its Machine failed, for `reason`: its files are
@@ -522,8 +525,9 @@ impl Entry {
             Phase::Cancelled { again } => (
                 match again {
                     Again::Retry => "Copy cancelled before anything was sent.".into(),
-                    Again::Resume => "Copy cancelled. Resume finishes it from where it stopped.".into(),
-                    Again::Add { .. } => "Copy cancelled once all of it had landed. Resume adds it.".into(),
+                    Again::Resume | Again::Add { .. } => {
+                        "Copy cancelled. Resume finishes it from where it stopped.".into()
+                    }
                 },
                 false,
             ),

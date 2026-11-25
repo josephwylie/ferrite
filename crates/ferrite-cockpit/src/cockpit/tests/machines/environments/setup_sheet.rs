@@ -27,11 +27,11 @@ fn card_size(cx: &mut gpui::VisualTestContext) -> gpui::Size<gpui::Pixels> {
     debug_bounds(cx, "placement-card".into()).expect("the card").size
 }
 
-/// A first copy under way once the copy has made its folder there and box
-/// is slow: what is left of it takes long enough to stop part way. The
-/// card shows how far it is.
-fn copying_part_way(dest: &Path, cx: &mut gpui::VisualTestContext) {
-    BOX_SLOW.store(true, Ordering::SeqCst);
+/// A first copy under way once the copy has made its folder there, held
+/// there by box till the hold lets go: it stops part way whenever the
+/// test stops it. The card shows how far it is.
+fn copying_part_way(dest: &Path, cx: &mut gpui::VisualTestContext) -> BoxHeld {
+    let held = hold_box_once(dest.join(".gitignore"));
     press(cx, "placement-copy");
     until(cx, |cx| {
         dest.join(".gitignore").is_file()
@@ -39,6 +39,7 @@ fn copying_part_way(dest: &Path, cx: &mut gpui::VisualTestContext) {
     });
     assert!(debug_bounds(cx, "placement-cancel".into()).is_some());
     assert!(debug_bounds(cx, "placement-resume".into()).is_none(), "a first copy is no Resume");
+    held
 }
 
 /// Whether a copy runs, whatever shows it.
@@ -260,9 +261,9 @@ fn a_copy_cancelled_part_way_is_resumed_and_keeps_what_was_put_there_since(cx: &
     drawn(cx, "placement-ignored:.env");
     let dest = projects.join("app");
 
-    copying_part_way(&dest, cx);
+    let held = copying_part_way(&dest, cx);
     press(cx, "placement-cancel");
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     assert!(sheet(&view, cx).is_some(), "Cancel stops the copy, not the sheet");
     assert!(!copy_runs(&view, cx));
     assert_eq!(
@@ -367,7 +368,7 @@ fn the_card_goes_and_the_copy_goes_on_until_cancel(cx: &mut TestAppContext) {
     assert!(bottom < band.top(), "the card ends at {bottom:?}, over the band at {:?}", band.top());
 
     let dest = projects.join("app");
-    copying_part_way(&dest, cx);
+    let held = copying_part_way(&dest, cx);
     settles(cx);
     let leaving = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.leaving_warning(cx));
     assert_eq!(
@@ -422,7 +423,7 @@ fn the_card_goes_and_the_copy_goes_on_until_cancel(cx: &mut TestAppContext) {
 
     pick_on(&view, ENVIRONMENT, "box", cx);
     press(cx, "placement-cancel");
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     assert!(!copy_runs(&view, cx), "Cancel stops it");
     assert_eq!(leaving(cx), None, "nothing is cut off by leaving now");
     assert_eq!(
@@ -695,9 +696,9 @@ fn a_file_in_use_while_copying_is_left_behind_and_listed(cx: &mut TestAppContext
     until(cx, |cx| {
         debug_bounds(cx, "placement-ignored:.env".into()).is_some()
     });
-    copying_part_way(&projects.join("app"), cx);
+    let held = copying_part_way(&projects.join("app"), cx);
     press(cx, "placement-background");
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     until(cx, |cx| text_of(cx, "notification-title").is_some_and(|said| said.contains("Copied app to box")));
     assert_eq!(text_of(cx, "notification-message").as_deref(), Some("1 item not copied"));
     assert_eq!(
@@ -834,9 +835,9 @@ fn another_projects_unfinished_copy_is_left_to_it(cx: &mut TestAppContext) {
     pick_on(&view, ENVIRONMENT, "box", cx);
     drawn(cx, "placement-ignored:.env");
     let dest = projects.join("app");
-    copying_part_way(&dest, cx);
+    let held = copying_part_way(&dest, cx);
     press(cx, "placement-cancel");
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     press(cx, "placement-close");
     // The write the cancel cut off is dropped there once its connection ends.
     let part = |path: &PathBuf| path.extension().is_some_and(|ext| ext == "part");
@@ -882,9 +883,9 @@ fn a_machine_lost_part_way_is_said_so_and_resume_finishes_once_it_is_back(cx: &m
     pick_on(&view, ENVIRONMENT, "box", cx);
     drawn(cx, "placement-ignored:.env");
     let dest = projects.join("app");
-    copying_part_way(&dest, cx);
+    let held = copying_part_way(&dest, cx);
     box_down(true);
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     drawn(cx, "placement-failed");
     let said = "The connection to box was lost. Resume finishes the copy once it is back.";
     assert_eq!(text_of(cx, "placement-failed").as_deref(), Some(said));
@@ -1026,7 +1027,7 @@ fn a_copy_finishing_unwatched_still_says_so(cx: &mut TestAppContext) {
     pick_on(&view, ENVIRONMENT, "box", cx);
     drawn(cx, "placement-ignored:.env");
     let dest = projects.join("app");
-    copying_part_way(&dest, cx);
+    let held = copying_part_way(&dest, cx);
     press(cx, "placement-background");
     on_toast(cx, "copy-toast-show");
     close_toast(cx);
@@ -1034,7 +1035,7 @@ fn a_copy_finishing_unwatched_still_says_so(cx: &mut TestAppContext) {
     assert!(copy_runs(&view, cx), "and the copy goes on");
 
     cx.deactivate_window();
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
     on_toast(cx, "notification-title");
     assert!(
@@ -1086,12 +1087,12 @@ fn a_copy_failing_unwatched_says_why_and_resumes_from_its_toast(cx: &mut TestApp
     pick_on(&view, ENVIRONMENT, "box", cx);
     drawn(cx, "placement-ignored:.env");
     let dest = projects.join("app");
-    copying_part_way(&dest, cx);
+    let held = copying_part_way(&dest, cx);
     press(cx, "placement-background");
     on_toast(cx, "copy-toast-show");
 
     box_down(true);
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     on_toast(cx, "copy-toast-again");
     assert!(text_of(cx, "notification-title").is_some_and(|said| said.contains("Copy of app to box stopped")));
     assert!(
@@ -1169,14 +1170,14 @@ fn a_machine_turned_off_mid_copy_stops_it_and_resume_finishes_once_it_is_on(cx: 
     pick_on(&view, ENVIRONMENT, "box", cx);
     drawn(cx, "placement-ignored:.env");
     let dest = projects.join("app");
-    copying_part_way(&dest, cx);
+    let held = copying_part_way(&dest, cx);
     press(cx, "placement-background");
     on_toast(cx, "copy-toast-show");
 
     toggle_box(&view, cx);
     assert_eq!(box_now(&view, cx), None, "box is off");
     assert!(!copy_runs(&view, cx), "its copy stops at once");
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     view.update(cx, |view, cx| view.hide_sheet(cx));
     on_toast(cx, "copy-toast-again");
     let off = "box was turned off. Resume finishes the copy once it is back.";
@@ -1236,7 +1237,7 @@ fn a_machine_removed_mid_copy_takes_the_copy_with_it(cx: &mut TestAppContext) {
     let draft = focused_draft(&view, cx);
     pick_on(&view, ENVIRONMENT, "box", cx);
     drawn(cx, "placement-ignored:.env");
-    copying_part_way(&projects.join("app"), cx);
+    let held = copying_part_way(&projects.join("app"), cx);
     press(cx, "placement-background");
     on_toast(cx, "copy-toast-show");
 
@@ -1249,7 +1250,7 @@ fn a_machine_removed_mid_copy_takes_the_copy_with_it(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(box_now(&view, cx), None, "box is gone");
     assert!(!copy_runs(&view, cx), "its copy stops at once");
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     view.update(cx, |view, cx| view.hide_sheet(cx));
     settles(cx);
     assert_eq!(text_of(cx, "notification-message").as_deref(), Some("box was removed."));
@@ -1340,11 +1341,11 @@ fn a_copy_ending_behind_the_window_notifies_with_its_card_up_until_seen(cx: &mut
     let draft = focused_draft(&view, cx);
     pick_on(&view, ENVIRONMENT, "box", cx);
     drawn(cx, "placement-ignored:.env");
-    copying_part_way(&projects.join("app"), cx);
+    let held = copying_part_way(&projects.join("app"), cx);
     assert!(sheet(&view, cx).is_some(), "the card is up");
 
     cx.deactivate_window();
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
     drawn(cx, "placement-copied");
     settles(cx);
@@ -1383,7 +1384,7 @@ fn a_draft_waiting_on_its_copy_is_sent_there_once_it_is_in(cx: &mut TestAppConte
     composer.update(cx, |composer, cx| composer.set("hello".into(), cx));
     pick_on(&view, ENVIRONMENT, "box", cx);
     drawn(cx, "placement-ignored:.env");
-    copying_part_way(&projects.join("app"), cx);
+    let held = copying_part_way(&projects.join("app"), cx);
     press(cx, "placement-background");
     settles(cx);
 
@@ -1397,7 +1398,7 @@ fn a_draft_waiting_on_its_copy_is_sent_there_once_it_is_in(cx: &mut TestAppConte
     assert_eq!(draft_project(&view, draft, cx), mine, "still a draft, here");
     assert_eq!(draft_text(&view, draft, cx), "hello");
 
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
     settles(cx);
     assert!(debug_bounds(cx, "band-copy-waits".into()).is_none());
@@ -1437,7 +1438,7 @@ fn a_draft_waiting_on_its_copy_can_still_be_sent_here(cx: &mut TestAppContext) {
     let draft = focused_draft(&view, cx);
     pick_on(&view, ENVIRONMENT, "box", cx);
     drawn(cx, "placement-ignored:.env");
-    copying_part_way(&projects.join("app"), cx);
+    let held = copying_part_way(&projects.join("app"), cx);
     press(cx, "placement-background");
     settles(cx);
 
@@ -1477,7 +1478,7 @@ fn a_draft_waiting_on_its_copy_can_still_be_sent_here(cx: &mut TestAppContext) {
     assert!(sheet(&view, cx).is_some(), "its row shows its card");
     press(cx, "placement-background");
 
-    BOX_SLOW.store(false, Ordering::SeqCst);
+    held.let_go();
     on_toast(cx, "copy-toast-chat");
     assert_eq!(draft_project(&view, draft, cx), mine, "it stays here");
     assert!(roots_on(&view, on_box, cx).contains(&projects.join("app")));

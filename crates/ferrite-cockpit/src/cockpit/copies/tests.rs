@@ -313,13 +313,15 @@ fn landed() -> Heard {
 #[test]
 fn what_a_copy_says_after_its_machine_went_counts() {
     let now = Instant::now();
-    // All of it landed as the Machine went: its Resume only adds it, and
-    // the file it left as it was is still told of.
-    let mut copy = Entry::new(order(false), Some(run()), now);
-    copy.hear(sending(5, 10, "a"), now, true);
+    // All of it landed as the Machine went, too late to stop: its Resume
+    // only adds it, and the file it left as it was is still told of.
+    let going = run();
+    let ended = going.cancel.clone();
+    let mut copy = Entry::new(order(false), Some(going), now);
+    copy.hear(sending(10, 10, "a"), now, true);
+    ended.end().unwrap();
     assert!(copy.machine_went("box was turned off.".into(), false));
-    assert!(cancelled(&copy), "its thread is told to stop");
-    copy.hear(sending(10, 10, "a"), now, false);
+    assert!(!cancelled(&copy), "too late to stop its thread");
     assert_eq!(copy.hear(landed(), now, false), None, "nothing is added while it is off");
     let Phase::Failed {
         reason,
@@ -363,8 +365,11 @@ fn what_a_copy_says_after_its_machine_went_counts() {
     assert_eq!(copy.phase.again(), Some(&Again::Retry));
 }
 
+/// A cancel stops a copy that lists or sends, what it sent kept for its
+/// Resume; one that comes once all of it landed is too late, and the copy
+/// is added as if it never came (`Cancellation`).
 #[test]
-fn a_copy_that_lands_after_its_cancel_is_added_on_its_resume() {
+fn a_copy_is_cancelled_or_added_never_both() {
     let now = Instant::now();
     let mut copy = Entry::new(order(false), Some(run()), now);
     assert!(copy.cancel());
@@ -377,15 +382,19 @@ fn a_copy_that_lands_after_its_cancel_is_added_on_its_resume() {
     assert!(cancelled(&copy));
     assert!(matches!(copy.phase, Phase::Cancelled { again: Again::Resume }), "what it sent stays");
     assert!(!copy.cancel(), "it stopped already");
-    copy.hear(landed(), now, true);
-    assert!(
-        matches!(copy.phase, Phase::Cancelled { again: Again::Add { bytes: 10, .. } }),
-        "it landed as it was cancelled: not found occupied by its own files"
-    );
+    copy.hear(stopped(io::ErrorKind::Interrupted.into()), now, true);
+    assert!(matches!(copy.phase, Phase::Cancelled { again: Again::Resume }), "it stopped part way");
     assert_eq!(
         copy.standing(false),
-        Some(("Copy cancelled once all of it had landed. Resume adds it.".into(), false))
+        Some(("Copy cancelled. Resume finishes it from where it stopped.".into(), false))
     );
-    assert!(copy.add_again());
-    assert!(matches!(copy.phase, Phase::Finishing { bytes: 10, .. }));
+
+    let going = run();
+    let ended = going.cancel.clone();
+    let mut copy = Entry::new(order(false), Some(going), now);
+    copy.hear(sending(10, 10, "a"), now, true);
+    ended.end().unwrap();
+    assert!(!copy.cancel(), "all of it landed: too late");
+    assert!(matches!(copy.phase, Phase::Copying { .. }), "it runs on");
+    assert_eq!(copy.hear(landed(), now, true), Some(Landed::Sent(copy.key())), "the window adds it");
 }
