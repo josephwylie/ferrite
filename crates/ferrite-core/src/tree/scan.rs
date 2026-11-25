@@ -229,9 +229,15 @@ impl Walk<'_> {
             return Ok(None);
         }
         let stamp = Stamp::of(&meta)?;
+        // A setup listing wants each file's text hash, which a hash another
+        // listing kept may not have: then the file is read again.
+        let texts = self.listing.follow;
         let (sha256, text) = match self.known.remove(path) {
-            Some(hashed) if hashed.stamp == stamp => (hashed.sha256, hashed.text),
-            _ => hash(&entry.path(), self.listing.follow)?,
+            Some(hashed) if hashed.stamp == stamp && (hashed.text.is_some() || !texts) => (hashed.sha256, hashed.text),
+            _ => {
+                let (sha256, text) = hash(&entry.path(), texts)?;
+                (sha256, texts.then_some(text))
+            }
         };
         if stamp.settled(self.started) {
             let hashed = Hashed {
@@ -241,13 +247,13 @@ impl Walk<'_> {
             };
             self.kept.insert(path.to_string(), hashed);
         }
-        let modified = self.listing.follow.then(|| millis(&meta)).flatten();
+        let modified = texts.then(|| millis(&meta)).flatten();
         Ok(Some(Entry::File {
             size: meta.len(),
             sha256,
             mode: mode(&meta),
             modified,
-            text,
+            text: text.filter(|_| texts).flatten(),
         }))
     }
 
@@ -366,7 +372,9 @@ impl Stamp {
 struct Hashed {
     stamp: Stamp,
     sha256: String,
-    text: Option<String>,
+    /// Its text hash, when the listing that read it hashed its text:
+    /// `Some(None)` for bytes that are not text.
+    text: Option<Option<String>>,
 }
 
 /// Each root's hashes, the root listed last at the end.
@@ -542,6 +550,24 @@ mod tests {
         assert_eq!(held(&cache), [("d", 8)]);
         assert_eq!(cache.take(Path::new("d")).len(), 8);
         assert!(cache.0.is_empty());
+    }
+
+    /// A hash a plain listing kept has no text hash: a setup listing of the
+    /// same folder reads the file again for it, so two copies that differ
+    /// only in line ends still read as one.
+    #[test]
+    fn a_setup_listing_hashes_the_text_a_plain_listing_kept_no_hash_of() {
+        let root = std::env::temp_dir().join("ferrite-scan-kept-text");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("SKILL.md"), "# Skill\r\n").unwrap();
+        let old = SystemTime::now() - Duration::from_secs(60);
+        std::fs::File::options().write(true).open(root.join("SKILL.md")).unwrap().set_modified(old).unwrap();
+        let plain = scan(&root, &[]).unwrap();
+        assert!(matches!(&plain.entries["SKILL.md"], Entry::File { text: None, .. }), "{plain:?}");
+        let setup = setup(&root, &[], &[], &|_| None).unwrap();
+        let Entry::File { text, .. } = &setup.entries["SKILL.md"] else { panic!("{setup:?}") };
+        assert_eq!(text.as_deref(), Text::of(b"# Skill\n").as_deref(), "{setup:?}");
     }
 
     #[test]
