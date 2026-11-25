@@ -50,18 +50,47 @@ means each entry of the object or table it holds is one. `PortableJson`,
 | `.claude/skills` | tree, except `synced` and `.trash` (Claude's account sync) |
 | `.claude/{commands,agents,rules,hooks,output-styles}` | tree |
 | `.claude/{CLAUDE.md,keybindings.json,statusline.sh}` | file |
-| `.claude/settings.json` | keys: `enabledPlugins` and `extraKnownMarketplaces` each, every other top-level key whole |
+| `.claude/settings.json` | keys: `enabledPlugins` and `extraKnownMarketplaces` each; `permissions`, `model`, `effortLevel`, `outputStyle`, `skillOverrides`, `modelSettings` and `includeCoAuthoredBy` whole |
 | `.claude.json` | keys: `mcpServers` each |
 | `.codex/skills` | tree, except `.system` |
 | `.codex/{prompts,rules}` | tree |
 | `.codex/AGENTS.md` | file |
-| `.codex/config.toml` | keys: `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity` and `plan_mode_reasoning_effort` whole; `plugins`, `marketplaces` and `mcp_servers` each |
+| `.codex/config.toml` | keys: `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity` and `plan_mode_reasoning_effort` whole; `plugins`, `marketplaces` (its `source_type`, `source`, `ref` and `sparse_paths` alone) and `mcp_servers` each |
 | `.claude/.credentials.json`, `.codex/auth.json` | sign-in, as before |
 
-`config.toml` is an allowlist. `projects`, `notify`, `skills.config` and
-every other key name this computer's own places or state, and are never
-read. All of `.claude/plugins`, `.codex/plugins`, `.agents/.skill-lock.json`
-and every cache, lock, log, session and database are derived.
+Both chosen files are allowlists, and a key the table does not name is
+never read. In `settings.json` that leaves out each key that holds a
+command a computer runs (`hooks`, `statusLine`, `apiKeyHelper`,
+`awsAuthRefresh`, `otelHeadersHelper`), its `env`, and how this computer
+shows Claude (`tui`, `teammateMode`, `preferredNotifChannel`, `theme`). In
+`config.toml` it leaves out `projects`, `notify`, `skills.config` and the
+rest, which name this computer's own places or state. All of
+`.claude/plugins`, `.codex/plugins`, `.agents/.skill-lock.json` and every
+cache, lock, log, session and database are derived. Inside a tree,
+`.git`, `.DS_Store`, `Thumbs.db` and `desktop.ini` are never synced, in any
+case, at any depth.
+
+## What of an Each key travels
+
+An entry of an `Each` key travels only when what it names is there on
+every side:
+
+- **A marketplace** travels only when it is fetched from elsewhere: a
+  GitHub `owner/repo`, or a git URL or URL (`https://`, `ssh://`, `git@`).
+  One in a folder, one held inline in the settings (Claude's `settings`
+  source) and one bundled with its tool (Codex's under `.codex/.tmp` or
+  `~/.cache/codex-runtimes`) stays its side's. Codex's carries where it is
+  fetched from alone; what Codex notes of each fetch (`last_revision`,
+  `last_updated`) stays each side's, and a write keeps it.
+- **A plugin** (`<plugin>@<marketplace>`) travels only when its
+  marketplace, in the same file, does. Claude's own, `@builtin`, never
+  does.
+- **An MCP server** stays its side's when its command or any word of it
+  names a path outside the home, or a path in the home that the table does
+  not sync (a plugin's download, Codex's bundle, a folder of the
+  operator's own), since another side may have none there.
+
+What stays is held unsaid, as an own value is.
 
 ## Keys
 
@@ -81,14 +110,17 @@ and every cache, lock, log, session and database are derived.
   keeps its comments, a value's trailing comment and the order of the rest.
   A removal takes the one key, or the one entry, and an `Each` key's object
   stays even when empty.
+- **A JSON file that holds a chosen key twice**, or an entry of one twice,
+  is read one way by its tool (the last) and another by a span writer (the
+  first). It is a problem, held, and nothing is written to it.
 - **A value that names an absolute path outside the home** is that
   computer's own, such as a hook or a status line run from `/usr/local/bin`,
   or an MCP server in `C:\tools`. It is held unsaid and never moves, on
   either side. This holds for every chosen key, not only `config.toml`'s.
 - **The first sync** unions `Each` entries, so two sides that each turned a
   plugin on both keep both. A key both sides hold differently, with no base,
-  takes this computer's value. No copy is kept, and the toast says what it
-  was: "`model` in ~/.claude/settings.json was set differently on wsl. It is
+  takes this computer's value. No conflict copy is kept (the old value is
+  in that side's trash), and the toast says what it was: "`model` in ~/.claude/settings.json was set differently on wsl. It is
   this computer's on both now. It was "sonnet" on wsl." With a base, of two
   changes the newer wins, by the file's modification time, and the toast
   says the same.
@@ -116,43 +148,77 @@ is written through it (`Hold::Linked`): Windows makes a file link only for
 some accounts, and a copy in its place would fight the link on the next
 sync.
 
+**A folder on one side where the other has a link** is never replaced,
+base or no base, unless each entry under it is the same, line ends aside,
+as the one at its place in the folder the link leads to on that same side.
+Then the side that changed has its way, and with no base the link wins,
+the folder going to that side's trash. Else it is held
+(`Hold::FolderAndLink`), either way, and the row says so: "the skill reui
+is a folder on josephpc and a link here: left as each has it". ADR 0048's
+table made a real folder of every linked skill on a Machine, and some of
+those were since written to there.
+
 ## Installing what was chosen
 
 A plugin turned on is a key. The download is derived, so each side's tool
 must install it. Prototyped in homes of their own, with no sign-in:
 
-- **Codex 0.171.0 installs by itself.** As a thread starts (`codex exec` or
-  `codex app-server`'s `thread/start`), it clones each marketplace its
-  config names and installs each plugin it enables, before any sign-in is
-  checked. Ferrite does nothing more for it.
+- **Codex 0.171.0 installs each plugin by itself**, as a thread starts
+  (`codex exec` or `codex app-server`'s `thread/start`), before any sign-in
+  is checked. But while a marketplace its config names has no copy fetched
+  (`.codex/.tmp/marketplaces/<name>`), `codex plugin list` fails.
+  `codex plugin marketplace upgrade -- <name>` fetches it and installs its
+  enabled plugins.
 - **Claude Code 2.1.330 does not.** A plugin and its marketplace declared in
   `settings.json` stayed uninstalled through `claude plugin list` and
   `claude -p`. `claude plugin install` refused a plugin of a marketplace it
   had not added. `claude plugin marketplace add cursor/plugins` took about
   4.4 s, then `claude plugin install pstack@cursor-plugins --json` about
   4.6 s. A second install answered "already installed" with outcome `ok`.
+- **What they write.** Run in a copy of a real home, neither command
+  removed anything outside `plugins/`. `install` of a plugin already on
+  left `settings.json` byte for byte. `marketplace add` wrote the
+  marketplace's `extraKnownMarketplaces` entry again, without the
+  operator's `"autoUpdate": true`.
 
-So the side that writes one of Claude's `enabledPlugins` or
-`extraKnownMarketplaces` keys runs Claude's installer (`Installs`): for each
-plugin on and not in `plugins/installed_plugins.json`, `claude plugin
-marketplace add <source>` when `known_marketplaces.json` lacks its
-marketplace, taken from `extraKnownMarketplaces`, then `claude plugin install
-<plugin> --json`. It runs on a thread of its own, one run at a time, and a
-write during a run asks for one more. It never runs on the pump. A scan waits
-up to 120 s for a run under way, so the sync that turned a plugin on says
-what failed, as a problem at `.claude/plugins/<plugin>`. The row reads
-"pstack could not be installed on wsl: …" until a later write installs it.
-The hub does the same for itself after a pull. There is no new protocol op.
+So the side a sync writes a plugin or marketplace key to runs the
+installers (`Installs`) at its next scan, the one that ends the sync, so
+no installer writes a file the sync is still writing. Only a plugin of a
+marketplace that travels is ever missing:
+
+- **Claude**: each plugin on and not in `plugins/installed_plugins.json`.
+  `claude plugin marketplace add -- <source>` runs when
+  `known_marketplaces.json` lacks its marketplace, and then the
+  marketplace's settings entry is put back as it was. Then `claude plugin
+  install --json -- <plugin>`.
+- **Codex**: `codex plugin marketplace upgrade -- <name>` for each
+  marketplace an enabled plugin is of that has no copy fetched.
+
+Each name handed over is a letter or a digit, then letters, digits, `.`,
+`_` and `-`, and each source a GitHub `owner/repo` or a URL as above. Any
+other is a failure, never run. A run is on a thread of its own, one at a
+time, and never on the pump. A scan waits up to 120 s for it, so the sync
+that turned a plugin on says what failed, as a problem at
+`.claude/plugins/<plugin>` or `.codex/plugins/<plugin>`. The row counts
+them as plugins, apart from paths, and names the side as the toast does:
+"pstack could not be installed on this computer: …". A failure stands
+until the plugin is installed or turned off. It is tried again at the next
+write of a plugin key and at the side's next start, which reads it from
+`setup-installs.json` in Ferrite's settings folder; never in a loop. The
+hub does the same for itself after a pull. There is no new protocol op.
 Nothing is ever uninstalled: a plugin turned off is a key set false, which
-Claude reads itself. The runner is core's. What runs `claude` is the
-engine's (`providers::claude_plugin_installs`), which finds it the way a
-Session does, and each process that syncs a home hands it in: the window,
-`ferrite setup sync` and the Server.
+the tool reads itself. The runner is core's. What runs `claude` and
+`codex` is the engine's (`providers::plugin_installs`), which finds each
+the way a Session does, and each process that syncs a home hands it in:
+the window, `ferrite setup sync` and the Server.
 
 ## The table's version
 
-`setup_sync::TABLE` is 2, and the Setup root carries it:
-`{"kind":"setup_table","table":2}`. A Server refuses any other. One by a
+`setup_sync::TABLE` is 3, and the Setup root carries it:
+`{"kind":"setup_table","table":3}`. Table 2 was this ADR's first cut,
+never released: it carried every key of `settings.json` and removed on a
+Machine with no trash, so a Server by it must not take this hub's writes.
+A Server refuses any other table. One by a
 newer table is refused as `unsupported`, which the hub's row reads as
 "Update Ferrite on <name> to sync your setup". One by an older table, or
 ADR 0048's `{"kind":"setup"}`, is refused with "Update Ferrite on this
@@ -170,17 +236,29 @@ differ.
 
 ## Old bases
 
-A base written by the first table still names plugin downloads,
-`settings.json` whole and the rest. It is read with every entry this table
-does not name left out, so no removal is ever planned from one. Its entries
-for what this table still names, a skill for one, stand.
+A base is stamped with the table that wrote it: `{"table": 3, "agreed":
+<manifest>}`. A base with another table's number, or none, as every base
+before this one, is not read at all, and the sync is a first sync: the
+union of both sides, which removes nothing and, by the text hash, moves no
+file that differs only in line ends. An old base is never read in part.
+Its entries were agreed by other rules (the first table hashed bytes, not
+text, and followed links), and a removal planned from one could take what
+this table never synced.
 
 ## Kept copies and trash
 
-A conflict's losing copy and a removal's trash are kept under the path with
-its first dot dropped, as `sync-conflicts/<stamp>/claude/CLAUDE.md` and
+Nothing a sync removes or writes over, on either side, is deleted. Each
+side's Server moves it to that side's own trash first, in its Ferrite
+settings folder: `~/.ferrite/sync-trash/<stamp>/…`, a folder for each
+sync, each kept 14 days. A removed file or folder, or a link, is moved
+there. A file a write replaces is copied there first. A key removed or
+written over is kept there as a file of its value. A sign-in is never put
+there: one is never removed, and a newer one replaces the older.
+
+A conflict's losing copy and the trash are kept under the path with its
+first dot dropped, as `sync-conflicts/<stamp>/claude/CLAUDE.md` and
 `sync-trash/<stamp>/agents/skills/x`, so Finder and Explorer show them. A
-trashed key is a file of its value, its name the key's path, with what
+kept key is a file of its value, its name the key's path, with what
 Windows refuses spelled `_`.
 
 ## Tradeoffs
@@ -190,12 +268,23 @@ Windows refuses spelled `_`.
 - **Own values never move.** An absolute path outside the home is assumed
   to be this computer's only. A hook the operator keeps at the same path on
   every computer is held on each, unsaid, and set by hand.
-- **A Whole key at the first sync loses the Machine's value.** It is said
-  once in the toast and not kept. The other choice, the newer, made the
-  first run's thousands of conflicts.
-- **The installer is Claude's CLI.** It needs the network and `claude` on
-  the side's PATH. A Machine without it says so on the row. A run that
-  hangs holds the scan 120 s at most, and later scans say what it found.
+- **Strict travel rules hold back some of the operator's own.** A
+  marketplace held inline in `settings.json` (a `settings` source) and its
+  plugins stay on the side that has them. So does an MCP server run from a
+  folder of the operator's in the home that the table does not sync,
+  `~/code/mcp/run` for one. Each is set by hand on another side.
+- **A Whole key at the first sync loses the Machine's value.** It is kept
+  in the Machine's trash and said once in the toast. The other choice, the
+  newer, made the first run's thousands of conflicts.
+- **The trash holds every file a sync writes over**, not only what it
+  removes, for 14 days. A file edited often on one side leaves a copy for
+  each sync on the other.
+- **The installers are the tools' CLIs.** They need the network and
+  `claude` or `codex` on the side's PATH. A side without one says so on the
+  row. A run that hangs holds the scan 120 s at most, and later scans say
+  what it found. Claude's `marketplace add` writes the whole settings file
+  from what it read as it began. A key the operator changes on that side
+  in those seconds can be lost, as when they run it themselves.
 - **A link out of the table is still followed.** A skills folder kept in a
   dotfiles checkout keeps syncing, at the cost of its contents travelling
   as files.
