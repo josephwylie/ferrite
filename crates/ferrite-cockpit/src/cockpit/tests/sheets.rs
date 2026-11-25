@@ -282,15 +282,11 @@ pub(super) fn new_task_up(cx: &mut gpui::VisualTestContext) -> bool {
     cx.debug_bounds("new-task-card").is_some()
 }
 
-/// What the New task sheet holds: its instructions and its PR.
+/// What the New task sheet holds: its instructions and its PR, trimmed.
 fn new_task_typed(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<(String, String)> {
     view.read_with(cx, |view, cx| {
-        let sheet = view.new_task(cx)?;
-        let sheet = sheet.read(cx);
-        Some((
-            sheet.instructions.read(cx).text().to_string(),
-            sheet.pr.read(cx).text().to_string(),
-        ))
+        let asked = view.new_task(cx)?.read(cx).asked(cx);
+        Some((asked.instructions, asked.pr.unwrap_or_default()))
     })
 }
 
@@ -298,28 +294,6 @@ pub(super) fn press(cx: &mut gpui::VisualTestContext, selector: &'static str) {
     let at = cx.debug_bounds(selector).expect(selector).center();
     cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);
-}
-
-/// The instructions hold the keyboard as the sheet opens; a press on the
-/// PR field takes it there and one on the instructions brings it back.
-#[gpui::test]
-fn the_new_task_sheet_gives_the_keyboard_to_the_field_pressed(cx: &mut TestAppContext) {
-    let (view, cx) = factory_window(cx, "sheets-new-task-focus");
-    view.update(cx, |view, cx| view.open_new_task(cx));
-    tick(cx);
-    assert!(cx.debug_bounds("new-task-instructions-focused").is_some(), "the instructions, on open");
-    cx.simulate_input("Fix");
-    press(cx, "new-task-pr");
-    assert!(cx.debug_bounds("new-task-pr-focused").is_some(), "the PR field, pressed");
-    cx.simulate_input("acme/widgets#1");
-    press(cx, "new-task-instructions");
-    assert!(cx.debug_bounds("new-task-instructions-focused").is_some(), "back to the instructions");
-    cx.simulate_input(" it");
-    tick(cx);
-    assert_eq!(
-        new_task_typed(&view, cx),
-        Some(("Fix it".into(), "acme/widgets#1".into()))
-    );
 }
 
 /// Tab leaves the keyboard in the field that holds it.
@@ -345,7 +319,7 @@ fn tab_leaves_the_keyboard_in_its_new_task_field(cx: &mut TestAppContext) {
 
 fn new_task_error(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<String> {
     view.read_with(cx, |view, cx| {
-        view.new_task(cx)?.read(cx).error.as_ref().map(ToString::to_string)
+        view.new_task(cx)?.read(cx).error().map(ToString::to_string)
     })
 }
 

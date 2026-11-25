@@ -676,9 +676,15 @@ fn the_process_menus_arrows_walk_from_the_chosen_process(cx: &mut TestAppContext
         "one-off and the saved Workflow"
     );
     let chosen = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| view.new_task(cx).unwrap().read(cx).workflow.clone())
+        view.read_with(cx, |view, cx| view.new_task(cx).unwrap().read(cx).workflow().cloned())
+    };
+    // What the sheet draws of the process is what the window names for the
+    // one chosen.
+    let process = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, _| window.debug_text("new-task-process")).unwrap_or_default().join(" ")
     };
     assert_eq!(chosen(&view, cx), None, "one-off at first");
+    assert!(process(cx).contains("One-off"), "{}", process(cx));
 
     click(cx, "new-task-process");
     assert!(shows(cx, "context-menu"), "the Process menu");
@@ -686,6 +692,7 @@ fn the_process_menus_arrows_walk_from_the_chosen_process(cx: &mut TestAppContext
     tick(cx);
     assert!(!shows(cx, "context-menu"), "the pick closes the menu");
     assert_eq!(chosen(&view, cx), Some(workflow), "↓ ⏎ picks the Workflow");
+    assert!(process(cx).contains("version 1"), "and the sheet names it: {}", process(cx));
 
     click(cx, "new-task-process");
     cx.simulate_keystrokes("up enter");

@@ -1,7 +1,7 @@
 //! A Project's Factory in the window (ADR 0037, #220): its nav entry, its
 //! board of Tasks in the board's place, a Task's panel beside the columns,
 //! and the alerts a Task raises. Its Workflows surface is `workflows.rs`
-//! (#221), and its New task sheet `new_task_view.rs`.
+//! (#221), and its New task sheet `ferrite_factory::new_task`.
 //!
 //! The Factory runs in the Server (`ferrite_engine::factory`): the window
 //! draws the board the Server publishes and sends commands through
@@ -134,7 +134,7 @@ pub(crate) struct FactoryView {
     /// What the last command said back (a refusal, a worktree kept).
     pub(crate) note: Option<SharedString>,
     /// The New task sheet as it was closed, for when it opens again.
-    pub(super) kept: Option<super::new_task_view::KeptNewTask>,
+    pub(super) kept: Option<ferrite_factory::new_task::KeptNewTask>,
     /// The columns' sideways scroll, and the open Task, its column and how
     /// many columns fit when it last brought that column into view.
     columns: gpui::ScrollHandle,

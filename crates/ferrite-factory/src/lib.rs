@@ -5,3 +5,5 @@
 //! tests without it.
 
 pub mod archive;
+pub mod new_task;
+pub mod picker;

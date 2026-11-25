@@ -2,26 +2,6 @@
 
 use super::*;
 
-/// Where a picker's trigger was last drawn, so its menu hangs under it
-/// rather than over it.
-#[derive(Clone, Default)]
-pub(crate) struct Trigger(std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>);
-
-impl Trigger {
-    /// The trigger's child that records where it is drawn; the trigger is
-    /// `relative`, so this fills it.
-    pub(crate) fn probe(&self) -> impl IntoElement {
-        let drawn = self.0.clone();
-        gpui::canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
-            .absolute()
-            .size_full()
-    }
-
-    pub(crate) fn bounds(&self) -> Option<gpui::Bounds<Pixels>> {
-        self.0.get()
-    }
-}
-
 /// A Provider's model choices as a picker offers them: its default first,
 /// named as the catalog names it (`Default · Opus 5.5`), then the rest.
 /// The value of the default is empty: no model is pinned.
@@ -295,7 +275,7 @@ impl CockpitView {
         };
         let chosen = self
             .new_task(cx)
-            .and_then(|sheet| sheet.read(cx).workflow.clone());
+            .and_then(|sheet| sheet.read(cx).workflow().cloned());
         let mut picks = vec![(
             ferrite_ui::menu::Item::new("One-off: a single agent").checked(chosen.is_none()),
             Pick::Process(None),

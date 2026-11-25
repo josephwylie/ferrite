@@ -61,7 +61,7 @@ mod sends;
 mod server;
 mod session_card;
 mod session_control;
-mod new_task_view;
+mod new_task;
 mod project_editor_view;
 mod settings_view;
 mod setup_sync;
