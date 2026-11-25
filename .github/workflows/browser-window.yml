@@ -11,23 +11,26 @@ env:
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: 'true'
 
-# Every merge to main runs it on macOS and Windows. A PR runs it on Windows
-# when it changes what only this run sees whole (scripts/ci_scope.py), and on
-# macOS too only for what no Windows pass reads or with the `browser-ci`
-# label: the macOS pass holds one of the account's five macOS runners for
-# half an hour beside the required macOS jobs.
+# Main runs it after merges and every night. A PR runs it when it changes
+# what only this run sees whole (scripts/ci_scope.py) or carries the
+# `browser-ci` label.
 on:
   push:
     branches: [main]
   pull_request:
     types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
+  # After ci.yml's nightly run, so the two don't share the macOS runners.
+  schedule:
+    - cron: '47 5 * * *'
 
 concurrency:
   # Adding any other label starts a run that does nothing, so it must not
   # replace this PR's real one. Main's runs all finish and save the caches
-  # PRs read; a newer merge replaces only a run still waiting.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'browser-ci' && format('-{0}', github.run_id) || '' }}
+  # PRs read; a newer merge replaces only a run still waiting, and checks
+  # its change too. The nightly run has its own group, so no merge replaces
+  # it.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}${{ github.event.action == 'labeled' && github.event.label.name != 'browser-ci' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -36,7 +39,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       browser: ${{ steps.scope.outputs.browser }}
-      browser_macos: ${{ steps.scope.outputs.browser_macos }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -69,7 +71,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(needs.scope.outputs.browser_macos == 'true' && '["macos-latest", "windows-latest"]' || '["windows-latest"]') }}
+        os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -243,7 +245,6 @@ jobs:
         env:
           SCOPE: ${{ needs.scope.result }}
           BROWSER: ${{ needs.scope.outputs.browser }}
-          BROWSER_MACOS: ${{ needs.scope.outputs.browser_macos }}
           PACKAGED: ${{ needs.packaged-cef.result }}
         run: |
           test "$SCOPE" = success
@@ -252,7 +253,4 @@ jobs:
             echo 'No Browser input changed. The packaged run is left to main; add browser-ci to force it.'
           else
             test "$PACKAGED" = success
-            if [ "$BROWSER_MACOS" = false ]; then
-              echo 'Windows pass only: nothing only the macOS pass reads changed. Main runs both; add browser-ci to force macOS.'
-            fi
           fi
