@@ -7728,7 +7728,10 @@ impl CockpitView {
             return cell.child(pane::render_draft(
                 pane,
                 pane::DraftState {
-                    start: self.draft_hero(index, cx),
+                    start: {
+                        let hero = self.draft_hero(index, cx);
+                        self.under_sheets(hero, cx)
+                    },
                     attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
                     menu: self.popover_element(index, cx),
                     composer_empty: pane.composer.read(cx).is_empty(),
@@ -7830,7 +7833,7 @@ impl CockpitView {
             // An empty Thread wears the draft's start card until its first
             // prompt.
             start: if pane.is_main() && open.transcript().blocks().is_empty() {
-                self.thread_hero(thread)
+                self.under_sheets(self.thread_hero(thread), cx)
             } else {
                 None
             },

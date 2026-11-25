@@ -223,6 +223,14 @@ impl CockpitView {
         self.sheets.read(cx).up().is_some()
     }
 
+    /// What a Pane under the sheets shows in its middle: its start hero, or
+    /// nothing while a sheet is up. The veil dims what is under it, and
+    /// the hero's words, as wide as the board and centred on it, would
+    /// read past the edge of any card narrower than them.
+    pub(super) fn under_sheets(&self, hero: Option<pane::Hero>, cx: &App) -> Option<pane::Hero> {
+        hero.filter(|_| !self.sheet_up(cx))
+    }
+
     /// Put `sheet` up in place of whatever was. The popup up goes too, as
     /// does the ring on a draft's band: the keyboard is the sheet's.
     pub(super) fn show_sheet(&mut self, sheet: Sheet, cx: &mut Context<Self>) {

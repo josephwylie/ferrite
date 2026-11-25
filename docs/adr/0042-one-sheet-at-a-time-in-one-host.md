@@ -71,6 +71,11 @@ their openers. Two of the five had no Escape.
 - **All five sheets are in the host.** No sheet draws its own veil, and
   `hide_sheet` is the one close path for every one of them. ADR 0043 does
   the same for the menus and cards that hang over the window.
+- **Nothing large stands in the veil beside a card.** The veil only dims,
+  so the empty Pane's heading, drawn in display type, read through it past
+  a card's edges. While any sheet is up the Cockpit draws no heading
+  (`CockpitView::under_sheets`), one rule for every sheet and Pane; the rest of
+  the window stays under the veil as it is.
 - **What was typed outlives its sheet as plain values.** The view is
   dropped on a close, so what must survive the close leaves with the
   sheet (`sheet_gone`) as plain values, kept by what outlives the sheet,
