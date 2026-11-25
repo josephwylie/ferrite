@@ -82,7 +82,10 @@ fn begun(dir: &Path, copy: Unfinished) -> io::Result<()> {
     write_list(&dir.join(UNFINISHED), &known)
 }
 
-fn finished(dir: &Path, local_root: &Path, remote_root: &Path) -> io::Result<()> {
+/// The copy of the Project at `local_root` to `remote_root`, on the
+/// Machine whose files are in `dir`, is unfinished no longer: it is done,
+/// or added there as a Project.
+pub fn finished(dir: &Path, local_root: &Path, remote_root: &Path) -> io::Result<()> {
     let mut known: Vec<Unfinished> = read_list(&dir.join(UNFINISHED));
     let before = known.len();
     known.retain(|old| !(old.local_root == local_root && old.remote_root == remote_root));
@@ -703,8 +706,10 @@ const COUNTED: usize = 250;
 /// anything. What could not be read as it was listed is sent once more,
 /// and what still could not is in the answer's problems. Once done, or
 /// stopped before anything landed, the copy is no longer kept as
-/// unfinished. A run waits for the one before it to the same destination
-/// to end ([`Going`]).
+/// unfinished; one done as `cancel` stopped it, all of it landed but
+/// never added, still is, so the run after it resumes it ([`finished`]
+/// once it is added). A run waits for the one before it to the same
+/// destination to end ([`Going`]).
 pub fn copy(
     copy: &CopyJob,
     exchange: &mut dyn Exchange,
@@ -735,8 +740,10 @@ pub fn copy(
             (sent, changed) = (added(sent, then), now);
         }
     }
-    if let Err(error) = finished(copy.kept, copy.source, copy.dest) {
-        return Err(Stopped { error, sent });
+    if cancel.check().is_ok() {
+        if let Err(error) = finished(copy.kept, copy.source, copy.dest) {
+            return Err(Stopped { error, sent });
+        }
     }
     Ok(Copied::Sent { sent, changed })
 }

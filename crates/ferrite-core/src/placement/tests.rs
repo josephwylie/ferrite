@@ -711,6 +711,56 @@ fn a_copy_that_lands_nothing_is_not_kept_as_unfinished() {
     assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new());
 }
 
+/// A `Local` that cancels the copy as it asks for its last file to be
+/// finished: a cancel that comes after everything was asked.
+struct CancelsAtFinish {
+    local: Local,
+    cancel: Cancellation,
+}
+
+impl Exchange for CancelsAtFinish {
+    fn ask(&mut self, request: Request) -> io::Result<Asked> {
+        if matches!(request, Request::Finish { .. }) {
+            self.cancel.cancel();
+        }
+        self.local.ask(request)
+    }
+
+    fn answer(&mut self, asked: Asked) -> io::Result<Reply> {
+        self.local.answer(asked)
+    }
+}
+
+/// A copy cancelled once everything was asked lands all the same, and
+/// stays unfinished until it is added: the run after it, a Resume, finds
+/// it its own and finishes it, sending nothing, rather than taking it for
+/// someone else's.
+#[test]
+fn a_copy_that_lands_as_it_is_cancelled_is_resumed_not_found_occupied() {
+    let dir = scratch("lands-as-cancelled");
+    let (source, dest, kept) = (dir.join("app"), dir.join("there/app"), dir.join("machine"));
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("main.rs"), "fn main() {}").unwrap();
+    let job = CopyJob {
+        source: &source,
+        dest: &dest,
+        skip: &[],
+        kept: &kept,
+    };
+    let cancel = Cancellation::default();
+    let mut exchange = CancelsAtFinish {
+        local: Local::new(),
+        cancel: cancel.clone(),
+    };
+    let (landed, _) = sent(copy(&job, &mut exchange, &mut |_| {}, &cancel).expect("it landed"));
+    assert_eq!(landed.written, 1);
+    assert_eq!(unfinished(&kept, &source), [dest.clone()], "unfinished until it is added");
+
+    let (resumed, changed) = sent(copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap());
+    assert_eq!((resumed.written, changed.len()), (0, 0), "{resumed:?}");
+    assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "finished");
+}
+
 /// A `Local` that at its first Begin cancels the copy, says so on `held`,
 /// and goes on only once `gate` opens: a copy cancelled before anything it
 /// asked was taken, slow to end.
