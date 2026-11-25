@@ -589,7 +589,7 @@ fn bounds(cx: &mut gpui::VisualTestContext, id: String) -> gpui::Bounds<gpui::Pi
 /// 2.7.7): the full column stays open however narrow the window gets,
 /// so a test can stand a narrow board beside it.
 fn hold_nav_open(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
-    view.update(cx, |view, _| view.nav_forced_open = true);
+    view.update(cx, |view, _| view.columns.hold_nav_open(true));
 }
 
 /// Turn the panel off, for a test whose geometry is the board without

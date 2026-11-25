@@ -79,7 +79,7 @@ fn the_arrows_lead_the_head_and_step_on_a_click(cx: &mut TestAppContext) {
     assert_eq!(shown(&view, cx), Some(first));
 
     view.update(cx, |view, cx| {
-        view.nav_forced_open = false;
+        view.columns.hold_nav_open(false);
         view.set_nav_collapsed(true, cx);
     });
     tick(cx);

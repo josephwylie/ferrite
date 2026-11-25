@@ -22,7 +22,7 @@ fn window<'a>(
     view.update(cx, |view, _| {
         view.prefs.dir = dir;
         view.prefs.settings.panel_shown = true;
-        view.nav_forced_open = true;
+        view.columns.hold_nav_open(true);
     });
     cx.simulate_resize(gpui::size(px(width), px(900.)));
     tick(cx);
@@ -72,7 +72,7 @@ fn toggle_panel(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
 
 fn fold_nav(folded: bool, view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| {
-        view.nav_forced_open = false;
+        view.columns.hold_nav_open(false);
         view.set_nav_collapsed(folded, cx);
     });
     cx.run_until_parked();
@@ -332,7 +332,7 @@ fn keys_typed_while_the_panel_slides_shut_reach_the_composer(cx: &mut TestAppCon
     view.update(cx, |view, _| {
         view.prefs.dir = dir;
         view.prefs.settings.panel_shown = true;
-        view.nav_forced_open = true;
+        view.columns.hold_nav_open(true);
     });
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
     settle(cx);
@@ -405,7 +405,7 @@ fn keys_held_by_a_panel_body_return_to_the_composer_when_the_tab_changes(
     view.update(cx, |view, _| {
         view.prefs.dir = dir;
         view.prefs.settings.panel_shown = true;
-        view.nav_forced_open = true;
+        view.columns.hold_nav_open(true);
     });
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
     settle(cx);

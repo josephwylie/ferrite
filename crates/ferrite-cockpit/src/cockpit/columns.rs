@@ -11,6 +11,7 @@
 
 use super::*;
 use ferrite_ui::motion::{Reveal, COLUMN};
+use std::cell::Cell;
 use std::time::Instant;
 
 /// One column's slide: how far in this frame draws it, 0 shut → 1 at rest.
@@ -63,10 +64,24 @@ pub(crate) struct Columns {
     /// The first frame has been tended: what is open by then arrives in
     /// place, with no entrance.
     tended: bool,
+    /// The operator folded the nav away (cmd-B), as the launch read it
+    /// from settings.
+    nav_collapsed: bool,
+    /// A window too narrow for the column beside a board folds the nav
+    /// (rule 2.7.7): shown, never saved.
+    nav_auto_fold: Cell<bool>,
+    /// cmd-B held the column open against the auto-fold.
+    nav_forced_open: bool,
+    /// Measuring with the nav at its full width: what the auto-fold judges
+    /// the board by.
+    nav_measure_full: Cell<bool>,
+    /// Measuring at every reader's slide's destination, so a threshold
+    /// never flaps mid-slide.
+    nav_measure_rest: Cell<bool>,
 }
 
 impl Columns {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(nav_collapsed: bool) -> Self {
         let now = Instant::now();
         Self {
             nav_viewport_width: f32::INFINITY,
@@ -76,12 +91,96 @@ impl Columns {
             panel: ColumnSlide::at_rest(false, now),
             panel_owner: None,
             tended: false,
+            nav_collapsed,
+            nav_auto_fold: Cell::new(false),
+            nav_forced_open: false,
+            nav_measure_full: Cell::new(false),
+            nav_measure_rest: Cell::new(false),
         }
     }
 
     /// A column slid this frame: the board moves, so frames keep coming.
     pub(super) fn moving(&self) -> bool {
         self.nav.moving || self.panel.moving
+    }
+
+    /// Whether the nav is folded: by the operator, or by a window too
+    /// narrow for it that cmd-B has not held open.
+    pub(super) fn nav_folded(&self) -> bool {
+        self.nav_collapsed || (self.nav_auto_fold.get() && !self.nav_forced_open)
+    }
+
+    /// Whether the operator folded the nav, whatever the window's width
+    /// does.
+    pub(super) fn nav_collapsed(&self) -> bool {
+        self.nav_collapsed
+    }
+
+    /// Whether the window's width folds the nav.
+    pub(super) fn nav_auto_folded(&self) -> bool {
+        self.nav_auto_fold.get()
+    }
+
+    pub(super) fn set_nav_auto_fold(&self, fold: bool) {
+        self.nav_auto_fold.set(fold);
+    }
+
+    /// cmd-B on a nav the window folded and the operator did not: hold it
+    /// open, or let it fold again. False, changing nothing, on any other.
+    pub(super) fn toggle_nav_held_open(&mut self) -> bool {
+        if self.nav_collapsed || !self.nav_auto_fold.get() {
+            return false;
+        }
+        self.nav_forced_open = !self.nav_forced_open;
+        true
+    }
+
+    /// Fold the nav or open it, as the operator asks: a fold lets go of a
+    /// resize under way. Whether it moved.
+    pub(super) fn set_nav_collapsed(&mut self, collapsed: bool) -> bool {
+        if self.nav_collapsed == collapsed {
+            return false;
+        }
+        self.nav_collapsed = collapsed;
+        if collapsed {
+            self.nav_resize = None;
+        }
+        true
+    }
+
+    /// The operator's cmd-B override of the narrow-window fold, as a test
+    /// stands a narrow board beside the full column.
+    #[cfg(test)]
+    pub(super) fn hold_nav_open(&mut self, held: bool) {
+        self.nav_forced_open = held;
+    }
+
+    /// `measure` with the nav at its full width, however the window folds
+    /// it.
+    pub(super) fn measured_with_full_nav<T>(&self, measure: impl FnOnce() -> T) -> T {
+        self.nav_measure_full.set(true);
+        let measured = measure();
+        self.nav_measure_full.set(false);
+        measured
+    }
+
+    /// `measure` where every slide ends.
+    pub(super) fn measured_at_rest<T>(&self, measure: impl FnOnce() -> T) -> T {
+        let previous = self.nav_measure_rest.replace(true);
+        let measured = measure();
+        self.nav_measure_rest.set(previous);
+        measured
+    }
+
+    /// Whether the board is being measured where the columns' slides end.
+    pub(super) fn measuring_rest(&self) -> bool {
+        self.nav_measure_rest.get() || self.nav_measure_full.get()
+    }
+
+    /// Whether the nav's slide ends folded away: never while it is measured
+    /// at its full width.
+    fn nav_rests_folded(&self) -> bool {
+        !self.nav_measure_full.get() && self.nav_folded()
     }
 }
 
@@ -236,7 +335,7 @@ impl CockpitView {
     pub(super) fn tend_columns(&mut self, cx: &gpui::App) {
         let now = cx.background_executor().now();
         let reduced = ferrite_ui::motion::reduced_motion(cx);
-        let nav_open = !self.nav_folded();
+        let nav_open = !self.columns.nav_folded();
         if !nav_open {
             self.cancel_nav_resize();
         }
@@ -284,14 +383,9 @@ impl CockpitView {
         }
     }
 
-    /// Whether the board is being measured where the columns' slides end.
-    pub(super) fn measuring_rest(&self) -> bool {
-        self.nav_measure_rest.get() || self.nav_measure_full.get()
-    }
-
     /// The nav's width where its slide ends.
     pub(super) fn nav_rest_w(&self) -> f32 {
-        if !self.nav_measure_full.get() && self.nav_folded() {
+        if self.columns.nav_rests_folded() {
             0.0
         } else {
             self.nav_expanded_width()
@@ -300,7 +394,7 @@ impl CockpitView {
 
     /// The nav's width on screen this frame.
     pub(super) fn nav_width(&self) -> f32 {
-        if self.measuring_rest() {
+        if self.columns.measuring_rest() {
             self.nav_rest_w()
         } else {
             self.nav_expanded_width() * self.columns.nav.drawn
@@ -319,7 +413,7 @@ impl CockpitView {
 
     /// The panel's width on screen this frame.
     pub(super) fn panel_column_w(&self, cx: &gpui::App) -> f32 {
-        if self.measuring_rest() {
+        if self.columns.measuring_rest() {
             return self.panel_target_w(cx);
         }
         self.panel_drawn_pane(cx).map_or(0.0, |index| {
@@ -337,7 +431,7 @@ impl CockpitView {
     pub(super) fn closing_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         let panel_closing =
             self.panel_pane(cx).is_none() && self.panel_closing_focus.contains_focused(window, cx);
-        let nav_closing = self.nav_folded() && self.nav_view.read(cx).focus.contains_focused(window, cx);
+        let nav_closing = self.columns.nav_folded() && self.nav_view.read(cx).focus.contains_focused(window, cx);
         panel_closing || nav_closing
     }
 }

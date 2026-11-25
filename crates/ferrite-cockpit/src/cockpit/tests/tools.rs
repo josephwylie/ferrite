@@ -251,7 +251,7 @@ fn maximize_covers_all_but_the_boards_least_and_restores(cx: &mut TestAppContext
 fn maximize_with_the_nav_folded_takes_its_room(cx: &mut TestAppContext) {
     let (core, _fake, _checkout) = bound_cockpit("surfaces-maximize-rail", Provider::Claude);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.nav_collapsed = true);
+    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     assert!(cx.debug_bounds("nav-card").is_none(), "the nav is folded");

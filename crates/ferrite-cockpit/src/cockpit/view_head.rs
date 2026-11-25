@@ -113,7 +113,7 @@ impl CockpitView {
     }
 
     pub(super) fn history_arrows_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.nav_folded() {
+        if !self.columns.nav_folded() {
             return Some(
                 div()
                     .debug_selector(|| "nav-titlebar".into())

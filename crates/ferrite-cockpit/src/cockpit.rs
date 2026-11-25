@@ -434,10 +434,6 @@ pub struct CockpitView {
     /// The Inbox's alerts and the toast float that shows them.
     pub(crate) toasts: Entity<ferrite_nav::toasts::ToastsView>,
     native_copy: Option<String>,
-    nav_collapsed: bool,
-    nav_auto_fold: std::cell::Cell<bool>,
-    nav_forced_open: bool,
-    nav_measure_full: std::cell::Cell<bool>,
     /// The breadcrumb parent's room, as the last frame laid it out.
     head_parent_room: std::rc::Rc<std::cell::Cell<view_head::ParentRoom>>,
     /// What the nav and the Pane head say about a Thread beyond an O(1)
@@ -589,9 +585,6 @@ pub struct CockpitView {
     /// press through (`cockpit::decisions`).
     decisions: Entity<decisions::DecisionsView>,
     // ---- the frame's (F-12 … F-15)
-    /// Measuring at every reader's slide's destination, so a threshold
-    /// never flaps mid-slide.
-    nav_measure_rest: std::cell::Cell<bool>,
     /// What stands in the board's place: the Factory or the PRs.
     destination: Option<destination::Destination>,
     /// The PRs destination, kept as it was left while another view shows.
@@ -1268,6 +1261,7 @@ impl CockpitView {
             browser_chrome,
             browser_dialog,
             browser_review,
+            columns: columns::Columns::new(prefs.settings.nav_collapsed),
             panes: Vec::new(),
             focus: cx.focus_handle(),
             field_watch: Default::default(),
@@ -1316,10 +1310,6 @@ impl CockpitView {
             usage_popover_held: false,
             session_control_error: Default::default(),
             card_waits: Default::default(),
-            nav_collapsed: prefs.settings.nav_collapsed,
-            nav_auto_fold: std::cell::Cell::new(false),
-            nav_forced_open: false,
-            nav_measure_full: std::cell::Cell::new(false),
             head_parent_room: Default::default(),
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
@@ -1355,13 +1345,11 @@ impl CockpitView {
             floats: palette::Floats::new(),
             transcript_entities: Default::default(),
             decisions,
-            nav_measure_rest: std::cell::Cell::new(false),
             destination: None,
             prs,
             task_toasts: Default::default(),
             empty_board,
             reader_slides: Default::default(),
-            columns: columns::Columns::new(),
             launch_provider,
             machines,
         };
@@ -2687,13 +2675,9 @@ impl CockpitView {
             || self.sheet_float_open()
     }
 
-    fn nav_folded(&self) -> bool {
-        self.nav_collapsed || (self.nav_auto_fold.get() && !self.nav_forced_open)
-    }
-
     fn update_auto_fold(&mut self, window: &Window, cx: &gpui::App) {
         use ferrite_ui::theme::{NAV_AUTO_FOLD_BOARD_W, NAV_AUTO_FOLD_HYSTERESIS, NAV_AUTO_FOLD_PANE_W};
-        let held = self.nav_auto_fold.get();
+        let held = self.columns.nav_auto_folded();
         let slack = if held { NAV_AUTO_FOLD_HYSTERESIS } else { 0.0 };
         let width = f32::from(window.viewport_size().width);
         let right = self.panel_target_w(cx);
@@ -2704,14 +2688,12 @@ impl CockpitView {
                 .map(|(_, rect)| rect.w)
                 .fold(f32::INFINITY, f32::min)
         };
-        self.nav_measure_full.set(true);
-        let full = narrowest(self);
-        self.nav_measure_full.set(false);
+        let full = self.columns.measured_with_full_nav(|| narrowest(self));
         let gain = (width - right) / board.max(1.0);
         let folded = full * gain;
         let cramped = full < NAV_AUTO_FOLD_PANE_W + slack && folded >= NAV_AUTO_FOLD_PANE_W;
         let fold = board < NAV_AUTO_FOLD_BOARD_W + slack || cramped;
-        self.nav_auto_fold.set(fold);
+        self.columns.set_nav_auto_fold(fold);
         // `board_bounds` cached the full-column board while measuring.
         self.board_bounds(window, cx);
     }
@@ -2818,7 +2800,7 @@ impl CockpitView {
             let Some(tree) = self.board_tree(board, cx) else {
                 return Vec::new();
             };
-            let tree = if self.nav_measure_rest.get() || self.nav_measure_full.get() {
+            let tree = if self.columns.measuring_rest() {
                 self.rest_tree(tree)
             } else {
                 self.slid_tree(tree, bounds)
@@ -4451,24 +4433,21 @@ impl CockpitView {
     }
 
     fn toggle_nav_now(&mut self, cx: &mut Context<Self>) {
-        if !self.nav_collapsed && self.nav_auto_fold.get() {
-            self.nav_forced_open = !self.nav_forced_open;
-            if self.nav_folded() {
+        if self.columns.toggle_nav_held_open() {
+            if self.columns.nav_folded() {
                 self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
             }
             cx.notify();
             return;
         }
-        self.set_nav_collapsed(!self.nav_collapsed, cx);
+        self.set_nav_collapsed(!self.columns.nav_collapsed(), cx);
     }
 
     fn set_nav_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
-        if self.nav_collapsed == collapsed {
+        if !self.columns.set_nav_collapsed(collapsed) {
             return;
         }
-        self.nav_collapsed = collapsed;
         if collapsed {
-            self.cancel_nav_resize();
             self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
         }
         cx.notify();
@@ -6811,7 +6790,7 @@ impl CockpitView {
         self.update_auto_fold(window, cx);
         self.tend_columns(cx);
         self.tend_details(window, cx);
-        if self.nav_folded() {
+        if self.columns.nav_folded() {
             self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
         }
         self.present_cli_updates(window, cx);
@@ -7420,7 +7399,7 @@ impl CockpitView {
             .child(crate::frame().titlebar(!self.overlay_open(cx), self.maximized))
             .child(self.view_head(cx))
             .children(self.history_arrows_element(cx))
-            .when(!self.nav_folded(), |root| root.child(self.nav_resize_rail(cx)))
+            .when(!self.columns.nav_folded(), |root| root.child(self.nav_resize_rail(cx)))
             .child(self.nav_edge_tab(cx))
             // The panel over the strip's right end: its tabs take
             // their presses, the gaps between them still drag. Its toggle
@@ -8653,7 +8632,7 @@ impl CockpitView {
                 .w(px(drawn))
                 .overflow_hidden()
                 .child(face)
-                .when(self.nav_folded(), |column| column.child(columns::veil()))
+                .when(self.columns.nav_folded(), |column| column.child(columns::veil()))
                 .into_any_element(),
         )
     }
@@ -8665,7 +8644,7 @@ impl CockpitView {
 
     fn nav_edge_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         use ferrite_ui::theme::NAV_INSET_Y;
-        let open = !self.nav_folded();
+        let open = !self.columns.nav_folded();
         let left = (self.nav_expanded_width() - ferrite_ui::theme::HAIRLINE_W)
             * self.nav_width() / self.nav_expanded_width();
         div()

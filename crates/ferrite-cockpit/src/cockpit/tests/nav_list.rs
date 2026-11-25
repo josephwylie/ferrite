@@ -318,7 +318,7 @@ fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(720.), px(900.)));
     tick(cx);
     assert!(
-        view.read_with(cx, |view, _| view.nav_folded()),
+        view.read_with(cx, |view, _| view.columns.nav_folded()),
         "720px folds"
     );
     assert!(cx.debug_bounds("nav-column").is_none(), "the column is folded away");
@@ -328,7 +328,7 @@ fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
     );
     assert_eq!(
         view.read_with(cx, |view, _| (
-            view.nav_collapsed,
+            view.columns.nav_collapsed(),
             view.prefs.settings.nav_collapsed
         )),
         (false, saved),
@@ -337,21 +337,21 @@ fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
     let threshold = view.read_with(cx, |view, _| view.nav_expanded_width()) + NAV_AUTO_FOLD_BOARD_W;
     cx.simulate_resize(gpui::size(px(threshold + 1.), px(900.)));
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view.nav_folded()), "held");
+    assert!(view.read_with(cx, |view, _| view.columns.nav_folded()), "held");
     cx.simulate_resize(gpui::size(
         px(threshold + NAV_AUTO_FOLD_HYSTERESIS + 1.),
         px(900.),
     ));
     tick(cx);
-    assert!(!view.read_with(cx, |view, _| view.nav_folded()), "restored");
+    assert!(!view.read_with(cx, |view, _| view.columns.nav_folded()), "restored");
     // Narrow again; cmd-B holds the column open.
     cx.simulate_resize(gpui::size(px(720.), px(900.)));
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view.nav_folded()));
+    assert!(view.read_with(cx, |view, _| view.columns.nav_folded()));
     view.update(cx, |view, cx| view.toggle_nav_now(cx));
     tick(cx);
     assert!(
-        !view.read_with(cx, |view, _| view.nav_folded()),
+        !view.read_with(cx, |view, _| view.columns.nav_folded()),
         "cmd-B wins"
     );
     assert_eq!(

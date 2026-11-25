@@ -153,7 +153,7 @@ impl CockpitView {
     /// laid out.
     pub(super) fn place_toasts(&self, window: &Window, cx: &mut Context<Self>) {
         let place = Place {
-            folded: self.nav_folded(),
+            folded: self.columns.nav_folded(),
             nav_w: self.nav_width(),
             board_right: self.toast_board_right(window, cx),
         };
