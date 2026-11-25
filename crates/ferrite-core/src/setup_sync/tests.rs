@@ -2052,6 +2052,32 @@ fn a_failed_install_is_tried_again_at_the_next_start_and_not_before() {
     assert!(read(&far, ".claude/plugins/installed_plugins.json").unwrap().contains("pstack@cursor-plugins"));
 }
 
+/// A sync that writes a plugin key and ends before its last scan, or a
+/// write one Ferrite process made, still has the plugin installed: the
+/// next scan of that side, in any process, finds the wish kept.
+#[test]
+fn a_plugin_key_a_sync_wrote_is_installed_by_the_next_scan_of_any_process() {
+    let world = World::new("installs-wanted");
+    let far = world.home("machine");
+    put(
+        &far,
+        ".claude/settings.json",
+        r#"{"enabledPlugins": {"pstack@cursor-plugins": true, "old@cursor-plugins": true},
+            "extraKnownMarketplaces": {"cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}}}}"#,
+    );
+    let (cut_short, _) = with_tools(&far, &[]);
+    assert!(cut_short.remove(".claude/settings.json#enabledPlugins/old@cursor-plugins").unwrap());
+    drop(cut_short);
+
+    let (next, calls) = with_tools(&far, &[]);
+    next.scan(&[]);
+    assert!(calls.lock().unwrap().iter().any(|call| call == "install --json -- pstack@cursor-plugins"), "{calls:?}");
+    assert!(read(&far, ".claude/plugins/installed_plugins.json").unwrap().contains("pstack@cursor-plugins"));
+    let ran = calls.lock().unwrap().len();
+    next.scan(&[]);
+    assert_eq!(calls.lock().unwrap().len(), ran, "the wish is spent once a run began");
+}
+
 /// Codex lists no plugin while a marketplace its config names has no copy
 /// fetched: the side the sync wrote it to fetches each one, once, and says
 /// a fetch that failed for each plugin of it.

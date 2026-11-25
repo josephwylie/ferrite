@@ -17,10 +17,13 @@
 //!
 //! A tool is handed only names and sources of the shape it takes itself,
 //! each after `--`. A failure is said by each scan of that side, and tried
-//! again by the next write of a plugin key and by the side's next start,
-//! which finds it in a file; never in a loop. Nothing is ever uninstalled:
-//! a plugin turned off is a key set false, which the tool reads itself.
-//! What runs a tool is the engine's (`Installer`), which knows where it is.
+//! again by the next write of a plugin key and by the side's next start;
+//! never in a loop. Both the wish a write leaves and each failure are kept
+//! in a file of the side's settings folder, so a sync cut short before its
+//! last scan, or a write one Ferrite process made, is installed by the next
+//! scan of any. Nothing is ever uninstalled: a plugin turned off is a key
+//! set false, which the tool reads itself. What runs a tool is the
+//! engine's (`Installer`), which knows where it is.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -29,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::keys::{self, plain};
@@ -41,8 +45,7 @@ use crate::provider::Provider;
 /// No entry is there, so the problem holds nothing back.
 const FAILED: [(Provider, &str); 2] = [(Provider::Claude, ".claude/plugins/"), (Provider::Codex, ".codex/plugins/")];
 
-/// What a Ferrite keeps of the installs that failed, in its settings
-/// folder, for its next start.
+/// Where a side keeps [`Kept`], in its Ferrite settings folder.
 const KEPT: &str = "setup-installs.json";
 
 /// The plugin a problem at `path` says could not be installed, as the row
@@ -72,7 +75,7 @@ pub(super) struct Folders {
 /// One side's installs of the plugins chosen there.
 pub struct Installs {
     installer: Box<dyn Installer>,
-    /// Where what failed is kept for the next start.
+    /// Where [`Kept`] is.
     kept: PathBuf,
     state: Mutex<State>,
     idle: Condvar,
@@ -81,21 +84,32 @@ pub struct Installs {
 #[derive(Default)]
 struct State {
     running: bool,
-    /// A plugin key was written, or an earlier start left a failure, since
-    /// the last run began: the next scan runs again.
-    wanted: bool,
+    /// An earlier start left a failure and this one has not run yet: its
+    /// first scan tries again.
+    retry: bool,
     /// Each plugin whose install failed, by where a scan says it, and why.
     failed: BTreeMap<String, String>,
 }
 
+/// What a side keeps of its installs between its Ferrite processes.
+#[derive(Default, Serialize, Deserialize)]
+struct Kept {
+    /// A plugin or marketplace key was written since the last run began.
+    #[serde(default)]
+    wanted: bool,
+    /// What the last run found failed.
+    #[serde(default)]
+    failed: BTreeMap<String, String>,
+}
+
 impl Installs {
-    /// Installs by `installer`, what fails kept in `settings`, a Ferrite
-    /// settings folder: what an earlier start left failed there is tried
-    /// again at the first scan.
+    /// Installs by `installer`, what is wanted and what failed kept in
+    /// `settings`, a Ferrite settings folder: what an earlier start left
+    /// failed there is tried again at the first scan.
     pub fn new(installer: impl Installer + 'static, settings: &Path) -> Arc<Self> {
         let kept = settings.join(KEPT);
-        let failed: BTreeMap<String, String> = fs::read(&kept).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
-        let state = State { wanted: !failed.is_empty(), failed, ..State::default() };
+        let failed = read(&kept).failed;
+        let state = State { retry: !failed.is_empty(), failed, ..State::default() };
         Arc::new(Self {
             installer: Box::new(installer),
             kept,
@@ -108,7 +122,8 @@ impl Installs {
     /// what is on and not installed. Not before: a sync still writing the
     /// file a tool's installer writes too would race it.
     pub(super) fn changed(&self) {
-        self.lock().wanted = true;
+        let _state = self.lock();
+        self.keep(|kept| kept.wanted = true);
     }
 
     /// What a scan says of the installs: the run under way waited for,
@@ -131,16 +146,18 @@ impl Installs {
     /// is wanted and none is under way.
     fn start(self: &Arc<Self>, folders: &Folders) {
         let mut state = self.lock();
-        if state.running || !std::mem::take(&mut state.wanted) {
+        let retry = std::mem::take(&mut state.retry);
+        if state.running || !(read(&self.kept).wanted || retry) {
             return;
         }
+        self.keep(|kept| kept.wanted = false);
         state.running = true;
         drop(state);
         let (installs, of) = (self.clone(), folders.clone());
         let spawned = std::thread::Builder::new().name("setup-sync-installs".into()).spawn(move || {
             let failed = installs.install(&of);
-            installs.keep(&failed);
             let mut state = installs.lock();
+            installs.keep(|kept| kept.failed = failed.clone());
             state.failed = failed;
             state.running = false;
             installs.idle.notify_all();
@@ -149,6 +166,7 @@ impl Installs {
             let mut state = self.lock();
             state.running = false;
             state.failed = missing(folders).into_iter().map(|plugin| (plugin, error.to_string())).collect();
+            self.keep(|kept| kept.wanted = true);
         }
     }
 
@@ -219,13 +237,16 @@ impl Installs {
         failed
     }
 
-    /// Keep `failed` for the next start. A file that cannot be written
-    /// costs only that retry: this start still says each failure.
-    fn keep(&self, failed: &BTreeMap<String, String>) {
-        let _ = match failed.is_empty() {
+    /// Change what is kept by `change`, the state's lock held. A file that
+    /// cannot be written costs only what another process or start would
+    /// have read from it: this one still runs and says each failure.
+    fn keep(&self, change: impl FnOnce(&mut Kept)) {
+        let mut kept = read(&self.kept);
+        change(&mut kept);
+        let _ = match !kept.wanted && kept.failed.is_empty() {
             true => fs::remove_file(&self.kept),
             false => self.kept.parent().map_or(Ok(()), private_dirs).and_then(|()| {
-                write_over(&self.kept, &serde_json::to_vec_pretty(failed).unwrap_or_default())
+                write_over(&self.kept, &serde_json::to_vec_pretty(&kept).unwrap_or_default())
             }),
         };
     }
@@ -240,6 +261,11 @@ impl Installs {
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// What is kept at `at`; nothing when it is not there or does not read.
+fn read(at: &Path) -> Kept {
+    fs::read(at).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
 }
 
 /// Each plugin the tools in `folders` lack of what is chosen there, by

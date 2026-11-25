@@ -205,7 +205,10 @@ them as plugins, apart from paths, and names the side as the toast does:
 until the plugin is installed or turned off. It is tried again at the next
 write of a plugin key and at the side's next start, which reads it from
 `setup-installs.json` in Ferrite's settings folder; never in a loop. The
-hub does the same for itself after a pull. There is no new protocol op.
+write's wish to install is kept in that file too, so a sync cut short
+before its last scan, or a write one Ferrite process made, is installed by
+the next scan of that side in any process. The hub does the same for
+itself after a pull. There is no new protocol op.
 Nothing is ever uninstalled: a plugin turned off is a key set false, which
 the tool reads itself. The runner is core's. What runs `claude` and
 `codex` is the engine's (`providers::plugin_installs`), which finds each
