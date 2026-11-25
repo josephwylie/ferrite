@@ -881,7 +881,10 @@ impl CockpitView {
             Some(SurfaceId::Changes) => filled(self.changes_pane(ferrite_tools::changes::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(_)) => filled(self.terminals.clone().into_any_element()),
             Some(SurfaceId::SideChat(_)) => filled(self.side_chat.clone().into_any_element()),
-            Some(SurfaceId::PullRequest(_)) => filled(self.pull_request.clone().into_any_element()),
+            Some(SurfaceId::PullRequest(_)) => {
+                self.register_pr_stops(cx);
+                filled(self.pull_request.clone().into_any_element())
+            }
         };
         let body = if takes_keys { keyed(body) } else { body };
         ferrite_ui::motion::swap_since(

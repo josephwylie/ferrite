@@ -568,7 +568,10 @@ impl CockpitView {
                 MenuTarget::SurfaceTab { thread, at }
             }
             PanelControl::Plus => return self.toggle_door(super::strip::plus_door(thread), cx),
-            PanelControl::PrNumber => MenuTarget::PrLink(thread),
+            PanelControl::PrNumber => {
+                let number = self.pull_request.read(cx).number_bounds();
+                return self.open_menu_under(number, MenuTarget::PrLink(thread), cx);
+            }
             PanelControl::PrMore => {
                 let Some(number) = self.pr_snapshot(thread, cx).map(|pr| pr.number) else {
                     return;
@@ -589,7 +592,19 @@ impl CockpitView {
         target: MenuTarget,
         cx: &mut Context<Self>,
     ) {
-        let Some(bounds) = self.panel.focus.bounds.borrow().get(&control).copied() else {
+        let bounds = self.panel.focus.bounds.borrow().get(&control).copied();
+        self.open_menu_under(bounds, target, cx);
+    }
+
+    /// Open `target`'s menu under a stop drawn at `bounds`, its left edge
+    /// on the stop's.
+    fn open_menu_under(
+        &mut self,
+        bounds: Option<gpui::Bounds<gpui::Pixels>>,
+        target: MenuTarget,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(bounds) = bounds else {
             return;
         };
         let at = gpui::point(

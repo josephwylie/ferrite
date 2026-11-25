@@ -24,22 +24,29 @@
 //!
 //! The reader is a view of its own (ADR 0041), `PullRequestView`: it owns
 //! every read, every action's course and the Merge armed. What it draws
-//! of the window it reads through `pr_inputs`; what it asks of the window
-//! (a read, a view kept, Code's diff, a hand-off, the `⋯`) it says as a
-//! `PrEvent`. The forge and the Thread's agent are the window's, so the
-//! window asks them and hands the answers to the view.
+//! of the window it reads through a `Source` the root makes over itself
+//! (`pr_inputs`); what it asks of the window (a read, a view kept, Code's
+//! diff, a hand-off, the `⋯`) it says as a `PrEvent`. The forge and the
+//! Thread's agent are the window's, so the window asks them and hands the
+//! answers to the view. Its controls are stops of the Panel's row: the
+//! view declares them (`tab_stops`), the root enters them as it draws the
+//! Surface and hands each one's handle back through the inputs. Code's
+//! body is Changes', a view the root hands it (`ChangesPane`).
 
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use gpui::WeakEntity;
+use gpui::{AnyView, Bounds, FocusHandle, Pixels, WeakEntity};
 
 use super::pr_action::{ActionState, PrActions, Stage};
 use super::pr_read::{Answer, PrFailure, PrRead, PrReads, stamp_age};
 use ferrite_core::pull_request::{PrSource, PrTarget};
 use super::*;
-use crate::cockpit::menu_button::{Door, Doors, Edge, MenuHost};
+use crate::cockpit::menu_button::{Door, Edge};
 use crate::cockpit::surfaces::PrTab;
-use ferrite_ui::components::IconSize;
+use ferrite_ui::components::{IconSize, MenuDoor};
+use ferrite_ui::source::Source;
 use ferrite_core::protocol::{
     WireCheckStatus, WirePr, WirePrCommentKind, WirePrState, WirePrUnread,
 };
@@ -310,11 +317,20 @@ pub(in crate::cockpit) fn soft_line() -> gpui::Rgba {
 /// The pull request reader (ADR 0041): what each PR it shows knows of its
 /// pull request, what each action on one became, the Merge waiting for
 /// its second press, and the prose it renders. One view for the window:
-/// the Panel's PR Surface is its render, and the PRs destination's detail
-/// is drawn by it as the root hands the open PR over (`content`), so the
+/// the Panel's PR Surface is its render, and the PRs destination, which
+/// holds it as its child, draws its detail with it (`pr_content`), so the
 /// two may stand in one frame while the Panel slides shut.
 pub(crate) struct PullRequestView {
-    cockpit: WeakEntity<CockpitView>,
+    /// The PR the Panel shows, as the window has it.
+    inputs: Source<PrInputs>,
+    /// Whether an answer for a PR is still wanted: a Thread's tab closed
+    /// meanwhile wants none.
+    wanted: Source<bool, PrTarget>,
+    /// Code's body in the Panel: Changes' pane of the PR, the root's view.
+    code: AnyView,
+    /// Where the PR's number was last drawn, for the menu ⇧F10 opens from
+    /// it to hang from.
+    number_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Each PR read whole, a Thread's tab's or a Project's.
     pub(super) reads: PrReads,
     /// What a PR's prose (its body, guide and comments) renders through.
@@ -329,26 +345,36 @@ pub(crate) struct PullRequestView {
 }
 
 /// A PR as the window shows it this frame, in the Panel or the PRs.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PrShown {
-    target: PrTarget,
+    pub target: PrTarget,
     /// The view chosen, as its Surface or the PRs keep it.
-    tab: PrTab,
+    pub tab: PrTab,
     /// Whether it is the PR of its Thread's branch: only that one can be
     /// asked to change (Merge, Write guide).
-    branch: bool,
-    /// Code's body, Changes' pane of the PR, while Code is chosen.
-    code: Option<AnyElement>,
-    /// The Panel's row, which the views' segments are stops of.
-    focus: Rc<PanelFocus>,
+    pub branch: bool,
+}
+
+/// One of the PR's controls that is a stop of the Panel's row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum PrStop {
+    Number,
+    Primary,
+    More,
+    View(PrTab),
 }
 
 /// What the Panel's PR Surface draws from, as the Cockpit has it.
 pub(crate) struct PrInputs {
-    shown: PrShown,
+    pub shown: PrShown,
     /// The nav's reading of the Thread's PR, its state and address: the
     /// header's until the PR is read.
-    reading: Option<(PrTone, Option<String>)>,
-    doors: Doors,
+    pub reading: Option<(PrTone, Option<String>)>,
+    /// The `⋯` button's door.
+    pub more: MenuDoor,
+    /// The handle of each stop `tab_stops` declared, as the window entered
+    /// them in the Panel's row.
+    pub stops: HashMap<PrStop, FocusHandle>,
 }
 
 /// What the reader asks of the window.
@@ -363,21 +389,11 @@ pub(crate) enum PrEvent {
     /// Merge confirmed, Ready for review, Write guide, or a failed
     /// hand-off's Retry: ask the Thread's agent.
     Run(PrTarget, PrAction),
-    /// The `⋯` pressed.
-    Door(Door),
+    /// The `⋯` pressed: its menu, or to shut it.
+    More(PrTarget),
 }
 
 impl EventEmitter<PrEvent> for PullRequestView {}
-
-impl MenuHost for PullRequestView {
-    fn press_door(&mut self, door: Door, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(PrEvent::Door(door));
-    }
-
-    fn tip<E: InteractiveElement>(element: E, text: SharedString) -> E {
-        <CockpitView as MenuHost>::tip(element, text)
-    }
-}
 
 impl CockpitView {
     /// The PR row and the `+` menu's Pull request: the branch's PR as a
@@ -534,27 +550,44 @@ impl CockpitView {
         }
     }
 
-    /// `target` in `tab`, as its reader draws it: Code's body is Changes'.
-    pub(in crate::cockpit) fn pr_shown(
-        &self,
-        target: PrTarget,
-        tab: PrTab,
+    /// The window's PR reader, reading it through `Source`s over the root,
+    /// and Code's body in the Panel, Changes' pane of the PR it shows.
+    pub(in crate::cockpit) fn new_pull_request(
+        changes: &Entity<ferrite_tools::changes::ChangesView>,
         cx: &mut Context<Self>,
-    ) -> PrShown {
+    ) -> Entity<PullRequestView> {
+        let root = cx.entity();
+        let inputs = Source::of(&root, |root: &Self, _: &(), cx| root.pr_inputs(cx));
+        let wanted = Source::of(&root, |root: &Self, target: &PrTarget, _| Some(root.pr_tab_open(*target)));
+        let shown = Source::of(&root, |root: &Self, _: &(), cx| {
+            let (shown, _) = root.panel_pr(cx)?;
+            root.pr_code(shown)
+        });
+        let code = cx.new(|_| ferrite_tools::changes::ChangesPane::new(changes.clone(), shown));
+        cx.new(|_| PullRequestView::new(inputs, wanted, code.into()))
+    }
+
+    /// Code's body for `shown`, while Code is its view: the PR's published
+    /// files, as Changes draws them.
+    pub(in crate::cockpit) fn pr_code(
+        &self,
+        shown: PrShown,
+    ) -> Option<(ferrite_tools::changes::Diff, ferrite_tools::changes::ChangesInputs)> {
+        let diff = ferrite_tools::changes::Diff::PullRequest(shown.target);
+        (shown.tab == PrTab::Code).then(|| (diff, self.changes_inputs(diff)))
+    }
+
+    /// `target` in `tab`, as its reader draws it.
+    pub(in crate::cockpit) fn pr_shown(&self, target: PrTarget, tab: PrTab) -> PrShown {
         PrShown {
             target,
             tab,
             branch: self.branch_pr(target),
-            code: (tab == PrTab::Code).then(|| {
-                self.changes_pane(ferrite_tools::changes::Diff::PullRequest(target), cx)
-                    .into_any_element()
-            }),
-            focus: self.panel.focus.clone(),
         }
     }
 
-    /// Everything the Panel's PR Surface draws from: the PR the Panel shows.
-    fn pr_inputs(&self, cx: &mut Context<Self>) -> Option<PrInputs> {
+    /// The PR the Panel draws this frame, and the nav's reading of it.
+    fn panel_pr(&self, cx: &gpui::App) -> Option<(PrShown, Option<(PrTone, Option<String>)>)> {
         let thread = self.panes[self.panel_drawn_pane(cx)?].thread()?;
         let Some(SurfaceId::PullRequest(number)) = self.active_surface(thread) else {
             return None;
@@ -568,11 +601,45 @@ impl CockpitView {
             .facts
             .pr(thread)
             .map(|pr| (PrTone::of_reading(pr.state, pr.draft), pr.url.clone()));
+        Some((self.pr_shown(PrTarget::thread(thread, number), tab), reading))
+    }
+
+    /// Everything the Panel's PR Surface draws from: the PR the Panel shows.
+    fn pr_inputs(&self, cx: &gpui::App) -> Option<PrInputs> {
+        let (shown, reading) = self.panel_pr(cx)?;
         Some(PrInputs {
-            shown: self.pr_shown(PrTarget::thread(thread, number), tab, cx),
+            shown,
             reading,
-            doors: self.doors(),
+            more: self.doors().door(MenuTarget::PrMore(shown.target)),
+            stops: self.panel.focus.handles(|control| match control {
+                PanelControl::PrNumber => Some(PrStop::Number),
+                PanelControl::PrPrimary => Some(PrStop::Primary),
+                PanelControl::PrMore => Some(PrStop::More),
+                PanelControl::PrView(tab) => Some(PrStop::View(*tab)),
+                _ => None,
+            }),
         })
+    }
+
+    /// The PR Surface's stops, as the reader declares them, enter the
+    /// Panel's row after the head's, before the reader draws them.
+    pub(in crate::cockpit) fn register_pr_stops(&self, cx: &mut Context<Self>) {
+        let Some((shown, reading)) = self.panel_pr(cx) else {
+            return;
+        };
+        let stops = self
+            .pull_request
+            .read(cx)
+            .tab_stops(shown, reading.map(|(tone, _)| tone));
+        for (stop, semantics) in stops {
+            let control = match stop {
+                PrStop::Number => PanelControl::PrNumber,
+                PrStop::Primary => PanelControl::PrPrimary,
+                PrStop::More => PanelControl::PrMore,
+                PrStop::View(tab) => PanelControl::PrView(tab),
+            };
+            self.panel.focus.register(control, semantics, cx);
+        }
     }
 
     pub(in crate::cockpit) fn on_pr_event(
@@ -598,15 +665,22 @@ impl CockpitView {
             }
             PrEvent::EnsureCode(target) => self.ensure_diff(ferrite_tools::changes::Diff::PullRequest(target), cx),
             PrEvent::Run(target, action) => self.run_pr_action(target, action, cx),
-            PrEvent::Door(door) => self.toggle_door(door, cx),
+            PrEvent::More(target) => self.toggle_door(pr_more_door(target), cx),
         }
     }
 }
 
 impl PullRequestView {
-    pub(in crate::cockpit) fn new(cockpit: WeakEntity<CockpitView>) -> Self {
+    pub(in crate::cockpit) fn new(
+        inputs: Source<PrInputs>,
+        wanted: Source<bool, PrTarget>,
+        code: AnyView,
+    ) -> Self {
         Self {
-            cockpit,
+            inputs,
+            wanted,
+            code,
+            number_at: Rc::default(),
             reads: PrReads::default(),
             rich: Default::default(),
             actions: PrActions::default(),
@@ -655,11 +729,7 @@ impl PullRequestView {
         read: std::io::Result<ferrite_core::protocol::ReviewPullRequest>,
         cx: &mut Context<Self>,
     ) {
-        let shown = self
-            .cockpit
-            .upgrade()
-            .is_some_and(|cockpit| cockpit.read(cx).pr_tab_open(target));
-        if !shown {
+        if !self.wanted.read(&target, cx).unwrap_or(false) {
             self.reads.forget(target);
             return;
         }
@@ -749,7 +819,7 @@ impl PullRequestView {
         &self,
         target: PrTarget,
         branch_pr: bool,
-    ) -> Vec<Option<(menu::Item, MenuVerb)>> {
+    ) -> Vec<Option<(menu::Item, PrAction)>> {
         let PrSource::Thread(_) = target.source else {
             return Vec::new();
         };
@@ -790,17 +860,74 @@ impl PullRequestView {
                         item = item.disabled_because("Another action on this PR is in flight");
                     }
                 }
-                rows.push(Some((item, MenuVerb::Pr(*action))));
+                rows.push(Some((item, *action)));
             }
         }
         rows
     }
 
+    /// The PR's state as its header shows it: its snapshot's, else the
+    /// nav's `reading`, else open.
+    fn tone(&self, target: PrTarget, reading: Option<PrTone>) -> PrTone {
+        self.reads
+            .snapshot(target)
+            .map(PrTone::of_snapshot)
+            .or(reading)
+            .unwrap_or(PrTone::Open)
+    }
+
+    /// An open PR's primary action and what it says: Merge, armed on the
+    /// first press; a draft's, Ready for review.
+    fn primary(&self, target: PrTarget, tone: PrTone) -> (PrAction, &'static str) {
+        match tone {
+            PrTone::Draft => (PrAction::ReadyForReview, "Ready for review"),
+            _ if self.armed == Some(target) => (PrAction::MergeNow, "Confirm merge?"),
+            _ => (PrAction::MergeNow, "Merge"),
+        }
+    }
+
+    /// The PR Surface's controls as stops of the Panel's row, in the order
+    /// it draws them: the number, the primary action while it shows, the
+    /// `⋯`, then the views. `reading` is the nav's reading of its state.
+    pub(in crate::cockpit) fn tab_stops(
+        &self,
+        shown: PrShown,
+        reading: Option<PrTone>,
+    ) -> Vec<(PrStop, Semantics)> {
+        let target = shown.target;
+        let tone = self.tone(target, reading);
+        let mut stops = vec![(
+            PrStop::Number,
+            Semantics::button(format!("Pull request #{}, open on GitHub", target.number)),
+        )];
+        if !tone.settled() && shown.branch {
+            stops.push((PrStop::Primary, Semantics::button(self.primary(target, tone).1)));
+        }
+        stops.push((PrStop::More, Semantics::button("More pull request actions")));
+        stops.extend(
+            PrTab::ALL.map(|tab| (PrStop::View(tab), Semantics::tab(tab.label(), tab == shown.tab))),
+        );
+        stops
+    }
+
+    /// Where the PR's number was last drawn: the menu ⇧F10 opens from it
+    /// hangs from there.
+    pub(in crate::cockpit) fn number_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.number_at.get()
+    }
+
     /// The PR Surface: header, then its content.
     fn surface(&self, inputs: PrInputs, cx: &mut Context<Self>) -> AnyElement {
         use ferrite_ui::theme::*;
-        let PrInputs { shown, reading, doors } = inputs;
+        let PrInputs {
+            shown,
+            reading,
+            more,
+            stops,
+        } = inputs;
         let target = shown.target;
+        let code = (shown.tab == PrTab::Code).then(|| self.code.clone());
+        let this = cx.weak_entity();
         div()
             .debug_selector(|| "pr".into())
             .flex()
@@ -808,37 +935,40 @@ impl PullRequestView {
             .flex_1()
             .min_h_0()
             .text_size(px(FS_BADGE))
-            .child(self.pr_header(target, shown.branch, reading, &doors, &shown.focus, cx))
+            .child(self.pr_header(target, shown.branch, reading, more, &stops, cx))
             .children(self.pr_action_notice(target, cx))
-            .child(self.pr_content(shown, cx))
+            .child(self.pr_content(shown, code, &stops, &this))
             .into_any_element()
     }
 
     /// A PR's views, the notice of its newest read, and the view shown,
-    /// whichever surface asks.
-    pub(in crate::cockpit) fn pr_content(&self, shown: PrShown, cx: &mut Context<Self>) -> Div {
-        let PrShown {
-            target,
-            tab,
-            branch,
-            code,
-            focus,
-        } = shown;
+    /// whichever surface asks: the Panel's, or the PRs' detail, which
+    /// holds this reader as its child and draws it with a read. `code` is
+    /// Code's body, `stops` the views' handles, `this` the reader their
+    /// presses go to.
+    pub(in crate::cockpit) fn pr_content(
+        &self,
+        shown: PrShown,
+        code: Option<AnyView>,
+        stops: &HashMap<PrStop, FocusHandle>,
+        this: &WeakEntity<Self>,
+    ) -> Div {
+        let PrShown { target, tab, branch } = shown;
         let read = self.reads.get(target);
         let snapshot = read.and_then(|read| read.snapshot.as_ref());
         let body = match (snapshot, read.and_then(PrRead::failure)) {
             (Some(pr), _) => match tab {
-                PrTab::Summary => self.pr_summary(target, pr, cx),
-                PrTab::Guide => self.pr_guide(target, branch, pr, cx),
-                PrTab::Timeline => self.pr_timeline(target, pr, cx),
-                PrTab::Code => code.unwrap_or_else(|| div().into_any_element()),
+                PrTab::Summary => self.pr_summary(target, pr),
+                PrTab::Guide => self.pr_guide(target, branch, pr, this),
+                PrTab::Timeline => self.pr_timeline(target, pr),
+                PrTab::Code => code.map_or_else(|| div().into_any_element(), AnyView::into_any_element),
             },
             (None, Some(failure)) => pr_note(failure.note.clone().into()),
             (None, None) => pr_note("Reading\u{2026}".into()),
         };
         let notice = read.and_then(|read| match (read.reading(), read.failure()) {
             (true, _) if snapshot.is_some() => Some(pr_refreshing()),
-            (_, Some(failure)) => Some(self.pr_failed(target, failure, snapshot.is_some(), cx)),
+            (_, Some(failure)) => Some(pr_failed(target, failure, snapshot.is_some(), this)),
             _ => None,
         });
         div()
@@ -848,59 +978,12 @@ impl PullRequestView {
             .min_h_0()
             .bg(rgb(ferrite_ui::theme::TX_GROUND))
             .children(snapshot.map(pr_identity))
-            .child(self.pr_views(target, tab, &focus, cx))
+            .child(self.pr_views(target, tab, stops, this))
             .children(notice)
             .child(ferrite_ui::motion::swap_since(
                 self.picked,
                 div().flex().flex_col().flex_1().min_h_0().child(body),
             ))
-    }
-
-    /// A read that failed: what went wrong and its way back, over the last
-    /// good content when there is any.
-    fn pr_failed(
-        &self,
-        target: PrTarget,
-        failure: &PrFailure,
-        stale: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        use ferrite_ui::theme::*;
-        let said = if stale {
-            format!(
-                "{}. Showing the last read. {}",
-                failure.headline(),
-                failure.note
-            )
-        } else {
-            failure.note.clone()
-        };
-        let retry = pr_chip("pr-retry", "Retry").on_click(cx.listener(
-            move |_, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                cx.emit(PrEvent::Read(target));
-            },
-        ));
-        div()
-            .debug_selector(|| "pr-failed".into())
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(SPACE_2))
-            .px(px(SPACE_4))
-            .py(px(SPACE_2))
-            .border_b(px(HAIRLINE_W))
-            .border_color(soft_line())
-            .text_color(rgb(RED))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .whitespace_normal()
-                    .child(SharedString::from(said)),
-            )
-            .child(retry)
-            .into_any_element()
     }
 
     /// T3's header grid: the crumbs, then the actions.
@@ -909,19 +992,14 @@ impl PullRequestView {
         target: PrTarget,
         branch_pr: bool,
         reading: Option<(PrTone, Option<String>)>,
-        doors: &Doors,
-        focus: &Rc<PanelFocus>,
+        more: MenuDoor,
+        stops: &HashMap<PrStop, FocusHandle>,
         cx: &mut Context<Self>,
     ) -> Div {
         use ferrite_ui::theme::*;
         let number = target.number;
         let (reading_tone, reading_url) = reading.unzip();
-        let tone = self
-            .reads
-            .snapshot(target)
-            .map(PrTone::of_snapshot)
-            .or(reading_tone)
-            .unwrap_or(PrTone::Open);
+        let tone = self.tone(target, reading_tone);
         let repo = self
             .reads
             .snapshot(target)
@@ -929,8 +1007,8 @@ impl PullRequestView {
             .or(reading_url.flatten())
             .and_then(|url| repo_of(&url));
         let number_semantics = Semantics::button(format!("Pull request #{number}, open on GitHub"));
-        let number_handle = focus.register(PanelControl::PrNumber, number_semantics.clone(), cx);
         let url = self.reads.snapshot(target).map(|pr| pr.url.clone());
+        let number_at = self.number_at.clone();
         let crumbs = div()
             .debug_selector(|| "pr-crumbs".into())
             .flex()
@@ -961,8 +1039,15 @@ impl PullRequestView {
                     .cursor_pointer()
                     .hover(|link| link.underline())
                     .tooltip(ferrite_ui::menu::tooltip("Open on GitHub"))
-                    .map(|link| controls::focusable(link, &number_handle, &number_semantics))
-                    .child(focus.measured(PanelControl::PrNumber))
+                    .map(|link| match stops.get(&PrStop::Number) {
+                        Some(handle) => controls::focusable(link, handle, &number_semantics),
+                        None => link,
+                    })
+                    .child(
+                        gpui::canvas(move |at, _, _| number_at.set(Some(at)), |_, _, _, _| {})
+                            .absolute()
+                            .size_full(),
+                    )
                     .child(SharedString::from(format!("#{number}")))
                     .child(icon(icons::EXTERNAL, PR_LINK_GLYPH, INK_SUBTLE))
                     .on_click(move |_: &ClickEvent, _, cx| {
@@ -974,23 +1059,28 @@ impl PullRequestView {
         let primary = if tone.settled() || !branch_pr {
             pr_pill(tone).into_any_element()
         } else {
-            self.pr_primary(target, tone, focus, cx)
+            self.pr_primary(target, tone, stops, cx)
         };
         let more_semantics = Semantics::button("More pull request actions");
-        let more_handle = focus.register(PanelControl::PrMore, more_semantics.clone(), cx);
-        let more = doors.button(
-            controls::icon_stop(
+        let face = match stops.get(&PrStop::More) {
+            Some(handle) => controls::icon_stop(
                 "pr-more",
                 icons::ELLIPSIS,
                 IconSize::Standard,
-                &more_handle,
+                handle,
                 &more_semantics,
                 cx,
             ),
-            pr_more_door(target),
-            "More",
-            cx,
-        );
+            None => ferrite_ui::components::icon_button(
+                "pr-more",
+                icons::ELLIPSIS,
+                IconSize::Standard,
+                more_semantics.name.clone(),
+                cx,
+            ),
+        };
+        let press_more = cx.listener(move |_, _: &(), _, cx| cx.emit(PrEvent::More(target)));
+        let more = more.button(face, "More", move |window, cx| press_more(&(), window, cx));
         div()
             .debug_selector(|| "pr-header".into())
             .bg(rgb(ferrite_ui::theme::TX_GROUND))
@@ -1022,16 +1112,11 @@ impl PullRequestView {
         &self,
         target: PrTarget,
         tone: PrTone,
-        focus: &Rc<PanelFocus>,
+        stops: &HashMap<PrStop, FocusHandle>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use ferrite_ui::theme::*;
-        let armed = self.armed == Some(target);
-        let (action, label) = match tone {
-            PrTone::Draft => (PrAction::ReadyForReview, "Ready for review"),
-            _ if armed => (PrAction::MergeNow, "Confirm merge?"),
-            _ => (PrAction::MergeNow, "Merge"),
-        };
+        let (action, label) = self.primary(target, tone);
         let held = self.actions.pending(target)
             || self
                 .reads
@@ -1039,7 +1124,6 @@ impl PullRequestView {
                 .is_some_and(|pr| action.blocked_by(pr).is_some());
         let key = ferrite_ui::pointer::hover_key(&gpui::ElementId::from("pr-primary"));
         let semantics = Semantics::button(label);
-        let handle = focus.register(PanelControl::PrPrimary, semantics.clone(), cx);
         div()
             .id("pr-primary")
             .debug_selector(|| "pr-primary".into())
@@ -1053,7 +1137,10 @@ impl PullRequestView {
             .font_weight(W_LABEL)
             .text_color(rgb(if held { INK_SUBTLE } else { INK_STRONG }))
             .when(!held, |button| button.hover_control(key).press_control())
-            .map(|primary| controls::focusable(primary, &handle, &semantics))
+            .map(|primary| match stops.get(&PrStop::Primary) {
+                Some(handle) => controls::focusable(primary, handle, &semantics),
+                None => primary,
+            })
             .child(label)
             .when(!held, |button| {
                 button.on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
@@ -1173,8 +1260,8 @@ impl PullRequestView {
         &self,
         target: PrTarget,
         shown: PrTab,
-        focus: &Rc<PanelFocus>,
-        cx: &mut Context<Self>,
+        stops: &HashMap<PrStop, FocusHandle>,
+        this: &WeakEntity<Self>,
     ) -> Div {
         use ferrite_ui::theme::*;
         let tabs = PrTab::ALL.into_iter();
@@ -1184,7 +1271,6 @@ impl PullRequestView {
             let key = ferrite_ui::pointer::hover_key(&gpui::ElementId::from(id.clone()));
             let pressed = tab == shown;
             let semantics = Semantics::tab(tab.label(), pressed);
-            let handle = focus.register(PanelControl::PrView(tab), semantics.clone(), cx);
             let segment = div()
                 .id(id)
                 .debug_selector(move || selector.clone())
@@ -1201,9 +1287,12 @@ impl PullRequestView {
                         segment.hover_raised(key)
                     }
                 })
-                .map(|segment| controls::focusable(segment, &handle, &semantics))
+                .map(|segment| match stops.get(&PrStop::View(tab)) {
+                    Some(handle) => controls::focusable(segment, handle, &semantics),
+                    None => segment,
+                })
                 .child(tab.label())
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                .on_click(on(this, move |view, _: &ClickEvent, _, cx| {
                     view.select(target, tab, pressed, cx);
                 }));
             if tab != PrTab::Code {
@@ -1213,7 +1302,7 @@ impl PullRequestView {
             // the segment's own hover is its wash's, so a wrapper listens.
             div()
                 .id("pr-tab-Code-near")
-                .on_hover(cx.listener(move |_, hovered: &bool, _, cx| {
+                .on_hover(on(this, move |_, hovered: &bool, _, cx| {
                     if *hovered {
                         cx.emit(PrEvent::EnsureCode(target));
                     }
@@ -1279,7 +1368,7 @@ impl PullRequestView {
     }
 
     /// Summary: the description and checks below the persistent PR identity.
-    fn pr_summary(&self, target: PrTarget, pr: &WirePr, cx: &mut Context<Self>) -> AnyElement {
+    fn pr_summary(&self, target: PrTarget, pr: &WirePr) -> AnyElement {
         use ferrite_ui::theme::*;
         let checks = pr
             .checks
@@ -1315,7 +1404,7 @@ impl PullRequestView {
                         .cursor_pointer()
                         .hover(|row| row.underline())
                         .child(icon(icons::EXTERNAL, PR_LINK_GLYPH, INK_SUBTLE))
-                        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url)))
+                        .on_click(move |_: &ClickEvent, _, cx| cx.open_url(&url))
                         .into_any_element(),
                     None => row.into_any_element(),
                 }
@@ -1346,7 +1435,6 @@ impl PullRequestView {
                     "pr-more-checks",
                     "More checks than are shown. See all on the forge",
                     &pr.url,
-                    cx,
                 ))
             })
             .into_any_element()
@@ -1359,7 +1447,7 @@ impl PullRequestView {
         target: PrTarget,
         branch: bool,
         pr: &WirePr,
-        cx: &mut Context<Self>,
+        this: &WeakEntity<Self>,
     ) -> AnyElement {
         use ferrite_ui::theme::*;
         if let Some(text) = guide(pr) {
@@ -1400,7 +1488,7 @@ impl PullRequestView {
                             button
                                 .hover_control("pr-write-guide")
                                 .press_control()
-                                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                .on_click(on(this, move |_, _: &ClickEvent, _, cx| {
                                     cx.emit(PrEvent::Run(target, PrAction::WriteGuide));
                                 }))
                         })
@@ -1417,7 +1505,7 @@ impl PullRequestView {
     /// Timeline: the conversation as the forge's read lists it, newest
     /// first (T3's default order): each entry's code context, its
     /// resolved or outdated mark, and its replies beneath.
-    fn pr_timeline(&self, target: PrTarget, pr: &WirePr, cx: &mut Context<Self>) -> AnyElement {
+    fn pr_timeline(&self, target: PrTarget, pr: &WirePr) -> AnyElement {
         use ferrite_ui::theme::*;
         if pr.comments.is_empty() {
             return pr_note("No comments yet".into());
@@ -1566,7 +1654,6 @@ impl PullRequestView {
                     "pr-more-comments",
                     "Older comments are not shown. See all on the forge",
                     &pr.url,
-                    cx,
                 ))
             })
             .into_any_element()
@@ -1575,20 +1662,72 @@ impl PullRequestView {
 
 impl Render for PullRequestView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        match self.cockpit.update(cx, |cockpit, cx| cockpit.pr_inputs(cx)) {
-            Ok(Some(inputs)) => self.surface(inputs, cx),
-            _ => div().into_any_element(),
+        match self.inputs.read(&(), cx) {
+            Some(inputs) => self.surface(inputs, cx),
+            None => div().into_any_element(),
         }
     }
 }
 
-/// The way past a read's cap: `url`, the PR where the forge holds the rest.
-fn pr_more(
-    id: &'static str,
-    said: &'static str,
-    url: &str,
-    cx: &mut Context<PullRequestView>,
+/// A read that failed: what went wrong and its way back, over the last
+/// good content when there is any.
+fn pr_failed(
+    target: PrTarget,
+    failure: &PrFailure,
+    stale: bool,
+    this: &WeakEntity<PullRequestView>,
 ) -> AnyElement {
+    use ferrite_ui::theme::*;
+    let said = if stale {
+        format!(
+            "{}. Showing the last read. {}",
+            failure.headline(),
+            failure.note
+        )
+    } else {
+        failure.note.clone()
+    };
+    let retry = pr_chip("pr-retry", "Retry").on_click(on(this, move |_, _: &ClickEvent, _, cx| {
+        cx.stop_propagation();
+        cx.emit(PrEvent::Read(target));
+    }));
+    div()
+        .debug_selector(|| "pr-failed".into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(SPACE_2))
+        .px(px(SPACE_4))
+        .py(px(SPACE_2))
+        .border_b(px(HAIRLINE_W))
+        .border_color(soft_line())
+        .text_color(rgb(RED))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .whitespace_normal()
+                .child(SharedString::from(said)),
+        )
+        .child(retry)
+        .into_any_element()
+}
+
+/// A press or hover on the reader, made outside its own update, as
+/// `cx.listener` makes one inside it: the PRs draw their detail with the
+/// reader, and its presses still go to it.
+fn on<E: ?Sized + 'static>(
+    this: &WeakEntity<PullRequestView>,
+    act: impl Fn(&mut PullRequestView, &E, &mut Window, &mut Context<PullRequestView>) + 'static,
+) -> impl Fn(&E, &mut Window, &mut gpui::App) + 'static {
+    let this = this.clone();
+    move |event, window, cx| {
+        this.update(cx, |view, cx| act(view, event, window, cx)).ok();
+    }
+}
+
+/// The way past a read's cap: `url`, the PR where the forge holds the rest.
+fn pr_more(id: &'static str, said: &'static str, url: &str) -> AnyElement {
     use ferrite_ui::theme::*;
     let url = url.to_string();
     div()
@@ -1603,7 +1742,7 @@ fn pr_more(
         .hover(|link| link.underline())
         .child(said)
         .child(icon(icons::EXTERNAL, PR_LINK_GLYPH, INK_SUBTLE))
-        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url)))
+        .on_click(move |_: &ClickEvent, _, cx| cx.open_url(&url))
         .into_any_element()
 }
 

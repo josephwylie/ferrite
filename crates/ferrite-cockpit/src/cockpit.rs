@@ -1225,7 +1225,6 @@ impl CockpitView {
             gpui::KeyBinding::new("escape", browser::CancelAnnotation, Some("BrowserAnnotationCapture")),
             gpui::KeyBinding::new("escape", ferrite_pane::annotation_editor::Cancel, Some("AnnotationEditor")),
         ]);
-        let cockpit_weak = cx.weak_entity();
         let cockpit = cx.new(|_| cockpit);
         let setup_sync = cx.new(|_| {
             setup_sync::SetupSync::new(prefs.setup_home.clone(), prefs.dir.clone(), cockpit.clone())
@@ -1236,9 +1235,7 @@ impl CockpitView {
             .detach();
         let sheets = cx.new(|_| sheets::Sheets::default());
         cx.subscribe(&sheets, Self::on_sheets_event).detach();
-        let prs = cx.new(|cx| prs_view::PrsView::new(cockpit_weak.clone(), cx));
         let empty_board = Self::new_empty_board(cx);
-        cx.subscribe(&prs, Self::on_prs_event).detach();
         let side_chat = Self::new_side_chat(cx);
         let files = Self::new_files(cx);
         let terminals = Self::new_terminals(cx);
@@ -1246,8 +1243,9 @@ impl CockpitView {
         // The root draws the diffs into its own frame (`changes_pane`), so
         // each change redraws the window.
         cx.observe(&changes, |_, _, cx| cx.notify()).detach();
-        let pull_request =
-            cx.new(|_| panel::pull_request::PullRequestView::new(cockpit_weak.clone()));
+        let pull_request = Self::new_pull_request(&changes, cx);
+        let prs = Self::new_prs(&changes, &pull_request, cx);
+        cx.subscribe(&prs, Self::on_prs_event).detach();
         cx.subscribe(&pull_request, Self::on_pr_event).detach();
         // What the reader shows is drawn by the root's frame too (a tab's
         // state, the PRs' header), so each change redraws the window.

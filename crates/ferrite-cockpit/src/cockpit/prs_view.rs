@@ -2,10 +2,10 @@
 //! requests, listed and read whole, in the board's place (as the Factory
 //! board is), whatever is checked out. The root holds it for the window's
 //! life, so what it holds outlives it being hidden. What it shows of the
-//! window it reads through `prs_inputs`; what it asks of the window (a
-//! list read, a PR read, the board back, a Project added) it says as a
-//! `PrsEvent`, which the Cockpit answers once the view's own update has
-//! ended.
+//! window it reads through a `Source` the root makes over itself
+//! (`prs_inputs`); what it asks of the window (a list read, a PR read, the
+//! board back, a Project added) it says as a `PrsEvent`, which the Cockpit
+//! answers once the view's own update has ended.
 //!
 //! The shape it holds:
 //!
@@ -19,9 +19,9 @@
 //!   scroll, its mark, its filter and its scope.
 //! - **Detail:** the PR as a Thread's PR tab shows it (`pr_content`), read
 //!   by number in the Project's repository (`PrTarget::project`), with no
-//!   actions: they belong to a Thread's own PR. The PR reader
-//!   (`PullRequestView`) draws that body, and the Cockpit hands it over
-//!   with the inputs.
+//!   actions: they belong to a Thread's own PR. The view holds the
+//!   window's PR reader (`PullRequestView`) as its child and draws that
+//!   body by reading it; Code's body is Changes', a view the root hands it.
 //! - **Freshness:** the view, a scope or filter chosen, and a detail opened
 //!   each read again, over the content the last read left.
 //! - **Keys:** the view owns its keys under the `PullRequests` context:
@@ -30,12 +30,13 @@
 
 use std::collections::HashMap;
 
-use gpui::{actions, WeakEntity};
+use gpui::{actions, AnyView};
 
 use super::panel::pr_read::PrFailure;
 use ferrite_core::pull_request::PrTarget;
-use super::panel::pull_request::PrTone;
+use super::panel::pull_request::{PrShown, PrStop, PrTone, PullRequestView};
 use super::*;
+use ferrite_ui::source::Source;
 use super::destination::{Destination, Shows};
 use crate::cockpit::surfaces::PrTab;
 use ferrite_core::protocol::{ReviewPullRequests, WirePrFilter, WirePrList, WirePrRow, WirePrUnread};
@@ -60,7 +61,13 @@ struct ListRead {
 }
 
 pub(crate) struct PrsView {
-    cockpit: WeakEntity<CockpitView>,
+    inputs: Source<PrsInputs>,
+    /// The window's PR reader, which draws the open PR's body.
+    reader: Entity<PullRequestView>,
+    /// Code's body, Changes' pane of the open PR: the root's view.
+    code: AnyView,
+    /// The detail's views' handles: stops of their own, not the Panel's.
+    stops: HashMap<PrStop, FocusHandle>,
     pub(super) project: Option<ProjectKey>,
     pub(super) filter: WirePrFilter,
     lists: HashMap<(ProjectKey, WirePrFilter), ListRead>,
@@ -75,19 +82,7 @@ pub(crate) struct PrsView {
 /// What the PRs draw from, as the Cockpit has it this frame.
 pub(crate) struct PrsInputs {
     /// The Projects to scope to, in the registry's order, by title.
-    projects: Vec<(ProjectKey, SharedString)>,
-    /// The open PR, when its detail shows.
-    detail: Option<PrsDetail>,
-}
-
-/// The open PR, as the Panel's reader has it.
-pub(crate) struct PrsDetail {
-    number: u64,
-    url: Option<String>,
-    /// The state the last read gave it; the list's row stands in before.
-    tone: Option<PrTone>,
-    /// The PR tab's body, drawn by the reader (`PullRequestView`).
-    content: Div,
+    pub projects: Vec<(ProjectKey, SharedString)>,
 }
 
 /// What the PRs ask of the window.
@@ -232,34 +227,51 @@ impl CockpitView {
             .update(cx, |prs, cx| prs.reading((project, filter), answer, cx));
     }
 
-    /// Everything the PRs draw from. `open` is the PR whose detail shows,
-    /// and the view of it chosen.
-    fn prs_inputs(&self, open: Option<(PrTarget, PrTab)>, cx: &mut Context<Self>) -> PrsInputs {
+    /// The window's PRs, reading it through a `Source` over the root, with
+    /// the window's PR reader as its child and Code's body, Changes' pane
+    /// of the PR whose detail shows.
+    pub(super) fn new_prs(
+        changes: &Entity<ferrite_tools::changes::ChangesView>,
+        reader: &Entity<PullRequestView>,
+        cx: &mut Context<Self>,
+    ) -> Entity<PrsView> {
+        let root = cx.entity();
+        let inputs = Source::of(&root, |root: &Self, _: &(), cx| Some(root.prs_inputs(cx)));
+        let shown = Source::of(&root, |root: &Self, _: &(), cx| {
+            let (target, tab) = root.prs.read(cx).open()?;
+            root.pr_code(root.pr_shown(target, tab))
+        });
+        let code = cx.new(|_| ferrite_tools::changes::ChangesPane::new(changes.clone(), shown));
+        let reader = reader.clone();
+        cx.new(|cx| PrsView::new(inputs, reader, code.into(), cx))
+    }
+
+    /// Everything the PRs draw from.
+    fn prs_inputs(&self, cx: &gpui::App) -> PrsInputs {
         let projects = self
             .every_project(cx)
             .into_iter()
             .map(|(key, _, title)| (key, SharedString::from(title)))
             .collect();
-        let detail = open.map(|(target, tab)| {
-            let shown = self.pr_shown(target, tab, cx);
-            self.pull_request.update(cx, |reader, cx| {
-                let snapshot = reader.snapshot(target);
-                PrsDetail {
-                    number: target.number,
-                    url: snapshot.map(|pr| pr.url.clone()),
-                    tone: snapshot.map(PrTone::of_snapshot),
-                    content: reader.pr_content(shown, cx),
-                }
-            })
-        });
-        PrsInputs { projects, detail }
+        PrsInputs { projects }
     }
 }
 
 impl PrsView {
-    pub(super) fn new(cockpit: WeakEntity<CockpitView>, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(
+        inputs: Source<PrsInputs>,
+        reader: Entity<PullRequestView>,
+        code: AnyView,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
-            cockpit,
+            inputs,
+            reader,
+            code,
+            stops: PrTab::ALL
+                .into_iter()
+                .map(|tab| (PrStop::View(tab), cx.focus_handle()))
+                .collect(),
             project: None,
             filter: WirePrFilter::Open,
             lists: HashMap::new(),
@@ -464,9 +476,9 @@ impl PrsView {
     /// The destination: its scope and filter over the list, or the open PR.
     fn board(&self, inputs: PrsInputs, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
-        let body = match (self.project, inputs.detail) {
+        let body = match (self.project, self.open()) {
             (None, _) => self.no_project(cx),
-            (Some(_), Some(detail)) => self.detail(detail, cx),
+            (Some(_), Some(open)) => self.detail(open, cx),
             (Some(project), None) => self.list(project, &inputs.projects, cx),
         };
         div()
@@ -841,15 +853,21 @@ impl PrsView {
     }
 
     /// The open PR: a way back to the list, its number on the forge, then
-    /// the views a Thread's PR tab has but Code.
-    fn detail(&self, detail: PrsDetail, cx: &mut Context<Self>) -> Div {
+    /// the views a Thread's PR tab has, drawn by the reader.
+    fn detail(&self, (target, tab): (PrTarget, PrTab), cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
-        let PrsDetail {
-            number,
-            url,
-            tone,
-            content,
-        } = detail;
+        let number = target.number;
+        let reader = self.reader.read(cx);
+        let snapshot = reader.snapshot(target);
+        let url = snapshot.map(|pr| pr.url.clone());
+        let tone = snapshot.map(PrTone::of_snapshot);
+        let shown = PrShown {
+            target,
+            tab,
+            branch: false,
+        };
+        let code = (tab == PrTab::Code).then(|| self.code.clone());
+        let content = reader.pr_content(shown, code, &self.stops, &self.reader.downgrade());
         let tone = tone.or_else(|| {
             let row = self.rows().iter().find(|row| row.number == number)?;
             Some(panel::pull_request::PrTone::of_wire(row.state, row.draft))
@@ -926,13 +944,9 @@ impl PrsView {
 
 impl Render for PrsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let open = self.open();
-        match self
-            .cockpit
-            .update(cx, |cockpit, cx| cockpit.prs_inputs(open, cx))
-        {
-            Ok(inputs) => self.board(inputs, cx),
-            Err(_) => div(),
+        match self.inputs.read(&(), cx) {
+            Some(inputs) => self.board(inputs, cx),
+            None => div(),
         }
     }
 }
