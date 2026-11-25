@@ -13,14 +13,15 @@ use crate::tree::{self, Asked, Exchange, Reply, Request, Session, Side};
 const SECRET: &str = "sk-ant-oat01-NEVER-SHOWN-7f3a";
 
 /// A Machine reached in this process: its Server's tree session over a
-/// home of its own, cut off after `left` requests when that is set, and
-/// `before` each request it takes.
+/// home of its own, the session of one connection, cut off after `left`
+/// requests when that is set, and `before` each request it takes, with
+/// the session as the Server holds it.
 struct Machine {
     session: Session,
     replies: VecDeque<(u64, io::Result<Reply>)>,
     asked: u64,
     left: Option<u64>,
-    before: Box<dyn FnMut(&Request)>,
+    before: Box<dyn FnMut(&Request, &mut Session)>,
 }
 
 impl Machine {
@@ -34,7 +35,7 @@ impl Machine {
             replies: VecDeque::new(),
             asked: 0,
             left,
-            before: Box::new(|_| {}),
+            before: Box::new(|_, _| {}),
         }
     }
 }
@@ -45,7 +46,7 @@ impl Exchange for Machine {
             return Err(io::Error::new(io::ErrorKind::ConnectionAborted, "cut off"));
         }
         self.asked += 1;
-        (self.before)(&request);
+        (self.before)(&request, &mut self.session);
         let reply = self.session.execute(request);
         self.replies.push_back((self.asked, reply));
         Ok(Asked::numbered(self.asked))
@@ -1010,7 +1011,7 @@ fn a_file_that_changes_while_it_crosses_is_left_to_the_next_sync() {
         let mut machine = Machine::new(&far);
         let (changing, again, newest) = (writer.clone(), added.clone(), format!("changed while it crossed {round}
 "));
-        machine.before = Box::new(move |request| {
+        machine.before = Box::new(move |request, _| {
             if let Request::Begin { path, .. } | Request::Read { path, .. } = request {
                 if *path == edited || *path == again {
                     put(&changing, path, &newest);
@@ -2210,7 +2211,7 @@ fn one_sync_of_a_home_runs_at_a_time_whichever_machine_it_is_with() {
     let second = std::thread::spawn(move || {
         let mut there = Machine::new(&machine_b);
         let mut paused = false;
-        there.before = Box::new(move |request| {
+        there.before = Box::new(move |request, _| {
             if !paused && matches!(request, Request::Read { .. }) {
                 paused = true;
                 let _ = scanned.send(());
@@ -2280,6 +2281,220 @@ fn a_scan_waits_once_for_an_install_under_way_and_the_next_goes_on() {
     let waited = second.elapsed();
     end.send(()).unwrap();
     assert!(waited < within / 2, "a later scan waited for the same run again: {waited:?}");
+}
+
+const CLAUDE_MD: &str = ".claude/CLAUDE.md";
+
+/// `home`'s own sync as a hub, with its Machine `machine`: its settings,
+/// and so its lock, in its own Ferrite folder, where its Server keeps them.
+fn hub_of(home: &Home, machine: &str) -> Job {
+    Job {
+        names: Names::Any,
+        ..Job::for_machine(home.clone(), &home.root().join(".ferrite"), machine)
+    }
+}
+
+/// The Mac, Windows and Linux, Windows a Machine to the Mac and a hub to
+/// Linux: all three agree on CLAUDE.md, then the Mac and Linux each edit
+/// it.
+fn three_computers(world: &World) -> (Home, Home, Home) {
+    let (mac, windows, linux) = (world.home("mac"), world.home("windows"), world.home("linux"));
+    put(&mac, CLAUDE_MD, "v0\n");
+    sync(&world.job(&mac, "windows"), &windows);
+    sync(&hub_of(&windows, "linux"), &linux);
+    put(&mac, CLAUDE_MD, "from the Mac\n");
+    put(&linux, CLAUDE_MD, "from Linux\n");
+    (mac, windows, linux)
+}
+
+/// The one conflict `synced` says, on CLAUDE.md, and both its copies: the
+/// one kept aside and the one `home` holds now.
+fn both_kept(synced: &Synced, home: &Home) -> [String; 2] {
+    let said: Vec<&str> = synced.conflicts.iter().map(|kept| kept.path.as_str()).collect();
+    assert_eq!(said, [CLAUDE_MD], "an edit was written over unsaid: {synced:?}");
+    let mut both = [fs::read_to_string(&synced.conflicts[0].kept).unwrap(), read(home, CLAUDE_MD).unwrap()];
+    both.sort();
+    both
+}
+
+/// The verifier's run. The Mac's sync holds Windows' home from its scan
+/// to its end, so Windows' own sync with Linux, asked as the Mac's write
+/// is on its way, is busy; once it runs it finds both edits and keeps
+/// both. Before, Windows took Linux's edit between the Mac's scan and its
+/// write, the Mac's copy went over it unsaid, and Windows' next sync
+/// carried that on to Linux, Linux's edit only in Windows' trash.
+#[test]
+fn a_hubs_sync_holds_its_machines_home_from_the_scan_to_the_end() {
+    let world = World::new("machine-held");
+    let (mac, windows, linux) = three_computers(&world);
+    let (meanwhile, heard) = mpsc::channel();
+    let mut there = Machine::new(&windows);
+    let (hub, machine) = (windows.clone(), linux.clone());
+    let mut asked = false;
+    there.before = Box::new(move |request, _| {
+        if !asked && matches!(request, Request::Begin { .. }) {
+            asked = true;
+            let own = run(&hub_of(&hub, "linux"), &mut Machine::new(&machine), &mut |_| {}, &Cancellation::default());
+            meanwhile.send(own.unwrap()).unwrap();
+        }
+    });
+    let pushed = run(&world.job(&mac, "windows"), &mut there, &mut |_| {}, &Cancellation::default()).unwrap();
+    drop(there);
+    let after = sync(&hub_of(&windows, "linux"), &linux);
+    assert_eq!(both_kept(&after, &windows), ["from Linux\n", "from the Mac\n"], "{pushed:?}");
+    assert_eq!(read(&linux, CLAUDE_MD), read(&windows, CLAUDE_MD));
+    assert_eq!(heard.try_iter().collect::<Vec<_>>(), [Outcome::Busy], "Windows' own sync ran while the Mac's held it");
+}
+
+/// A hub that goes quiet mid-sync, its computer asleep, past what the
+/// Machine waits for: the Machine let its home go, and its own sync took
+/// Linux's edit meanwhile. The write the hub sends as it wakes was planned
+/// from the scan before, so it is refused and changes nothing there, and
+/// the next sync finds both edits. Before, it went over Linux's, unsaid.
+#[test]
+fn a_write_after_the_machine_let_its_hub_go_is_refused_and_changes_nothing() {
+    let world = World::new("hub-let-go");
+    let (mac, windows, linux) = three_computers(&world);
+    let mut there = Machine::new(&windows);
+    let (hub, machine) = (windows.clone(), linux.clone());
+    let mut asleep = false;
+    there.before = Box::new(move |request, session| {
+        if !asleep && matches!(request, Request::Begin { .. }) {
+            asleep = true;
+            // What the Server's lane does once a connection asks nothing
+            // for as long as it waits.
+            session.expire();
+            sync(&hub_of(&hub, "linux"), &machine);
+        }
+    });
+    let late = run(&world.job(&mac, "windows"), &mut there, &mut |_| {}, &Cancellation::default());
+    drop(there);
+    assert_eq!(read(&windows, CLAUDE_MD).as_deref(), Some("from Linux\n"), "the late write landed: {late:?}");
+    assert!(late.is_err(), "{late:?}");
+    let again = sync(&world.job(&mac, "windows"), &windows);
+    assert_eq!(both_kept(&again, &mac), ["from Linux\n", "from the Mac\n"]);
+}
+
+/// A Machine whose own install is under way holds its home: a hub's sync
+/// with it is busy at once and writes nothing there. Before, the hub's
+/// write waited for the install, past the 30 s a hub waits for a reply,
+/// and landed once the install let go.
+#[test]
+fn a_sync_with_a_machine_whose_install_holds_its_home_is_busy_at_once_and_writes_nothing() {
+    let world = World::new("machine-installing");
+    let mine = world.home("here");
+    let (slow, began, end) = Slow::new();
+    let machine = world.home("machine");
+    let installs = Installs::new(slow, &machine.root().join(".ferrite"));
+    let far = machine.with_installs(installs.clone());
+    put(&far, ".claude/settings.json", TURNED_ON);
+    installs.changed();
+    let installing = far.clone();
+    let scan = std::thread::spawn(move || installing.scan(&[]));
+    began.recv().unwrap();
+    put(&mine, CLAUDE_MD, "From here.\n");
+    let before = files(&far);
+    let (done, outcome) = mpsc::channel();
+    let (job, there) = (world.job(&mine, "far"), far.clone());
+    std::thread::spawn(move || done.send(run(&job, &mut Machine::new(&there), &mut |_| {}, &Cancellation::default()).unwrap()));
+    let busy = outcome.recv_timeout(Duration::from_secs(10));
+    end.send(()).unwrap();
+    scan.join().unwrap();
+    assert_eq!(busy, Ok(Outcome::Busy), "the hub's sync waited for the Machine's install");
+    assert_eq!(files(&far), before, "and wrote nothing there");
+}
+
+/// Two computers that are each other's hub sync with each other at once:
+/// each holds its own home and finds the other's held, so one or both are
+/// busy and wrote nothing, and trying again a moment later, both finish.
+/// Before, each wrote into the other's home while the other's sync held
+/// it, and both waited for ever.
+#[test]
+fn two_computers_that_are_each_others_hub_both_finish() {
+    let world = World::new("each-others-hub");
+    let (one, other) = (world.home("one"), world.home("other"));
+    put(&one, ".claude/commands/from-one.md", "One's.\n");
+    put(&other, ".claude/commands/from-other.md", "The other's.\n");
+    let together = Arc::new(std::sync::Barrier::new(2));
+    let (done, finished) = mpsc::channel();
+    for (hub, machine) in [(one.clone(), other.clone()), (other.clone(), one.clone())] {
+        let (together, done) = (together.clone(), done.clone());
+        std::thread::spawn(move || {
+            let job = hub_of(&hub, "peer");
+            let mut busy = 0;
+            loop {
+                let mut there = Machine::new(&machine);
+                if busy == 0 {
+                    // Each holds its own home before it asks the other.
+                    let (together, mut met) = (together.clone(), false);
+                    there.before = Box::new(move |_, _| {
+                        if !std::mem::replace(&mut met, true) {
+                            together.wait();
+                        }
+                    });
+                }
+                match run(&job, &mut there, &mut |_| {}, &Cancellation::default()) {
+                    Ok(Outcome::Busy) if busy < 100 => {
+                        busy += 1;
+                        std::thread::sleep(Duration::from_millis(rand::random::<u64>() % 20));
+                    }
+                    outcome => return done.send((busy, outcome)).unwrap(),
+                }
+            }
+        });
+    }
+    let mut busy = 0;
+    for _ in 0..2 {
+        let (tried, outcome) = finished.recv_timeout(Duration::from_secs(30)).expect("the two hubs waited for each other for ever");
+        assert!(matches!(outcome, Ok(Outcome::Synced(_))), "{outcome:?}");
+        busy += tried;
+    }
+    assert!(busy > 0, "they never met");
+    assert_eq!(files(&one), files(&other));
+    assert_eq!(read(&other, ".claude/commands/from-one.md").as_deref(), Some("One's.\n"));
+}
+
+/// A Server from before the hold, which reads `hold` as an op it does not
+/// know.
+struct Older(Machine);
+
+impl Exchange for Older {
+    fn ask(&mut self, request: Request) -> io::Result<Asked> {
+        let known = ["scan", "begin", "chunk", "finish", "read", "make_dir", "link", "remove"];
+        let action = serde_json::to_value(&request).unwrap()["action"].as_str().unwrap_or_default().to_string();
+        if !known.contains(&action.as_str()) {
+            self.0.asked += 1;
+            let unknown = io::Error::new(io::ErrorKind::Unsupported, "This server does not know that tree operation");
+            self.0.replies.push_back((self.0.asked, Err(unknown)));
+            return Ok(Asked::numbered(self.0.asked));
+        }
+        self.0.ask(request)
+    }
+
+    fn answer(&mut self, asked: Asked) -> io::Result<Reply> {
+        self.0.answer(asked)
+    }
+}
+
+/// A hub and a Server not both from the hold on move nothing: a Server
+/// from before it refuses the hold as unsupported, which the row reads as
+/// "Update Ferrite on <name>", and one from it refuses a hub from before
+/// it, which never holds, with words for that hub's operator.
+#[test]
+fn a_hub_or_a_server_from_before_the_hold_moves_nothing() {
+    let world = World::new("before-the-hold");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    seed(&mine);
+    put(&far, CLAUDE_MD, "The Machine's.\n");
+    let (here, there) = (files(&mine), files(&far));
+    let job = world.job(&mine, "far");
+    let older = run(&job, &mut Older(Machine::new(&far)), &mut |_| {}, &Cancellation::default());
+    assert_eq!(older.as_ref().map_err(io::Error::kind).err(), Some(io::ErrorKind::Unsupported), "{older:?}");
+
+    let unheld = Session::with_home(far.clone()).execute(Request::Scan { root: tree::Root::SETUP, skip: Vec::new(), after: None });
+    let refused = unheld.expect_err("a scan by a hub from before the hold");
+    assert!(refused.to_string().starts_with("Update Ferrite on this computer to sync your setup"), "{refused}");
+    assert_eq!((files(&mine), files(&far)), (here, there), "nothing moved");
 }
 
 /// Take away the link at `at`, not what it leads to.

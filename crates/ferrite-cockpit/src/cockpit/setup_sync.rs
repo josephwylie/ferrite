@@ -1016,7 +1016,25 @@ mod tests {
         assert_eq!(track.status, Status::Syncing(None));
         assert!(!track.status.failed());
         assert_eq!(track.due(now + Duration::from_secs(1), false, false), None, "it waits a moment");
-        assert_eq!(track.due(now + SETTLE, false, false), Some(Ask::WHOLE), "all of it, as the other sync may have moved anything");
+        assert_eq!(track.due(now + 2 * SETTLE, false, false), Some(Ask::WHOLE), "all of it, as the other sync may have moved anything");
+    }
+
+    /// Two computers that are each other's hub, each holding its own home
+    /// as it asks for the other's, find each other busy at once: each
+    /// tries again at a moment of its own, or they would meet each time.
+    #[test]
+    fn syncs_that_found_each_other_busy_try_again_at_moments_of_their_own() {
+        let now = Instant::now();
+        let tried: std::collections::BTreeSet<Duration> = (0..8)
+            .map(|_| {
+                let mut track = track();
+                track.finished(Ok(Outcome::Busy), Ask::HERE, now, &mut News::default());
+                let mut after = (0..=600).map(|step| Duration::from_millis(10 * step));
+                after.find(|after| track.due(now + *after, false, false).is_some()).unwrap()
+            })
+            .collect();
+        assert!(tried.iter().all(|after| (SETTLE..=2 * SETTLE).contains(after)), "{tried:?}");
+        assert!(tried.len() > 1, "each tried again at the same moment: {tried:?}");
     }
 
     const SIGN_IN: &str = ".claude/.credentials.json";
@@ -1220,6 +1238,11 @@ mod tests {
             (".claude/agents/helper.md", "the agent helper"),
             (".claude/rules/style.md", "the rule style"),
             (".agents/skills/reui/SKILL.md", "the skill reui"),
+            (".claude/skills/next.js", "the skill next.js"),
+            (".claude/skills/README.md", "~/.claude/skills/README.md"),
+            (".claude/settings.json#skillOverrides", "Claude's skill overrides"),
+            (".claude/settings.json#model", "Claude's model"),
+            (".codex/config.toml#model_reasoning_effort", "Codex's model reasoning effort"),
             (".codex/prompts/fix.md", "the Codex prompt fix"),
             (".claude/CLAUDE.md", "CLAUDE.md"),
             (".codex/AGENTS.md", "Codex's AGENTS.md"),
