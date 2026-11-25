@@ -1,0 +1,120 @@
+$ cargo build --locked -p ferrite --features headless
+--- stdout
+--- stderr
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\taffy\Cargo.toml
+workspace: C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\Cargo.toml
+   Compiling gpui-pre-windows v0.3.3 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\gpui-pre-windows)
+warning: function `sign_in_script` is never used
+   --> crates\ferrite-core\src\machine.rs:736:4
+    |
+736 | fn sign_in_script(name: &str, target: &str, control: &Path) -> String {
+    |    ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-core` (lib) generated 1 warning
+warning: method `as_event_status` is never used
+  --> crates\ferrite-focus-notify\src\focus.rs:36:8
+   |
+34 | impl Status {
+   | ----------- method in this implementation
+35 |     /// The status as upstream's events spell it.
+36 |     fn as_event_status(self) -> &'static str {
+   |        ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-focus-notify` (lib) generated 1 warning
+   Compiling gpui-pre-platform v0.3.3 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\gpui-pre-platform)
+   Compiling gpui-base v0.6.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\gpui-base)
+   Compiling gpui-component v0.6.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\gpui-component)
+   Compiling gpui-kit v0.6.0
+   Compiling ferrite-ui v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-ui)
+   Compiling ferrite-pane v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-pane)
+   Compiling ferrite-terminal v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-terminal)
+   Compiling ferrite-frame v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-frame)
+   Compiling ferrite-cockpit v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-cockpit)
+warning: type `cockpit::context_menu::MenuTarget` is more private than the item `cockpit::menu_button::Door::target`
+  --> crates\ferrite-cockpit\src\cockpit\menu_button.rs:23:5
+   |
+23 |     pub target: MenuTarget,
+   |     ^^^^^^^^^^^^^^^^^^^^^^ field `cockpit::menu_button::Door::target` is reachable at visibility `pub(crate)`
+   |
+note: but type `cockpit::context_menu::MenuTarget` is only usable at visibility `pub(in crate::cockpit)`
+  --> crates\ferrite-cockpit\src\cockpit\context_menu.rs:14:1
+   |
+14 | pub(super) enum MenuTarget {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: `#[warn(private_interfaces)]` on by default
+
+warning: type `cockpit::context_menu::MenuTarget` is more private than the item `cockpit::menu_button::Door::new`
+  --> crates\ferrite-cockpit\src\cockpit\menu_button.rs:28:5
+   |
+28 |     pub(crate) fn new(target: MenuTarget, edge: Edge) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ associated function `cockpit::menu_button::Door::new` is reachable at visibility `pub(crate)`
+   |
+note: but type `cockpit::context_menu::MenuTarget` is only usable at visibility `pub(in crate::cockpit)`
+  --> crates\ferrite-cockpit\src\cockpit\context_menu.rs:14:1
+   |
+14 | pub(super) enum MenuTarget {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `focus_answer` is never used
+   --> crates\ferrite-cockpit\src\cockpit\direction.rs:556:19
+    |
+487 | impl CockpitView {
+    | ---------------- method in this implementation
+...
+556 |     pub(crate) fn focus_answer(&mut self, cx: &mut Context<Self>) {
+    |                   ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: variants `Dismiss`, `DismissDecision`, and `MarkAllRead` are never constructed
+  --> crates\ferrite-cockpit\src\notifications.rs:42:5
+   |
+37 | pub enum Verb {
+   |          ---- variants in this enum
+...
+42 |     Dismiss(MachineId, NoticeId),
+   |     ^^^^^^^
+...
+46 |     DismissDecision(MachineId, DecisionNoticeId),
+   |     ^^^^^^^^^^^^^^^
+...
+49 |     MarkAllRead,
+   |     ^^^^^^^^^^^
+   |
+   = note: `Verb` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `cursor` and `cursor_thread` are never read
+   --> crates\ferrite-cockpit\src\notifications.rs:379:9
+    |
+376 | pub struct NeedsYou {
+    |            -------- fields in this struct
+...
+379 |     pub cursor: usize,
+    |         ^^^^^^
+380 |     cursor_thread: RefCell<Option<ThreadKey>>,
+    |     ^^^^^^^^^^^^^
+
+warning: methods `reset_cursor`, `cursor_at`, and `select_cursor` are never used
+   --> crates\ferrite-cockpit\src\notifications.rs:402:12
+    |
+390 | impl NeedsYou {
+    | ------------- methods in this implementation
+...
+402 |     pub fn reset_cursor(&mut self) {
+    |            ^^^^^^^^^^^^
+...
+408 |     pub fn cursor_at(&self, rows: &[Row]) -> usize {
+    |            ^^^^^^^^^
+...
+417 |     pub fn select_cursor(&mut self, at: usize, rows: &[Row]) {
+    |            ^^^^^^^^^^^^^
+
+   Compiling ferrite v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite)
+warning: `ferrite-cockpit` (lib) generated 6 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 00s
+--- exit 0

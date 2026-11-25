@@ -1,0 +1,46 @@
+=== installed
+{
+  "version": 2,
+  "plugins": {
+    "pstack@cursor-plugins": [
+      {
+        "scope": "user",
+        "installPath": "/home/joseph/ferrite-wsl-machine/home/.claude/plugins/cache/cursor-plugins/pstack/0.15.48",
+        "version": "0.15.48",
+        "installedAt": "2026-11-25T08:58:13.815Z",
+        "lastUpdated": "2026-11-25T08:58:13.815Z",
+        "gitCommitSha": "41e400932eca14f289e7db717a70455256b6d388"
+      }
+    ],
+    "origin-apps@cursor-plugins": [
+      {
+        "scope": "user",
+        "installPath": "/home/joseph/ferrite-wsl-machine/home/.claude/plugins/cache/cursor-plugins/origin-apps/0.1.0",
+        "version": "0.1.0",
+        "installedAt": "2026-11-25T09:07:07.475Z",
+        "lastUpdated": "2026-11-25T09:07:07.475Z",
+        "gitCommitSha": "41e400932eca14f289e7db717a70455256b6d388"
+      }
+    ]
+  }
+}
+=== known
+{
+  "cursor-plugins": {
+    "source": {
+      "source": "github",
+      "repo": "cursor/plugins"
+    },
+    "installLocation": "/home/joseph/ferrite-wsl-machine/home/.claude/plugins/marketplaces/cursor-plugins",
+    "lastUpdated": "2026-11-25T09:07:07.446Z"
+  }
+}
+=== kept
+
+=== codex tmp
+cursor-plugins
+=== procs
+your 131072x1 screen size is bogus. expect trouble
+  11135      45 /bin/sh -c sh -c 'binary="$HOME/.ferrite/runtime/versions/0.4.0/ferrited"; if [ -x "$binary" ] && [ "$("$binary" --version 2>/dev/null)" = "ferr
+  11136      45 /home/joseph/ferrite-wsl-machine/home/.ferrite/runtime/versions/0.4.0/ferrited bridge
+  11138      44 /home/joseph/ferrite-wsl-machine/home/.ferrite/runtime/versions/0.4.0/ferrited server

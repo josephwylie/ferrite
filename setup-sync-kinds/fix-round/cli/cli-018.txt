@@ -1,0 +1,5 @@
+$ ferrite window text -- settings-card
+--- stdout
+{"id":"1","result":{"answer":"read","lines":["Settings","Search","New threads","Permissions","Behaviour","Notifications","Server","Connections","Labs","About","Applying settings on this computer","This app","Local environment","Run agents on this computer. Turn off to use Ferrite only with remote environments.","Environments","+ Add","No saved remote environments","Pair a remote backend to make it available in this client.","Add Environment","Pair another environment to this client.","Remote link","Enter a backend host and pairing code.","SSH","Use local SSH config, agent, and tunnels for the backend.","SSH host or alias","ferrite-wsl","Username","root","Port","22","Connecting over SSH…","Adding…"]}}
+--- stderr
+--- exit 0

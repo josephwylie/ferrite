@@ -1,0 +1,29 @@
+$ claude plugin list
+Installed plugins:
+
+  ❯ pstack@cursor-plugins
+    Version: 0.15.48
+    Scope: user
+    Status: ✔ enabled
+
+Built-in plugins:
+
+  ❯ cc-plugin-agents-md@builtin
+    Status: ✔ enabled
+
+  ❯ cc-plugin-plugin-authoring@builtin
+    Status: ✔ enabled
+
+  ❯ cc-plugin-privacy@builtin
+    Status: ✔ enabled
+
+  ❯ cc-plugin-telemetry@builtin
+    Status: ✔ enabled
+$ codex plugin list
+Marketplace `cursor-plugins`
+/home/joseph/ferrite-wsl-machine/home/.codex/.tmp/marketplaces/cursor-plugins/.claude-plugin/marketplace.json
+
+PLUGIN                      STATUS              VERSION  SOURCE
+origin-apps@cursor-plugins  not installed                /home/joseph/ferrite-wsl-machine/home/.codex/.tmp/marketplaces/cursor-plugins/origin-apps
+pstack@cursor-plugins       installed, enabled  0.15.48  /home/joseph/ferrite-wsl-machine/home/.codex/.tmp/marketplaces/cursor-plugins/harness/pstack/claude-code
+exit 0

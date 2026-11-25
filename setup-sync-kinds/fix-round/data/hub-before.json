@@ -1,0 +1,152 @@
+{
+".agents/skills": [
+"dir",
+"",
+"",
+""
+],
+".agents/skills/ask-matt": [
+"dir",
+"",
+"",
+""
+],
+".agents/skills/ask-matt/PHASE-BOUNDARIES.md": [
+"file",
+"6917fc52fab71341241d58c1038a2bf3b05c17c208fc99ff5abbdc76ecf47184",
+"2b0e101f14e07df1929f3175591bd5dd266a82c50a088ebfcd02b9efe9881057",
+""
+],
+".agents/skills/ask-matt/SKILL.md": [
+"file",
+"cefe719d14fd3a53bb1e5e53636281fa706a86444f90f2296998e07a7172a896",
+"c4def9d09802b55623f91b9073d9a21e3c5085c1f65c6c5a58fb3af06661e114",
+""
+],
+".agents/skills/reui": [
+"dir",
+"",
+"",
+""
+],
+".agents/skills/reui/SKILL.md": [
+"file",
+"8a8def9ba510ce50d73f94fbf82864f197f671efbc866dc864e54d3e0ad94a11",
+"a7b7a669d5664125cd0dd1a0a14fec313e6ad68cece371d01f485a273e404094",
+""
+],
+".agents/skills/reui/rules": [
+"dir",
+"",
+"",
+""
+],
+".agents/skills/reui/rules/tokens.md": [
+"file",
+"0807c9888e73897cad17b0c92970836652b320329b27afdfcb3e60692cc8afcb",
+"f6be5eba05304128f28f1aed47e8af6c46880374b1df949e5dca6e79d806526a",
+""
+],
+".claude.json": [
+"file",
+"2d376c49c46dafee6090a1b45e28a09bf8d9b029ae9ff39bef439a31f0eaeac0",
+"2d376c49c46dafee6090a1b45e28a09bf8d9b029ae9ff39bef439a31f0eaeac0",
+""
+],
+".claude/CLAUDE.md": [
+"file",
+"00db8551a844edefc6a50926d42defe22de9c8148b593eb62092962a6f8b049e",
+"cef506e3fafcca624dfefdc13e4d3f01a6f3e15ac49d3526de07d2be560a5101",
+""
+],
+".claude/commands": [
+"dir",
+"",
+"",
+""
+],
+".claude/commands/team.md": [
+"file",
+"c1f58731208e57921d9eca89c507f510ef9be2cd562395d60733d71506aaa0bf",
+"4180996cd1ffc88901f6813408627a0762d02757d087c3fc4c75d9c583410dd6",
+""
+],
+".claude/settings.json": [
+"file",
+"638c66bf7dc4b17243767d36e94b0617f827da9facff900499ac3b5b69a997da",
+"c68a112f3de1fa9f2b360e36be3c31deaf130679da649848c84a09233be19094",
+""
+],
+".claude/skills": [
+"dir",
+"",
+"",
+""
+],
+".claude/skills/ask-matt": [
+"link",
+"",
+"",
+"\\\\?\\C:\\Users\\josep\\AppData\\Local\\Temp\\fv-sk5\\home\\.agents\\skills\\ask-matt"
+],
+".claude/skills/both-edit": [
+"dir",
+"",
+"",
+""
+],
+".claude/skills/both-edit/SKILL.md": [
+"file",
+"33a7e91775ba61e8466bf342a4cf8c7aea71d966b02c97cbbc52710e64cd4785",
+"f56f2e5aca17f1cce7e5ba03c9d06a422b6848522123796e042df4c0a0db8ce5",
+""
+],
+".claude/skills/pc-skill": [
+"dir",
+"",
+"",
+""
+],
+".claude/skills/pc-skill/SKILL.md": [
+"file",
+"a9e682fe05d6a71ada759642e46e98df8b8ef3953a47c76e624968e7c47300db",
+"32bdbbf0c7e114145e6544331f3df6c64b5449813e8b65c62ea549dd39ba20b7",
+""
+],
+".claude/skills/pc-skill/Thumbs.db": [
+"file",
+"2efea92f4788d994e39a3264accc626af7e1e3e01f4f067506c627d7c7ea4be1",
+"2efea92f4788d994e39a3264accc626af7e1e3e01f4f067506c627d7c7ea4be1",
+""
+],
+".claude/skills/pc-skill/desktop.ini": [
+"file",
+"fbb42629e41fd3f5f4c8fdd6b3a916a0e8307bc97f48de1e1fb3fc6a95f98346",
+"5efbf424573ea0f34dab5419f94f81f253b1f4dcd368c38fc850b36a576628f2",
+""
+],
+".claude/skills/reui": [
+"link",
+"",
+"",
+"\\\\?\\C:\\Users\\josep\\AppData\\Local\\Temp\\fv-sk5\\home\\.agents\\skills\\reui"
+],
+".claude/skills/synced": [
+"dir",
+"",
+"",
+""
+],
+".claude/skills/synced/state.json": [
+"file",
+"71c497f7bb3d0bc4daa6e47171c0b699a1f7dd856f38cade18bacba24698af0b",
+"71c497f7bb3d0bc4daa6e47171c0b699a1f7dd856f38cade18bacba24698af0b",
+""
+],
+".codex/config.toml": [
+"file",
+"a8bc6120799692d9126bc2a98898615e8daacd9f934774bb8aa23e93bd6fc23b",
+"45f13d134a1176a449ace42c9e1ff960dbdd557972ab0667da16e66474767bb3",
+""
+]
+}

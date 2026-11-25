@@ -1,0 +1,5 @@
+$ ferrite --machine ferrite-wsl setup sync
+--- stdout
+{"outcome":"synced","pushed":0,"pulled":0,"removed_here":0,"removed_there":0,"held":{".claude/skills/ask-matt":{"folder_and_link":"there"}}}
+--- stderr
+--- exit 0

@@ -1,0 +1,60 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   V:\.worktrees\ferrite\setup-kinds\vendor\taffy\Cargo.toml
+workspace: V:\.worktrees\ferrite\setup-kinds\Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   V:\.worktrees\ferrite\setup-kinds\vendor\taffy\Cargo.toml
+workspace: V:\.worktrees\ferrite\setup-kinds\Cargo.toml
+warning: function `sign_in_script` is never used
+   --> crates\ferrite-core\src\machine.rs:736:4
+    |
+736 | fn sign_in_script(name: &str, target: &str, control: &Path) -> String {
+    |    ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling ferrite-core v0.4.0 (V:\.worktrees\ferrite\setup-kinds\crates\ferrite-core)
+warning: `ferrite-core` (lib) generated 1 warning
+warning: function `scratch` is never used
+   --> crates\ferrite-core\src\user_commands.rs:264:8
+    |
+264 |     fn scratch(name: &str) -> std::path::PathBuf {
+    |        ^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `command` is never used
+   --> crates\ferrite-core\src\user_commands.rs:274:8
+    |
+274 |     fn command(run: Run) -> UserCommand {
+    |        ^^^^^^^
+
+warning: `ferrite-core` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.16s
+────────────
+ Nextest run ID b684486e-bb7f-411d-bd3f-c18051787e7f with nextest profile: default
+    Starting 1 test across 2 binaries (641 tests skipped)
+        FAIL [   0.176s] (1/1) ferrite-core setup_sync::tests::what_a_sync_removes_or_replaces_on_either_side_is_kept_in_that_sides_trash
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::what_a_sync_removes_or_replaces_on_either_side_is_kept_in_that_sides_trash ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::what_a_sync_removes_or_replaces_on_either_side_is_kept_in_that_sides_trash
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.12s
+
+  stderr ───
+
+    thread 'setup_sync::tests::what_a_sync_removes_or_replaces_on_either_side_is_kept_in_that_sides_trash' (48340) panicked at crates\ferrite-core\src\setup_sync\tests.rs:1624:5:
+    assertion `left == right` failed: []
+      left: None
+     right: Some("Review the diff.\n")
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   0.178s] 1 test run: 0 passed, 1 failed, 641 skipped
+        FAIL [   0.176s] (1/1) ferrite-core setup_sync::tests::what_a_sync_removes_or_replaces_on_either_side_is_kept_in_that_sides_trash
+error: test run failed

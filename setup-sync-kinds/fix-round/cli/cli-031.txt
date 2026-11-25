@@ -1,0 +1,5 @@
+$ ferrite window text -- settings-card
+--- stdout
+{"id":"1","result":{"answer":"read","lines":["Settings","Search","New threads","Permissions","Behaviour","Notifications","Server","Connections","Labs","About","Applying settings on this computer","This app","Local environment","Run agents on this computer. Turn off to use Ferrite only with remote environments.","Environments","Add","ferrite-wsl","ferrite-wsl · Connected","Sync my setup","Off","Setup sync: 3 things to look at","ferrite-wsl: ~/.claude/skills/both-edit/SKILL.md changed on both sides","ferrite-wsl: `model` in ~/.claude/settings.json is this computer's on both now; it was \"sonnet\" on ferrite-wsl","ferrite-wsl: `model` in ~/.codex/config.toml is this computer's on both now; it was \"gpt-6.2-sol\" on ferrite-wsl","The others are kept in Ferrite's sync-conflicts folder.","Open folder"]}}
+--- stderr
+--- exit 0

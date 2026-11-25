@@ -1,0 +1,5 @@
+$ ferrite project open --cwd 'C:\Users\josep\AppData\Local\Temp\fv-sk5\repo' --label verify --focus
+--- stdout
+{"id":"1","result":{"project":{"id":"1","label":"verify","focused":false,"thread_count":0,"directory":"C:\\Users\\josep\\AppData\\Local\\Temp\\fv-sk5\\repo","worktree":{"repo_key":"C:\\Users\\josep\\AppData\\Local\\Temp\\fv-sk5\\repo","checkout_path":"C:\\Users\\josep\\AppData\\Local\\Temp\\fv-sk5\\repo","is_linked_worktree":false}}}}
+--- stderr
+--- exit 0

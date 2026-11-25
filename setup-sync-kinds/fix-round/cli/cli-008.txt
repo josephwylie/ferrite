@@ -1,0 +1,5 @@
+$ ferrite window click --x 1216 --y 362
+--- stdout
+{"id":"1","result":{"answer":"clicked","x":1216.0,"y":362.0}}
+--- stderr
+--- exit 0

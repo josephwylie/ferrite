@@ -1,0 +1,5 @@
+$ ferrite window text -- settings-card
+--- stdout
+{"id":"1","result":{"answer":"read","lines":["Settings","Search","New threads","Permissions","Behaviour","Notifications","Server","Connections","Labs","About","Applying settings on this computer","This app","Local environment","Run agents on this computer. Turn off to use Ferrite only with remote environments.","Environments","Add","ferrite-wsl","ferrite-wsl · Connected","Sync my setup","Syncing 21 files"]}}
+--- stderr
+--- exit 0

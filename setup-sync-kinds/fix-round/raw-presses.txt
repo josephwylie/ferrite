@@ -1,0 +1,26 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\taffy\Cargo.toml
+workspace: C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\Cargo.toml
+   Compiling gpui-pre v0.3.3 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\gpui-pre)
+    Checking taffy v0.13.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\taffy)
+   Compiling gpui-pre-windows v0.3.3 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\gpui-pre-windows)
+    Checking ferrite-reviewr v0.46.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-reviewr)
+   Compiling gpui-component v0.6.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\gpui-component)
+   Compiling ferrite-cockpit v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-cockpit)
+   Compiling ferrite v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite)
+    Checking ferrite-focus-notify v0.8.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-focus-notify)
+    Checking ferrite-core v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-core)
+    Checking gpui-kit-assets v0.6.0
+    Checking gpui-pre-platform v0.3.3 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\gpui-pre-platform)
+    Checking gpui-base v0.6.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\vendor\gpui-base)
+    Checking ferrite-client v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-client)
+    Checking ferrite-engine v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-engine)
+    Checking ferrite-server v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-server)
+    Checking gpui-kit v0.6.0
+    Checking ferrite-ui v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-ui)
+    Checking ferrite-terminal v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-terminal)
+    Checking ferrite-pane v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-pane)
+    Checking ferrite-frame v0.4.0 (C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\crates\ferrite-frame)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 37.54s
+239 raw presses in 71 files; baseline 239.
+exit 0

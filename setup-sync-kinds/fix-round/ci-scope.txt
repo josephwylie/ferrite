@@ -1,0 +1,52 @@
+{
+  "code": true,
+  "browser": true,
+  "full": false,
+  "packages": [
+    "ferrite",
+    "ferrite-client",
+    "ferrite-cockpit",
+    "ferrite-core",
+    "ferrite-engine",
+    "ferrite-focus-notify",
+    "ferrite-frame",
+    "ferrite-pane",
+    "ferrite-reviewr",
+    "ferrite-server",
+    "ferrite-terminal",
+    "ferrite-ui"
+  ],
+  "vendored": [
+    "gpui-base",
+    "gpui-component",
+    "gpui-pre",
+    "gpui-pre-macos",
+    "gpui-pre-platform",
+    "gpui-pre-windows",
+    "taffy"
+  ],
+  "decisions": {
+    "ferrite": true,
+    "ferrite-client": true,
+    "ferrite-cockpit": true,
+    "ferrite-core": true,
+    "ferrite-engine": true,
+    "ferrite-focus-notify": true,
+    "ferrite-frame": true,
+    "ferrite-pane": true,
+    "ferrite-reviewr": true,
+    "ferrite-server": true,
+    "ferrite-terminal": true,
+    "ferrite-ui": true,
+    "gpui-base": true,
+    "gpui-component": true,
+    "gpui-pre": true,
+    "gpui-pre-macos": true,
+    "gpui-pre-platform": true,
+    "gpui-pre-windows": true,
+    "taffy": true
+  },
+  "reasons": [
+    "shared build or packaging input: Cargo.lock"
+  ]
+}

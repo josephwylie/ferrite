@@ -1,0 +1,5 @@
+$ ferrite window focus
+--- stdout
+{"id":"1","result":{"answer":"focused","contexts":["Root","Ferrite","Input"],"selector":"connection-host","label":null}}
+--- stderr
+--- exit 0

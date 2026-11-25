@@ -1,0 +1,89 @@
+=== .claude/settings.json
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Bash(cargo nextest:*)"
+    ],
+    "deny": [
+      "Artifact"
+    ],
+    "defaultMode": "acceptEdits"
+  },
+  "model": "opus[1m]",
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline.sh"
+  },
+  "enabledPlugins": {
+    "cc-plugin-telemetry@builtin": true,
+    "pstack@cursor-plugins": true
+  },
+  "extraKnownMarketplaces": {
+    "cursor-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "cursor/plugins"
+      },
+      "autoUpdate": true
+    }
+  },
+  "effortLevel": "xhigh",
+  "theme": "light"
+}
+
+=== .claude.json
+{
+  "userID": "45bc67896a978922323d78454e5bccfd768f81a80aad132e7711d05516d95f1f",
+  "mcpServers": {
+    "search": {
+      "command": "search-mcp"
+    },
+    "docs": {
+      "args": [
+        "-y",
+        "@acme/docs-mcp"
+      ],
+      "command": "npx"
+    }
+  },
+  "firstStartTime": "2026-11-25T08:58:02.859Z",
+  "firstStartVersion": "2.1.332",
+  "machineID": "e87266c752b5eb1ebee5a4ffeb3e79ac6d1981ae6dec1c75437350eca3a5e8c0",
+  "opusProMigrationComplete": true,
+  "seenNotifications": {},
+  "hasResetAutoModeOptInForDefaultOffer": true,
+  "migrationVersion": 15
+}
+=== .codex/config.toml
+model = "gpt-6.2-astra"
+notify = ["/home/joseph/ferrite-wsl-machine/home/bin/notify.sh"]
+model_reasoning_effort = "high"
+
+[projects."/home/joseph/work"]
+trust_level = "trusted"
+
+[marketplaces.cursor-plugins]
+source = "https://github.com/cursor/plugins.git"
+source_type = "git"
+
+[mcp_servers.docs]
+args = ["-y", "@acme/docs-mcp"]
+command = "npx"
+
+[plugins."pstack@cursor-plugins"]
+enabled = true
+
+=== trash keys
+/home/joseph/ferrite-wsl-machine/home/.ferrite/sync-trash/20261125-192803-166/claude/settings.json#model: "sonnet"
+/home/joseph/ferrite-wsl-machine/home/.ferrite/sync-trash/20261125-192803-166/codex/config.toml#model: "gpt-6.2-sol"
+=== links
+total 24
+drwxr-xr-x 6 joseph joseph 4096 Nov 25 19:31 .
+drwxr-xr-x 8 joseph joseph 4096 Nov 25 19:28 ..
+lrwxrwxrwx 1 joseph joseph   29 Nov 25 19:31 ask-matt -> ../../.agents/skills/ask-matt
+drwxr-xr-x 2 joseph joseph 4096 Nov 25 19:28 both-edit
+drwxr-xr-x 2 joseph joseph 4096 Nov 25 19:22 linux-skill
+drwx------ 2 joseph joseph 4096 Nov 25 19:28 pc-skill
+lrwxrwxrwx 1 joseph joseph   25 Nov 25 19:28 reui -> ../../.agents/skills/reui
+drwxr-xr-x 2 joseph joseph 4096 Nov 25 19:22 synced

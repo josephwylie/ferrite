@@ -1,0 +1,5 @@
+$ ferrite window text -- connection-dialog
+--- stdout
+{"id":"1","result":{"answer":"read","lines":["Add Environment","Pair another environment to this client.","Remote link","Enter a backend host and pairing code.","SSH","Use local SSH config, agent, and tunnels for the backend.","SSH host or alias","Search hosts or type devbox","Username","root","Port","22","Add environment"]}}
+--- stderr
+--- exit 0

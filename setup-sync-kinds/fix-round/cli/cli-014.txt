@@ -1,0 +1,5 @@
+$ ferrite window type -- ferrite-wsl
+--- stdout
+{"id":"1","result":{"answer":"typed"}}
+--- stderr
+--- exit 0

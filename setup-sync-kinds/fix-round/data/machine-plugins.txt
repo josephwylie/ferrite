@@ -1,0 +1,36 @@
+=== installed
+{
+  "version": 2,
+  "plugins": {
+    "pstack@cursor-plugins": [
+      {
+        "scope": "user",
+        "installPath": "/home/joseph/ferrite-wsl-machine/home/.claude/plugins/cache/cursor-plugins/pstack/0.15.48",
+        "version": "0.15.48",
+        "installedAt": "2026-11-25T08:58:13.815Z",
+        "lastUpdated": "2026-11-25T08:58:13.815Z",
+        "gitCommitSha": "41e400932eca14f289e7db717a70455256b6d388"
+      }
+    ]
+  }
+}
+=== known
+{
+  "cursor-plugins": {
+    "source": {
+      "source": "github",
+      "repo": "cursor/plugins"
+    },
+    "installLocation": "/home/joseph/ferrite-wsl-machine/home/.claude/plugins/marketplaces/cursor-plugins",
+    "lastUpdated": "2026-11-25T08:58:13.145Z"
+  }
+}
+=== kept
+
+=== codex tmp
+cursor-plugins
+=== procs
+your 131072x1 screen size is bogus. expect trouble
+   9200     441 /home/joseph/ferrite-wsl-machine/home/.ferrite/runtime/versions/0.4.0/ferrited server
+   9462     440 /bin/sh -c sh -c 'binary="$HOME/.ferrite/runtime/versions/0.4.0/ferrited"; if [ -x "$binary" ] && [ "$("$binary" --version 2>/dev/null)" = "ferr
+   9463     440 /home/joseph/ferrite-wsl-machine/home/.ferrite/runtime/versions/0.4.0/ferrited bridge

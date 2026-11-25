@@ -1,0 +1,6 @@
+$ ferrite --machine ferrite-wsl setup sync
+--- stdout
+--- stderr
+ferrite: machine: the tunnel ended: ssh: Could not resolve hostname ferrite-wsl: No such host is known.
+{"error":{"code":"server_unavailable","message":"ssh: Could not resolve hostname ferrite-wsl: No such host is known."}}
+--- exit 1

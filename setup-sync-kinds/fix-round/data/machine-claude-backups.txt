@@ -1,0 +1,19 @@
+total 16
+drwxr-xr-x 2 joseph joseph 4096 2026-11-25 19:28:02.930626098 +1030 .
+drwxr-xr-x 8 joseph joseph 4096 2026-11-25 19:28:13.746844868 +1030 ..
+-rw------- 1 joseph joseph   84 2026-11-25 16:39:39.869991775 +1030 .claude.json.backup.1795586979873
+-rw------- 1 joseph joseph  103 2026-11-25 19:28:02.930626098 +1030 .claude.json.backup.1795597082935
+/home/joseph/ferrite-wsl-machine/home/.claude/backups/.claude.json.backup.1795586979873:
+{
+  "firstStartTime": "2026-11-25T06:09:32.216Z",
+  "firstStartVersion": "2.1.332"
+}
+/home/joseph/ferrite-wsl-machine/home/.claude/backups/.claude.json.backup.1795597082935:
+{
+  "userID": "linux-user",
+  "mcpServers": {
+    "search": {
+      "command": "search-mcp"
+    }
+  }
+}

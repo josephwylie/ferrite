@@ -1,0 +1,5 @@
+$ ferrite window key -- ctrl-,
+--- stdout
+{"id":"1","result":{"answer":"pressed","unhandled":[]}}
+--- stderr
+--- exit 0

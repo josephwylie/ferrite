@@ -1,0 +1,5 @@
+$ ferrite window shot 'C:\Users\josep\Desktop\Projects\.worktrees\ferrite\setup-kinds\target\verify-ferrite\sk5\06-second-plugin-in-sync.png'
+--- stdout
+{"id":"1","result":{"answer":"shot","path":"C:\\Users\\josep\\Desktop\\Projects\\.worktrees\\ferrite\\setup-kinds\\target\\verify-ferrite\\sk5\\06-second-plugin-in-sync.png","width":2880,"height":1800,"scale":2.0}}
+--- stderr
+--- exit 0

@@ -1,0 +1,5 @@
+$ ferrite window find nav-search
+--- stdout
+{"id":"1","result":{"answer":"found","x":8.0,"y":60.0,"width":152.0,"height":32.0}}
+--- stderr
+--- exit 0

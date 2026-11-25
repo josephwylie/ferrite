@@ -1,0 +1,354 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   V:\.worktrees\ferrite\setup-kinds\vendor\taffy\Cargo.toml
+workspace: V:\.worktrees\ferrite\setup-kinds\Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   V:\.worktrees\ferrite\setup-kinds\vendor\taffy\Cargo.toml
+workspace: V:\.worktrees\ferrite\setup-kinds\Cargo.toml
+warning: function `sign_in_script` is never used
+   --> crates\ferrite-core\src\machine.rs:736:4
+    |
+736 | fn sign_in_script(name: &str, target: &str, control: &Path) -> String {
+    |    ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling ferrite-core v0.4.0 (V:\.worktrees\ferrite\setup-kinds\crates\ferrite-core)
+warning: `ferrite-core` (lib) generated 1 warning
+warning: function `scratch` is never used
+   --> crates\ferrite-core\src\user_commands.rs:264:8
+    |
+264 |     fn scratch(name: &str) -> std::path::PathBuf {
+    |        ^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `command` is never used
+   --> crates\ferrite-core\src\user_commands.rs:274:8
+    |
+274 |     fn command(run: Run) -> UserCommand {
+    |        ^^^^^^^
+
+warning: `ferrite-core` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.92s
+────────────
+ Nextest run ID 78e245f2-cc72-4442-a50a-653e6103ee74 with nextest profile: default
+    Starting 14 tests across 2 binaries (628 tests skipped)
+        FAIL [   0.131s] ( 1/14) ferrite-core setup_sync::tests::a_base_another_table_wrote_is_no_base_and_the_sync_removes_nothing
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::a_base_another_table_wrote_is_no_base_and_the_sync_removes_nothing ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::a_base_another_table_wrote_is_no_base_and_the_sync_removes_nothing
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.03s
+
+  stderr ───
+
+    thread 'setup_sync::tests::a_base_another_table_wrote_is_no_base_and_the_sync_removes_nothing' (55972) panicked at crates\ferrite-core\src\setup_sync\tests.rs:139:20:
+    Stopped(Valve { side: There, item: ".agents/skills", removing: 1, holding: 1, vanished: true })
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.159s] ( 2/14) ferrite-core setup_sync::tests::claudes_own_plugins_are_never_missing_and_one_turned_on_is_installed
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::claudes_own_plugins_are_never_missing_and_one_turned_on_is_installed ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::claudes_own_plugins_are_never_missing_and_one_turned_on_is_installed
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.07s
+
+  stderr ───
+
+    thread 'setup_sync::tests::claudes_own_plugins_are_never_missing_and_one_turned_on_is_installed' (34664) panicked at crates\ferrite-core\src\setup_sync\tests.rs:1842:5:
+    assertion `left == right` failed: Synced { pushed: 3, pulled: 0, removed_here: 0, removed_there: 0, conflicts: [], replaced: [], held: {}, problems: [Problem { path: ".claude/plugins/cc-plugin-plugin-authoring@builtin", side: There, error: "Claude there knows no marketplace `builtin`, and the settings name no source for it" }, Problem { path: ".claude/plugins/cc-plugin-telemetry@builtin", side: There, error: "Claude there knows no marketplace `builtin`, and the settings name no source for it" }], trashed: None }
+      left: [Problem { path: ".claude/plugins/cc-plugin-plugin-authoring@builtin", side: There, error: "Claude there knows no marketplace `builtin`, and the settings name no source for it" }, Problem { path: ".claude/plugins/cc-plugin-telemetry@builtin", side: There, error: "Claude there knows no marketplace `builtin`, and the settings name no source for it" }]
+     right: []
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.168s] ( 3/14) ferrite-core setup_sync::tests::what_a_file_browser_leaves_in_a_folder_never_travels
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::what_a_file_browser_leaves_in_a_folder_never_travels ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::what_a_file_browser_leaves_in_a_folder_never_travels
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.08s
+
+  stderr ───
+
+    thread 'setup_sync::tests::what_a_file_browser_leaves_in_a_folder_never_travels' (49516) panicked at crates\ferrite-core\src\setup_sync\tests.rs:1992:5:
+    assertion `left == right` failed
+      left: [".agents/skills/x/.DS_Store", ".agents/skills/x/SKILL.md", ".claude/commands/Thumbs.db", ".claude/commands/go.md", ".claude/skills/y/SKILL.md", ".claude/skills/y/desktop.ini"]
+     right: [".agents/skills/x/SKILL.md", ".claude/commands/go.md", ".claude/skills/y/SKILL.md"]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.185s] ( 4/14) ferrite-core setup_sync::tests::a_file_holding_a_chosen_key_twice_is_held_and_never_written
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::a_file_holding_a_chosen_key_twice_is_held_and_never_written ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::a_file_holding_a_chosen_key_twice_is_held_and_never_written
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.08s
+
+  stderr ───
+
+    thread 'setup_sync::tests::a_file_holding_a_chosen_key_twice_is_held_and_never_written' (31564) panicked at crates\ferrite-core\src\setup_sync\tests.rs:2091:9:
+    assertion `left == right` failed: round 0: Synced { pushed: 3, pulled: 0, removed_here: 0, removed_there: 0, conflicts: [], replaced: [Replaced { path: ".claude/settings.json#model", winner: Here, was: "\"haiku\"" }], held: {}, problems: [], trashed: None }
+      left: Some("{\"model\": \"sonnet\", \"model\": \"haiku\", \"enabledPlugins\": {\"a@m\":true}, \"extraKnownMarketplaces\": {\"m\":{\"source\":{\"repo\":\"o/m\",\"source\":\"github\"}}}}")
+     right: Some("{\"model\": \"opus\", \"model\": \"haiku\"}")
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.190s] ( 5/14) ferrite-core setup_sync::tests::adding_a_marketplace_leaves_the_operators_entry_for_it_as_it_was
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::adding_a_marketplace_leaves_the_operators_entry_for_it_as_it_was ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::adding_a_marketplace_leaves_the_operators_entry_for_it_as_it_was
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.08s
+
+  stderr ───
+
+    thread 'setup_sync::tests::adding_a_marketplace_leaves_the_operators_entry_for_it_as_it_was' (58532) panicked at crates\ferrite-core\src\setup_sync\tests.rs:2070:5:
+    assertion `left == right` failed: {"enabledPlugins":{"pstack@cursor-plugins":true},"extraKnownMarketplaces":{"cursor-plugins":{"source":{"repo":"cursor/plugins","source":"github"}}}}
+      left: Null
+     right: true
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.202s] ( 6/14) ferrite-core setup_sync::tests::codex_carries_a_remote_marketplace_by_its_source_and_never_a_bundled_or_local_one
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::codex_carries_a_remote_marketplace_by_its_source_and_never_a_bundled_or_local_one ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::codex_carries_a_remote_marketplace_by_its_source_and_never_a_bundled_or_local_one
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.12s
+
+  stderr ───
+
+    thread 'setup_sync::tests::codex_carries_a_remote_marketplace_by_its_source_and_never_a_bundled_or_local_one' (60340) panicked at crates\ferrite-core\src\setup_sync\tests.rs:1937:9:
+    last_revision reached the Machine:
+    model = "gpt-5.5"
+    [marketplaces.cursor-plugins]
+    last_revision = "abc"
+    last_updated = "2026-11-24T10:00:00Z"
+    source = "https://github.com/cursor/plugins.git"
+    source_type = "git"
+
+    [marketplaces.openai-bundled]
+    source = 'C:\Users\josep\AppData\Local\Temp\ferrite-tests\62360\ferrite-setup-sync-codex-markets\machine\.codex\.tmp\bundled-marketplaces\openai-bundled'
+    source_type = "local"
+
+    [marketplaces.runtimes]
+    source = 'C:\Users\josep\AppData\Local\Temp\ferrite-tests\62360\ferrite-setup-sync-codex-markets\machine\.cache\codex-runtimes\marketplace'
+    source_type = "local"
+
+    [plugins."computer-use@openai-bundled"]
+    enabled = true
+
+    [plugins."pstack@cursor-plugins"]
+    enabled = true
+
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.204s] ( 7/14) ferrite-core setup_sync::tests::a_plugin_name_claude_would_read_as_an_option_is_never_handed_to_it
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::a_plugin_name_claude_would_read_as_an_option_is_never_handed_to_it ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::a_plugin_name_claude_would_read_as_an_option_is_never_handed_to_it
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.08s
+
+  stderr ───
+
+    thread 'setup_sync::tests::a_plugin_name_claude_would_read_as_an_option_is_never_handed_to_it' (51608) panicked at crates\ferrite-core\src\setup_sync\tests.rs:2017:9:
+    marketplace add cursor/plugins in ["marketplace add cursor/plugins", "install --help@cursor-plugins --json", "install pstack@cursor-plugins --json"]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.210s] ( 8/14) ferrite-core setup_sync::tests::a_failed_install_is_tried_again_at_the_next_start_and_not_before
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::a_failed_install_is_tried_again_at_the_next_start_and_not_before ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::a_failed_install_is_tried_again_at_the_next_start_and_not_before
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.12s
+
+  stderr ───
+
+    thread 'setup_sync::tests::a_failed_install_is_tried_again_at_the_next_start_and_not_before' (48208) panicked at crates\ferrite-core\src\setup_sync\tests.rs:2048:5:
+    assertion failed: calls.lock().unwrap().iter().any(|call|
+            call.contains("pstack@cursor-plugins"))
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.224s] ( 9/14) ferrite-core setup_sync::tests::a_folder_against_a_link_is_held_unless_the_link_loses_nothing
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::a_folder_against_a_link_is_held_unless_the_link_loses_nothing ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::a_folder_against_a_link_is_held_unless_the_link_loses_nothing
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.12s
+
+  stderr ───
+
+    thread 'setup_sync::tests::a_folder_against_a_link_is_held_unless_the_link_loses_nothing' (26968) panicked at crates\ferrite-core\src\setup_sync\tests.rs:1650:5:
+    Synced { pushed: 0, pulled: 0, removed_here: 0, removed_there: 0, conflicts: [], replaced: [], held: {".claude/skills/differs": Kinds, ".claude/skills/same": Kinds}, problems: [], trashed: None }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.241s] (10/14) ferrite-core setup_sync::tests::an_mcp_server_that_runs_what_another_side_may_not_have_stays_unsaid
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::an_mcp_server_that_runs_what_another_side_may_not_have_stays_unsaid ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::an_mcp_server_that_runs_what_another_side_may_not_have_stays_unsaid
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.12s
+
+  stderr ───
+
+    thread 'setup_sync::tests::an_mcp_server_that_runs_what_another_side_may_not_have_stays_unsaid' (10264) panicked at crates\ferrite-core\src\setup_sync\tests.rs:1975:5:
+    assertion `left == right` failed: {"mcpServers":{"bundled":{"args":["C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\39600\\ferrite-setup-sync-mcp-servers\\machine\\.codex\\.tmp\\bundled-marketplaces\\openai-bundled\\cu\\index.js"],"command":"node"},"docs":{"args":["-y","@acme/docs-mcp"],"command":"npx"},"elsewhere":{"command":"C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\39600\\ferrite-setup-sync-mcp-servers\\machine\\code\\mcp\\run"},"hooked":{"args":["C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\39600\\ferrite-setup-sync-mcp-servers\\machine\\.claude\\hooks\\mcp.js"],"command":"node"},"plugin":{"command":"C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\39600\\ferrite-setup-sync-mcp-servers\\machine\\.claude\\plugins\\cache\\m\\p\\1.0\\bin\\server"}}}
+      left: ["bundled", "docs", "elsewhere", "hooked", "plugin"]
+     right: ["docs", "hooked"]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.272s] (11/14) ferrite-core setup_sync::tests::the_first_tables_base_and_the_folders_it_made_of_links_lose_nothing
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::the_first_tables_base_and_the_folders_it_made_of_links_lose_nothing ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::the_first_tables_base_and_the_folders_it_made_of_links_lose_nothing
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.18s
+
+  stderr ───
+
+    thread 'setup_sync::tests::the_first_tables_base_and_the_folders_it_made_of_links_lose_nothing' (56580) panicked at crates\ferrite-core\src\setup_sync\tests.rs:1748:5:
+    assertion `left == right` failed: Synced { pushed: 10, pulled: 0, removed_here: 0, removed_there: 0, conflicts: [], replaced: [], held: {".claude/skills/better-ui": Kinds}, problems: [], trashed: None }
+      left: [".claude/skills/brandkit/SKILL.md", ".claude/skills/brandkit/assets/0.md", ".claude/skills/brandkit/assets/1.md", ".claude/skills/brandkit/assets/2.md", ".claude/skills/brandkit/assets/3.md", ".claude/skills/brandkit/assets/4.md", ".claude/skills/brandkit/assets/5.md", ".claude/skills/reui/SKILL.md", ".claude/skills/reui/rules/colors.md"]
+     right: []
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.130s] (12/14) ferrite-core setup_sync::tests::with_no_base_a_line_end_difference_never_moves_even_from_an_old_base
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::with_no_base_a_line_end_difference_never_moves_even_from_an_old_base ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::with_no_base_a_line_end_difference_never_moves_even_from_an_old_base
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.04s
+
+  stderr ───
+
+    thread 'setup_sync::tests::with_no_base_a_line_end_difference_never_moves_even_from_an_old_base' (65556) panicked at crates\ferrite-core\src\setup_sync\tests.rs:1686:5:
+    assertion `left == right` failed: Synced { pushed: 1, pulled: 0, removed_here: 0, removed_there: 0, conflicts: [], replaced: [], held: {}, problems: [], trashed: None }
+      left: 1
+     right: 0
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.361s] (13/14) ferrite-core setup_sync::tests::claudes_settings_carry_only_the_keys_the_table_names
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::claudes_settings_carry_only_the_keys_the_table_names ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::claudes_settings_carry_only_the_keys_the_table_names
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.26s
+
+  stderr ───
+
+    thread 'setup_sync::tests::claudes_settings_carry_only_the_keys_the_table_names' (62916) panicked at crates\ferrite-core\src\setup_sync\tests.rs:1910:9:
+    env travelled: {"aKeyNoTableNames":1,"apiKeyHelper":"~/bin/key","awsAuthRefresh":"aws sso login","effortLevel":"xhigh","enabledPlugins":{"mine@local-tools":true,"pstack@cursor-plugins":true,"team@inline":true},"env":{"VITEST_MAX_FORKS":"2"},"extraKnownMarketplaces":{"cursor-plugins":{"autoUpdate":true,"source":{"repo":"cursor/plugins","source":"github"}},"inline":{"source":{"name":"inline","plugins":[],"source":"settings"}},"local-tools":{"source":{"path":"C:\\Users\\josep\\AppData\\Local\\Temp\\ferrite-tests\\47772\\ferrite-setup-sync-settings-allowlist\\machine\\local-tools","source":"directory"}}},"hooks":{"PreToolUse":[{"hooks":[{"command":"$HOME/.claude/hooks/use-nextest.sh","type":"command"}],"matcher":"Bash"}]},"includeCoAuthoredBy":false,"model":"opus[1m]","modelSettings":{"claude-opus-5-5":{"effortLevel":"medium"}},"otelHeadersHelper":"~/bin/otel","outputStyle":"Concise","permissions":{"defaultMode":"acceptEdits","deny":["Artifact"]},"preferredNotifChannel":"auto","skillOverrides":{"loop-me":"off"},"statusLine":{"command":"~/.claude/statusline.sh","type":"command"},"teammateMode":"in-process","theme":"dark","tui":"fullscreen"}
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.228s] (14/14) ferrite-core setup_sync::tests::what_a_sync_removes_or_replaces_on_either_side_is_kept_in_that_sides_trash
+  stdout ───
+
+    running 1 test
+    test setup_sync::tests::what_a_sync_removes_or_replaces_on_either_side_is_kept_in_that_sides_trash ... FAILED
+
+    failures:
+
+    failures:
+        setup_sync::tests::what_a_sync_removes_or_replaces_on_either_side_is_kept_in_that_sides_trash
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.12s
+
+  stderr ───
+
+    thread 'setup_sync::tests::what_a_sync_removes_or_replaces_on_either_side_is_kept_in_that_sides_trash' (70020) panicked at crates\ferrite-core\src\setup_sync\tests.rs:139:20:
+    Stopped(Valve { side: There, item: ".claude/commands", removing: 1, holding: 1, vanished: true })
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   0.383s] 14 tests run: 0 passed, 14 failed, 628 skipped
+        FAIL [   0.131s] ( 1/14) ferrite-core setup_sync::tests::a_base_another_table_wrote_is_no_base_and_the_sync_removes_nothing
+        FAIL [   0.159s] ( 2/14) ferrite-core setup_sync::tests::claudes_own_plugins_are_never_missing_and_one_turned_on_is_installed
+        FAIL [   0.168s] ( 3/14) ferrite-core setup_sync::tests::what_a_file_browser_leaves_in_a_folder_never_travels
+        FAIL [   0.185s] ( 4/14) ferrite-core setup_sync::tests::a_file_holding_a_chosen_key_twice_is_held_and_never_written
+        FAIL [   0.190s] ( 5/14) ferrite-core setup_sync::tests::adding_a_marketplace_leaves_the_operators_entry_for_it_as_it_was
+        FAIL [   0.202s] ( 6/14) ferrite-core setup_sync::tests::codex_carries_a_remote_marketplace_by_its_source_and_never_a_bundled_or_local_one
+        FAIL [   0.204s] ( 7/14) ferrite-core setup_sync::tests::a_plugin_name_claude_would_read_as_an_option_is_never_handed_to_it
+        FAIL [   0.210s] ( 8/14) ferrite-core setup_sync::tests::a_failed_install_is_tried_again_at_the_next_start_and_not_before
+        FAIL [   0.224s] ( 9/14) ferrite-core setup_sync::tests::a_folder_against_a_link_is_held_unless_the_link_loses_nothing
+        FAIL [   0.241s] (10/14) ferrite-core setup_sync::tests::an_mcp_server_that_runs_what_another_side_may_not_have_stays_unsaid
+        FAIL [   0.272s] (11/14) ferrite-core setup_sync::tests::the_first_tables_base_and_the_folders_it_made_of_links_lose_nothing
+        FAIL [   0.130s] (12/14) ferrite-core setup_sync::tests::with_no_base_a_line_end_difference_never_moves_even_from_an_old_base
+        FAIL [   0.361s] (13/14) ferrite-core setup_sync::tests::claudes_settings_carry_only_the_keys_the_table_names
+        FAIL [   0.228s] (14/14) ferrite-core setup_sync::tests::what_a_sync_removes_or_replaces_on_either_side_is_kept_in_that_sides_trash
+error: test run failed

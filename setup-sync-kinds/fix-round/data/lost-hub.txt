@@ -1,0 +1,2 @@
+LOST .claude.json: now file; its old file is kept nowhere
+1 changed, 1 lost, 2 added: .claude/skills/linux-skill/SKILL.md, .claude/statusline.sh

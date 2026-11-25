@@ -1,0 +1,5 @@
+$ ferrite thread list
+--- stdout
+{"id":"1","result":{"threads":[]}}
+--- stderr
+--- exit 0

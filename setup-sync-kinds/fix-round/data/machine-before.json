@@ -1,0 +1,170 @@
+{
+".agents/skills": [
+"dir",
+"",
+"",
+""
+],
+".agents/skills/ask-matt": [
+"dir",
+"",
+"",
+""
+],
+".agents/skills/ask-matt/PHASE-BOUNDARIES.md": [
+"file",
+"2b0e101f14e07df1929f3175591bd5dd266a82c50a088ebfcd02b9efe9881057",
+"2b0e101f14e07df1929f3175591bd5dd266a82c50a088ebfcd02b9efe9881057",
+""
+],
+".agents/skills/ask-matt/SKILL.md": [
+"file",
+"c4def9d09802b55623f91b9073d9a21e3c5085c1f65c6c5a58fb3af06661e114",
+"c4def9d09802b55623f91b9073d9a21e3c5085c1f65c6c5a58fb3af06661e114",
+""
+],
+".agents/skills/reui": [
+"dir",
+"",
+"",
+""
+],
+".agents/skills/reui/SKILL.md": [
+"file",
+"a7b7a669d5664125cd0dd1a0a14fec313e6ad68cece371d01f485a273e404094",
+"a7b7a669d5664125cd0dd1a0a14fec313e6ad68cece371d01f485a273e404094",
+""
+],
+".agents/skills/reui/rules": [
+"dir",
+"",
+"",
+""
+],
+".agents/skills/reui/rules/tokens.md": [
+"file",
+"f6be5eba05304128f28f1aed47e8af6c46880374b1df949e5dca6e79d806526a",
+"f6be5eba05304128f28f1aed47e8af6c46880374b1df949e5dca6e79d806526a",
+""
+],
+".claude.json": [
+"file",
+"458a2766c336de81982d03691e2581f9f585343d6db9d2404cec98f8f0ea1ae6",
+"458a2766c336de81982d03691e2581f9f585343d6db9d2404cec98f8f0ea1ae6",
+""
+],
+".claude/settings.json": [
+"file",
+"53d0a72d90aea722c1fe60e0092ad35dfbf3fe881156a451988f3018ea7c40cc",
+"53d0a72d90aea722c1fe60e0092ad35dfbf3fe881156a451988f3018ea7c40cc",
+""
+],
+".claude/skills": [
+"dir",
+"",
+"",
+""
+],
+".claude/skills/ask-matt": [
+"dir",
+"",
+"",
+""
+],
+".claude/skills/ask-matt/NOTES.md": [
+"file",
+"9150d2166575ab12bc17b744283b391653c384bd5f0e106d3dcde51ca61c92cc",
+"9150d2166575ab12bc17b744283b391653c384bd5f0e106d3dcde51ca61c92cc",
+""
+],
+".claude/skills/ask-matt/PHASE-BOUNDARIES.md": [
+"file",
+"2b0e101f14e07df1929f3175591bd5dd266a82c50a088ebfcd02b9efe9881057",
+"2b0e101f14e07df1929f3175591bd5dd266a82c50a088ebfcd02b9efe9881057",
+""
+],
+".claude/skills/ask-matt/SKILL.md": [
+"file",
+"c4def9d09802b55623f91b9073d9a21e3c5085c1f65c6c5a58fb3af06661e114",
+"c4def9d09802b55623f91b9073d9a21e3c5085c1f65c6c5a58fb3af06661e114",
+""
+],
+".claude/skills/both-edit": [
+"dir",
+"",
+"",
+""
+],
+".claude/skills/both-edit/SKILL.md": [
+"file",
+"8b28b1c23dacd626cae4ebe4a8c9a01beda4b7358bcd66d7c40cf413a6d3a498",
+"8b28b1c23dacd626cae4ebe4a8c9a01beda4b7358bcd66d7c40cf413a6d3a498",
+""
+],
+".claude/skills/linux-skill": [
+"dir",
+"",
+"",
+""
+],
+".claude/skills/linux-skill/.DS_Store": [
+"file",
+"c60d20d511de9eb88cd842833d175fc7cb79c6fe54fb4f3f4265b144ec39e7a6",
+"c60d20d511de9eb88cd842833d175fc7cb79c6fe54fb4f3f4265b144ec39e7a6",
+""
+],
+".claude/skills/linux-skill/SKILL.md": [
+"file",
+"06a471a47f57ce6c1dcfed8760944feb934818d51bc8024fb85491018c48a831",
+"06a471a47f57ce6c1dcfed8760944feb934818d51bc8024fb85491018c48a831",
+""
+],
+".claude/skills/reui": [
+"dir",
+"",
+"",
+""
+],
+".claude/skills/reui/SKILL.md": [
+"file",
+"a7b7a669d5664125cd0dd1a0a14fec313e6ad68cece371d01f485a273e404094",
+"a7b7a669d5664125cd0dd1a0a14fec313e6ad68cece371d01f485a273e404094",
+""
+],
+".claude/skills/reui/rules": [
+"dir",
+"",
+"",
+""
+],
+".claude/skills/reui/rules/tokens.md": [
+"file",
+"f6be5eba05304128f28f1aed47e8af6c46880374b1df949e5dca6e79d806526a",
+"f6be5eba05304128f28f1aed47e8af6c46880374b1df949e5dca6e79d806526a",
+""
+],
+".claude/skills/synced": [
+"dir",
+"",
+"",
+""
+],
+".claude/skills/synced/state.json": [
+"file",
+"4f520e1e7a0ee5a47eed3e382d398bb47d0946f456e616d530853534357cbc9f",
+"4f520e1e7a0ee5a47eed3e382d398bb47d0946f456e616d530853534357cbc9f",
+""
+],
+".claude/statusline.sh": [
+"file",
+"1bad934e0b53620111b02f1513cbbdebac09bc6d346686d2e3b477986f103c6f",
+"1bad934e0b53620111b02f1513cbbdebac09bc6d346686d2e3b477986f103c6f",
+""
+],
+".codex/config.toml": [
+"file",
+"8217a8f79c3130af0847fff2d8cdab5fe597570c17fe3faceb9eae82648da24e",
+"8217a8f79c3130af0847fff2d8cdab5fe597570c17fe3faceb9eae82648da24e",
+""
+]
+}
