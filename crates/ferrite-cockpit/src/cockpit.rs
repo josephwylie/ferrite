@@ -1239,7 +1239,7 @@ impl CockpitView {
         let prs = cx.new(|cx| prs_view::PrsView::new(cockpit_weak.clone(), cx));
         let empty_board = Self::new_empty_board(cx);
         cx.subscribe(&prs, Self::on_prs_event).detach();
-        let side_chat = cx.new(|_| side_chat_view::SideChatView::new(cockpit_weak.clone()));
+        let side_chat = Self::new_side_chat(cx);
         let files = Self::new_files(cx);
         let terminals = Self::new_terminals(cx);
         let changes = Self::new_changes(cx);
@@ -1797,9 +1797,8 @@ impl CockpitView {
                 .and_then(|thread| self.pane_for(thread))
                 .filter(|index| !shown.contains(index)),
         );
-        for index in shown {
-            self.sync_transcript(index, cx);
-        }
+        shown.into_iter().for_each(|index| self.sync_transcript(index, cx));
+        self.sync_side_chat_transcript(cx);
     }
 
     /// Core's child-retention budget evicted these Subjects. Release only

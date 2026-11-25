@@ -31,14 +31,17 @@
 //!
 //! Every Thread's side chats live in one view of their own (ADR 0041),
 //! which the Panel draws as the body of whichever side chat it shows. What
-//! it draws of the window it reads through `side_chat_inputs`; what it
-//! asks of the window (a question sent, Bring back, Trash) it says as a
+//! it draws of the window it reads through a `Source` the root makes over
+//! itself (`side_chat_inputs`), asking with the forks its tabs hold; what
+//! it asks of the window (a question sent, Bring back, Trash) it says as a
 //! `SideChatEvent`. The fork is a Thread of the engine, so asking for it,
-//! binding it and retiring it stay the Cockpit's.
+//! binding it and retiring it stay the Cockpit's, and so does telling the
+//! shown fork's transcript what the fork holds: the root does it where it
+//! tells each Pane's (`sync_visible_transcripts`), before the frame draws.
 
 use std::collections::HashMap;
 
-use gpui::WeakEntity;
+use ferrite_ui::source::Source;
 
 use crate::cockpit::surfaces::SurfaceId;
 use ferrite_core::Rehold;
@@ -98,7 +101,7 @@ struct Chat {
 
 /// Every Thread's side chat, and the forks still on their way.
 pub(crate) struct SideChatView {
-    cockpit: WeakEntity<CockpitView>,
+    inputs: Source<SideChatInputs, Forks>,
     chats: HashMap<ThreadKey, Chat>,
     /// The tab waiting on each Thread's fork, kept when the tab closes so
     /// the fork is retired when it lands. One per Thread: the engine makes
@@ -126,6 +129,18 @@ pub(crate) struct SideChatInputs {
     /// Why Bring back cannot run now, or None.
     blocked: Option<&'static str>,
     confirm_delete: bool,
+}
+
+/// The fork each tab holds, by the tab's id: what the side chat asks the
+/// window about, since whether a fork has answered and whether Bring back
+/// can run are the window's to read.
+#[derive(Default)]
+pub(crate) struct Forks(HashMap<u64, Fork>);
+
+impl Forks {
+    fn of(&self, tab: u64) -> Option<Fork> {
+        self.0.get(&tab).copied()
+    }
 }
 
 /// What the side chat asks of the window.
@@ -157,7 +172,7 @@ impl CockpitView {
         subject: &Subject,
         pane: &PaneView,
         skip: usize,
-        cx: &mut Context<Self>,
+        cx: &mut gpui::App,
     ) {
         let reduce_motion = cx.reduce_motion();
         // The model is lent, not written: the transcript copies what it
@@ -448,31 +463,48 @@ impl CockpitView {
     /// The fork of the side chat the Panel shows, once it has one: a
     /// Thread whose records the window draws.
     pub(super) fn side_chat_drawn(&self, cx: &gpui::App) -> Option<ThreadKey> {
+        let (owner, tab) = self.side_chat_shown(cx)?;
+        Some(self.side_chat.read(cx).fork(owner, tab)?.thread)
+    }
+
+    /// The window's side chat, reading it through a `Source` over the root.
+    pub(super) fn new_side_chat(cx: &mut Context<Self>) -> Entity<SideChatView> {
+        let inputs = Source::of(&cx.entity(), |root: &Self, forks: &Forks, cx| {
+            root.side_chat_inputs(forks, cx)
+        });
+        cx.new(|_| SideChatView::new(inputs))
+    }
+
+    /// The Thread whose Panel shows a side chat this frame, and its tab.
+    fn side_chat_shown(&self, cx: &gpui::App) -> Option<(ThreadKey, u64)> {
         let owner = self.panes[self.panel_drawn_pane(cx)?].thread()?;
         let Some(SurfaceId::SideChat(tab)) = self.active_surface(owner) else {
             return None;
         };
-        Some(self.side_chat.read(cx).fork(owner, tab)?.thread)
+        Some((owner, tab))
+    }
+
+    /// The shown side chat's transcript is told what its fork holds after
+    /// its history, as each Pane's is (`sync_visible_transcripts`): before
+    /// the frame draws it.
+    pub(super) fn sync_side_chat_transcript(&self, cx: &mut Context<Self>) {
+        let Some((owner, tab)) = self.side_chat_shown(cx) else {
+            return;
+        };
+        self.side_chat.update(cx, |chat, cx| {
+            if let Some((Fork { thread, inherited: Some(inherited) }, pane)) =
+                chat.shown_conversation(owner, tab)
+            {
+                self.sync_compact_transcript(thread, &Subject::Main, pane, inherited, cx);
+            }
+        });
     }
 
     /// Everything the side chat draws from: the tab the Panel shows, and
-    /// what `conversation` (the view's own, by Thread and tab) holds. Its
-    /// transcript is told here what its fork holds after its history.
-    pub(super) fn side_chat_inputs<'a>(
-        &self,
-        conversation: impl FnOnce(ThreadKey, u64) -> Option<(Fork, &'a PaneView)>,
-        cx: &mut Context<Self>,
-    ) -> Option<SideChatInputs> {
-        let thread = self.panes[self.panel_drawn_pane(cx)?].thread()?;
-        let owner = thread;
-        let Some(SurfaceId::SideChat(tab)) = self.active_surface(owner) else {
-            return None;
-        };
-        let conversation = conversation(owner, tab);
-        if let Some((Fork { thread, inherited: Some(inherited) }, pane)) = conversation {
-            self.sync_compact_transcript(thread, &Subject::Main, pane, inherited, cx);
-        }
-        let fork = conversation.map(|(fork, _)| fork);
+    /// what its fork (`forks`, the view's own, by tab) holds.
+    fn side_chat_inputs(&self, forks: &Forks, cx: &gpui::App) -> Option<SideChatInputs> {
+        let (owner, tab) = self.side_chat_shown(cx)?;
+        let fork = forks.of(tab);
         let answered = fork.is_some_and(|fork| {
             fork.inherited.is_some_and(|inherited| {
                 self.cockpit
@@ -564,9 +596,9 @@ impl CockpitView {
 }
 
 impl SideChatView {
-    pub(super) fn new(cockpit: WeakEntity<CockpitView>) -> Self {
+    pub(super) fn new(inputs: Source<SideChatInputs, Forks>) -> Self {
         Self {
-            cockpit,
+            inputs,
             chats: HashMap::new(),
             asked: HashMap::new(),
             next_tab: 0,
@@ -598,6 +630,23 @@ impl SideChatView {
 
     fn tab(&self, owner: ThreadKey, id: u64) -> Option<&Tab> {
         self.chats.get(&owner)?.tabs.iter().find(|tab| tab.id == id)
+    }
+
+    /// Side chat `id`'s fork and what draws it, once the agent has made it.
+    fn shown_conversation(&self, owner: ThreadKey, id: u64) -> Option<(Fork, &PaneView)> {
+        let conversation = self.tab(owner, id)?.conversation.as_ref()?;
+        Some((conversation.fork, &conversation.pane))
+    }
+
+    /// The fork each tab holds: what the view asks the window about.
+    fn forks(&self) -> Forks {
+        Forks(
+            self.chats
+                .values()
+                .flat_map(|chat| &chat.tabs)
+                .filter_map(|tab| Some((tab.id, tab.conversation.as_ref()?.fork)))
+                .collect(),
+        )
     }
 
     fn tab_mut(&mut self, id: u64) -> Option<&mut Tab> {
@@ -1100,18 +1149,7 @@ impl SideChatView {
 
 impl Render for SideChatView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(cockpit) = self.cockpit.upgrade() else {
-            return div().into_any_element();
-        };
-        let chats = &self.chats;
-        let conversation = |owner: ThreadKey, id: u64| {
-            let tab = chats.get(&owner)?.tabs.iter().find(|tab| tab.id == id)?;
-            let conversation = tab.conversation.as_ref()?;
-            Some((conversation.fork, &conversation.pane))
-        };
-        let Some(inputs) =
-            cockpit.update(cx, |cockpit, cx| cockpit.side_chat_inputs(conversation, cx))
-        else {
+        let Some(inputs) = self.inputs.read(&self.forks(), cx) else {
             return div().into_any_element();
         };
         self.follow(&inputs, window, cx);

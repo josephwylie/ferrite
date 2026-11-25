@@ -306,6 +306,44 @@ fn a_side_chat_question_goes_to_its_fork_and_shows_only_the_new_words(cx: &mut T
     );
 }
 
+/// The fork's words are drawn in the frame whose pump brings them: its
+/// transcript takes what the fork holds before that frame draws it, not in
+/// the frame after.
+#[gpui::test]
+fn a_side_chat_answer_is_drawn_in_the_frame_that_brings_it(cx: &mut TestAppContext) {
+    let (view, fake, cx) = answered("side-chat-frame", cx);
+    open_chat(&view, cx);
+    let owner = owner(&view, cx);
+    let fork = view
+        .read_with(cx, |view, cx| shown_fork(view, owner, cx))
+        .unwrap();
+    cx.simulate_input("what is alpha?");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    tick(cx);
+    let drawn = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            view.selection
+                .registered(fork.thread())
+                .into_iter()
+                .any(|(_, _, _, text)| text.contains("the first letter"))
+        })
+    };
+    assert!(!drawn(&view, cx), "nothing answered yet");
+
+    fake.streams.borrow()[1]
+        .send(SessionEvent::TextDelta {
+            text: "Alpha is the first letter.\n\n".into(),
+        })
+        .unwrap();
+    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
+    let before = renders();
+    cx.executor().advance_clock(Duration::from_millis(PUMP_MS));
+    cx.run_until_parked();
+    assert!(drawn(&view, cx), "the fork's words are drawn");
+    assert_eq!(renders() - before, 1, "by the one frame its pump asked for");
+}
+
 fn block_text(block: &ferrite_core::transcript::Block) -> String {
     match &block.body {
         ferrite_core::transcript::Body::Prompt(text) => text.clone(),
