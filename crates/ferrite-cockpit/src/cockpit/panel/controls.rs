@@ -481,12 +481,37 @@ impl CockpitView {
     }
 
     /// Close `path`'s file tab: the keyboard goes to the file that takes
-    /// its place, else back to the Panel's own tab.
+    /// its place, else back to the Panel's own tab. A tab with an edit to
+    /// write keeps the keyboard until the write lands and it goes
+    /// (`file_tab_closed`).
     fn close_file_tab(&mut self, thread: ThreadKey, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
         let Some(at) = self.files.read(cx).tab_index(thread, path) else {
             return;
         };
         self.files.update(cx, |files, cx| files.close_tab(thread, at, cx));
+        if self.files.read(cx).tab_index(thread, path).is_none() {
+            self.focus_file_tab_successor(thread, at, window, cx);
+        }
+    }
+
+    /// A file tab that waited to close is gone: if the keyboard stayed on
+    /// it, it goes on as from a tab closed at once.
+    pub(in crate::cockpit) fn file_tab_closed(
+        &mut self,
+        thread: ThreadKey,
+        path: &Path,
+        at: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.panel.focus.focused(window) == Some(PanelControl::FileTab(path.to_path_buf())) {
+            self.focus_file_tab_successor(thread, at, window, cx);
+        }
+    }
+
+    /// The keyboard to the file tab now `at`, else the last, else the
+    /// Panel's own Files tab.
+    fn focus_file_tab_successor(&mut self, thread: ThreadKey, at: usize, window: &mut Window, cx: &mut Context<Self>) {
         let files = self.files.read(cx);
         let next = files
             .tab_count(thread)

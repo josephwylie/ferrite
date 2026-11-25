@@ -687,14 +687,21 @@ fn discarding_a_failed_buffer_closes_the_tab(cx: &mut TestAppContext) {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "l\n");
 }
 
+/// Closing an edited tab writes it, then closes it, and tells the window
+/// which tab went and where it stood, so the keyboard can go on.
 #[gpui::test]
 fn closing_a_dirty_tab_writes_it_then_closes(cx: &mut TestAppContext) {
     let (view, _kept, file, _editor, cx) = open_editor("close-dirty", cx);
+    let heard = record(cx, &view, |event: &FilesEvent| match event {
+        FilesEvent::Closed { thread, path, at } => Some((*thread, path.clone(), *at)),
+        _ => None,
+    });
     type_into("// hi\n", cx);
     click(cx, "files-tab-close-0");
     tick(cx);
     assert!(tab_names(&view, cx).is_empty());
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "// hi\nl\n");
+    assert_eq!(heard.take(), [Some((thread(), file, 0))]);
 }
 
 /// A buffer with no edits of its own takes its file's new text, its caret

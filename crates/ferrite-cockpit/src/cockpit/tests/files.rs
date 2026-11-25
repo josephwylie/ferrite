@@ -249,6 +249,32 @@ fn twenty_tabs_at_a_narrow_width_are_all_reachable(cx: &mut TestAppContext) {
     assert!(tab_names(&view, thread, cx).is_empty(), "every tab closed by key");
 }
 
+/// ⌫ on an edited file's tab closes it once its write lands, and the
+/// keyboard then goes to the file that takes its place, as from a tab with
+/// nothing to write.
+#[gpui::test]
+fn a_dirty_tab_closed_by_key_hands_the_keyboard_on_once_its_write_lands(cx: &mut TestAppContext) {
+    use crate::cockpit::panel::PanelControl;
+    let (view, thread, checkout, cx) = files_window("files-close-dirty-key", cx);
+    let (a, b) = (checkout.join("a.rs"), checkout.join("b.rs"));
+    for file in [&a, &b] {
+        std::fs::write(file, "x\n").unwrap();
+        open(&view, thread, file, true, cx);
+    }
+    open(&view, thread, &a, true, cx);
+    type_into("// hi\n", cx);
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "x\n", "auto save has not written it yet");
+    let tab = view.read_with(cx, |view, _| view.panel.focus.handle(&PanelControl::FileTab(a.clone())).unwrap());
+    cx.update(|window, cx| window.focus(&tab, cx));
+    tick(cx);
+    super::panel_focus::press("backspace", cx);
+    tick(cx);
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "// hi\nx\n", "the close wrote it");
+    assert_eq!(tab_names(&view, thread, cx), [("b.rs".to_string(), false)], "then closed it");
+    let focused = cx.update(|window, cx| view.read(cx).panel.focus.focused(window));
+    assert_eq!(focused, Some(PanelControl::FileTab(b)), "the keyboard went on to b.rs");
+}
+
 /// The tab whose opening first overflows the row lands whole in it, though
 /// the chevron slots that overflow brings in narrow the row.
 #[gpui::test]

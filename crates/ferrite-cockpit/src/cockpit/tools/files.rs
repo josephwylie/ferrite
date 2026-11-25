@@ -217,6 +217,7 @@ impl CockpitView {
             FilesEvent::More { thread } => {
                 self.toggle_door(Door::new(MenuTarget::FilesMore(*thread), Edge::Right), cx)
             }
+            FilesEvent::Closed { thread, path, at } => self.file_tab_closed(*thread, path, *at, window, cx),
         }
     }
 

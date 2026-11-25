@@ -319,6 +319,9 @@ pub enum FilesEvent {
     GoToFile { thread: ThreadKey },
     /// A press on the `⋯` button: its menu, or to shut it.
     More { thread: ThreadKey },
+    /// A tab whose close waited on its write, or whose failed buffer was
+    /// discarded, is gone: it stood `at` in the row.
+    Closed { thread: ThreadKey, path: PathBuf, at: usize },
 }
 
 impl EventEmitter<FilesEvent> for FilesView {}
@@ -580,11 +583,12 @@ impl FilesView {
             match event {
                 // Typing keeps a preview tab.
                 editor::Event::Edited => files.tabs[at].preview = false,
-                editor::Event::Settled if editor.read(cx).is_closing_clean() => {
-                    return view.remove_tab(thread, at, cx);
+                editor::Event::Settled if !editor.read(cx).is_closing_clean() => {}
+                editor::Event::Settled | editor::Event::Discard => {
+                    let path = files.tabs[at].path.clone();
+                    view.remove_tab(thread, at, cx);
+                    return cx.emit(FilesEvent::Closed { thread, path, at });
                 }
-                editor::Event::Settled => {}
-                editor::Event::Discard => return view.remove_tab(thread, at, cx),
             }
             cx.notify();
         })
