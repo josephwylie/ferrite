@@ -454,8 +454,9 @@ Windows window.
   Settings stops its copies at once, "E was turned off." or "E was
   removed.", with Resume; the card adds "Resume finishes the copy once it
   is back." until it is. A copy whose files all landed but that could
-  not be added on E ("Copied, but not added on E: …") keeps them: its
-  Resume only adds it. Through a first copy its button reads Copy; only a
+  not be added on E ("Copied, but not added on E: …"), or whose landing
+  the window had not yet heard when E went, keeps them: its Resume only
+  adds it. Through a first copy its button reads Copy; only a
   resume's reads Resume. Retry from a failure copies again.
 - `CONTEXT.md`'s Draft entry and ADR 0045's line on the strip over the
   Composer say the environment is a choice until the first send.
