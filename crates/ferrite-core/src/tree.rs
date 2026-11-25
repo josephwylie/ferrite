@@ -19,6 +19,7 @@ use crate::chunked::{self, Cancellation, Progress};
 use crate::link;
 use crate::protocol::{ClientMessage, Command, Done, Op};
 
+mod links;
 mod scan;
 mod serve;
 #[cfg(test)]
@@ -161,8 +162,35 @@ pub enum Reply {
     Done,
     /// It was already so: nothing was done.
     Unchanged,
+    /// This side did not make the entry, and why: the sender leaves it as
+    /// this side has it and goes on.
+    Unmade(Refusal),
     #[serde(other)]
     Unknown,
+}
+
+/// Why a far side did not make an entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "why", rename_all = "snake_case")]
+pub enum Refusal {
+    /// A link that leads out of the tree.
+    LeadsOut,
+    /// A link that leads to nothing that side has.
+    LeadsNowhere,
+    /// A name that side's file system cannot hold.
+    Name,
+    /// That side's file system would not make it.
+    Failed { error: String },
+    #[serde(other)]
+    Unknown,
+}
+
+impl Refusal {
+    pub(crate) fn failed(error: io::Error) -> Self {
+        Refusal::Failed {
+            error: error.to_string(),
+        }
+    }
 }
 
 /// How long a Server is given to answer a chunk or any one entry's op,
@@ -279,14 +307,32 @@ impl Step {
             Step::Link { path, .. } | Step::Write { path, .. } => path,
         }
     }
+
+    /// The entry it makes, as this side lists it.
+    fn entry(&self) -> Option<Entry> {
+        match self {
+            Step::Remove(_) => None,
+            Step::MakeDir(_) => Some(Entry::Dir),
+            Step::Write { size, sha256, mode, .. } => Some(Entry::File {
+                size: *size,
+                sha256: sha256.clone(),
+                mode: *mode,
+                modified: None,
+            }),
+            Step::Link { target, .. } => Some(Entry::Symlink { target: target.clone() }),
+        }
+    }
 }
 
 /// What makes `dest` equal `source`: first what must go, the outermost
 /// entry of each removal only, then what is made, in path order so a
-/// directory is made before what it holds. A file of the same kind is
-/// rewritten in place. What `skip` names, what either side could not list,
-/// and each directory that holds one of those are left as each side has
-/// them.
+/// directory is made before what it holds, and each link last, after what
+/// it leads to, a link that leads through another after that one: a side
+/// that makes a link by what it leads to (Windows) finds it there. A file
+/// of the same kind is rewritten in place, and a link is there when the
+/// far side holds it as it can ([`Manifest::holds_link`]). What `skip`
+/// names, what either side could not list, and each directory that holds
+/// one of those are left as each side has them.
 pub fn plan(source: &Manifest, dest: &Manifest, skip: &[String]) -> Vec<Step> {
     let held = Held(
         skip.iter()
@@ -302,7 +348,7 @@ pub fn plan(source: &Manifest, dest: &Manifest, skip: &[String]) -> Vec<Step> {
         }
         let same_kind = match (source.entries.get(path), there) {
             (Some(Entry::Dir), Entry::Dir) | (Some(Entry::File { .. }), Entry::File { .. }) => true,
-            (Some(here @ Entry::Symlink { .. }), there) => here == there,
+            (Some(Entry::Symlink { target }), there) => source.holds_link(path, target, there),
             _ => false,
         };
         let stays = same_kind
@@ -313,6 +359,7 @@ pub fn plan(source: &Manifest, dest: &Manifest, skip: &[String]) -> Vec<Step> {
         }
     }
     let mut steps: Vec<Step> = removed.iter().map(|path| Step::Remove(path.to_string())).collect();
+    let mut links = Vec::new();
     for (path, here) in &source.entries {
         if held.covers(path) {
             continue;
@@ -338,15 +385,27 @@ pub fn plan(source: &Manifest, dest: &Manifest, skip: &[String]) -> Vec<Step> {
                     });
                 }
             }
-            (Entry::Symlink { target }, None) => steps.push(Step::Link {
-                path: path.clone(),
-                target: target.clone(),
-            }),
+            (Entry::Symlink { target }, None) => {
+                let through = source.lead(path, target).map_or(0, |(_, through)| through);
+                links.push((
+                    through,
+                    Step::Link {
+                        path: path.clone(),
+                        target: target.clone(),
+                    },
+                ));
+            }
             _ => {}
         }
     }
+    links.sort_by_key(|(through, _)| *through);
+    steps.extend(links.into_iter().map(|(_, link)| link));
     steps
 }
+
+/// The most links one target is followed through, as a system's own
+/// lookup gives up.
+const MOST_LINKS: usize = 40;
 
 /// The paths a plan leaves as each side has them.
 struct Held<'a>(BTreeSet<&'a str>);
@@ -374,6 +433,61 @@ fn inside_any(path: &str, dirs: &BTreeSet<&str>) -> bool {
 }
 
 impl Manifest {
+    /// Where the link at `path`, to `target`, leads in this tree: the path
+    /// it ends at, each link on the way followed as a lookup follows it,
+    /// and how many it followed. None when it leads out of the tree, or
+    /// through more links than a lookup takes.
+    pub(crate) fn lead<'a>(&'a self, path: &'a str, target: &'a str) -> Option<(String, usize)> {
+        if target.starts_with('/') {
+            return None;
+        }
+        let mut at: Vec<&str> = path.split('/').collect();
+        at.pop();
+        let mut ahead: VecDeque<&str> = target.split('/').collect();
+        let mut through = 0;
+        while let Some(part) = ahead.pop_front() {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    at.pop()?;
+                }
+                name => {
+                    at.push(name);
+                    if let Some(Entry::Symlink { target }) = self.entries.get(&at.join("/")) {
+                        through += 1;
+                        if through > MOST_LINKS || target.starts_with('/') {
+                            return None;
+                        }
+                        at.pop();
+                        for part in target.split('/').rev() {
+                            ahead.push_front(part);
+                        }
+                    }
+                }
+            }
+        }
+        Some((at.join("/"), through))
+    }
+
+    /// Whether `there`, the far side's entry at `path`, holds this side's
+    /// link there to `target`: a link that leads the same way, however its
+    /// target is spelled with `.` and `/`, or a copy of the file it leads
+    /// to here, as a side that makes no file link holds one (Windows).
+    pub(crate) fn holds_link(&self, path: &str, target: &str, there: &Entry) -> bool {
+        fn spelled(target: &str) -> (bool, Vec<&str>) {
+            let parts = target.split('/').filter(|part| !matches!(*part, "" | ".")).collect();
+            (target.starts_with('/'), parts)
+        }
+        match there {
+            Entry::Symlink { target: theirs } => spelled(target) == spelled(theirs),
+            Entry::File { size, sha256, .. } => matches!(
+                self.lead(path, target).and_then(|(to, _)| self.entries.get(&to)),
+                Some(Entry::File { size: ours, sha256: hash, .. }) if ours == size && hash == sha256
+            ),
+            _ => false,
+        }
+    }
+
     /// The entries and problems after `after`, in path order, as many as
     /// take at most `budget` bytes of JSON (and at least one), and whether
     /// more follow them.
@@ -416,7 +530,8 @@ impl Manifest {
     }
 }
 
-/// What a [`send`] did, and what each side could not list or read.
+/// What a [`send`] did, what each side could not list or read, and what
+/// the far side did not make.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Sent {
     pub removed: usize,
@@ -426,6 +541,19 @@ pub struct Sent {
     pub bytes: u64,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<Problem>,
+    /// Each outermost: nothing under a folder left unmade is listed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unmade: Vec<Unmade>,
+}
+
+/// An entry the far side did not make, left as it has it: what it is
+/// here, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Unmade {
+    pub path: String,
+    pub entry: Entry,
+    #[serde(flatten)]
+    pub why: Refusal,
 }
 
 /// A send that stopped before its last step: why, and what it had taken
@@ -544,9 +672,11 @@ impl<T: AsRef<Path> + ?Sized> Source for T {
 /// bytes of all the steps' files the far side has. A file that cannot be
 /// read here as its step lists it (gone, held by another program, changed
 /// since it was listed) is left as the far side has it, a problem of this
-/// side, and the send goes on. An error names the entry it was for, and
-/// comes with what was taken by then; what was asked after it may still
-/// be taken there, since each step is whole on its own.
+/// side, and the send goes on. So is an entry the far side says it did not
+/// make (`unmade`), with all under it, which is not asked for. An error
+/// names the entry it was for, and comes with what was taken by then; what
+/// was asked after it may still be taken there, since each step is whole
+/// on its own.
 pub fn send(
     source: &(impl Source + ?Sized),
     steps: &[Step],
@@ -571,10 +701,15 @@ pub fn send(
         received: 0,
         total,
         sent: Sent::default(),
+        unmade: None,
+        unmade_dirs: BTreeSet::new(),
     };
     for step in steps {
         if let Err(error) = cancel.check() {
             return Err(flight.stop(error));
+        }
+        if inside_any(step.path(), &flight.unmade_dirs) {
+            continue;
         }
         let root = dest.clone();
         let request = match step {
@@ -621,6 +756,9 @@ pub fn send(
                     let mut pieces = chunked::Pieces::new(file, *size);
                     for piece in &mut pieces {
                         cancel.check().map_err(Halt::Stop)?;
+                        if flight.is_unmade(step) {
+                            return Err(Halt::Unmade);
+                        }
                         let (piece, data) = piece.map_err(Halt::Unread)?;
                         let chunk = Request::Chunk {
                             write,
@@ -641,7 +779,7 @@ pub fn send(
                     let _ = flight.exchange.ask(finish);
                 }
                 match sent {
-                    Ok(()) => {}
+                    Ok(()) | Err(Halt::Unmade) => {}
                     Err(Halt::Unread(error)) => flight.left_here(path, error),
                     Err(Halt::Stop(error)) => return Err(flight.stop(error)),
                 }
@@ -656,9 +794,11 @@ pub fn send(
 }
 
 /// Why a file's write ended early: it could not be read here as listed,
-/// and the send goes on; or the send itself must stop.
+/// or the far side did not make it, and the send goes on; or the send
+/// itself must stop.
 enum Halt {
     Unread(io::Error),
+    Unmade,
     Stop(io::Error),
 }
 
@@ -673,6 +813,11 @@ struct Flight<'a> {
     received: u64,
     total: u64,
     sent: Sent,
+    /// The step the far side last said it did not make: the rest asked for
+    /// it is refused there, and passed over here.
+    unmade: Option<&'a Step>,
+    /// Each folder the far side did not make.
+    unmade_dirs: BTreeSet<&'a str>,
 }
 
 /// What a reply says when all went well.
@@ -708,13 +853,31 @@ impl<'a> Flight<'a> {
         let Some((asked, step, expect)) = self.waiting.pop_front() else {
             return Ok(());
         };
-        let reply = self.exchange.answer(asked).map_err(|error| named(step, Side::There, error))?;
-        match (expect, reply) {
+        let bytes = match &expect {
+            Expect::Written(piece) => piece.end - piece.start,
+            _ => 0,
+        };
+        self.ahead -= bytes;
+        let reply = self.exchange.answer(asked).map_err(|error| named(step, Side::There, error));
+        if self.is_unmade(step) {
+            return reply.map(drop).or_else(|error| if line_down(&error) { Err(error) } else { Ok(()) });
+        }
+        match (expect, reply?) {
             (Expect::Taken, Reply::Done) => self.sent.took(step),
             (Expect::Taken, Reply::Unchanged) | (Expect::Begun, Reply::Done) => {}
+            (Expect::Taken | Expect::Begun, Reply::Unmade(why)) => {
+                let entry = step.entry().ok_or_else(|| named(step, Side::There, unanswered()))?;
+                if let Step::MakeDir(path) = step {
+                    self.unmade_dirs.insert(path);
+                }
+                self.unmade = Some(step);
+                self.sent.unmade.push(Unmade {
+                    path: step.path().to_string(),
+                    entry,
+                    why,
+                });
+            }
             (Expect::Written(piece), Reply::Written { offset }) if offset == piece.end => {
-                let bytes = piece.end - piece.start;
-                self.ahead -= bytes;
                 self.received += bytes;
                 (self.progress)(Progress {
                     sent: self.received,
@@ -726,6 +889,11 @@ impl<'a> Flight<'a> {
         Ok(())
     }
 
+    /// Whether the far side said it did not make `step`'s entry.
+    fn is_unmade(&self, step: &Step) -> bool {
+        self.unmade.is_some_and(|unmade| std::ptr::eq(unmade, step))
+    }
+
     /// What the send did, once every reply is heard.
     fn land(mut self) -> Result<Sent, Stopped> {
         while !self.waiting.is_empty() {
@@ -733,7 +901,15 @@ impl<'a> Flight<'a> {
                 return Err(self.stop(error));
             }
         }
-        Ok(self.sent)
+        Ok(self.taken())
+    }
+
+    /// What was taken there, and each outermost entry that was not: one
+    /// asked before the folder it is in was refused fails with it.
+    fn taken(&mut self) -> Sent {
+        let dirs = &self.unmade_dirs;
+        self.sent.unmade.retain(|unmade| !inside_any(&unmade.path, dirs));
+        std::mem::take(&mut self.sent)
     }
 
     /// The file at `path` is left as the far side has it.
@@ -758,7 +934,7 @@ impl<'a> Flight<'a> {
         }
         Stopped {
             error,
-            sent: std::mem::take(&mut self.sent),
+            sent: self.taken(),
         }
     }
 }
@@ -882,6 +1058,44 @@ fn holds(outer: &Path, inner: &Path) -> bool {
     } else {
         inner.starts_with(outer)
     }
+}
+
+/// The target that leads from the link at `path` to `to`, both in the
+/// tree: up from the link's folder to where the two part, then down.
+fn relative(path: &str, to: &[String]) -> String {
+    let mut from: Vec<&str> = path.split('/').collect();
+    from.pop();
+    let fold = |name: &str| {
+        if cfg!(any(windows, target_os = "macos")) {
+            name.to_lowercase()
+        } else {
+            name.to_string()
+        }
+    };
+    let common = from.iter().zip(to).take_while(|(here, there)| fold(here) == fold(there)).count();
+    let parts: Vec<&str> = std::iter::repeat_n("..", from.len() - common)
+        .chain(to[common..].iter().map(String::as_str))
+        .collect();
+    if parts.is_empty() {
+        ".".into()
+    } else {
+        parts.join("/")
+    }
+}
+
+/// Whether Windows can hold a file named `name`: none with `<>:"/\|?*` or
+/// a control character, none that is a device name (`aux`, `com1.txt`),
+/// none ending in a dot or a space.
+pub(crate) fn windows_name(name: &str) -> bool {
+    const DEVICES: &[&str] = &["con", "prn", "aux", "nul"];
+    let stem = name.split('.').next().unwrap_or(name).trim_end().to_lowercase();
+    let numbered = |prefix: &str| {
+        stem.strip_prefix(prefix)
+            .is_some_and(|digit| digit.len() == 1 && digit.chars().all(|c| c.is_ascii_digit() && c != '0'))
+    };
+    let device = DEVICES.contains(&stem.as_str()) || numbered("com") || numbered("lpt");
+    let refused = name.chars().any(|c| c < ' ' || "<>:\"/\\|?*".contains(c));
+    !(device || refused || name.ends_with('.') || name.ends_with(' '))
 }
 
 /// `path` as this computer spells it under `root`.

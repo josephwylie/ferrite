@@ -666,6 +666,9 @@ fn another_projects_unfinished_copy_is_left_to_it(cx: &mut TestAppContext) {
     press(cx, "placement-close");
     BOX_SLOW.store(false, Ordering::SeqCst);
     press(cx, "placement-close");
+    // The write the cancel cut off is dropped there once its connection ends.
+    let part = |path: &PathBuf| path.extension().is_some_and(|ext| ext == "part");
+    until(cx, |_| !files_in(&dest).iter().any(|(path, _)| part(path)));
     let held = files_in(&dest);
 
     view.update(cx, |view, cx| view.open_draft_in_project(web, cx));

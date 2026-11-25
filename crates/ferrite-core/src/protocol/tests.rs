@@ -1542,6 +1542,8 @@ fn samples() -> Vec<(&'static str, Sample)> {
         ("reply_tree_read", Sample::Server(ServerMessage::Reply { id: 324, ok: Some(Done::Tree { reply: crate::tree::Reply::Bytes { data: "YWJj".into(), size: 3 } }), error: None })),
         ("reply_tree_done", Sample::Server(ServerMessage::Reply { id: 325, ok: Some(Done::Tree { reply: crate::tree::Reply::Done }), error: None })),
         ("reply_tree_unchanged", Sample::Server(ServerMessage::Reply { id: 327, ok: Some(Done::Tree { reply: crate::tree::Reply::Unchanged }), error: None })),
+        ("reply_tree_unmade", Sample::Server(ServerMessage::Reply { id: 326, ok: Some(Done::Tree { reply: crate::tree::Reply::Unmade(crate::tree::Refusal::LeadsOut) }), error: None })),
+        ("reply_tree_unmade_failed", Sample::Server(ServerMessage::Reply { id: 325, ok: Some(Done::Tree { reply: crate::tree::Reply::Unmade(crate::tree::Refusal::Failed { error: "Access is denied. (os error 5)".into() }) }), error: None })),
         ("command_changes_read", command(315, Op::Changes { request: crate::changes::Request::Read { root: "/workspace".into(), scope: crate::changes::Scope::Against("main".into()) } })),
         ("command_changes_stage", command(316, Op::Changes { request: crate::changes::Request::SetStaged { root: "/workspace".into(), path: "a.rs".into(), staged: true } })),
         ("reply_changes_read", Sample::Server(ServerMessage::Reply { id: 315, ok: Some(Done::Changes { reply: crate::changes::Reply::Read { files: vec![], branches: vec!["main".into()], staged: vec!["a.rs".into()] } }), error: None })),

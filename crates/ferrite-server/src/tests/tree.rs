@@ -244,8 +244,10 @@ fn a_send_cut_off_part_way_is_finished_by_the_next_without_resending_what_arrive
     same(&source, &dest);
 }
 
+/// An entry the Machine cannot make is left there, named, and the send
+/// takes the rest: what was asked for it already does no harm.
 #[test]
-fn a_refused_entry_fails_the_send_by_its_name_and_its_later_requests_do_no_harm() {
+fn an_entry_the_machine_cannot_make_is_left_by_its_name_and_the_send_goes_on() {
     let harness = start("tree-refused-entry");
     let sent = Arc::default();
     let mut cockpit = machine(&harness, &sent);
@@ -259,7 +261,7 @@ fn a_refused_entry_fails_the_send_by_its_name_and_its_later_requests_do_no_harm(
     let steps = ["a.txt", "never-made/b.bin", "c.txt"].map(|path| listed(&source, path));
 
     let mut exchange = connect(&mut cockpit);
-    let refused = tree::send(
+    let sent = tree::send(
         &source,
         &steps,
         &Root::Path { path: dest.clone() },
@@ -267,9 +269,10 @@ fn a_refused_entry_fails_the_send_by_its_name_and_its_later_requests_do_no_harm(
         &mut |_| {},
         &Cancellation::default(),
     )
-    .unwrap_err();
-    assert!(refused.to_string().starts_with("never-made/b.bin: "), "{refused}");
-    assert_eq!(refused.sent.written, 2, "what was asked around the refusal is taken and told");
+    .unwrap();
+    assert_eq!(sent.unmade.iter().map(|unmade| unmade.path.as_str()).collect::<Vec<_>>(), ["never-made/b.bin"]);
+    assert!(matches!(sent.unmade[0].why, tree::Refusal::Failed { .. }), "{sent:?}");
+    assert_eq!(sent.written, 2, "what was asked around it is taken and told");
 
     let Reply::Scanned { manifest, .. } = exchange
         .call(Request::Scan {
@@ -289,6 +292,43 @@ fn a_refused_entry_fails_the_send_by_its_name_and_its_later_requests_do_no_harm(
     }
     assert!(!dest.join("never-made").exists());
     assert_eq!(parts(&dest), 0);
+}
+
+/// Links, as a Mac lists them, reach the Machine over the wire as it makes
+/// them: one that leads inside the tree reads there as what it leads to,
+/// one it cannot make is left and said why, and sending again moves
+/// nothing.
+#[test]
+fn links_reach_a_machine_as_it_makes_them_and_sending_again_moves_nothing() {
+    let harness = start("tree-links");
+    let sent = Arc::default();
+    let mut cockpit = machine(&harness, &sent);
+    let source = harness.dir.join("desktop-tree");
+    let dest = harness.dir.join("box-tree");
+    write(&source.join("lib/index.js"), "module.exports = 1;\n");
+    let mut here = tree::scan(&source, &[]).unwrap();
+    here.entries.insert("node_modules".into(), tree::Entry::Dir);
+    for (path, target) in [("node_modules/lib", "../lib"), ("escape", "../../outside")] {
+        here.entries.insert(path.into(), tree::Entry::Symlink { target: target.into() });
+    }
+    let root = Root::Path { path: dest.clone() };
+    let send_once = |exchange: &mut dyn Exchange| {
+        let there = tree::scan_far(exchange, &root, &[]).unwrap();
+        let steps = tree::plan(&here, &there, &[]);
+        tree::send(&source, &steps, &root, exchange, &mut |_| {}, &Cancellation::default()).unwrap()
+    };
+    let mut exchange = connect(&mut cockpit);
+
+    let first = send_once(&mut *exchange);
+    assert_eq!(std::fs::read(dest.join("node_modules/lib/index.js")).unwrap(), b"module.exports = 1;\n");
+    let unmade: Vec<_> = first.unmade.iter().map(|unmade| (unmade.path.as_str(), &unmade.why)).collect();
+    if cfg!(windows) {
+        assert_eq!(unmade, [("escape", &tree::Refusal::LeadsOut)]);
+    } else {
+        assert_eq!(unmade, []);
+    }
+    let again = send_once(&mut *exchange);
+    assert_eq!((again.removed, again.made, again.written, again.linked), (0, 0, 0, 0), "{again:?}");
 }
 
 #[test]
@@ -358,11 +398,12 @@ fn a_tree_op_outside_its_root_is_refused() {
         path: absolute.clone()
     })
     .is_err());
-    assert!(exchange.call(Request::MakeDir {
+    // On Windows its drive is a name no folder there holds.
+    let made = exchange.call(Request::MakeDir {
         root: root.clone(),
-        path: absolute
-    })
-    .is_err());
+        path: absolute,
+    });
+    assert!(made.is_err() || matches!(made, Ok(Reply::Unmade(_))), "{made:?}");
     assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
 
     for named in ["relative/dir", "~", "/"] {
@@ -385,27 +426,26 @@ fn a_tree_op_outside_its_root_is_refused() {
     .unwrap_err();
     assert_eq!(unknown.kind(), io::ErrorKind::Unsupported);
 
-    #[cfg(unix)]
-    {
-        let outside = harness.dir.join("outside");
-        std::fs::create_dir_all(&outside).unwrap();
-        std::fs::create_dir_all(&dest).unwrap();
-        std::os::unix::fs::symlink(&outside, dest.join("through")).unwrap();
-        assert!(exchange.call(Request::Begin {
-            write: 1,
-            root: root.clone(),
-            path: "through/x.txt".into(),
-            size: 1,
-            mode: None,
-        })
-        .is_err());
-        assert!(exchange.call(Request::Remove {
-            root,
-            path: "through/x.txt".into()
-        })
-        .is_err());
-        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
-    }
+    // Nothing is written through a link there, a junction on Windows too:
+    // the write is left unmade, and the send goes on without it.
+    let outside = harness.dir.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::create_dir_all(&dest).unwrap();
+    dir_link(&outside, &dest.join("through"));
+    let begun = exchange.call(Request::Begin {
+        write: 2,
+        root: root.clone(),
+        path: "through/x.txt".into(),
+        size: 1,
+        mode: None,
+    });
+    assert!(matches!(begun, Ok(Reply::Unmade(tree::Refusal::Failed { .. }))), "{begun:?}");
+    assert!(exchange.call(Request::Remove {
+        root,
+        path: "through/x.txt".into()
+    })
+    .is_err());
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
 }
 
 /// `link` made a directory link to `target`: a symlink on Unix, a junction

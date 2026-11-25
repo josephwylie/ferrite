@@ -445,6 +445,8 @@ struct Local {
     begun: usize,
     cancel: Option<(Cancellation, usize)>,
     refuse: bool,
+    /// Refuses every link, as a Windows Server did before it made them.
+    refuse_links: bool,
 }
 
 impl Local {
@@ -456,6 +458,7 @@ impl Local {
             begun: 0,
             cancel: None,
             refuse: false,
+            refuse_links: false,
         }
     }
 
@@ -488,6 +491,8 @@ impl Exchange for Local {
         self.next += 1;
         let reply = if self.refuse && !matches!(request, Request::Scan { .. }) {
             Err(io::Error::new(io::ErrorKind::PermissionDenied, "Permission denied"))
+        } else if self.refuse_links && matches!(request, Request::Link { .. }) {
+            Err(io::Error::new(io::ErrorKind::Unsupported, "this Server does not make symlinks on Windows"))
         } else {
             self.session.execute(request)
         };
@@ -583,6 +588,65 @@ fn a_resume_sends_only_what_is_not_there_and_leaves_what_someone_put_there() {
         }
     }
     assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "finished");
+}
+
+/// A link to the folder `target` (relative to the link's folder) at
+/// `link`, as a package manager makes one: a symlink on Unix, a junction
+/// on Windows, which needs no privilege.
+fn dir_link(target: &str, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    {
+        // `cmd` reads a `/` in a path as a switch.
+        let spelled = |path: &Path| path.components().collect::<PathBuf>();
+        let made = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(spelled(link))
+            .arg(spelled(&link.parent().unwrap().join(target)))
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    }
+}
+
+/// A copy an older Windows Server stopped at its first link is finished by
+/// its Resume, the link made there and read through. A link a resume
+/// finds there as the destination holds it is done, not someone else's.
+#[test]
+fn a_copy_stopped_at_a_link_is_finished_by_its_resume() {
+    let dir = scratch("stopped-at-a-link");
+    let (source, dest, kept) = (dir.join("app"), dir.join("there/app"), dir.join("machine"));
+    let package = source.join("node_modules/.pnpm/pkg@1.0.0/node_modules/pkg");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("index.js"), "module.exports = 1;\n").unwrap();
+    fs::write(source.join("README.md"), "# app\n").unwrap();
+    dir_link(".pnpm/pkg@1.0.0/node_modules/pkg", &source.join("node_modules/pkg"));
+    let job = CopyJob {
+        source: &source,
+        dest: &dest,
+        skip: &[],
+        kept: &kept,
+    };
+    let mut refusing = Local {
+        refuse_links: true,
+        ..Local::new()
+    };
+    let stopped = copy(&job, &mut refusing, &mut |_| {}, &Cancellation::default()).expect_err("stopped at the link");
+    assert!(stopped.to_string().starts_with("node_modules/pkg: "), "{stopped}");
+    assert_eq!(unfinished(&kept, &source), [dest.clone()]);
+
+    let (resumed, changed) = sent(copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap());
+    assert_eq!((resumed.linked, resumed.unmade.len()), (1, 0), "{resumed:?}");
+    assert_eq!(changed, Vec::<String>::new());
+    assert_eq!(fs::read(dest.join("node_modules/pkg/index.js")).unwrap(), b"module.exports = 1;\n");
+    assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "finished");
+
+    begun(&kept, Unfinished { local_root: source.clone(), remote_root: dest.clone() }).unwrap();
+    fs::remove_file(dest.join("README.md")).unwrap();
+    let (again, changed) = sent(copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap());
+    assert_eq!(changed, Vec::<String>::new(), "the link there is this copy's");
+    assert_eq!((again.written, again.linked), (1, 0));
 }
 
 /// A copy that stops before anything lands is not kept as unfinished:
