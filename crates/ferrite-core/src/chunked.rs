@@ -10,7 +10,7 @@ use std::fs::{File, Metadata};
 use std::io::{self, Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -28,21 +28,44 @@ pub struct Progress {
     pub total: u64,
 }
 
+/// Work on another thread asked to stop, which it does at its next
+/// `check`. Work that marks its `end` is cancelled or ends, never both.
 #[derive(Clone, Default)]
-pub struct Cancellation(Arc<AtomicBool>);
+pub struct Cancellation(Arc<AtomicU8>);
+
+const RUNNING: u8 = 0;
+const CANCELLED: u8 = 1;
+const ENDED: u8 = 2;
 
 impl Cancellation {
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+    /// False when the work had ended: too late, it did all it was asked.
+    pub fn cancel(&self) -> bool {
+        match self.0.compare_exchange(RUNNING, CANCELLED, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => true,
+            Err(state) => state == CANCELLED,
+        }
     }
 
     pub fn check(&self) -> io::Result<()> {
-        if self.0.load(Ordering::Acquire) {
-            Err(io::Error::new(io::ErrorKind::Interrupted, "Cancelled"))
+        if self.0.load(Ordering::Acquire) == CANCELLED {
+            Err(cancelled())
         } else {
             Ok(())
         }
     }
+
+    /// The work is done, and a cancel from now on comes too late. Err
+    /// when one came first.
+    pub fn end(&self) -> io::Result<()> {
+        match self.0.compare_exchange(RUNNING, ENDED, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) | Err(ENDED) => Ok(()),
+            Err(_) => Err(cancelled()),
+        }
+    }
+}
+
+fn cancelled() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "Cancelled")
 }
 
 struct Part<T> {
@@ -372,6 +395,20 @@ mod tests {
 
     fn files(dir: &Path) -> usize {
         std::fs::read_dir(dir).unwrap().count()
+    }
+
+    #[test]
+    fn work_is_cancelled_or_ends_whichever_comes_first() {
+        let ended = Cancellation::default();
+        ended.end().unwrap();
+        assert!(!ended.cancel(), "too late");
+        assert!(ended.check().is_ok());
+
+        let cancelled = Cancellation::default();
+        assert!(cancelled.cancel());
+        assert!(cancelled.cancel(), "and cancelled still");
+        assert_eq!(cancelled.check().unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert_eq!(cancelled.end().unwrap_err().kind(), io::ErrorKind::Interrupted);
     }
 
     #[test]

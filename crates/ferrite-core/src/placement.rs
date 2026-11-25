@@ -666,7 +666,8 @@ const COUNTED: usize = 250;
 /// anything. What could not be read as it was listed is sent once more,
 /// and what still could not is in the answer's problems. Once done, or
 /// stopped before anything landed, the copy is no longer kept as
-/// unfinished.
+/// unfinished. It is cancelled or done, never both: a cancel heard after
+/// the last request, while its replies come, stops it all the same.
 pub fn copy(
     copy: &CopyJob,
     exchange: &mut dyn Exchange,
@@ -678,12 +679,13 @@ pub fn copy(
     }
     let checkout = Checkout::of(copy.source);
     let resumed = unfinished(copy.kept, copy.source).contains(&copy.dest.to_path_buf());
-    let first = pass(copy, &checkout, exchange, progress, cancel).map_err(|stopped| {
+    let ended_short = |stopped: Stopped| {
         if !resumed && stopped.took_nothing() {
             let _ = finished(copy.kept, copy.source, copy.dest);
         }
         stopped
-    })?;
+    };
+    let first = pass(copy, &checkout, exchange, progress, cancel).map_err(&ended_short)?;
     let Copied::Sent { mut sent, mut changed } = first else {
         return Ok(first);
     };
@@ -695,6 +697,9 @@ pub fn copy(
         if let Copied::Sent { sent: then, changed: now } = again {
             (sent, changed) = (added(sent, then), now);
         }
+    }
+    if let Err(error) = cancel.end() {
+        return Err(ended_short(Stopped { error, sent }));
     }
     if let Err(error) = finished(copy.kept, copy.source, copy.dest) {
         return Err(Stopped { error, sent });

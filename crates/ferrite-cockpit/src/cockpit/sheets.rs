@@ -310,7 +310,9 @@ impl CockpitView {
             Sheet::NewTask(sheet) => self.new_task_gone(&sheet, cx),
             Sheet::Direct(sheet) => self.direct_gone(&sheet, cx),
             // A copy goes with its sheet: nothing would register it.
-            Sheet::Placement(sheet) => sheet.update(cx, |sheet, _| sheet.stop()),
+            Sheet::Placement(sheet) => {
+                sheet.update(cx, |sheet, _| sheet.stop());
+            }
             Sheet::ProjectEditor(_) | Sheet::BackgroundDialog(_) => {}
         }
     }

@@ -420,23 +420,26 @@ impl PlacementView {
         cx.emit(PlacementEvent::Place { dest: spelled });
     }
 
-    /// Stop the copy under way; what it sent stays, for its Resume.
-    pub(super) fn stop(&mut self) {
-        if let Some(copy) = self.copy.take() {
-            copy.cancel.cancel();
+    /// Stop the copy under way; what it sent stays, for its Resume. False
+    /// when it was done by then: how it went is on its way.
+    pub(super) fn stop(&mut self) -> bool {
+        if self.copy.as_ref().is_some_and(|copy| !copy.cancel.cancel()) {
+            return false;
         }
+        self.copy = None;
+        true
     }
 
     /// The close button, Cancel and esc: a copy under way is cancelled,
-    /// the sheet staying up to say so; else the sheet closes.
+    /// the sheet staying up to say so, unless it was done by then; else
+    /// the sheet closes.
     pub(super) fn cancel(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.stage, Stage::Listing(_) | Stage::Copying(_)) {
-            self.stop();
+        if !matches!(self.stage, Stage::Listing(_) | Stage::Copying(_)) {
+            cx.emit(PlacementEvent::Closed);
+        } else if self.stop() {
             // The copy may have made its folder by now.
             self.dest.update(cx, |dest, cx| dest.relist(cx));
             self.enter(Stage::Cancelled, cx);
-        } else {
-            cx.emit(PlacementEvent::Closed);
         }
     }
 
