@@ -129,6 +129,8 @@ jobs:
         env:
           PACKAGES: ${{ needs.scope.outputs.packages }}
         run: |
+          # With no -p, nextest would build the default members.
+          if [ -z "$PACKAGES" ]; then echo 'No package selected.'; exit 0; fi
           quarantined=$(python3 scripts/quarantine.py)
           if [ "$quarantined" = 'none()' ]; then echo 'No test is quarantined.'; exit 0; fi
           args=()
@@ -351,6 +353,8 @@ jobs:
         env:
           PACKAGES: ${{ needs.scope.outputs.packages }}
         run: |
+          # With no -p, nextest would build the default members.
+          if [ -z "$PACKAGES" ]; then echo 'No package selected.'; exit 0; fi
           quarantined=$(python scripts/quarantine.py)
           if [ "$quarantined" = 'none()' ]; then echo 'No test is quarantined.'; exit 0; fi
           args=()

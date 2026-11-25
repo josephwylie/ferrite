@@ -2,11 +2,12 @@
 #
 # CI runs these apart from the rest, in a step that reports them and never
 # fails the job (ci.yml). Each entry is a debt: fix the test or the product,
-# then delete the entry. An entry names the test as nextest lists it, why it
-# is here, and who owns the fix:
+# then delete the entry. An entry names one test as nextest lists it, its
+# binary and its name, then why it is here and who owns the fix:
 #
 #     [[test]]
-#     name = "cockpit::tests::machines::everywhere::every_row_and_palette_verb_reaches_its_threads_machine"
+#     binary = "ferrite-cockpit"
+#     test = "cockpit::tests::machines::everywhere::every_row_and_palette_verb_reaches_its_threads_machine"
 #     reason = "waits out doorbell::until's 120 s bound on a loaded runner"
 #     owner = "<GitHub login>"
 #

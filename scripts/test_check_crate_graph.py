@@ -72,6 +72,15 @@ class CrateGraphTests(unittest.TestCase):
         self.assertIn("ferrite-prs reaches ferrite-review", out)
         self.assertNotIn("ferrite-review reaches", out)
 
+    def test_a_feature_crate_outside_the_workspace_is_still_forbidden(self):
+        (self.root / "Cargo.toml").write_text(
+            '[workspace]\nresolver = "2"\nmembers = ["crates/*"]\nexclude = ["crates/ferrite-prs"]\n')
+        self.write_crate("ferrite-prs")
+        self.write_crate("ferrite-review", f"[dependencies]\n{path('ferrite-prs')}\n")
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("ferrite-review reaches ferrite-prs", out)
+
     def test_a_missing_shell_crate_fails_instead_of_checking_nothing(self):
         shutil.rmtree(self.root / "crates" / "ferrite-server")
         code, out = self.run_check()

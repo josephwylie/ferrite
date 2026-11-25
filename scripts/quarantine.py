@@ -16,27 +16,33 @@ from typing import TextIO
 
 ROOT = Path(__file__).resolve().parents[1]
 LIST = ROOT / ".config" / "quarantine.toml"
-FIELDS = {"name", "reason", "owner"}
-TEST_NAME = re.compile(r"[A-Za-z0-9_]+(::[A-Za-z0-9_]+)*")
+FIELDS = {"binary", "test", "reason", "owner"}
+# A test binary as nextest names it: `crate`, `crate::target`, or
+# `crate::bin/target` (also `bench/`, `example/`).
+BINARY = re.compile(r"[A-Za-z0-9_-]+(::((bin|bench|example)/)?[A-Za-z0-9_-]+)?")
+TEST = re.compile(r"[A-Za-z0-9_]+(::[A-Za-z0-9_]+)*")
 
 
-def quarantined(path: Path = LIST) -> list[str]:
-    """The quarantined tests' names, once each entry has a name, a reason and an owner."""
+def quarantined(path: Path = LIST) -> list[tuple[str, str]]:
+    """Each quarantined test as (binary, test), once every entry has both, a reason and an owner."""
     entries = tomllib.loads(path.read_text(encoding="utf-8")).get("test", [])
-    names = []
+    tests = []
     for entry in entries:
         if set(entry) != FIELDS or not all(isinstance(value, str) and value.strip() for value in entry.values()):
-            raise ValueError(f"{path.name}: each [[test]] has exactly a name, a reason and an owner: {entry}")
-        if not TEST_NAME.fullmatch(entry["name"]):
-            raise ValueError(f"{path.name}: not a test name: {entry['name']!r}")
-        if entry["name"] in names:
-            raise ValueError(f"{path.name}: {entry['name']} is listed twice")
-        names.append(entry["name"])
-    return names
+            raise ValueError(f"{path.name}: each [[test]] has exactly a binary, a test, a reason and an owner: {entry}")
+        if not BINARY.fullmatch(entry["binary"]):
+            raise ValueError(f"{path.name}: not a nextest binary id: {entry['binary']!r}")
+        if not TEST.fullmatch(entry["test"]):
+            raise ValueError(f"{path.name}: not a test name: {entry['test']!r}")
+        test = (entry["binary"], entry["test"])
+        if test in tests:
+            raise ValueError(f"{path.name}: {' '.join(test)} is listed twice")
+        tests.append(test)
+    return tests
 
 
-def filterset(names: list[str]) -> str:
-    return " | ".join(f"test(={name})" for name in names) or "none()"
+def filterset(tests: list[tuple[str, str]]) -> str:
+    return " | ".join(f"(binary_id(={binary}) & test(={test}))" for binary, test in tests) or "none()"
 
 
 def main(argv: list[str] | None = None, out: TextIO = sys.stdout) -> int:
@@ -44,11 +50,11 @@ def main(argv: list[str] | None = None, out: TextIO = sys.stdout) -> int:
     parser.add_argument("--list", type=Path, default=LIST)
     args = parser.parse_args(argv)
     try:
-        names = quarantined(args.list)
+        tests = quarantined(args.list)
     except ValueError as invalid:
         print(invalid, file=sys.stderr)
         return 1
-    print(filterset(names), file=out)
+    print(filterset(tests), file=out)
     return 0
 
 

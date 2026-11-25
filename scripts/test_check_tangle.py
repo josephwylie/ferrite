@@ -27,7 +27,8 @@ FIXTURE = '''fn add_cockpit_window(cx: &mut TestAppContext) -> WindowHandle<Cock
 #[test]
 fn opens() { add_cockpit_window(cx); add_cockpit_window (cx); }
 '''
-ENTRY = '[[test]]\nname = "cockpit::tests::{}"\nreason = "fails on a loaded runner"\nowner = "someone"\n'
+ENTRY = ('[[test]]\nbinary = "ferrite-cockpit"\ntest = "cockpit::tests::{}"\n'
+         'reason = "fails on a loaded runner"\nowner = "someone"\n')
 
 
 class TangleTests(unittest.TestCase):
@@ -91,14 +92,34 @@ class TangleTests(unittest.TestCase):
                 self.assertIn(f"{name}: {before + 1}, baseline {before}.", out)
                 self.assertIn(f"Rose: {name}.", out)
 
-    def test_names_counts_that_fell_without_failing(self):
+    def test_a_fall_fails_until_it_is_recorded(self):
         self.run_check("--write")
         (self.root / "crates/ferrite-cockpit/src/cockpit/nav.rs").unlink()
         code, out = self.run_check()
-        self.assertEqual(code, 0, out)
+        self.assertEqual(code, 1, out)
         self.assertIn("files holding WeakEntity<CockpitView>: 0, baseline 1.", out)
         self.assertIn("Fell: files holding WeakEntity<CockpitView>, files with impl CockpitView.", out)
-        self.assertIn("--write", out)
+        self.assertIn("take either side, then rerun --write", out)
+        self.run_check("--write")
+        self.assertEqual(self.run_check()[0], 0)
+
+    def test_comments_and_literals_are_not_counted(self):
+        self.write("crates/ferrite-cockpit/src/cockpit.rs", "struct CockpitView { /* } */ first: bool, second: bool, }\n")
+        self.write("crates/ferrite-cockpit/src/cockpit/nav.rs", "")
+        self.write("crates/ferrite-cockpit/src/cockpit/tests.rs", '''
+// add_cockpit_window(cx)
+/* outer /* nested */ add_cockpit_window(cx); impl CockpitView { */
+/// A Nav holds a WeakEntity<CockpitView>.
+const SAID: &str = "add_cockpit_window(cx) WeakEntity<CockpitView>";
+const RAW: &str = r#"add_cockpit_window(" "#;
+fn quote() -> char { '"' }
+fn opens<'a>(cx: &'a mut Cx) { add_cockpit_window(cx); }
+''')
+        self.run_check("--write")
+        counts = json.loads(self.baseline.read_text())
+        self.assertEqual((counts["CockpitView fields"], counts["add_cockpit_window calls"],
+                          counts["files holding WeakEntity<CockpitView>"], counts["files with impl CockpitView"]),
+                         (2, 1, 0, 0))
 
     def test_a_count_missing_from_the_baseline_fails(self):
         self.baseline.write_text("{}")

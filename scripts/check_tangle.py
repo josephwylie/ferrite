@@ -3,7 +3,10 @@
 
 Counts how much of the window still runs through its root view,
 `CockpitView`, and compares the counts with scripts/tangle.json. While the
-window is untangled into feature crates they may only fall. Run locally with:
+window is untangled into feature crates they may only fall, and a fall is
+recorded in the change that makes it, so a later rise cannot take its
+place. Comments and string literals are not code and are not counted. Run
+locally with:
 
     python3 scripts/check_tangle.py
 
@@ -22,11 +25,34 @@ from quarantine import quarantined
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "scripts" / "tangle.json"
 ROOT_FILE = "crates/ferrite-cockpit/src/cockpit.rs"
-COMMENT = re.compile(r"//[^\n]*")
+# What is not code: a line comment, the start of a block comment (they
+# nest, so `block_end` finds the end), a raw, plain or byte string, a char.
+NOT_CODE = re.compile(r"""//[^\n]*|/\*|(?<!\w)(?:b?r(\#*)".*?"\1|b?"(?:\\.|[^"\\])*"|b?'(?:\\u\{[0-9A-Fa-f]+\}|\\.|[^\\'\n])')""",
+                      re.DOTALL)
+BLOCK = re.compile(r"/\*|\*/")
+
+
+def block_end(text: str, start: int) -> int:
+    depth = 0
+    for mark in BLOCK.finditer(text, start):
+        depth += 1 if mark.group() == "/*" else -1
+        if depth == 0:
+            return mark.end()
+    return len(text)
+
+
+def code(text: str) -> str:
+    """Rust source with each comment and literal blanked, keeping its lines."""
+    kept, at = [], 0
+    while match := NOT_CODE.search(text, at):
+        end = block_end(text, match.start()) if match.group() == "/*" else match.end()
+        kept += [text[at:match.start()], " ", "\n" * text.count("\n", match.start(), end)]
+        at = end
+    return "".join(kept) + text[at:]
 
 
 def sources(root: Path) -> dict[str, str]:
-    return {path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+    return {path.relative_to(root).as_posix(): code(path.read_text(encoding="utf-8"))
             for path in sorted((root / "crates").glob("**/*.rs"))}
 
 
@@ -41,8 +67,8 @@ def calls(pattern: str) -> Callable[[Path, dict[str, str]], int]:
 
 
 def root_fields(root: Path, texts: dict[str, str]) -> int:
-    """`CockpitView`'s fields: its body's top-level items, comments and attributes aside."""
-    text = COMMENT.sub("", texts[ROOT_FILE])
+    """`CockpitView`'s fields: its body's top-level items, attributes and all."""
+    text = texts[ROOT_FILE]
     start = re.search(r"\bstruct\s+CockpitView\s*\{", text).end()
     depth, item, fields = 0, "", 0
     for at, char in enumerate(text[start:], start):
@@ -61,7 +87,7 @@ def root_fields(root: Path, texts: dict[str, str]) -> int:
 
 
 def root_lines(root: Path, texts: dict[str, str]) -> int:
-    return texts[ROOT_FILE].count("\n")
+    return (root / ROOT_FILE).read_text(encoding="utf-8").count("\n")
 
 
 def quarantined_tests(root: Path, texts: dict[str, str]) -> int:
@@ -93,12 +119,16 @@ def check(found: dict[str, int], baseline: dict[str, int], out: TextIO) -> bool:
         print(
             f"Rose: {', '.join(over)}. While the window is untangled these only fall: new code takes plain "
             "values in a view of its own, outside cockpit.rs, and a test that needs no window opens none. "
-            "A rise that cannot be avoided raises the baseline: rerun with --write in this change and say why.",
+            "A rise that cannot be avoided is recorded with --write in this change, saying why.",
             file=out,
         )
     if lower:
-        print(f"Fell: {', '.join(lower)}. Lower the baseline with --write and commit scripts/tangle.json.", file=out)
-    return not over
+        print(f"Fell: {', '.join(lower)}. Record the lower baseline with --write in this change, "
+              "so a later rise cannot take its place.", file=out)
+    if over or lower:
+        print("Commit scripts/tangle.json. If it conflicts with another change that moved a count, "
+              "take either side, then rerun --write on the merged sources.", file=out)
+    return not (over or lower)
 
 
 def main(argv: list[str] | None = None, out: TextIO = sys.stdout) -> int:

@@ -40,8 +40,10 @@ def check(root: Path, out: TextIO) -> bool:
     if missing:
         print(f"Not in the workspace, so nothing would be checked against it: {', '.join(missing)}", file=out)
         return False
+    # Walk from the members, but forbid every feature crate's name: one
+    # outside the workspace is still not a crate a feature may reach.
     present = [crate for crate in FEATURE_CRATES if crate in workspace]
-    forbidden = set(SHELL) | set(present)
+    forbidden = set(SHELL) | set(FEATURE_CRATES)
     found = [(crate, other) for crate in present for other in sorted(reached(root, crate) & (forbidden - {crate}))]
     for crate, other in found:
         print(f"{crate} reaches {other}, which a feature crate may not:", file=out)
