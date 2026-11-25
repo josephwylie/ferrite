@@ -284,15 +284,27 @@ def browser_input(path: str) -> bool:
             or (path.startswith(("crates/", "scripts/")) and "browser" in path))
 
 
+# The packaged run's macOS pass takes one of the account's five macOS runners
+# for half an hour, beside the required macOS jobs. A PR runs it only for the
+# inputs no other pass reads (the macOS bundle, the Browser's macOS platform
+# code, the GPUI macOS platform, this workflow) or with the `browser-ci`
+# label; its Windows pass runs for every Browser input, and main runs both
+# after every merge.
+MACOS_BROWSER_INPUTS = ("scripts/install-app.sh", ".github/workflows/browser-window.yml", "vendor/gpui-pre-macos/",
+                        "crates/ferrite-pane/src/visual/web/cef/macos.rs", "crates/ferrite-pane/src/visual/web/cef/nsapp.rs")
+
+
 def select(packages: dict[str, Package], paths: list[str], full: bool = False, browser: bool = False,
-           windows: bool = False) -> dict:
+           windows: bool = False, browser_macos: bool = False) -> dict:
     """What ci.yml checks for a change to `paths`. `full` selects everything
-    and Windows; `windows` runs the Windows checks for what is selected."""
+    and Windows; `windows` runs the Windows checks for what is selected;
+    `browser_macos` runs the packaged browser on macOS too."""
     check_boundaries(packages)
     selected = set()
     inputs = {SHARED} if full or not paths else set()
     reasons = {"full run or unavailable change list"} if inputs else set()
-    browser = browser or not paths or any(map(browser_input, paths))
+    browser = browser or browser_macos or not paths or any(map(browser_input, paths))
+    browser_macos = browser_macos or not paths or any(path.startswith(MACOS_BROWSER_INPUTS) for path in paths)
     for path in paths:
         owners = {name for name, package in packages.items() if package.reads(path)}
         selects = rule(path) or (None if owners else UNCLASSIFIED)
@@ -319,6 +331,7 @@ def select(packages: dict[str, Package], paths: list[str], full: bool = False, b
     return {
         "code": bool(selected) or checks or windows,
         "browser": browser,
+        "browser_macos": browser_macos,
         "checks": checks,
         "windows": windows,
         **runs,
@@ -376,7 +389,7 @@ def main() -> None:
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--full", action="store_true", help="Select every package and Windows CI")
     parser.add_argument("--windows", action="store_true", help="Run the Windows checks for what is selected")
-    parser.add_argument("--browser", action="store_true", help="Select the packaged browser checks")
+    parser.add_argument("--browser", action="store_true", help="Select the packaged browser checks, on macOS too")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
     if any(revision.startswith("-") for revision in [args.base or "", args.head, *args.checked]):
@@ -385,11 +398,12 @@ def main() -> None:
     base = comparison(root, args.head, args.base, args.checked)
     paths = changed_paths(root, base, args.head) if base else []
     browser = args.browser or (bool(base) and changes_cef_gate(root, base, args.head))
-    result = select(workspace(root), paths, full=args.full or not base, browser=browser, windows=args.windows)
+    result = select(workspace(root), paths, full=args.full or not base, browser=browser, windows=args.windows,
+                    browser_macos=args.browser)
     print(json.dumps(result, indent=2))
     if args.github_output:
         with args.github_output.open("a") as output:
-            for name in ("code", "browser", "checks", "windows"):
+            for name in ("code", "browser", "browser_macos", "checks", "windows"):
                 output.write(f"{name}={str(result[name]).lower()}\n")
             for name in ("packages", "vendored"):
                 output.write(f"{name}={' '.join(result[name])}\n")
