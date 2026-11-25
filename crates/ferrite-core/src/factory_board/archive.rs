@@ -86,7 +86,7 @@ mod tests {
     fn a_task_matches_its_title_or_instructions_in_any_case() {
         let task = task(
             "Fix the flaky login test",
-            "Fix the flaky login test\nIt fails one run in ten.",
+            "It fails one run in ten.",
         );
         for query in ["", "  ", "FLAKY LOGIN", "one run in ten", " login "] {
             assert!(task.matches(query), "{query:?}");

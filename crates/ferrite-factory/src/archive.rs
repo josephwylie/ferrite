@@ -341,13 +341,19 @@ mod tests {
         cx.simulate_input("deploy");
         cx.run_until_parked();
         assert!(!shows(cx, "factory-archive-t-1"));
-        assert!(shows(cx, "factory-archive-empty"));
+        let says = |cx: &mut VisualTestContext| {
+            cx.update(|window, _| window.debug_text("factory-archive-empty"))
+        };
+        let no_match = says(cx);
+        assert!(no_match.is_some());
         kept.update(cx, |kept, cx| {
             kept.tasks.clear();
             cx.notify();
         });
         cx.run_until_parked();
-        assert!(shows(cx, "factory-archive-empty"), "nothing is archived");
+        let none_archived = says(cx);
+        assert!(none_archived.is_some(), "nothing is archived");
+        assert_ne!(none_archived, no_match, "and it says which");
     }
 
     /// A row asks for its Task's panel; Board asks for the board back.

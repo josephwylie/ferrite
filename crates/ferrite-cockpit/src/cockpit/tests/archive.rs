@@ -119,6 +119,20 @@ fn archived_tasks_leave_the_board_and_clear_asks_for_the_rest(cx: &mut TestAppCo
     assert_eq!(asks, vec![TaskAction::Clear { project }]);
 }
 
+/// What is typed in the search reaches the window: a line no archived Task
+/// matches empties the list.
+#[gpui::test]
+fn a_search_nothing_matches_empties_the_archive(cx: &mut TestAppContext) {
+    let (_view, cx, _) = world(cx, "archive-miss");
+    click(cx, "factory-archive");
+    assert!(shows(cx, "factory-archive-t-1"));
+    click(cx, "factory-archive-search");
+    cx.simulate_input("deploy");
+    tick(cx);
+    assert!(!shows(cx, "factory-archive-t-1"));
+    assert!(shows(cx, "factory-archive-empty"));
+}
+
 /// AC: the Archive opens and is searched by title and instructions; an
 /// archived Task opens read-only, with its activity and its Workers.
 #[gpui::test]

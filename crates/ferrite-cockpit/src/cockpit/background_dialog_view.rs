@@ -398,6 +398,14 @@ mod tests {
         let asked = kept.read_with(cx, |kept, _| kept.asked.borrow().clone());
         assert!(!asked.is_empty());
         assert!(asked.iter().all(|asked| *asked == thread()));
+
+        kept.update(cx, |kept, cx| {
+            kept.work.retain(|(_, launched)| launched.is_some());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(shows(cx, "background-dialog-section"), "the command alone is a section");
+        assert!(!shows(cx, "background-dialog-open-toolu_a"));
     }
 
     /// With no work left it says so, and work that comes back is listed

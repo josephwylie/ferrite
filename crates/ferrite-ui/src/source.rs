@@ -18,7 +18,9 @@ pub struct Source<T, Q = ()> {
 }
 
 impl<T: 'static, Q: 'static> Source<T, Q> {
-    /// Inputs kept by `owner`, held weakly: `None` once it is gone.
+    /// Inputs kept by `owner`, held weakly. A read is `None` once the owner
+    /// is gone, and also when `read` has nothing to answer the query with: a
+    /// view draws nothing either way.
     pub fn of<E: 'static>(
         owner: &Entity<E>,
         read: impl Fn(&E, &Q, &App) -> Option<T> + 'static,
