@@ -1031,9 +1031,10 @@ fn connection_pairing_url_paste_fills_host_and_code_after_replacing_text(cx: &mu
     });
 }
 
-/// A toast stands over Settings: it draws over the sheet's veil, short of
-/// the sheet's close button, which stays in reach, and a press on it is
-/// the toast's, not the veil's, which would close Settings.
+/// A toast stands over Settings in its one home, low on the right above
+/// a Composer (`TOAST_FOOT`): it draws over the sheet's veil, clear of the
+/// widest page's close button, Add button and Local switch, and a press on
+/// it is the toast's, not the veil's, which would close Settings.
 #[gpui::test]
 fn a_toast_stands_over_the_settings_sheet(cx: &mut TestAppContext) {
     use gpui::component::notification::Notification;
@@ -1045,8 +1046,8 @@ fn a_toast_stands_over_the_settings_sheet(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_keystrokes("cmd-,");
     tick(cx);
-    // Connections is the widest page: its close button is nearest the
-    // window's right edge, where toasts hang.
+    // Connections is the widest and tallest page: its controls come
+    // nearest the toasts' corner.
     view.update(cx, |view, cx| {
         let sheet = view.settings_sheet(cx).expect("Settings is up");
         sheet.update(cx, |sheet, _| sheet.page = settings::PageKey::Connections);
@@ -1069,14 +1070,21 @@ fn a_toast_stands_over_the_settings_sheet(cx: &mut TestAppContext) {
         cx.run_until_parked();
     }
     let card = bounds(cx, "notification-card".into());
-    let close = bounds(cx, "settings-close".into());
-    // Where the toasts end, as the app's theme hangs them (the tests' kit
-    // theme hangs them elsewhere).
-    let end = cx.update(|window, cx| {
-        let shifted = view.read(cx).toasts_shifted(window, cx);
-        window.viewport_size().width - px(ferrite_ui::theme::TOAST_BOX_RIGHT) - shifted
+    // Its home is the board's lower right corner, short of the panel
+    // (`place_toasts`), whatever sheet is up.
+    let (viewport, right) = cx.update(|window, cx| {
+        let right = gpui::component::Theme::global(cx).notification.margins.right;
+        (window.viewport_size(), right)
     });
-    assert!(end <= close.left(), "toasts end at {end:?}, over Settings' close button at {close:?}");
+    assert!(
+        (card.right() - (viewport.width - right)).abs() <= px(1.)
+            && (card.bottom() - (viewport.height - px(ferrite_ui::theme::TOAST_FOOT))).abs() <= px(1.),
+        "the toast stands at {card:?}, not in its home"
+    );
+    for control in ["settings-close", "connection-add", "connection-toggle-local"] {
+        let at = bounds(cx, control.into());
+        assert!(!card.intersects(&at), "the toast at {card:?} covers {control} at {at:?}");
+    }
     cx.simulate_click(card.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(pressed.get(), 1, "the press reached the toast");

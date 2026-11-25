@@ -1981,9 +1981,9 @@ fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
 }
 
 /// The kit's toast card moves as Ferrite's own toasts do (the vendored
-/// gpui-component's patch): it slides down its own height out from under
-/// the edge it hangs on, never further, never back, and lands within
-/// `TOAST_IN` (200ms), not the kit's 400ms rise from 96px.
+/// gpui-component's patch): standing low on the right (`TOAST_FOOT`), it
+/// rises its own height into place, never further, never back, and lands
+/// within `TOAST_IN` (200ms), not the kit's 400ms rise from 96px.
 #[gpui::test]
 fn a_kit_toast_slides_its_own_height_on_the_toast_tokens(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
@@ -2025,16 +2025,16 @@ fn a_kit_toast_slides_its_own_height_on_the_toast_tokens(cx: &mut TestAppContext
     }
     let rest = tops.last().expect("the card was drawn").1;
     assert!(
-        tops.iter().any(|(_, top)| *top < rest - px(1.)),
-        "it came down into place: {tops:?}"
+        tops.iter().any(|(_, top)| *top > rest + px(1.)),
+        "it came up into place: {tops:?}"
     );
     assert!(
-        tops.iter().all(|(_, top)| *top >= rest - height - px(1.)),
+        tops.iter().all(|(_, top)| *top <= rest + height + px(1.)),
         "from its own height, no more: {tops:?}"
     );
     assert!(
-        tops.windows(2).all(|pair| pair[1].1 >= pair[0].1 - px(0.5)),
-        "only ever down: {tops:?}"
+        tops.windows(2).all(|pair| pair[1].1 <= pair[0].1 + px(0.5)),
+        "only ever up: {tops:?}"
     );
     assert!(
         tops.iter()

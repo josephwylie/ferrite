@@ -612,9 +612,11 @@ impl Render for Notification {
                             .shadow(toast_shadow(opacity.powi(3)))
                             .scale(1. - (1. - NOTIFICATION_EXIT_SCALE) * delta)
                     } else {
+                        // A stack standing on the bottom edge grows from
+                        // nothing as the card is measured, which carries the
+                        // card up its own height already: it slides no more.
                         let from = match placement {
                             Anchor::TopLeft | Anchor::TopRight | Anchor::TopCenter => -1.,
-                            Anchor::BottomLeft | Anchor::BottomRight | Anchor::BottomCenter => 1.,
                             _ => 0.,
                         };
                         let opacity = delta;

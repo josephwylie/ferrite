@@ -1369,11 +1369,13 @@ pub fn init_components(cx: &mut gpui::App) {
     // (Button::primary, menu rows, tooltips, checkboxes) would paint the
     // kit's neutrals. Rebuild them from the colours above.
     theme.tokens = gpui::component::ThemeTokens::from(&theme.colors);
-    theme.notification.placement = gpui::Anchor::TopRight;
+    // The kit's toasts have one home, whatever sheet is up (`TOAST_FOOT`);
+    // the Cockpit keeps their right margin short of the panel.
+    theme.notification.placement = gpui::Anchor::BottomRight;
     theme.notification.margins = gpui::base::Edges {
         top: px(WIN_CHROME_H + PANE_HEAD_H + TOAST_TOP),
         right: px(TOAST_BOX_RIGHT),
-        bottom: px(TOAST_TOP),
+        bottom: px(TOAST_FOOT),
         left: px(SPACE_2),
     };
     theme.notification.width = px(TOAST_W);
@@ -2850,12 +2852,22 @@ pub const TOOLTIP_MAX_W: f32 = 320.0;
 /// the right panel: `TOAST_W` wide (less where the board is narrower), its
 /// right edge `TOAST_BOX_RIGHT` in from the board's (the panel's left while
 /// it shows), under a Pane's head or tab strip (`PANE_HEAD_H`), so it
-/// covers no head's controls (the kit's toast stack stands there too).
+/// covers no head's controls (the kit's toast stack stands low on the
+/// right, `TOAST_FOOT`).
 /// One row of head (`◆ needs you · <title>`), one body line, then
 /// the quick answers: `TOKEN_H` buttons (`Allow 1`, `Deny 3`, `Open ⏎`),
 /// `TOAST_QUICK_GAP` over the float's edge.
 pub const TOAST_BOX_RIGHT: f32 = SPACE_4;
 pub const TOAST_TOP: f32 = SPACE_2;
+/// How far over the window's foot the kit's toasts stand (a copy's, a
+/// setup sync's), `TOAST_BOX_RIGHT` in from the board's right edge as a
+/// toast's is (the window's while no panel shows), the newest lowest:
+/// clear of a draft's Composer and its band, so they cover none of its
+/// presses, and in the corner a sheet keeps clear of, a sheet's head and
+/// footer being narrower than the window or ending above it. They never
+/// move for a sheet.
+pub const TOAST_FOOT: f32 =
+    ENV_STRIP_H + COMPOSER_HERO_INPUT_H + COMPOSER_TOOLBAR_H + COMPOSER_FOOTER_H + TOAST_TOP;
 pub const TOAST_QUICK_GAP: f32 = SPACE_2;
 /// **The palette** (command search, ⌘K; SPEC §5.8), measured off the
 /// Claude app's own ⌘K search at 1x (2026-11-03): a `PALETTE_W` dialog
