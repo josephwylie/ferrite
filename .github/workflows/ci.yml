@@ -58,8 +58,11 @@ jobs:
           if [ "$FULL_LABEL" = true ]; then args+=(--full); fi
           python scripts/ci_scope.py "${args[@]}" --github-output "$GITHUB_OUTPUT"
 
-  macos:
-    name: macOS (Metal)
+  # The macOS work is three jobs that run at once, so it takes as long as the
+  # longest one. Each compiles on its own runner, and rust-cache keys each
+  # job's cache by its job id, so no job overwrites another's.
+  macos-tests:
+    name: macOS tests
     needs: scope
     if: ${{ !cancelled() && needs.scope.outputs.code != 'false' }}
     runs-on: macos-latest
@@ -67,13 +70,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
       - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
         with:
-          # Bumped so main saves a cache that holds the CEF builds' output.
-          prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Install nextest
@@ -97,16 +96,49 @@ jobs:
         run: |
           left=$(ls -d "$TMPDIR"/ferrite-* /tmp/ferrite-* 2>/dev/null | grep -vx /tmp/ferrite-tests || true)
           if [ -n "$left" ]; then echo "$left"; exit 1; fi
-      # Its own run: gpui-pre-macos's tests need its test-support feature
-      # named for them. The app's tests get it through the headless platform.
+
+  # Its own run: gpui-pre-macos's tests need its test-support feature named
+  # for them. The app's tests get it through the headless platform.
+  macos-vendored:
+    name: macOS vendored tests
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.vendored != '' }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
       - name: Test vendored framework crates
-        if: ${{ needs.scope.outputs.vendored != '' }}
         env:
           VENDORED: ${{ needs.scope.outputs.vendored }}
         run: |
           args=()
           for package in $VENDORED; do args+=(-p "$package"); done
           cargo nextest run "${args[@]}" --features gpui-pre-macos/test-support --locked --no-fail-fast --retries 2 --final-status-level flaky
+
+  macos-checks:
+    name: macOS checks
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.code != 'false' }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
       - name: Build app
         run: cargo build -p ferrite --locked
       # Nothing else builds the scene fixtures behind this feature, so a
@@ -126,7 +158,7 @@ jobs:
         run: |
           cargo check -p ferrite --locked --features cef
           cargo check -p ferrite --locked --features browser-smoke
-      # Last, so a new raw press does not hide the tests' results. The cap
+      # Last, so a new raw press does not hide the builds' results. The cap
       # keeps the vendored crates' own deny attributes from stopping clippy;
       # bash's pipefail fails the step if clippy errors (docs/adr/0044).
       - name: Hold feature code's raw presses to the baseline
@@ -135,6 +167,32 @@ jobs:
           cargo clippy --locked -p ferrite -p ferrite-cockpit -p ferrite-frame -p ferrite-pane -p ferrite-terminal \
             --message-format=json -- --cap-lints warn -A clippy::all -W clippy::disallowed_methods \
             | python3 scripts/check_raw_presses.py
+
+  # The required check for the macOS jobs. A skipped required check passes,
+  # so this one also runs after a job it needs failed or timed out; it is
+  # skipped only for documentation-only changes, and cancelling the run
+  # cancels it.
+  macos:
+    name: macOS (Metal)
+    needs: [scope, macos-tests, macos-vendored, macos-checks]
+    if: ${{ !cancelled() && needs.scope.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the macOS jobs
+        env:
+          TESTS: ${{ needs.macos-tests.result }}
+          CHECKS: ${{ needs.macos-checks.result }}
+          VENDORED: ${{ needs.scope.outputs.vendored }}
+          VENDORED_TESTS: ${{ needs.macos-vendored.result }}
+        run: |
+          test "$TESTS" = success
+          test "$CHECKS" = success
+          if [ -n "$VENDORED" ]; then
+            test "$VENDORED_TESTS" = success
+          else
+            test "$VENDORED_TESTS" = skipped
+            echo 'No vendored crate selected. Vendored tests intentionally skipped.'
+          fi
 
   windows:
     name: Windows (DirectX 11)
