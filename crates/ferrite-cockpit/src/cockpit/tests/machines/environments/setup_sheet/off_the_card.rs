@@ -199,3 +199,42 @@ fn a_stopped_copy_whose_draft_closed_is_still_a_pick_away(cx: &mut TestAppContex
     assert!(!copy_is(&view, cx, |_| true), "closed, it goes");
     box_down(false);
 }
+
+/// A copy in on box whose Placement this computer cannot keep is no
+/// silent dead end: it says so in plain words, with Resume, and its
+/// Resume keeps it once it can.
+#[gpui::test]
+fn a_copy_whose_placement_could_not_be_kept_says_so_and_resumes(cx: &mut TestAppContext) {
+    let base = resolved_dir("env-unkept");
+    let projects = base.join("projects");
+    let (mut core, _fake, machines, _agents) = two_machines_keeping_projects_in("env-unkept", &projects);
+    let on_box = machines.held(1).unwrap();
+    let mine = registered_here(&mut core, &project_folder(&base.join("here/app"), None));
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    let draft = focused_draft(&view, cx);
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    drawn(cx, "placement-ignored:.env");
+    // Where copies went cannot be written: its file is a folder.
+    let jammed = box_dir(&view, cx).join("placements.json");
+    std::fs::create_dir_all(&jammed).unwrap();
+    press(cx, "placement-copy");
+    until(cx, |cx| copy_is(&view, cx, |phase| matches!(phase, Phase::Done(_) | Phase::Failed { .. })));
+    settles(cx);
+    let said = text_of(cx, "placement-failed").unwrap_or_default();
+    assert!(
+        said.starts_with("Copied to box, but this computer could not keep where it went: "),
+        "{said:?}"
+    );
+    assert!(!said.contains("os error"), "{said}");
+    assert!(debug_bounds(cx, "placement-resume".into()).is_some(), "its Resume keeps it");
+    assert_eq!(draft_project(&view, draft, cx), mine, "not sent there yet");
+
+    std::fs::remove_dir_all(&jammed).unwrap();
+    press(cx, "placement-resume");
+    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
+    let kept = ferrite_core::placement::placements(&box_dir(&view, cx));
+    assert_eq!(kept.len(), 1, "where it went is kept: {kept:?}");
+}

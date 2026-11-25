@@ -498,8 +498,11 @@ Windows window.
   (`placement::copy` clears the record only for a run not cancelled, and
   the window once it adds the copy, `placement::finished`). So does one
   that landed but could not be added on E ("Copied, but not added on E:
-  …"). Through a first copy its button reads Copy; only a resume's reads
-  Resume. Retry from a failure copies again.
+  …"), and one added whose Placement this computer could not keep
+  ("Copied to E, but this computer could not keep where it went: …"):
+  never a dead end said only in the log. Through a first copy its button
+  reads Copy; only a resume's reads Resume. Retry from a failure copies
+  again.
 - `CONTEXT.md`'s Draft entry and ADR 0045's line on the strip over the
   Composer say the environment is a choice until the first send.
 

@@ -584,10 +584,15 @@ impl CockpitView {
         let kept = placement::finished(&placing.kept, &placing.root, &order.target)
             .and_then(|()| placement::place(&placing.kept, placed));
         if let Err(error) = kept {
-            ferrite_core::log!(
-                "the placement of {} was not kept: {error}",
-                placing.root.display()
+            ferrite_core::log!("the placement of {} was not kept: {error}", placing.root.display());
+            let reason = format!(
+                "Copied to {}, but this computer could not keep where it went: {}.",
+                placing.machine_name,
+                copies::words::plainly(&error.to_string())
             );
+            self.copies.update(cx, |copies, cx| copies.unadded(key, reason, false, cx));
+            self.tell_copy(key, cx);
+            return;
         }
         let moves = order.waits
             && self
@@ -647,14 +652,14 @@ impl CockpitView {
     /// Hear the copies, and do what each that moved asks of the window. A
     /// copy whose draft's Pane closed waits for no draft.
     pub(super) fn poll_copies(&mut self, cx: &mut Context<Self>) {
+        let open: Vec<PaneIdentity> = self.panes.iter().map(|pane| pane.identity).collect();
+        self.copies
+            .update(cx, |copies, cx| copies.drafts_closed(|draft| !open.contains(&draft), cx));
         let landed = self.copies.update(cx, |copies, cx| copies.poll(cx));
         for landed in landed {
             self.copy_landed(landed, cx);
         }
     }
-        let open: Vec<PaneIdentity> = self.panes.iter().map(|pane| pane.identity).collect();
-        self.copies
-            .update(cx, |copies, cx| copies.drafts_closed(|draft| !open.contains(&draft), cx));
 
     /// Do what a copy that moved asks of the window.
     fn copy_landed(&mut self, landed: copies::Landed, cx: &mut Context<Self>) {
