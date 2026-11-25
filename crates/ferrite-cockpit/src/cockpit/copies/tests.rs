@@ -158,7 +158,7 @@ fn a_copy_that_stops_says_why_in_the_operators_words() {
     );
     assert!(matches!(
         &copy.phase,
-        Phase::Failed { reason, again: Again::Retry, when_back: true } if reason == "Can't reach box."
+        Phase::Failed { reason, again: Some(Again::Retry), when_back: true } if reason == "Can't reach box."
     ));
 
     let mut copy = Entry::new(order(false), None, now);
@@ -166,7 +166,7 @@ fn a_copy_that_stops_says_why_in_the_operators_words() {
     copy.hear(stopped(io::ErrorKind::BrokenPipe.into()), now, true);
     assert!(matches!(
         &copy.phase,
-        Phase::Failed { reason, again: Again::Resume, when_back: true }
+        Phase::Failed { reason, again: Some(Again::Resume), when_back: true }
             if reason == "The connection to box was lost."
     ));
 
@@ -206,16 +206,32 @@ fn a_resumed_copy_is_done_at_its_whole_size() {
 }
 
 #[test]
+fn a_second_pass_never_takes_a_copy_back() {
+    let now = Instant::now();
+    let mut copy = Entry::new(order(false), None, now);
+    copy.hear(sending(99, 100, "a"), now, true);
+    // What could not be read is sent once more: that pass lists the
+    // Project again, and reads less sent before it counts what is there.
+    copy.hear(Heard::Copying(Copying::Listing(250)), now, true);
+    copy.hear(sending(40, 100, "big.lock"), now, true);
+    let Phase::Copying { sent, file, .. } = &copy.phase else {
+        panic!("still copying, not listing");
+    };
+    assert_eq!((*sent, file.as_deref()), (99, Some("big.lock")));
+    assert_eq!(copy.phase.done(), Some(0.99), "its percentage stays");
+}
+
+#[test]
 fn a_machine_that_goes_stops_its_copy_for_a_resume_that_only_adds_what_landed() {
     let now = Instant::now();
     let mut copy = Entry::new(order(false), None, now);
     copy.hear(sending(5, 10, "a"), now, true);
-    assert!(copy.machine_went("box was turned off.".into(), now));
+    assert!(copy.machine_went("box was turned off.".into(), false));
     assert!(matches!(
         &copy.phase,
-        Phase::Failed { reason, again: Again::Resume, when_back: true } if reason == "box was turned off."
+        Phase::Failed { reason, again: Some(Again::Resume), when_back: true } if reason == "box was turned off."
     ));
-    assert!(!copy.machine_went("box was removed.".into(), now), "it stopped already");
+    assert!(!copy.machine_went("box was turned off.".into(), false), "it stopped already");
 
     let mut copy = Entry::new(order(false), None, now);
     let heard = Heard::Copied {
@@ -229,8 +245,8 @@ fn a_machine_that_goes_stops_its_copy_for_a_resume_that_only_adds_what_landed() 
         unfinished: Vec::new(),
     };
     copy.hear(heard, now, true);
-    assert!(copy.machine_went("box was turned off.".into(), now));
-    let Phase::Failed { again: Again::Add { bytes, skipped }, .. } = &copy.phase else {
+    assert!(copy.machine_went("box was turned off.".into(), false));
+    let Some(Again::Add { bytes, skipped }) = copy.phase.again() else {
         panic!("all of it landed: its Resume only adds it");
     };
     assert_eq!((*bytes, skipped.entries), (10, 1));
@@ -238,22 +254,49 @@ fn a_machine_that_goes_stops_its_copy_for_a_resume_that_only_adds_what_landed() 
     assert!(copy.add_again());
     assert!(matches!(copy.phase, Phase::Finishing { bytes: 10, used: false, .. }));
     assert!(copy.unadded("Copied, but not added on box: no space.".into(), false));
-    assert!(matches!(copy.phase, Phase::Failed { again: Again::Add { .. }, when_back: false, .. }));
+    assert!(matches!(copy.phase, Phase::Failed { again: Some(Again::Add { .. }), when_back: false, .. }));
 }
 
-/// A copy's thread that said `said`, none of it heard yet.
-fn run(said: Vec<Heard>) -> Run {
-    let (heard, hear) = ferrite_core::doorbell::channel();
-    for said in said {
-        let _ = heard.send(said);
+#[test]
+fn a_removed_machine_takes_its_copy_with_it() {
+    let now = Instant::now();
+    let run = run();
+    let cancel = run.cancel.clone();
+    let mut copy = Entry::new(order(false), Some(run), now);
+    copy.hear(sending(5, 10, "a"), now, true);
+    assert!(copy.machine_went("box was removed.".into(), true));
+    assert!(cancel.check().is_err(), "its thread is told to stop");
+    assert!(copy.run.is_none(), "nothing it says counts");
+    assert!(matches!(&copy.phase, Phase::Failed { again: None, when_back: false, .. }));
+    assert_eq!(copy.phase.again(), None, "no Resume, no Retry");
+    for back in [false, true] {
+        assert_eq!(copy.standing(back), Some(("box was removed.".into(), true)));
     }
+    assert!(!copy.machine_went("box was removed.".into(), true), "it was told");
+
+    // A copy that stopped for the Machine being off goes with it too.
+    let mut copy = Entry::new(order(false), None, now);
+    copy.hear(sending(5, 10, "a"), now, true);
+    copy.machine_went("box was turned off.".into(), false);
+    assert!(copy.machine_went("box was removed.".into(), true));
+    assert_eq!(copy.phase.again(), None);
+}
+
+/// A copy's thread, running, none of what it says heard yet.
+fn run() -> Run {
+    let (_, hear) = ferrite_core::doorbell::channel();
     Run {
         hear,
         cancel: Cancellation::default(),
     }
 }
 
-/// All of the copy landed: 10 bytes.
+/// Whether the copy's thread was told to stop.
+fn cancelled(copy: &Entry) -> bool {
+    copy.run.as_ref().is_some_and(|run| run.cancel.check().is_err())
+}
+
+/// All of the copy landed: 10 bytes, a file changed there left as it was.
 fn landed() -> Heard {
     Heard::Copied {
         copied: Ok(Copied::Sent {
@@ -261,50 +304,88 @@ fn landed() -> Heard {
                 bytes: 10,
                 ..Sent::default()
             },
-            changed: Vec::new(),
+            changed: vec!["notes.md".into()],
         }),
-        unfinished: Vec::new(),
+        unfinished: vec![TARGET.into()],
     }
 }
 
 #[test]
-fn what_a_copy_said_before_its_machine_went_counts() {
+fn what_a_copy_says_after_its_machine_went_counts() {
     let now = Instant::now();
-    // All of it landed, and the window had not heard so yet.
-    let mut copy = Entry::new(order(false), Some(run(vec![sending(10, 10, "a"), landed()])), now);
+    // All of it landed as the Machine went: its Resume only adds it, and
+    // the file it left as it was is still told of.
+    let mut copy = Entry::new(order(false), Some(run()), now);
     copy.hear(sending(5, 10, "a"), now, true);
-    assert!(copy.machine_went("box was turned off.".into(), now));
-    assert!(
-        matches!(
-            &copy.phase,
-            Phase::Failed { reason, again: Again::Add { bytes: 10, .. }, when_back: true }
-                if reason == "box was turned off."
-        ),
-        "its Resume only adds it"
+    assert!(copy.machine_went("box was turned off.".into(), false));
+    assert!(cancelled(&copy), "its thread is told to stop");
+    copy.hear(sending(10, 10, "a"), now, false);
+    assert_eq!(copy.hear(landed(), now, false), None, "nothing is added while it is off");
+    let Phase::Failed {
+        reason,
+        again: Some(Again::Add { bytes: 10, skipped }),
+        when_back: true,
+    } = &copy.phase
+    else {
+        panic!("its Resume only adds it");
+    };
+    assert_eq!(reason.as_ref(), "box was turned off.");
+    assert_eq!(skipped.lines, ["notes.md \u{b7} changed on box"]);
+    assert!(copy.run.is_none(), "it ended");
+    assert_eq!(
+        copy.standing(false),
+        Some(("box was turned off. Resume adds the copy once it is back.".into(), true))
     );
+    assert_eq!(copy.standing(true), Some(("box is back. Resume adds the copy.".into(), false)));
 
-    // It stopped on its own just before: the Machine going is why.
-    let ended = stopped(io::ErrorKind::BrokenPipe.into());
-    let mut copy = Entry::new(order(false), Some(run(vec![sending(5, 10, "a"), ended])), now);
-    assert!(copy.machine_went("box was turned off.".into(), now), "it is told");
+    // It stopped part way: its Resume finishes it, the Machine going why.
+    let mut copy = Entry::new(order(false), Some(run()), now);
+    copy.hear(sending(5, 10, "a"), now, true);
+    copy.machine_went("box was turned off.".into(), false);
+    copy.hear(stopped(io::ErrorKind::BrokenPipe.into()), now, false);
     assert!(matches!(
         &copy.phase,
-        Phase::Failed { reason, again: Again::Resume, when_back: true } if reason == "box was turned off."
+        Phase::Failed { reason, again: Some(Again::Resume), when_back: true } if reason == "box was turned off."
     ));
+    assert_eq!(copy.standing(true), Some(("box is back. Resume finishes the copy.".into(), false)));
+
+    // It stopped before anything was kept: its Retry starts over.
+    let mut copy = Entry::new(order(false), Some(run()), now);
+    copy.machine_went("box was turned off.".into(), false);
+    let ended = Heard::Copied {
+        copied: Err(Stopped {
+            error: io::ErrorKind::BrokenPipe.into(),
+            sent: Sent::default(),
+        }),
+        unfinished: Vec::new(),
+    };
+    copy.hear(ended, now, false);
+    assert_eq!(copy.phase.again(), Some(&Again::Retry));
 }
 
 #[test]
-fn a_copy_that_landed_before_its_cancel_was_heard_is_added() {
+fn a_copy_that_lands_after_its_cancel_is_added_on_its_resume() {
     let now = Instant::now();
-    let mut copy = Entry::new(order(false), Some(run(vec![sending(5, 10, "a")])), now);
-    assert_eq!(copy.cancel(now), None);
-    assert!(
-        matches!(copy.phase, Phase::Cancelled { resumable: true }),
-        "it had sent: what it sent stays for its Resume"
-    );
+    let mut copy = Entry::new(order(false), Some(run()), now);
+    assert!(copy.cancel());
+    assert!(matches!(copy.phase, Phase::Cancelled { again: Again::Retry }), "nothing was sent");
+    assert_eq!(copy.standing(false), Some(("Copy cancelled before anything was sent.".into(), false)));
 
-    let mut copy = Entry::new(order(false), Some(run(vec![sending(10, 10, "a"), landed()])), now);
-    let key = copy.key();
-    assert_eq!(copy.cancel(now), Some(Landed::Sent(key)), "the window adds it");
+    let mut copy = Entry::new(order(false), Some(run()), now);
+    copy.hear(sending(5, 10, "a"), now, true);
+    assert!(copy.cancel());
+    assert!(cancelled(&copy));
+    assert!(matches!(copy.phase, Phase::Cancelled { again: Again::Resume }), "what it sent stays");
+    assert!(!copy.cancel(), "it stopped already");
+    copy.hear(landed(), now, true);
+    assert!(
+        matches!(copy.phase, Phase::Cancelled { again: Again::Add { bytes: 10, .. } }),
+        "it landed as it was cancelled: not found occupied by its own files"
+    );
+    assert_eq!(
+        copy.standing(false),
+        Some(("Copy cancelled once all of it had landed. Resume adds it.".into(), false))
+    );
+    assert!(copy.add_again());
     assert!(matches!(copy.phase, Phase::Finishing { bytes: 10, .. }));
 }

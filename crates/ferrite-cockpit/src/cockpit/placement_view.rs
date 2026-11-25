@@ -9,7 +9,7 @@
 //! stopped part way is unfinished (`placement::unfinished`): the sheet
 //! opens on it, and only its Resume goes there.
 
-use super::copies::{self, Again, Copies, CopyKey, Landed, Order, Phase};
+use super::copies::{self, Again, Copies, CopyKey, Order, Phase};
 use super::draft_environment::Band;
 use super::folder_browser::{FolderBrowser, Moved};
 use super::*;
@@ -66,9 +66,9 @@ pub(crate) enum PlacementEvent {
     Use,
     /// Add the copy whose files all landed and only adding it failed.
     Add,
-    /// The copy ended before it heard the operator stop it: do what that
-    /// asks.
-    Landed(Landed),
+    /// Start a chat on this Project, the copy's on its Machine: the draft
+    /// that asked for the copy did not move there.
+    Chat(ProjectKey),
 }
 
 impl EventEmitter<PlacementEvent> for PlacementView {}
@@ -135,6 +135,10 @@ pub(crate) struct PlacementView {
     /// The folder the card put the browser at. The browser elsewhere with
     /// the operator not browsing went there itself, that folder unread.
     put_at: String,
+    /// The operator aimed the card away from where the copy that stopped
+    /// went: how that one ended no longer shows here, though the window
+    /// keeps it for the draft that waits on it.
+    elsewhere: bool,
     scroll: ScrollHandle,
     /// The draft's band, which the card keeps clear of.
     band: Option<Band>,
@@ -199,6 +203,7 @@ impl PlacementView {
             refusal: None,
             browsing: false,
             put_at: folder,
+            elsewhere: false,
             scroll: ScrollHandle::new(),
             band,
             size: CardSize::default(),
@@ -252,9 +257,20 @@ impl PlacementView {
         self.listing = Some(listing);
     }
 
-    /// The copy the card shows, while the window has one.
+    /// The copy the card shows, while the window has one and the card is
+    /// not aimed away from it.
     fn copy<'a>(&self, cx: &'a App) -> Option<&'a copies::Entry> {
-        self.copies.read(cx).get(&self.key())
+        self.copies
+            .read(cx)
+            .get(&self.key())
+            .filter(|copy| copy.phase.live() || !self.elsewhere)
+    }
+
+    /// Whether the card shows a copy whose Machine was removed: nothing
+    /// can go there again.
+    fn removed(&self, cx: &App) -> bool {
+        self.copy(cx)
+            .is_some_and(|copy| matches!(copy.phase, Phase::Failed { again: None, .. }))
     }
 
     fn face(&self, cx: &App) -> Face {
@@ -324,11 +340,11 @@ impl PlacementView {
     /// be read now.
     fn resumes(&self, cx: &App) -> bool {
         let dest = self.destination(cx);
-        let stopped = self.copy(cx).filter(|copy| copy.order.dest == dest).map(|copy| &copy.phase);
-        if matches!(
-            stopped,
-            Some(Phase::Failed { again: Again::Resume | Again::Add { .. }, .. } | Phase::Cancelled { resumable: true })
-        ) {
+        let stopped = self.copy(cx).filter(|copy| copy.order.dest == dest);
+        if stopped
+            .and_then(|copy| copy.phase.again())
+            .is_some_and(|again| *again != Again::Retry)
+        {
             return true;
         }
         let target = self.target(cx);
@@ -347,6 +363,7 @@ impl PlacementView {
         });
         if elsewhere {
             self.let_go(cx);
+            self.elsewhere = true;
         }
         cx.notify();
     }
@@ -467,6 +484,7 @@ impl PlacementView {
             waits: true,
         };
         self.browsing = false;
+        self.elsewhere = false;
         self.copies.update(cx, |copies, cx| copies.start(order, cx));
         cx.notify();
     }
@@ -474,9 +492,7 @@ impl PlacementView {
     /// Stop the copy under way; what it sent stays, for its Resume.
     fn stop(&mut self, cx: &mut Context<Self>) {
         let key = self.key();
-        if let Some(landed) = self.copies.update(cx, |copies, cx| copies.cancel(&key, cx)) {
-            cx.emit(PlacementEvent::Landed(landed));
-        }
+        self.copies.update(cx, |copies, cx| copies.cancel(&key, cx));
         // The copy may have made its folder by now.
         self.dest.update(cx, |dest, cx| dest.relist(cx));
     }
@@ -497,13 +513,24 @@ impl PlacementView {
     }
 
     /// The primary button while choosing: what is there used, a copy that
-    /// all landed added, or a copy.
+    /// all landed added, or a copy. A copy whose Machine was removed has
+    /// none.
     fn primary(&mut self, cx: &mut Context<Self>) {
-        match self.copy(cx).map(|copy| &copy.phase) {
-            Some(Phase::Occupied { of: None }) => cx.emit(PlacementEvent::Use),
-            Some(Phase::Occupied { .. }) => {}
-            Some(Phase::Failed { again: Again::Add { .. }, .. }) => cx.emit(PlacementEvent::Add),
+        let Some(phase) = self.copy(cx).map(|copy| &copy.phase) else {
+            return self.start(cx);
+        };
+        match phase {
+            Phase::Occupied { of: None } => cx.emit(PlacementEvent::Use),
+            Phase::Occupied { .. } | Phase::Failed { again: None, .. } => {}
+            phase if matches!(phase.again(), Some(Again::Add { .. })) => cx.emit(PlacementEvent::Add),
             _ => self.start(cx),
+        }
+    }
+
+    /// Start a chat on the Project the copy is on its Machine.
+    fn chat(&mut self, cx: &mut Context<Self>) {
+        if let Some(Phase::Done(summary)) = self.copy(cx).map(|copy| &copy.phase) {
+            cx.emit(PlacementEvent::Chat(summary.project));
         }
     }
 

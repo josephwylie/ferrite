@@ -19,8 +19,9 @@ impl PlacementView {
             format!("Copy {} to {}", self.placing.title, self.placing.machine_name).into(),
             self.close(cx),
         );
+        let removed = self.removed(cx);
         let mut content = column();
-        content = if self.browsing {
+        content = if self.browsing && !removed {
             content.child(self.dest.clone()).child(
                 project_editor::prefixed_field(
                     "Copies to".into(),
@@ -40,6 +41,8 @@ impl PlacementView {
                     cx.stop_propagation();
                     sheet.browse(window, cx);
                 }));
+            // A Machine removed has no folder to choose.
+            let change = div().children((!removed).then_some(change));
             content.child(
                 project_editor::shown_path(
                     self.folder_prefix(cx).into(),
@@ -80,13 +83,14 @@ impl PlacementView {
                         sheet.dismiss(cx);
                     })),
             )
-            .child(self.primary_button(cx));
+            .children((!removed).then(|| self.primary_button(cx)));
         (head, content, project_editor::footer(left, right))
     }
 
     /// Choosing's completing button: Copy and what it sends, Resume where
     /// an unfinished copy is, Retry after a failure, or what is there
-    /// used as it is.
+    /// used as it is. A copy whose Machine was removed has none: only
+    /// Close.
     fn primary_button(&self, cx: &mut Context<Self>) -> gpui::component::button::Button {
         let unready = self.entries.is_none() || self.unfit.is_some();
         let phase = self.copy(cx).map(|copy| &copy.phase);
@@ -110,43 +114,31 @@ impl PlacementView {
     }
 
     /// How the last copy here ended, or why none can go, when there is
-    /// anything to say: two lines at most, whole in its tooltip.
+    /// anything to say: two lines at most, whole in its tooltip. A copy
+    /// that stopped says it as its toast does (`copies::Entry::standing`).
     fn stage_line(&self, cx: &App) -> Option<gpui::Stateful<Div>> {
-        let copy = self.copy(cx);
-        let resumes = self.resumes(cx);
-        let (text, ink, selector): (String, u32, &'static str) =
-            match (self.refusal.as_ref().or(self.unfit.as_ref()), copy.map(|copy| (copy, &copy.phase))) {
-                (Some(refusal), _) => (refusal.to_string(), BLOCKED, "placement-refusal"),
-                (None, Some((copy, Phase::Occupied { .. }))) => {
-                    (copy.why().unwrap_or_default(), BLOCKED, "placement-occupied")
-                }
-                (None, Some((_, Phase::Cancelled { .. }))) => (
-                    if resumes {
-                        "Copy cancelled. Resume finishes it from where it stopped."
-                    } else {
-                        "Copy cancelled before anything was sent."
-                    }
-                    .into(),
-                    INK_SUBTLE,
-                    "placement-cancelled",
-                ),
-                (None, Some((_, Phase::Failed { reason, when_back, .. }))) => (
-                    match (when_back, self.copies.read(cx).back(&self.key(), cx), resumes) {
-                        (false, ..) | (true, true, false) => reason.to_string(),
-                        (true, true, true) => format!("{reason} Resume finishes the copy."),
-                        (true, false, true) => format!("{reason} Resume finishes the copy once it is back."),
-                        (true, false, false) => format!("{reason} Try again once it is back."),
-                    },
-                    BLOCKED,
-                    "placement-failed",
-                ),
-                _ if resumes => (
-                    format!("An unfinished copy of {} is here.", self.placing.title),
-                    INK_SUBTLE,
-                    "placement-unfinished",
-                ),
-                _ => return None,
-            };
+        let back = self.copies.read(cx).back(&self.key(), cx);
+        let standing = self
+            .copy(cx)
+            .and_then(|copy| Some((copy.standing(back)?, &copy.phase)));
+        let (text, ink, selector): (String, u32, &'static str) = match (self.refusal.as_ref().or(self.unfit.as_ref()), standing) {
+            (Some(refusal), _) => (refusal.to_string(), BLOCKED, "placement-refusal"),
+            (None, Some(((text, failed), phase))) => (
+                text,
+                if failed { BLOCKED } else { INK_SUBTLE },
+                match phase {
+                    Phase::Occupied { .. } => "placement-occupied",
+                    Phase::Cancelled { .. } => "placement-cancelled",
+                    _ => "placement-failed",
+                },
+            ),
+            _ if self.resumes(cx) => (
+                format!("An unfinished copy of {} is here.", self.placing.title),
+                INK_SUBTLE,
+                "placement-unfinished",
+            ),
+            _ => return None,
+        };
         let text = SharedString::from(text);
         Some(
             div()
@@ -261,13 +253,20 @@ impl PlacementView {
         (head, content, project_editor::footer(div(), right))
     }
 
-    /// What the copy did: where the Project is now, how much in how long,
-    /// whether the chat runs there, and what stayed as it was.
+    /// What the copy did, under the check of a finish: where the Project is
+    /// now, how much in how long, whether the chat runs there, and what
+    /// stayed as it was. A draft that did not move there can start a chat
+    /// there.
     pub(super) fn result(&self, cx: &mut Context<Self>) -> Drawn {
         let machine = &self.placing.machine_name;
-        let head = project_editor::head(format!("Copied to {machine}").into(), self.close(cx));
+        let mark = div()
+            .debug_selector(|| "placement-done-mark".into())
+            .child(ferrite_ui::icons::icon(ferrite_ui::icons::CHECK_CIRCLE, ICON_BUTTON_GLYPH, RUNNING));
+        let head = ferrite_ui::sheet::sheet_head_marked(mark, format!("Copied to {machine}"), self.close(cx));
         let mut content = column();
+        let mut moved = true;
         if let Some((copy, Phase::Done(summary))) = self.copy(cx).map(|copy| (copy, &copy.phase)) {
+            moved = summary.moved;
             content = content
                 .child(
                     components::text_ui()
@@ -301,7 +300,23 @@ impl PlacementView {
                 cx.stop_propagation();
                 sheet.dismiss(cx);
             }));
-        (head, content, project_editor::footer(div(), done))
+        let chat = (!moved).then(|| {
+            components::secondary_button("placement-chat", None, "Start a chat there", cx)
+                .debug_selector(|| "placement-chat".into())
+                .h(px(FORM_CONTROL_H))
+                .px(px(FORM_BUTTON_PAD_X))
+                .on_click(cx.listener(|sheet: &mut Self, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    sheet.chat(cx);
+                }))
+        });
+        let right = div()
+            .flex()
+            .items_center()
+            .gap(px(SPACE_2))
+            .children(chat)
+            .child(done);
+        (head, content, project_editor::footer(div(), right))
     }
 }
 

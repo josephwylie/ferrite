@@ -390,18 +390,21 @@ Windows window.
   copies are still its own, each started, resumed and shown on it as the
   window holds it then), a state machine: `Listing { files } → Copying {
   sent, total, file } → Finishing → Done { took, not copied } | Failed {
-  reason, again } | Cancelled`, with `Occupied` after `Listing` when a
-  first copy finds the destination holding something, and `again` what
-  its button does: Retry, Resume, or Add for one whose files all landed.
+  reason, again } | Cancelled { again }`, with `Occupied` after `Listing`
+  when a first copy finds the destination holding something, and `again`
+  what its button does: Retry, Resume, or Add for one whose files all
+  landed; none once its Machine was removed.
   The card, a toast and the Draft's environment chip are three views of
   it; none keeps a copy's state of its own. Copy again for a copy under
   way opens the card on it.
 - **A copy is of all of P.** What an earlier run left there counts as
   sent from the first reading, so a Resume's bar starts where the last
-  run stopped and never goes back (`placement::copy` counts the bytes
-  found there in each `Progress` it reports); its rate and time left are
-  of what remains, and its result
-  names the whole size and the time this run took.
+  run stopped (`placement::copy` counts the bytes found there in each
+  `Progress` it reports); its rate and time left are of what remains, and
+  its result names the whole size and the time this run took. Once it
+  sends, how far it is never goes back nor loses its percentage: the
+  second pass that sends what could not be read lists P again, and the
+  window hears that listing only while the copy still lists.
 - **The card has three faces.** Choosing (above). Copying: the same card
   resizes to the compact width with the sheet's motion (`DIALOG_IN`),
   "Copying to E" over "P → ~/projects/app", a bar, "134 MB of 2.2 GB" with
@@ -431,33 +434,56 @@ Windows window.
   way) each show whole, one above the other. Leaving the app while a copy
   runs asks first ("Copying P to E. Leaving stops it; Resume finishes it
   later.").
-- **The Draft waits on its copy.** While it runs, the Draft's chip shows
-  a ring and the percentage, "Send once copied" stands beside it, and
-  there is no Send: a first send starts nothing. The chip's menu ticks E,
-  "copying 42%", whose pick brings the card back; another environment
-  ("Local", "send here instead") lets the Draft go there, the copy
-  carrying on. Once the copy is in, the Draft is on it and Send is back.
-  Nothing is queued.
+- **A copy is always a pick away.** Every Draft's environment chip lists
+  each copy under way after its environments, "Copying P to E" and how
+  far, the Draft's own Project first; a pick opens its card. The chip
+  stands whenever a copy runs, since its Machine is on, so with the toast
+  closed and the Draft gone or sent here the copy is still reached; a new
+  Draft (⌘N) is its home when there is no other.
+- **The Draft waits on its copy until it is in.** While it runs, the
+  Draft's chip shows a ring and the percentage, "Send once copied"
+  stands beside it, and there is no Send: a first send starts nothing.
+  A copy that stopped short (cancelled, its Machine off or removed, the
+  connection lost, a failure) keeps the Draft waiting: the chip keeps E,
+  "Copy stopped" stands beside it, still no Send, until its Resume puts
+  it in or the operator picks where the Draft runs. Closing its card or
+  toast does not let the Draft go; it only means no toast tells of the
+  stop again. The chip's menu ticks E, "copying 42%" or "copy stopped",
+  whose pick brings the card back; another environment ("Local", "send
+  here instead") lets the Draft go there, the copy carrying on. Once the
+  copy is in, the Draft is on it and Send is back. Nothing is queued.
 - **A copy that ends with the card gone still says so.** A toast "Copied
   P to E", whether or not the progress toast was closed, with how much in
-  how long. With the window in the background, the chime and the system
+  how long, which goes by itself as other toasts do unless it left items
+  as they were; one for a copy that stopped stays until it is closed.
+  With the window in the background, the chime and the system
   notification too (Settings › Notifications), card up or not, whose
   click opens the card; it is taken back once the operator, in the
   window, has the card or a toast show how the copy ended. A Draft that
-  has since moved or been sent stays where it is, and the toast offers
-  "Start a chat there". A failure turns the toast into "Copy of P to E
-  stopped", its reason, Show and Resume (or Retry).
-- **A failure is said in the operator's words**: "The connection to E was
-  lost." when the connection went, with Resume once it is back, else the
-  folder that could not be written and why, under `~/`: "Can't write in
-  ~/projects/app: permission denied." A Machine turned off or removed in
-  Settings stops its copies at once, "E was turned off." or "E was
-  removed.", with Resume; the card adds "Resume finishes the copy once it
-  is back." until it is. A copy whose files all landed but that could
-  not be added on E ("Copied, but not added on E: …"), or whose landing
-  the window had not yet heard when E went, keeps them: its Resume only
-  adds it. Through a first copy its button reads Copy; only a
-  resume's reads Resume. Retry from a failure copies again.
+  has since moved or been sent stays where it is, and the toast and the
+  card's last face, marked with a check, offer "Start a chat there";
+  closing the card leaves the toast's. A failure turns the toast into
+  "Copy of P to E stopped", how it stands, Show and Resume (or Retry).
+- **A failure is said in the operator's words**, the card and the toast
+  alike (`Entry::standing`): "The connection to E was lost." when the
+  connection went, else the folder that could not be written and why,
+  under `~/`: "Can't write in ~/projects/app: permission denied." A
+  Machine turned off in Settings stops its copies at once: "E was turned
+  off. Resume finishes the copy once it is back.", and once E went and
+  answers again, plainly, not as a failure, "E is back. Resume finishes
+  the copy." A connection lost reads the same way once E has been seen
+  gone and answers again; one whose Server never went is never said to
+  be back. A Machine removed takes its copies with it: "E was removed.",
+  no Resume, no Retry, no Change…, only Close. A copy stopped goes on
+  being heard until its thread ends, so how it truly ended counts: one
+  whose files all landed as it was cancelled or its Machine went keeps
+  its record and them, with what it left as it was, and its Resume only
+  adds it, never finding its own files there as Occupied
+  (`placement::copy` clears the record only for a run not cancelled, and
+  the window once it adds the copy, `placement::finished`). So does one
+  that landed but could not be added on E ("Copied, but not added on E:
+  …"). Through a first copy its button reads Copy; only a resume's reads
+  Resume. Retry from a failure copies again.
 - `CONTEXT.md`'s Draft entry and ADR 0045's line on the strip over the
   Composer say the environment is a choice until the first send.
 

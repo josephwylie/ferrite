@@ -81,8 +81,10 @@ impl Heard {
     }
 }
 
-/// Why a draft waiting on its copy has no Send, beside the copy's chip.
-pub(super) fn copy_waits_note() -> Div {
+/// Why a draft waiting on its copy has no Send, beside the copy's chip:
+/// it sends once copied, or its copy stopped short, until the operator
+/// resumes it or picks where the draft runs.
+pub(super) fn copy_waits_note(running: bool) -> Div {
     div()
         .flex()
         .items_center()
@@ -95,7 +97,7 @@ pub(super) fn copy_waits_note() -> Div {
             ferrite_ui::components::text_ui()
                 .truncate()
                 .text_color(gpui::rgb(ferrite_ui::theme::INK_SUBTLE))
-                .child("Send once copied"),
+                .child(if running { "Send once copied" } else { "Copy stopped" }),
         )
 }
 
@@ -116,10 +118,11 @@ fn unreached(server: Option<ServerState>) -> Option<SharedString> {
 }
 
 impl CockpitView {
-    /// Whether a draft can choose where it runs: more than one environment
-    /// is on.
-    pub(super) fn environment_chip_shown(&self, cx: &App) -> bool {
-        self.cockpit.read(cx).machines().nth(1).is_some()
+    /// Whether the draft in Pane `index` can choose where it runs: more
+    /// than one environment is on, or it waits on a copy, whose Machine
+    /// may be off by now.
+    pub(super) fn environment_chip_shown(&self, index: usize, cx: &App) -> bool {
+        self.cockpit.read(cx).machines().nth(1).is_some() || self.waited_on(index, cx).is_some()
     }
 
     /// What the environment chip and its rows call `machine`.
@@ -149,8 +152,8 @@ impl CockpitView {
             .collect()
     }
 
-    /// The copy the draft in Pane `index` waits on, while it runs: the
-    /// draft is sent there once it is in.
+    /// The copy the draft in Pane `index` waits on, under way or stopped
+    /// short: the draft is sent there once it is in.
     pub(super) fn waited_on<'a>(&self, index: usize, cx: &'a App) -> Option<(&'a CopyKey, &'a copies::Entry)> {
         let pane = self.panes.get(index)?;
         let project = pane.draft()?.binding.project();
@@ -158,21 +161,43 @@ impl CockpitView {
     }
 
     /// The environment chip's rows for `draft`, in Pane `pane`: while it
-    /// waits on a copy, the copy's Machine is ticked and says how far, and
-    /// its own sends it here instead.
+    /// waits on a copy, the copy's Machine is ticked and says how far or
+    /// that the copy stopped, off or removed by now or not, and its own
+    /// sends it here instead. Then every other copy under way, this
+    /// Project's first: a copy is always a pick away, its toast closed and
+    /// its draft gone.
     pub(super) fn environment_menu_rows(&self, pane: PaneIdentity, draft: &pane::DraftBinding, cx: &App) -> Vec<Row> {
         let copies = self.copies.read(cx);
-        let copying = copies
-            .waited_on_by(pane, draft.binding.project())
-            .and_then(|(key, copy)| {
-                let machine = self.cockpit.read(cx).machine_saved_as(&key.machine)?;
+        let project = draft.binding.project();
+        let waited = copies.waited_on_by(pane, project).map(|(key, copy)| menu_rows::Waited {
+            machine: self.cockpit.read(cx).machine_saved_as(&key.machine),
+            name: copy.order.placing.machine_name.clone(),
+            detail: match copy.phase.done() {
+                Some(done) if copy.phase.live() => format!("copying {}%", (done * 100.).floor()).into(),
+                _ if copy.phase.live() => "copying".into(),
+                _ => "copy stopped".into(),
+            },
+            copy: key.clone(),
+        });
+        let mut under_way: Vec<_> = copies
+            .iter()
+            .filter(|(key, copy)| copy.phase.live() && waited.as_ref().is_none_or(|waited| waited.copy != **key))
+            .map(|(key, copy)| {
                 let detail = match copy.phase.done() {
-                    Some(done) => format!("copying {}%", (done * 100.).floor()),
-                    None => "copying".into(),
+                    Some(done) => format!("{}%", (done * 100.).floor()),
+                    None => "listing files".into(),
                 };
-                Some((machine, SharedString::from(detail)))
-            });
-        menu_rows::environment_rows(&self.environments(cx), draft, copying)
+                let name = format!("Copying {} to {}", copy.order.placing.title, copy.order.placing.machine_name);
+                (key.project != project, menu_rows::UnderWay {
+                    name: name.into(),
+                    detail: detail.into(),
+                    copy: key.clone(),
+                })
+            })
+            .collect();
+        under_way.sort_by_key(|(elsewhere, _)| *elsewhere);
+        let under_way = under_way.into_iter().map(|(_, copy)| copy).collect();
+        menu_rows::environment_rows(&self.environments(cx), draft, waited, under_way)
     }
 
     /// The focused draft runs on `to` instead: its Project's counterpart
@@ -406,15 +431,33 @@ impl CockpitView {
                 }
             }
             PlacementEvent::Add => self.copy_again(&key, cx),
-            PlacementEvent::Landed(landed) => self.copy_landed(landed.clone(), cx),
+            PlacementEvent::Chat(project) => self.chat_on_copy(&key, *project, cx),
         }
     }
 
-    /// The card went: how the copy it showed ended has been seen.
+    /// The card went: how the copy it showed ended has been seen. A copy
+    /// done that its draft did not move to stays a moment more: its toast
+    /// still offers a chat there.
     pub(super) fn placement_closed(&mut self, sheet: &Entity<PlacementView>, cx: &mut Context<Self>) {
         let key = sheet.read(cx).key();
-        self.copies.update(cx, |copies, cx| copies.forget(&key, cx));
+        let offers_chat = matches!(
+            self.copies.read(cx).get(&key).map(|copy| &copy.phase),
+            Some(copies::Phase::Done(summary)) if !summary.moved
+        );
+        if !offers_chat {
+            self.copies.update(cx, |copies, cx| copies.forget(&key, cx));
+        }
         self.hide_sheet(cx);
+    }
+
+    /// Start a chat on `project`, the copy of `key` on its Machine, from
+    /// its card or its toast: the copy has been seen.
+    pub(super) fn chat_on_copy(&mut self, key: &CopyKey, project: ProjectKey, cx: &mut Context<Self>) {
+        if self.placement_sheet(cx).is_some_and(|sheet| sheet.read(cx).key() == *key) {
+            self.hide_sheet(cx);
+        }
+        self.open_draft_in_project(project, cx);
+        self.copies.update(cx, |copies, cx| copies.forget(key, cx));
     }
 
     /// The copy of `key` is on its machine: register it there as a
@@ -530,7 +573,11 @@ impl CockpitView {
             local_root: placing.root.clone(),
             remote_root,
         };
-        if let Err(error) = placement::place(&placing.kept, placed) {
+        // Added, it is unfinished no longer, though its run was stopped
+        // as it landed.
+        let kept = placement::finished(&placing.kept, &placing.root, &order.target)
+            .and_then(|()| placement::place(&placing.kept, placed));
+        if let Err(error) = kept {
             ferrite_core::log!(
                 "the placement of {} was not kept: {error}",
                 placing.root.display()

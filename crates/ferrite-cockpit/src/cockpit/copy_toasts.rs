@@ -2,12 +2,14 @@
 //! that follows one under way and can be closed without stopping it, a
 //! toast for how it ended, and as it ends the chime and, with the window
 //! in the background, the system's notification (Settings › Notifications).
-//! Each reads the copy as it is drawn; none keeps a copy's state.
+//! Each reads the copy as it is drawn; none keeps a copy's state. A toast
+//! for a copy done goes by itself unless it left something as it was; one
+//! for a copy that stopped stays until it is closed.
 
 use super::copies::words::{bytes, count, took};
 use super::copies::{CopyKey, Landed, Phase};
 use super::*;
-use gpui::component::button::Button;
+use ferrite_ui::components;
 use gpui::component::notification::{Notification, NotificationProgress, NotificationType};
 use gpui::component::WindowExt as _;
 use std::collections::{HashMap, HashSet};
@@ -20,8 +22,9 @@ struct CopyToast;
 enum Kind {
     Progress,
     Done,
-    /// Stopped, or found its destination taken: nothing was added.
-    Failed,
+    /// Stopped, or found its destination taken: nothing was added. Said
+    /// again once its Machine is `back`.
+    Failed { back: bool },
 }
 
 #[derive(Default)]
@@ -48,7 +51,7 @@ impl CockpitView {
     }
 
     /// Do what a copy that moved asks of the window.
-    pub(super) fn copy_landed(&mut self, landed: Landed, cx: &mut Context<Self>) {
+    fn copy_landed(&mut self, landed: Landed, cx: &mut Context<Self>) {
         match landed {
             Landed::Sent(key) => self.place_copy(&key, cx),
             Landed::Ended(key) => self.tell_copy(&key, cx),
@@ -119,9 +122,9 @@ impl CockpitView {
 
     /// Each copy's toast as it stands: none for the copy on the card up,
     /// one that follows it while it runs unless the operator closed that,
-    /// and one for how it ended until the operator has seen it. A system
-    /// notification is taken back once the window, active, shows what it
-    /// told.
+    /// and one for how it ended until the operator has seen it, said again
+    /// once its Machine is back. A system notification is taken back once
+    /// the window, active, shows what it told.
     pub(super) fn present_copies(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let carded = self.placement_sheet(cx).map(|sheet| sheet.read(cx).key());
         let window_active = self.cockpit.read(cx).window_active();
@@ -135,12 +138,15 @@ impl CockpitView {
         toasts.closed.retain(|key| running.contains(key));
         let wanted: HashMap<CopyKey, Kind> = copies
             .iter()
-            .filter(|(key, _)| carded.as_ref() != Some(*key))
+            .filter(|(key, copy)| carded.as_ref() != Some(*key) && !copy.seen())
             .filter_map(|(key, copy)| {
                 let kind = match &copy.phase {
                     phase if phase.live() => (!toasts.closed.contains(key)).then_some(Kind::Progress)?,
                     Phase::Done(_) => Kind::Done,
-                    Phase::Failed { .. } | Phase::Occupied { .. } => Kind::Failed,
+                    Phase::Failed { when_back, .. } => Kind::Failed {
+                        back: *when_back && copies.back(key, cx),
+                    },
+                    Phase::Occupied { .. } => Kind::Failed { back: false },
                     // Cancelled on its card: the operator saw it stop.
                     _ => return None,
                 };
@@ -153,8 +159,8 @@ impl CockpitView {
             .filter(|key| match copies.get(key) {
                 Some(copy) if !copy.phase.live() => {
                     let shown = carded.as_ref() == Some(*key)
-                        || matches!(wanted.get(*key), Some(Kind::Done | Kind::Failed));
-                    window_active && shown
+                        || matches!(wanted.get(*key), Some(Kind::Done | Kind::Failed { .. }));
+                    copy.seen() || (window_active && shown)
                 }
                 // Gone, or under way again.
                 _ => true,
@@ -203,11 +209,10 @@ impl CockpitView {
                     .ok();
             });
         let shown = (view.clone(), key.clone());
-        let show = move |_: &mut Notification, _: &mut Window, _: &mut Context<Notification>| {
+        let show = move |_: &mut Notification, _: &mut Window, cx: &mut Context<Notification>| {
             let (view, key) = shown.clone();
-            Button::new("copy-toast-show")
+            components::secondary_button("copy-toast-show", None, "Show", cx)
                 .debug_selector(|| "copy-toast-show".into())
-                .label("Show")
                 .on_click(move |_, _, cx| {
                     view.update(cx, |view, cx| view.show_copy(&key, cx)).ok();
                 })
@@ -238,55 +243,51 @@ impl CockpitView {
                 let toast = toast
                     .with_type(NotificationType::Success)
                     .title(format!("Copied {title} to {machine}"));
-                // What it left is on the card: the toast says how many.
-                let toast = match summary.skipped.entries {
+                // What it left is on the card: the toast says how many, and
+                // stays until it is closed.
+                let left = summary.skipped.entries;
+                let toast = match left {
                     0 => toast.message(format!("{} in {}", bytes(summary.bytes), took(summary.took))),
                     entries => toast.message(not_copied(entries)).action(show),
                 };
-                if summary.moved {
+                let toast = if summary.moved {
                     toast
                 } else {
                     let (project, key) = (summary.project, key.clone());
-                    toast.action(move |_, _, _| {
+                    toast.action(move |_, _, cx| {
                         let (view, key) = (view.clone(), key.clone());
-                        Button::new("copy-toast-chat")
+                        project_editor::primary_button("copy-toast-chat", "Start a chat there", false, cx)
                             .debug_selector(|| "copy-toast-chat".into())
-                            .label("Start a chat there")
                             .on_click(move |_, _, cx| {
-                                view.update(cx, |view, cx| {
-                                    view.open_draft_in_project(project, cx);
-                                    view.copies.update(cx, |copies, cx| copies.forget(&key, cx));
-                                })
-                                .ok();
+                                view.update(cx, |view, cx| view.chat_on_copy(&key, project, cx)).ok();
                             })
                     })
-                }
-            }
-            Kind::Failed => {
-                let again = match &copy.phase {
-                    Phase::Failed { again, .. } => Some(again.verb()),
-                    _ => None,
                 };
+                // A press on it does not keep a toast that says all went
+                // well: it goes as the kit's toasts go.
+                toast.autohide(left == 0)
+            }
+            Kind::Failed { back } => {
+                let standing = copy.standing(back);
+                let failed = standing.as_ref().is_none_or(|(_, failed)| *failed);
                 let toast = toast
-                    .with_type(NotificationType::Warning)
+                    .with_type(if failed { NotificationType::Warning } else { NotificationType::Info })
                     .title(format!("Copy of {title} to {machine} stopped"))
-                    .message(copy.why().unwrap_or_default())
-                    .action(show);
-                match again {
-                    Some(verb) => {
-                        let key = key.clone();
-                        toast.action(move |_, _, _| {
-                            let (view, key) = (view.clone(), key.clone());
-                            Button::new("copy-toast-again")
-                                .debug_selector(|| "copy-toast-again".into())
-                                .label(verb)
-                                .on_click(move |_, _, cx| {
-                                    view.update(cx, |view, cx| view.copy_again(&key, cx)).ok();
-                                })
+                    .message(standing.map(|(said, _)| said).unwrap_or_default());
+                // A copy whose Machine was removed has nothing to show or
+                // do: only its close.
+                let Some(verb) = copy.phase.again().map(|again| again.verb()) else {
+                    return Some(toast);
+                };
+                let key = key.clone();
+                toast.action(show).action(move |_, _, cx| {
+                    let (view, key) = (view.clone(), key.clone());
+                    components::secondary_button("copy-toast-again", None, verb, cx)
+                        .debug_selector(|| "copy-toast-again".into())
+                        .on_click(move |_, _, cx| {
+                            view.update(cx, |view, cx| view.copy_again(&key, cx)).ok();
                         })
-                    }
-                    None => toast,
-                }
+                })
             }
         })
     }
@@ -305,7 +306,7 @@ impl CockpitView {
             Kind::Progress => {
                 self.copy_toasts.closed.insert(key.clone());
             }
-            Kind::Done | Kind::Failed => {
+            Kind::Done | Kind::Failed { .. } => {
                 self.copies.update(cx, |copies, cx| copies.forget(key, cx));
             }
         }

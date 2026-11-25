@@ -4291,7 +4291,7 @@ impl CockpitView {
         }) {
             return;
         }
-        let environment = self.environment_chip_shown(cx);
+        let environment = self.environment_chip_shown(self.focused(cx), cx);
         let Some(draft) = self.focused_draft_mut(cx) else {
             self.cycle_tools(false, window, cx);
             return;
@@ -5645,6 +5645,7 @@ impl CockpitView {
                 }
             }
             BandChoice::Environment(machine) => self.pick_environment(*machine, cx),
+            BandChoice::Copy(key) => self.show_copy(key, cx),
             BandChoice::Connections => self.open_connections(cx),
         }
         cx.notify();
@@ -5772,19 +5773,25 @@ impl CockpitView {
             DraftTarget::New => (ferrite_ui::icons::FOLDER_GIT, SharedString::from("New worktree")),
         };
         // Where the draft runs: a chip while there is more than one
-        // environment to choose, else a word for a machine.
+        // environment to choose, or a copy to wait on, else a word for a
+        // machine.
         let machine = draft.binding.project().machine();
-        let waits = self.waited_on(index, cx).is_some();
-        let environment = self.environment_chip_shown(cx).then(|| {
-            // The copy the draft waits on: where to, and how far.
+        let waits = self.waited_on(index, cx).map(|(_, copy)| copy.phase.live());
+        let environment = self.environment_chip_shown(index, cx).then(|| {
+            // The copy the draft waits on: where to, and how far while it
+            // runs; the Machine alone once it stopped.
             if let Some((_, copy)) = self.waited_on(index, cx) {
                 let name = copy.order.placing.machine_name.clone();
-                let done = copy.phase.done();
-                let label = match done {
-                    Some(done) => format!("{name} {}%", (done * 100.).floor()).into(),
-                    None => name,
+                let (done, live) = (copy.phase.done(), copy.phase.live());
+                let (mark, label) = match done {
+                    Some(done) if live => {
+                        let label = format!("{name} {}%", (done * 100.).floor());
+                        (pane::ChipMark::Ring(done), label.into())
+                    }
+                    _ if live => (pane::ChipMark::Ring(0.), name),
+                    _ => (pane::ChipMark::Icon(ferrite_ui::icons::SERVER), name),
                 };
-                return (pane::BandChip::Environment, 2, pane::ChipMark::Ring(done.unwrap_or_default()), label);
+                return (pane::BandChip::Environment, 2, mark, label);
             }
             let mark = if self.elsewhere(machine, cx) {
                 ferrite_ui::icons::SERVER
@@ -5840,9 +5847,9 @@ impl CockpitView {
                 .into_any_element()
             });
         let mut chips: Vec<AnyElement> = word.into_iter().chain(chips).collect();
-        if waits {
-            // Beside the copy's percentage, why Send is not there.
-            chips.insert(1, draft_environment::copy_waits_note().into_any_element());
+        if let Some(running) = waits {
+            // Beside the copy's chip, why Send is not there.
+            chips.insert(1, draft_environment::copy_waits_note(running).into_any_element());
         }
         chips
     }

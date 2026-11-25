@@ -309,9 +309,10 @@ A Pane's pending Provider, Effort, Project, and Workspace choices before its
 first prompt creates a Thread. It has no durable history or Session. Its
 environment is its Project's Machine, a choice on its environment chip
 until that first prompt: picking another moves it to its Project's
-counterpart there, made by a copy when there is none (ADR 0048). While
-that copy runs the Draft waits on it, with no Send, and moves there once
-it is in.
+counterpart there, made by a copy when there is none (ADR 0048). The Draft
+waits on that copy, with no Send, and moves there once it is in; a copy
+that stopped short keeps it waiting until it is resumed or the operator
+picks where the Draft runs.
 
 **Current Thread**
 The Thread the operator is in: the focused one, else the open Thread focus
@@ -387,9 +388,11 @@ _Avoid_: partial copy, interrupted sync, half copy.
 One run of copying a Project of this computer to a Machine, one at a time
 for each Project and Machine, the Machine as it is saved (turned off and on
 again, its copies are still its own). The window keeps it from Copy until
-the operator has seen how it ended. Its card, a toast and the Draft's
-environment chip all show it. Cancel, or its Machine turned off or
-removed, stops it; the card closed, it runs on (ADR 0048).
+the operator has seen how it ended, and one that stopped short while its
+Draft waits on it. Its card, a toast and every Draft's environment chip
+all show it. Cancel, or its Machine turned off or removed, stops it; the
+card closed, it runs on. A Machine removed takes it with it: it can never
+go again (ADR 0048).
 _Avoid_: transfer, upload, sync job.
 
 **Setup sync**

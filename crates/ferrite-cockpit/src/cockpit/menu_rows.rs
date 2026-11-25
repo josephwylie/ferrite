@@ -123,6 +123,8 @@ pub(super) enum BandChoice {
     AddProject,
     /// Run the draft on this machine instead (`pick_environment`).
     Environment(ferrite_core::MachineId),
+    /// The card on this copy (`show_copy`).
+    Copy(super::copies::CopyKey),
     /// Settings › Connections: `Add environment…`, or a machine the window
     /// cannot reach.
     Connections,
@@ -456,18 +458,41 @@ pub(super) struct Environment {
     pub(super) unreached: Option<SharedString>,
 }
 
+/// The copy a draft waits on, as its chip's menu shows it.
+pub(super) struct Waited {
+    /// The copy's Machine as the window holds it: none while it is off or
+    /// once it was removed.
+    pub(super) machine: Option<ferrite_core::MachineId>,
+    /// What the Machine is called.
+    pub(super) name: SharedString,
+    /// How far the copy is, or that it stopped, in words.
+    pub(super) detail: SharedString,
+    pub(super) copy: super::copies::CopyKey,
+}
+
+/// A copy under way, as a chip's menu lists it: what it copies where, and
+/// how far.
+pub(super) struct UnderWay {
+    pub(super) name: SharedString,
+    pub(super) detail: SharedString,
+    pub(super) copy: super::copies::CopyKey,
+}
+
 /// A draft's environment chip's rows: each environment on, `draft`'s
 /// ticked, one the window cannot reach dimmed with why (its pick opens
-/// Connections), then `Add environment…`. While the draft waits on a copy
-/// (`copying`: to where, and how far in words), that Machine is ticked
-/// instead, and the draft's own says it sends here instead.
+/// Connections). While the draft waits on a copy (`waited`), that
+/// Machine is ticked instead and says how far, a row of its own while it
+/// is off or gone, its pick the copy's card; the draft's own says it
+/// sends here instead. Then each other copy `under_way`, its pick its
+/// card, and `Add environment…`.
 pub(super) fn environment_rows(
     environments: &[Environment],
     draft: &pane::DraftBinding,
-    copying: Option<(ferrite_core::MachineId, SharedString)>,
+    waited: Option<Waited>,
+    under_way: Vec<UnderWay>,
 ) -> Vec<Row> {
     let here = draft.binding.project().machine();
-    let ticked = copying.as_ref().map_or(here, |(to, _)| *to);
+    let ticked = waited.as_ref().map_or(Some(here), |waited| waited.machine);
     let mut rows: Vec<Row> = environments
         .iter()
         .map(|environment| {
@@ -475,22 +500,30 @@ pub(super) fn environment_rows(
                 None => BandChoice::Environment(environment.machine),
                 Some(_) => BandChoice::Connections,
             };
-            let detail = match (&copying, &environment.unreached) {
+            let detail = match (&waited, &environment.unreached) {
                 (_, Some(why)) => why.clone(),
-                (Some((to, how_far)), None) if *to == environment.machine => how_far.clone(),
+                (Some(waited), None) if waited.machine == Some(environment.machine) => waited.detail.clone(),
                 (Some(_), None) if environment.machine == here => "send here instead".into(),
                 _ => SharedString::default(),
             };
             let mut row = band_row(
                 environment.name.clone(),
                 detail,
-                ticked == environment.machine,
+                ticked == Some(environment.machine),
                 choice,
             );
             row.row.inert = environment.unreached.is_some();
             row
         })
         .collect();
+    if let Some(waited) = waited.filter(|waited| waited.machine.is_none()) {
+        rows.push(band_row(waited.name, waited.detail, true, BandChoice::Copy(waited.copy)));
+    }
+    rows.extend(
+        under_way
+            .into_iter()
+            .map(|copy| band_row(copy.name, copy.detail, false, BandChoice::Copy(copy.copy))),
+    );
     rows.push(band_row(
         SharedString::from("Add environment…"),
         SharedString::default(),
