@@ -111,13 +111,19 @@ fn answer(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Strin
     view.read_with(cx, |view, cx| view.answer_text("t-1", cx))
 }
 
-/// What the sheet up holds in its field, trimmed: the feedback or the note.
+/// What the sheet up holds in its field, as typed: the feedback or the note.
 fn typed(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> String {
     view.read_with(cx, |view, cx| {
         view.direct_sheet(cx)
-            .map(|sheet| sheet.read(cx).asked(cx).0)
+            .map(|sheet| sheet.read(cx).typed(cx))
             .unwrap_or_default()
     })
+}
+
+/// What the menu's row `at` is drawn saying.
+fn row_text(cx: &mut gpui::VisualTestContext, at: usize) -> String {
+    let row = format!("context-menu-row-{at}");
+    cx.update(|window, _| window.debug_text(&row)).unwrap_or_default().join(" ")
 }
 
 /// AC: a question is answered in the Task: the asker and the question
@@ -247,25 +253,23 @@ fn the_rework_sheet_needs_feedback_and_keeps_it(cx: &mut TestAppContext) {
     assert!(asks(&view, cx).is_empty());
 
     click(cx, "rework-feedback");
-    cx.simulate_input("Mention --fast in the README");
+    cx.simulate_input("Mention --fast in the README ");
     tick(cx);
     click(cx, "direct-cancel");
     assert!(!shows(cx, "rework-sheet"));
     click(cx, "task-rework-open");
     assert_eq!(
         typed(&view, cx),
-        "Mention --fast in the README",
-        "survives the sheet closing"
+        "Mention --fast in the README ",
+        "survives the sheet closing, as typed"
     );
     assert!(!shows(cx, "rework-missing"));
 
-    view.update(cx, |view, cx| {
-        view.apply_pick(
-            Pick::Task(TaskPick::ReworkTo(Destination::Step("s-2".into()))),
-            cx,
-        )
-    });
-    tick(cx);
+    click(cx, "rework-to");
+    assert!(row_text(cx, 1).contains("Review"), "{}", row_text(cx, 1));
+    click(cx, "context-menu-row-1");
+    let chosen = cx.update(|window, _| window.debug_text("rework-to")).unwrap_or_default().join(" ");
+    assert!(chosen.contains("Review"), "{chosen}");
     click(cx, "rework-send");
     assert_eq!(
         asks(&view, cx),
@@ -295,17 +299,19 @@ fn the_redirect_sheet_sends_one_task_and_keeps_its_choices(cx: &mut TestAppConte
     assert!(shows(cx, "redirect-missing"), "a Step is needed");
     assert!(asks(&view, cx).is_empty());
 
-    view.update(cx, |view, cx| {
-        view.apply_pick(Pick::Task(TaskPick::RedirectTo("s-3".into())), cx)
-    });
-    tick(cx);
+    click(cx, "redirect-to-flagged");
+    assert!(row_text(cx, 2).contains("Check"), "{}", row_text(cx, 2));
+    click(cx, "context-menu-row-2");
     assert!(!shows(cx, "redirect-skip-s-3"), "not the one it goes to");
+    // The keyboard is the note's, and a press on its choices leaves it
+    // there: what is typed straight after lands in the note.
+    click(cx, "redirect-note");
+    cx.simulate_input("Only the");
     click(cx, "redirect-skip-s-2");
     assert!(shows(cx, "redirect-skip-s-2-on"));
     click(cx, "redirect-then-1");
     assert!(shows(cx, "redirect-then-1-on"));
-    click(cx, "redirect-note");
-    cx.simulate_input("Only the docs changed");
+    cx.simulate_input(" docs changed");
     tick(cx);
 
     click(cx, "direct-cancel");
@@ -440,7 +446,8 @@ fn a_refused_send_stays_on_its_sheet(cx: &mut TestAppContext) {
 }
 
 /// A sheet stays up as its Task moves on, drawing its own Task as the
-/// board has it now, and goes once its Task leaves the board.
+/// board has it now, not the Task whose panel is open, and goes once its
+/// Task leaves the board.
 #[gpui::test]
 fn a_sheet_follows_its_task_and_goes_with_it(cx: &mut TestAppContext) {
     let (view, cx) = panel(
@@ -462,9 +469,12 @@ fn a_sheet_follows_its_task_and_goes_with_it(cx: &mut TestAppContext) {
         }))
     });
     tick(cx);
+    view.update(cx, |view, cx| view.open_task(view.cockpit.read(cx).first_machine(), "t-2", cx));
+    tick(cx);
+    assert_eq!(view.read_with(cx, |view, cx| view.open_task_now(cx).map(|task| task.id.clone())), Some("t-2".into()));
     assert!(shows(cx, "redirect-sheet"), "stays up as its Task moves on");
     let drawn = cx.update(|window, _| window.debug_text("redirect-sheet")).unwrap_or_default().join(" ");
-    assert!(drawn.contains("superseded"), "its own Task, Working now, not the other: {drawn}");
+    assert!(drawn.contains("superseded"), "its own Task, Working now, not t-2's panel: {drawn}");
     view.update(cx, |view, cx| {
         view.cockpit.update(cx, |cockpit, _| cockpit.fixture_factory(Board {
             workflows: Vec::new(),

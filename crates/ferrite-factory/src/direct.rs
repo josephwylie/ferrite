@@ -184,6 +184,11 @@ impl DirectView {
         (self.field.read(cx).text().trim().to_string(), self.choice.clone())
     }
 
+    /// What its field holds, as typed.
+    pub fn typed(&self, cx: &App) -> String {
+        self.field.read(cx).text().to_string()
+    }
+
     pub fn focus(&self, cx: &App) -> FocusHandle {
         self.field.read(cx).focus_handle(cx)
     }
@@ -633,7 +638,8 @@ mod tests {
     }
 
     /// What a sheet's events say: a picker's rows by label, the checked
-    /// one marked, and whether it said where its trigger was drawn.
+    /// one marked, each with what it sets, and whether it said where its
+    /// trigger was drawn.
     fn said(event: &DirectEvent) -> String {
         match event {
             DirectEvent::SendRework => "send rework".into(),
@@ -642,13 +648,41 @@ mod tests {
             DirectEvent::OpenPicks(picks, trigger, _) => {
                 let rows: Vec<String> = picks
                     .iter()
-                    .map(|(item, _)| format!("{}{}", item.label, if item.checked { " (checked)" } else { "" }))
+                    .map(|(item, pick)| {
+                        let checked = if item.checked { " (checked)" } else { "" };
+                        format!("{}{checked} = {pick:?}", item.label)
+                    })
                     .collect();
                 let under = if trigger.bounds().is_some() { " under it" } else { "" };
                 format!("picks{under}: {}", rows.join(", "))
             }
         }
     }
+
+    type Rows = Rc<Vec<(ferrite_ui::menu::Item, TaskPick)>>;
+
+    /// A picker's rows, as the menu it opens holds them.
+    fn opened(event: &DirectEvent) -> Option<Rows> {
+        match event {
+            DirectEvent::OpenPicks(picks, _, _) => Some(picks.clone()),
+            _ => None,
+        }
+    }
+
+    /// What the row labelled `label` of the last picker opened sets: what
+    /// the menu hands back to the sheet when that row is pressed.
+    fn row(opened: &ferrite_ui::testing::Heard<Option<Rows>>, label: &str) -> TaskPick {
+        let rows = opened.take().into_iter().flatten().last().expect("a picker opened");
+        let (_, pick) = rows
+            .iter()
+            .find(|(item, _)| item.label.as_ref() == label)
+            .unwrap_or_else(|| panic!("no row {label}"));
+        pick.clone()
+    }
+
+    /// Direct this task's Step rows, as a Task at Review draws them.
+    const REDIRECT_ROWS: &str = "Build = RedirectTo(\"s-1\"), Review \u{b7} current = RedirectTo(\"s-2\"), \
+                                 Check = RedirectTo(\"s-3\")";
 
     /// The Rework sheet draws its Task: the Workflow's recipient on its
     /// chooser, and the window is asked about the sheet's own Task.
@@ -682,24 +716,37 @@ mod tests {
         assert_eq!(heard.take(), ["send rework", "send rework"]);
     }
 
-    /// The recipient chooser offers each Step and the Coordinator, the one
-    /// it sends to checked; a pick moves it.
+    /// The recipient chooser offers each Step and the Coordinator, each row
+    /// sending to what it names and the one it sends to checked; a row
+    /// pressed moves it.
     #[gpui::test]
     fn the_recipient_chooser_offers_each_step_and_the_coordinator(cx: &mut TestAppContext) {
         let (view, _board, cx) = open(Status::Approval, DirectSheet::Rework, &mut KeptDirection::default(), cx);
         let heard = record(cx, &view, said);
+        let opened = record(cx, &view, opened);
         click(cx, "rework-to");
-        view.update(cx, |view, cx| view.pick(TaskPick::ReworkTo(Destination::Step("s-2".into())), cx));
+        let review = row(&opened, "Review");
+        view.update(cx, |view, cx| view.pick(review, cx));
         cx.run_until_parked();
         assert!(text(cx, "rework-to").contains("Review"), "{}", text(cx, "rework-to"));
         click(cx, "rework-to");
-        let heard = heard.take();
-        assert_eq!(heard.len(), 2);
-        assert!(heard[0].starts_with("picks under it: Build (checked), Review, Check, "), "{}", heard[0]);
-        assert!(heard[1].starts_with("picks under it: Build, Review (checked), Check, "), "{}", heard[1]);
-        assert_eq!(heard[0].matches(", ").count(), 3, "and the Coordinator: {}", heard[0]);
+        let coordinator = row(&opened, "Coordinator");
+        view.update(cx, |view, cx| view.pick(coordinator, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            heard.take(),
+            [
+                "picks under it: Build (checked) = ReworkTo(Step(\"s-1\")), \
+                 Review = ReworkTo(Step(\"s-2\")), Check = ReworkTo(Step(\"s-3\")), \
+                 Coordinator = ReworkTo(Coordinator)",
+                "picks under it: Build = ReworkTo(Step(\"s-1\")), \
+                 Review (checked) = ReworkTo(Step(\"s-2\")), Check = ReworkTo(Step(\"s-3\")), \
+                 Coordinator = ReworkTo(Coordinator)",
+            ]
+        );
+        assert!(text(cx, "rework-to").contains("Coordinator"), "{}", text(cx, "rework-to"));
         let (_, choice) = view.read_with(cx, |view, cx| view.asked(cx));
-        assert!(matches!(choice, Choice::Rework(ReworkChoice { to: Some(Destination::Step(step)) }) if step == "s-2"));
+        assert!(matches!(choice, Choice::Rework(ReworkChoice { to: Some(Destination::Coordinator) })));
     }
 
     /// Direct this task needs a Step; the one it goes to is not offered to
@@ -710,10 +757,12 @@ mod tests {
         let heard = record(cx, &view, said);
         assert!(shows(cx, "redirect-sheet"));
         assert!(shows(cx, "redirect-to"));
+        let opened = record(cx, &view, opened);
         click(cx, "redirect-apply");
         assert!(shows(cx, "redirect-missing"), "a Step is needed");
-        assert!(shows(cx, "redirect-to-flagged"));
-        view.update(cx, |view, cx| view.pick(TaskPick::RedirectTo("s-3".into()), cx));
+        click(cx, "redirect-to-flagged");
+        let check = row(&opened, "Check");
+        view.update(cx, |view, cx| view.pick(check, cx));
         cx.run_until_parked();
         assert!(!shows(cx, "redirect-missing"));
         assert!(!shows(cx, "redirect-skip-s-3"), "not the one it goes to");
@@ -727,7 +776,7 @@ mod tests {
         assert!(shows(cx, "redirect-then-0-on"));
         click(cx, "redirect-then-1");
         assert!(shows(cx, "redirect-then-1-on"));
-        assert_eq!(heard.take(), ["apply redirect"]);
+        assert_eq!(heard.take(), ["apply redirect".to_string(), format!("picks under it: {REDIRECT_ROWS}")]);
         let (_, choice) = view.read_with(cx, |view, cx| view.asked(cx));
         let Choice::Redirect(choice) = choice else { panic!("a redirect") };
         assert_eq!(
@@ -755,7 +804,7 @@ mod tests {
         let (view, board, cx) = open(Status::Working, DirectSheet::Redirect, &mut KeptDirection::default(), cx);
         let heard = record(cx, &view, said);
         click(cx, "redirect-to");
-        assert_eq!(heard.take(), ["picks under it: Build, Review \u{b7} current, Check"]);
+        assert_eq!(heard.take(), [format!("picks under it: {REDIRECT_ROWS}")]);
         assert!(text(cx, "redirect-sheet").contains("superseded"));
         board.update(cx, |board, cx| {
             board.tasks[1] = task("t-1", Status::Approval);
@@ -785,10 +834,10 @@ mod tests {
         cx.simulate_input("Docs");
         click(cx, "redirect-skip-s-2");
         click(cx, "redirect-then-1");
-        pump(&view, cx);
+        assert!(shows(cx, "factory-field-focused"), "the presses leave it in the note");
         cx.simulate_input(" only");
         cx.run_until_parked();
-        assert_eq!(view.read_with(cx, |view, cx| view.asked(cx).0), "Docs only");
+        assert_eq!(view.read_with(cx, |view, cx| view.typed(cx)), "Docs only");
     }
 
     /// What a sheet holds goes back on its Task's keeping, apart from the
@@ -798,19 +847,19 @@ mod tests {
         let mut kept = KeptDirection::default();
         let (rework, _board, cx) = open(Status::Approval, DirectSheet::Rework, &mut kept, cx);
         pump(&rework, cx);
-        cx.simulate_input("Fix the docs");
+        cx.simulate_input("Fix the docs ");
         rework.update(cx, |view, cx| view.pick(TaskPick::ReworkTo(Destination::Coordinator), cx));
         rework.read_with(cx, |view, cx| view.keep(&mut kept, cx));
         let reopen = |sheet, kept: &mut KeptDirection, cx: &mut VisualTestContext| {
             let inputs = Source::of(&rework, |_: &DirectView, _: &DirectQuery, _| None);
             let view = cx.new(|cx| DirectView::new(inputs, project(), "t-1".into(), sheet, kept, cx));
-            view.read_with(cx, |view, cx| view.asked(cx))
+            view.read_with(cx, |view, cx| (view.typed(cx), view.asked(cx).1))
         };
         let (note, choice) = reopen(DirectSheet::Redirect, &mut kept, cx);
         assert_eq!(note, "", "the other sheet's own");
         assert!(matches!(choice, Choice::Redirect(_)));
         let (feedback, choice) = reopen(DirectSheet::Rework, &mut kept, cx);
-        assert_eq!(feedback, "Fix the docs");
+        assert_eq!(feedback, "Fix the docs ", "as typed");
         assert!(matches!(choice, Choice::Rework(ReworkChoice { to: Some(Destination::Coordinator) })));
         rework.read_with(cx, |view, cx| view.keep(&mut kept, cx));
         kept.spend(DirectSheet::Rework);

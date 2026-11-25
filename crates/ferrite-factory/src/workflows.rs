@@ -427,11 +427,12 @@ mod tests {
     use super::*;
     use crate::starts::StartsInputs;
 
-    /// The window's part in it: the shown Workflow as the Server published
-    /// it, what is known installed, and every query the editor asked.
+    /// The window's part in it: the Workflows as the Server published
+    /// them, what is known installed, and every query the editor asked.
     struct Held {
-        /// None while the Project has no Workflow.
-        draft: Option<Definition>,
+        /// Each Workflow by id, the first shown until one is chosen; none
+        /// while the Project has no Workflow.
+        drafts: Vec<(WorkflowId, Definition)>,
         saved: Option<u32>,
         unsaved: bool,
         problems: Vec<Problem>,
@@ -447,9 +448,13 @@ mod tests {
     impl Held {
         fn inputs(&self, (workflow, step): &WorkflowsQuery) -> Option<WorkflowsInputs> {
             self.asked.borrow_mut().push((workflow.clone(), step.clone()));
-            let draft = self.draft.clone()?;
+            let (id, draft) = match workflow {
+                Some(workflow) => self.drafts.iter().find(|(id, _)| id == workflow)?,
+                None => self.drafts.first()?,
+            }
+            .clone();
             Some(WorkflowsInputs {
-                workflow: workflow.clone().unwrap_or_else(|| "w-1".into()),
+                workflow: id,
                 title: draft.name.clone(),
                 saved: self.saved,
                 unsaved: self.unsaved,
@@ -498,6 +503,18 @@ mod tests {
         .unwrap()
     }
 
+    /// Another Workflow, Docs pass: Draft on Codex, then Proofread.
+    fn docs() -> Definition {
+        serde_json::from_value(serde_json::json!({
+            "name": "Docs pass",
+            "steps": [
+                step("d-1", "Draft", serde_json::json!({"provider": "codex"})),
+                step("d-2", "Proofread", serde_json::json!({})),
+            ],
+        }))
+        .unwrap()
+    }
+
     fn model(value: &str, display: &str, efforts: &[&str]) -> ModelInfo {
         ModelInfo {
             value: value.into(),
@@ -518,8 +535,8 @@ mod tests {
         }
     }
 
-    /// The editor over `draft`, unsaved, tall and wide enough to show
-    /// every row and setting.
+    /// The editor over `draft`, unsaved, as w-1, with Docs pass beside it
+    /// as w-2; tall and wide enough to show every row and setting.
     fn editor(
         draft: Option<Definition>,
         cx: &mut TestAppContext,
@@ -543,7 +560,9 @@ mod tests {
             let claude = vec![model("claude-opus-4", "Opus 4", &["high", "max"])];
             let codex = vec![model("gpt-5", "GPT-5", &["low", "high"])];
             Held {
-                draft,
+                drafts: draft
+                    .map(|draft| vec![("w-1".into(), draft), ("w-2".into(), docs())])
+                    .unwrap_or_default(),
                 saved: None,
                 unsaved: true,
                 problems: Vec::new(),
@@ -824,7 +843,7 @@ mod tests {
             ["picks Default Effort(\"s-2\", \"\"), low Effort(\"s-2\", \"low\"), \
               *high Effort(\"s-2\", \"high\")"]
         );
-        change(&held, cx, |held| held.draft.as_mut().unwrap().steps.clear());
+        change(&held, cx, |held| held.drafts[0].1.steps.clear());
         assert!(shows(cx, "inspector-none"));
     }
 
@@ -894,7 +913,7 @@ mod tests {
         assert!(shows(cx, "completion-paths"));
 
         change(&held, cx, |held| {
-            held.draft.as_mut().unwrap().approval.by = Approver::Agent;
+            held.drafts[0].1.approval.by = Approver::Agent;
         });
         answer(&view, cx, |view, cx| {
             view.ensure(Field::ApprovalInstructions("w-1".into()), "", cx)
@@ -909,6 +928,37 @@ mod tests {
         );
     }
 
+    /// V12: a Step's instructions are a text area, taller than a one-line
+    /// field, that grows with what is typed.
+    #[gpui::test]
+    fn step_instructions_are_a_text_area_that_grows(cx: &mut TestAppContext) {
+        let (view, _held, cx) = editor(Some(draft()), cx);
+        answer(&view, cx, |view, cx| {
+            view.ensure(Field::StepName("w-1".into(), "s-1".into()), "Build", cx);
+            view.ensure(Field::Instructions("w-1".into(), "s-1".into()), "Build it", cx);
+        });
+        let name = bounds(cx, "inspector-name");
+        let empty = bounds(cx, "inspector-instructions");
+        assert!(
+            empty.size.height > name.size.height + px(ferrite_ui::theme::LH_UI),
+            "an area, not a line: {empty:?} vs {name:?}"
+        );
+        click(cx, "inspector-instructions");
+        let focus = view.read_with(cx, |view, cx| view.focus(cx)).expect("the instructions hold it");
+        cx.update(|window, cx| window.focus(&focus, cx));
+        for _ in 0..6 {
+            cx.simulate_input(
+                "Use the triage skill on the incoming issue and ask the owner about anything missing. ",
+            );
+        }
+        cx.run_until_parked();
+        let grown = bounds(cx, "inspector-instructions");
+        assert!(
+            grown.size.height > empty.size.height,
+            "it grows: {grown:?} from {empty:?}"
+        );
+    }
+
     /// The inspector shows one thing, and only its outline row is chosen:
     /// a Step, the approval or the start, which its own view draws;
     /// choosing a Workflow lands on its first Step, asked for by id.
@@ -919,6 +969,8 @@ mod tests {
             [
                 ("outline-row-s-1-selected", "step"),
                 ("outline-row-s-2-selected", "second"),
+                ("outline-row-d-1-selected", "Draft"),
+                ("outline-row-d-2-selected", "Proofread"),
                 ("outline-approval-selected", "approval"),
                 ("outline-start-selected", "start"),
                 ("approval-settings", "approval settings"),
@@ -938,16 +990,20 @@ mod tests {
         answer(&view, cx, |view, _| view.select_step("s-2".into()));
         assert_eq!(chosen(cx), ["second"]);
         answer(&view, cx, |view, _| view.inspect(Inspected::Approval));
+        assert_eq!(text(cx, "workflow-picker"), "Ship it");
         answer(&view, cx, |view, _| view.select_workflow("w-2".into()));
-        assert_eq!(chosen(cx), ["step"], "a Workflow chosen shows its first Step");
+        assert_eq!(chosen(cx), ["Draft"], "a Workflow chosen shows its own first Step");
+        assert_eq!(text(cx, "workflow-picker"), "Docs pass");
+        assert_eq!(text(cx, "inspector-provider"), "Codex", "Draft's, not Build's");
         assert_eq!(view.read_with(cx, |view, _| view.selected().cloned()), Some("w-2".into()));
         assert_eq!(
             held.read_with(cx, |held, _| held.asked.borrow().last().cloned()),
             Some((Some("w-2".into()), None)),
             "it asks for the Workflow it chose"
         );
-        answer(&view, cx, |view, _| view.set_step(Some("s-3".into())));
-        assert!(shows(cx, "outline-row-s-3-selected"));
+        answer(&view, cx, |view, _| view.set_step(Some("d-2".into())));
+        assert_eq!(chosen(cx), ["Proofread"]);
+        assert_eq!(text(cx, "inspector-provider"), "Claude");
     }
 
     /// Each field is made once and keeps what was typed; what is typed is

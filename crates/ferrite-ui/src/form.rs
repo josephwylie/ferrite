@@ -69,7 +69,7 @@ pub fn head(title: SharedString, close: impl IntoElement) -> Div {
 /// short sheet and a long one scrolls. A row of air under the last field.
 pub fn body() -> gpui::Stateful<Div> {
     div()
-        .id("project-editor-body")
+        .id("sheet-form-body")
         .flex()
         .flex_col()
         .flex_shrink(1.)

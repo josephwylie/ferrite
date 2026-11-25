@@ -282,12 +282,9 @@ pub(super) fn new_task_up(cx: &mut gpui::VisualTestContext) -> bool {
     cx.debug_bounds("new-task-card").is_some()
 }
 
-/// What the New task sheet holds: its instructions and its PR, trimmed.
+/// What the New task sheet holds, as typed: its instructions and its PR.
 fn new_task_typed(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<(String, String)> {
-    view.read_with(cx, |view, cx| {
-        let asked = view.new_task(cx)?.read(cx).asked(cx);
-        Some((asked.instructions, asked.pr.unwrap_or_default()))
-    })
+    view.read_with(cx, |view, cx| Some(view.new_task(cx)?.read(cx).typed(cx)))
 }
 
 pub(super) fn press(cx: &mut gpui::VisualTestContext, selector: &'static str) {
@@ -334,7 +331,7 @@ fn the_new_task_sheet_keeps_what_was_typed_across_a_close(cx: &mut TestAppContex
         view.open_new_task(cx);
     });
     tick(cx);
-    cx.simulate_input("Fix the flake");
+    cx.simulate_input("Fix the flake ");
     press(cx, "new-task-pr");
     cx.simulate_input("acme/widgets#7");
     view.update(cx, |view, cx| view.apply_pick(crate::cockpit::workflows::Pick::Process(Some("w-1".into())), cx));
@@ -349,7 +346,8 @@ fn the_new_task_sheet_keeps_what_was_typed_across_a_close(cx: &mut TestAppContex
     assert!(new_task_up(cx));
     assert_eq!(
         new_task_typed(&view, cx),
-        Some(("Fix the flake".into(), "acme/widgets#7".into()))
+        Some(("Fix the flake ".into(), "acme/widgets#7".into())),
+        "as typed"
     );
     assert_eq!(new_task_error(&view, cx), None, "the refusal does not come back");
     assert!(cx.debug_bounds("new-task-instructions-focused").is_some());

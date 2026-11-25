@@ -176,6 +176,11 @@ impl NewTaskView {
         }
     }
 
+    /// What its two fields hold, as typed: the instructions and the PR.
+    pub fn typed(&self, cx: &App) -> (String, String) {
+        (self.instructions.read(cx).text().to_string(), self.pr.read(cx).text().to_string())
+    }
+
     /// The process it runs, chosen in the window's picker.
     pub fn set_workflow(&mut self, workflow: Option<WorkflowId>, cx: &mut Context<Self>) {
         self.workflow = workflow;
@@ -503,7 +508,7 @@ mod tests {
     fn what_it_keeps_seeds_the_next_sheet(cx: &mut TestAppContext) {
         let (sheet, factory, cx) = open(kept(), KeptNewTask::new(), cx);
         pump(&sheet, cx);
-        cx.simulate_input("Fix the flake");
+        cx.simulate_input("Fix the flake ");
         click(cx, "new-task-pr");
         pump(&sheet, cx);
         cx.simulate_input("acme/widgets#7");
@@ -516,6 +521,7 @@ mod tests {
         let next = cx.new(|cx| NewTaskView::new(inputs, project(), seed, cx));
         next.read_with(cx, |next, cx| {
             assert_eq!(next.asked(cx), was, "the same words, process and request");
+            assert_eq!(next.typed(cx), ("Fix the flake ".into(), "acme/widgets#7".into()), "as typed");
             assert_eq!(next.error(), None, "the refusal is not kept");
         });
         assert_ne!(KeptNewTask::new().request, KeptNewTask::new().request);
