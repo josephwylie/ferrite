@@ -3,7 +3,7 @@ name = "ferrite-tools"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Ferrite's tools Surfaces (ADR 0039): Files, Changes and the Terminal, each reading the window through a Source"
+description = "Ferrite's tools Surfaces (ADR 0039): Changes, the Terminal and Files' remote checkout, each reading the window through a Source"
 
 [lib]
 doctest = false

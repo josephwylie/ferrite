@@ -6,7 +6,10 @@
 //! one door (`upsert_surface`); pressed again they bring the same tab
 //! forward. The Terminal keeps its shells, Changes its diffs and Files
 //! its trees and editors in views of their own (`TerminalsView`,
-//! `ChangesView`, `FilesView`, ADR 0041).
+//! `ChangesView`, `FilesView`, ADR 0041). The first two are
+//! `ferrite-tools`', and `changes` and `terminal` here are the window's
+//! side of them; Files is the Cockpit's, as it registers its tab stops in
+//! the Panel's `PanelFocus` while it draws.
 
 use std::collections::HashSet;
 
