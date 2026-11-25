@@ -1433,7 +1433,7 @@ impl PullRequestView {
                 }
                 _ => format!("{} {kind}", comment.author),
             };
-            let verdict = comment.verdict.and_then(crate::pr::review_verdict);
+            let verdict = comment.verdict.and_then(ferrite_ui::pull_request::review_verdict);
             let mark = |text: &'static str, ink: u32| {
                 div()
                     .debug_selector(move || format!("pr-{}-{index}", text.to_lowercase()))

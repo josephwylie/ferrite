@@ -35,7 +35,7 @@ headless = [
 # Opt-in native framebuffer artifacts (`cockpit::visual_reference`);
 # excluded from normal application builds. The app's own
 # `visual-reference` feature turns this on.
-visual-reference = ["headless", "ferrite-pane/visual-reference"]
+visual-reference = ["headless", "ferrite-pane/visual-reference", "ferrite-review/visual-reference"]
 
 browser-smoke = ["gpui/test-support", "dep:gpui-reference-platform", "ferrite-pane/browser-smoke"]
 
@@ -56,6 +56,9 @@ ferrite-terminal = { path = "../ferrite-terminal" }
 # herdr-reviewr's review core, vendored: the Review slot's rows and comments
 # (ADR 0021).
 ferrite-reviewr = { path = "../ferrite-reviewr" }
+# The Review slot's view (ADR 0021), which the cockpit reads for and lays
+# beside a Pane.
+ferrite-review = { path = "../ferrite-review" }
 # The kit facade keeps the renderer, native platform and components on one
 # compatible stack. Keep the gpui import name for derives and existing code.
 gpui = { package = "gpui-kit", version = "=0.6.0" }

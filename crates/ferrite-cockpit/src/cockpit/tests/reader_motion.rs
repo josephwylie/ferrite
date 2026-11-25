@@ -16,7 +16,7 @@ fn read(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
             let composer = view.panes[index].composer.clone();
             let reading = view.prefs.settings.reading_size;
             cx.new(|cx| {
-                crate::review::ReviewView::new(
+                ferrite_review::ReviewView::new(
                     composer,
                     ferrite_reviewr::model::Scope::Uncommitted,
                     reading,

@@ -23,7 +23,7 @@ use gpui::{AppContext, Focusable};
 use super::{Feed, Scene, Setup, conversation};
 use crate::cockpit::panel::Opener;
 use crate::cockpit::surfaces::SurfaceId;
-use crate::review::ReviewView;
+use ferrite_review::ReviewView;
 
 /// Every state this module draws, at the app size.
 pub(super) const STATES: &[&str] = &[

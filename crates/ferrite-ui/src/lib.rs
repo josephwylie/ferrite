@@ -14,6 +14,7 @@ pub mod platform_text;
 pub mod pointer;
 pub mod project_badge;
 pub mod provider;
+pub mod pull_request;
 mod scrollbar;
 #[cfg(any(test, feature = "test-support"))]
 pub use scrollbar::painted_thumb_in;

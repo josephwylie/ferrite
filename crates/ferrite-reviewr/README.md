@@ -57,7 +57,7 @@ Dropped: the terminal UI and its loop (`app.rs`, `ui.rs`, `input*`,
 `selection.rs`, `browser.rs`, `editor.rs`, `schedule.rs`,
 `world.rs`, `watch.rs`, `actions.rs`, `config.rs`, `main.rs`), the
 herdr adapter (`herdr.rs`, `herdr_socket.rs`), the plugin manifest and
-scripts. Ferrite draws the review with GPUI (`crates/ferrite/src/review.rs`)
+scripts. Ferrite draws the review with GPUI (`crates/ferrite-review`)
 and feeds turn tracking its own agents (`ferrite::TurnSource`).
 
 Tests: every unit test of the kept modules, `tests/git_repo.rs` (its scope

@@ -58,6 +58,7 @@ use gpui::{
 use ferrite_pane::composer::{Composer, Edited, Role};
 use ferrite_pane::pane::{DiffKind, Grid};
 use ferrite_ui::pointer::Pointer as _;
+use ferrite_ui::pull_request::review_verdict;
 use ferrite_ui::theme::*;
 
 gpui::actions!(
@@ -152,41 +153,41 @@ const COMMENT_GUTTER_CELLS: f32 = COMMENT_ON.len() as f32 + 3.0;
 
 /// The operator picked another scope; the cockpit loads it and calls
 /// `show` (`show_commits` for the commits scope).
-pub(crate) struct ScopePicked(pub Scope);
+pub struct ScopePicked(pub Scope);
 
 /// The operator picked one of the listed commits, or a run of them; the
 /// cockpit loads the pick's diff and calls `show`.
-pub(crate) struct CommitPicked(pub CommitPick);
+pub struct CommitPicked(pub CommitPick);
 
 /// The search field reads `0`; the cockpit searches the checkout and calls
 /// `show_found`.
-pub(crate) struct Searched(pub String);
+pub struct Searched(pub String);
 
 /// The operator opened file `path` of the checkout (at `line`, a found
 /// line); the cockpit reads it and calls `show_file`.
-pub(crate) struct FileOpened {
+pub struct FileOpened {
     pub path: String,
 }
 
 /// The operator asked for the pull request; the cockpit reads it and calls
 /// `show_pr`.
-pub(crate) struct PrAsked;
+pub struct PrAsked;
 
 /// The operator asked for every file of the checkout; the cockpit reads
 /// them and calls `show_tree`.
-pub(crate) struct FilesAsked;
+pub struct FilesAsked;
 
 /// The operator opened the base picker; the cockpit reads the bases and
 /// calls `show_bases`.
-pub(crate) struct BasesAsked;
+pub struct BasesAsked;
 
 /// The operator picked the branch scope's base; the cockpit writes the
 /// pick and, once written, reads the branch scope again.
-pub(crate) struct BasePicked(pub String);
+pub struct BasePicked(pub String);
 
 /// The operator right-clicked row `line` (the pick holds it); the cockpit
 /// opens the slot's context menu `at` the pointer.
-pub(crate) struct MenuAsked {
+pub struct MenuAsked {
     pub at: Point<Pixels>,
     pub line: usize,
 }
@@ -345,7 +346,7 @@ struct Shown {
 /// now (`head`), both indices into `lines`. A pick never leaves the file
 /// it started in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Selection {
+pub struct Selection {
     pub anchor: usize,
     pub head: usize,
 }
@@ -371,7 +372,7 @@ impl Selection {
     }
 }
 
-pub(crate) struct ReviewView {
+pub struct ReviewView {
     /// The Pane's own prompt: where comments gather, and are read back to
     /// mark the lines they are about.
     composer: Entity<Composer>,
@@ -442,7 +443,7 @@ impl EventEmitter<BasesAsked> for ReviewView {}
 impl EventEmitter<BasePicked> for ReviewView {}
 
 impl ReviewView {
-    pub(crate) fn new(
+    pub fn new(
         composer: Entity<Composer>,
         scope: Scope,
         reading: ferrite_core::settings::ReadingSize,
@@ -481,42 +482,42 @@ impl ReviewView {
         }
     }
 
-    pub(crate) fn scope(&self) -> Scope {
+    pub fn scope(&self) -> Scope {
         self.scope
     }
 
     /// The commits under review, if any are.
-    pub(crate) fn commit(&self) -> Option<&CommitPick> {
+    pub fn commit(&self) -> Option<&CommitPick> {
         self.commit.as_ref()
     }
 
     /// The file open whole, if one is.
-    pub(crate) fn file_open(&self) -> Option<&str> {
+    pub fn file_open(&self) -> Option<&str> {
         self.file.as_ref().map(|file| file.path.as_str())
     }
 
     /// Whether the search is open: its answers still land.
-    pub(crate) fn searching(&self) -> bool {
+    pub fn searching(&self) -> bool {
         self.search.is_some()
     }
 
     /// Whether the pull request is shown.
-    pub(crate) fn pr_open(&self) -> bool {
+    pub fn pr_open(&self) -> bool {
         self.pr_open
     }
 
     /// Whether every file is listed: its answer still lands.
-    pub(crate) fn tree_open(&self) -> bool {
+    pub fn tree_open(&self) -> bool {
         self.tree.is_some()
     }
 
     /// Whether the base picker is open: its answer still lands.
-    pub(crate) fn bases_open(&self) -> bool {
+    pub fn bases_open(&self) -> bool {
         self.bases.is_some()
     }
 
     /// The commits scope's list has been read: show it, the newest picked.
-    pub(crate) fn show_commits(&mut self, commits: Vec<CommitRow>, cx: &mut Context<Self>) {
+    pub fn show_commits(&mut self, commits: Vec<CommitRow>, cx: &mut Context<Self>) {
         self.commits = Some(commits);
         self.commit_pick = 0;
         self.commit_anchor = None;
@@ -596,7 +597,7 @@ impl ReviewView {
     }
 
     /// The operator changed the reading size: the rows follow it.
-    pub(crate) fn set_reading(
+    pub fn set_reading(
         &mut self,
         reading: ferrite_core::settings::ReadingSize,
         cx: &mut Context<Self>,
@@ -623,7 +624,7 @@ impl ReviewView {
 
     /// The handle holding the keyboard in this review — a field of it, or
     /// the review itself — so the cockpit keeps it there.
-    pub(crate) fn held_focus(&self, window: &Window, cx: &gpui::App) -> Option<FocusHandle> {
+    pub fn held_focus(&self, window: &Window, cx: &gpui::App) -> Option<FocusHandle> {
         let fields = [
             self.editor.as_ref().map(|editor| editor.focus_handle(cx)),
             self.search
@@ -649,7 +650,7 @@ impl ReviewView {
 
     /// `scope`'s files have been read: draw them, the first row picked —
     /// once back from a file open meanwhile.
-    pub(crate) fn show(&mut self, scope: Scope, files: Vec<FileSides>, cx: &mut Context<Self>) {
+    pub fn show(&mut self, scope: Scope, files: Vec<FileSides>, cx: &mut Context<Self>) {
         self.scope = scope;
         self.diff = Some(files.into_iter().map(ReviewFile::of).collect());
         self.error = None;
@@ -663,7 +664,7 @@ impl ReviewView {
     }
 
     /// File `path` has been read: show it whole, at the found line.
-    pub(crate) fn show_file(&mut self, path: &str, text: String, cx: &mut Context<Self>) {
+    pub fn show_file(&mut self, path: &str, text: String, cx: &mut Context<Self>) {
         let Some(view) = self.file.as_mut().filter(|view| view.path == path) else {
             return;
         };
@@ -693,14 +694,14 @@ impl ReviewView {
     }
 
     /// The pull request has been read.
-    pub(crate) fn show_pr(&mut self, pr: ReviewPullRequest, cx: &mut Context<Self>) {
+    pub fn show_pr(&mut self, pr: ReviewPullRequest, cx: &mut Context<Self>) {
         self.pr = Some(pr);
         self.error = None;
         cx.notify();
     }
 
     /// A search has answered `query`: shown while the field still reads it.
-    pub(crate) fn show_found(
+    pub fn show_found(
         &mut self,
         query: &str,
         results: Result<SearchResults, String>,
@@ -719,7 +720,7 @@ impl ReviewView {
 
     /// Every file of the checkout has been read: listed as a tree, the
     /// scope's changed files marked.
-    pub(crate) fn show_tree(
+    pub fn show_tree(
         &mut self,
         listed: Result<Vec<WorktreeEntry>, String>,
         cx: &mut Context<Self>,
@@ -740,7 +741,7 @@ impl ReviewView {
 
     /// The bases have been read: listed under the field, the one the
     /// branch scope reads against picked.
-    pub(crate) fn show_bases(&mut self, bases: Result<Bases, String>, cx: &mut Context<Self>) {
+    pub fn show_bases(&mut self, bases: Result<Bases, String>, cx: &mut Context<Self>) {
         let Some(panel) = self.bases.as_mut() else {
             return;
         };
@@ -757,14 +758,14 @@ impl ReviewView {
     }
 
     /// What was asked could not be read: say why in its place.
-    pub(crate) fn fail(&mut self, error: String, cx: &mut Context<Self>) {
+    pub fn fail(&mut self, error: String, cx: &mut Context<Self>) {
         self.error = Some(error);
         cx.notify();
     }
 
     /// Ask for `scope` (the one shown again reads it afresh): the bar
     /// moves at once, the diff when it is read.
-    pub(crate) fn pick_scope(&mut self, scope: Scope, cx: &mut Context<Self>) {
+    pub fn pick_scope(&mut self, scope: Scope, cx: &mut Context<Self>) {
         self.scope = scope;
         self.diff = None;
         self.error = None;
@@ -796,7 +797,7 @@ impl ReviewView {
 
     /// `p`, or the bar's `PR` (or the panel's `Review PR`): the pull
     /// request, read afresh.
-    pub(crate) fn open_pr(&mut self, cx: &mut Context<Self>) {
+    pub fn open_pr(&mut self, cx: &mut Context<Self>) {
         self.tree = None;
         self.pr_open = true;
         self.pr = None;
@@ -966,7 +967,7 @@ impl ReviewView {
     }
 
     /// The picked lines as the file reads them: no signs, no numbers.
-    pub(crate) fn picked_text(&self) -> Option<String> {
+    pub fn picked_text(&self) -> Option<String> {
         let rows = self.picked()?;
         Some(
             rows.iter()
@@ -979,7 +980,7 @@ impl ReviewView {
 
     /// Where row `line` sits: its file's path, as git names it, and its
     /// number there (the old one for a removed line).
-    pub(crate) fn place(&self, line: usize) -> Option<(&str, u32)> {
+    pub fn place(&self, line: usize) -> Option<(&str, u32)> {
         let shown = *self.lines.get(line)?;
         let row = self.row(shown);
         let number = row.new_no().or_else(|| row.old_no())?;
@@ -1080,7 +1081,7 @@ impl ReviewView {
 
     /// `c` or ⏎: review the listed commit, open the fold, or open the
     /// comment field under the pick.
-    pub(crate) fn open_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(pick) = self.tree.as_ref().map(|tree| tree.pick) {
             self.open_tree_row(pick, cx);
             return;
@@ -2501,7 +2502,7 @@ fn pr_comment_head(comment: &WirePrComment) -> String {
         WirePrCommentKind::Comment | WirePrCommentKind::Unknown => "comment",
     };
     let mut head = format!("{} \u{b7} {kind}", comment.author);
-    if let Some((verdict, _)) = comment.verdict.and_then(crate::pr::review_verdict) {
+    if let Some((verdict, _)) = comment.verdict.and_then(review_verdict) {
         head.push_str(&format!(" \u{b7} {}", verdict.to_lowercase()));
     }
     // A review or a comment is anchored to its own kind's word: only a
@@ -2581,13 +2582,13 @@ fn row_highlights(
 #[cfg(feature = "visual-reference")]
 impl ReviewView {
     /// The rows `anchor` to `head` picked, as a click and a ⇧-click do.
-    pub(crate) fn stage_pick(&mut self, anchor: usize, head: usize, cx: &mut Context<Self>) {
+    pub fn stage_pick(&mut self, anchor: usize, head: usize, cx: &mut Context<Self>) {
         self.pick(anchor, false, cx);
         self.pick(head, true, cx);
     }
 
     /// The comment field open under the pick, `words` typed in it.
-    pub(crate) fn stage_comment(
+    pub fn stage_comment(
         &mut self,
         words: &str,
         window: &mut Window,
@@ -2600,13 +2601,13 @@ impl ReviewView {
     }
 
     /// The PR tab open on `pr`.
-    pub(crate) fn stage_pr(&mut self, pr: ReviewPullRequest, cx: &mut Context<Self>) {
+    pub fn stage_pr(&mut self, pr: ReviewPullRequest, cx: &mut Context<Self>) {
         self.pr_open = true;
         self.show_pr(pr, cx);
     }
 
     /// The search field open on `query`, answered by `results`.
-    pub(crate) fn stage_search(
+    pub fn stage_search(
         &mut self,
         query: &str,
         results: SearchResults,
@@ -2773,9 +2774,7 @@ mod tests {
     ) -> (Entity<ReviewView>, gpui::VisualTestContext) {
         cx.update(|cx| {
             ferrite_pane::pane::init_components(cx);
-            let table = ferrite_ui::keymap::bindings(ferrite_ui::keymap::Platform::Mac);
-            let bindings = ferrite_frame::keys::load(table, cx);
-            cx.bind_keys(bindings);
+            bind_production_keys(cx);
         });
         let window = cx.add_window(|_, cx| {
             let composer = cx.new(Composer::new);
@@ -2797,6 +2796,34 @@ mod tests {
         });
         cx.run_until_parked();
         (review, cx)
+    }
+
+    /// The production key table, built as the app builds it. The actions
+    /// only the cockpit declares are not in this program, and nothing in a
+    /// Review's window handles them, so their keys are left out.
+    fn bind_production_keys(cx: &mut gpui::App) {
+        let table = ferrite_ui::keymap::bindings(ferrite_ui::keymap::Platform::Mac);
+        let bindings: Vec<_> = table
+            .into_iter()
+            .filter_map(|(keystroke, action, context)| {
+                let action = cx.build_action(action, None).ok()?;
+                let context = context.map(|context| {
+                    gpui::KeyBindingContextPredicate::parse(context)
+                        .expect("the keymap contexts parse")
+                        .into()
+                });
+                let binding = gpui::KeyBinding::load(
+                    &keystroke,
+                    action,
+                    context,
+                    false,
+                    None,
+                    &gpui::DummyKeyboardMapper,
+                );
+                Some(binding.expect("the keymap keystrokes parse"))
+            })
+            .collect();
+        cx.bind_keys(bindings);
     }
 
     /// The keys walk and stretch the pick, `c` opens the field, ⏎ there

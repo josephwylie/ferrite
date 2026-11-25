@@ -100,7 +100,8 @@ def workspace(root: Path) -> dict[str, Package]:
 
 # The window's crates. Each builds without the Server process, so an edit to
 # the Server rebuilds no window code; their tests may still run a Server.
-WINDOW_CHAIN = ("ferrite-client", "ferrite-ui", "ferrite-terminal", "ferrite-pane", "ferrite-frame", "ferrite-cockpit")
+WINDOW_CHAIN = ("ferrite-client", "ferrite-ui", "ferrite-terminal", "ferrite-pane", "ferrite-frame", "ferrite-review",
+                "ferrite-cockpit")
 
 
 def check_boundaries(packages: dict[str, Package]) -> None:
@@ -115,7 +116,10 @@ def check_boundaries(packages: dict[str, Package]) -> None:
     # The Server holds no window model (ADR 0049); its tests drive one.
     if "ferrite-server" in packages:
         forbid(packages, "ferrite-server", lambda name: name == "ferrite-client", "runtime")
-    forbid(packages, "ferrite-frame", lambda name: name == "ferrite-cockpit", "dependencies")
+    # The frame and the Review build and test without the Cockpit.
+    for source in ("ferrite-frame", "ferrite-review"):
+        if source in packages:
+            forbid(packages, source, lambda name: name == "ferrite-cockpit", "dependencies")
     for source in WINDOW_CHAIN:
         if source in packages:
             forbid(packages, source, lambda name: name == "ferrite-server", "runtime")

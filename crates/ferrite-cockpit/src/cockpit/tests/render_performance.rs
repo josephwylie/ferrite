@@ -2237,7 +2237,7 @@ fn nav_rebuilds_starve_no_review_slide(cx: &mut TestAppContext) {
         let composer = view.panes[0].composer.clone();
         let reading = view.prefs.settings.reading_size;
         let review = cx.new(|cx| {
-            crate::review::ReviewView::new(
+            ferrite_review::ReviewView::new(
                 composer,
                 ferrite_reviewr::model::Scope::Uncommitted,
                 reading,
