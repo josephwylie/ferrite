@@ -268,24 +268,34 @@ Windows window.
      onto this computer it sends the file here. One no longer here says
      "Gone from this computer" on either side and asks for no upload;
      put back, its Retry sends it;
-  2. none, and P is on this computer: the setup sheet (`PlacementView`).
-     Where the copy goes is chosen by browsing E, never by typing a path
-     (though one can be typed): see **The folder browser** below. The copy
-     goes to `<folder browsed>/<name>`, its name P's folder name until
-     edited ("Copies to"). P's git-ignored entries are listed with their
-     sizes, unticked; a folder git ignores whole is one row, nothing in it
-     listed apart, and ticked it carries all it holds; past 20, the rest
-     are one row, "and N more", that ticks them all. Worktrees inside P
+  2. none, and P is on this computer: the copy card (`PlacementView`).
+     It opens on one line, where the copy goes under `~/`, the folder
+     muted and the name in ink, with "Change…" beside it, which opens
+     **The folder browser** below in place. The browser opens by itself
+     only when that is in doubt: the folder could not be read, so the
+     browser went home, or the name is taken there by what the copy would
+     not resume. Where the copy goes is chosen by browsing E, never by
+     typing a path (though one can be typed). The copy goes to
+     `<folder browsed>/<name>`, its name P's folder name until edited
+     ("Copies to"). Under it, "Include files git ignores": one tick, none,
+     some (a dash) or all, with how many and their size, and a press
+     ticks all from none or some and none from all. Under that each entry
+     has its own tick and size, unticked, scrolling inside the card; a
+     folder git ignores whole is one row, nothing in it listed apart, and
+     ticked it carries all it holds; past 20, the rest are one row, "and N
+     more", that ticks them all. The button says how much goes: "Copy
+     2.2 GB". Worktrees inside P
      are never copied nor listed, and the sheet says so; a P that is
      itself a linked worktree is refused, since its `.git` names a path
      here, and the sheet names the folder of its main checkout where that
      `.git` file leads to one. Copy
      runs on a thread of its own over a connection of its own
-     (`Cockpit::tree`), with its progress and Cancel. Then the window
+     (`Cockpit::tree`), as an entry of the window's copies (below). Then
+     the window
      registers the destination on E, names a Project made there as P is
      named, so both read as one Project (one there before keeps its name,
      as the registry's answer says), keeps a Placement, and chooses the
-     new Project on the Draft;
+     new Project on the Draft, while it is still an unsent Draft on P;
   3. none, and P is on another Machine: the Project card on E (a folder
      dialog when E is this computer), which chooses what it makes on the
      Draft.
@@ -305,9 +315,10 @@ Windows window.
   name to the first folder it starts, and with none to finish moves on.
   "New folder" names a folder in the one shown, which "The copy makes
   this folder" marks; one that cannot be read says so in place, in two
-  lines at most, and `..` leads out of it. On the setup sheet its folders
-  take the card's free height, six rows at least, and it reads its folder
-  again once a copy ends or is cancelled. The
+  lines at most, and `..` leads out of it. It reads its folder again once
+  a copy ends or is cancelled. On the setup sheet the list is
+  as tall as the folder's rows, up to eight, and more scroll, so a folder
+  with almost nothing in it leaves no well under them. The
   Project card on a Machine uses the same browser in place of its path
   field: "+ Add directory" under it, or ↵ once it has moved, adds the
   folder shown, and the browser goes back to the folder that one is in.
@@ -321,7 +332,8 @@ Windows window.
   `machine::dir(..)/unfinished.json` beside the Placements, by P's root
   and the destination alone. It is cleared once the copy is in, or once
   it stops with nothing landed; `placement::copy` alone writes and clears
-  it. A copy cancelled, cut off, or stopped with the app is resumed by the
+  it, one run at a time for a destination, so a run cancelled before
+  anything landed never clears what the next run wrote. A copy cancelled, cut off, or stopped with the app is resumed by the
   next copy of P to that destination, which reads what is done off the
   destination rather than a list: a file there as the copy sends it is
   done, one not there is sent, and one there that differs is someone
@@ -340,8 +352,10 @@ Windows window.
   through `.` or `..` (`placement::refuse_destination`).
 - **A file that changes or cannot be read** during the copy is left by its
   name, sent once more, and if it still cannot be, listed when the copy is
-  in: the sheet stays up on Done to list it under Not copied, "Left as it
-  was", each with why: "in use here", "unreadable on E" or "changed on
+  in: the card's last face lists it under Not copied, "Left as it was",
+  and with the card gone, the toast says how many ("1 item not copied",
+  counts grouped in thousands as everywhere on the card: "and 2,981
+  more") and its Show opens the card on them. Each is listed with why: "in use here", "unreadable on E" or "changed on
   E". An entry E cannot make is listed there too: "a link outside the
   Project, not made on E", "a link to nothing on E, not made", "a name E
   cannot hold", or "not made on E:" and the reason. More than three alike
@@ -371,27 +385,147 @@ Windows window.
   ("connecting", "sign in", "not set up", "offline"). A press on it opens
   Connections; the arrows pass over it, as over every dimmed row.
 - **The Draft's "Add project…"** opens the card on the Draft's Machine.
-- **The sheet is one state machine**: `Choosing → Listing { count } →
-  Copying { progress } → Registering → Done { skipped } | Failed { reason }`,
-  with `Occupied` after `Listing` when a first copy finds the destination
-  holding something, and `Cancelled` from `Listing` or `Copying`. Listing
-  counts the files as it goes, and Cancel stops it there too. While a copy
-  runs a press outside the card does nothing, and ✕, Esc and Cancel are
-  one act: the copy stops, the sheet stays and says it can be resumed.
-  A copy is cancelled or done, never both (`Cancellation::end`): one that
-  has asked all it sends and waits on the last replies stops as any other
-  and stays unfinished, and a cancel once it is done changes nothing.
-  Through a first copy its button stays Copy; only a resume's reads
-  Resume. Retry from a failure copies again. A failure is said in the
-  operator's words: "The connection to E was lost. Resume finishes the
-  copy once it is back." when the connection went, else the folder that
-  could not be written and why, under `~/`: "Can't write in
-  ~/projects/app: permission denied." From Copy on, where the copy goes is
-  held: the browser, the copy's name and the ticks take no press or key
-  until it stops. How it stands is a two-line slot under "Copies to",
-  whole in its tooltip, there in every stage. Over a draft the card, as
-  the Project card on a Machine, is one size in every stage, centred in
-  the room above the band and never reaching it.
+- **A copy is one entry of the window's copies** (`Copies`, by Project
+  and the Machine as it is saved, `MachineKey`, one at a time for each:
+  turned off and on, a Machine is held under another `MachineId` and its
+  copies are still its own, each started, resumed and shown on it as the
+  window holds it then), a state machine: `Listing { files } → Copying {
+  sent, total, file } → Finishing → Done { took, not copied } | Failed {
+  reason, again } | Cancelled { again }`, with `Occupied` after `Listing`
+  when a first copy finds the destination holding something, and `again`
+  what its button does: Retry, Resume, or Add for one whose files all
+  landed; none once its Machine was removed.
+  The card, a toast and the Draft's environment chip are three views of
+  it; none keeps a copy's state of its own. Copy again for a copy under
+  way opens the card on it.
+- **A copy is of all of P.** What an earlier run left there counts as
+  sent from the first reading, so a Resume's bar starts where the last
+  run stopped (`placement::copy` counts the bytes found there in each
+  `Progress` it reports); its rate and time left are of what remains, and
+  its result names the whole size and the time this run took. Once it
+  sends, how far it is never goes back nor loses its percentage: the
+  second pass that sends what could not be read lists P again, and the
+  window hears that listing only while the copy still lists.
+- **The card has three faces.** Choosing (above). Copying: the same card
+  resizes to the compact width with the sheet's motion (`DIALOG_IN`),
+  "Copying to E" over "P → ~/projects/app", a bar, "134 MB of 2.2 GB" with
+  "11 MB/s · about 3 min left", and the file being sent on one muted line,
+  cut in its middle. While the files are listed the bar runs with no end
+  and the line counts them, "Listing files… 18,402". Copied: "Copied P to
+  E", as its toast says, "P is at ~/projects/app on E", "2.2 GB in 3 min
+  40 s", "This chat now runs on E." when the Draft moved, and Not copied,
+  with Done. A stopped copy's card leads with how it stopped, in the ink
+  of what is read (a failure's in red), over where it goes: "Copy
+  cancelled at 42%. Resume finishes it.", and reads Close and Resume (or
+  Retry). The card is as
+  tall as what it shows, centred in the room above the band and never
+  reaching it.
+- **The rate and the time left** are one pure function of what was heard
+  when (`copies::meter`, tested on a clock of its own): the rate is what
+  was sent over the last five seconds, so a copy that stalls slows to
+  nothing; the time left shows after three seconds of sending, said as a
+  person says it ("less than a minute", "about 3 min", past ten minutes to
+  the nearest five), and another shows once the one shown has been wrong
+  for three seconds, so it does not flicker; one that would say too
+  little by more than a step of that saying shows at once, so a copy that
+  slows is never said to end much sooner than it will.
+- **Only Cancel stops a copy.** ✕, Esc, a press outside the card and
+  "Continue in background" let the card go and the copy go on. Cancel
+  keeps what was sent for its Resume and says so. A copy is cancelled or
+  done, never both (`Cancellation::end`): one that has asked all it sends
+  and waits on the last replies stops as any other and stays unfinished,
+  and a Cancel once all of it landed comes too late and changes nothing,
+  so the copy is added. While the card is gone
+  a toast that does not hide by itself says "Copying P to E", a thin bar,
+  "38% · about 3 min left" and Show, which brings the card back; closing
+  it does not stop the copy. Toasts standing together (two copies under
+  way) each show whole, one above the other. **Where toasts stand:** the
+  kit's toasts stand over the Composer of the board's lower right Pane,
+  their right edge on its box's and their foot just over its stack. They
+  rise only when they would cover what the operator answers at the
+  transcript's foot, a Decision's card or a failed turn's Retry, in view
+  and with no sheet up: then their foot stands just over it, never over
+  the Pane's head unless only that keeps Allow and Deny clear. With no
+  Composer there, they stand in the board's lower right corner
+  (`toast_home`). A sheet holds the keys and the pointer, so the row
+  under it waits and the toasts stay home rather than rise into its
+  card. So they read
+  as anchored in every layout (a draft, a Thread, the panel or the
+  Details card open, a sheet up), and never cover an answer the operator
+  owes. They draw over any sheet and under every menu (ADR 0043's
+  ladder), edged as every float is (`FLOAT_EDGE`), so one over a sheet's
+  card reads as its own card. Since the board's menus (a message's, a
+  Decision's, a citation's comment, the Composer's) draw over sheets too,
+  a sheet or the palette coming up closes them first: no menu outlives
+  the surface it belongs to. The Composer's menu does not open again
+  while a sheet, the palette or the shortcuts are up, whatever moves its
+  line or lists its commands meanwhile; the first edit once they go opens
+  it. A citation's comment closed that way keeps its words on the reply,
+  even over the limit, since a sheet can come up unasked (a copy's
+  notification clicked); words over the limit hold the send back, and a
+  send held back opens the comment to say so. Leaving the app while a copy runs asks first ("Copying P to
+  E. Leaving stops it; Resume finishes it later.").
+- **A copy is always a pick away.** Every Draft's environment chip lists
+  each copy the window keeps under a "Copies" heading of its own, after
+  its environments and "Add environment…", the Draft's own
+  Project first: "Copying P to E" and how far, "Copied P to E" and done,
+  or "Copy of P to E" and stopped; a pick opens its card. The menu open
+  reads each as it is now, as the chip and the toast do. The chip stands
+  whenever a copy runs, since its Machine is on, so with the toast closed
+  and the Draft gone or sent here the copy is still reached; a new Draft
+  (⌘N) is its home when there is no other. A copy whose Draft's Pane
+  closes waits for no Draft; one that stopped stays listed until the
+  operator closes its card.
+- **The Draft waits on its copy until it is in.** While it runs, the
+  Draft's chip shows a ring and the percentage, "Send once copied"
+  stands beside it, and there is no Send: a first send starts nothing.
+  A copy that stopped short (cancelled, its Machine off or removed, the
+  connection lost, a failure) keeps the Draft waiting: the chip keeps E,
+  "Copy stopped" stands beside it, still no Send, until its Resume puts
+  it in or the operator picks where the Draft runs. Closing its card or
+  toast does not let the Draft go; it only means no toast tells of the
+  stop again. The chip's menu ticks E, "copying 42%" or "copy stopped",
+  whose pick brings the card back; another environment ("Local", "send
+  here instead") lets the Draft go there, the copy carrying on. Once the
+  copy is in, the Draft is on it and Send is back. Nothing is queued.
+- **A copy that ends with the card gone still says so.** A toast "Copied
+  P to E", whether or not the progress toast was closed, with how much in
+  how long, which goes by itself as other toasts do unless it left items
+  as they were; one for a copy that stopped stays until it is closed.
+  A finished copy is kept only while it leaves the operator something to
+  do or see: the operator closing its toast, or acting on it, lets it go,
+  and so does its toast going by itself once its Draft moved there and it
+  left nothing as it was. A copy let go takes its system notification
+  with it, so no click opens nothing. Otherwise a toast that went by itself leaves the
+  copy, its system notification and its row on the chip as they were, so
+  "Start a chat there" or what it left is still on its card. With the window in the background, the chime and the system
+  notification too (Settings › Notifications), card up or not, whose
+  click opens the card; it is taken back once the operator, in the
+  window, has the card or a toast show how the copy ended. A Draft that
+  has since moved or been sent stays where it is, and the toast and the
+  card's last face, marked with a check, offer "Start a chat there";
+  closing the card leaves the toast's. A failure turns the toast into
+  "Copy of P to E stopped", how it stands, Show and Resume (or Retry).
+- **A failure is said in the operator's words**, the card and the toast
+  alike (`Entry::standing`): "The connection to E was lost." when the
+  connection went, else the folder that could not be written and why,
+  under `~/`: "Can't write in ~/projects/app: permission denied." A
+  Machine turned off in Settings stops its copies at once: "E was turned
+  off. Resume finishes the copy once it is back.", and once E went and
+  answers again, plainly, not as a failure, "E is back. Resume finishes
+  the copy." A connection lost reads the same way once E has been seen
+  gone and answers again; one whose Server never went is never said to
+  be back. A Machine removed takes its copies with it: "E was removed.",
+  no Resume, no Retry, no Change…, only Close. A copy whose Machine went
+  goes on being heard until its thread ends, so how it truly ended
+  counts: one whose files had all landed keeps them, with what it left as
+  it was, and its Resume only adds it, never copying again. So does one
+  that landed but could not be added on E ("Copied, but not added on E:
+  …"), and one added whose Placement this computer could not keep
+  ("Copied to E, but this computer could not keep where it went: …"):
+  never a dead end said only in the log. Through a first copy its button
+  reads Copy; only a resume's reads Resume. Retry from a failure copies
+  again.
 - `CONTEXT.md`'s Draft entry and ADR 0045's line on the strip over the
   Composer say the environment is a choice until the first send.
 

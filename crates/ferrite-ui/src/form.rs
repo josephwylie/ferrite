@@ -12,7 +12,10 @@ use crate::components;
 use crate::sheet;
 use crate::theme::*;
 
-const WIDTH: f32 = 600.;
+pub const WIDTH: f32 = 600.;
+/// A card that reports rather than asks (the setup sheet's progress and
+/// what a copy did): as wide as the Background work sheet.
+pub const COMPACT_WIDTH: f32 = BACKGROUND_DIALOG_W;
 
 /// The sheet sizes to its content up to here; past it the body scrolls. A
 /// machine's folder browser and the rows around it fit under it.
@@ -49,7 +52,7 @@ pub fn steady_card_over(viewport_h: f32, band_top: Option<f32>) -> Div {
 /// How tall a card over a draft whose band starts `band_top` down a window
 /// `viewport_h` tall may be, and how far it is lifted to stay clear of the
 /// band: not at all with no band, or too little room above it.
-fn room(viewport_h: f32, band_top: Option<f32>) -> (f32, f32) {
+pub fn room(viewport_h: f32, band_top: Option<f32>) -> (f32, f32) {
     let room = band_top
         .map(|top| top - SPACE_2)
         .filter(|room| (LEAST_ROOM..viewport_h).contains(room));
@@ -115,7 +118,7 @@ pub fn directory_list(rows: impl IntoIterator<Item = impl IntoElement>) -> Div {
 /// with dark ink.
 pub fn primary_button(
     id: impl Into<gpui::ElementId>,
-    label: &'static str,
+    label: impl Into<SharedString>,
     disabled: bool,
     cx: &App,
 ) -> Button {

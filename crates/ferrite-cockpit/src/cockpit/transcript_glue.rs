@@ -17,7 +17,7 @@ use ferrite_core::transcript::BlockId;
 use ferrite_core::ThreadKey;
 use ferrite_pane::pane::{AgentClock, AgentFace, AgentFaces, AgentRun};
 use ferrite_pane::transcript::{PromptAction, ScrollTarget, TranscriptTail};
-use gpui::{App, ClipboardItem, Context, IntoElement, SharedString, Window};
+use gpui::{App, ClipboardItem, Context, SharedString, Window};
 
 use super::CockpitView;
 
@@ -177,16 +177,45 @@ fn failure_words(message: &str) -> SharedString {
 }
 
 impl CockpitView {
+    /// The row after a transcript's last (`tail_row`). What the operator
+    /// answers in it (a Decision's cards, a Retry) keeps where it is drawn
+    /// in the Pane's geometry for the kit's toasts to stand clear of
+    /// (`toast_home`): the row clears it as it draws, before its cards
+    /// draw; with no row, nothing is kept.
+    pub(super) fn transcript_tail(&self, index: usize, cx: &Context<Self>) -> Option<TranscriptTail> {
+        use ferrite_pane::pane::PaneGeometry;
+        let geometry = self.panes.get(index)?.geometry.clone();
+        let Some(tail) = self.tail_row(index, cx) else {
+            geometry.set(PaneGeometry { answers: Default::default(), ..geometry.get() });
+            return None;
+        };
+        let row = tail.render;
+        Some(TranscriptTail {
+            key: tail.key,
+            render: std::rc::Rc::new(move |window: &mut Window, cx: &mut App| {
+                use gpui::prelude::*;
+                let geometry = geometry.clone();
+                let cleared = ferrite_ui::components::on_bounds(gpui::div(), move |_, _, _| {
+                    geometry.set(PaneGeometry { answers: Default::default(), ..geometry.get() })
+                });
+                gpui::div()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .min_w_0()
+                    .child(cleared)
+                    .child(row(window, cx))
+                    .into_any_element()
+            }),
+        })
+    }
+
     /// The row after a transcript's last: the pending Decision, as its
     /// card is built for the tail (`CockpitView::decision_tail`, the
     /// Decision card's owner), else the failure strip or the
     /// background-work line, under the line that says a Delegate waits on
     /// the operator (T3's `ThreadNow`: the line that needs you first).
-    pub(super) fn transcript_tail(
-        &self,
-        index: usize,
-        cx: &Context<Self>,
-    ) -> Option<TranscriptTail> {
+    fn tail_row(&self, index: usize, cx: &Context<Self>) -> Option<TranscriptTail> {
         if let Some(decision) = self.decision_tail(index, cx) {
             return Some(decision);
         }
@@ -237,16 +266,24 @@ impl CockpitView {
             ("failure", thread, words.as_ref(), closed).hash(&mut hasher);
             hasher.finish()
         };
+        let geometry = pane.geometry.clone();
         Some(TranscriptTail {
             key,
             render: std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
+                use gpui::prelude::*;
                 let owner = owner.clone();
+                let geometry = geometry.clone();
                 let retry = (!closed).then(|| {
-                    ferrite_pane::pane::retry_button(thread.thread().get(), cx)
-                        .on_click(move |_, _, cx| {
-                            let _ = owner.update(cx, |view, cx| view.retry_failed_turn(thread, cx));
-                        })
-                        .into_any_element()
+                    let retry = ferrite_pane::pane::retry_button(thread.thread().get(), cx).on_click(move |_, _, cx| {
+                        let _ = owner.update(cx, |view, cx| view.retry_failed_turn(thread, cx));
+                    });
+                    // The Retry is what the operator answers here.
+                    ferrite_ui::components::on_bounds(gpui::div().flex_shrink_0().child(retry), move |at, _, _| {
+                        let kept = geometry.get();
+                        let answers = kept.answers.with_cards(at).with_buttons(at);
+                        geometry.set(ferrite_pane::pane::PaneGeometry { answers, ..kept })
+                    })
+                    .into_any_element()
                 });
                 ferrite_pane::pane::failure_strip(thread.thread().get(), words.clone(), retry)
                     .into_any_element()

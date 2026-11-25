@@ -1119,6 +1119,17 @@ impl TranscriptView {
         self.scroll.is_following_tail()
     }
 
+    /// Whether the row after the last (`TranscriptTail`) stood in the
+    /// view as the list was last laid out.
+    pub fn tail_in_view(&self) -> bool {
+        let rows = self.rows.rows();
+        let Some(at) = rows.len().checked_sub(1).filter(|&at| rows[at].kind() == RowKind::Tail) else {
+            return false;
+        };
+        let list = self.scroll.list_state();
+        list.bounds_for_item(at).is_some_and(|row| row.intersects(&list.viewport_bounds()))
+    }
+
     /// The next prompt to arrive scrolls to the top of the view, leaving
     /// the room below it for its answer (Claude's, on a send). The next
     /// content change settles it: a send adds its prompt at once.
@@ -2661,7 +2672,7 @@ fn hang_menu(
                 ferrite_ui::motion::Opens::Down,
             )),
     )
-    .with_priority(2)
+    .with_priority(ferrite_ui::layer::MENU)
     .into_any_element()
 }
 

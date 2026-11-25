@@ -211,6 +211,12 @@ fn what_git_ignores_is_listed_each_directory_whole_with_its_size() {
     );
     assert_eq!(size(&root, "target"), 305);
     assert_eq!(ignored(&scratch("not-git")), []);
+    // What a copy sends but the entries it leaves out: the rest of the
+    // folder, `.git` and `.gitignore` included.
+    let skip: Vec<String> = listed.iter().map(|entry| entry.path.clone()).collect();
+    let rest = size_but(&root, &skip);
+    assert_eq!(rest, size_but(&root, &[]) - 305 - 3 - 6 - 2);
+    assert_eq!(rest, size(&root, ".git") + 19 + 13);
 }
 
 /// A linked worktree's `.git` names its repository by a path of this
@@ -554,7 +560,11 @@ fn half_copied(dir: &Path, files: usize) -> BTreeSet<String> {
     let stopped = copy(&job, &mut Local::cancelling(&cancel, 3), &mut |copying| heard.push(copying), &cancel)
         .expect_err("cancelled part way");
     assert_eq!(stopped.error.kind(), io::ErrorKind::Interrupted);
-    assert!(heard.iter().any(|copying| matches!(copying, Copying::Sending(_))));
+    // Each reading names the file its last bytes were of.
+    assert!(heard.iter().any(|copying| matches!(
+        copying,
+        Copying::Sending { file: Some(file), .. } if file.starts_with("file-")
+    )));
     assert_eq!(unfinished(&kept, &source), [dest.clone()], "kept as unfinished");
     let landed = holds(&dest);
     assert!(!landed.is_empty() && landed.len() < files, "part of it landed: {landed:?}");
@@ -629,6 +639,38 @@ fn a_resume_sends_only_what_is_not_there_and_leaves_what_someone_put_there() {
         }
     }
     assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "finished");
+}
+
+/// A resume's progress is of the whole copy: what the stopped copy landed
+/// counts as sent from its first reading, and the total is all the copy
+/// carries, never only what is left.
+#[test]
+fn a_resume_counts_what_landed_as_sent_from_its_first_reading() {
+    let dir = scratch("resume-progress");
+    let landed = half_copied(&dir, 8);
+    let (source, dest, kept) = (dir.join("app"), dir.join("there/app"), dir.join("machine"));
+    let size = |root: &Path, path: &str| fs::metadata(root.join(path)).unwrap().len();
+    let whole: u64 = (0..8).map(|at| size(&source, &format!("file-{at}.txt"))).sum();
+    let there: u64 = landed.iter().filter(|path| path.ends_with(".txt")).map(|path| size(&dest, path)).sum();
+    assert!(there > 0 && there < whole);
+    let job = CopyJob {
+        source: &source,
+        dest: &dest,
+        skip: &[],
+        kept: &kept,
+    };
+    let mut heard = Vec::new();
+    copy(&job, &mut Local::new(), &mut |copying| heard.push(copying), &Cancellation::default()).unwrap();
+    let readings: Vec<Progress> = heard
+        .into_iter()
+        .filter_map(|copying| match copying {
+            Copying::Sending { progress, .. } => Some(progress),
+            Copying::Listing(_) => None,
+        })
+        .collect();
+    assert_eq!(readings.first(), Some(&Progress { sent: there, total: whole }));
+    assert_eq!(readings.last(), Some(&Progress { sent: whole, total: whole }));
+    assert!(readings.windows(2).all(|pair| pair[0].sent <= pair[1].sent), "{readings:?}");
 }
 
 /// A link to the folder `target` (relative to the link's folder) at
@@ -708,6 +750,89 @@ fn a_copy_that_lands_nothing_is_not_kept_as_unfinished() {
         .expect_err("every write refused");
     assert_eq!(stopped.error.kind(), io::ErrorKind::PermissionDenied);
     assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new());
+}
+
+/// A `Local` that at its first Begin cancels the copy, says so on `held`,
+/// and goes on only once `gate` opens: a copy cancelled before anything it
+/// asked was taken, slow to end.
+struct Held {
+    local: Local,
+    cancel: Cancellation,
+    held: std::sync::mpsc::Sender<()>,
+    gate: std::sync::mpsc::Receiver<()>,
+    began: bool,
+}
+
+impl Exchange for Held {
+    fn ask(&mut self, request: Request) -> io::Result<Asked> {
+        if matches!(request, Request::Begin { .. }) && !self.began {
+            self.began = true;
+            self.cancel.cancel();
+            let _ = self.held.send(());
+            let _ = self.gate.recv();
+        }
+        self.local.ask(request)
+    }
+
+    fn answer(&mut self, asked: Asked) -> io::Result<Reply> {
+        self.local.answer(asked)
+    }
+}
+
+/// Cancel, then Resume at once: the cancelled run, which took nothing,
+/// ends after the next one began. It never undoes what that one keeps, so
+/// the next run stopped part way is still kept for its own Resume.
+#[test]
+fn a_run_cancelled_before_anything_landed_never_undoes_the_next_ones_unfinished_copy() {
+    use std::sync::mpsc;
+    let dir = scratch("cancel-then-resume");
+    let (source, dest, kept) = (dir.join("app"), dir.join("there/app"), dir.join("machine"));
+    fs::create_dir_all(&source).unwrap();
+    for at in 0..8 {
+        fs::write(source.join(format!("file-{at}.txt")), format!("{at}")).unwrap();
+    }
+    let run = |exchange: Box<dyn Exchange + Send>, cancel: Cancellation| {
+        let (source, dest, kept) = (source.clone(), dest.clone(), kept.clone());
+        move || {
+            let mut exchange = exchange;
+            let job = CopyJob {
+                source: &source,
+                dest: &dest,
+                skip: &[],
+                kept: &kept,
+            };
+            copy(&job, &mut *exchange, &mut |_| {}, &cancel).map(drop)
+        }
+    };
+    let (held, holding) = mpsc::channel();
+    let (open, gate) = mpsc::channel();
+    let cancel = Cancellation::default();
+    let first = Held {
+        local: Local::new(),
+        cancel: cancel.clone(),
+        held,
+        gate,
+        began: false,
+    };
+    let first = std::thread::spawn(run(Box::new(first), cancel));
+    holding.recv().unwrap();
+    assert_eq!(unfinished(&kept, &source), [dest.clone()], "kept from before its first byte");
+
+    let cancel = Cancellation::default();
+    let (ended, ending) = mpsc::channel();
+    let second = run(Box::new(Local::cancelling(&cancel, 3)), cancel);
+    let second = std::thread::spawn(move || {
+        let stopped = second();
+        let _ = ended.send(());
+        stopped
+    });
+    // Without waiting on the first run, the second has ended by now.
+    let _ = ending.recv_timeout(std::time::Duration::from_secs(2));
+    open.send(()).unwrap();
+    first.join().unwrap().expect_err("the first was cancelled");
+    second.join().unwrap().expect_err("the second was cancelled part way");
+    assert!(!holds(&dest).is_empty(), "the second landed part of it");
+    assert_eq!(unfinished(&kept, &source), [dest.clone()], "kept for the second's Resume");
 }
 
 /// An unfinished copy whose destination holds another repository by now

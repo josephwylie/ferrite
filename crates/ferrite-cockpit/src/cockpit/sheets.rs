@@ -14,9 +14,7 @@ use ferrite_settings::sheet::SettingsView;
 use super::*;
 use ferrite_ui::motion;
 use ferrite_ui::sheet::Drawn;
-use gpui::{App, Bounds};
-use std::cell::Cell;
-use std::rc::Rc;
+use gpui::App;
 use std::time::Instant;
 
 /// A sheet the host can hold. The set is closed: one variant per sheet.
@@ -89,8 +87,6 @@ pub(crate) struct Sheets {
     shown: Option<Shown>,
     /// What held the keyboard before the sheet up took it.
     back: Option<FocusHandle>,
-    /// Where the card up was last drawn.
-    card: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 /// The operator pressed the veil, outside the card.
@@ -104,11 +100,6 @@ impl Sheets {
             Some(Shown::Up(sheet)) => Some(sheet),
             _ => None,
         }
-    }
-
-    /// Where the card up was last drawn; `None` while none is up.
-    pub(super) fn card(&self) -> Option<Bounds<Pixels>> {
-        self.up().and(self.card.get())
     }
 
     pub(super) fn settings(&self) -> Option<&Entity<SettingsView>> {
@@ -178,20 +169,6 @@ impl Sheets {
     }
 }
 
-impl Sheets {
-    /// The card's child that notes where the card is drawn, and draws the
-    /// window again when that moved: the toasts hang from it.
-    fn probe(&self) -> impl IntoElement {
-        let card = self.card.clone();
-        let noted = move |bounds: Bounds<Pixels>, window: &mut Window, _: &mut App| {
-            if card.replace(Some(bounds)) != Some(bounds) {
-                window.on_next_frame(|window, _| window.refresh());
-            }
-        };
-        gpui::canvas(noted, |_, _, _, _| {}).absolute().top_0().left_0().size_full()
-    }
-}
-
 impl Render for Sheets {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         ferrite_ui::loops_overlay::begin(window, cx.entity_id());
@@ -227,15 +204,15 @@ impl Render for Sheets {
                             cx.emit(Dismissed);
                         }),
                     )
-                    .child(motion::dialog_in(sheet.entrance(), card.child(self.probe()))),
+                    .child(motion::dialog_in(sheet.entrance(), card)),
             )
             .into_any_element(),
         };
         div()
             .absolute()
             .inset_0()
-            .child(deferred(face).with_priority(3))
-            .children(above.map(|above| deferred(above).with_priority(4)))
+            .child(deferred(face).with_priority(ferrite_ui::layer::SHEET))
+            .children(above.map(|above| deferred(above).with_priority(ferrite_ui::layer::SHEET_ABOVE)))
             .into_any_element()
     }
 }
@@ -246,8 +223,17 @@ impl CockpitView {
         self.sheets.read(cx).up().is_some()
     }
 
+    /// What a Pane under the sheets shows in its middle: its start hero, or
+    /// nothing while a sheet is up. The veil dims what is under it, and
+    /// the hero's words, as wide as the board and centred on it, would
+    /// read past the edge of any card narrower than them.
+    pub(super) fn under_sheets(&self, hero: Option<pane::Hero>, cx: &App) -> Option<pane::Hero> {
+        hero.filter(|_| !self.sheet_up(cx))
+    }
+
     /// Put `sheet` up in place of whatever was. The popup up goes too, as
-    /// does the ring on a draft's band: the keyboard is the sheet's.
+    /// do the board's menus and the ring on a draft's band: the keyboard is
+    /// the sheet's.
     pub(super) fn show_sheet(&mut self, sheet: Sheet, cx: &mut Context<Self>) {
         if let Some(replaced) = self.sheets.update(cx, |sheets, cx| sheets.show(sheet, cx)) {
             self.sheet_gone(replaced, cx);
@@ -256,6 +242,7 @@ impl CockpitView {
             draft.band_focus = None;
         }
         self.close_popup(cx);
+        self.close_board_menus(cx);
         cx.notify();
     }
 
@@ -309,11 +296,8 @@ impl CockpitView {
             }
             Sheet::NewTask(sheet) => self.new_task_gone(&sheet, cx),
             Sheet::Direct(sheet) => self.direct_gone(&sheet, cx),
-            // A copy goes with its sheet: nothing would register it.
-            Sheet::Placement(sheet) => {
-                sheet.update(cx, |sheet, _| sheet.stop());
-            }
-            Sheet::ProjectEditor(_) | Sheet::BackgroundDialog(_) => {}
+            // A copy outlives its card: the window keeps it (`Copies`).
+            Sheet::Placement(_) | Sheet::ProjectEditor(_) | Sheet::BackgroundDialog(_) => {}
         }
     }
 
@@ -337,22 +321,29 @@ impl CockpitView {
                 let sheet = sheet.read(cx);
                 self.direct_inputs(sheet.project(), sheet.task(), cx).is_none()
             }
-            Some(Sheet::Placement(sheet)) => self
-                .index_of(sheet.read(cx).placing.draft)
-                .and_then(|index| self.panes[index].draft())
-                .is_none(),
+            // A card on a copy stays whatever became of its draft.
+            Some(Sheet::Placement(sheet)) => {
+                let sheet = sheet.read(cx);
+                !sheet.shows_a_copy(cx)
+                    && self
+                        .index_of(sheet.placing.draft)
+                        .and_then(|index| self.panes[index].draft())
+                        .is_none()
+            }
         };
         if gone {
             self.hide_sheet(cx);
         }
     }
 
-    /// A press outside the card closes the sheet, unless it is copying:
-    /// only its own Cancel stops a copy.
+    /// A press outside the card closes the sheet; a copy it shows carries
+    /// on.
     pub(super) fn on_sheets_event(&mut self, _: Entity<Sheets>, _: &Dismissed, cx: &mut Context<Self>) {
-        if self.placement_sheet(cx).is_some_and(|sheet| sheet.read(cx).busy()) {
-            return;
+        match self.placement_sheet(cx) {
+            Some(sheet) => self.placement_closed(&sheet, cx),
+            None => {
+                self.hide_sheet(cx);
+            }
         }
-        self.hide_sheet(cx);
     }
 }

@@ -206,7 +206,7 @@ fn admission(sent: Executed) -> Admission {
 fn gone() -> WireError {
     WireError {
         code: ErrorCode::UnknownThread,
-        message: "that machine is not held".to_string(),
+        message: "that Machine is turned off".to_string(),
     }
 }
 

@@ -21,7 +21,7 @@ use ferrite_core::folder::Listing;
 use ferrite_pane::composer::{Composer, Edited, Role};
 use ferrite_ui::components;
 use ferrite_ui::theme::*;
-use gpui::component::{button::Button, Disableable};
+use gpui::component::button::Button;
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, AnyElement, App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle,
@@ -35,7 +35,8 @@ const KEY_CONTEXT: &str = "FolderBrowser";
 
 /// How many rows the list shows at least, however few the folder has, so
 /// the sheet holds still as the browser moves. It takes the card's free
-/// height too; more scroll.
+/// height too; more scroll. A fitted browser (`fitted`) shows as many as
+/// the folder has instead.
 const ROWS: f32 = 6.0;
 
 /// Where the browser goes when the folder it was put at cannot be read.
@@ -74,10 +75,9 @@ pub struct FolderBrowser {
     makes: Option<SharedString>,
     /// A new folder's name, while one is being named.
     naming: Option<Entity<Composer>>,
+    /// The list is as tall as its rows, up to this many; more scroll.
+    fitted: Option<usize>,
     scroll: UniformListScrollHandle,
-    /// The folder shown is held, while a copy goes into it: the line takes
-    /// no keys and the rows no presses, all drawn quiet.
-    held: bool,
 }
 
 /// The line moved: to another folder, or by a keystroke.
@@ -150,8 +150,8 @@ impl FolderBrowser {
             made: HashSet::new(),
             makes: None,
             naming: None,
+            fitted: None,
             scroll: UniformListScrollHandle::new(),
-            held: false,
         };
         browser.edited(cx);
         browser
@@ -164,15 +164,11 @@ impl FolderBrowser {
         self
     }
 
-    /// Hold the folder shown, or let it go.
-    pub fn hold(&mut self, held: bool, cx: &mut Context<Self>) {
-        if self.held == held {
-            return;
-        }
-        self.held = held;
-        self.naming = None;
-        self.cursor = None;
-        cx.notify();
+    /// The list as tall as the folder's rows, up to `rows`: a folder with
+    /// almost nothing in it leaves no well under them.
+    pub fn fitted(mut self, rows: usize) -> Self {
+        self.fitted = Some(rows);
+        self
     }
 
     fn line(cx: &mut Context<Self>) -> Entity<Composer> {
@@ -212,11 +208,9 @@ impl FolderBrowser {
             .is_some_and(|naming| naming.read(cx).focus_handle(cx).is_focused(window))
     }
 
-    /// Show `folder`, `/` last, unless the folder shown is held.
+    /// Show `folder`, `/` last.
     fn go(&mut self, folder: String, cx: &mut Context<Self>) {
-        if !self.held {
-            self.field.update(cx, |field, cx| field.set(folder, cx));
-        }
+        self.field.update(cx, |field, cx| field.set(folder, cx));
     }
 
     /// Show `folder`, as the browser's own move rather than the operator's.
@@ -344,6 +338,21 @@ impl FolderBrowser {
         }
     }
 
+    /// Whether the folder shown holds an entry called `name`: None until
+    /// it is read, or while it cannot be; never for one not there yet.
+    pub fn has(&self, name: &str) -> Option<bool> {
+        if self.made.contains(&self.shown) {
+            return Some(false);
+        }
+        let listing = self.listed.get(&self.shown)?.as_ref().ok()?;
+        Some(listing.entries.iter().any(|entry| entry.name == name))
+    }
+
+    /// The Machine's home as its Server spells it, once read.
+    pub fn home(&self) -> Option<PathBuf> {
+        Some(self.listed.get(HOME)?.as_ref().ok()?.path.clone())
+    }
+
     /// Ask the Machine where its home is, for `tilde`.
     pub fn ask_home(&mut self, cx: &mut Context<Self>) {
         self.list(HOME.into(), cx);
@@ -445,7 +454,7 @@ impl FolderBrowser {
             return cx.propagate();
         }
         let rows = self.rows.len();
-        if rows == 0 || self.held {
+        if rows == 0 {
             return;
         }
         let last = rows as isize - 1;
@@ -486,9 +495,6 @@ impl FolderBrowser {
     /// Name a folder in the one shown, made by what goes into it: a row
     /// under its folders.
     pub fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.held {
-            return;
-        }
         let naming = match &self.naming {
             Some(naming) => naming.clone(),
             None => Self::line(cx),
@@ -581,7 +587,6 @@ impl FolderBrowser {
                     icon,
                     label.into(),
                     self.cursor == Some(at),
-                    self.held,
                     cx,
                 )
                 .debug_selector(move || selector.clone())
@@ -599,14 +604,12 @@ impl FolderBrowser {
 /// One row of a folder browser, the Files tree's row (`FILES_ROW_H`, its
 /// mark in a chevron-wide column, `FS_LABEL` in `INK_STRONG`) as the shared
 /// press: a folder to go into, or `..` out of one. The row the arrows rest
-/// on is `paint::SELECTED`, as the tree's open file is. A `held` row takes
-/// no press and its name is `INK_SUBTLE`.
+/// on is `paint::SELECTED`, as the tree's open file is.
 fn folder_row(
     id: impl Into<gpui::ElementId>,
     mark: &'static str,
     label: SharedString,
     cursor: bool,
-    held: bool,
     cx: &App,
 ) -> Button {
     let rest = if cursor {
@@ -615,8 +618,6 @@ fn folder_row(
         Paint(TRANSPARENT)
     };
     components::form_button_on(id, rest, cx)
-        .disabled(held)
-        .when(held, |row| row.cursor_default())
         .w_full()
         .h(px(FILES_ROW_H))
         .p_0()
@@ -629,7 +630,7 @@ fn folder_row(
                     .truncate()
                     .text_size(px(FS_LABEL))
                     .line_height(px(LH_UI))
-                    .text_color(rgb(if held { INK_SUBTLE } else { INK_STRONG }))
+                    .text_color(rgb(INK_STRONG))
                     .child(label),
             ),
         )
@@ -708,15 +709,6 @@ fn folder_line(mark: &'static str) -> Div {
 impl Render for FolderBrowser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let note = self.note(cx);
-        let line = if self.held {
-            components::text_ui()
-                .truncate()
-                .text_color(rgb(INK_SUBTLE))
-                .child(self.typed(cx).to_string())
-                .into_any_element()
-        } else {
-            self.field.clone().into_any_element()
-        };
         let naming = self.naming.clone().map(|naming| {
             let focused = naming.read(cx).focus_handle(cx).is_focused(window);
             let empty = naming.read(cx).text().is_empty();
@@ -728,10 +720,12 @@ impl Render for FolderBrowser {
             self.rows.len(),
             cx.processor(|browser, range, _, cx| browser.drawn_rows(range, cx)),
         )
-        .track_scroll(&self.scroll)
-        .flex_grow(1.)
-        .flex_basis(px(0.))
-        .min_h_0();
+        .track_scroll(&self.scroll);
+        let rows = match self.fitted {
+            Some(most) => rows.h(px(self.rows.len().min(most) as f32 * FILES_ROW_H)),
+            None => rows.flex_grow(1.).flex_basis(px(0.)).min_h_0(),
+        };
+        let fitted = self.fitted.is_some();
         div()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|browser, _: &Up, window, cx| browser.step(-1, window, cx)))
@@ -739,24 +733,23 @@ impl Render for FolderBrowser {
             .on_action(cx.listener(|browser, _: &Open, window, cx| browser.confirm(window, cx)))
             .on_action(cx.listener(|browser, _: &Cancel, window, cx| browser.cancel(window, cx)))
             .flex_shrink_0()
-            .flex_grow(1.)
+            .when(!fitted, |browser| browser.flex_grow(1.))
             .flex()
             .flex_col()
             .gap(px(SPACE_1))
             .child(ferrite_ui::field::text_field(
                 self.label.clone(),
-                line,
-                !self.held && self.focus_handle(cx).is_focused(window),
+                self.field.clone(),
+                self.focus_handle(cx).is_focused(window),
                 "project-path-focused",
             ))
             .child(
                 div()
                     .debug_selector(|| "folder-browser-rows".into())
                     .flex_shrink_0()
-                    .flex_grow(1.)
                     .flex()
                     .flex_col()
-                    .min_h(px(ROWS * FILES_ROW_H))
+                    .when(!fitted, |list| list.flex_grow(1.).min_h(px(ROWS * FILES_ROW_H)))
                     .child(rows)
                     .children(naming)
                     .children(note),
@@ -1140,22 +1133,6 @@ mod tests {
         let (view, _machine, cx) = open(machine, "/home/me/nowhere/", false, cx);
         assert_eq!(line(&view, cx), "~/");
         assert!(shows(cx, "folder-row:work"), "home's folders");
-    }
-
-    /// The folder shown, held: its rows take no press. Let go, they do.
-    #[gpui::test]
-    fn a_held_folder_takes_no_press(cx: &mut TestAppContext) {
-        let (view, _machine, cx) = open(home(), "/home/me/", false, cx);
-        view.update(cx, |view, cx| view.hold(true, cx));
-        cx.run_until_parked();
-        click(cx, "folder-row:work");
-        settle(&view, cx);
-        assert_eq!(line(&view, cx), "/home/me/");
-        view.update(cx, |view, cx| view.hold(false, cx));
-        cx.run_until_parked();
-        click(cx, "folder-row:work");
-        settle(&view, cx);
-        assert_eq!(line(&view, cx), "/home/me/work/");
     }
 
     /// The folder shown is taken spelled out as the Machine spells it, and

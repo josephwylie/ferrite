@@ -249,6 +249,9 @@ impl CockpitView {
             .copied()
             .filter(|machine| !now.contains(machine))
             .collect();
+        // A Machine removed while off holds nothing, yet its copies go
+        // with it.
+        self.stop_copies_to(&gone, cx);
         if gone.is_empty() && before.len() == now.len() {
             return;
         }
@@ -267,6 +270,22 @@ impl CockpitView {
         self.toasts.update(cx, |toasts, cx| toasts.forget(&gone, cx));
         self.sync_panes(cx);
         cx.notify();
+    }
+
+    /// The window let go of `gone`: each copy to one stops at once, saying
+    /// whether its Machine was turned off, for its Resume, or removed, for
+    /// good; a copy to a Machine removed while off says so too.
+    fn stop_copies_to(&mut self, gone: &[ferrite_core::MachineId], cx: &mut Context<Self>) {
+        let saved = &self.prefs.settings.machines;
+        let removed = |key: &ferrite_core::MachineKey| {
+            key.0
+                .as_ref()
+                .is_some_and(|target| !saved.iter().any(|machine| machine.target == *target))
+        };
+        let stopped = self.copies.update(cx, |copies, cx| copies.machines_went(gone, removed, cx));
+        for key in &stopped {
+            self.tell_copy(key, cx);
+        }
     }
 
     /// The window let go of `gone`: a Project of theirs names nothing it

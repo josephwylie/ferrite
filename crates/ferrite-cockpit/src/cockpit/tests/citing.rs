@@ -921,6 +921,108 @@ fn citation_comment_limit_blocks_save_send_and_outside_dismissal(cx: &mut TestAp
     assert_eq!(replies(&view, cx)[0].text, "");
 }
 
+/// Settings coming up closes the comment popover, which draws over a
+/// sheet, its words kept as a press outside keeps them: a press where its
+/// Cancel stood reaches Settings and takes nothing back.
+#[gpui::test]
+fn a_comment_popover_goes_as_settings_comes_up(cx: &mut TestAppContext) {
+    let (view, cx) = conversation("cite-under-settings", cx, PARAGRAPHS);
+    cite_alpha(&view, cx);
+    open_comment(cx, 0);
+    cx.simulate_input("kept");
+    let cancel = cx.debug_bounds("cite-cancel").expect("Cancel");
+
+    cx.dispatch_action(OpenSettings);
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| view.settings_sheet(cx).is_some()), "Settings is up");
+    assert!(cx.debug_bounds("cite-panel").is_none(), "the popover went with the board");
+    assert_eq!(replies(&view, cx)[0].text, "kept", "its words are kept");
+    cx.simulate_click(cancel.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(replies(&view, cx)[0].text, "kept", "no Cancel took them back");
+}
+
+/// Whether the Composer's `/` `@` `$` menu is shut, and drawn nowhere.
+fn line_menu_shut(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
+    view.read_with(cx, |view, cx| view.popover(cx).is_none()) && cx.debug_bounds("composer-menu-rows").is_none()
+}
+
+/// The prompt line, pressed: it holds the keyboard.
+fn press_line(cx: &mut gpui::VisualTestContext) {
+    let line = cx
+        .debug_bounds("focused-prompt-editor")
+        .or_else(|| cx.debug_bounds("prompt-editor"))
+        .expect("the prompt line");
+    cx.simulate_click(line.center(), gpui::Modifiers::none());
+    tick(cx);
+}
+
+/// A line with `@x` at its caret and a comment open: Settings coming up
+/// closes the comment, which moves the line, and the `@` menu that would
+/// open on it stays shut under the sheet, as under the palette. Once the
+/// sheet goes, typing opens it again.
+#[gpui::test]
+fn the_lines_menu_stays_shut_as_settings_or_the_palette_close_a_comment(cx: &mut TestAppContext) {
+    let (view, cx) = conversation("cite-line-menu-under-sheets", cx, PARAGRAPHS);
+    cite_alpha(&view, cx);
+    press_line(cx);
+    cx.simulate_input("look at @x");
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| view.popover(cx).is_some()), "the premise: `@x` opens the menu");
+
+    open_comment(cx, 0);
+    cx.simulate_input("kept");
+    cx.dispatch_action(OpenSettings);
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| view.settings_sheet(cx).is_some()), "Settings is up");
+    assert!(cx.debug_bounds("cite-panel").is_none(), "the comment went with the board");
+    assert_eq!(replies(&view, cx)[0].text, "kept", "its words are kept");
+    assert!(line_menu_shut(&view, cx), "no menu opens over Settings");
+
+    view.update(cx, |view, cx| view.hide_sheet(cx));
+    tick(cx);
+    press_line(cx);
+    cx.simulate_input("y");
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| view.popover(cx).is_some()), "typing on the board opens it again");
+
+    open_comment(cx, 0);
+    cx.simulate_input(" again");
+    cx.dispatch_action(crate::palette::Toggle);
+    tick(cx);
+    assert!(cx.debug_bounds("palette-veil").is_some(), "the palette is up");
+    assert!(cx.debug_bounds("cite-panel").is_none(), "the comment went with the board");
+    assert!(line_menu_shut(&view, cx), "no menu opens over the palette");
+}
+
+/// Settings coming up over a comment too long to save closes it with its
+/// words kept on the reply. They hold the send back until they are cut,
+/// and the send held back opens the comment again to say why.
+#[gpui::test]
+fn a_comment_too_long_to_save_keeps_its_words_as_settings_comes_up(cx: &mut TestAppContext) {
+    let (view, sent, cx) = conversation_sent("cite-long-under-settings", cx, PARAGRAPHS);
+    cite_alpha(&view, cx);
+    open_comment(cx, 0);
+    let long = "😀".repeat(4_001);
+    paste(cx, long.clone());
+    tick(cx);
+    assert!(cx.debug_bounds("cite-comment-too-long").is_some(), "the premise: too long to save");
+
+    cx.dispatch_action(OpenSettings);
+    tick(cx);
+    assert!(cx.debug_bounds("cite-panel").is_none(), "the comment went with the board");
+    assert!(replies(&view, cx)[0].text == long, "its words are kept");
+
+    view.update(cx, |view, cx| view.hide_sheet(cx));
+    tick(cx);
+    press_line(cx);
+    cx.simulate_input("go");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(sent.borrow().is_empty(), "words over the limit hold the send back");
+    assert!(cx.debug_bounds("cite-comment-too-long").is_some(), "the send held back opens the comment to say why");
+}
+
 #[gpui::test]
 fn command_enter_saves_the_comment_and_sends_the_prompt(cx: &mut TestAppContext) {
     let (view, sent, cx) = conversation_sent("cite-comment-send", cx, PARAGRAPHS);

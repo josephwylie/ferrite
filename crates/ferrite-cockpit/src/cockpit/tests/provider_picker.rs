@@ -92,6 +92,8 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
 
 /// A draft's `$` menu reads the same listing as its `/` menu: typing on
 /// after `$` asks the Provider once, and the skills it found stay listed.
+/// The listing arriving while Settings is up opens no menu over it, and no
+/// key picks from one; the first edit once the sheet goes opens it.
 #[gpui::test]
 fn a_drafts_skill_menu_asks_for_its_commands_once(cx: &mut TestAppContext) {
     let fake = Fake::default();
@@ -115,6 +117,9 @@ fn a_drafts_skill_menu_asks_for_its_commands_once(cx: &mut TestAppContext) {
     cx.simulate_input("$");
     cx.run_until_parked();
     assert_eq!(rows(cx), ["Searching workspace skills..."]);
+    cx.dispatch_action(OpenSettings);
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| view.settings_sheet(cx).is_some()), "Settings is up");
     tx.send(Ok(vec![ferrite_core::SessionCommand {
         name: "grill-me".into(),
         description: "A relentless interview".into(),
@@ -123,7 +128,13 @@ fn a_drafts_skill_menu_asks_for_its_commands_once(cx: &mut TestAppContext) {
     }]))
     .unwrap();
     tick(cx);
-    assert_eq!(rows(cx), ["grill-me"]);
+    assert!(rows(cx).is_empty(), "the listing opened nothing under Settings: {:?}", rows(cx));
+    assert!(cx.debug_bounds("composer-menu-rows").is_none(), "no menu is drawn over Settings");
+    cx.dispatch_action(MenuPick);
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "$", "no key picks from a menu under the sheet");
+    view.update(cx, |view, cx| view.hide_sheet(cx));
+    tick(cx);
     cx.simulate_input("gri");
     tick(cx);
     assert_eq!(

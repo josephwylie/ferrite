@@ -219,46 +219,8 @@ impl RenderOnce for UsageRing {
             rgb(ATTENTION).into(),
             tight,
         );
-        ring(fraction, ink)
+        ferrite_ui::components::progress_ring(theme::CONTEXT_RING, fraction, ink)
     }
-}
-
-/// The ring drawn `fraction` round in `ink`.
-fn ring(fraction: f32, ink: gpui::Hsla) -> Div {
-    let track: gpui::Hsla = rgb(theme::USAGE_POP_TRACK).into();
-    div().flex_shrink_0().size(px(theme::CONTEXT_RING)).child(
-        gpui::canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                let stroke = px(theme::CONTEXT_RING_STROKE);
-                let r = (bounds.size.width.min(bounds.size.height) - stroke) / 2.;
-                let c = bounds.center();
-                let at = |turn: f32| {
-                    let a = std::f32::consts::TAU * turn - std::f32::consts::FRAC_PI_2;
-                    gpui::point(c.x + r * a.cos(), c.y + r * a.sin())
-                };
-                let arc = |from: f32, to: f32| {
-                    let mut path = gpui::PathBuilder::stroke(stroke);
-                    path.move_to(at(from));
-                    // Two halves at most, so no arc spans a full turn.
-                    let mid = (from + to) / 2.;
-                    for end in [mid, to] {
-                        path.arc_to(gpui::point(r, r), px(0.), false, true, at(end));
-                    }
-                    path.build().ok()
-                };
-                if let Some(path) = arc(0., 1.) {
-                    window.paint_path(path, track);
-                }
-                if fraction > 0.005 {
-                    if let Some(path) = arc(0., fraction) {
-                        window.paint_path(path, ink);
-                    }
-                }
-            },
-        )
-        .size_full(),
-    )
 }
 
 /// When a subscription window resets, as the popover reads it: `Resets

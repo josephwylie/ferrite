@@ -28,7 +28,7 @@ pub use background_work::{
 pub use composer::model_label;
 pub use composer::{
     attach_button, composer_footer, composer_row_limit, env_machine, env_strip, env_word,
-    mode_chip, model_effort_chip, offers_import, ModelChip, permission_mode_label, queued_close, queued_count,
+    mode_chip, model_effort_chip, offers_import, ChipMark, ModelChip, permission_mode_label, queued_close, queued_count,
     primary_actions, queued_edit, queued_send_now, queued_sends_now, queued_takes_back, send_button,
     stop_button,
     toolbar_chip, ComposerControls, PrimaryActions,
@@ -132,7 +132,39 @@ pub struct PaneView {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PaneGeometry {
     pub card: Option<gpui::Bounds<gpui::Pixels>>,
+    /// The Composer's box.
     pub composer: Option<gpui::Bounds<gpui::Pixels>>,
+    /// The Composer's whole stack: what stands over its box (the band, the
+    /// queue, the shelf), the box, and its footer. None while the Pane has
+    /// no Composer (a subagent's transcript runs to its foot).
+    pub stack: Option<gpui::Bounds<gpui::Pixels>>,
+    /// What the operator answers at the transcript's foot, as last drawn.
+    pub answers: Answers,
+}
+
+/// What the operator answers at a transcript's foot, as last drawn: a
+/// Decision's cards, or a failed turn's Retry. Cleared as the row after
+/// the transcript's last draws again (`cockpit::transcript_tail`), and
+/// filled as what it holds is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Answers {
+    /// The cards, or the Retry.
+    pub cards: Option<gpui::Bounds<gpui::Pixels>>,
+    /// Their buttons, Allow and Deny: what must stay in sight. None where
+    /// the whole card is.
+    pub buttons: Option<gpui::Bounds<gpui::Pixels>>,
+}
+
+impl Answers {
+    /// `cards` joins what is answered.
+    pub fn with_cards(self, cards: gpui::Bounds<gpui::Pixels>) -> Self {
+        Self { cards: Some(self.cards.map_or(cards, |had| had.union(&cards))), ..self }
+    }
+
+    /// `buttons` join the buttons.
+    pub fn with_buttons(self, buttons: gpui::Bounds<gpui::Pixels>) -> Self {
+        Self { buttons: Some(self.buttons.map_or(buttons, |had| had.union(&buttons))), ..self }
+    }
 }
 
 /// View ownership stays with a Subject even while its transcript is hidden.
@@ -879,6 +911,11 @@ fn dock_slot(cx: &mut PaneCtx) -> Vec<AnyElement> {
 /// its transcript runs to the Pane's foot.
 fn composer_slot(cx: &mut PaneCtx) -> Option<AnyElement> {
     if !cx.view.is_main() {
+        let geometry = &cx.view.geometry;
+        geometry.set(PaneGeometry {
+            stack: None,
+            ..geometry.get()
+        });
         return None;
     }
     Some(
@@ -1139,7 +1176,7 @@ pub fn hero_project(label: SharedString, switcher: bool) -> Stateful<Div> {
 /// Pane its label cuts first.
 pub fn band_chip(
     slot: usize,
-    mark: &'static str,
+    mark: ChipMark,
     label: SharedString,
     focused: bool,
 ) -> Stateful<Div> {

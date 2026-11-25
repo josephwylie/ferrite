@@ -71,6 +71,42 @@ fn sheet_frame(width: f32) -> Div {
 /// A sheet's head: its title, then the close button, over a `FLOAT_EDGE` rule.
 /// The close button's tooltip names `esc`; no keycap repeats it.
 pub fn sheet_head(title: impl Into<SharedString>, close: impl IntoElement) -> Div {
+    head(
+        div()
+            .min_w_0()
+            .flex_1()
+            .truncate()
+            .font_weight(W_LABEL)
+            .text_color(rgb(INK_STRONG))
+            .child(title.into()),
+        close,
+    )
+}
+
+/// `sheet_head` with `mark` before its title, `SPACE_2` apart: what the
+/// sheet tells of at a glance, a finish's check.
+pub fn sheet_head_marked(mark: impl IntoElement, title: impl Into<SharedString>, close: impl IntoElement) -> Div {
+    head(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(SPACE_2))
+            .min_w_0()
+            .flex_1()
+            .child(mark)
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(W_LABEL)
+                    .text_color(rgb(INK_STRONG))
+                    .child(title.into()),
+            ),
+        close,
+    )
+}
+
+fn head(title: Div, close: impl IntoElement) -> Div {
     div()
         .flex()
         .flex_shrink_0()
@@ -79,15 +115,7 @@ pub fn sheet_head(title: impl Into<SharedString>, close: impl IntoElement) -> Di
         .h(px(MODAL_HEAD_H))
         .pl(px(MODAL_PAD))
         .pr(px(SPACE_1))
-        .child(
-            div()
-                .min_w_0()
-                .flex_1()
-                .truncate()
-                .font_weight(W_LABEL)
-                .text_color(rgb(INK_STRONG))
-                .child(title.into()),
-        )
+        .child(title)
         // The kit button's own tooltip takes only a string; the chord
         // suffix rides a wrapper, as on every keyed control.
         .child(

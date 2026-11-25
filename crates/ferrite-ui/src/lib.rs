@@ -12,6 +12,7 @@ pub mod frame;
 pub mod fuzzy;
 pub mod icons;
 pub mod keymap;
+pub mod layer;
 pub mod loops_overlay;
 pub mod menu;
 pub mod motion;

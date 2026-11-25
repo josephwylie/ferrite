@@ -627,3 +627,27 @@ fn a_press_outside_closes_the_allow_menu(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds(always).is_none(), "a second press on its button shuts it");
     assert!(answered(&fake).is_empty(), "{:?}", answered(&fake));
 }
+
+/// Settings coming up closes the allow menu, which draws over a sheet: a
+/// press where its row stood reaches Settings and answers nothing.
+#[gpui::test]
+fn the_allow_menu_goes_as_settings_comes_up(cx: &mut TestAppContext) {
+    let (view, fake, cx) = waiting("parity-menu-settings", cx, bash("menu-settings", "cargo test"));
+    let (thread, serial) = view.read_with(cx, |view, cx| {
+        let request = view.shown_request(0, cx).unwrap();
+        (view.panes[0].thread().unwrap(), request.handle.serial)
+    });
+    let always = format!("request-always-{}-{serial}", thread.thread().get()).leak();
+    let more = bounds(cx, format!("request-more-{}-{serial}", thread.thread().get()));
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    let row = cx.debug_bounds(always).expect("the menu is open");
+
+    cx.dispatch_action(OpenSettings);
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| view.settings_sheet(cx).is_some()), "Settings is up");
+    assert!(cx.debug_bounds(always).is_none(), "the menu went with the board");
+    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(answered(&fake).is_empty(), "{:?}", answered(&fake));
+}

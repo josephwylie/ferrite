@@ -185,6 +185,14 @@ impl TranscriptView {
         cx.notify();
     }
 
+    /// Close the menus this transcript holds open, a message's or a link's
+    /// and an output's: something came up over the board.
+    pub fn close_menus(&mut self, cx: &mut Context<Self>) {
+        if self.message_menu.take().is_some() | self.output_menu.take().is_some() {
+            cx.notify();
+        }
+    }
+
     fn run_verb(&mut self, menu: &MessageMenu, verb: Verb, window: &mut gpui::Window, cx: &mut Context<Self>) {
         let copy = |text: &str, cx: &mut Context<Self>| {
             cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()))

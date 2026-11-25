@@ -697,9 +697,17 @@ impl<T: AsRef<Path> + ?Sized> Source for T {
     }
 }
 
+/// How far a [`send`] has come: the bytes of all its steps' files the far
+/// side has, and the file the last of them were of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sending<'a> {
+    pub progress: Progress,
+    pub file: Option<&'a str>,
+}
+
 /// Take each of `steps` to `dest` through `exchange`, the files read from
-/// `source`, asking ahead of the replies. `progress` hears how many
-/// bytes of all the steps' files the far side has. A file that cannot be
+/// `source`, asking ahead of the replies. `progress` hears how far it has
+/// come ([`Sending`]). A file that cannot be
 /// read here as its step lists it (gone, held by another program, changed
 /// since it was listed) is left as the far side has it, a problem of this
 /// side, and the send goes on. So is an entry the far side says it did not
@@ -712,7 +720,7 @@ pub fn send(
     steps: &[Step],
     dest: &Root,
     exchange: &mut dyn Exchange,
-    progress: &mut dyn FnMut(Progress),
+    progress: &mut dyn FnMut(Sending),
     cancel: &Cancellation,
 ) -> Result<Sent, Stopped> {
     let total = steps
@@ -722,7 +730,10 @@ pub fn send(
             _ => 0,
         })
         .sum();
-    progress(Progress { sent: 0, total });
+    progress(Sending {
+        progress: Progress { sent: 0, total },
+        file: None,
+    });
     let mut flight = Flight {
         exchange,
         progress,
@@ -835,7 +846,7 @@ enum Halt {
 /// What a send has asked and not yet heard the replies to, oldest first.
 struct Flight<'a> {
     exchange: &'a mut dyn Exchange,
-    progress: &'a mut dyn FnMut(Progress),
+    progress: &'a mut dyn FnMut(Sending),
     waiting: VecDeque<(Asked, &'a Step, Expect)>,
     /// Bytes of files in what `waiting` asked.
     ahead: u64,
@@ -909,9 +920,12 @@ impl<'a> Flight<'a> {
             }
             (Expect::Written(piece), Reply::Written { offset }) if offset == piece.end => {
                 self.received += bytes;
-                (self.progress)(Progress {
-                    sent: self.received,
-                    total: self.total,
+                (self.progress)(Sending {
+                    progress: Progress {
+                        sent: self.received,
+                        total: self.total,
+                    },
+                    file: Some(step.path()),
                 });
             }
             _ => return Err(named(step, Side::There, unanswered())),
@@ -977,7 +991,7 @@ pub fn mirror(
     dest: &Root,
     skip: &[String],
     exchange: &mut dyn Exchange,
-    progress: &mut dyn FnMut(Progress),
+    progress: &mut dyn FnMut(Sending),
     cancel: &Cancellation,
 ) -> Result<Sent, Stopped> {
     let asked = exchange.ask(scan_request(dest, skip, None))?;

@@ -28,6 +28,42 @@ pub fn prefixed_field(
     )
 }
 
+/// A path shown rather than typed, in a field's box with no label: the
+/// folder it is in as `prefix` in `INK_SUBTLE`, cut from its start, then
+/// `name` in `INK_STRONG`, and `action` at the box's end.
+pub fn shown_path(prefix: SharedString, name: SharedString, action: impl IntoElement) -> Div {
+    div()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_2))
+        .h(px(FORM_CONTROL_H))
+        .pl(px(FORM_FIELD_PAD_X))
+        .pr(px(SPACE_1))
+        .rounded(px(R_CONTROL))
+        .border_1()
+        .border_color(paint::FIELD_RING)
+        .child(
+            div()
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(
+                    components::text_ui()
+                        .flex_shrink_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis_start()
+                        .text_color(rgb(INK_SUBTLE))
+                        .child(prefix),
+                )
+                .child(components::text_ui().flex_shrink_0().child(name)),
+        )
+        .child(div().flex_shrink_0().child(action))
+}
+
 /// A one-line field: its label as a `INK_SUBTLE` row over a box a cell
 /// in, one row high, rounded as every control is (`R_CONTROL`) and ringed
 /// with the Composer's hairline (`FIELD_RING`), the strong edge

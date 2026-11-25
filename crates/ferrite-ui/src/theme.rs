@@ -1124,8 +1124,7 @@ pub const CHECK_SKIP_DASH: f32 = 5.0;
 /// A toast's widest, less where the board is narrower
 /// (`cockpit::toasts::ToastsView`).
 pub const TOAST_W: f32 = 320.0;
-/// The gap the kit fans a stack out by under the pointer. The stack holds
-/// one toast (`max_items`), so this is only ever the kit's own spacing.
+/// The gap between toasts standing together, the stack fanned out.
 pub const TOAST_GAP: f32 = SPACE_3;
 
 // -------------------------------------------- pane body and the row column
@@ -1370,20 +1369,28 @@ pub fn init_components(cx: &mut gpui::App) {
     // (Button::primary, menu rows, tooltips, checkboxes) would paint the
     // kit's neutrals. Rebuild them from the colours above.
     theme.tokens = gpui::component::ThemeTokens::from(&theme.colors);
-    theme.notification.placement = gpui::Anchor::TopRight;
+    // The kit's toasts have one home, whatever sheet is up: the Cockpit
+    // keeps their margins on a Composer (`TOAST_FOOT`).
+    theme.notification.placement = gpui::Anchor::BottomRight;
     theme.notification.margins = gpui::base::Edges {
         top: px(WIN_CHROME_H + PANE_HEAD_H + TOAST_TOP),
         right: px(TOAST_BOX_RIGHT),
-        bottom: px(TOAST_TOP),
+        bottom: px(TOAST_FOOT),
         left: px(SPACE_2),
     };
     theme.notification.width = px(TOAST_W);
-    theme.notification.max_items = 1;
-    // Only the front toast shows: no ghost edges behind it.
+    // A toast is a float: it edges itself as one. The kit's `border` is
+    // `LINE`, the float's own grey, so a toast over a sheet's card had no
+    // edge and read as part of the sheet.
+    theme.notification.ring = Some(paint::FLOAT_EDGE.into());
+    // Toasts that stand together, two copies under way, each show whole,
+    // `TOAST_GAP` apart: no ghost edges behind a front one.
+    theme.notification.max_items = 3;
     cx.set_global(gpui::base::DefaultToastMotion(gpui::base::ToastMotion {
         collapsed_peek: px(0.),
         collapsed_scale_step: 0.,
-        collapsed_visible: 1,
+        collapsed_visible: 3,
+        fanned: true,
         expanded_gap: px(TOAST_GAP),
         // The stack settles over the toast tokens (rule 2.10.4).
         duration: std::time::Duration::from_millis(MOTION_TOAST_IN_MS),
@@ -2849,12 +2856,28 @@ pub const TOOLTIP_MAX_W: f32 = 320.0;
 /// the right panel: `TOAST_W` wide (less where the board is narrower), its
 /// right edge `TOAST_BOX_RIGHT` in from the board's (the panel's left while
 /// it shows), under a Pane's head or tab strip (`PANE_HEAD_H`), so it
-/// covers no head's controls (the kit's toast stack stands there too).
+/// covers no head's controls (the kit's toast stack stands low on the
+/// right, `TOAST_FOOT`).
 /// One row of head (`◆ needs you · <title>`), one body line, then
 /// the quick answers: `TOKEN_H` buttons (`Allow 1`, `Deny 3`, `Open ⏎`),
 /// `TOAST_QUICK_GAP` over the float's edge.
 pub const TOAST_BOX_RIGHT: f32 = SPACE_4;
 pub const TOAST_TOP: f32 = SPACE_2;
+/// The kit's toasts (a copy's, a setup sync's) stand over the Composer of
+/// the board's lower right Pane, the newest lowest: their right edge on
+/// the Composer box's, their foot `TOAST_TOP` over its band, or over what
+/// the operator answers at the transcript's foot (a Decision's card, a
+/// failed turn's Retry) when they would cover it
+/// (`cockpit::toasts::toast_home`).
+/// They never move for a sheet. With no Composer there, they stand
+/// `TOAST_FOOT` over the window's foot, `TOAST_BOX_RIGHT` in from the
+/// board's right edge, clear of where a draft's Composer and band would
+/// be.
+pub const TOAST_FOOT: f32 =
+    ENV_STRIP_H + COMPOSER_HERO_INPUT_H + COMPOSER_TOOLBAR_H + COMPOSER_FOOTER_H + TOAST_TOP;
+/// A kit toast at its tallest: its title, a bar or two lines, and the
+/// caption row its buttons end.
+pub const TOAST_KIT_H: f32 = 112.0;
 pub const TOAST_QUICK_GAP: f32 = SPACE_2;
 /// **The palette** (command search, ⌘K; SPEC §5.8), measured off the
 /// Claude app's own ⌘K search at 1x (2026-11-03): a `PALETTE_W` dialog
@@ -4127,6 +4150,12 @@ mod tests {
             assert_eq!(theme.muted, solid(RAISED));
             assert_eq!(theme.background, solid(CARD));
             assert!(!theme.shadow, "floats wear Ferrite's own shadow");
+            assert_eq!(
+                theme.notification.ring,
+                Some(paint::FLOAT_EDGE.hsla()),
+                "a toast edges itself as every float does: `LINE` vanishes on a float's \
+                 ground, a sheet's under it among them"
+            );
             assert_eq!(theme.radius, gpui::px(R_CONTROL));
             assert_eq!(theme.radius_lg, gpui::px(R_FLOAT));
             assert_eq!(theme.font_size, gpui::px(FS_UI));

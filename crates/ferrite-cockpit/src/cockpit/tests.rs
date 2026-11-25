@@ -12,6 +12,7 @@ mod composer_chips;
 mod browser_annotations;
 mod browser_asks;
 mod tells;
+mod toast_home;
 mod browser_chrome;
 mod composer_controls;
 mod composer_menus;

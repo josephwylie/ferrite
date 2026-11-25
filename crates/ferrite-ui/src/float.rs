@@ -24,11 +24,11 @@ pub enum FloatPlace {
     BoardTop { top: f32, width: f32 },
 }
 
-/// The priority every float paints at: over the Panes' own deferred menus
-/// and over the veil (`VEIL_PRIORITY`).
-pub const FLOAT_PRIORITY: usize = 4;
+/// The priority every float paints at: over the kit's toasts and the veil
+/// (`VEIL_PRIORITY`), with every menu (the `layer` ladder).
+pub const FLOAT_PRIORITY: usize = crate::layer::MENU;
 /// The palette's veil: over the board's Panes, under the float.
-pub const VEIL_PRIORITY: usize = 3;
+pub const VEIL_PRIORITY: usize = crate::layer::SHEET;
 
 /// The anchored corner, the point it is pinned to and the offset for a
 /// placement — pure, so the geometry is testable without a window.

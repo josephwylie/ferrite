@@ -17,6 +17,7 @@ mod composer_footer;
 mod columns;
 mod composer_menu;
 mod context_menu;
+mod copies;
 pub(crate) mod coordinator;
 pub(crate) mod decisions;
 mod delegates;
@@ -584,6 +585,8 @@ pub struct CockpitView {
     server_bands: server::ServerBands,
     /// The operator's setup kept in sync with each Machine (ADR 0048).
     setup_sync: Entity<setup_sync::SetupSync>,
+    /// Every copy of a Project of this computer to a Machine (ADR 0048 §2).
+    copies: Entity<copies::Copies>,
     /// Whether the window has said `settings.json` could not be used.
     unreadable_told: bool,
     /// The operator's commands running, and what they and the keys have
@@ -1229,6 +1232,7 @@ impl CockpitView {
         let setup_sync = cx.new(|_| {
             setup_sync::SetupSync::new(prefs.setup_home.clone(), prefs.dir.clone(), cockpit.clone())
         });
+        let copies = Self::copies_of_window(cockpit.clone(), cx);
         let composer_menu = cx.new(|_| composer_menu::ComposerMenuView::default());
         // Whether a Composer's key context is the menu's follows the menu.
         cx.observe(&composer_menu, |view, _, cx| view.sync_composer_floats(cx))
@@ -1366,6 +1370,7 @@ impl CockpitView {
             ferrite_update: Default::default(),
             server_bands: Default::default(),
             setup_sync,
+            copies,
             unreadable_told: false,
             user_commands: Default::default(),
             leave_asked: false,
@@ -2210,6 +2215,7 @@ impl CockpitView {
         if let Some(sheet) = self.placement_sheet(cx) {
             sheet.update(cx, |sheet, cx| sheet.poll(cx));
         }
+        self.poll_copies(cx);
         self.poll_environment_lookup(cx);
         self.poll_machine_repo(cx);
         self.tick_setup_sync(cx);
@@ -3920,7 +3926,7 @@ impl CockpitView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
-        if self.panes.get(self.focused(cx)).is_some_and(|pane| !pane.composer.read(cx).comment_valid(cx)) {
+        if self.panes.get(self.focused(cx)).map(|pane| pane.composer.clone()).is_some_and(|line| line.update(cx, |line, cx| line.holds_send(window, cx))) {
             return;
         }
         // The card's ↵ is its confirm — but in a machine's folder browser,
@@ -4070,10 +4076,9 @@ impl CockpitView {
             connections.update(cx, |connections, cx| connections.cancel(cx));
             return;
         }
-        // The setup sheet's esc is its Cancel: a copy under way stops, and
-        // the sheet stays to say so.
+        // The setup sheet's esc closes it; a copy it shows carries on.
         if let Some(sheet) = self.placement_sheet(cx) {
-            sheet.update(cx, |sheet, cx| sheet.cancel(cx));
+            sheet.update(cx, |sheet, cx| sheet.dismiss(cx));
             return;
         }
         if self.hide_sheet(cx) {
@@ -4245,7 +4250,7 @@ impl CockpitView {
         }) {
             return;
         }
-        let environment = self.environment_chip_shown(cx);
+        let environment = self.environment_chip_shown(self.focused(cx), cx);
         let Some(draft) = self.focused_draft_mut(cx) else {
             self.cycle_tools(false, window, cx);
             return;
@@ -5272,7 +5277,7 @@ impl CockpitView {
                 }
                 return;
             }
-            pane::BandChip::Environment => self.environment_menu_rows(draft, cx),
+            pane::BandChip::Environment => self.environment_menu_rows(identity, draft, cx),
             pane::BandChip::Project => self.project_menu_rows(draft, cx),
             pane::BandChip::Workspace => self.workspace_menu_rows(draft, cx),
         };
@@ -5599,6 +5604,7 @@ impl CockpitView {
                 }
             }
             BandChoice::Environment(machine) => self.pick_environment(*machine, cx),
+            BandChoice::Copy(key) => self.show_copy(key, cx),
             BandChoice::Connections => self.open_connections(cx),
         }
         cx.notify();
@@ -5619,7 +5625,8 @@ impl CockpitView {
         };
         let binding = draft.binding.clone();
         let composer = pane.composer.clone();
-        if !self.admit_files(self.focused(cx), cx) {
+        // A draft waiting on its copy runs where the copy goes, once it is in.
+        if self.waited_on(self.focused(cx), cx).is_some() || !self.admit_files(self.focused(cx), cx) {
             return;
         }
         let text = composer.read(cx).prompt().trim().to_string();
@@ -5722,15 +5729,19 @@ impl CockpitView {
             DraftTarget::New => (ferrite_ui::icons::FOLDER_GIT, SharedString::from("New worktree")),
         };
         // Where the draft runs: a chip while there is more than one
-        // environment to choose, else a word for a machine.
+        // environment to choose, or a copy to wait on, else a word for a
+        // machine.
         let machine = draft.binding.project().machine();
-        let environment = self.environment_chip_shown(cx).then(|| {
+        let environment = self.environment_chip_shown(index, cx).then(|| {
+            if let Some((mark, label)) = self.copy_chip(index, cx) {
+                return (pane::BandChip::Environment, 2, mark, label);
+            }
             let mark = if self.elsewhere(machine, cx) {
                 ferrite_ui::icons::SERVER
             } else {
                 ferrite_ui::icons::LAPTOP
             };
-            (pane::BandChip::Environment, 2, mark, self.environment_name(machine, cx))
+            (pane::BandChip::Environment, 2, pane::ChipMark::Icon(mark), self.environment_name(machine, cx))
         });
         let word = environment
             .is_none()
@@ -5741,13 +5752,13 @@ impl CockpitView {
             (
                 pane::BandChip::Project,
                 0,
-                ferrite_ui::icons::FOLDER,
+                pane::ChipMark::Icon(ferrite_ui::icons::FOLDER),
                 pane::band_chip_label(&project_title),
             ),
             (
                 pane::BandChip::Workspace,
                 1,
-                workspace_mark,
+                pane::ChipMark::Icon(workspace_mark),
                 pane::band_chip_label(&workspace_label),
             ),
         ]);
@@ -5778,7 +5789,7 @@ impl CockpitView {
                 )
                 .into_any_element()
             });
-        word.into_iter().chain(chips).collect()
+        self.noting_copy(index, word.into_iter().chain(chips).collect(), cx)
     }
 
     /// The focused draft's model chip (#29), where a live Thread's stands
@@ -5948,7 +5959,7 @@ impl CockpitView {
         Some(pane::ComposerControls {
             attach: Some(attach),
             stop: composer_footer::stop_button(index, running, line_empty, cx),
-            send: composer_footer::send_button(index, running, line_empty, cx),
+            send: composer_footer::send_button(index, running, line_empty, cx).filter(|_| self.waited_on(index, cx).is_none()),
             footer: Some(pane::composer_footer(model, words, ring).into_any_element()),
             env: env
                 .filter(|chips: &Vec<AnyElement>| !chips.is_empty())
@@ -6903,6 +6914,7 @@ impl CockpitView {
         self.present_ferrite_update(window, cx);
         self.present_server(window, cx);
         self.present_setup_sync(window, cx);
+        self.present_copies(window, cx);
         self.present_restart(window, cx);
         self.present_unreadable_settings(window, cx);
         self.present_user_commands(window, cx);
@@ -7518,23 +7530,7 @@ impl CockpitView {
             .children(self.sheet_floats(window, cx))
             .children(self.lightbox_element(cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
-            .children(gpui::component::Root::render_notification_layer(window, cx).map(|layer| {
-                let shifted = div().absolute().inset_0().right(self.toasts_shifted(window, cx)).child(layer);
-                deferred(shifted).with_priority(ferrite_ui::float::FLOAT_PRIORITY)
-            }))
-    }
-
-    /// How far left of where they hang the toasts hang while a sheet is
-    /// up: short of the square at the end of its head that holds its close
-    /// button, so they never cover it, and at their own height, so they
-    /// cover as little of the sheet as they can.
-    fn toasts_shifted(&self, window: &Window, cx: &gpui::App) -> Pixels {
-        use ferrite_ui::theme::{MODAL_HEAD_H, TOAST_BOX_RIGHT};
-        let Some(card) = self.sheets.read(cx).card() else {
-            return px(0.);
-        };
-        let right = window.viewport_size().width - px(TOAST_BOX_RIGHT);
-        (right - (card.right() - px(MODAL_HEAD_H))).max(px(0.))
+            .children(self.kit_toasts(window, cx))
     }
 }
 
@@ -7646,7 +7642,7 @@ impl CockpitView {
             return cell.child(pane::render_draft(
                 pane,
                 pane::DraftState {
-                    start: self.draft_hero(index, cx),
+                    start: self.under_sheets(self.draft_hero(index, cx), cx),
                     attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
                     menu: self.popover_element(index, cx),
                     composer_empty: pane.composer.read(cx).is_empty(),
@@ -7748,7 +7744,7 @@ impl CockpitView {
             // An empty Thread wears the draft's start card until its first
             // prompt.
             start: if pane.is_main() && open.transcript().blocks().is_empty() {
-                self.thread_hero(thread)
+                self.under_sheets(self.thread_hero(thread), cx)
             } else {
                 None
             },
@@ -8591,7 +8587,7 @@ impl CockpitView {
     /// (the click handler's doing) and lands on what it was about, in
     /// place, on whichever machine.
     pub(crate) fn open_system_notification(&mut self, tag: &str, cx: &mut Context<Self>) {
-        if self.open_task_notification(tag, cx) {
+        if self.open_task_notification(tag, cx) || self.open_copy_notification(tag, cx) {
             return;
         }
         // Its entry stays: read now, the next pump takes it out of the

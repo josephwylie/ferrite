@@ -10,7 +10,7 @@ use gpui::{
     RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _, px, relative, rems, svg,
 };
-use gpui_base::{CheckboxIndicator, spring};
+use gpui_base::{CheckboxIndicator, CheckboxState, spring};
 
 /// A Checkbox element.
 #[derive(IntoElement)]
@@ -24,6 +24,7 @@ pub struct Checkbox {
     accessibility_label: Option<SharedString>,
     children: Vec<AnyElement>,
     checked: bool,
+    indeterminate: bool,
     disabled: bool,
     size: Size,
     tab_stop: bool,
@@ -46,6 +47,7 @@ impl Checkbox {
             accessibility_label: None,
             children: Vec::new(),
             checked: false,
+            indeterminate: false,
             disabled: false,
             size: Size::default(),
             on_click: None,
@@ -85,6 +87,14 @@ impl Checkbox {
     /// Set the checked state for the checkbox.
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = checked;
+        self
+    }
+
+    /// Ferrite's patch: neither checked nor unchecked, as a tick over a set
+    /// that is partly ticked is. It draws filled, with a dash for its mark,
+    /// and a press checks it.
+    pub fn indeterminate(mut self, indeterminate: bool) -> Self {
+        self.indeterminate = indeterminate;
         self
     }
 
@@ -181,11 +191,7 @@ pub(crate) fn checkbox_check_icon(
         window,
         cx,
     );
-    let color = if disabled {
-        cx.theme().primary_foreground.opacity(0.5)
-    } else {
-        cx.theme().primary_foreground
-    };
+    let color = mark_color(disabled, cx);
 
     svg()
         .absolute()
@@ -204,9 +210,41 @@ pub(crate) fn checkbox_check_icon(
         })
 }
 
+fn mark_color(disabled: bool, cx: &App) -> gpui::Hsla {
+    if disabled {
+        cx.theme().primary_foreground.opacity(0.5)
+    } else {
+        cx.theme().primary_foreground
+    }
+}
+
+/// Ferrite's patch: the indeterminate mark, a dash across the box's middle.
+fn checkbox_dash(disabled: bool, cx: &App) -> impl IntoElement {
+    div()
+        .debug_selector(|| "checkbox-dash".into())
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(relative(0.2))
+        .right(relative(0.2))
+        .my_auto()
+        .h(px(2.))
+        .rounded(px(1.))
+        .bg(mark_color(disabled, cx))
+}
+
 impl RenderOnce for Checkbox {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let checked = self.checked;
+        let mixed = self.indeterminate;
+        let checked = self.checked && !mixed;
+        let filled = checked || mixed;
+        let state = if mixed {
+            CheckboxState::Indeterminate
+        } else if checked {
+            CheckboxState::Checked
+        } else {
+            CheckboxState::Unchecked
+        };
 
         let base = self.base;
         let children = self.children;
@@ -222,7 +260,7 @@ impl RenderOnce for Checkbox {
 
         let unchecked_border = cx.theme().input;
         let checked_color = cx.theme().primary;
-        let disabled_indicator_color = if checked {
+        let disabled_indicator_color = if filled {
             checked_color.opacity(0.5)
         } else {
             unchecked_border.opacity(0.5)
@@ -231,7 +269,7 @@ impl RenderOnce for Checkbox {
         let disabled_text_color = cx.theme().muted_foreground;
         let instance_style = self.style.clone();
         base.role(self.role)
-            .checked(checked)
+            .state(state)
             .disabled(self.disabled)
             .styles(|styles| {
                 styles.disabled(|style| {
@@ -271,7 +309,7 @@ impl RenderOnce for Checkbox {
             .refine_style(&self.style)
             .child(
                 CheckboxIndicator::new()
-                    .checked(checked)
+                    .state(state)
                     .disabled(self.disabled)
                     .relative()
                     .map(|this| match self.size {
@@ -284,7 +322,7 @@ impl RenderOnce for Checkbox {
                     .flex_shrink_0()
                     .border_1()
                     .rounded(radius)
-                    .when(!checked, |this| {
+                    .when(!filled, |this| {
                         this.bg(cx.theme().input_background())
                             .when(!self.disabled, |this| this.border_color(unchecked_border))
                     })
@@ -295,10 +333,15 @@ impl RenderOnce for Checkbox {
                                     .border_color(checked_color)
                                     .bg(cx.theme().tokens.primary)
                             })
+                            .indeterminate(|style| {
+                                style
+                                    .border_color(checked_color)
+                                    .bg(cx.theme().tokens.primary)
+                            })
                             .disabled(|style| {
                                 style
                                     .border_color(disabled_indicator_color)
-                                    .when(checked, |style| style.bg(disabled_indicator_color))
+                                    .when(filled, |style| style.bg(disabled_indicator_color))
                             })
                     })
                     .child(checkbox_check_icon(
@@ -308,7 +351,8 @@ impl RenderOnce for Checkbox {
                         self.disabled,
                         window,
                         cx,
-                    )),
+                    ))
+                    .when(mixed, |this| this.child(checkbox_dash(self.disabled, cx))),
             )
             .when(self.label.is_some() || !children.is_empty(), |this| {
                 this.child(
@@ -461,6 +505,37 @@ mod tests {
         assert_eq!(clicks.get(), 0);
         assert_eq!(parent_clicks.get(), 1);
         cx.update(|window, cx| assert!(window.focused(cx).is_none()));
+    }
+
+    /// Ferrite's patch: a box over a set partly ticked shows a dash, and a
+    /// press on it ticks the whole set.
+    #[gpui::test]
+    fn an_indeterminate_box_draws_a_dash_and_a_press_checks_it(cx: &mut TestAppContext) {
+        struct Mixed(Rc<Cell<Option<bool>>>);
+
+        impl Render for Mixed {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let heard = self.0.clone();
+                div().size(px(100.)).child(
+                    Checkbox::new("mixed")
+                        .checked(false)
+                        .indeterminate(true)
+                        .size_full()
+                        .on_click(move |checked, _, _| heard.set(Some(*checked))),
+                )
+            }
+        }
+
+        cx.update(crate::init);
+        let heard = Rc::new(Cell::new(None));
+        let (_, cx) = cx.add_window_view({
+            let heard = heard.clone();
+            move |_, _| Mixed(heard)
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(cx.debug_bounds("checkbox-dash").is_some(), "the dash is its mark");
+        cx.simulate_click(point(px(10.), px(10.)), Modifiers::default());
+        assert_eq!(heard.get(), Some(true));
     }
 
     #[gpui::test]

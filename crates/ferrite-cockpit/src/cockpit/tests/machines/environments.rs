@@ -110,7 +110,14 @@ fn text_of(cx: &mut gpui::VisualTestContext, selector: &str) -> Option<String> {
         .map(|lines| lines.join(" "))
 }
 
+/// Press the centre of what `selector` drew. A setup card up is let come
+/// to its size first: it takes the height of what it shows a frame after
+/// that changes, its controls moving with it, so a press aimed at the
+/// frame before lands where they were.
 fn press(cx: &mut gpui::VisualTestContext, selector: &str) {
+    if debug_bounds(cx, "placement-card".into()).is_some() {
+        settles(cx);
+    }
     let at = debug_bounds(cx, selector.to_string())
         .unwrap_or_else(|| panic!("{selector} is drawn"))
         .center();
@@ -197,6 +204,12 @@ fn aim_sheet_at(view: &Entity<CockpitView>, dest: &Path, cx: &mut gpui::VisualTe
     line.update(cx, |line, cx| line.set(folder, cx));
     name.update(cx, |name, cx| name.set(leaf, cx));
     tick(cx);
+}
+
+/// The setup sheet's folder browser opened, as Change… opens it.
+fn browse(cx: &mut gpui::VisualTestContext) {
+    drawn(cx, "placement-change");
+    press(cx, "placement-change");
 }
 
 /// `selector` drawn, once box's Server answers what it waits on.

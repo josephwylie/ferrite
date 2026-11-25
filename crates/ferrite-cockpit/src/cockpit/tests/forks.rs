@@ -300,3 +300,31 @@ fn right_clicking_an_answer_or_a_prompt_opens_the_message_menu(cx: &mut TestAppC
         Some("again")
     );
 }
+
+/// Settings coming up closes an answer's menu, which draws over a sheet: a
+/// press where its Pin stood reaches Settings, never the Thread under it.
+/// The palette coming up closes it too.
+#[gpui::test]
+fn an_answers_menu_goes_as_settings_or_the_palette_comes_up(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = answered("answer-menu-sheet", cx);
+    let answer = cx.debug_bounds("transcript-answer").expect("the answer");
+    right_click(cx, answer.center());
+    let pin = cx.debug_bounds("answer-menu-row-4").expect("Pin as chapter");
+
+    cx.dispatch_action(OpenSettings);
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| view.settings_sheet(cx).is_some()), "Settings is up");
+    assert!(cx.debug_bounds("answer-menu").is_none(), "the menu went with the board");
+    cx.simulate_click(pin.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("answer-chapter").is_none(), "the Thread under it is not pinned");
+
+    view.update(cx, |view, cx| view.hide_sheet(cx));
+    tick(cx);
+    right_click(cx, answer.center());
+    assert!(cx.debug_bounds("answer-menu").is_some(), "the menu opens again");
+    cx.dispatch_action(crate::palette::Toggle);
+    tick(cx);
+    assert!(cx.debug_bounds("palette-veil").is_some(), "the palette is up");
+    assert!(cx.debug_bounds("answer-menu").is_none(), "the menu went with the board");
+}

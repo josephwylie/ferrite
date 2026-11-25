@@ -222,15 +222,38 @@ impl Composer {
         focus.contains_focused(window, cx).then_some(focus)
     }
 
-    pub fn comment_valid(&self, cx: &App) -> bool {
+    /// Whether the comment open, if one is, is within the limit.
+    fn editing_valid(&self, cx: &App) -> bool {
         self.citations
             .editing
             .as_ref()
             .is_none_or(|edit| valid_comment(edit.field.read(cx).text()))
     }
 
+    /// Whether the draft may be sent: the comment open and every reply's
+    /// words within the limit. A sheet closing a comment keeps its words
+    /// on the reply even over it (`close_comment`), and they hold the send
+    /// back until they are cut.
+    pub fn comment_valid(&self, cx: &App) -> bool {
+        self.editing_valid(cx) && self.replies.iter().all(|reply| valid_comment(&reply.text))
+    }
+
+    /// Whether words over a comment's limit hold the send back. They say
+    /// so: a reply that keeps them opens to cut them, unless a comment is
+    /// open already, which says it.
+    pub fn holds_send(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> bool {
+        if self.comment_valid(cx) {
+            return false;
+        }
+        let long = self.replies.iter().position(|reply| !valid_comment(&reply.text));
+        if let Some(index) = long.filter(|_| self.citations.editing.is_none()) {
+            self.edit_comment(index, window, cx);
+        }
+        true
+    }
+
     pub(super) fn commit_comment(&mut self, cx: &App) -> bool {
-        if !self.comment_valid(cx) {
+        if !self.editing_valid(cx) {
             return false;
         }
         let Some(Editing { index, field, .. }) = self.citations.editing.take() else {
@@ -258,6 +281,22 @@ impl Composer {
         cx.refresh_windows();
         self.edited(cx);
         true
+    }
+
+    /// Close the comment popover with its words kept on the reply, as a
+    /// press outside it does: something came up over the board, which the
+    /// operator may not have asked for. Words over the limit, which no press
+    /// outside closes on, are kept too (`comment_valid`).
+    pub fn close_comment(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(edit) = self.citations.editing.take() else {
+            return;
+        };
+        if let Some(reply) = self.replies.get_mut(edit.index) {
+            reply.text = edit.field.read(cx).text().trim().to_string();
+        }
+        self.citations.source_anchor = None;
+        cx.refresh_windows();
+        self.edited(cx);
     }
 
     pub fn save_comment(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> bool {
@@ -419,7 +458,7 @@ pub(super) fn tray(entity: &Entity<Composer>, now: Instant, cx: &App) -> Option<
                     .margin(px(16.))
                     .child(panel(entity, index, reply, cx)),
             )
-            .with_priority(4)
+            .with_priority(ferrite_ui::layer::MENU)
             .into_any_element()
         });
     Some(
@@ -631,7 +670,7 @@ fn panel(entity: &Entity<Composer>, index: usize, _reply: &Reply, cx: &App) -> A
     let field = edit.field.clone();
     let pending = edit.focus_pending.clone();
     let empty = field.read(cx).text().is_empty();
-    let invalid = !composer.comment_valid(cx);
+    let invalid = !composer.editing_valid(cx);
     let focused_field = field.clone();
     let field = components::on_bounds(
         div()
