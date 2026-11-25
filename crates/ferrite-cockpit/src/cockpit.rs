@@ -72,6 +72,7 @@ use ferrite_ui::components::rename_field;
 use rename::RenameTarget;
 pub(crate) mod starts;
 mod surfaces;
+mod sweep;
 mod toasts;
 pub(crate) mod subagents;
 pub(crate) mod tools;
@@ -378,31 +379,16 @@ pub struct CockpitView {
     focus: FocusHandle,
     field_watch: fields::FieldWatch,
     perf: Option<Perf>,
-    /// When the watchdog last swept, on the executor's clock (the wall
-    /// clock in the app, the fake one under test, so a loaded test machine
-    /// cannot drop a sweep into the middle of a test). Measurements are
-    /// cached from the RSS worker, so a sweep never waits for an
-    /// operating-system query.
-    swept: std::time::Instant,
+    /// When the watchdog's sweep is next due, and what it finds turned
+    /// over (`sweep`).
+    sweep: sweep::Sweep,
     /// The nav and each Pane as cached parts (`parts`), and what notifies
     /// the frame around them alone.
     parts: std::cell::RefCell<parts::Parts>,
     frame_tick: Entity<parts::FrameTick>,
-    /// When the next nav age (`2m`) turns over, as of the last draw: the
-    /// sweep redraws an otherwise quiet window then.
-    ages_turn_at: Option<std::time::SystemTime>,
-    /// When the frame's own clock text (a notice's age) next turns over,
-    /// as of the last draw.
-    frame_turn_at: Option<std::time::SystemTime>,
     /// Free bytes on the volume holding the Threads' checkouts, as last
     /// read (the nav foot's `N GB free`); `None` until read, or when unknown.
     free_disk: Option<u64>,
-    /// When free disk was last asked for, on the executor's clock: at
-    /// launch, then by the sweep once a minute (`read_free_disk`).
-    free_disk_asked: Option<std::time::Instant>,
-    /// The wall-clock minute the transcripts' message times (`52 minutes
-    /// ago`) were last drawn in: the sweep redraws them as it turns over.
-    message_minute: i64,
     /// When the Threads' checkout labels are read from git
     /// (`refresh_branches`).
     branch_reads: branch_reads::BranchReads,
@@ -879,13 +865,6 @@ struct Band {
 #[cfg(test)]
 const TAIL_SLACK: Pixels = px(2.);
 
-/// How often the watchdog sweeps. Leaks grow over seconds, not frames; a
-/// sweep per frame would spawn a `ps`/`tasklist` per Session per tick.
-const SWEEP_INTERVAL: Duration = Duration::from_secs(2);
-
-/// How often the sweep re-reads free disk for the nav's foot.
-const FREE_DISK_EVERY: Duration = Duration::from_secs(60);
-
 #[cfg(test)]
 thread_local! {
     /// Root Cockpit renders on this (test) thread: the unit the idle frame
@@ -1259,14 +1238,10 @@ impl CockpitView {
                 frames: 0,
                 since: std::time::Instant::now(),
             }),
-            swept: cx.background_executor().now(),
+            sweep: sweep::Sweep::new(cx.background_executor().now()),
             parts: Default::default(),
             frame_tick: cx.new(|_| parts::FrameTick),
-            ages_turn_at: None,
-            frame_turn_at: None,
             free_disk: None,
-            free_disk_asked: None,
-            message_minute: ferrite_core::clock::now().timestamp().div_euclid(60),
             branch_reads: Default::default(),
             selection: TranscriptText::default(),
             side_chat,
@@ -1363,8 +1338,9 @@ impl CockpitView {
         view.parked_changed(cx);
         // The bar's free disk from the first frame; the sweep re-reads it
         // each minute.
-        view.free_disk_asked = Some(cx.background_executor().now());
-        view.read_free_disk(cx);
+        if view.sweep.ask_free_disk(cx.background_executor().now()) {
+            view.read_free_disk(cx);
+        }
         // Nothing revived: the cockpit starts as one draft Pane (#29) —
         // nothing spawns before the operator's choice. Only this
         // computer's Projects are there before any Server answers.
@@ -2240,8 +2216,7 @@ impl CockpitView {
         let mut swept_busy: Vec<ThreadKey> = Vec::new();
         let mut swept_frame = false;
         let now = cx.background_executor().now();
-        if now.duration_since(self.swept) >= SWEEP_INTERVAL {
-            self.swept = now;
+        if self.sweep.take(now) {
             // The core logs each restart (`Cockpit::sweep`).
             for restart in self.cockpit.update(cx, |cockpit, _| cockpit.sweep()) {
                 restarted.push(restart.thread);
@@ -2266,24 +2241,18 @@ impl CockpitView {
                 .chain(moved)
                 .collect();
             let wall = ferrite_core::clock::system_time();
-            let aged = self.ages_turn_at.is_some_and(|at| wall >= at);
-            swept_frame = self.frame_turn_at.is_some_and(|at| wall >= at);
+            let aged = self.sweep.ages_turned(wall);
+            swept_frame = self.sweep.frame_turned(wall);
             swept_change = aged;
             self.refresh_branches(cx);
             self.follow_workspace(cx);
             // Free disk rides the sweep, once a minute: no wake of its own.
-            if self
-                .free_disk_asked
-                .is_none_or(|at| now.duration_since(at) >= FREE_DISK_EVERY)
-            {
-                self.free_disk_asked = Some(now);
+            if self.sweep.ask_free_disk(now) {
                 self.read_free_disk(cx);
             }
             // Message times turn over with the minute, on this one timer:
             // each transcript redraws then, and no row arms a wake.
-            let minute = ferrite_core::clock::now().timestamp().div_euclid(60);
-            if minute != self.message_minute {
-                self.message_minute = minute;
+            if self.sweep.minute_turned() {
                 for transcript in self.panes.iter().filter_map(|pane| pane.transcript()) {
                     transcript.update(cx, |_, cx| cx.notify());
                 }
@@ -2429,8 +2398,7 @@ impl CockpitView {
             return pump_interval();
         }
         let now = cx.background_executor().now();
-        let sweep = SWEEP_INTERVAL.saturating_sub(now.duration_since(self.swept));
-        PUMP_FALLBACK.min(sweep)
+        PUMP_FALLBACK.min(self.sweep.due_in(now))
     }
 
     /// What a stream can change that more than its own Pane and nav row
@@ -6653,8 +6621,8 @@ impl CockpitView {
         let thread_ages = self.facts.next_age_change(wall);
         // The sweep redraws a window nothing else draws when an age turns:
         // a Thread's everywhere, a notice's in the frame.
-        self.ages_turn_at = thread_ages.map(|next| wall + next);
-        self.frame_turn_at = notices.map(|next| wall + next);
+        self.sweep
+            .clock_text_turns(thread_ages.map(|next| wall + next), notices.map(|next| wall + next));
         if ferrite_ui::motion::reduced_motion(cx) {
             return;
         }

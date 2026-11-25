@@ -865,7 +865,7 @@ fn an_idle_window_runs_no_git_until_its_checkout_moves(cx: &mut TestAppContext) 
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let sweep = |cx: &mut gpui::VisualTestContext| {
-        cx.executor().advance_clock(SWEEP_INTERVAL);
+        cx.executor().advance_clock(sweep::SWEEP_INTERVAL);
         cx.run_until_parked();
     };
     let dirty = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {

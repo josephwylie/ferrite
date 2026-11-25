@@ -628,7 +628,7 @@ fn agent_worked(view: &gpui::Entity<CockpitView>, fake: &Fake, stream: usize, cx
         .send(SessionEvent::TextDelta { text: "Edited.".into() })
         .unwrap();
     view.update(cx, |view, cx| {
-        view.swept = cx.background_executor().now() - SWEEP_INTERVAL;
+        view.sweep.fall_due(cx.background_executor().now());
         view.pump(cx);
     });
     cx.run_until_parked();

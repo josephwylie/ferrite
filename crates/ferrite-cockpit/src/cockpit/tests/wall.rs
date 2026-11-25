@@ -150,7 +150,7 @@ fn the_locked_pane_caches_the_actual_checkout_branch(cx: &mut TestAppContext) {
     // watchdog cadence still refreshes and repaints the header.
     git(&["checkout", "-q", "-b", "agent-moved"]);
     view.update(cx, |view, cx| {
-        view.swept = cx.background_executor().now() - SWEEP_INTERVAL;
+        view.sweep.fall_due(cx.background_executor().now());
         view.pump(cx);
     });
     view.read_with(cx, |view, _| {

@@ -10,6 +10,15 @@ fn solo_of<'a>(
     cx: &'a mut TestAppContext,
 ) -> (Entity<CockpitView>, Fake, &'a mut gpui::VisualTestContext) {
     let (core, fake) = cockpit(name, 1);
+    solo_on(core, fake, cx)
+}
+
+/// `core`'s one Thread, Solo, at the app's size.
+fn solo_on(
+    core: Cockpit,
+    fake: Fake,
+    cx: &mut TestAppContext,
+) -> (Entity<CockpitView>, Fake, &mut gpui::VisualTestContext) {
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
@@ -121,6 +130,31 @@ fn the_foot_says_free_disk_only_when_it_runs_low(cx: &mut TestAppContext) {
             "{free:?} free"
         );
     }
+}
+
+/// Free disk is read as the window opens, and again by the sweep once a
+/// minute: never on every sweep.
+#[gpui::test]
+fn free_disk_is_read_at_launch_and_again_each_minute(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("frame-foot-disk-read", 1);
+    core.fixture_free_disk(7_500_000_000);
+    let (view, _fake, cx) = solo_on(core, fake, cx);
+    assert!(cx.debug_bounds("nav-free-disk").is_some(), "read as the window opens");
+
+    view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |core, _| core.fixture_free_disk(30_000_000_000))
+    });
+    cx.executor().advance_clock(sweep::SWEEP_INTERVAL);
+    cx.run_until_parked();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("nav-free-disk").is_some(),
+        "a sweep within the minute reads nothing"
+    );
+    cx.executor().advance_clock(Duration::from_secs(60));
+    cx.run_until_parked();
+    tick(cx);
+    assert!(cx.debug_bounds("nav-free-disk").is_none(), "the minute's sweep reads it again");
 }
 
 /// F-14: a file opens at a line in the Panel's preview — the Panel wide,
