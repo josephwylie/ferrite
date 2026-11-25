@@ -58,6 +58,7 @@ use gpui::{
 use ferrite_pane::composer::{Composer, Edited, Role};
 use ferrite_pane::pane::{DiffKind, Grid};
 use ferrite_ui::pointer::Pointer as _;
+use ferrite_ui::pull_request::review_verdict;
 use ferrite_ui::theme::*;
 
 gpui::actions!(
@@ -2501,7 +2502,7 @@ fn pr_comment_head(comment: &WirePrComment) -> String {
         WirePrCommentKind::Comment | WirePrCommentKind::Unknown => "comment",
     };
     let mut head = format!("{} \u{b7} {kind}", comment.author);
-    if let Some((verdict, _)) = comment.verdict.and_then(crate::pr::review_verdict) {
+    if let Some((verdict, _)) = comment.verdict.and_then(review_verdict) {
         head.push_str(&format!(" \u{b7} {}", verdict.to_lowercase()));
     }
     // A review or a comment is anchored to its own kind's word: only a
