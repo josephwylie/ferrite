@@ -26,15 +26,17 @@ mod tests;
 pub use installs::{Installer, Installs};
 pub use portable::Spelling;
 pub use reconcile::{agreed, reconcile, Action, Hold};
-pub use run::{run, Job, Kept, Names, Outcome, Replaced, Synced, Valve, BASE, CONFLICTS, TRASH};
-pub use store::{Home, Keychain};
+pub use run::{run, Job, Kept, Names, Outcome, Replaced, Synced, Valve, BASE, CONFLICTS};
+pub use store::{Home, Keychain, TRASH};
 pub(crate) use store::Place;
 
 /// Which table this Ferrite syncs by. Both sides of a sync must name the
 /// same one: a Server refuses the Setup root of any other, so two Ferrites
-/// whose tables differ move nothing. The first table, 0.4.0's, synced
-/// plugin downloads and whole tool files.
-pub const TABLE: u32 = 2;
+/// whose tables differ move nothing, and a base is read only by the table
+/// that wrote it. The first table, 0.4.0's, synced plugin downloads and
+/// whole tool files. The second, never released, carried every key of
+/// Claude's settings and removed on a Machine with no trash.
+pub const TABLE: u32 = 3;
 
 /// One part of the operator's setup, by its path from the home directory;
 /// `.claude/…` is from `$CLAUDE_CONFIG_DIR` and `.codex/…` from

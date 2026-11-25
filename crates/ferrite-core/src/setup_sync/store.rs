@@ -5,15 +5,16 @@
 //! edit. A chosen key is written into its file with every other byte of it
 //! kept. Nothing is ever written through a symlink, and nothing removed
 //! through one: a link itself may go. A link to a place the table names
-//! is listed as that link, and made again on the other side. A sign-in is
-//! only ever owner-only bytes: never logged or named by its content in an
-//! error.
+//! is listed as that link, and made again on the other side. Nothing a
+//! sync removes or writes over is deleted: each side moves it to its own
+//! trash first. A sign-in is only ever owner-only bytes: never logged or
+//! named by its content in an error, and never put in the trash.
 
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
@@ -38,6 +39,14 @@ pub(super) const OWN: &str = "it names a place of this computer's own";
 /// it can say which did not.
 const INSTALLING: Duration = Duration::from_secs(120);
 
+/// Where what a sync removes or writes over is moved, in Ferrite's
+/// settings folder, a folder for each sync.
+pub const TRASH: &str = "sync-trash";
+/// How long a sync's trash folder is kept.
+const KEPT: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+/// How a sync's folder of conflicts or trash is named: its time.
+pub(super) const STAMP: &str = "%Y%m%d-%H%M%S-%3f";
+
 /// One side's home directory, and where its agents keep what the table
 /// names.
 #[derive(Clone)]
@@ -54,6 +63,59 @@ pub struct Home {
     keychain: Option<(Arc<dyn Keychain>, String)>,
     /// What installs the plugins a sync turns on in Claude here.
     installs: Option<Arc<Installs>>,
+    /// Where what a sync removes or writes over here goes.
+    trash: Arc<Trash>,
+}
+
+/// A side's trash: what a sync removes or writes over there, in a folder
+/// for each sync named by its time, each kept [`KEPT`].
+struct Trash {
+    root: PathBuf,
+    /// This sync's folder, once it has one.
+    folder: Mutex<Option<PathBuf>>,
+}
+
+impl Trash {
+    fn at(root: PathBuf) -> Arc<Self> {
+        Arc::new(Self { root, folder: Mutex::new(None) })
+    }
+
+    /// A sync begins: each folder older than [`KEPT`] goes, and what this
+    /// one moves goes in a folder of its own.
+    fn begin(&self) {
+        prune(&self.root);
+        *self.lock() = None;
+    }
+
+    /// This sync's folder.
+    fn folder(&self) -> PathBuf {
+        let stamp = || self.root.join(crate::clock::now().format(STAMP).to_string());
+        self.lock().get_or_insert_with(stamp).clone()
+    }
+
+    /// This sync's folder, once something was moved there.
+    fn used(&self) -> Option<PathBuf> {
+        self.lock().clone().filter(|folder| folder.exists())
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<PathBuf>> {
+        self.folder.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Remove each sync's trash folder older than [`KEPT`].
+fn prune(trash: &Path) {
+    let Ok(folders) = fs::read_dir(trash) else {
+        return;
+    };
+    let now = crate::clock::now().naive_local();
+    for folder in folders.flatten() {
+        let name = folder.file_name();
+        let when = name.to_str().and_then(|name| chrono::NaiveDateTime::parse_from_str(name, STAMP).ok());
+        if when.is_some_and(|when| (now - when).to_std().is_ok_and(|age| age > KEPT)) {
+            let _ = fs::remove_dir_all(folder.path());
+        }
+    }
 }
 
 /// A store of secrets by service, for this computer's user.
@@ -84,7 +146,7 @@ impl Home {
         let codex = var("CODEX_HOME").map(under);
         let claude = var("CLAUDE_CONFIG_DIR").map(under);
         let keychain = cfg!(target_os = "macos") && account.as_ref().is_some_and(|account| *account == root);
-        let mut home = Self::at(root, codex);
+        let mut home = Self::at(root, codex).with_trash_in(&crate::server::settings_dir());
         if let Some(claude) = claude {
             home = home.with_claude(claude);
         }
@@ -103,16 +165,31 @@ impl Home {
     }
 
     /// A home at `root` whose sign-ins are files, with Codex's at `codex`
-    /// or in `root`, and nothing to install plugins with.
+    /// or in `root`, nothing to install plugins with, and its trash in
+    /// `.ferrite` there, as a Ferrite of that home keeps it.
     pub fn at(root: PathBuf, codex: Option<PathBuf>) -> Self {
         Self {
             claude: root.join(".claude"),
             claude_json: root.join(".claude.json"),
             codex: codex.unwrap_or_else(|| root.join(".codex")),
+            trash: Trash::at(root.join(".ferrite").join(TRASH)),
             root,
             keychain: None,
             installs: None,
         }
+    }
+
+    /// What a sync removes or writes over here kept in the trash of
+    /// `settings`, a Ferrite settings folder, a trash of its own.
+    pub fn with_trash_in(mut self, settings: &Path) -> Self {
+        self.trash = Trash::at(settings.join(TRASH));
+        self
+    }
+
+    /// Where the last sync moved what it removed or wrote over here, when
+    /// it moved anything.
+    pub(super) fn trashed(&self) -> Option<PathBuf> {
+        self.trash.used()
     }
 
     /// Claude's folder at `dir`, as `CLAUDE_CONFIG_DIR` puts it, its
@@ -235,8 +312,10 @@ impl Home {
     /// item behind a link to something not there; only an item that is
     /// not there at all is nothing. Each plugin a sync turned on here that
     /// could not be installed is a problem too, once the installs under way
-    /// are over.
+    /// are over. A scan begins a sync here: what it moves aside goes in a
+    /// trash folder of its own.
     pub(crate) fn scan(&self, skip: &[String]) -> Manifest {
+        self.trash.begin();
         for dir in self.file_dirs() {
             sweep(&dir);
         }
@@ -420,6 +499,7 @@ impl Home {
             }
             Ok((tree::permissions(there.as_ref(), sent), there.is_none()))
         };
+        let placed = |dir: PathBuf, mode: Option<u32>, how: How| Place { path: path.to_string(), dir, mode, how };
         Ok(match (at.item().source, at) {
             (Source::Tree { .. }, At::In(item, rest)) => {
                 let root = self.physical(item.path);
@@ -427,35 +507,35 @@ impl Home {
                 let at = tree::inside(&root, rest)?;
                 let (mode, new) = replaced(&at)?;
                 let dir = at.parent().map(Path::to_path_buf).unwrap_or(root);
-                Place { dir, mode, how: How::Rename { at, new } }
+                placed(dir, mode, How::Rename { at, new })
             }
             (Source::File { owner_only }, At::Whole(_)) => {
                 private_dirs(&parent)?;
                 let (mode, new) = replaced(&file)?;
                 let mode = if owner_only && new { Some(0o600) } else { mode };
-                Place { dir: parent, mode, how: How::Rename { at: file, new } }
+                placed(parent, mode, How::Rename { at: file, new })
             }
             (Source::Keys { format, keys }, At::Key(_, key)) => {
                 private_dirs(&parent)?;
-                let how = How::Key { at: file, format, keys, key: key.to_string() };
-                Place { dir: parent, mode: Some(0o600), how }
+                placed(parent, Some(0o600), How::Key { at: file, format, keys, key: key.to_string() })
             }
             (Source::Credential(provider), At::Whole(_)) => match self.secret(provider, path) {
                 Secret::File(at) => {
                     private_dir(&parent)?;
-                    Place { dir: parent, mode: Some(0o600), how: How::Secret(at) }
+                    placed(parent, Some(0o600), How::Secret(at))
                 }
                 Secret::Keychain(..) => {
                     let dir = self.claude.clone();
                     private_dir(&dir)?;
-                    Place { dir, mode: Some(0o600), how: How::Keychain }
+                    placed(dir, Some(0o600), How::Keychain)
                 }
             },
             _ => return Err(not_setup(path)),
         })
     }
 
-    /// Put `received`, a whole file synced to disk, where `place` says.
+    /// Put `received`, a whole file synced to disk, where `place` says,
+    /// what it writes over copied to this side's trash first.
     pub(crate) fn place(&self, place: &Place, received: &Path) -> io::Result<()> {
         match &place.how {
             How::Rename { at, new } => {
@@ -466,6 +546,7 @@ impl Home {
                 if let Some(mode) = mode {
                     tree::set_mode(received, mode)?;
                 }
+                self.copy_aside(&place.path, at)?;
                 fs::rename(received, at).map_err(|error| tree::at(at, error))
             }
             How::Key { at, format, keys, key } => {
@@ -473,6 +554,7 @@ impl Home {
                 let carried = fs::read(received)?;
                 let written = keys::set(*format, keys, raw.as_deref(), key, &carried, &self.spelling())
                     .map_err(|error| tree::at(at, error))?;
+                self.key_aside(&place.path)?;
                 write_over(at, &written)?;
                 self.installing(at, key);
                 Ok(())
@@ -550,15 +632,14 @@ impl Home {
         tree::make_link(&under, &at, &spelled).map_err(|why| tree::at(&at, unmade(why)))
     }
 
-    /// Remove `path`, and all under it: whether it was there.
+    /// Remove `path`, and all under it, by moving it to this side's trash
+    /// at its [`visible`] path: whether it was there. A key is kept there
+    /// as a file of its value, owner-only, then taken out of its file. A
+    /// sign-in is refused: no sync removes one, so none is ever in the
+    /// trash.
     pub(crate) fn remove(&self, path: &str) -> io::Result<bool> {
         match item(path)? {
-            At::In(item, rest) => {
-                self.removable(item, rest)?;
-                tree::remove_entry(&self.physical(item.path), rest)
-            }
             At::Whole(Item { source: Source::Credential(_), .. }) => Err(kept_sign_in(path)),
-            At::Whole(_) => remove_file(&self.physical(path)),
             At::Key(Item { source: Source::Keys { format, keys }, .. }, key) => {
                 self.writable(path)?;
                 let at = self.physical(path);
@@ -568,42 +649,58 @@ impl Home {
                 let Some(written) = keys::remove(*format, keys, &raw, key).map_err(|error| tree::at(&at, error))? else {
                     return Ok(false);
                 };
+                self.key_aside(path)?;
                 write_over(&at, &written)?;
                 Ok(true)
             }
             At::Key(..) => Err(not_setup(path)),
+            At::In(item, rest) => {
+                self.removable(item, rest)?;
+                self.move_aside(path)
+            }
+            At::Whole(_) => self.move_aside(path),
         }
     }
 
-    /// Move `path`, and all under it, to `into`, a trash folder of this
-    /// computer, at its [`visible`] path: whether it was there. A key is
-    /// kept there as a file of its value, owner-only. A sign-in is refused:
-    /// no sync removes one, so none is ever in the trash.
-    pub(crate) fn trash(&self, path: &str, into: &Path) -> io::Result<bool> {
-        let at = item(path)?;
-        if matches!(at.item().source, Source::Credential(_)) {
-            return Err(kept_sign_in(path));
-        }
-        let kept = visible(into, path);
-        if let At::Key(..) = at {
-            let Some((carried, _)) = self.bytes(at)? else {
-                return Ok(false);
-            };
-            private_dirs(kept.parent().unwrap_or(into))?;
-            write_over(&kept, &self.written(path, carried))?;
-            return self.remove(path);
-        }
-        if let At::In(item, rest) = at {
-            self.removable(item, rest)?;
-        }
+    /// Where `path` is kept in this sync's trash, its folder made.
+    fn aside(&self, path: &str) -> io::Result<PathBuf> {
+        let folder = self.trash.folder();
+        let kept = visible(&folder, path);
+        private_dirs(kept.parent().unwrap_or(&folder))?;
+        Ok(kept)
+    }
+
+    /// Move the file, folder or link at `path` to this sync's trash:
+    /// whether it was there.
+    fn move_aside(&self, path: &str) -> io::Result<bool> {
         let file = self.physical(path);
         match fs::symlink_metadata(&file) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
             meta => meta.map_err(|error| tree::at(&file, error))?,
         };
-        private_dirs(kept.parent().unwrap_or(into))?;
-        moved(&file, &kept).map_err(|error| tree::at(&file, error))?;
+        moved(&file, &self.aside(path)?).map_err(|error| tree::at(&file, error))?;
         Ok(true)
+    }
+
+    /// Copy the file at `at`, the setup path `path`, to this sync's trash
+    /// before a write takes its place; a link is moved there whole.
+    fn copy_aside(&self, path: &str, at: &Path) -> io::Result<()> {
+        let meta = match fs::symlink_metadata(at) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            meta => meta.map_err(|error| tree::at(at, error))?,
+        };
+        let kept = self.aside(path)?;
+        let copied = if meta.file_type().is_symlink() { moved(at, &kept) } else { fs::copy(at, &kept).map(drop) };
+        copied.map_err(|error| tree::at(at, error))
+    }
+
+    /// Keep the value the key `path` holds here, when it holds one, in
+    /// this sync's trash as a file of it, before it is written or removed.
+    fn key_aside(&self, path: &str) -> io::Result<()> {
+        let Some((carried, _)) = self.bytes(item(path)?)? else {
+            return Ok(());
+        };
+        write_over(&self.aside(path)?, &self.written(path, carried))
     }
 
     fn keychain(&self) -> io::Result<(&dyn Keychain, &str)> {
@@ -634,6 +731,8 @@ enum Secret<'a> {
 
 /// Where a write is received and how it is put in place.
 pub(crate) struct Place {
+    /// The setup path it writes.
+    path: String,
     pub(crate) dir: PathBuf,
     pub(crate) mode: Option<u32>,
     how: How,
@@ -873,14 +972,6 @@ fn sweep(dir: &Path) {
 fn private_dir(dir: &Path) -> io::Result<()> {
     private_dirs(dir)?;
     tree::set_mode(dir, DIR_MODE)
-}
-
-fn remove_file(at: &Path) -> io::Result<bool> {
-    match fs::remove_file(at) {
-        Ok(()) => Ok(true),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(tree::at(at, error)),
-    }
 }
 
 /// Whether the file begins `#!`: a new one sent from a side that keeps

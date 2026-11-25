@@ -425,7 +425,7 @@ pub(crate) fn inside(root: &Path, path: &str) -> io::Result<PathBuf> {
 }
 
 /// Remove the entry at `path` and all under it: whether anything was there.
-pub(crate) fn remove(root: &Path, path: &str) -> io::Result<bool> {
+fn remove(root: &Path, path: &str) -> io::Result<bool> {
     let gone = |error: &io::Error| error.kind() == io::ErrorKind::NotFound;
     let path = match inside(root, path) {
         Err(error) if gone(&error) => return Ok(false),

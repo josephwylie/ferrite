@@ -4,22 +4,22 @@
 //! all of it is done, when anything was, and only then is the base
 //! written, from what the two now hold alike: a sync cut short anywhere
 //! leaves the base it began from, and the next one finishes it. What it
-//! removes on this computer goes to a trash folder, not away. Both sides
-//! scan by the same [`TABLE`](super::TABLE), or the Machine refuses the
-//! scan and nothing moves.
+//! removes or writes over on either side goes to that side's trash, not
+//! away. Both sides scan by the same [`TABLE`], or the Machine refuses the
+//! scan and nothing moves, and a base is read only by the table that wrote
+//! it.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::reconcile::{agreed, reconcile, Action, Hold};
-use super::store::{self, visible, Home};
-use super::{file_of, sign_in, Item, ITEMS, UNREAD_WITHOUT_SIGN_INS};
+use super::store::{self, visible, Home, STAMP};
+use super::{file_of, sign_in, Item, ITEMS, TABLE, UNREAD_WITHOUT_SIGN_INS};
 use crate::chunked::{Cancellation, CHUNK_SIZE};
 use crate::tree::{self, Asked, Entry, Exchange, Manifest, Problem, Reply, Request, Root, Session, Side, Step};
 
@@ -30,16 +30,9 @@ pub const BASE: &str = "setup-sync.json";
 const LOCK: &str = "setup-sync.lock";
 /// Where each conflict's losing copy is kept, in Ferrite's settings folder.
 pub const CONFLICTS: &str = "sync-conflicts";
-/// Where what a sync removes on this computer is moved, in Ferrite's
-/// settings folder, a folder for each sync.
-pub const TRASH: &str = "sync-trash";
-/// How long a sync's trash folder is kept.
-const KEPT: Duration = Duration::from_secs(14 * 24 * 60 * 60);
 /// How far the files pulled here are asked ahead of the replies.
 const AHEAD: usize = 64;
 const AHEAD_BYTES: u64 = 4 << 20;
-/// How a sync's folder of conflicts or trash is named: its time.
-const STAMP: &str = "%Y%m%d-%H%M%S-%3f";
 
 pub struct Job {
     /// This computer's setup.
@@ -49,9 +42,6 @@ pub struct Job {
     /// Where the losing copy of each conflict is kept, under the time of
     /// the sync.
     pub conflicts: PathBuf,
-    /// Where what the sync removes here is moved, under the time of the
-    /// sync.
-    pub trash: PathBuf,
     /// Remove whatever the plan removes: the operator said so.
     pub allow_removals: bool,
     /// Leave the Machine be when nothing here changed since the base: a
@@ -73,10 +63,9 @@ impl Job {
     /// conflicts and trash are kept in `settings_dir`.
     pub fn for_machine(home: Home, settings_dir: &Path, target: &str) -> Self {
         Self {
-            home,
+            home: home.with_trash_in(settings_dir),
             dir: crate::machine::dir(settings_dir, target),
             conflicts: settings_dir.join(CONFLICTS),
-            trash: settings_dir.join(TRASH),
             allow_removals: false,
             only_if_changed_here: false,
             read_sign_ins: true,
@@ -141,7 +130,7 @@ pub struct Synced {
     pub held: BTreeMap<String, Hold>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<Problem>,
-    /// Where what was removed here was moved.
+    /// Where what was removed or written over here was moved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trashed: Option<PathBuf>,
 }
@@ -202,7 +191,6 @@ pub fn run(
         Err(fs::TryLockError::WouldBlock) => return Ok(Outcome::Busy),
         Err(fs::TryLockError::Error(error)) => return Err(error),
     }
-    prune(&job.trash);
     let base = base(&job.dir);
     let unread = job.unread();
     let (mut here, mut far) = if job.only_if_changed_here {
@@ -291,9 +279,8 @@ pub fn run(
 
     let steps = steps_there(&actions, &here, &far);
     let sent = tree::send(&job.home, &steps, &Root::SETUP, there, &mut |_| {}, cancel)?;
-    let trash = job.trash.join(&stamp);
-    let pulled = take_here(job, &actions, &here, &far, there, &trash, cancel)?;
-    synced.trashed = trash.exists().then_some(trash);
+    let pulled = take_here(job, &actions, &here, &far, there, cancel)?;
+    synced.trashed = job.home.trashed();
 
     if !actions.is_empty() {
         here = job.home.scan(&unread);
@@ -302,7 +289,7 @@ pub fn run(
     }
     let agreed = agreed(&base, &here, &far);
     if agreed != base {
-        store::write_over(&job.dir.join(BASE), &serde_json::to_vec(&agreed)?)?;
+        store::write_over(&job.dir.join(BASE), &serde_json::to_vec(&Base { table: TABLE, agreed })?)?;
     }
     for (side, manifest) in [(Side::Here, here), (Side::There, far)] {
         let said = manifest
@@ -315,16 +302,25 @@ pub fn run(
     Ok(Outcome::Synced(synced))
 }
 
-/// The base, or none: a base that is not there or does not read is a
-/// first sync, which removes nothing. What an older table synced that
-/// this one does not is left out of it, so no sync removes it anywhere.
-fn base(dir: &Path) -> Manifest {
-    let mut base: Manifest = fs::read(dir.join(BASE))
+/// What a base file holds: the state both sides last agreed on, and the
+/// table that read them.
+#[derive(Serialize, Deserialize)]
+pub(super) struct Base {
+    pub table: u32,
+    pub agreed: Manifest,
+}
+
+/// The base, or none: a base that is not there, does not read, or that
+/// another table wrote is a first sync, which removes nothing. Another
+/// table's base is never read in part: it agreed by other rules, and a
+/// removal planned from it could take what this table never synced.
+pub(super) fn base(dir: &Path) -> Manifest {
+    fs::read(dir.join(BASE))
         .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default();
-    base.entries.retain(|path, _| store::in_table(path));
-    base
+        .and_then(|bytes| serde_json::from_slice::<Base>(&bytes).ok())
+        .filter(|base| base.table == TABLE)
+        .map(|base| base.agreed)
+        .unwrap_or_default()
 }
 
 /// Both sides as reconcile reads them: what this sync did not read is as
@@ -504,16 +500,15 @@ fn steps_there(actions: &[Action], here: &Manifest, far: &Manifest) -> Vec<Step>
 }
 
 /// Do here what the actions do on this computer: what goes first, moved
-/// to `trash`, then each folder, then each file, read from the Machine and
-/// asked ahead of the replies, then each link. A file that does not come
-/// across whole is left as each side has it, and said.
+/// to the trash, then each folder, then each file, read from the Machine
+/// and asked ahead of the replies, then each link. A file that does not
+/// come across whole is left as each side has it, and said.
 fn take_here(
     job: &Job,
     actions: &[Action],
     here: &Manifest,
     far: &Manifest,
     there: &mut dyn Exchange,
-    trash: &Path,
     cancel: &Cancellation,
 ) -> io::Result<Vec<Problem>> {
     let mut taken = Vec::new();
@@ -521,7 +516,7 @@ fn take_here(
         cancel.check()?;
         let path = match action {
             Action::RemoveHere(path) => {
-                job.home.trash(path, trash).map_err(|error| named(path, Side::Here, error))?;
+                job.home.remove(path).map_err(|error| named(path, Side::Here, error))?;
                 continue;
             }
             Action::Pull(path) | Action::Conflict { path, winner: Side::There } => path,
@@ -531,7 +526,7 @@ fn take_here(
             continue;
         };
         if mine.is_some_and(|mine| !same_kind(entry, mine)) {
-            job.home.trash(path, trash).map_err(|error| named(path, Side::Here, error))?;
+            job.home.remove(path).map_err(|error| named(path, Side::Here, error))?;
         }
         taken.push((path.as_str(), entry));
     }
@@ -735,21 +730,6 @@ fn kept_already(conflicts: &Path, path: &str, bytes: &[u8]) -> Option<PathBuf> {
         .flatten()
         .map(|sync| visible(&sync.path(), path))
         .find(|kept| fs::read(kept).is_ok_and(|held| held == bytes))
-}
-
-/// Remove each sync's trash folder older than [`KEPT`].
-fn prune(trash: &Path) {
-    let Ok(folders) = fs::read_dir(trash) else {
-        return;
-    };
-    let now = crate::clock::now().naive_local();
-    for folder in folders.flatten() {
-        let name = folder.file_name();
-        let when = name.to_str().and_then(|name| chrono::NaiveDateTime::parse_from_str(name, STAMP).ok());
-        if when.is_some_and(|when| (now - when).to_std().is_ok_and(|age| age > KEPT)) {
-            let _ = fs::remove_dir_all(folder.path());
-        }
-    }
 }
 
 fn same_kind(one: &Entry, other: &Entry) -> bool {

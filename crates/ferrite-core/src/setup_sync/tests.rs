@@ -611,13 +611,14 @@ fn losing_every_skill_stops_though_other_skills_outnumber_them_and_what_goes_her
     let valve = stopped(&job, &far);
     assert_eq!((valve.item.as_str(), valve.removing, valve.holding, valve.vanished), (".claude/commands", 2, 3, false));
 
-    let old = job.trash.join("20200101-000000-000");
+    let trash = world.root.join("settings").join(TRASH);
+    let old = trash.join("20200101-000000-000");
     fs::create_dir_all(old.join(".claude")).unwrap();
     job.allow_removals = true;
     let synced = sync(&job, &far);
     assert_eq!(read(&mine, ".claude/commands/a.md"), None);
     let trashed = synced.trashed.expect("a trash folder");
-    assert!(trashed.starts_with(&job.trash));
+    assert!(trashed.starts_with(&trash));
     let kept = |path: &str| fs::read_to_string(path.split('/').fold(trashed.clone(), |at, part| at.join(part))).ok();
     assert_eq!(kept("claude/commands/a.md").as_deref(), Some("a\n"), "in a folder a file browser shows");
     assert_eq!(kept("claude/commands/b.md").as_deref(), Some("b\n"));
@@ -773,7 +774,7 @@ fn signing_out_on_either_side_signs_it_back_in_and_nothing_stops() {
     gone(&mine, ".codex/auth.json");
     assert_eq!(sync(&job, &far), Synced::default(), "signed out on both sides is nothing");
     assert_eq!(sync(&job, &far), Synced::default());
-    assert!(!job.trash.exists() && !job.conflicts.exists());
+    assert!(!world.root.join("settings").join(TRASH).exists() && !trash_of(&far).exists() && !job.conflicts.exists());
 }
 
 /// No code path writes a sign-in to the trash or to a conflict copy: the
@@ -788,15 +789,13 @@ fn no_sign_in_is_ever_put_in_the_trash_or_kept_as_a_conflict() {
     keychain.set(CLAUDE_KEYCHAIN, &format!(r#"{{"accessToken": "{SECRET}"}}"#)).unwrap();
     seed(&mine);
     put(&keyed, ".codex/auth.json", &format!(r#"{{"tokens": "{SECRET}"}}"#));
-    let by_hand = world.root.join("trash-by-hand");
     for home in [&mine, &keyed] {
         for path in [".claude/.credentials.json", ".codex/auth.json"] {
-            assert!(home.trash(path, &by_hand).is_err(), "{path}");
             assert!(home.remove(path).is_err(), "{path}");
         }
+        assert!(!trash_of(home).exists());
     }
     assert!(keychain.get(CLAUDE_KEYCHAIN).unwrap().is_some() && read(&mine, ".claude/.credentials.json").is_some());
-    assert!(!by_hand.exists());
 
     let job = Job {
         allow_removals: true,
@@ -825,7 +824,8 @@ fn no_sign_in_is_ever_put_in_the_trash_or_kept_as_a_conflict() {
     let synced = sync(&job, &far);
     assert_eq!(synced.conflicts, [], "{synced:?}");
     assert_eq!(read(&mine, ".claude/.credentials.json"), read(&far, ".claude/.credentials.json"));
-    assert_eq!(secrets(&job.trash), Vec::<PathBuf>::new());
+    assert_eq!(secrets(&world.root.join("settings").join(TRASH)), Vec::<PathBuf>::new());
+    assert_eq!(secrets(&trash_of(&far)), Vec::<PathBuf>::new());
     assert_eq!(secrets(&job.conflicts), Vec::<PathBuf>::new());
 }
 
@@ -995,7 +995,7 @@ fn a_file_that_changes_while_it_crosses_is_left_to_the_next_sync() {
     seed(&mine);
     let job = world.job(&mine, "far");
     sync(&job, &far);
-    let agreed = || -> tree::Manifest { serde_json::from_slice(&fs::read(job.dir.join(BASE)).unwrap()).unwrap() };
+    let agreed = || super::run::base(&job.dir);
     let edited = ".claude/skills/deploy/SKILL.md";
     for (round, writer, side) in [(0, &mine, Side::Here), (1, &far, Side::There)] {
         let added = format!(".claude/skills/fresh-{round}/SKILL.md");
@@ -1482,3 +1482,166 @@ fn a_plugin_a_sync_turns_on_is_installed_once_and_one_that_will_not_install_is_s
     assert_eq!(quiet.changed(), 0, "{quiet:?}");
     assert_eq!(quiet.problems.len(), 1, "said until a later write installs it");
 }
+/// What a sync moved aside on one side: each file under each sync's
+/// folder of `trash`, by its path from that folder, with its bytes.
+fn kept_in(trash: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut kept = BTreeMap::new();
+    for sync in fs::read_dir(trash).into_iter().flatten().flatten() {
+        let mut walked = BTreeMap::new();
+        walk_bytes(&sync.path(), "", &mut walked);
+        kept.extend(walked);
+    }
+    kept
+}
+
+fn walk_bytes(dir: &Path, prefix: &str, into: &mut BTreeMap<String, Vec<u8>>) {
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
+        if is_link(&entry.path()) {
+            continue;
+        }
+        if entry.path().is_dir() {
+            walk_bytes(&entry.path(), &path, into);
+        } else {
+            into.insert(path, fs::read(entry.path()).unwrap());
+        }
+    }
+}
+
+/// A side's own trash: `~/.ferrite/sync-trash` of a home of its own.
+fn trash_of(home: &Home) -> PathBuf {
+    home.root().join(".ferrite").join("sync-trash")
+}
+
+/// Every file of `home` but Ferrite's own folder, with its bytes, links
+/// not followed.
+fn own_files(home: &Home) -> BTreeMap<String, Vec<u8>> {
+    let mut all = BTreeMap::new();
+    walk_bytes(home.root(), "", &mut all);
+    all.retain(|path, _| !path.starts_with(".ferrite/"));
+    all
+}
+
+/// The entry the first table listed for the file or folder at `path`: its
+/// bytes' hash, no text hash, as a link followed lists it.
+fn first_table_entry(home: &Home, path: &str) -> tree::Entry {
+    use sha2::Digest as _;
+    let at = at(home, path);
+    if at.is_dir() {
+        return tree::Entry::Dir;
+    }
+    let bytes = fs::read(&at).unwrap();
+    tree::Entry::File {
+        size: bytes.len() as u64,
+        sha256: crate::chunked::hex(&sha2::Sha256::digest(&bytes)),
+        mode: None,
+        modified: None,
+        text: None,
+    }
+}
+
+/// Each entry under `path` in `home`, as the first table listed it,
+/// through links.
+fn first_table_entries(home: &Home, path: &str) -> Vec<(String, tree::Entry)> {
+    let mut listed = vec![(path.to_string(), first_table_entry(home, path))];
+    if at(home, path).is_dir() {
+        let mut names: Vec<String> = fs::read_dir(at(home, path)).unwrap().flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        for name in names {
+            listed.extend(first_table_entries(home, &format!("{path}/{name}")));
+        }
+    }
+    listed
+}
+
+/// Write `entries` as the base Ferrite 0.4.0's table left: a manifest,
+/// named by no table.
+fn first_table_base(job: &Job, entries: Vec<(String, tree::Entry)>) {
+    let base = tree::Manifest { entries: entries.into_iter().collect(), ..tree::Manifest::default() };
+    fs::create_dir_all(&job.dir).unwrap();
+    fs::write(job.dir.join(BASE), serde_json::to_vec(&base).unwrap()).unwrap();
+}
+
+/// A base another table wrote, with or without its number, is read as no
+/// base: the sync is a first one, which removes nothing anywhere.
+#[test]
+fn a_base_another_table_wrote_is_no_base_and_the_sync_removes_nothing() {
+    for (round, stamped) in [(0, None), (1, Some(1)), (2, Some(TABLE + 1))] {
+        let world = World::new(&format!("other-table-base-{round}"));
+        let (mine, far) = (world.home("here"), world.home("machine"));
+        put(&mine, ".claude/CLAUDE.md", "Be careful.\n");
+        put(&far, ".claude/CLAUDE.md", "Be careful.\n");
+        put(&far, ".claude/commands/kept.md", "Kept on the Machine.\n");
+        put(&far, ".agents/skills/x/SKILL.md", "# X\n");
+        let job = world.job(&mine, "far");
+        let entries = [".claude/CLAUDE.md", ".claude/commands", ".claude/commands/kept.md", ".agents/skills", ".agents/skills/x", ".agents/skills/x/SKILL.md"]
+            .map(|path| (path.to_string(), first_table_entry(&far, path)))
+            .to_vec();
+        match stamped {
+            None => first_table_base(&job, entries),
+            Some(table) => {
+                let agreed = tree::Manifest { entries: entries.into_iter().collect(), ..tree::Manifest::default() };
+                fs::create_dir_all(&job.dir).unwrap();
+                fs::write(job.dir.join(BASE), serde_json::to_vec(&serde_json::json!({"table": table, "agreed": agreed})).unwrap()).unwrap();
+            }
+        }
+        let before = own_files(&far);
+
+        let synced = sync(&job, &far);
+        assert_eq!((synced.removed_here, synced.removed_there), (0, 0), "round {round}: {synced:?}");
+        assert_eq!(own_files(&far), before, "round {round}: the Machine as it was");
+        assert_eq!(read(&mine, ".claude/commands/kept.md").as_deref(), Some("Kept on the Machine.\n"), "round {round}: a first sync's union");
+        assert_eq!(read(&mine, ".agents/skills/x/SKILL.md").as_deref(), Some("# X\n"), "round {round}");
+    }
+}
+
+/// Nothing a sync removes or writes over is deleted: each side moves what
+/// it removes, and the file or key it writes over, to its own trash.
+#[test]
+fn what_a_sync_removes_or_replaces_on_either_side_is_kept_in_that_sides_trash() {
+    let world = World::new("trash-both-sides");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    seed(&mine);
+    put(&mine, ".claude/commands/ship.md", "Ship it.\n");
+    put(&mine, ".codex/prompts/plan.md", "Plan it.\n");
+    let job = world.job(&mine, "far");
+    sync(&job, &far);
+
+    gone(&mine, ".claude/commands/review.md");
+    put(&mine, ".claude/agents/helper.md", "Edited here.\n");
+    put(&mine, ".claude/settings.json", r#"{"model": "sonnet", "statusLine": {"command": "~/bin/status"}}"#);
+    put(&far, ".claude/rules/style.md", "Edited on the Machine.\n");
+    gone(&far, ".codex/prompts/fix.md");
+    let synced = sync(&job, &far);
+    assert_eq!((synced.pushed, synced.pulled, synced.removed_here, synced.removed_there), (2, 1, 1, 1), "{synced:?}");
+    assert_eq!(read(&far, ".claude/commands/review.md"), None);
+    assert_eq!(read(&mine, ".codex/prompts/fix.md"), None);
+
+    let there = kept_in(&trash_of(&far));
+    let text = |kept: &BTreeMap<String, Vec<u8>>, path: &str| kept.get(path).map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+    assert_eq!(text(&there, "claude/commands/review.md").as_deref(), Some("Review the diff.\n"), "{:?}", there.keys());
+    assert_eq!(text(&there, "claude/agents/helper.md").as_deref(), Some("A helper.\n"), "written over there");
+    assert!(text(&there, "claude/settings.json#model").is_some_and(|was| was.contains("opus")), "a key written over: {:?}", there.keys());
+    let here = kept_in(&world.root.join("settings").join(TRASH));
+    assert_eq!(text(&here, "codex/prompts/fix.md").as_deref(), Some("Fix it.\n"), "{:?}", here.keys());
+    assert_eq!(text(&here, "claude/rules/style.md").as_deref(), Some("Short sentences.\n"), "written over here");
+    assert_eq!(sync(&job, &far), Synced::default());
+}
+
+/// With no base, two copies that differ only in line ends are one file,
+/// though a base from another table named the bytes of one.
+#[test]
+fn with_no_base_a_line_end_difference_never_moves_even_from_an_old_base() {
+    let world = World::new("line-ends-old-base");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    put(&mine, ".claude/CLAUDE.md", "Be careful.\r\nBe kind.\r\n");
+    put(&far, ".claude/CLAUDE.md", "Be careful.\nBe kind.\n");
+    let job = world.job(&mine, "far");
+    first_table_base(&job, vec![(".claude/CLAUDE.md".into(), first_table_entry(&far, ".claude/CLAUDE.md"))]);
+    let synced = sync(&job, &far);
+    assert_eq!(synced.changed(), 0, "{synced:?}");
+    assert_eq!(read(&mine, ".claude/CLAUDE.md").as_deref(), Some("Be careful.\r\nBe kind.\r\n"));
+    assert_eq!(read(&far, ".claude/CLAUDE.md").as_deref(), Some("Be careful.\nBe kind.\n"));
+}
+
