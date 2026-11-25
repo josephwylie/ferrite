@@ -7,7 +7,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex, PoisonError};
 
 use base64::Engine as _;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -668,8 +668,9 @@ pub struct CopyJob<'a> {
 pub enum Copying {
     /// The Project's files being listed: this many so far.
     Listing(usize),
-    /// Sent, the copy kept as unfinished until it ends: how far, and the
-    /// file the last bytes were of.
+    /// Sent, the copy kept as unfinished until it ends: how far, of all the
+    /// bytes the copy carries, what was there before it counting as sent;
+    /// and the file the last bytes were of.
     Sending {
         progress: Progress,
         file: Option<String>,
@@ -702,7 +703,8 @@ const COUNTED: usize = 250;
 /// anything. What could not be read as it was listed is sent once more,
 /// and what still could not is in the answer's problems. Once done, or
 /// stopped before anything landed, the copy is no longer kept as
-/// unfinished.
+/// unfinished. A run waits for the one before it to the same destination
+/// to end ([`Going`]).
 pub fn copy(
     copy: &CopyJob,
     exchange: &mut dyn Exchange,
@@ -712,6 +714,7 @@ pub fn copy(
     if let Some(refusal) = refuse_source(copy.source) {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, refusal).into());
     }
+    let _going = Going::to(copy, cancel)?;
     let checkout = Checkout::of(copy.source);
     let resumed = unfinished(copy.kept, copy.source).contains(&copy.dest.to_path_buf());
     let first = pass(copy, &checkout, exchange, progress, cancel).map_err(|stopped| {
@@ -736,6 +739,41 @@ pub fn copy(
         return Err(Stopped { error, sent });
     }
     Ok(Copied::Sent { sent, changed })
+}
+
+/// The copies going in this process, by the Machine's folder here and
+/// where each goes there: one run at a time to a destination. A run
+/// cancelled and started again ends before the next begins, so what it
+/// undoes as it ends (`finished`) is never what the next run keeps.
+static GOING: Mutex<BTreeSet<(PathBuf, PathBuf)>> = Mutex::new(BTreeSet::new());
+static GONE: Condvar = Condvar::new();
+
+/// A run going to its destination, until it is dropped.
+struct Going((PathBuf, PathBuf));
+
+impl Going {
+    /// Once no other run goes where `copy` goes: the wait ends early when
+    /// `cancel` stops it.
+    fn to(copy: &CopyJob, cancel: &Cancellation) -> io::Result<Self> {
+        let key = (copy.kept.to_path_buf(), copy.dest.to_path_buf());
+        let mut going = GOING.lock().unwrap_or_else(PoisonError::into_inner);
+        while going.contains(&key) {
+            cancel.check()?;
+            going = GONE
+                .wait_timeout(going, std::time::Duration::from_millis(100))
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        going.insert(key.clone());
+        Ok(Self(key))
+    }
+}
+
+impl Drop for Going {
+    fn drop(&mut self) {
+        GOING.lock().unwrap_or_else(PoisonError::into_inner).remove(&self.0);
+        GONE.notify_all();
+    }
 }
 
 /// One pass of a copy.
@@ -784,9 +822,29 @@ fn pass(
     let (left, changed) = left_there(&here, &there);
     let held: Vec<String> = copy.skip.iter().cloned().chain(left).collect();
     let steps = tree::plan(&here, &there, &held);
+    let whole: u64 = here
+        .entries
+        .values()
+        .map(|entry| match entry {
+            Entry::File { size, .. } => *size,
+            _ => 0,
+        })
+        .sum();
+    let to_send: u64 = steps
+        .iter()
+        .map(|step| match step {
+            tree::Step::Write { size, .. } => *size,
+            _ => 0,
+        })
+        .sum();
+    // What a resume finds there is done from its first reading.
+    let already = whole.saturating_sub(to_send);
     let mut sending = |sent: tree::Sending| {
         progress(Copying::Sending {
-            progress: sent.progress,
+            progress: Progress {
+                sent: already + sent.progress.sent,
+                total: already + sent.progress.total,
+            },
             file: sent.file.map(str::to_string),
         })
     };
