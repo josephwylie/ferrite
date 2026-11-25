@@ -3,7 +3,8 @@
 //! step of the operator's. A Machine syncs as it connects, as a Thread
 //! starts on it, a few seconds after the setup here changes, and once a
 //! minute while it stays connected, on a clock of its own that no other
-//! sync moves; one sync at a time each, off the window's thread. Each
+//! sync moves; off the window's thread, and one sync of the setup at a time
+//! for them all: one that finds another under way tries again. Each
 //! Machine's last sync is its line in Settings › Connections, and what
 //! needs the operator's eye is one toast for them all.
 
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant};
 use super::*;
 use ferrite_core::chunked::Cancellation;
 use ferrite_client::cockpit::ServerState;
-use ferrite_core::setup_sync::{self, Hold, Home, Job, Kept, Outcome, Synced, Valve};
+use ferrite_core::setup_sync::{self, Hold, Home, Job, Kept, Outcome, Replaced, Synced, Valve};
 use ferrite_core::tree::{Side, Stuck};
 use gpui::App;
 
@@ -166,7 +167,7 @@ pub(crate) enum Status {
     InSync(BTreeMap<String, Why>),
     Stopped(Valve),
     Failed(Failure),
-    /// The Machine's Ferrite is older and syncs no setup.
+    /// The Machine's Ferrite syncs setup by an older table, or none.
     Older,
 }
 
@@ -205,7 +206,7 @@ impl Failure {
     /// It in words, the Machine called `name`.
     fn said(&self, name: &str) -> String {
         match &self.at {
-            Some((path, on)) => format!("~/{path} on {}: {}", place(*on, name), self.why),
+            Some((path, on)) => format!("{} on {}: {}", named(path), place(*on, name), self.why),
             None => self.why.clone(),
         }
     }
@@ -242,11 +243,23 @@ impl Status {
             Status::InSync(held) => match held.iter().next() {
                 None => "In sync".into(),
                 Some((path, why)) if held.len() == 1 => format!("In sync except {}", why.said(path, name)),
-                Some((path, why)) => format!("In sync except {} paths. {}", held.len(), why.said(path, name)),
+                Some((path, why)) => {
+                    let plugins = held.keys().filter(|path| setup_sync::installing(path).is_some()).count();
+                    let count = |count: usize, one: &str| match count {
+                        1 => format!("1 {one}"),
+                        count => format!("{count} {one}s"),
+                    };
+                    let counted = match (held.len() - plugins, plugins) {
+                        (paths, 0) => count(paths, "path"),
+                        (0, plugins) => count(plugins, "plugin"),
+                        (paths, plugins) => format!("{} and {}", count(paths, "path"), count(plugins, "plugin")),
+                    };
+                    format!("In sync except {counted}. {}", why.said(path, name))
+                }
             },
             Status::Stopped(valve) => format!("Stopped: {}", stopped(valve, name)),
             Status::Failed(failure) => failure.said(name),
-            Status::Older => "Update Ferrite there to sync".into(),
+            Status::Older => format!("Update Ferrite on {name} to sync your setup"),
         }
     }
 
@@ -263,15 +276,85 @@ impl Status {
 impl Why {
     /// `path` and why it was held, the Machine called `name`.
     fn said(&self, path: &str, name: &str) -> String {
+        let named = named(path);
         match self {
-            Why::Problem(on, error) => format!("~/{path} on {}: {}", place(*on, name), plain(error)),
+            Why::Problem(on, error) => match setup_sync::installing(path) {
+                Some(plugin) => format!("{plugin} could not be installed on {}: {}", place(*on, name), plain(error)),
+                None => format!("{named} on {}: {}", place(*on, name), plain(error)),
+            },
             Why::Held(Hold::Linked(on)) => format!(
-                "~/{path}: it lies through a link on {}, and Setup sync never writes through one",
+                "{named}: it lies through a link on {}, and Setup sync never writes through one",
                 place(*on, name)
             ),
-            Why::Held(Hold::Kinds) => format!("~/{path}: it is a file on one side and a folder on the other"),
-            Why::Held(Hold::SignIn) => format!("~/{path}: it is signed in differently on each side"),
+            Why::Held(Hold::Kinds) => format!("{named}: it is a file on one side and a folder on the other"),
+            Why::Held(Hold::FolderAndLink(folder)) => match folder {
+                Side::Here => format!("{named} is a folder here and a link on {name}: left as each has it"),
+                Side::There => format!("{named} is a folder on {name} and a link here: left as each has it"),
+            },
+            Why::Held(Hold::SignIn) => format!("{named}: it is signed in differently on each side"),
         }
+    }
+}
+
+/// A setup path as the operator names what it is: a skill, a command, an
+/// agent, a rule or a prompt by its name, an instruction file by its own,
+/// and a chosen key by what it sets and for which tool. What has no plain
+/// name is its path from the home folder.
+fn named(path: &str) -> String {
+    if let Some((item, key)) = setup_sync::chosen(path) {
+        let tool = if item.path.starts_with(".codex/") { "Codex's" } else { "Claude's" };
+        let (kind, name) = key.split_once('/').unwrap_or(("", key));
+        let what = match kind {
+            "enabledPlugins" | "plugins" => format!("plugin {}", name.rsplit_once('@').map_or(name, |(plugin, _)| plugin)),
+            "extraKnownMarketplaces" | "marketplaces" => format!("marketplace {name}"),
+            "mcpServers" | "mcp_servers" => format!("MCP server {name}"),
+            _ => key.replace('/', " › "),
+        };
+        return format!("{tool} {what}");
+    }
+    let file = |under: &str, suffix: &str| path.strip_prefix(under).and_then(|rest| rest.strip_suffix(suffix));
+    // A skill is a folder: what lies in one, or a name with no extension.
+    let folder = |under: &str| {
+        let rest = path.strip_prefix(under)?;
+        match rest.split_once('/') {
+            Some((name, _)) => Some(name),
+            None => (!rest.is_empty() && !rest.contains('.')).then_some(rest),
+        }
+    };
+    let named = [
+        (".claude/skills/", "the skill"),
+        (".agents/skills/", "the skill"),
+        (".codex/skills/", "the Codex skill"),
+    ]
+    .iter()
+    .find_map(|(under, kind)| Some(format!("{kind} {}", folder(under)?)))
+    .or_else(|| {
+        [
+            (".claude/commands/", "the command"),
+            (".claude/agents/", "the agent"),
+            (".claude/rules/", "the rule"),
+            (".claude/output-styles/", "the output style"),
+            (".codex/prompts/", "the Codex prompt"),
+            (".codex/rules/", "the Codex rule"),
+        ]
+        .iter()
+        .find_map(|(under, kind)| Some(format!("{kind} {}", file(under, ".md")?)))
+    });
+    named.unwrap_or_else(|| match path {
+        ".claude/CLAUDE.md" => "CLAUDE.md".to_string(),
+        ".codex/AGENTS.md" => "Codex's AGENTS.md".to_string(),
+        ".claude/keybindings.json" => "Claude's keybindings".to_string(),
+        ".claude/statusline.sh" => "Claude's status line script".to_string(),
+        _ => format!("~/{path}"),
+    })
+}
+
+/// A key's old value, short enough for a line.
+fn short(value: &str) -> String {
+    const MOST: usize = 60;
+    match value.char_indices().nth(MOST) {
+        Some((at, _)) => format!("{}…", &value[..at]),
+        None => value.to_string(),
     }
 }
 
@@ -322,11 +405,21 @@ pub(crate) struct News {
     /// the other is kept in `kept`.
     conflicts: Vec<String>,
     kept: Option<PathBuf>,
+    /// Each key both sides held differently, and what the loser held.
+    replaced: Vec<Replaced>,
     stopped: Option<Valve>,
     failed: Option<Failure>,
 }
 
 impl News {
+    /// Note each key a sync replaced on one side, the last of each.
+    fn replaced(&mut self, replaced: &[Replaced]) {
+        for key in replaced {
+            self.replaced.retain(|said| said.path != key.path);
+            self.replaced.push(key.clone());
+        }
+    }
+
     /// Note a sync's conflicts: the folder its losing copies are in, or
     /// the folder of every sync's when they are in more than one.
     fn conflicted(&mut self, kept: &[Kept]) {
@@ -345,29 +438,57 @@ impl News {
     }
 
     fn is_empty(&self) -> bool {
-        self.conflicts.is_empty() && self.stopped.is_none() && self.failed.is_none()
+        self.conflicts.is_empty() && self.replaced.is_empty() && self.stopped.is_none() && self.failed.is_none()
+    }
+
+    /// Whether it asks anything of the operator: a key replaced is only
+    /// said.
+    fn warns(&self) -> bool {
+        !self.conflicts.is_empty() || self.stopped.is_some() || self.failed.is_some()
     }
 }
 
-/// The toast for `news`: its title, its message, and the folder its press
-/// opens. `None` when there is nothing to say.
-fn toast(news: &BTreeMap<String, News>) -> Option<(String, String, Option<PathBuf>)> {
+/// What the toast says.
+#[derive(Debug, PartialEq, Eq)]
+struct Toast {
+    title: String,
+    message: String,
+    /// What its press opens.
+    folder: Option<PathBuf>,
+    /// Something in it asks the operator to look.
+    warning: bool,
+}
+
+/// The toast for `news`; `None` when there is nothing to say.
+fn toast(news: &BTreeMap<String, News>) -> Option<Toast> {
     let kept = format!("Ferrite's {} folder", setup_sync::CONFLICTS);
     let mut said: Vec<(String, String, String)> = Vec::new();
     let mut folder = None;
     for (machine, news) in news {
         if let [path, ..] = news.conflicts.as_slice() {
-            let title = match news.conflicts.len() {
-                1 => format!("~/{path} changed on both sides"),
+            let changed = match news.conflicts.len() {
+                1 => format!("{} changed on both sides", named(path)),
                 count => format!("{count} files changed on both sides"),
             };
             let message = match news.conflicts.len() {
                 1 => format!("Here and on {machine}. The newer copy is on both now; the other is kept in {kept}."),
-                _ => format!("Here and on {machine}. The newer copy of each is on both now; the others are kept in {kept}."),
+                _ => format!("Here and on {machine}. The newer copy of each is on both now; the other copy of each is kept in {kept}."),
             };
-            let line = format!("{machine}: {title}");
-            said.push((title, message, line));
+            said.push((capitalised(&changed), message, format!("{machine}: {changed}")));
             folder = news.kept.clone();
+        }
+        for key in &news.replaced {
+            let (whose, lost, trash) = match key.winner {
+                Side::Here => ("this computer's".to_string(), format!("on {machine}"), "its"),
+                Side::There => (format!("{machine}'s"), "here".to_string(), "Ferrite's"),
+            };
+            let (named, was) = (named(&key.path), short(&key.was));
+            let kept = format!("kept in {trash} {} folder", setup_sync::TRASH);
+            said.push((
+                capitalised(&format!("{named} was set differently on {machine}")),
+                format!("It is {whose} on both now. It was {was} {lost}, {kept}."),
+                format!("{machine}: {named} is {whose} on both now; it was {was} {lost}, {kept}"),
+            ));
         }
         if let Some(valve) = &news.stopped {
             let stopped = stopped(valve, machine);
@@ -383,20 +504,29 @@ fn toast(news: &BTreeMap<String, News>) -> Option<(String, String, Option<PathBu
         }
     }
     let act = if news.values().any(|news| news.stopped.is_some()) {
-        "Sync anyway in Settings › Connections.".to_string()
+        Some("Sync anyway in Settings › Connections.".to_string())
     } else if news.values().any(|news| news.failed.is_some()) {
-        "More in Settings › Connections.".to_string()
+        Some("More in Settings › Connections.".to_string())
+    } else if news.values().any(|news| !news.conflicts.is_empty()) {
+        Some(format!("The other copy of each file is kept in {kept}."))
     } else {
-        format!("The others are kept in {kept}.")
+        None
     };
+    let warning = news.values().any(News::warns);
     match said.as_slice() {
         [] => None,
-        [(title, message, _)] => Some((title.clone(), message.clone(), folder)),
-        _ => Some((
-            format!("Setup sync: {} things to look at", said.len()),
-            said.iter().map(|(_, _, line)| line.as_str()).chain([act.as_str()]).collect::<Vec<_>>().join("\n"),
+        [(title, message, _)] => Some(Toast {
+            title: title.clone(),
+            message: message.clone(),
             folder,
-        )),
+            warning,
+        }),
+        _ => Some(Toast {
+            title: format!("Setup sync: {} things to look at", said.len()),
+            message: said.iter().map(|(_, _, line)| line.as_str()).chain(act.as_deref()).collect::<Vec<_>>().join("\n"),
+            folder,
+            warning,
+        }),
     }
 }
 
@@ -438,7 +568,7 @@ impl SetupSync {
     }
 
     /// The toast, when what it says moved since it was put up.
-    fn untold(&mut self) -> Option<Option<(String, String, Option<PathBuf>)>> {
+    fn untold(&mut self) -> Option<Option<Toast>> {
         std::mem::take(&mut self.untold).then(|| toast(&self.news))
     }
 
@@ -633,6 +763,7 @@ impl Track {
                 }
                 news.failed = None;
                 news.conflicted(&synced.conflicts);
+                news.replaced(&synced.replaced);
                 self.found.status()
             }
             Ok(Outcome::Stopped(valve)) => {
@@ -808,7 +939,7 @@ impl CockpitView {
         let Some(toast) = self.setup_sync.update(cx, |sync, _| sync.untold()) else {
             return;
         };
-        let Some((title, message, folder)) = toast else {
+        let Some(Toast { title, message, folder, warning }) = toast else {
             window.remove_notification::<SetupSyncToast>(cx);
             return;
         };
@@ -817,7 +948,7 @@ impl CockpitView {
             .id::<SetupSyncToast>()
             .title(title)
             .message(message)
-            .with_type(NotificationType::Warning)
+            .with_type(if warning { NotificationType::Warning } else { NotificationType::Info })
             .autohide(false)
             .on_close(move |_, cx| {
                 sync.update(cx, |sync, _| sync.heard()).ok();
@@ -997,9 +1128,10 @@ mod tests {
         };
         assert!(track.finished(Ok(Outcome::Synced(synced)), Ask::CHECK, now, &mut news));
         let all = BTreeMap::from([("box".to_string(), news.clone())]);
-        let (title, message, folder) = toast(&all).unwrap();
+        let Toast { title, message, folder, warning } = toast(&all).unwrap();
+        assert!(warning);
         assert_eq!(title, "3 files changed on both sides");
-        assert!(message.ends_with("the others are kept in Ferrite's sync-conflicts folder."), "{message}");
+        assert!(message.ends_with("the other copy of each is kept in Ferrite's sync-conflicts folder."), "{message}");
         assert_eq!(folder, Some(PathBuf::from("/settings/sync-conflicts/1")));
 
         let failed = || {
@@ -1018,7 +1150,7 @@ mod tests {
         assert_eq!(track.status.line("box"), "~/.claude/skills/a.md on box: Permission denied");
         assert!(!track.finished(failed(), Ask::CHECK, now, &mut news), "still failing: no second toast");
         let all = BTreeMap::from([("box".to_string(), news.clone())]);
-        let (title, message, _) = toast(&all).unwrap();
+        let Toast { title, message, .. } = toast(&all).unwrap();
         assert_eq!(title, "Setup sync: 2 things to look at", "one toast, the first not hidden");
         assert_eq!(
             message,
@@ -1026,7 +1158,7 @@ mod tests {
         );
         news.stopped = Some(valve(".claude/skills"));
         let all = BTreeMap::from([("box".to_string(), news.clone())]);
-        let (_, message, _) = toast(&all).unwrap();
+        let Toast { message, .. } = toast(&all).unwrap();
         assert!(message.ends_with("\nSync anyway in Settings › Connections."), "{message}");
         news.stopped = None;
 
@@ -1036,6 +1168,139 @@ mod tests {
         assert!(track.finished(Ok(Outcome::Synced(Synced::default())), Ask::CHECK, now, &mut news));
         assert_eq!(news.failed, None, "it synced again");
         assert_eq!(news.conflicts.len(), 3);
+    }
+
+    #[test]
+    fn a_key_one_side_lost_is_said_with_what_it_was_and_asks_nothing() {
+        let mut track = track();
+        let mut news = News::default();
+        let replaced = Replaced {
+            path: ".claude/settings.json#model".into(),
+            winner: Side::Here,
+            was: "\"sonnet\"".into(),
+        };
+        let synced = Synced { pushed: 1, replaced: vec![replaced], ..Synced::default() };
+        assert!(track.finished(Ok(Outcome::Synced(synced)), Ask::CHECK, Instant::now(), &mut news));
+        assert_eq!(track.status.line("box"), "In sync");
+        let all = BTreeMap::from([("box".to_string(), news)]);
+        let shown = toast(&all).unwrap();
+        assert_eq!(shown.title, "Claude's model was set differently on box");
+        assert_eq!(shown.message, "It is this computer's on both now. It was \"sonnet\" on box, kept in its sync-trash folder.");
+        assert_eq!((shown.folder, shown.warning), (None, false), "nothing to open, nothing to do");
+    }
+
+    /// A toast names what changed as the operator calls it, never by a
+    /// path where a name does, and says where each old copy went: a file's
+    /// in the sync-conflicts folder, a key's in the trash of the side that
+    /// lost it.
+    #[test]
+    fn a_toast_names_what_changed_and_where_each_old_copy_is_kept() {
+        let mut news = News::default();
+        news.conflicted(&[kept(".claude/skills/both-edit/SKILL.md", "1")]);
+        let one = BTreeMap::from([("ferrite-wsl".to_string(), news.clone())]);
+        assert_eq!(toast(&one).unwrap().title, "The skill both-edit changed on both sides");
+        news.replaced(&[
+            Replaced { path: ".claude/settings.json#model".into(), winner: Side::Here, was: "\"sonnet\"".into() },
+            Replaced { path: ".codex/config.toml#model".into(), winner: Side::There, was: "\"gpt-6.2-sol\"".into() },
+        ]);
+        let all = BTreeMap::from([("ferrite-wsl".to_string(), news)]);
+        let Toast { title, message, .. } = toast(&all).unwrap();
+        assert_eq!(title, "Setup sync: 3 things to look at");
+        assert_eq!(
+            message,
+            "ferrite-wsl: the skill both-edit changed on both sides\n\
+             ferrite-wsl: Claude's model is this computer's on both now; it was \"sonnet\" on ferrite-wsl, kept in its sync-trash folder\n\
+             ferrite-wsl: Codex's model is ferrite-wsl's on both now; it was \"gpt-6.2-sol\" here, kept in Ferrite's sync-trash folder\n\
+             The other copy of each file is kept in Ferrite's sync-conflicts folder."
+        );
+        assert!(!message.contains('`') && !title.contains('`'), "{message}");
+
+        for (path, name) in [
+            (".claude/commands/team.md", "the command team"),
+            (".claude/agents/helper.md", "the agent helper"),
+            (".claude/rules/style.md", "the rule style"),
+            (".agents/skills/reui/SKILL.md", "the skill reui"),
+            (".codex/prompts/fix.md", "the Codex prompt fix"),
+            (".claude/CLAUDE.md", "CLAUDE.md"),
+            (".codex/AGENTS.md", "Codex's AGENTS.md"),
+            (".claude/settings.json#enabledPlugins/pstack@cursor-plugins", "Claude's plugin pstack"),
+            (".claude.json#mcpServers/docs", "Claude's MCP server docs"),
+            (".codex/config.toml#marketplaces/cursor-plugins", "Codex's marketplace cursor-plugins"),
+            (".claude/hooks/check.sh", "~/.claude/hooks/check.sh"),
+        ] {
+            assert_eq!(named(path), name);
+        }
+    }
+
+    #[test]
+    fn a_machine_by_another_table_says_to_update_it_and_a_plugin_that_did_not_install_says_why() {
+        let mut track = track();
+        let older = std::io::Error::new(std::io::ErrorKind::Unsupported, "This server does not know that kind of root");
+        track.finished(Err(older), Ask::CHECK, Instant::now(), &mut News::default());
+        assert_eq!(track.status.line("box"), "Update Ferrite on box to sync your setup");
+        assert!(track.status.failed());
+
+        let synced = Synced {
+            problems: vec![ferrite_core::tree::Problem {
+                path: ".claude/plugins/pstack@cursor-plugins".into(),
+                side: Side::There,
+                error: "Plugin \"pstack\" not found in marketplace \"cursor-plugins\".".into(),
+            }],
+            ..Synced::default()
+        };
+        assert_eq!(
+            Status::InSync(held(&synced).collect()).line("box"),
+            "In sync except pstack could not be installed on box: Plugin \"pstack\" not found in marketplace \"cursor-plugins\"."
+        );
+    }
+
+    /// Plugins that did not install here are counted as plugins, and this
+    /// computer is named as itself.
+    #[test]
+    fn plugins_that_did_not_install_here_are_counted_as_plugins_on_this_computer() {
+        let problem = |path: &str, side: Side, error: &str| ferrite_core::tree::Problem {
+            path: path.into(),
+            side,
+            error: error.into(),
+        };
+        let synced = Synced {
+            problems: vec![
+                problem(".claude/plugins/pstack@cursor-plugins", Side::Here, "Plugin \"pstack\" not found."),
+                problem(".claude/plugins/sentry@cursor-plugins", Side::Here, "Plugin \"sentry\" not found."),
+            ],
+            ..Synced::default()
+        };
+        let line = Status::InSync(held(&synced).collect()).line("box");
+        assert_eq!(line, "In sync except 2 plugins. pstack could not be installed on this computer: Plugin \"pstack\" not found.");
+        let mixed = Synced {
+            problems: vec![
+                problem(".claude/plugins/pstack@cursor-plugins", Side::There, "Plugin \"pstack\" not found."),
+                problem(".claude/skills/a.md", Side::There, "Permission denied"),
+            ],
+            ..Synced::default()
+        };
+        let line = Status::InSync(held(&mixed).collect()).line("box");
+        assert!(line.starts_with("In sync except 1 path and 1 plugin. "), "{line}");
+    }
+
+    #[test]
+    fn a_skill_that_is_a_folder_on_one_side_and_a_link_on_the_other_says_so() {
+        let on = |path: &str, folder: Side| {
+            let synced = Synced { held: BTreeMap::from([(path.to_string(), Hold::FolderAndLink(folder))]), ..Synced::default() };
+            Status::InSync(held(&synced).collect()).line("josephpc")
+        };
+        assert_eq!(
+            on(".claude/skills/reui", Side::There),
+            "In sync except the skill reui is a folder on josephpc and a link here: left as each has it"
+        );
+        assert_eq!(
+            on(".claude/skills/reui", Side::Here),
+            "In sync except the skill reui is a folder here and a link on josephpc: left as each has it"
+        );
+        assert_eq!(
+            on(".claude/commands/team", Side::There),
+            "In sync except ~/.claude/commands/team is a folder on josephpc and a link here: left as each has it"
+        );
     }
 
     #[test]

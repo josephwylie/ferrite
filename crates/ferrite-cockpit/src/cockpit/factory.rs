@@ -156,7 +156,7 @@ pub(crate) struct FactoryView {
     /// pickers.
     pub(crate) starts: Entity<super::starts::StartsView>,
     /// The Archive (#226): its search and the earlier Worker being read.
-    pub(crate) archive: Entity<super::archive::ArchiveView>,
+    pub(crate) archive: Entity<ferrite_factory::archive::ArchiveView>,
     /// Whether the Archive shows in the board's place.
     pub(crate) archive_shown: bool,
 }

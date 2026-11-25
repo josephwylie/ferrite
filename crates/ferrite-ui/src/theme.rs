@@ -4236,6 +4236,7 @@ mod tests {
         crate::face::assert_render_code_draws_only_covered_glyphs(&[
             ("menu.rs", include_str!("menu.rs")),
             ("components.rs", include_str!("components.rs")),
+            ("field.rs", include_str!("field.rs")),
             ("keymap.rs", include_str!("keymap.rs")),
             ("scrollbar.rs", include_str!("scrollbar.rs")),
             ("lib.rs", include_str!("lib.rs")),

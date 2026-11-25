@@ -11,18 +11,20 @@
 //! the filesystem's root, which a mirror would empty, however it is
 //! spelled. The Setup root is the operator's setup in this side's home
 //! directory, as `setup_sync` spells it, and each write to it is on disk
-//! before it is in place.
+//! before it is in place. A Setup root by any table but this Ferrite's is
+//! refused, so two Ferrites whose tables differ move nothing (ADR 0050).
 
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use base64::Engine as _;
 
 use super::links::link;
 use super::{at, canonical, check_path, holds, local, scan, windows_name, Manifest, Refusal, Reply, Request, Root};
 use crate::chunked::{self, CHUNK_SIZE};
-use crate::setup_sync::{Home, Place};
+use crate::setup_sync::{Home, Installs, Place, TABLE};
 
 /// At most this many files are written at once on one connection.
 pub(crate) const MOST_WRITES: usize = 4;
@@ -54,6 +56,9 @@ pub struct Session {
     /// The setup the Setup root names: this process's home directory's
     /// unless given.
     home: Option<Home>,
+    /// What installs the Claude plugins a write to this process's home
+    /// turns on.
+    installs: Option<Arc<Installs>>,
 }
 
 /// A scan not yet read to its last page.
@@ -75,6 +80,7 @@ impl Default for Session {
             writes: chunked::Incoming::new(MOST_WRITES),
             scanned: None,
             home: None,
+            installs: None,
         }
     }
 }
@@ -88,6 +94,15 @@ impl Session {
         }
     }
 
+    /// Ops on the Setup root work on this process's home, and what a
+    /// write there turns on in Claude is installed by `installs`.
+    pub fn installing(installs: Arc<Installs>) -> Self {
+        Self {
+            installs: Some(installs),
+            ..Self::default()
+        }
+    }
+
     pub fn expire(&mut self) {
         self.writes.expire();
     }
@@ -95,16 +110,31 @@ impl Session {
     fn home(&mut self) -> io::Result<&Home> {
         let home = match self.home.take() {
             Some(home) => home,
-            None => Home::from_env()?,
+            None => match self.installs.clone() {
+                Some(installs) => Home::from_env()?.with_installs(installs),
+                None => Home::from_env()?,
+            },
         };
         Ok(self.home.insert(home))
     }
 
     pub fn execute(&mut self, request: Request) -> io::Result<Reply> {
+        let root = match &request {
+            Request::Scan { root, .. }
+            | Request::Begin { root, .. }
+            | Request::Read { root, .. }
+            | Request::MakeDir { root, .. }
+            | Request::Link { root, .. }
+            | Request::Remove { root, .. } => Some(root),
+            Request::Chunk { .. } | Request::Finish { .. } | Request::Unknown => None,
+        };
+        if let Some(root) = root {
+            by_this_table(root)?;
+        }
         match request {
             Request::Scan { root, skip, after } => {
                 let root = match root {
-                    Root::Setup => Resolved::Setup,
+                    Root::Setup { .. } => Resolved::Setup,
                     root => Resolved::Path(resolve(&root)?),
                 };
                 let manifest = match self.scanned.take() {
@@ -134,7 +164,7 @@ impl Session {
             }
             Request::Begin {
                 write,
-                root: Root::Setup,
+                root: Root::Setup { .. },
                 path,
                 size,
                 mode,
@@ -190,7 +220,7 @@ impl Session {
                 Ok(Reply::Done)
             }
             Request::Read {
-                root: Root::Setup,
+                root: Root::Setup { .. },
                 path,
                 offset,
             } => {
@@ -216,7 +246,7 @@ impl Session {
                 })
             }
             Request::MakeDir {
-                root: Root::Setup,
+                root: Root::Setup { .. },
                 path,
             } => Ok(done(self.home()?.make_dir(&path)?)),
             Request::MakeDir { root, path } => {
@@ -238,10 +268,11 @@ impl Session {
                     Err(error) => Ok(Reply::Unmade(Refusal::failed(error))),
                 }
             }
-            Request::Link { root: Root::Setup, .. } => Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "Setup sync makes no links",
-            )),
+            Request::Link {
+                root: Root::Setup { .. },
+                path,
+                target,
+            } => Ok(done(self.home()?.link(&path, &target)?)),
             Request::Link { root, path, target } => {
                 let root = made(&root)?;
                 Ok(match placed(&root, &path)?.and_then(|path| link(&root, &path, &target)) {
@@ -250,7 +281,7 @@ impl Session {
                 })
             }
             Request::Remove {
-                root: Root::Setup,
+                root: Root::Setup { .. },
                 path,
             } => Ok(done(self.home()?.remove(&path)?)),
             Request::Remove { root, path } => Ok(done(remove(&resolve(&root)?, &path)?)),
@@ -260,6 +291,26 @@ impl Session {
             )),
         }
     }
+}
+
+/// Refuse the operator's setup by any table but [`TABLE`]: a newer one as
+/// a root this Server does not know, which its sender reads as "update
+/// Ferrite there", and an older one, or 0.4.0's first, with words for the
+/// sender's operator.
+fn by_this_table(root: &Root) -> io::Result<()> {
+    match root {
+        Root::Setup { table } if *table > TABLE => Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "This server syncs setup by an older table",
+        )),
+        Root::Setup { table } if *table < TABLE => Err(newer_here()),
+        Root::FirstSetup => Err(newer_here()),
+        _ => Ok(()),
+    }
+}
+
+fn newer_here() -> io::Error {
+    io::Error::other("Update Ferrite on this computer to sync your setup: the Machine's Ferrite is newer")
 }
 
 /// `done` when it was done, `unchanged` when it was already so.
@@ -374,7 +425,7 @@ pub(crate) fn inside(root: &Path, path: &str) -> io::Result<PathBuf> {
 }
 
 /// Remove the entry at `path` and all under it: whether anything was there.
-pub(crate) fn remove(root: &Path, path: &str) -> io::Result<bool> {
+fn remove(root: &Path, path: &str) -> io::Result<bool> {
     let gone = |error: &io::Error| error.kind() == io::ErrorKind::NotFound;
     let path = match inside(root, path) {
         Err(error) if gone(&error) => return Ok(false),

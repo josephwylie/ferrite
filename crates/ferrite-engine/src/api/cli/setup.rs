@@ -50,7 +50,11 @@ fn sync(machine: &Machine, allow_removals: bool, store: &Path, settings_dir: &Pa
     let failed = |error: std::io::Error| ApiError::new(Code::Failed, error.to_string());
     let job = Job {
         allow_removals,
-        ..Job::for_machine(Home::from_env().map_err(failed)?, settings_dir, &machine.target)
+        ..Job::for_machine(
+            Home::from_env().map_err(failed)?.with_installs(crate::providers::plugin_installs()),
+            settings_dir,
+            &machine.target,
+        )
     };
     let mut there = attach(Some(machine), "ferrite setup sync", store, settings_dir)?;
     setup_sync::run(&job, &mut there, &mut |_| {}, &Cancellation::default()).map_err(failed)

@@ -489,6 +489,15 @@ Windows window.
 
 ## 3. Setup sync (built)
 
+> Superseded in part by ADR 0050 (2026-11-25): what is synced is what the
+> operator wrote, as files, and what they chose, as keys of their tools'
+> files. Nothing a tool derives travels: the table below, its seeded
+> marketplaces, its portable JSON files and its whole `config.toml` are
+> replaced. Text compares without its line ends, a link into the table is
+> made again as a link, the side that turns a Claude plugin on installs it,
+> and the Setup root carries the table's version. The rest of this section
+> stands.
+
 `ferrite_core::setup_sync`, run by the window (`cockpit/setup_sync.rs`).
 
 - **`Root::Setup`** joins the tree ops, and each side resolves one table,

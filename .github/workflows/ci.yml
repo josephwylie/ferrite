@@ -1,18 +1,25 @@
 name: CI
 
-# Windows runs on main and on a PR labelled `full-ci`. Documentation-only
-# changes skip platform checks after architecture and selector validation.
+# Each run checks what its change can affect (scripts/ci_scope.py): a PR
+# against its base, a push to main against the newest commit whose run here
+# succeeded. Windows runs on main and on a PR labelled `full-ci`. The
+# nightly run and `full-ci` check everything. A change no check here reads
+# skips the platform checks after architecture and selector validation.
 # Caches are saved from main only, which every PR reads.
 on:
   push:
     branches: [main]
   pull_request:
     types: [opened, synchronize, reopened, labeled]
+  schedule:
+    - cron: '17 4 * * *'
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  # A newer push to a PR replaces its run; main's runs all finish, so each
-  # one saves the caches PRs read.
+  # A newer push to a PR replaces its run. Main's runs finish, so each saves
+  # the caches PRs read; a newer push replaces only one still waiting, and
+  # checks its change too. The nightly run has its own group, so no push
+  # replaces it.
+  group: ci-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -30,9 +37,14 @@ env:
 jobs:
   scope:
     runs-on: ubuntu-latest
+    # It reads which of main's runs succeeded.
+    permissions:
+      actions: read
+      contents: read
     outputs:
       code: ${{ steps.scope.outputs.code }}
-      full: ${{ steps.scope.outputs.full }}
+      checks: ${{ steps.scope.outputs.checks }}
+      windows: ${{ steps.scope.outputs.windows }}
       packages: ${{ steps.scope.outputs.packages }}
       vendored: ${{ steps.scope.outputs.vendored }}
     steps:
@@ -52,19 +64,33 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
           FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+          FORCED: ${{ github.event.forced }}
+          GH_TOKEN: ${{ github.token }}
+        # A push to main checks everything since the newest commit whose run
+        # here succeeded, so the change of a run that was cancelled or failed
+        # is checked again. ci_scope.py checks everything when there is no
+        # such commit HEAD descends from, as after a first push. A forced
+        # push, the nightly run and any other event check everything.
         run: |
-          args=()
-          if [ "$EVENT" = pull_request ]; then args+=(--base "$BASE"); fi
-          if [ "$FULL_LABEL" = true ]; then args+=(--full); fi
+          case "$EVENT" in
+            pull_request) args=(--base "$BASE"); if [ "$FULL_LABEL" = true ]; then args+=(--full); fi ;;
+            push)
+              mapfile -t checked < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=50" \
+                --jq '.workflow_runs[] | select(.event == "push" or .event == "schedule") | .head_sha' | grep -xE '[0-9a-f]{40}')
+              if [ "${#checked[@]}" = 0 ]; then echo '::warning::No successful run on main found; checking everything.'; fi
+              if [ "$FORCED" = true ]; then args=(--full); else args=(--checked "${checked[@]}" --windows); fi ;;
+            *) args=(--full) ;;
+          esac
           python scripts/ci_scope.py "${args[@]}" --github-output "$GITHUB_OUTPUT"
 
   # The macOS work is three jobs that run at once, so it takes as long as the
   # longest one. Each compiles on its own runner, and rust-cache keys each
-  # job's cache by its job id, so no job overwrites another's.
+  # job's cache by its job id, so no job overwrites another's. Each runs only
+  # when the scope job succeeded and selected it.
   macos-tests:
     name: macOS tests
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.code != 'false' }}
+    if: ${{ needs.scope.outputs.packages != '' }}
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -98,11 +124,12 @@ jobs:
           if [ -n "$left" ]; then echo "$left"; exit 1; fi
 
   # Its own run: gpui-pre-macos's tests need its test-support feature named
-  # for them. The app's tests get it through the headless platform.
+  # for them. The app's tests get it through the headless platform. Only
+  # vendored code and what builds it select it (ci_scope.py).
   macos-vendored:
     name: macOS vendored tests
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.vendored != '' }}
+    if: ${{ needs.scope.outputs.vendored != '' }}
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -126,7 +153,7 @@ jobs:
   macos-checks:
     name: macOS checks
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.code != 'false' }}
+    if: ${{ needs.scope.outputs.checks == 'true' }}
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -164,40 +191,48 @@ jobs:
       - name: Hold feature code's raw presses to the baseline
         shell: bash
         run: |
-          cargo clippy --locked -p ferrite -p ferrite-cockpit -p ferrite-frame -p ferrite-pane -p ferrite-review -p ferrite-terminal \
+          cargo clippy --locked -p ferrite -p ferrite-cockpit -p ferrite-frame -p ferrite-pane -p ferrite-review -p ferrite-factory -p ferrite-terminal \
             --message-format=json -- --cap-lints warn -A clippy::all -W clippy::disallowed_methods \
             | python3 scripts/check_raw_presses.py
 
   # The required check for the macOS jobs. A skipped required check passes,
-  # so this one also runs after a job it needs failed or timed out; it is
-  # skipped only for documentation-only changes, and cancelling the run
-  # cancels it.
+  # so this one also runs after the scope job or a job it needs failed or
+  # timed out, and fails then. It is skipped only when the scope job
+  # succeeded and selected nothing, and cancelling the run cancels it.
   macos:
     name: macOS (Metal)
     needs: [scope, macos-tests, macos-vendored, macos-checks]
-    if: ${{ !cancelled() && needs.scope.outputs.code != 'false' }}
+    if: ${{ !cancelled() && !(needs.scope.result == 'success' && needs.scope.outputs.code == 'false') }}
     runs-on: ubuntu-latest
     steps:
-      - name: Require the macOS jobs
+      - name: Require the selected macOS jobs
         env:
-          TESTS: ${{ needs.macos-tests.result }}
-          CHECKS: ${{ needs.macos-checks.result }}
+          SCOPE: ${{ needs.scope.result }}
+          PACKAGES: ${{ needs.scope.outputs.packages }}
+          CHECKS: ${{ needs.scope.outputs.checks }}
           VENDORED: ${{ needs.scope.outputs.vendored }}
-          VENDORED_TESTS: ${{ needs.macos-vendored.result }}
+          TESTS_RESULT: ${{ needs.macos-tests.result }}
+          CHECKS_RESULT: ${{ needs.macos-checks.result }}
+          VENDORED_RESULT: ${{ needs.macos-vendored.result }}
         run: |
-          test "$TESTS" = success
-          test "$CHECKS" = success
-          if [ -n "$VENDORED" ]; then
-            test "$VENDORED_TESTS" = success
-          else
-            test "$VENDORED_TESTS" = skipped
-            echo 'No vendored crate selected. Vendored tests intentionally skipped.'
-          fi
+          test "$SCOPE" = success
+          # A selected job must succeed, and one not selected must be skipped.
+          require() {
+            if [ -n "$2" ] && [ "$2" != false ]; then
+              test "$3" = success
+            else
+              test "$3" = skipped
+              echo "$1: not selected, intentionally skipped."
+            fi
+          }
+          require 'macOS tests' "$PACKAGES" "$TESTS_RESULT"
+          require 'macOS checks' "$CHECKS" "$CHECKS_RESULT"
+          require 'Vendored tests' "$VENDORED" "$VENDORED_RESULT"
 
   windows:
     name: Windows (DirectX 11)
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.code != 'false' && needs.scope.outputs.full != 'false' }}
+    if: ${{ needs.scope.outputs.windows == 'true' }}
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -235,7 +270,9 @@ jobs:
           cache-on-failure: true
       - name: Install nextest
         uses: taiki-e/install-action@nextest
+      # A change to the staging scripts alone selects no package.
       - name: Test affected workspace packages (synthetic engine)
+        if: needs.scope.outputs.packages != ''
         shell: bash
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         env:
@@ -277,7 +314,7 @@ jobs:
         env:
           SCOPE: ${{ needs.scope.result }}
           CODE: ${{ needs.scope.outputs.code }}
-          FULL: ${{ needs.scope.outputs.full }}
+          WINDOWS_SELECTED: ${{ needs.scope.outputs.windows }}
           MACOS: ${{ needs.macos.result }}
           WINDOWS: ${{ needs.windows.result }}
         run: |
@@ -285,13 +322,13 @@ jobs:
           if [ "$CODE" = false ]; then
             test "$MACOS" = skipped
             test "$WINDOWS" = skipped
-            echo 'Documentation only. Platform checks intentionally skipped.'
+            echo 'Nothing a check here reads changed. Platform checks intentionally skipped.'
           else
             test "$MACOS" = success
-            if [ "$FULL" = true ]; then
+            if [ "$WINDOWS_SELECTED" = true ]; then
               test "$WINDOWS" = success
             else
               test "$WINDOWS" = skipped
-              echo 'Windows intentionally deferred to main or a full-ci PR.'
+              echo 'Windows intentionally deferred to main or a full-ci PR, or nothing it checks changed.'
             fi
           fi

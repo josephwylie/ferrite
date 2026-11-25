@@ -2,18 +2,21 @@
 //! sides last agreed on (the base), and what each side holds now. A side
 //! that changed a path since the base has its way; when both did, the
 //! same way is nothing, an edit beats a removal, and of two edits the
-//! newer wins, the other kept aside. The first sync, with no base, is the
-//! union of both sides and removes nothing, but two different sign-ins
-//! wait for the operator. A sign-in is never removed: a side without one
-//! takes the other's. A seed's folders are copied whole to a side that
-//! lacks them, and never otherwise touched.
+//! newer wins, the other kept aside. A file is the same as another whose
+//! text differs only in line ends. The first sync, with no base, is the
+//! union of both sides and removes nothing; a chosen key both sides hold
+//! differently takes this computer's, and two different sign-ins wait for
+//! the operator. A sign-in is never removed: a side without one takes the
+//! other's. A folder on one side where the other has a link is never
+//! replaced, base or no base, unless it holds only what the link leads to
+//! on that side.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 
 use serde::Serialize;
 
-use super::{sign_in, Source, ITEMS};
+use super::{chosen, file_of, links, sign_in};
 use crate::tree::{executable_differs, Entry, Manifest, Side};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +41,9 @@ pub enum Hold {
     Linked(Side),
     /// A file on one side and a folder on the other.
     Kinds,
+    /// A folder on `Side`, and a link on the other side to a folder that,
+    /// on `Side`, holds other than it does: either way something would go.
+    FolderAndLink(Side),
     /// Two sign-ins, one each side, with none agreed before: which is kept
     /// is the operator's to say, since each may be another account.
     SignIn,
@@ -71,9 +77,10 @@ impl Action {
 pub fn reconcile(base: &Manifest, here: &Manifest, there: &Manifest) -> Vec<Action> {
     let sides = Sides { here, there };
     let mut held = Held::of(here, there);
+    let mut linked_over = BTreeSet::new();
     let mut actions = BTreeMap::new();
     for path in paths(base, here, there) {
-        if held.covers(path) || seeded(path) {
+        if held.covers(path) || linked_over.iter().any(|link: &&str| under(path, link)) {
             continue;
         }
         let [b, h, t] = [base, here, there].map(|manifest| manifest.entries.get(path));
@@ -81,27 +88,60 @@ pub fn reconcile(base: &Manifest, here: &Manifest, there: &Manifest) -> Vec<Acti
             held.0.insert(path);
             continue;
         }
-        let Some(action) = decide(path, b, h, t, &sides) else {
+        let action = match folder_and_link(h, t) {
+            Some((folder, target)) if !sides.loses_nothing(path, folder, target, &held) => {
+                Some(Action::Hold { path: path.to_string(), why: Hold::FolderAndLink(folder) })
+            }
+            Some((folder, _)) => {
+                let link = || match folder {
+                    Side::Here => Action::Pull(path.to_string()),
+                    Side::There => Action::Push(path.to_string()),
+                };
+                let action = match decide(path, b, h, t, &sides) {
+                    Some(Action::Hold { why: Hold::Kinds, .. }) => Some(link()),
+                    action => action,
+                };
+                if action == Some(link()) {
+                    linked_over.insert(path);
+                }
+                action
+            }
+            None => decide(path, b, h, t, &sides),
+        };
+        let Some(action) = action else {
             continue;
         };
-        if matches!(action, Action::Hold { why: Hold::Kinds, .. }) {
+        if matches!(action, Action::Hold { why: Hold::Kinds | Hold::FolderAndLink(_), .. }) {
             held.0.insert(path);
         }
         actions.insert(path, action);
     }
-    actions.extend(seeds(&sides, &held));
-    keep_what_survives(&mut actions, &held, &sides);
+    keep_what_survives(&mut actions, &held, &linked_over, &sides);
     let actions = outermost(actions, &sides);
     actions.into_iter().map(|action| through_links(action, &sides)).collect()
 }
 
+/// The side holding a folder where the other holds a link, and the link's
+/// target.
+fn folder_and_link<'a>(h: Option<&'a Entry>, t: Option<&'a Entry>) -> Option<(Side, &'a str)> {
+    match (h, t) {
+        (Some(Entry::Dir), Some(Entry::Symlink { target })) => Some((Side::Here, target)),
+        (Some(Entry::Symlink { target }), Some(Entry::Dir)) => Some((Side::There, target)),
+        _ => None,
+    }
+}
+
+/// Whether `path` lies in the folder `dir`.
+fn under(path: &str, dir: &str) -> bool {
+    path.strip_prefix(dir).is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// What both sides hold alike now, by path, and the base's entry where
-/// they differ or one of them could not list it: the next sync's base. A
-/// seed is never in it: each side keeps its own up.
+/// they differ or one of them could not list it: the next sync's base.
 pub fn agreed(base: &Manifest, here: &Manifest, there: &Manifest) -> Manifest {
     let held = Held::of(here, there);
     let mut agreed = Manifest::default();
-    for path in paths(base, here, there).into_iter().filter(|path| !seeded(path)) {
+    for path in paths(base, here, there) {
         let [b, h, t] = [base, here, there].map(|manifest| manifest.entries.get(path));
         let entry = if !held.covers(path) && same(h, t) { h } else { b };
         if let Some(entry) = entry {
@@ -142,6 +182,7 @@ fn decide(path: &str, b: Option<&Entry>, h: Option<&Entry>, t: Option<&Entry>, s
                 let winner = match (sides.linked(Side::Here, &path), sides.linked(Side::There, &path)) {
                     (true, false) => Side::Here,
                     (false, true) => Side::There,
+                    _ if b.is_none() && chosen(&path).is_some() => Side::Here,
                     _ if matches!((mh, mt), (Some(h), Some(t)) if t > h) => Side::There,
                     _ => Side::Here,
                 };
@@ -152,78 +193,15 @@ fn decide(path: &str, b: Option<&Entry>, h: Option<&Entry>, t: Option<&Entry>, s
     })
 }
 
-/// Whether `path` lies in a seed: its folders are seeded whole or left be.
-pub(super) fn seeded(path: &str) -> bool {
-    seed_of(path).is_some()
-}
-
-/// The seed folder `path` lies in, as `<seed>/<name>`.
-fn seed_of(path: &str) -> Option<&str> {
-    ITEMS.iter().filter(|item| item.source == Source::Seed).find_map(|item| {
-        let name = path.strip_prefix(item.path)?.strip_prefix('/')?.split('/').next()?;
-        Some(&path[..item.path.len() + 1 + name.len()])
-    })
-}
-
-/// Each seed folder one side lacks, taken there whole. A folder the other
-/// side holds only part of, each part as this side has it, is a copy cut
-/// short, and the rest of it goes too; any other folder both sides hold is
-/// left as each has it. Nothing is ever removed from one.
-fn seeds<'a>(sides: &Sides<'a>, held: &Held) -> Vec<(&'a str, Action)> {
-    let folders = |manifest: &'a Manifest| {
-        let mut folders: BTreeMap<&'a str, Vec<(&'a str, &'a Entry)>> = BTreeMap::new();
-        for (path, entry) in &manifest.entries {
-            if let Some(folder) = seed_of(path) {
-                folders.entry(folder).or_default().push((path.as_str(), entry));
-            }
-        }
-        folders
-    };
-    let (here, there) = (folders(sides.here), folders(sides.there));
-    let within = |part: &[(&str, &Entry)], whole: &Manifest| {
-        part.iter().all(|(path, entry)| same(Some(entry), whole.entries.get(*path)))
-    };
-    let names: BTreeSet<&str> = here.keys().chain(there.keys()).copied().collect();
-    let mut actions = Vec::new();
-    for folder in names {
-        let under = format!("{folder}/");
-        if held.covers(folder) || held.0.iter().any(|path| path.starts_with(&under)) {
-            continue;
-        }
-        let (mine, theirs) = (here.get(folder), there.get(folder));
-        let from = match (mine, theirs) {
-            (Some(_), None) => Side::Here,
-            (None, Some(_)) => Side::There,
-            (Some(mine), Some(theirs)) if mine.len() > theirs.len() && within(theirs, sides.here) => Side::Here,
-            (Some(mine), Some(theirs)) if theirs.len() > mine.len() && within(mine, sides.there) => Side::There,
-            _ => continue,
-        };
-        let (source, dest) = match from {
-            Side::Here => (mine, sides.there),
-            Side::There => (theirs, sides.here),
-        };
-        for (path, _) in source.into_iter().flatten() {
-            if !dest.entries.contains_key(*path) {
-                let action = match from {
-                    Side::Here => Action::Push(path.to_string()),
-                    Side::There => Action::Pull(path.to_string()),
-                };
-                actions.push((*path, action));
-            }
-        }
-    }
-    actions
-}
-
 /// A folder is removed from a side only when nothing under it stays
 /// there: one whose removal would take what changed or is held there is
 /// made again on the other side instead, and a file put in its place is
 /// a clash of kinds. Deepest first, so a folder kept keeps each holding
 /// it.
-fn keep_what_survives(actions: &mut BTreeMap<&str, Action>, held: &Held, sides: &Sides) {
+fn keep_what_survives(actions: &mut BTreeMap<&str, Action>, held: &Held, linked_over: &BTreeSet<&str>, sides: &Sides) {
     let paths: Vec<&str> = actions.keys().rev().copied().collect();
     for path in paths {
-        let Some(action) = actions.get(path) else {
+        let Some(action) = actions.get(path).filter(|_| !linked_over.contains(path)) else {
             continue;
         };
         let (on, removal) = match action {
@@ -293,7 +271,8 @@ fn through_links(action: Action, sides: &Sides) -> Action {
     };
     let path = action.path();
     let blocked = if action.removes() {
-        sides.of(side).links.iter().any(|link| path.starts_with(&format!("{link}/")))
+        let links = &sides.of(side).links;
+        links.iter().any(|link| path.starts_with(&format!("{link}/"))) || (file_of(path) != path && links.contains(file_of(path)))
     } else {
         sides.linked(side, path)
     };
@@ -320,11 +299,32 @@ impl Sides<'_> {
         }
     }
 
-    /// Whether `side` reaches `path` through a link: it, or a folder it
-    /// lies in.
+    /// Whether `side` reaches `path` through a link: it, a folder it lies
+    /// in, or the file it is a key of.
     fn linked(&self, side: Side, path: &str) -> bool {
         let links = &self.of(side).links;
-        links.contains(path) || path.match_indices('/').any(|(at, _)| links.contains(&path[..at]))
+        within(path, |at| links.contains(at))
+    }
+
+    /// Whether the folder at `path` on `side` holds only what the link the
+    /// other side has there, to `target`, leads to on `side`: each entry
+    /// under it the same as the one at its place in that folder, its text
+    /// by its line ends aside, and nothing under either one held.
+    fn loses_nothing(&self, path: &str, side: Side, target: &str, held: &Held) -> bool {
+        let Some(to) = links::joined(path, target) else {
+            return false;
+        };
+        let manifest = self.of(side);
+        let inside = |dir: &str, at: &str| at == dir || under(at, dir);
+        if manifest.entries.get(&to) != Some(&Entry::Dir) || held.0.iter().any(|at| inside(path, at) || inside(&to, at)) {
+            return false;
+        }
+        let under_path = format!("{path}/");
+        manifest
+            .entries
+            .range::<str, _>((Bound::Included(under_path.as_str()), Bound::Unbounded))
+            .take_while(|(at, _)| at.starts_with(&under_path))
+            .all(|(at, entry)| same(Some(entry), manifest.entries.get(&format!("{to}/{}", &at[under_path.len()..]))))
     }
 }
 
@@ -337,8 +337,15 @@ impl<'a> Held<'a> {
     }
 
     fn covers(&self, path: &str) -> bool {
-        self.0.contains(path) || path.match_indices('/').any(|(at, _)| self.0.contains(&path[..at]))
+        within(path, |at| self.0.contains(at))
     }
+}
+
+/// Whether `path`, a folder it lies in, or the file it is a key of, is
+/// one that `is`.
+fn within(path: &str, is: impl Fn(&str) -> bool) -> bool {
+    let file = file_of(path);
+    is(path) || is(file) || file.match_indices('/').any(|(at, _)| is(&file[..at]))
 }
 
 fn paths<'a>(base: &'a Manifest, here: &'a Manifest, there: &'a Manifest) -> BTreeSet<&'a str> {
@@ -349,20 +356,28 @@ fn paths<'a>(base: &'a Manifest, here: &'a Manifest, there: &'a Manifest) -> BTr
         .collect()
 }
 
-/// Whether two entries hold the same: a file by its bytes and, where both
-/// sides keep them, its executable bits.
+/// Whether two entries hold the same: a file by its text where both are
+/// text, else its bytes, and, where both sides keep them, its executable
+/// bits.
 fn same(one: Option<&Entry>, other: Option<&Entry>) -> bool {
     match (one, other) {
         (None, None) | (Some(Entry::Dir), Some(Entry::Dir)) => true,
         (
-            Some(Entry::File { size, sha256, mode, .. }),
+            Some(Entry::File { size, sha256, mode, text, .. }),
             Some(Entry::File {
                 size: other_size,
                 sha256: other_sha256,
                 mode: other_mode,
+                text: other_text,
                 ..
             }),
-        ) => size == other_size && sha256 == other_sha256 && !executable_differs(*mode, *other_mode),
+        ) => {
+            let alike = match (text, other_text) {
+                (Some(text), Some(other)) => text == other,
+                _ => size == other_size && sha256 == other_sha256,
+            };
+            alike && !executable_differs(*mode, *other_mode)
+        }
         (Some(Entry::Symlink { target }), Some(Entry::Symlink { target: other })) => target == other,
         _ => false,
     }
@@ -379,6 +394,7 @@ mod tests {
             sha256: bytes.into(),
             mode: None,
             modified: Some(modified),
+            text: None,
         }
     }
 
@@ -564,6 +580,25 @@ mod tests {
         );
         let unchanged = manifest(&[("x", Entry::Dir), ("x/a", file("a", 0))]);
         assert_eq!(reconcile(&base, &replaced, &unchanged), [Action::Push("x".into())], "the folder goes for the file");
+    }
+
+    #[test]
+    fn a_folder_against_a_link_goes_only_when_it_holds_what_the_link_leads_to() {
+        let (skill, inside) = (".claude/skills/x", ".claude/skills/x/SKILL.md");
+        let link = Entry::Symlink { target: "../../.agents/skills/x".into() };
+        let installed = [(".agents/skills/x", Entry::Dir), (".agents/skills/x/SKILL.md", file("a", 0))];
+        let with = |more: &[(&str, Entry)]| manifest(&[installed.as_slice(), more].concat());
+        let (linked, folder) = (with(&[(skill, link.clone())]), with(&[(skill, Entry::Dir), (inside, file("a", 3))]));
+        assert_eq!(reconcile(&Manifest::default(), &linked, &folder), [Action::Push(skill.into())], "the link, with no base");
+        let edited = with(&[(skill, Entry::Dir), (inside, file("b", 3))]);
+        let held = [Action::Hold { path: skill.into(), why: Hold::FolderAndLink(There) }];
+        assert_eq!(reconcile(&Manifest::default(), &linked, &edited), held);
+        assert_eq!(reconcile(&with(&[(skill, Entry::Dir), (inside, file("b", 0))]), &linked, &edited), held, "a base does not make it go");
+        assert_eq!(
+            reconcile(&linked, &folder, &linked),
+            [Action::Push(skill.into()), Action::Push(inside.into())],
+            "a link made a folder of what it held, since the base"
+        );
     }
 
     #[test]

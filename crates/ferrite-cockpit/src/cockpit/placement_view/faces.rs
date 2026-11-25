@@ -23,7 +23,7 @@ impl PlacementView {
         let mut content = column();
         content = if self.browsing && !removed {
             content.child(self.dest.clone()).child(
-                project_editor::prefixed_field(
+                ferrite_ui::field::prefixed_field(
                     "Copies to".into(),
                     self.folder_prefix(cx).into(),
                     self.name.clone(),
@@ -44,7 +44,7 @@ impl PlacementView {
             // A Machine removed has no folder to choose.
             let change = div().children((!removed).then_some(change));
             content.child(
-                project_editor::shown_path(
+                ferrite_ui::field::shown_path(
                     self.folder_prefix(cx).into(),
                     self.copy_name(cx).to_string().into(),
                     change,

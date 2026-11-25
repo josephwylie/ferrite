@@ -9,8 +9,9 @@ description = "Ferrite's shared UI: theme, icons, components, motion and menus"
 doctest = false
 
 [features]
-# The test hooks the app's own tests reach for.
-test-support = []
+# The test hooks the app's own tests reach for, and the window a
+# feature view opens in on its own (`testing`).
+test-support = ["gpui/test-support"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }

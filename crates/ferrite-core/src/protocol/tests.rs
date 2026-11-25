@@ -1518,25 +1518,36 @@ fn samples() -> Vec<(&'static str, Sample)> {
         ("reply_tree_scan", Sample::Server(ServerMessage::Reply { id: 320, ok: Some(Done::Tree { reply: crate::tree::Reply::Scanned { manifest: crate::tree::Manifest {
             entries: [
                 ("bin".to_string(), crate::tree::Entry::Dir),
-                ("bin/run".to_string(), crate::tree::Entry::File { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), mode: Some(0o755), modified: None }),
+                ("bin/run".to_string(), crate::tree::Entry::File { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), mode: Some(0o755), modified: None, text: None }),
                 ("latest".to_string(), crate::tree::Entry::Symlink { target: "bin/run".into() }),
             ].into_iter().collect(),
             problems: Default::default(),
             links: Default::default(),
         }, more: false } }), error: None })),
         ("reply_tree_scan_page", Sample::Server(ServerMessage::Reply { id: 328, ok: Some(Done::Tree { reply: crate::tree::Reply::Scanned { manifest: crate::tree::Manifest {
-            entries: [("notes.txt".to_string(), crate::tree::Entry::File { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), mode: None, modified: None })].into_iter().collect(),
+            entries: [("notes.txt".to_string(), crate::tree::Entry::File { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), mode: None, modified: None, text: None })].into_iter().collect(),
             problems: [("private".to_string(), "Permission denied (os error 13)".to_string())].into_iter().collect(),
             links: Default::default(),
         }, more: true } }), error: None })),
-        ("command_tree_scan_setup", command(329, Op::Tree { request: crate::tree::Request::Scan { root: crate::tree::Root::Setup, skip: Vec::new(), after: None } })),
+        ("command_tree_scan_setup", command(329, Op::Tree { request: crate::tree::Request::Scan { root: crate::tree::Root::FirstSetup, skip: Vec::new(), after: None } })),
         ("reply_tree_scan_setup", Sample::Server(ServerMessage::Reply { id: 329, ok: Some(Done::Tree { reply: crate::tree::Reply::Scanned { manifest: crate::tree::Manifest {
             entries: [
                 (".claude/skills/shared".to_string(), crate::tree::Entry::Dir),
-                (".claude/skills/shared/SKILL.md".to_string(), crate::tree::Entry::File { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), mode: Some(0o644), modified: Some(1_764_000_000_000) }),
+                (".claude/skills/shared/SKILL.md".to_string(), crate::tree::Entry::File { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), mode: Some(0o644), modified: Some(1_764_000_000_000), text: None }),
             ].into_iter().collect(),
             problems: Default::default(),
             links: [".claude/skills/shared".to_string()].into_iter().collect(),
+        }, more: false } }), error: None })),
+        ("command_tree_scan_setup_table", command(330, Op::Tree { request: crate::tree::Request::Scan { root: crate::tree::Root::Setup { table: 2 }, skip: Vec::new(), after: None } })),
+        ("command_tree_link_setup", command(331, Op::Tree { request: crate::tree::Request::Link { root: crate::tree::Root::Setup { table: 2 }, path: ".claude/skills/shared".into(), target: "../../.agents/skills/shared".into() } })),
+        ("reply_tree_scan_setup_table", Sample::Server(ServerMessage::Reply { id: 330, ok: Some(Done::Tree { reply: crate::tree::Reply::Scanned { manifest: crate::tree::Manifest {
+            entries: [
+                (".agents/skills/shared/SKILL.md".to_string(), crate::tree::Entry::File { size: 4, sha256: "8b0e6e6d1b11a26f4a3ad7e5d6b2d4b1c4b0b7b3c5f2a6c6e2a0f0d3f1b8d5e2".into(), mode: Some(0o644), modified: Some(1_764_000_000_000), text: Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into()) }),
+                (".claude/settings.json#enabledPlugins/pstack@cursor-plugins".to_string(), crate::tree::Entry::File { size: 4, sha256: "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b".into(), mode: None, modified: Some(1_764_000_000_000), text: None }),
+                (".claude/skills/shared".to_string(), crate::tree::Entry::Symlink { target: "../../.agents/skills/shared".into() }),
+            ].into_iter().collect(),
+            problems: [(".claude/plugins/pstack@cursor-plugins".to_string(), "Plugin \"pstack\" not found in marketplace \"cursor-plugins\".".to_string())].into_iter().collect(),
+            links: Default::default(),
         }, more: false } }), error: None })),
         ("reply_tree_chunk", Sample::Server(ServerMessage::Reply { id: 322, ok: Some(Done::Tree { reply: crate::tree::Reply::Written { offset: 3 } }), error: None })),
         ("reply_tree_read", Sample::Server(ServerMessage::Reply { id: 324, ok: Some(Done::Tree { reply: crate::tree::Reply::Bytes { data: "YWJj".into(), size: 3 } }), error: None })),

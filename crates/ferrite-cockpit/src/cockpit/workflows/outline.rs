@@ -674,9 +674,9 @@ pub(crate) fn field_input(
         .capture_any_mouse_down(pressed)
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(if field.prose() {
-            crate::project_editor::text_area(label.into(), composer, focused, "factory-field-focused")
+            ferrite_ui::field::text_area(label.into(), composer, focused, "factory-field-focused")
         } else {
-            crate::project_editor::text_field(label.into(), composer, focused, "factory-field-focused")
+            ferrite_ui::field::text_field(label.into(), composer, focused, "factory-field-focused")
         })
         .into_any_element()
 }

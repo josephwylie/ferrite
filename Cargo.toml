@@ -10,6 +10,7 @@ members = [
     "crates/ferrite-pane",
     "crates/ferrite-cockpit",
     "crates/ferrite-review",
+    "crates/ferrite-factory",
     "crates/ferrite-terminal",
     "crates/ferrite-frame",
     "crates/ferrite-focus-notify",

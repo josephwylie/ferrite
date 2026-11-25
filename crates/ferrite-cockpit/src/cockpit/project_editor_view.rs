@@ -269,7 +269,7 @@ impl ProjectEditorView {
         ));
         let mut body = project_editor::body()
             .track_scroll(&self.scroll)
-            .child(project_editor::name_field(
+            .child(ferrite_ui::field::name_field(
                 self.name.clone(),
                 self.name.read(cx).focus_handle(cx).is_focused(window),
             ))

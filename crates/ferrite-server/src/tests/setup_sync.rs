@@ -1,6 +1,7 @@
 //! The operator's setup synced with a machine's Server through its bridge,
 //! on the connection of its own a window's `Cockpit::tree` opens (ADR
-//! 0048): the Setup root is the Server's own home directory.
+//! 0048, ADR 0050): the Setup root is the Server's own home directory, by
+//! this Ferrite's table.
 
 use ferrite_core::chunked::Cancellation;
 use ferrite_core::setup_sync::{self, Home, Job, Outcome};
@@ -45,22 +46,15 @@ fn a_setup_sync_lands_in_the_machines_home_and_comes_back_from_it() {
     write(&mine.join(".claude/CLAUDE.md"), "Be careful.\n");
     write(&mine.join(".claude/.credentials.json"), r#"{"claudeAiOauth": {}}"#);
     write(&mine.join(".claude/history.jsonl"), "not the setup\n");
-    let install = mine.join(".claude").join("plugins").join("cache").join("tool");
-    write(
-        &mine.join(".claude/plugins/installed_plugins.json"),
-        &format!(r#"{{"installPath": {}}}"#, serde_json::to_string(&install.to_string_lossy()).unwrap()),
-    );
+    write(&mine.join(".claude/plugins/installed_plugins.json"), r#"{"plugins": {}}"#);
     let job = Job::for_machine(Home::at(mine.clone(), None), &harness.dir.join("settings"), "box");
 
     let mut exchange = cockpit.tree(cockpit.first_machine()).unwrap()().unwrap();
     let first = sync(&job, &mut *exchange);
-    assert_eq!((first.pushed, first.pulled), (5, 0), "{first:?}");
+    assert_eq!((first.pushed, first.pulled), (4, 0), "{first:?}");
     assert_eq!(std::fs::read_to_string(far.join(".claude/skills/deploy/SKILL.md")).unwrap(), "# Deploy\n");
     assert!(!far.join(".claude/history.jsonl").exists());
-    let plugins: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(far.join(".claude/plugins/installed_plugins.json")).unwrap()).unwrap();
-    let there = far.join(".claude").join("plugins").join("cache").join("tool");
-    assert_eq!(plugins["installPath"], *there.to_string_lossy());
+    assert!(!far.join(".claude/plugins").exists(), "Claude's own record of its plugins is each side's");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -81,5 +75,6 @@ fn a_setup_sync_lands_in_the_machines_home_and_comes_back_from_it() {
         .filter(|message| message["op"] == "tree" && message["request"]["action"] == "scan")
         .map(|message| message["request"]["root"].clone())
         .collect();
-    assert!(!roots.is_empty() && roots.iter().all(|root| *root == serde_json::json!({ "kind": "setup" })), "{roots:?}");
+    let table = serde_json::json!({ "kind": "setup_table", "table": setup_sync::TABLE });
+    assert!(!roots.is_empty() && roots.iter().all(|root| *root == table), "{roots:?}");
 }

@@ -279,6 +279,7 @@ fn a_copy_from_a_side_that_keeps_no_bits_takes_them_from_git() {
             sha256: String::new(),
             mode: Some(0o700),
             modified: None,
+            text: None,
         },
     );
     Checkout::from_windows(&root).list(&mut listed);

@@ -180,7 +180,7 @@ mod tests {
         let failed = Refusal::Failed {
             error: "Access is denied. (os error 5)".into(),
         };
-        sent.unmade.push(unmade("dist/app.js", tree::Entry::File { size: 1, sha256: String::new(), mode: None, modified: None }, failed));
+        sent.unmade.push(unmade("dist/app.js", tree::Entry::File { size: 1, sha256: String::new(), mode: None, modified: None, text: None }, failed));
         assert_eq!(
             not_copied(&sent, &["notes.md".into()], "josephpc"),
             [
