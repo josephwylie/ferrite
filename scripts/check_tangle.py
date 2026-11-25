@@ -25,6 +25,7 @@ from quarantine import quarantined
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "scripts" / "tangle.json"
 ROOT_FILE = "crates/ferrite-cockpit/src/cockpit.rs"
+RECORD = "python3 scripts/check_tangle.py --write"
 # What is not code: a line comment, the start of a block comment (they
 # nest, so `block_end` finds the end), a raw, plain or byte string, a char.
 NOT_CODE = re.compile(r"""//[^\n]*|/\*|(?<!\w)(?:b?r(\#*)".*?"\1|b?"(?:\\.|[^"\\])*"|b?'(?:\\u\{[0-9A-Fa-f]+\}|\\.|[^\\'\n])')""",
@@ -119,15 +120,15 @@ def check(found: dict[str, int], baseline: dict[str, int], out: TextIO) -> bool:
         print(
             f"Rose: {', '.join(over)}. While the window is untangled these only fall: new code takes plain "
             "values in a view of its own, outside cockpit.rs, and a test that needs no window opens none. "
-            "A rise that cannot be avoided is recorded with --write in this change, saying why.",
+            "Record a rise only when it cannot be avoided, and say why in the change.",
             file=out,
         )
     if lower:
-        print(f"Fell: {', '.join(lower)}. Record the lower baseline with --write in this change, "
-              "so a later rise cannot take its place.", file=out)
+        print(f"Fell: {', '.join(lower)}. Record the fall in this change, so a later rise cannot take its place.",
+              file=out)
     if over or lower:
-        print("Commit scripts/tangle.json. If it conflicts with another change that moved a count, "
-              "take either side, then rerun --write on the merged sources.", file=out)
+        print(f"To record the counts, run `{RECORD}` and commit scripts/tangle.json. If it conflicts "
+              "with another change, rebase onto that change and run the same command again.", file=out)
     return not (over or lower)
 
 

@@ -99,7 +99,7 @@ class TangleTests(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("files holding WeakEntity<CockpitView>: 0, baseline 1.", out)
         self.assertIn("Fell: files holding WeakEntity<CockpitView>, files with impl CockpitView.", out)
-        self.assertIn("take either side, then rerun --write", out)
+        self.assertIn("run `python3 scripts/check_tangle.py --write` and commit scripts/tangle.json", out)
         self.run_check("--write")
         self.assertEqual(self.run_check()[0], 0)
 

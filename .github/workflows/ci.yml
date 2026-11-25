@@ -345,28 +345,28 @@ jobs:
           # Retries as on macOS above: this runner fails a different
           # timing-dependent test on most runs.
           cargo nextest run "${args[@]}" --profile ci -E "not ($quarantined)" --locked --no-fail-fast --retries 2 --status-level all --final-status-level flaky
+      # Like the tests above, these need a package: with no -p, nextest
+      # would build the default members.
       - name: Test the quarantined tests, which never fail the job
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && needs.scope.outputs.packages != '' }}
         continue-on-error: true
         shell: bash
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         env:
           PACKAGES: ${{ needs.scope.outputs.packages }}
         run: |
-          # With no -p, nextest would build the default members.
-          if [ -z "$PACKAGES" ]; then echo 'No package selected.'; exit 0; fi
           quarantined=$(python scripts/quarantine.py)
           if [ "$quarantined" = 'none()' ]; then echo 'No test is quarantined.'; exit 0; fi
           args=()
           for package in $PACKAGES; do args+=(-p "$package"); done
           cargo nextest run "${args[@]}" --profile quarantine -E "$quarantined" --locked --no-fail-fast --no-tests=pass
       - name: Summarize the test reports
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && needs.scope.outputs.packages != '' }}
         shell: bash
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: python scripts/junit_summary.py target/nextest/*/junit.xml >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the test reports
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && needs.scope.outputs.packages != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: junit-windows-${{ github.run_attempt }}
