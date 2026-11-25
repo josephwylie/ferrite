@@ -58,8 +58,9 @@ class Package:
 # is placed on purpose.
 CLASSES = {"crates/": "packages", "vendor/": "vendored"}
 
-# A file a Rust source embeds, by its literal path or a `concat!`'s first piece.
-EMBED = re.compile(r'\binclude(?:_str|_bytes)?!\(\s*(?:concat!\(\s*)?"([^"]+)"')
+# A file a Rust source embeds or takes as a module, by its literal path or a
+# `concat!`'s first piece. Each is relative to the source's folder.
+EMBED = re.compile(r'(?:\binclude(?:_str|_bytes)?!\(\s*(?:concat!\(\s*)?|#\[path\s*=\s*)"([^"]+)"')
 
 
 def embedded(root: Path, directory: Path) -> tuple[str, ...]:
@@ -218,6 +219,7 @@ def shipped(package: Package, requested: frozenset[str]) -> list[tuple[str, froz
 # What a path selects in ci.yml, beyond the members that read it.
 SHARED = "shared input"  # every package and check, the vendored ones too
 UNCLASSIFIED = "unclassified input"  # as a shared input
+VENDORED = "read by a vendored crate"  # as vendored code: its dependants are not workspace edges
 CHECKS = "macOS checks input"  # the app build, visual-reference, CEF and raw-press checks
 WINDOWS = "Windows checks input"  # the Windows checks, which run on main and on a full-ci PR
 NOTHING = "no check here"
@@ -290,11 +292,13 @@ def select(packages: dict[str, Package], paths: list[str], full: bool = False, b
     for path in paths:
         owners = {name for name, package in packages.items() if package.reads(path)}
         selects = rule(path) or (None if owners else UNCLASSIFIED)
+        if selects in (None, NOTHING) and any(packages[name].run == "vendored" for name in owners):
+            selects = VENDORED
         selected.update(owners)
         if selects not in (None, NOTHING):
             inputs.add(selects)
             reasons.add(f"{selects}: {path}")
-    if inputs & {SHARED, UNCLASSIFIED}:
+    if inputs & {SHARED, UNCLASSIFIED, VENDORED}:
         selected = set(packages)
     else:
         while True:
@@ -303,7 +307,7 @@ def select(packages: dict[str, Package], paths: list[str], full: bool = False, b
             if expanded == selected:
                 break
             selected = expanded
-    runs = {run: [] for run in CLASSES.values()}
+    runs ={run: [] for run in CLASSES.values()}
     for name in sorted(selected):
         runs[packages[name].run].append(name)
     checks = bool(runs["packages"]) or CHECKS in inputs
@@ -319,9 +323,24 @@ def select(packages: dict[str, Package], paths: list[str], full: bool = False, b
     }
 
 
-def known_commit(root: Path, revision: str) -> bool:
-    return subprocess.run(["git", "cat-file", "-e", f"{revision}^{{commit}}"], cwd=root,
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+def succeeds(root: Path, *args: str) -> bool:
+    return subprocess.run(["git", *args], cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def comparison(root: Path, head: str, base: str | None, checked: list[str]) -> str | None:
+    """What to compare `head` with, or None to check everything. A PR's
+    `base` must share history with `head`. A push to main takes the newest
+    `checked` commit, whose run succeeded, that `head` descends from: a change
+    whose run was cancelled or failed is checked again. A first push has none,
+    and a forced one can leave them all behind."""
+    if base:
+        return base if succeeds(root, "merge-base", base, head) else None
+    if not checked:
+        return None
+    tip = subprocess.run(["git", "rev-parse", f"{head}^{{commit}}"], cwd=root, check=True,
+                         capture_output=True, text=True).stdout.strip()
+    return next((commit for commit in checked
+                 if commit != tip and succeeds(root, "merge-base", "--is-ancestor", commit, head)), None)
 
 
 def changed_paths(root: Path, base: str, head: str) -> list[str]:
@@ -346,19 +365,20 @@ def changes_cef_gate(root: Path, base: str, head: str) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--base", help="Compare against this Git revision's merge base")
+    since = parser.add_mutually_exclusive_group()
+    since.add_argument("--base", help="Compare against this Git revision's merge base")
+    since.add_argument("--checked", nargs="*", default=[], metavar="COMMIT",
+                       help="Commits whose run on main succeeded, newest first: compare against the first HEAD descends from")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--full", action="store_true", help="Select every package and Windows CI")
     parser.add_argument("--windows", action="store_true", help="Run the Windows checks for what is selected")
     parser.add_argument("--browser", action="store_true", help="Select the packaged browser checks")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
-    if (args.base and args.base.startswith("-")) or args.head.startswith("-"):
+    if any(revision.startswith("-") for revision in [args.base or "", args.head, *args.checked]):
         parser.error("Git revisions cannot start with a dash")
     root = args.root.resolve()
-    # A first push names no earlier commit (all zeros), and a forced one can
-    # name one this clone lacks: with nothing to compare, check everything.
-    base = args.base if args.base and known_commit(root, args.base) else None
+    base = comparison(root, args.head, args.base, args.checked)
     paths = changed_paths(root, base, args.head) if base else []
     browser = args.browser or (bool(base) and changes_cef_gate(root, base, args.head))
     result = select(workspace(root), paths, full=args.full or not base, browser=browser, windows=args.windows)

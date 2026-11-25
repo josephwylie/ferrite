@@ -145,14 +145,27 @@ class SelectionTests(unittest.TestCase):
 
     def test_a_file_a_member_embeds_selects_it(self):
         # The `ferrite skill` text, an engine fixture ferrite-core's tests
-        # read, and the README gpui-base's markdown test renders.
+        # read, the README gpui-base's markdown test renders, and the test
+        # programs' temporary folder, a module of every test program.
         for path, reader in [("skills/ferrite/SKILL.md", "ferrite-engine"),
                              ("crates/ferrite-engine/tests/fixtures/claude-report-findings-2.1.318.jsonl", "ferrite-core"),
-                             ("README.md", "gpui-base")]:
+                             ("README.md", "gpui-base"),
+                             ("crates/ferrite-core/src/test_temp.rs", "ferrite-focus-notify")]:
             with self.subTest(path=path):
-                result = select(self.packages, [path])
+                result = select(self.packages, [path], windows=True)
                 self.assertIn(reader, result["packages"] + result["vendored"])
         self.assertFalse(select(self.packages, ["skills/verify-ferrite/SKILL.md"])["code"])
+
+    def test_vendored_crates_are_tested_together(self):
+        # Their run names gpui-pre-macos's test-support feature, which Cargo
+        # refuses unless gpui-pre-macos is selected. A file a vendored crate
+        # reads is vendored code: its dependants reach it through crates.io.
+        result = select(self.packages, ["README.md"])
+        self.assertEqual(result["vendored"], self.vendored)
+        self.assertEqual(result["packages"], self.ferrite)
+        for name, package in self.packages.items():
+            with self.subTest(package=name):
+                self.assertIn(select(self.packages, [f"{package.directory}/src/lib.rs"])["vendored"], ([], self.vendored))
 
     def test_windows_runs_for_what_a_push_to_main_changed(self):
         crate = select(self.packages, ["crates/ferrite-server/src/calls.rs"], windows=True)
@@ -399,10 +412,12 @@ renamed = { package = "helper", path = "crates/helper" }
         source.parent.mkdir()
         source.write_text('const SKILL: &str = include_str!("../../../skills/core/SKILL.md");\n'
                           'const ICON: &[u8] = include_bytes!(concat!("../../ferrite-engine/icons/", "x.svg"));\n'
-                          'const OWN: &str = include_str!("../README.md");\n')
+                          'const OWN: &str = include_str!("../README.md");\n'
+                          '#[cfg(test)]\n#[path = "../../ferrite-engine/src/shared.rs"]\nmod shared;\n')
         packages = workspace(self.root)
-        self.assertEqual(packages["ferrite-core"].embeds, ("crates/ferrite-engine/icons", "skills/core/SKILL.md"))
-        for path in ["skills/core/SKILL.md", "crates/ferrite-engine/icons/x.svg"]:
+        self.assertEqual(packages["ferrite-core"].embeds,
+                         ("crates/ferrite-engine/icons", "crates/ferrite-engine/src/shared.rs", "skills/core/SKILL.md"))
+        for path in ["skills/core/SKILL.md", "crates/ferrite-engine/icons/x.svg", "crates/ferrite-engine/src/shared.rs"]:
             with self.subTest(path=path):
                 self.assertIn("ferrite-core", select(packages, [path])["packages"])
         self.assertFalse(select(packages, ["skills/other/SKILL.md"])["code"])
@@ -415,25 +430,40 @@ renamed = { package = "helper", path = "crates/helper" }
             main()
         return dict(line.split("=", 1) for line in output.read_text().splitlines())
 
-    def test_a_push_to_main_checks_what_it_changed_on_windows_too(self):
-        source = self.root / "crates/ferrite-frame/src/lib.rs"
-        source.parent.mkdir()
-        source.write_text("fn frame() {}\n")
-        before = self.commit("base")
-        source.write_text("fn frame() { draw(); }\n")
-        self.commit("change the frame")
-        outputs = self.scope("--base", before, "--windows")
+    EVERYTHING = "ferrite-cockpit ferrite-core ferrite-engine ferrite-frame"
+
+    def test_a_push_checks_everything_since_the_newest_commit_whose_run_succeeded(self):
+        frame = self.root / "crates/ferrite-frame/src/lib.rs"
+        frame.parent.mkdir()
+        frame.write_text("fn frame() {}\n")
+        checked = self.commit("base")
+        frame.write_text("fn frame() { draw(); }\n")
+        self.commit("change the frame; its run was cancelled")
+        (self.root / "README.md").write_text("Ferrite\n")
+        head = self.commit("document")
+        # Newest first; the head's own run and commits this clone lacks are passed over.
+        outputs = self.scope("--checked", head, "1234567890abcdef1234567890abcdef12345678", checked, "--windows")
         self.assertEqual(outputs["packages"], "ferrite-frame")
         self.assertEqual(outputs["windows"], "true")
 
-    def test_a_push_with_no_earlier_commit_here_checks_everything(self):
-        self.commit("base")
-        # A first push names all zeros; a forced one can name a commit this clone lacks.
-        for before in ["0" * 40, "1234567890abcdef1234567890abcdef12345678"]:
-            with self.subTest(before=before):
-                outputs = self.scope("--base", before, "--windows")
-                self.assertEqual(outputs["packages"], "ferrite-cockpit ferrite-core ferrite-engine ferrite-frame")
+    def test_a_push_with_no_checked_commit_it_descends_from_checks_everything(self):
+        base = self.commit("base")
+        self.git("checkout", "-q", "--orphan", "rewritten")
+        self.commit("rewritten history")
+        # A first push, an unknown commit, and one a forced push left behind.
+        for checked in [[], ["0" * 40], ["1234567890abcdef1234567890abcdef12345678"], [base]]:
+            with self.subTest(checked=checked):
+                outputs = self.scope("--checked", *checked, "--windows")
+                self.assertEqual(outputs["packages"], self.EVERYTHING)
                 self.assertEqual(outputs["windows"], "true")
+
+    def test_a_base_with_no_common_history_checks_everything(self):
+        base = self.commit("base")
+        self.git("checkout", "-q", "--orphan", "unrelated")
+        self.commit("unrelated history")
+        for revision in [base, "0" * 40]:
+            with self.subTest(base=revision):
+                self.assertEqual(self.scope("--base", revision)["packages"], self.EVERYTHING)
 
     def test_invalid_boundary_writes_no_skip_outputs(self):
         self.write_package("ferrite-core", '[dependencies]\ngpui = "1"\n')

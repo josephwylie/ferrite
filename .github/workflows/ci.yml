@@ -1,11 +1,11 @@
 name: CI
 
 # Each run checks what its change can affect (scripts/ci_scope.py): a PR
-# against its base, a push to main against the commit it replaced. Windows
-# runs on main and on a PR labelled `full-ci`. The nightly run and `full-ci`
-# check everything. A change no check here reads skips the platform checks
-# after architecture and selector validation. Caches are saved from main
-# only, which every PR reads.
+# against its base, a push to main against the newest commit whose run here
+# succeeded. Windows runs on main and on a PR labelled `full-ci`. The
+# nightly run and `full-ci` check everything. A change no check here reads
+# skips the platform checks after architecture and selector validation.
+# Caches are saved from main only, which every PR reads.
 on:
   push:
     branches: [main]
@@ -15,10 +15,11 @@ on:
     - cron: '17 4 * * *'
 
 concurrency:
-  # A newer push to a PR replaces its run. Main's runs never replace one
-  # another, since each checks only what its push changed; each saves the
-  # caches PRs read.
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  # A newer push to a PR replaces its run. Main's runs finish, so each saves
+  # the caches PRs read; a newer push replaces only one still waiting, and
+  # checks its change too. The nightly run has its own group, so no push
+  # replaces it.
+  group: ci-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -36,6 +37,10 @@ env:
 jobs:
   scope:
     runs-on: ubuntu-latest
+    # It reads which of main's runs succeeded.
+    permissions:
+      actions: read
+      contents: read
     outputs:
       code: ${{ steps.scope.outputs.code }}
       checks: ${{ steps.scope.outputs.checks }}
@@ -59,15 +64,21 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
           FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
-          BEFORE: ${{ github.event.before }}
           FORCED: ${{ github.event.forced }}
-        # A forced push rewrote what it replaced, so it checks everything, as
-        # the nightly run and any other event do. ci_scope.py does too when
-        # it lacks the earlier commit, as on a first push.
+          GH_TOKEN: ${{ github.token }}
+        # A push to main checks everything since the newest commit whose run
+        # here succeeded, so the change of a run that was cancelled or failed
+        # is checked again. ci_scope.py checks everything when there is no
+        # such commit HEAD descends from, as after a first push. A forced
+        # push, the nightly run and any other event check everything.
         run: |
           case "$EVENT" in
             pull_request) args=(--base "$BASE"); if [ "$FULL_LABEL" = true ]; then args+=(--full); fi ;;
-            push) if [ "$FORCED" = true ]; then args=(--full); else args=(--base "$BEFORE" --windows); fi ;;
+            push)
+              mapfile -t checked < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=50" \
+                --jq '.workflow_runs[] | select(.event == "push" or .event == "schedule") | .head_sha' | grep -xE '[0-9a-f]{40}')
+              if [ "${#checked[@]}" = 0 ]; then echo '::warning::No successful run on main found; checking everything.'; fi
+              if [ "$FORCED" = true ]; then args=(--full); else args=(--checked "${checked[@]}" --windows); fi ;;
             *) args=(--full) ;;
           esac
           python scripts/ci_scope.py "${args[@]}" --github-output "$GITHUB_OUTPUT"
