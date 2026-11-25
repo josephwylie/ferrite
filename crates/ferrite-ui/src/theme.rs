@@ -1124,8 +1124,7 @@ pub const CHECK_SKIP_DASH: f32 = 5.0;
 /// A toast's widest, less where the board is narrower
 /// (`cockpit::toasts::ToastsView`).
 pub const TOAST_W: f32 = 320.0;
-/// The gap the kit fans a stack out by under the pointer. The stack holds
-/// one toast (`max_items`), so this is only ever the kit's own spacing.
+/// The gap between toasts standing together, the stack fanned out.
 pub const TOAST_GAP: f32 = SPACE_3;
 
 // -------------------------------------------- pane body and the row column
@@ -1378,12 +1377,14 @@ pub fn init_components(cx: &mut gpui::App) {
         left: px(SPACE_2),
     };
     theme.notification.width = px(TOAST_W);
-    theme.notification.max_items = 1;
-    // Only the front toast shows: no ghost edges behind it.
+    // Toasts that stand together, two copies under way, each show whole,
+    // `TOAST_GAP` apart: no ghost edges behind a front one.
+    theme.notification.max_items = 3;
     cx.set_global(gpui::base::DefaultToastMotion(gpui::base::ToastMotion {
         collapsed_peek: px(0.),
         collapsed_scale_step: 0.,
-        collapsed_visible: 1,
+        collapsed_visible: 3,
+        fanned: true,
         expanded_gap: px(TOAST_GAP),
         // The stack settles over the toast tokens (rule 2.10.4).
         duration: std::time::Duration::from_millis(MOTION_TOAST_IN_MS),

@@ -128,7 +128,8 @@ look above (they join `PartialEq`, so a change re-keys selection layout):
   find code runs; with a wash the square highlight background is dropped.
 - `DefaultToastMotion`: a global motion for toast stacks whose builder never
   called `.motion(..)`. The kit's notification list builds its stack without
-  one; Ferrite sets a collapsed stack that shows only its front toast.
+  one; Ferrite sets a stack fanned out at rest (`ToastMotion::fanned`, its
+  own field), each toast whole, as upstream lays it out under the pointer.
 - `ToastStack` redraws the view that draws it when a measurement moves the
   stack (an item's height, the stack's width, the pointer entering it), where
   upstream called `cx.refresh_windows()`, which rebuilt every cached view in

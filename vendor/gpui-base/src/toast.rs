@@ -38,6 +38,9 @@ pub struct ToastMotion {
     pub collapsed_scale_step: f32,
     /// Number of layers visible while the stack is collapsed.
     pub collapsed_visible: usize,
+    /// Ferrite: the stack lies fanned out at rest, each toast whole, as
+    /// it does under the pointer.
+    pub fanned: bool,
 }
 
 impl ToastMotion {
@@ -50,6 +53,7 @@ impl ToastMotion {
             expanded_gap: px(14.),
             collapsed_scale_step: 0.05,
             collapsed_visible: 3,
+            fanned: false,
         }
     }
 }
@@ -429,7 +433,13 @@ impl RenderOnce for ToastStack {
             .as_ref()
             .is_some_and(|handle| handle.contains_focused(window, cx));
         self.state.focused.set(focused);
-        let expanded = self.state.is_expanded();
+        let motion = if self.motion_set {
+            self.motion
+        } else {
+            cx.try_global::<DefaultToastMotion>()
+                .map_or(self.motion, |default| default.0)
+        };
+        let expanded = self.state.is_expanded() || motion.fanned;
         let keys = self
             .children
             .iter()
@@ -445,12 +455,6 @@ impl RenderOnce for ToastStack {
             .map(|id| measured_by_id.get(id).copied().unwrap_or(px(0.)))
             .collect::<Vec<_>>();
         let measured = self.state.heights.clone();
-        let motion = if self.motion_set {
-            self.motion
-        } else {
-            cx.try_global::<DefaultToastMotion>()
-                .map_or(self.motion, |default| default.0)
-        };
         let peek = motion.collapsed_peek;
         let gap = motion.expanded_gap;
         let scale_step = motion.collapsed_scale_step;
