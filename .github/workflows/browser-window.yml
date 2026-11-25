@@ -84,9 +84,13 @@ jobs:
           if ! command -v sccache >/dev/null 2>&1; then
             echo 'RUSTC_WRAPPER=' >> "$GITHUB_ENV"
           fi
+      # Saved from main only, which every PR reads, as in ci.yml. A PR's own
+      # cache (about 0.9 GB a platform, and no other PR can read it) pushed
+      # the repository past its 10 GB, and GitHub evicted main's caches.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: browser-cef
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - uses: actions/setup-python@v5
         with:
