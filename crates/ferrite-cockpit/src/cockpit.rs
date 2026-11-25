@@ -9,6 +9,7 @@ mod attachments;
 mod background_dialog_view;
 mod background_work;
 pub(crate) mod beside;
+mod branch_reads;
 mod browser;
 #[cfg(feature = "browser-smoke")]
 mod browser_smoke;
@@ -271,20 +272,6 @@ fn pump_hears(executor: &gpui::BackgroundExecutor) -> ferrite_core::doorbell::He
     ferrite_core::doorbell::Hears::AnyThread
 }
 
-/// What a Thread's checkouts say, read with no git process: its own
-/// checkout whole (`checkout`, its `git_read::checkout_stamp`), and the
-/// `HEAD` of each of its Project's directories, whose branch is all the
-/// Thread shows of them.
-fn checkouts_stamp(checkout: Option<u64>, directories: &[(SharedString, std::path::PathBuf)]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::hash::DefaultHasher::new();
-    checkout.hash(&mut hasher);
-    for (_, directory) in directories {
-        ferrite_core::git_read::head_of(directory).hash(&mut hasher);
-    }
-    hasher.finish()
-}
-
 /// A Thread's system notification tag: a newer one for the same Thread
 /// replaces it in the notification centre. A Thread on another machine is
 /// named by it too, since ids are per Store, whichever machine the window
@@ -415,19 +402,9 @@ pub struct CockpitView {
     /// The wall-clock minute the transcripts' message times (`52 minutes
     /// ago`) were last drawn in: the sweep redraws them as it turns over.
     message_minute: i64,
-    /// One checkout-label refresh at a time, always off the UI thread.
-    branch_refreshing: bool,
-    /// A moment that must not be skipped (a turn ended) asked for a
-    /// refresh while one was under way: another follows it.
-    branch_refresh_queued: bool,
-    /// What each Thread's checkouts said (`checkouts_stamp`) when its
-    /// labels were last read: a refresh runs git for a Thread only once
-    /// they say something else, so an idle window starts no git.
-    checkout_stamps: std::collections::HashMap<ThreadKey, u64>,
-    /// The files git tracks in each Thread's checkout (by its cwd) though
-    /// an ignore rule matches them, as git last listed them
-    /// (`git_read::tracked_ignored`): its stamp reads them by name.
-    tracked_ignored: std::collections::HashMap<std::path::PathBuf, std::sync::Arc<[std::path::PathBuf]>>,
+    /// When the Threads' checkout labels are read from git
+    /// (`refresh_branches`).
+    branch_reads: branch_reads::BranchReads,
     /// The machines whose Threads' branches are being read there.
     /// What a draft's workspace chip and its menu read of its Project's
     /// repo, as git or the machine's Server last answered.
@@ -1306,10 +1283,7 @@ impl CockpitView {
             free_disk: None,
             free_disk_asked: None,
             message_minute: ferrite_core::clock::now().timestamp().div_euclid(60),
-            branch_refreshing: false,
-            branch_refresh_queued: false,
-            checkout_stamps: Default::default(),
-            tracked_ignored: Default::default(),
+            branch_reads: Default::default(),
             selection: TranscriptText::default(),
             side_chat,
             held_sends: Default::default(),
@@ -2515,9 +2489,7 @@ impl CockpitView {
     /// may have read git before the moment that asks, so one more follows
     /// it as soon as it lands.
     fn refresh_branches_soon(&mut self, cx: &mut Context<Self>) {
-        if self.branch_refreshing {
-            self.branch_refresh_queued = true;
-        } else {
+        if !self.branch_reads.queue_behind_read() {
             self.refresh_branches(cx);
         }
     }
@@ -2541,7 +2513,7 @@ impl CockpitView {
             .map(|draft| draft.binding.project())
             .collect();
         self.look_up_checkouts(drafted, cx);
-        if self.branch_refreshing {
+        if self.branch_reads.reading() {
             return;
         }
         // Before anything is read: a creation that finishes from here on
@@ -2588,85 +2560,22 @@ impl CockpitView {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                Some((thread, cwd.to_path_buf(), directories, repo))
+                Some(branch_reads::Target {
+                    thread,
+                    cwd: cwd.to_path_buf(),
+                    directories,
+                    repo,
+                })
             })
             .collect();
-        self.checkout_stamps
-            .retain(|thread, _| targets.iter().any(|(open, ..)| open == thread));
-        self.tracked_ignored
-            .retain(|checkout, _| targets.iter().any(|(_, cwd, ..)| cwd == checkout));
-        if targets.is_empty() {
+        let Some(read) = self.branch_reads.begin(targets, listing_wanted) else {
             return;
-        }
-        let known = self.checkout_stamps.clone();
-        let tracked_ignored = self.tracked_ignored.clone();
-        self.branch_refreshing = true;
+        };
         cx.spawn(async move |this, cx| {
-            let (branches, listings, learned) = cx
-                .background_executor()
-                .spawn(async move {
-                    // One `git worktree list` per repo, and one status
-                    // per checkout, however many Threads share them.
-                    let mut listed: std::collections::HashMap<
-                        std::path::PathBuf,
-                        Option<Vec<std::path::PathBuf>>,
-                    > = std::collections::HashMap::new();
-                    let mut walked = std::collections::HashMap::new();
-                    let mut statuses = std::collections::HashMap::new();
-                    let mut learned = std::collections::HashMap::new();
-                    let mut listings = Vec::new();
-                    let branches = targets
-                        .into_iter()
-                        .filter_map(|(thread, cwd, directories, repo)| {
-                            // Before git reads: a write from here on moves
-                            // the next stamp.
-                            let checkout = *walked.entry(cwd.clone()).or_insert_with(|| {
-                                let listed = tracked_ignored.get(&cwd).map_or(&[][..], |files| files);
-                                ferrite_core::git_read::checkout_stamp(&cwd, listed)
-                            });
-                            let stamp = checkouts_stamp(checkout, &directories);
-                            if !listing_wanted && known.get(&thread) == Some(&stamp) {
-                                return None;
-                            }
-                            if let Some(repo) = repo {
-                                let listing = listed
-                                    .entry(repo.clone())
-                                    .or_insert_with(|| {
-                                        ferrite_core::git_read::worktree_paths(&repo).ok()
-                                    })
-                                    .clone();
-                                if let Some(listing) = listing {
-                                    listings.push((thread, listing));
-                                }
-                            }
-                            // A list that changed moves the next stamp,
-                            // which reads it: git runs once more, then rests.
-                            let status = statuses
-                                .entry(cwd.clone())
-                                .or_insert_with(|| {
-                                    let listed = ferrite_core::git_read::tracked_ignored(&cwd);
-                                    learned.insert(cwd.clone(), listed.into());
-                                    ferrite_core::git_read::branch_status(&cwd)
-                                })
-                                .clone();
-                            let project_branches = directories
-                                .into_iter()
-                                .filter_map(|(label, directory)| {
-                                    ferrite_core::git_read::checkout_branch(&directory)
-                                        .map(|branch| (label, SharedString::from(branch)))
-                                })
-                                .collect();
-                            Some((thread, stamp, status, project_branches))
-                        })
-                        .collect::<Vec<_>>();
-                    (branches, listings, learned)
-                })
-                .await;
+            let mut said = cx.background_executor().spawn(async move { read.run() }).await;
             this.update(cx, |view, cx| {
-                view.branch_refreshing = false;
-                view.checkout_stamps
-                    .extend(branches.iter().map(|(thread, stamp, ..)| (*thread, *stamp)));
-                view.tracked_ignored.extend(learned);
+                view.branch_reads.landed(&mut said);
+                let branch_reads::Said { branches, listings, .. } = said;
                 let labels = view.facts.set_branches(
                     branches
                         .iter()
@@ -2699,7 +2608,7 @@ impl CockpitView {
                     view.notify_part(parts::Part::Nav, cx);
                     view.notify_frame(cx);
                 }
-                if moved || std::mem::take(&mut view.branch_refresh_queued) {
+                if moved || view.branch_reads.take_queued() {
                     // The labels above were read for the old cwd, or
                     // before a turn ended; go straight back for the new.
                     view.refresh_branches(cx);
