@@ -1047,6 +1047,7 @@ fn a_file_that_changes_while_it_crosses_is_left_to_the_next_sync() {
             }
             outcome => panic!("{outcome:?}"),
         }
+        drop(machine);
         let base = agreed();
         assert_eq!(base.entries.get(edited), before.entries.get(edited), "round {round}");
         assert_eq!(base.entries.get(&added), None, "round {round}");

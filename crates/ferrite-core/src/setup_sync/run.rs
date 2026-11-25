@@ -172,11 +172,12 @@ pub struct Valve {
     pub vanished: bool,
 }
 
-/// Sync `job`'s setup with the Machine `there` reaches. `planned` hears
-/// how many entries the sync moves or removes, once it knows. Both homes
-/// are held from the first scan to the base, this computer's and the
-/// Machine's, so one sync of either runs at a time, whichever computer
-/// drives it: one that finds either held is busy, and wrote nothing.
+/// Sync `job`'s setup with the Machine `there` reaches, on a connection of
+/// the sync's own. `planned` hears how many entries the sync moves or
+/// removes, once it knows. Both homes are held from the first scan, this
+/// computer's to the base and the Machine's until `there` goes, so one
+/// sync of either runs at a time, whichever computer drives it: one that
+/// finds either held is busy, and wrote nothing.
 pub fn run(
     job: &Job,
     there: &mut dyn Exchange,
