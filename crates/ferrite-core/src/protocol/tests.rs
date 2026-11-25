@@ -1540,6 +1540,8 @@ fn samples() -> Vec<(&'static str, Sample)> {
         }, more: false } }), error: None })),
         ("command_tree_scan_setup_table", command(330, Op::Tree { request: crate::tree::Request::Scan { root: crate::tree::Root::Setup { table: 2 }, skip: Vec::new(), after: None } })),
         ("command_tree_link_setup", command(331, Op::Tree { request: crate::tree::Request::Link { root: crate::tree::Root::Setup { table: 2 }, path: ".claude/skills/shared".into(), target: "../../.agents/skills/shared".into() } })),
+        ("command_tree_hold", command(332, Op::Tree { request: crate::tree::Request::Hold { root: crate::tree::Root::Setup { table: 3 } } })),
+        ("reply_tree_busy", Sample::Server(ServerMessage::Reply { id: 332, ok: Some(Done::Tree { reply: crate::tree::Reply::Busy }), error: None })),
         ("reply_tree_scan_setup_table", Sample::Server(ServerMessage::Reply { id: 330, ok: Some(Done::Tree { reply: crate::tree::Reply::Scanned { manifest: crate::tree::Manifest {
             entries: [
                 (".agents/skills/shared/SKILL.md".to_string(), crate::tree::Entry::File { size: 4, sha256: "8b0e6e6d1b11a26f4a3ad7e5d6b2d4b1c4b0b7b3c5f2a6c6e2a0f0d3f1b8d5e2".into(), mode: Some(0o644), modified: Some(1_764_000_000_000), text: Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into()) }),

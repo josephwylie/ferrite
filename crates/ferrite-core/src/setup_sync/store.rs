@@ -37,10 +37,6 @@ pub(super) const MID_WRITE: &str = "the sign-in is being written; it syncs once 
 /// does not travel.
 pub(super) const OWN: &str = "it names a place of this computer's own";
 
-/// How long a scan waits for the plugins a sync turned on to install, so
-/// it can say which did not.
-const INSTALLING: Duration = Duration::from_secs(120);
-
 /// Where what a sync removes or writes over is moved, in Ferrite's
 /// settings folder, a folder for each sync.
 pub const TRASH: &str = "sync-trash";
@@ -187,19 +183,22 @@ impl Home {
 
     /// This side's Ferrite settings folder at `settings`: what a sync
     /// removes or writes over here is kept in its trash, and the home is
-    /// held by its lock. A view of the home of its own: a sync through it
-    /// holds the home for its own writes alone.
+    /// held by its lock.
     pub fn with_settings_in(mut self, settings: &Path) -> Self {
         self.trash = Trash::at(settings.join(TRASH));
         self.lock = Lock::at(settings.join(LOCK));
         self
     }
 
-    /// This home held for one sync through this view of it, from its first
-    /// scan to its base: `None` while another sync, an install or a write
-    /// holds it, in this process or another.
-    pub(super) fn hold(&self) -> io::Result<Option<Held>> {
-        self.lock.sync()
+    /// This home held for one sync, from its first scan to its base: `None`
+    /// while another sync or an install holds it, in this process or
+    /// another, and while an install the last sync wanted waits to. Each
+    /// write the sync makes here is under it, and takes nothing more.
+    pub(crate) fn hold(&self) -> io::Result<Option<Held>> {
+        if self.installs.as_ref().is_some_and(|installs| installs.waiting()) {
+            return Ok(None);
+        }
+        self.lock.try_hold()
     }
 
     /// Where the last sync moved what it removed or wrote over here, when
@@ -332,9 +331,8 @@ impl Home {
     /// it does not read. What it could not read is a problem, and so is an
     /// item behind a link to something not there; only an item that is
     /// not there at all is nothing. Each plugin a sync turned on here that
-    /// could not be installed is a problem too, once the installs under way
-    /// are over. A scan begins a sync here: what it moves aside goes in a
-    /// trash folder of its own.
+    /// the last run could not install is a problem too. A scan begins a
+    /// sync here: what it moves aside goes in a trash folder of its own.
     pub(crate) fn scan(&self, skip: &[String]) -> Manifest {
         self.trash.begin();
         for dir in self.file_dirs() {
@@ -348,7 +346,7 @@ impl Home {
             }
         }
         if let Some(installs) = &self.installs {
-            manifest.problems.extend(installs.settled(&self.folders(), INSTALLING));
+            manifest.problems.extend(installs.settled(&self.folders()));
         }
         manifest
     }
@@ -557,7 +555,6 @@ impl Home {
     /// Put `received`, a whole file synced to disk, where `place` says,
     /// what it writes over copied to this side's trash first.
     pub(crate) fn place(&self, place: &Place, received: &Path) -> io::Result<()> {
-        let _held = self.lock.write()?;
         match &place.how {
             How::Rename { at, new } => {
                 let mode = match place.mode {
@@ -610,7 +607,6 @@ impl Home {
             return Err(not_setup(path));
         };
         self.writable(path)?;
-        let _held = self.lock.write()?;
         let root = self.physical(item.path);
         private_dirs(&root)?;
         let at = tree::inside(&root, rest)?;
@@ -641,7 +637,6 @@ impl Home {
         let At::In(..) = self::item(&to)? else {
             return Err(not_setup(&to));
         };
-        let _held = self.lock.write()?;
         let root = self.physical(item.path);
         private_dirs(&root)?;
         let at = links::unfollowed(&tree::inside(&root, rest)?);
@@ -667,7 +662,6 @@ impl Home {
     /// sign-in is refused: no sync removes one, so none is ever in the
     /// trash.
     pub(crate) fn remove(&self, path: &str) -> io::Result<bool> {
-        let _held = self.lock.write()?;
         match item(path)? {
             At::Whole(Item { source: Source::Credential(_), .. }) => Err(kept_sign_in(path)),
             At::Key(Item { source: Source::Keys { format, keys }, .. }, key) => {

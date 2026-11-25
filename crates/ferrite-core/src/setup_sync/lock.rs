@@ -1,46 +1,32 @@
 //! One writer of a home's setup at a time, by any process (ADR 0050): a
-//! sync holds the home from its first scan to its base, an install holds it
-//! while its tools run, and each write a Machine is asked for holds it for
-//! that write. Two syncs to different Machines never cross in a home, and
-//! no tool rewrites a file a sync is writing. A sync that finds the home
-//! held is busy, and is asked again once it is let go.
+//! sync holds both its homes from its first scan to its base, this
+//! computer's itself and the Machine's by the connection it syncs over
+//! (`tree::Request::Hold`), and an install holds its home while its tools
+//! run. So two syncs never cross in a home, whichever computer drives each,
+//! and no tool rewrites a file a sync is writing. A sync that finds either
+//! home held is busy, and is asked again once it is let go.
 
 use std::fs::{self, File};
 use std::io;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::Arc;
 
 /// The file a home is held by, in its Ferrite settings folder.
 pub(super) const LOCK: &str = "setup-sync.lock";
 
-/// A home's lock, as one view of the home holds it: a sync's writes are
-/// its own, and every other writer waits.
 pub(super) struct Lock {
     at: PathBuf,
-    /// The sync under way through this view of the home, if any.
-    sync: Mutex<Weak<File>>,
 }
 
 /// The home held, until the last clone of this is dropped.
 #[derive(Clone)]
-pub(super) struct Held {
+pub(crate) struct Held {
     _file: Arc<File>,
 }
 
 impl Lock {
     pub(super) fn at(at: PathBuf) -> Arc<Self> {
-        Arc::new(Self { at, sync: Mutex::new(Weak::new()) })
-    }
-
-    /// The home held for a sync through this view of it, its writes then
-    /// its own: `None` while anything else holds it.
-    pub(super) fn sync(&self) -> io::Result<Option<Held>> {
-        let mut sync = self.sync.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(held) = self.try_hold()? else {
-            return Ok(None);
-        };
-        *sync = Arc::downgrade(&held._file);
-        Ok(Some(held))
+        Arc::new(Self { at })
     }
 
     /// The home held, or `None` while anything holds it.
@@ -58,15 +44,6 @@ impl Lock {
         let file = self.open()?;
         file.lock()?;
         Ok(Held { _file: Arc::new(file) })
-    }
-
-    /// The home held for one write: nothing to take when it is the write of
-    /// the sync under way through this view of it.
-    pub(super) fn write(&self) -> io::Result<Option<Held>> {
-        if self.sync.lock().unwrap_or_else(PoisonError::into_inner).strong_count() > 0 {
-            return Ok(None);
-        }
-        self.hold().map(Some)
     }
 
     fn open(&self) -> io::Result<File> {

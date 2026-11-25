@@ -5,9 +5,10 @@
 //! tools' installers on a thread of its own, one run at a time, for the
 //! plugins of marketplaces that travel alone: what a tool bundles, Claude's
 //! `@builtin` for one, is never missing. A run holds the side's home as a
-//! sync does, so no tool rewrites a file a sync is writing: on the side
-//! whose sync it is, it begins once that sync lets go. A scan waits for a
-//! run once at most, and each tool is stopped once it runs too long.
+//! sync does, so no tool rewrites a file a sync is writing: on either side
+//! of the sync that wanted it, it begins once that sync lets go, and before
+//! the next sync of that home, which says what it found. Each tool is
+//! stopped once it runs too long.
 //!
 //! - Claude installs nothing by itself: each plugin set on that it has not
 //!   installed is `claude plugin install`ed, after `claude plugin
@@ -22,9 +23,11 @@
 //! each after `--`. A failure is said by each scan of that side, and tried
 //! again by the next write of a plugin key and by the side's next start;
 //! never in a loop. Both the wish a write leaves and each failure are kept
-//! in a file of the side's settings folder, so a sync cut short before its
-//! last scan, or a write one Ferrite process made, is installed by the next
-//! scan of any. Nothing is ever uninstalled: a plugin turned off is a key
+//! in a file of the side's settings folder, the wish until a run for it
+//! ends. So a sync cut short before its last scan, a write one Ferrite
+//! process made, or a run its process did not outlive, as `ferrite setup
+//! sync`'s, is installed by the next scan of any. Nothing is ever
+//! uninstalled: a plugin turned off is a key
 //! set false, which the tool reads itself. What runs a tool is the
 //! engine's (`Installer`), which knows where it is.
 
@@ -32,8 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -83,7 +85,6 @@ pub struct Installs {
     /// Where [`Kept`] is.
     kept: PathBuf,
     state: Mutex<State>,
-    idle: Condvar,
 }
 
 #[derive(Default)]
@@ -91,8 +92,9 @@ struct State {
     running: bool,
     /// The run under way waits for its home, which a sync holds.
     blocked: bool,
-    /// A scan waited for the run under way: no other waits for it again.
-    waited: bool,
+    /// A plugin or marketplace key was written since the run under way
+    /// began: the wish outlasts that run.
+    wanted_again: bool,
     /// An earlier start left a failure and this one has not run yet: its
     /// first scan tries again.
     retry: bool,
@@ -123,7 +125,6 @@ impl Installs {
             installer: Box::new(installer),
             kept,
             state: Mutex::new(state),
-            idle: Condvar::new(),
         })
     }
 
@@ -131,19 +132,17 @@ impl Installs {
     /// what is on and not installed. Not before: a sync still writing the
     /// file a tool's installer writes too would race it.
     pub(super) fn changed(&self) {
-        let _state = self.lock();
+        let mut state = self.lock();
+        state.wanted_again = true;
         self.keep(|kept| kept.wanted = true);
     }
 
-    /// What a scan says of the installs: the run under way waited for,
-    /// then one for what was wanted since, both within `within` of the
-    /// scan's start; then each plugin that failed and is still on and not
-    /// installed. What a run finds failed stands until the next run.
-    pub(super) fn settled(self: &Arc<Self>, folders: &Folders, within: Duration) -> Vec<(String, String)> {
-        let until = Instant::now() + within;
-        self.wait(until);
+    /// What a scan says of the installs: a run begun for what was wanted
+    /// since the last, which waits for the sync scanning to let go, then
+    /// each plugin that failed and is still on and not installed. What a
+    /// run finds failed stands until the next run.
+    pub(super) fn settled(self: &Arc<Self>, folders: &Folders) -> Vec<(String, String)> {
         self.start(folders);
-        self.wait(until);
         let failed = self.lock().failed.clone();
         if failed.is_empty() {
             return Vec::new();
@@ -169,10 +168,9 @@ impl Installs {
                 return;
             }
         };
-        self.keep(|kept| kept.wanted = false);
         state.running = true;
         state.blocked = held.is_none();
-        state.waited = false;
+        state.wanted_again = false;
         drop(state);
         let (installs, of) = (self.clone(), folders.clone());
         let spawned = std::thread::Builder::new().name("setup-sync-installs".into()).spawn(move || {
@@ -183,17 +181,21 @@ impl Installs {
                 Err(error) => missing(&of).into_iter().map(|plugin| (plugin, error.to_string())).collect(),
             };
             let mut state = installs.lock();
-            installs.keep(|kept| kept.failed = failed.clone());
+            let spent = !state.wanted_again;
+            installs.keep(|kept| {
+                kept.failed = failed.clone();
+                if spent {
+                    kept.wanted = false;
+                }
+            });
             state.failed = failed;
             state.running = false;
-            installs.idle.notify_all();
         });
         if let Err(error) = spawned {
             let mut state = self.lock();
             state.running = false;
             state.blocked = false;
             state.failed = missing(folders).into_iter().map(|plugin| (plugin, error.to_string())).collect();
-            self.keep(|kept| kept.wanted = true);
         }
     }
 
@@ -278,19 +280,10 @@ impl Installs {
         };
     }
 
-    /// Wait for the run under way, if any, to end, until `until` at most:
-    /// by the first scan that finds it, never by another, and not while it
-    /// waits for its home, which a sync holds and lets go only once its
-    /// scans are done.
-    fn wait(&self, until: Instant) {
-        let mut state = self.lock();
-        if !state.running || state.blocked || state.waited {
-            return;
-        }
-        state.waited = true;
-        let within = until.saturating_duration_since(Instant::now());
-        let waited = self.idle.wait_timeout_while(state, within, |state| state.running);
-        drop(waited.unwrap_or_else(PoisonError::into_inner));
+    /// Whether a run waits for its home, which a sync holds: it goes before
+    /// the next sync of that home, which then says what it found.
+    pub(super) fn waiting(&self) -> bool {
+        self.lock().blocked
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {

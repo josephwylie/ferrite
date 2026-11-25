@@ -190,9 +190,10 @@ must install it. Prototyped in homes of their own, with no sign-in:
 So the side a sync writes a plugin or marketplace key to runs the
 installers (`Installs`) at its next scan, the one that ends the sync. A run
 holds the side's home while it runs (see One sync at a time), so no
-installer writes a file a sync is writing: on the hub, a run its own sync
-wanted begins once that sync lets go, and says what failed at the next
-sync. Only a plugin of a marketplace that travels is ever missing:
+installer writes a file a sync is writing: on either side, a run a sync
+wanted begins once that sync lets go, before the next sync of that home,
+and says what failed at that next sync. Only a plugin of a marketplace
+that travels is ever missing:
 
 - **Claude**: each plugin on and not in `plugins/installed_plugins.json`.
   `claude plugin marketplace add -- <source>` runs when
@@ -209,20 +210,19 @@ anything: git under it is told never to prompt (`GIT_TERMINAL_PROMPT=0`,
 `GCM_INTERACTIVE=never`), and a command still running after 120 s is
 stopped with all it started, a failure in plain words: "Claude Code's
 installer did not finish in 2 minutes, so it was stopped". A run is on a
-thread of its own, one at a time, and never on the pump. The first scan
-that finds a run under way waits for it, up to 120 s from the scan's start;
-no other scan waits for that run, and none waits while the run waits for
-its home. So the sync that turned a plugin on says what failed, as a
-problem at
-`.claude/plugins/<plugin>` or `.codex/plugins/<plugin>`. The row counts
+thread of its own, one at a time, and never on the pump. No scan waits for
+a run: every scan is a sync's, which holds the home a run needs. So the
+sync after the one that turned a plugin on says what failed, as a problem
+at `.claude/plugins/<plugin>` or `.codex/plugins/<plugin>`. The row counts
 them as plugins, apart from paths, and names the side as the toast does:
 "pstack could not be installed on this computer: …". A failure stands
 until the plugin is installed or turned off. It is tried again at the next
 write of a plugin key and at the side's next start, which reads it from
 `setup-installs.json` in Ferrite's settings folder; never in a loop. The
-write's wish to install is kept in that file too, so a sync cut short
-before its last scan, or a write one Ferrite process made, is installed by
-the next scan of that side in any process. The hub does the same for
+write's wish to install is kept in that file too, until a run for it
+ends, so a sync cut short before its last scan, a write one Ferrite
+process made, or a run its process did not outlive, as `ferrite setup
+sync`'s, is installed by the next scan of that side in any process. The hub does the same for
 itself after a pull. There is no new protocol op.
 Nothing is ever uninstalled: a plugin turned off is a key set false, which
 the tool reads itself. The runner is core's. What runs `claude` and
@@ -233,16 +233,37 @@ the window, `ferrite setup sync` and the Server.
 ## One sync at a time
 
 A home has one writer at a time, by any process: a file lock,
-`setup-sync.lock`, in that side's Ferrite settings folder. A sync holds its
-home from its first scan to its base, whichever Machine it is with. Syncs
-to two Machines ran side by side before: one scanned the hub, the other
-took its Machine's edit to the hub, and the first then wrote its own over
-it, unsaid. Now a sync that finds the home held does nothing and is busy,
-and the window asks it again 3 s later, so the syncs queue. An install
-holds the home while it runs, and each write a Machine is asked for holds
-it for that write, so a hub's write waits for the Machine's own install. A
-sync's own writes go through the view of the home it holds, and take
-nothing more.
+`setup-sync.lock`, in that side's Ferrite settings folder. A sync holds
+both its homes from its first scan to its base, whichever computer drives
+it: its own, and the Machine's by the tree op `hold`, which it asks before
+it scans there. Syncs to two Machines ran side by side before: one scanned
+the hub, the other took its Machine's edit to the hub, and the first then
+wrote its own over it, unsaid. A computer that is a Machine to one hub and
+a hub to its own Machine did the same: the Mac scanned Windows, Windows
+took Linux's edit of CLAUDE.md, the Mac's write went over it, and Windows'
+next sync carried the Mac's copy on to Linux.
+
+Now a sync that finds either home held does nothing and is busy: nothing
+was written on either side. The window asks it again 3 s later and up to
+3 s more by chance, so the syncs queue, and two computers that are each
+other's hub, each holding its own home as it asks for the other's, do not
+meet again each time they ask. An install holds its home while it runs. A
+sync's writes, on either side, are under its hold and take nothing more,
+so none waits: a Machine's write that waited for that Machine's own
+install, past the 30 s a hub waits for a reply, used to land after the hub
+had given up.
+
+The Machine's Server holds its home for the connection that asked, which
+is the hub's for that sync alone. It lets it go as the connection goes: at
+the sync's end, or when the hub crashes or its line drops. It lets it go
+too when the connection asks nothing for 90 s (`tree::HOLD_QUIET`), as a
+laptop hub asleep mid-sync does, so the Machine's own syncs and installs
+wait no longer. A hub mid-sync asks again well within the 30 s it waits for
+each reply, and each chunk of a long write is an ask. An unfinished write
+is still kept for 10 minutes (`chunked::EXPIRY`). Every other Setup op of a
+connection that does not hold the home is refused. One whose hold lapsed
+reads "<Machine> stopped waiting for this computer; the next sync starts
+over": what it asks was planned from a scan the home may no longer match.
 
 ## The table's version
 
@@ -258,6 +279,15 @@ computer to sync your setup: the Machine's Ferrite is newer". A Server from
 before this ADR reads `setup_table` as a root it does not know and refuses
 it as `unsupported`, so a new hub never syncs with it. Its row says to
 update it, and nothing moves either way.
+
+The hold is checked by its op, and the table stays 3. A Server from before
+the hold reads `hold` as an op it does not know and refuses it as
+`unsupported`, so the row says "Update Ferrite on <name> to sync your
+setup". A hub from before it scans without holding, and is refused with
+"Update Ferrite on this computer to sync your setup: the Machine's Ferrite
+is newer". Nothing moves either way, and every base stands: a new table
+would have made the next sync with each Machine a first sync, which
+removes nothing and gives each Whole key the hub's value.
 
 A Machine's `ferrited` is updated by its setup. Settings › Connections runs
 `machine/bootstrap.sh` there, which puts this app's version at
@@ -313,14 +343,19 @@ Windows refuses spelled `_`.
   each sync on the other.
 - **The installers are the tools' CLIs.** They need the network and
   `claude` or `codex` on the side's PATH. A side without one says so on the
-  row. A command that hangs is stopped after 120 s, and only the first scan
-  that finds it waits. Claude's `marketplace add` writes the whole settings
+  row. A command that hangs is stopped after 120 s, and a sync of that
+  home is busy until then. Claude's `marketplace add` writes the whole settings
   file from what it read as it began. No sync writes that file meanwhile,
   but a key the operator changes on that side in those seconds can be
   lost, as when they run it themselves.
 - **Syncs queue.** With two Machines, the second waits for the first, a
   few seconds more on each change, and a sync waits for an install under
-  way in its home. On the hub, what an install found shows one sync later.
+  way in either of its homes. What an install found shows one sync later.
+- **A hold is its connection's.** A hub whose line drops mid-sync starts
+  again on a new connection, and so does one quiet for 90 s. A lease that
+  outlived the connection would let it go on, at the cost of a token on
+  every op, a clock the hub keeps renewing, and a Server-wide table of
+  leases to expire.
 - **A link out of the table is still followed.** A skills folder kept in a
   dotfiles checkout keeps syncing, at the cost of its contents travelling
   as files.

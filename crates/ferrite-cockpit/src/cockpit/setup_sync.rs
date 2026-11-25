@@ -18,15 +18,23 @@ use super::*;
 use ferrite_core::chunked::Cancellation;
 use ferrite_client::cockpit::ServerState;
 use ferrite_core::setup_sync::{self, Hold, Home, Job, Kept, Outcome, Replaced, Synced, Valve};
-use ferrite_core::tree::{Side, Stuck};
+use ferrite_core::tree::{self, Side, Stuck};
 use gpui::App;
 
 /// How often a connected Machine is looked at for what changed there.
 const CHECK: Duration = Duration::from_secs(60);
 /// How long the setup here is left to settle after a change before it
-/// syncs: an edit is often several writes. A sync that found another
-/// under way tries again after as long.
+/// syncs: an edit is often several writes.
 const SETTLE: Duration = Duration::from_secs(3);
+
+/// How long a sync that found another under way waits to try again:
+/// [`SETTLE`], and up to as long again by chance. Two computers that are
+/// each other's hub each hold their own home as they ask for the other's,
+/// so two that ask at once both find the other busy, and would again each
+/// time they tried again together.
+fn retry_after() -> Duration {
+    SETTLE + SETTLE.mul_f64(rand::random::<f64>())
+}
 
 pub(crate) struct SetupSync {
     /// This computer's setup, or why this window syncs none of it; `None`
@@ -191,7 +199,7 @@ pub(crate) struct Failure {
 
 impl Failure {
     fn of(error: &std::io::Error) -> Self {
-        match error.get_ref().and_then(|inner| inner.downcast_ref::<Stuck>()) {
+        let failure = match error.get_ref().and_then(|inner| inner.downcast_ref::<Stuck>()) {
             Some(stuck) => Self {
                 at: Some((stuck.path.clone(), stuck.side)),
                 why: plain(&stuck.error.to_string()),
@@ -200,6 +208,11 @@ impl Failure {
                 at: None,
                 why: plain(&error.to_string()),
             },
+        };
+        // A lapsed hold is the whole sync's, not the path's it met it at.
+        match failure.why == tree::LAPSED {
+            true => Self { at: None, ..failure },
+            false => failure,
         }
     }
 
@@ -207,6 +220,7 @@ impl Failure {
     fn said(&self, name: &str) -> String {
         match &self.at {
             Some((path, on)) => format!("{} on {}: {}", named(path), place(*on, name), self.why),
+            None if self.why == tree::LAPSED => self.why.replacen("The Machine", name, 1),
             None => self.why.clone(),
         }
     }
@@ -308,17 +322,20 @@ fn named(path: &str) -> String {
             "enabledPlugins" | "plugins" => format!("plugin {}", name.rsplit_once('@').map_or(name, |(plugin, _)| plugin)),
             "extraKnownMarketplaces" | "marketplaces" => format!("marketplace {name}"),
             "mcpServers" | "mcp_servers" => format!("MCP server {name}"),
-            _ => key.replace('/', " › "),
+            "" => words(name),
+            _ => format!("{} › {name}", words(kind)),
         };
         return format!("{tool} {what}");
     }
     let file = |under: &str, suffix: &str| path.strip_prefix(under).and_then(|rest| rest.strip_suffix(suffix));
-    // A skill is a folder: what lies in one, or a name with no extension.
-    let folder = |under: &str| {
+    let skill = |under: &str| {
         let rest = path.strip_prefix(under)?;
         match rest.split_once('/') {
-            Some((name, _)) => Some(name),
-            None => (!rest.is_empty() && !rest.contains('.')).then_some(rest),
+            Some((folder, _)) => Some(folder),
+            None => {
+                let loose_markdown = rest.ends_with(".md");
+                (!rest.is_empty() && !loose_markdown).then_some(rest)
+            }
         }
     };
     let named = [
@@ -327,7 +344,7 @@ fn named(path: &str) -> String {
         (".codex/skills/", "the Codex skill"),
     ]
     .iter()
-    .find_map(|(under, kind)| Some(format!("{kind} {}", folder(under)?)))
+    .find_map(|(under, kind)| Some(format!("{kind} {}", skill(under)?)))
     .or_else(|| {
         [
             (".claude/commands/", "the command"),
@@ -347,6 +364,21 @@ fn named(path: &str) -> String {
         ".claude/statusline.sh" => "Claude's status line script".to_string(),
         _ => format!("~/{path}"),
     })
+}
+
+/// A tool's key in plain words: `skillOverrides` is "skill overrides",
+/// and `model_reasoning_effort` "model reasoning effort".
+fn words(key: &str) -> String {
+    let mut words = String::new();
+    for letter in key.chars() {
+        if letter == '_' || letter.is_uppercase() {
+            words.push(' ');
+        }
+        if letter != '_' {
+            words.extend(letter.to_lowercase());
+        }
+    }
+    words
 }
 
 /// A key's old value, short enough for a line.
@@ -780,7 +812,7 @@ impl Track {
                     ..ask
                 };
                 self.again = Some(self.again.map_or(ask, |again| again.and(ask)));
-                self.retry = Some(now + SETTLE);
+                self.retry = Some(now + retry_after());
                 Status::Syncing(None)
             }
             Err(error) if error.kind() == std::io::ErrorKind::Unsupported => Status::Older,
@@ -1016,7 +1048,39 @@ mod tests {
         assert_eq!(track.status, Status::Syncing(None));
         assert!(!track.status.failed());
         assert_eq!(track.due(now + Duration::from_secs(1), false, false), None, "it waits a moment");
-        assert_eq!(track.due(now + SETTLE, false, false), Some(Ask::WHOLE), "all of it, as the other sync may have moved anything");
+        assert_eq!(track.due(now + 2 * SETTLE, false, false), Some(Ask::WHOLE), "all of it, as the other sync may have moved anything");
+    }
+
+    /// Two computers that are each other's hub, each holding its own home
+    /// as it asks for the other's, find each other busy at once: each
+    /// tries again at a moment of its own, or they would meet each time.
+    #[test]
+    fn syncs_that_found_each_other_busy_try_again_at_moments_of_their_own() {
+        let now = Instant::now();
+        let tried: std::collections::BTreeSet<Duration> = (0..8)
+            .map(|_| {
+                let mut track = track();
+                track.finished(Ok(Outcome::Busy), Ask::HERE, now, &mut News::default());
+                let mut after = (0..=600).map(|step| Duration::from_millis(10 * step));
+                after.find(|after| track.due(now + *after, false, false).is_some()).unwrap()
+            })
+            .collect();
+        assert!(tried.iter().all(|after| (SETTLE..=2 * SETTLE).contains(after)), "{tried:?}");
+        assert!(tried.len() > 1, "each tried again at the same moment: {tried:?}");
+    }
+
+    /// A hold the Machine let lapse reads as that Machine, by its name,
+    /// giving up on this computer, not as the path the sync was at.
+    #[test]
+    fn a_lapsed_hold_says_which_machine_stopped_waiting() {
+        let mut track = track();
+        let stuck = Stuck {
+            path: ".claude/CLAUDE.md".into(),
+            side: Side::There,
+            error: std::io::Error::other(tree::LAPSED),
+        };
+        track.finished(Err(std::io::Error::other(stuck)), Ask::HERE, Instant::now(), &mut News::default());
+        assert_eq!(track.status.line("box"), "box stopped waiting for this computer; the next sync starts over");
     }
 
     const SIGN_IN: &str = ".claude/.credentials.json";
@@ -1220,6 +1284,11 @@ mod tests {
             (".claude/agents/helper.md", "the agent helper"),
             (".claude/rules/style.md", "the rule style"),
             (".agents/skills/reui/SKILL.md", "the skill reui"),
+            (".claude/skills/next.js", "the skill next.js"),
+            (".claude/skills/README.md", "~/.claude/skills/README.md"),
+            (".claude/settings.json#skillOverrides", "Claude's skill overrides"),
+            (".claude/settings.json#model", "Claude's model"),
+            (".codex/config.toml#model_reasoning_effort", "Codex's model reasoning effort"),
             (".codex/prompts/fix.md", "the Codex prompt fix"),
             (".claude/CLAUDE.md", "CLAUDE.md"),
             (".codex/AGENTS.md", "Codex's AGENTS.md"),

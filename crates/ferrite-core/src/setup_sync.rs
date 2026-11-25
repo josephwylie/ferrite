@@ -25,6 +25,7 @@ mod store;
 mod tests;
 
 pub use installs::{installing, Installer, Installs};
+pub(crate) use lock::Held;
 pub use portable::Spelling;
 pub use reconcile::{agreed, reconcile, Action, Hold};
 pub use run::{run, Job, Kept, Names, Outcome, Replaced, Synced, Valve, BASE, CONFLICTS};
