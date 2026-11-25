@@ -3,7 +3,8 @@
 //! step of the operator's. A Machine syncs as it connects, as a Thread
 //! starts on it, a few seconds after the setup here changes, and once a
 //! minute while it stays connected, on a clock of its own that no other
-//! sync moves; one sync at a time each, off the window's thread. Each
+//! sync moves; off the window's thread, and one sync of the setup at a time
+//! for them all: one that finds another under way tries again. Each
 //! Machine's last sync is its line in Settings › Connections, and what
 //! needs the operator's eye is one toast for them all.
 
@@ -205,7 +206,7 @@ impl Failure {
     /// It in words, the Machine called `name`.
     fn said(&self, name: &str) -> String {
         match &self.at {
-            Some((path, on)) => format!("{} on {}: {}", spelled(path), place(*on, name), self.why),
+            Some((path, on)) => format!("{} on {}: {}", named(path), place(*on, name), self.why),
             None => self.why.clone(),
         }
     }
@@ -275,44 +276,77 @@ impl Status {
 impl Why {
     /// `path` and why it was held, the Machine called `name`.
     fn said(&self, path: &str, name: &str) -> String {
-        let spelled = spelled(path);
+        let named = named(path);
         match self {
             Why::Problem(on, error) => match setup_sync::installing(path) {
                 Some(plugin) => format!("{plugin} could not be installed on {}: {}", place(*on, name), plain(error)),
-                None => format!("{spelled} on {}: {}", place(*on, name), plain(error)),
+                None => format!("{named} on {}: {}", place(*on, name), plain(error)),
             },
             Why::Held(Hold::Linked(on)) => format!(
-                "{spelled}: it lies through a link on {}, and Setup sync never writes through one",
+                "{named}: it lies through a link on {}, and Setup sync never writes through one",
                 place(*on, name)
             ),
-            Why::Held(Hold::Kinds) => format!("{spelled}: it is a file on one side and a folder on the other"),
-            Why::Held(Hold::FolderAndLink(folder)) => {
-                let what = skill(path).map_or(spelled, |skill| format!("the skill {skill}"));
-                match folder {
-                    Side::Here => format!("{what} is a folder here and a link on {name}: left as each has it"),
-                    Side::There => format!("{what} is a folder on {name} and a link here: left as each has it"),
-                }
-            }
-            Why::Held(Hold::SignIn) => format!("{spelled}: it is signed in differently on each side"),
+            Why::Held(Hold::Kinds) => format!("{named}: it is a file on one side and a folder on the other"),
+            Why::Held(Hold::FolderAndLink(folder)) => match folder {
+                Side::Here => format!("{named} is a folder here and a link on {name}: left as each has it"),
+                Side::There => format!("{named} is a folder on {name} and a link here: left as each has it"),
+            },
+            Why::Held(Hold::SignIn) => format!("{named}: it is signed in differently on each side"),
         }
     }
 }
 
-/// The skill a setup path is the folder of, by its name.
-fn skill(path: &str) -> Option<&str> {
-    [".claude/skills/", ".agents/skills/", ".codex/skills/"]
-        .iter()
-        .find_map(|skills| path.strip_prefix(skills))
-        .filter(|name| !name.contains('/'))
-}
-
-/// A setup path as the operator reads it: a chosen key by its name in its
-/// file.
-fn spelled(path: &str) -> String {
-    match setup_sync::chosen(path) {
-        Some((item, key)) => format!("`{}` in ~/{}", key.replace('/', " › "), item.path),
-        None => format!("~/{path}"),
+/// A setup path as the operator names what it is: a skill, a command, an
+/// agent, a rule or a prompt by its name, an instruction file by its own,
+/// and a chosen key by what it sets and for which tool. What has no plain
+/// name is its path from the home folder.
+fn named(path: &str) -> String {
+    if let Some((item, key)) = setup_sync::chosen(path) {
+        let tool = if item.path.starts_with(".codex/") { "Codex's" } else { "Claude's" };
+        let (kind, name) = key.split_once('/').unwrap_or(("", key));
+        let what = match kind {
+            "enabledPlugins" | "plugins" => format!("plugin {}", name.rsplit_once('@').map_or(name, |(plugin, _)| plugin)),
+            "extraKnownMarketplaces" | "marketplaces" => format!("marketplace {name}"),
+            "mcpServers" | "mcp_servers" => format!("MCP server {name}"),
+            _ => key.replace('/', " › "),
+        };
+        return format!("{tool} {what}");
     }
+    let file = |under: &str, suffix: &str| path.strip_prefix(under).and_then(|rest| rest.strip_suffix(suffix));
+    // A skill is a folder: what lies in one, or a name with no extension.
+    let folder = |under: &str| {
+        let rest = path.strip_prefix(under)?;
+        match rest.split_once('/') {
+            Some((name, _)) => Some(name),
+            None => (!rest.is_empty() && !rest.contains('.')).then_some(rest),
+        }
+    };
+    let named = [
+        (".claude/skills/", "the skill"),
+        (".agents/skills/", "the skill"),
+        (".codex/skills/", "the Codex skill"),
+    ]
+    .iter()
+    .find_map(|(under, kind)| Some(format!("{kind} {}", folder(under)?)))
+    .or_else(|| {
+        [
+            (".claude/commands/", "the command"),
+            (".claude/agents/", "the agent"),
+            (".claude/rules/", "the rule"),
+            (".claude/output-styles/", "the output style"),
+            (".codex/prompts/", "the Codex prompt"),
+            (".codex/rules/", "the Codex rule"),
+        ]
+        .iter()
+        .find_map(|(under, kind)| Some(format!("{kind} {}", file(under, ".md")?)))
+    });
+    named.unwrap_or_else(|| match path {
+        ".claude/CLAUDE.md" => "CLAUDE.md".to_string(),
+        ".codex/AGENTS.md" => "Codex's AGENTS.md".to_string(),
+        ".claude/keybindings.json" => "Claude's keybindings".to_string(),
+        ".claude/statusline.sh" => "Claude's status line script".to_string(),
+        _ => format!("~/{path}"),
+    })
 }
 
 /// A key's old value, short enough for a line.
@@ -432,28 +466,28 @@ fn toast(news: &BTreeMap<String, News>) -> Option<Toast> {
     let mut folder = None;
     for (machine, news) in news {
         if let [path, ..] = news.conflicts.as_slice() {
-            let title = match news.conflicts.len() {
-                1 => format!("~/{path} changed on both sides"),
+            let changed = match news.conflicts.len() {
+                1 => format!("{} changed on both sides", named(path)),
                 count => format!("{count} files changed on both sides"),
             };
             let message = match news.conflicts.len() {
                 1 => format!("Here and on {machine}. The newer copy is on both now; the other is kept in {kept}."),
-                _ => format!("Here and on {machine}. The newer copy of each is on both now; the others are kept in {kept}."),
+                _ => format!("Here and on {machine}. The newer copy of each is on both now; the other copy of each is kept in {kept}."),
             };
-            let line = format!("{machine}: {title}");
-            said.push((title, message, line));
+            said.push((capitalised(&changed), message, format!("{machine}: {changed}")));
             folder = news.kept.clone();
         }
         for key in &news.replaced {
-            let (whose, lost) = match key.winner {
-                Side::Here => ("this computer's".to_string(), format!("on {machine}")),
-                Side::There => (format!("{machine}'s"), "here".to_string()),
+            let (whose, lost, trash) = match key.winner {
+                Side::Here => ("this computer's".to_string(), format!("on {machine}"), "its"),
+                Side::There => (format!("{machine}'s"), "here".to_string(), "Ferrite's"),
             };
-            let (spelled, was) = (spelled(&key.path), short(&key.was));
+            let (named, was) = (named(&key.path), short(&key.was));
+            let kept = format!("kept in {trash} {} folder", setup_sync::TRASH);
             said.push((
-                capitalised(&format!("{spelled} was set differently on {machine}")),
-                format!("It is {whose} on both now. It was {was} {lost}."),
-                format!("{machine}: {spelled} is {whose} on both now; it was {was} {lost}"),
+                capitalised(&format!("{named} was set differently on {machine}")),
+                format!("It is {whose} on both now. It was {was} {lost}, {kept}."),
+                format!("{machine}: {named} is {whose} on both now; it was {was} {lost}, {kept}"),
             ));
         }
         if let Some(valve) = &news.stopped {
@@ -474,7 +508,7 @@ fn toast(news: &BTreeMap<String, News>) -> Option<Toast> {
     } else if news.values().any(|news| news.failed.is_some()) {
         Some("More in Settings › Connections.".to_string())
     } else if news.values().any(|news| !news.conflicts.is_empty()) {
-        Some(format!("The others are kept in {kept}."))
+        Some(format!("The other copy of each file is kept in {kept}."))
     } else {
         None
     };
@@ -1097,7 +1131,7 @@ mod tests {
         let Toast { title, message, folder, warning } = toast(&all).unwrap();
         assert!(warning);
         assert_eq!(title, "3 files changed on both sides");
-        assert!(message.ends_with("the others are kept in Ferrite's sync-conflicts folder."), "{message}");
+        assert!(message.ends_with("the other copy of each is kept in Ferrite's sync-conflicts folder."), "{message}");
         assert_eq!(folder, Some(PathBuf::from("/settings/sync-conflicts/1")));
 
         let failed = || {
@@ -1150,9 +1184,52 @@ mod tests {
         assert_eq!(track.status.line("box"), "In sync");
         let all = BTreeMap::from([("box".to_string(), news)]);
         let shown = toast(&all).unwrap();
-        assert_eq!(shown.title, "`model` in ~/.claude/settings.json was set differently on box");
-        assert_eq!(shown.message, "It is this computer's on both now. It was \"sonnet\" on box.");
+        assert_eq!(shown.title, "Claude's model was set differently on box");
+        assert_eq!(shown.message, "It is this computer's on both now. It was \"sonnet\" on box, kept in its sync-trash folder.");
         assert_eq!((shown.folder, shown.warning), (None, false), "nothing to open, nothing to do");
+    }
+
+    /// A toast names what changed as the operator calls it, never by a
+    /// path where a name does, and says where each old copy went: a file's
+    /// in the sync-conflicts folder, a key's in the trash of the side that
+    /// lost it.
+    #[test]
+    fn a_toast_names_what_changed_and_where_each_old_copy_is_kept() {
+        let mut news = News::default();
+        news.conflicted(&[kept(".claude/skills/both-edit/SKILL.md", "1")]);
+        let one = BTreeMap::from([("ferrite-wsl".to_string(), news.clone())]);
+        assert_eq!(toast(&one).unwrap().title, "The skill both-edit changed on both sides");
+        news.replaced(&[
+            Replaced { path: ".claude/settings.json#model".into(), winner: Side::Here, was: "\"sonnet\"".into() },
+            Replaced { path: ".codex/config.toml#model".into(), winner: Side::There, was: "\"gpt-6.2-sol\"".into() },
+        ]);
+        let all = BTreeMap::from([("ferrite-wsl".to_string(), news)]);
+        let Toast { title, message, .. } = toast(&all).unwrap();
+        assert_eq!(title, "Setup sync: 3 things to look at");
+        assert_eq!(
+            message,
+            "ferrite-wsl: the skill both-edit changed on both sides\n\
+             ferrite-wsl: Claude's model is this computer's on both now; it was \"sonnet\" on ferrite-wsl, kept in its sync-trash folder\n\
+             ferrite-wsl: Codex's model is ferrite-wsl's on both now; it was \"gpt-6.2-sol\" here, kept in Ferrite's sync-trash folder\n\
+             The other copy of each file is kept in Ferrite's sync-conflicts folder."
+        );
+        assert!(!message.contains('`') && !title.contains('`'), "{message}");
+
+        for (path, name) in [
+            (".claude/commands/team.md", "the command team"),
+            (".claude/agents/helper.md", "the agent helper"),
+            (".claude/rules/style.md", "the rule style"),
+            (".agents/skills/reui/SKILL.md", "the skill reui"),
+            (".codex/prompts/fix.md", "the Codex prompt fix"),
+            (".claude/CLAUDE.md", "CLAUDE.md"),
+            (".codex/AGENTS.md", "Codex's AGENTS.md"),
+            (".claude/settings.json#enabledPlugins/pstack@cursor-plugins", "Claude's plugin pstack"),
+            (".claude.json#mcpServers/docs", "Claude's MCP server docs"),
+            (".codex/config.toml#marketplaces/cursor-plugins", "Codex's marketplace cursor-plugins"),
+            (".claude/hooks/check.sh", "~/.claude/hooks/check.sh"),
+        ] {
+            assert_eq!(named(path), name);
+        }
     }
 
     #[test]
