@@ -219,6 +219,10 @@ impl CockpitView {
             pane.composer
                 .update(cx, |composer, cx| composer.load(fresh.content, cx));
         }
+        // Its binding is new to the window: the notify pass asks about its
+        // checkout (`ask_draft_checkouts`), which a launch brings no other
+        // notify for.
+        cx.notify();
         true
     }
 

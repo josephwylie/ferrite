@@ -351,10 +351,11 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Ask about each draft's checkout git has not named yet, as the
-    /// window hears its binding change (the root's notify), so the
-    /// Workspace menu opens already answered. Never from a frame; a named
-    /// checkout is read again by the sweep (`refresh_branches`).
+    /// Ask about each draft's checkout on this computer that git has not
+    /// named and is not being asked about, as the window hears its binding
+    /// change (the root's notify), so the Workspace menu opens already
+    /// answered. Never from a frame; a named checkout is read again by the
+    /// sweep (`refresh_branches`), a machine's by its Server.
     pub(super) fn ask_draft_checkouts(&self, cx: &Context<Self>) {
         let unnamed: Vec<ProjectKey> = self
             .panes
@@ -362,7 +363,8 @@ impl CockpitView {
             .filter_map(|pane| pane.draft())
             .filter(|draft| matches!(draft.binding.target(), DraftTarget::Main))
             .map(|draft| draft.binding.project())
-            .filter(|project| self.checkouts.branch(*project).is_none())
+            .filter(|project| self.checkouts.branch(*project).is_none() && !self.checkouts.asking(*project))
+            .filter(|project| !self.elsewhere(project.machine(), cx))
             .collect();
         self.look_up_checkouts(unnamed, cx);
     }
