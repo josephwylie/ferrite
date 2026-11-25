@@ -457,7 +457,13 @@ Windows window.
   card reads as its own card. Since the board's menus (a message's, a
   Decision's, a citation's comment, the Composer's) draw over sheets too,
   a sheet or the palette coming up closes them first: no menu outlives
-  the surface it belongs to. Leaving the app while a copy runs asks first ("Copying P to
+  the surface it belongs to. The Composer's menu does not open again
+  while a sheet, the palette or the shortcuts are up, whatever moves its
+  line or lists its commands meanwhile; the first edit once they go opens
+  it. A citation's comment closed that way keeps its words on the reply,
+  even over the limit, since a sheet can come up unasked (a copy's
+  notification clicked); words over the limit hold the send back, and a
+  send held back opens the comment to say so. Leaving the app while a copy runs asks first ("Copying P to
   E. Leaving stops it; Resume finishes it later.").
 - **A copy is always a pick away.** Every Draft's environment chip lists
   each copy the window keeps under a "Copies" heading of its own, after
@@ -489,7 +495,8 @@ Windows window.
   A finished copy is kept only while it leaves the operator something to
   do or see: the operator closing its toast, or acting on it, lets it go,
   and so does its toast going by itself once its Draft moved there and it
-  left nothing as it was. Otherwise a toast that went by itself leaves the
+  left nothing as it was. A copy let go takes its system notification
+  with it, so no click opens nothing. Otherwise a toast that went by itself leaves the
   copy, its system notification and its row on the chip as they were, so
   "Start a chat there" or what it left is still on its card. With the window in the background, the chime and the system
   notification too (Settings › Notifications), card up or not, whose

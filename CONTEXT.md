@@ -391,7 +391,7 @@ again, its copies are still its own). The window keeps it from Copy until
 the operator has seen how it ended, and one that stopped short while its
 Draft waits on it; a toast that went by itself is not seeing it, unless
 the copy's Draft moved there and it left nothing as it was, which leaves
-nothing to see. Its card,
+nothing to see; its system notification goes with it. Its card,
 a toast and every Draft's environment chip all show it. Cancel, or its
 Machine turned off or removed, stops it unless all of it had landed by
 then: it is stopped or done, never both. The card closed, it runs on. A
