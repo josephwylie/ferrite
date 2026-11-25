@@ -725,6 +725,99 @@ fn a_revoked_session_asks_to_sign_in_and_opens_its_pairing(cx: &mut TestAppConte
         .expect("its dialog");
     assert!(dialog.iter().any(|line| line == "Sign in to box"), "{dialog:?}");
     assert!(!dialog.iter().any(|line| line == "SSH"), "a link stays a link: {dialog:?}");
+    let row = connection_groups(&view, cx)
+        .into_iter()
+        .flat_map(|group| group.rows)
+        .find_map(|row| match row.control {
+            settings::Control::ConnectionRow(row) if row.name.as_ref() == "box" => Some(row),
+            _ => None,
+        })
+        .expect("box's Connections row");
+    assert_eq!(row.status.as_ref(), "Needs attention", "the row says it too");
+    assert!(row.actions.iter().any(|action| action.id.as_ref() == "connection-retry-1" && action.label.as_ref() == "Sign in"));
+}
+
+/// Connections reads its rows from the window (`connections_inputs`):
+/// each environment where the window lists it, as the window reaches it,
+/// with the reason the window gives; and the window answers a press on
+/// one of them.
+#[gpui::test]
+fn the_connections_rows_are_the_windows_environments(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("machines-reached", 1);
+    fresh("reached");
+    let link = Machine {
+        name: "box".into(),
+        ..Machine::new("ferrite-link:00112233445566778899aabbccddeeff")
+    };
+    let spare = Machine {
+        name: "spare".into(),
+        enabled: false,
+        ..Machine::new("me@spare")
+    };
+    let mut machines = Machines::new(reach("reached", revoked), &[link, spare], None, true);
+    machines.beside(&mut core);
+    let on_box = machines.held(1).unwrap();
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    until(cx, |cx| connection(&view, 1, cx) == Connection::Attention);
+    view.update(cx, |view, cx| view.open_connections(cx));
+    tick(cx);
+    let reason = view.read_with(cx, |view, cx| match view.cockpit.read(cx).server(on_box) {
+        Some(ferrite_client::cockpit::ServerState::Detached { reason, .. }) => reason,
+        _ => panic!("box is detached"),
+    });
+    let rows = |cx: &mut gpui::VisualTestContext| -> Vec<settings::ConnectionRow> {
+        connection_groups(&view, cx)
+            .into_iter()
+            .flat_map(|group| group.rows)
+            .filter_map(|row| match row.control {
+                settings::Control::ConnectionRow(row) => Some(row),
+                _ => None,
+            })
+            .collect()
+    };
+    let said: Vec<_> = rows(cx)
+        .iter()
+        .map(|row| {
+            let retry = row
+                .actions
+                .iter()
+                .find(|action| action.id.starts_with("connection-retry-"))
+                .map(|action| (action.id.to_string(), action.label.to_string()));
+            (row.name.to_string(), row.status.to_string(), row.detail.as_ref().map(|detail| detail.to_string()), row.connected, retry)
+        })
+        .collect();
+    assert_eq!(
+        said,
+        [
+            (
+                "Local environment".into(),
+                "Run agents on this computer. Turn off to use Ferrite only with remote environments.".into(),
+                None,
+                true,
+                None,
+            ),
+            (
+                "box".into(),
+                "Needs attention".into(),
+                Some(reason),
+                false,
+                Some(("connection-retry-1".into(), "Sign in".into())),
+            ),
+            ("spare".into(), "Disconnected".into(), None, false, None),
+        ],
+    );
+    let open = rows(cx)[1]
+        .actions
+        .iter()
+        .find(|action| action.id.as_ref() == "connection-open-1")
+        .expect("box's Open")
+        .act
+        .clone();
+    cx.update(|window, cx| open(window, cx));
+    tick(cx);
+    assert_eq!(view.read_with(cx, |view, cx| view.settings_machine(cx)), Some(on_box));
+    let open = rows(cx)[1].actions.iter().find(|action| action.id.as_ref() == "connection-open-1").map(|action| action.enabled);
+    assert_eq!(open, Some(false), "Settings is about box now");
 }
 
 /// Another machine's Thread draws the row this computer's does: its

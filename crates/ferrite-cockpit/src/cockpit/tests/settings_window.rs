@@ -18,8 +18,12 @@ fn connection_fields(
         .expect("the connection editor is open")
 }
 
+/// Connections in the window (`ferrite_settings::connections` has the
+/// page's own tests): it is the sheet's Connections page, Escape cancels
+/// its editor before it closes Settings, and a finished setup is saved
+/// once, in Settings' file.
 #[gpui::test]
-fn connections_keep_failed_input_save_only_ready_and_cancel_with_escape(cx: &mut TestAppContext) {
+fn connections_cancel_with_escape_and_save_a_ready_setup_once(cx: &mut TestAppContext) {
     use ferrite_core::machine::{setup::Event, Machine};
     let (core, _fake) = cockpit("connection-editor", 1);
     bind_production_keys(cx);
@@ -28,79 +32,23 @@ fn connections_keep_failed_input_save_only_ready_and_cancel_with_escape(cx: &mut
     tick(cx);
     cx.simulate_keystrokes("cmd-,");
     tick(cx);
-    let hit = cx
-        .debug_bounds("settings-page-connections")
-        .unwrap()
-        .center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    let hit = cx.debug_bounds("connection-add").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    let hit = cx.debug_bounds("connection-mode-ssh").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    let fields = connection_fields(&view, cx);
-    cx.update(|window, cx| {
-        fields
-            .host
-            .update(cx, |field, cx| field.set_value("-bad", window, cx));
-        fields
-            .username
-            .update(cx, |field, cx| field.set_value("developer", window, cx));
-        fields
-            .port
-            .update(cx, |field, cx| field.set_value("2222", window, cx));
-    });
-    cx.simulate_keystrokes("enter");
-    tick(cx);
-    assert!(cx.debug_bounds("connection-error").is_some());
-    let card = cx.debug_bounds("connection-dialog").unwrap();
-    for selector in [
-        "connection-host",
-        "connection-username",
-        "connection-port",
-        "connection-submit",
-        "connection-close",
-    ] {
-        let bounds = cx.debug_bounds(selector).expect(selector);
-        assert!(
-            bounds.left() >= card.left() && bounds.right() <= card.right(),
-            "{selector} fits the small sheet"
-        );
-    }
-    view.read_with(cx, |view, cx| {
-        assert!(view.prefs.settings.machines.is_empty());
-        assert_eq!(fields.host.read(cx).value().as_ref(), "-bad");
-        assert_eq!(fields.username.read(cx).value().as_ref(), "developer");
-        assert_eq!(fields.port.read(cx).value().as_ref(), "2222");
-    });
-    connections_view(&view, cx).update(cx, |connections, cx| {
-        connections.setup_event(
-            Event::Failed("Connection refused. Check the host and port.".into()),
-            cx,
-        )
-    });
-    tick(cx);
-    assert_eq!(
-        connection_fields(&view, cx).host,
-        fields.host,
-        "connection failure retains the same fields"
-    );
+    let click = |selector: &'static str, cx: &mut gpui::VisualTestContext| {
+        let hit = cx.debug_bounds(selector).expect(selector).center();
+        cx.simulate_click(hit, gpui::Modifiers::none());
+        tick(cx);
+    };
+    click("settings-page-connections", cx);
+    click("connection-add", cx);
+    assert!(cx.debug_bounds("connection-dialog").is_some());
     cx.simulate_keystrokes("escape");
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(
-            view.settings_open(cx),
-            "Escape cancels the editor before closing Settings"
-        );
+        assert!(view.settings_open(cx), "Escape cancels the editor before closing Settings");
         assert!(!view.connections(cx).unwrap().read(cx).editing());
     });
     assert!(cx.debug_bounds("connection-add").is_some());
 
-    let hit = cx.debug_bounds("connection-add").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
+    click("connection-add", cx);
     let machine = Machine::new("ready.example");
     connections_view(&view, cx).update(cx, |connections, cx| {
         connections.setup_event(Event::Ready(machine.clone()), cx);
@@ -837,198 +785,6 @@ fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
         assert!(view.cockpit.read(cx).thread(thread).is_none(), "gone on one press");
     });
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[gpui::test]
-fn connection_modal_defaults_to_link_traps_tab_and_resets_on_reopen(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("connection-modal-focus", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    tick(cx);
-    cx.simulate_keystrokes("cmd-,");
-    tick(cx);
-    let hit = cx
-        .debug_bounds("settings-page-connections")
-        .unwrap()
-        .center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    let hit = cx.debug_bounds("connection-add").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    assert!(cx.debug_bounds("connection-remote-host").is_some());
-    assert!(cx.debug_bounds("connection-pairing-code").is_some());
-    assert!(cx.debug_bounds("connection-host").is_none());
-    let fields = connection_fields(&view, cx);
-    cx.update(|window, cx| {
-        assert!(fields
-            .remote_host
-            .read(cx)
-            .focus_handle(cx)
-            .is_focused(window))
-    });
-    let mut visited = Vec::new();
-    for _ in 0..12 {
-        cx.simulate_keystrokes("tab");
-        tick(cx);
-        let focused = view.update_in(cx, |view, window, cx| {
-            assert!(view.connections(cx).unwrap().read(cx).holds_focus(window, cx));
-            window.focused(cx).unwrap()
-        });
-        if !visited.contains(&focused) {
-            visited.push(focused);
-        }
-    }
-    assert!(visited.len() >= 6, "Tab reaches the fields, modes, close, and submit");
-    for _ in 0..12 {
-        cx.simulate_keystrokes("shift-tab");
-        tick(cx);
-        view.update_in(cx, |view, window, cx| {
-            assert!(view.connections(cx).unwrap().read(cx).holds_focus(window, cx))
-        });
-    }
-    cx.update(|window, cx| {
-        fields.remote_host.update(cx, |field, cx| {
-            field.set_value("backend.example.com", window, cx)
-        });
-        fields
-            .pairing_code
-            .update(cx, |field, cx| field.set_value("", window, cx));
-    });
-    let hit = cx.debug_bounds("connection-submit").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    assert!(cx.debug_bounds("connection-error").is_some());
-    let hit = cx.debug_bounds("connection-mode-ssh").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    assert!(cx.debug_bounds("connection-error").is_none());
-    let hit = cx.debug_bounds("connection-close").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    let hit = cx.debug_bounds("connection-add").unwrap().center();
-    cx.simulate_click(hit, gpui::Modifiers::none());
-    tick(cx);
-    let reopened = connection_fields(&view, cx);
-    assert_ne!(fields.remote_host, reopened.remote_host);
-    assert!(cx.debug_bounds("connection-remote-host").is_some());
-    assert!(cx.debug_bounds("connection-host").is_none());
-    view.read_with(cx, |_, cx| {
-        assert!(reopened.remote_host.read(cx).value().is_empty());
-        assert!(reopened.pairing_code.read(cx).value().is_empty());
-    });
-    cx.simulate_keystrokes("escape");
-    tick(cx);
-    view.read_with(cx, |view, cx| {
-        assert!(view.settings_open(cx) && !view.connections(cx).unwrap().read(cx).editing())
-    });
-    cx.simulate_keystrokes("escape");
-    tick(cx);
-    view.read_with(cx, |view, cx| assert!(!view.settings_open(cx)));
-}
-
-#[gpui::test]
-fn connection_modal_does_not_submit_or_close_during_ime_composition(cx: &mut TestAppContext) {
-    use gpui::EntityInputHandler;
-    let (core, _fake) = cockpit("connection-modal-ime", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-    cx.simulate_keystrokes("cmd-,");
-    tick(cx);
-    connections_view(&view, cx)
-        .update_in(cx, |connections, window, cx| connections.edit(None, window, cx));
-    tick(cx);
-    let fields = connection_fields(&view, cx);
-    cx.update(|window, cx| {
-        fields.remote_host.update(cx, |input, cx| {
-            input.focus(window, cx);
-            input.replace_and_mark_text_in_range(None, "仮", None, window, cx);
-        });
-    });
-    for key in ["enter", "escape"] {
-        cx.simulate_keystrokes(key);
-        tick(cx);
-        assert!(cx.debug_bounds("connection-dialog").is_some());
-        assert!(cx.debug_bounds("connection-error").is_none());
-    }
-    cx.update(|window, cx| {
-        fields
-            .remote_host
-            .update(cx, |input, cx| input.unmark_text(window, cx))
-    });
-    cx.simulate_keystrokes("escape");
-    tick(cx);
-    assert!(cx.debug_bounds("connection-dialog").is_none());
-}
-
-#[gpui::test]
-fn connection_pairing_url_can_be_typed_without_rewriting_its_prefix(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("connection-typed-pairing", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-    cx.simulate_keystrokes("cmd-,");
-    tick(cx);
-    connections_view(&view, cx)
-        .update_in(cx, |connections, window, cx| connections.edit(None, window, cx));
-    tick(cx);
-    let fields = connection_fields(&view, cx);
-    let url = "https://backend.example.com/pair#code=0123456789abcdef0123456789abcdef&server=fedcba9876543210fedcba9876543210";
-    let mut typed = String::new();
-    for character in url.chars() {
-        typed.push(character);
-        cx.simulate_input(&character.to_string());
-        cx.run_until_parked();
-        view.read_with(cx, |_, cx| {
-            assert_eq!(fields.remote_host.read(cx).value().as_ref(), typed.as_str());
-            assert!(fields.pairing_code.read(cx).value().is_empty());
-        });
-    }
-    view.read_with(cx, |_, cx| {
-        let parsed = ferrite_core::machine::remote::PairingFields::parse(
-            fields.remote_host.read(cx).value().as_ref(),
-            fields.pairing_code.read(cx).value().as_ref(),
-        )
-        .unwrap();
-        assert_eq!(parsed.host, "https://backend.example.com");
-        assert_eq!(parsed.pairing_code, "0123456789abcdef0123456789abcdef");
-    });
-}
-
-#[gpui::test]
-fn connection_pairing_url_paste_fills_host_and_code_after_replacing_text(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("connection-pasted-pairing", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-    cx.simulate_keystrokes(&ferrite_ui::keymap::PLATFORM.chord(","));
-    tick(cx);
-    connections_view(&view, cx)
-        .update_in(cx, |connections, window, cx| connections.edit(None, window, cx));
-    tick(cx);
-    let fields = connection_fields(&view, cx);
-    cx.simulate_input("https://backend.example.com");
-    cx.run_until_parked();
-    cx.simulate_keystrokes(&ferrite_ui::keymap::PLATFORM.chord("a"));
-    cx.update(|_, cx| {
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-            "https://backend.example.com/pair#code=0123456789abcdef0123456789abcdef&server=fedcba9876543210fedcba9876543210".into(),
-        ))
-    });
-    cx.simulate_keystrokes(&ferrite_ui::keymap::PLATFORM.chord("v"));
-    cx.run_until_parked();
-    view.read_with(cx, |_, cx| {
-        assert_eq!(
-            fields.remote_host.read(cx).value().as_ref(),
-            "https://backend.example.com"
-        );
-        assert_eq!(
-            fields.pairing_code.read(cx).value().as_ref(),
-            "0123456789abcdef0123456789abcdef"
-        );
-    });
 }
 
 /// A toast stands over Settings: it draws over the sheet's veil, short of

@@ -2,15 +2,11 @@
 #
 # Each line is a debt: fix the test or the product, then delete the line. A
 # `full-ci` label runs the Windows check on a PR.
-#
-# Besides the browser-annotation test, connection pairing: the host field is
-# empty after select-all then paste (`settings_window.rs:878`).
 [[profile.default.overrides]]
 platform = 'cfg(windows)'
 default-filter = '''
 not (
     test(=cockpit::tests::browser_annotations::browser_annotation_history_keeps_a_distinct_reviewable_capture)
-  | test(=cockpit::tests::settings_window::connection_pairing_url_paste_fills_host_and_code_after_replacing_text)
 )
 '''
 

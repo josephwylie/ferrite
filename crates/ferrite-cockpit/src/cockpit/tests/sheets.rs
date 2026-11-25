@@ -100,7 +100,7 @@ fn closing_settings_drops_the_connection_editor(cx: &mut TestAppContext) {
         assert!(connections.read_with(cx, |connections, _| connections.editing()));
         connections
     };
-    let dropped = |connections: &Entity<super::connections_view::ConnectionsView>,
+    let dropped = |connections: &Entity<ferrite_settings::connections::ConnectionsView>,
                    cx: &mut gpui::VisualTestContext,
                    how: &str| {
         view.read_with(cx, |view, cx| {

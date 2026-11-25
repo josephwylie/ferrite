@@ -25,3 +25,6 @@ ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
 # The tests open each view in a window of its own (`ferrite_ui::testing`).
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
 ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
+# The Settings sheet as the app draws it, for the Connections page's
+# tests. It is the app's frame, not a feature crate.
+ferrite-frame = { path = "../ferrite-frame" }

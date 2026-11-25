@@ -2549,6 +2549,7 @@ name = "ferrite-settings"
 version = "0.4.0"
 dependencies = [
  "ferrite-core",
+ "ferrite-frame",
  "ferrite-pane",
  "ferrite-ui",
  "gpui-kit",

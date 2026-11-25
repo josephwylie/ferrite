@@ -7,8 +7,9 @@
 //! operator asks of the window it says as a `SettingsEvent`, which the
 //! Cockpit answers once the sheet's own update has ended.
 
-use super::connections_view::{ConnectionsView, PageEvent};
 use super::*;
+use ferrite_settings::connections::{ConnectionsInputs, ConnectionsView, PageEvent};
+use ferrite_ui::source::Source;
 use ferrite_core::settings::Settings;
 use ferrite_core::ModelInfo;
 use gpui::component::input::InputState;
@@ -81,8 +82,12 @@ pub(crate) enum SettingsEvent {
 impl EventEmitter<SettingsEvent> for SettingsView {}
 
 impl SettingsView {
-    pub(super) fn new(cockpit: WeakEntity<CockpitView>, cx: &mut Context<Self>) -> Self {
-        let connections = cx.new(|_| ConnectionsView::new(cockpit.clone()));
+    pub(super) fn new(
+        cockpit: WeakEntity<CockpitView>,
+        connections: Source<ConnectionsInputs, ()>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let connections = cx.new(|_| ConnectionsView::new(connections));
         Self {
             cockpit,
             page: settings::PageKey::default(),
@@ -602,7 +607,8 @@ impl CockpitView {
     /// defaults. Every opener comes here.
     pub(crate) fn show_settings(&mut self, cx: &mut Context<Self>) -> Entity<SettingsView> {
         let cockpit = cx.weak_entity();
-        let view = cx.new(|cx| SettingsView::new(cockpit, cx));
+        let connections = Source::of(&cx.entity(), |root: &Self, _: &(), cx| Some(root.connections_inputs(cx)));
+        let view = cx.new(|cx| SettingsView::new(cockpit, connections, cx));
         cx.subscribe(&view, Self::on_settings_event).detach();
         let connections = view.read(cx).connections.clone();
         cx.subscribe(&connections, Self::on_connections_event).detach();

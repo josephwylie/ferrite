@@ -42,7 +42,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_frame_selects_cockpit_dev_dependency(self):
         self.assertEqual(select(self.packages, ["crates/ferrite-frame/src/lib.rs"])["packages"],
-                         ["ferrite", "ferrite-cockpit", "ferrite-frame"])
+                         ["ferrite", "ferrite-cockpit", "ferrite-frame", "ferrite-settings"])
 
     def test_review_selects_the_window_that_lays_it_out(self):
         self.assertEqual(select(self.packages, ["crates/ferrite-review/src/lib.rs"])["packages"],

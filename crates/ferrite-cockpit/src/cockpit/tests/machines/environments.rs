@@ -6,7 +6,7 @@
 //! gets the Project card. What the draft holds goes with it.
 
 use super::*;
-use crate::cockpit::connections_view::ConnectionsEvent;
+use ferrite_settings::connections::ConnectionsEvent;
 use crate::cockpit::placement_view::PlacementView;
 use std::path::{Path, PathBuf};
 
