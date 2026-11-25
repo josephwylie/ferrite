@@ -2,13 +2,14 @@ import contextlib
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from ci_scope import Package, changed_paths, changes_cef_gate, check_boundaries, main, select, workspace
+from ci_scope import RULES, Package, changed_paths, changes_cef_gate, check_boundaries, main, select, workspace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,15 +73,94 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(select(self.packages, [path])["browser"])
 
     def test_shared_and_unknown_inputs_fail_closed(self):
-        paths = ["Cargo.lock", "Cargo.toml", "vendor/new-package/src/lib.rs", "scripts/install-app.sh",
-                 "scripts/stage-windows.ps1", "scripts/package-agent-browser.py", ".cargo/config.toml",
-                 ".config/nextest.toml", ".github/workflows/ci.yml", ".github/workflows/browser-window.yml",
-                 "resources/icon.ico", "new-build-input", "crates/removed/src/lib.rs"]
+        paths = ["Cargo.lock", "Cargo.toml", "rust-toolchain.toml", "vendor/new-package/src/lib.rs", ".cargo/config.toml",
+                 ".config/nextest.toml", ".github/workflows/ci.yml", "scripts/ci_scope.py", ".github/actions/setup/action.yml",
+                 "resources/icon.ico", "assets/logo.png", ".gitattributes", "new-build-input", "crates/removed/src/lib.rs"]
         for path in paths:
             with self.subTest(path=path):
                 result = select(self.packages, [path])
                 self.assertEqual(result["packages"], self.ferrite)
                 self.assertEqual(result["vendored"], self.vendored)
+                self.assertTrue(result["checks"])
+
+    def test_scripts_no_check_here_runs_select_nothing(self):
+        # The scope job runs its own tests on every event; other workflows
+        # and the release run the rest, or only people do.
+        paths = ["scripts/test_ci_scope.py", "scripts/test_check_raw_presses.py", "scripts/install-app.sh",
+                 "scripts/package-agent-browser.py", "scripts/package-windows.ps1", "scripts/package-server.sh",
+                 "scripts/tests/package-server.sh", "scripts/patches/agent-browser-0.41.2-ferrite.patch",
+                 "scripts/probe-native-codex-queue.py", "scripts/warm-main.sh", "scripts/wsl-machine.ps1",
+                 "scripts/git-hooks/post-commit", "scripts/bench/edit-loop.sh", "scripts/core-sides.json"]
+        for path in paths:
+            with self.subTest(path=path):
+                result = select(self.packages, [path], windows=True)
+                self.assertFalse(result["code"])
+                self.assertEqual(result["packages"] + result["vendored"], [])
+
+    def test_the_raw_press_baseline_selects_the_macos_checks_only(self):
+        for path in ["scripts/check_raw_presses.py", "scripts/raw-presses.json"]:
+            with self.subTest(path=path):
+                result = select(self.packages, [path], windows=True)
+                self.assertTrue(result["code"])
+                self.assertTrue(result["checks"])
+                self.assertFalse(result["windows"])
+                self.assertEqual(result["packages"] + result["vendored"], [])
+
+    def test_the_windows_staging_scripts_select_the_windows_checks_only(self):
+        for path in ["scripts/stage-windows.ps1", "scripts/copy-chromium-windows.ps1", "scripts/tests/windows-stage.ps1"]:
+            with self.subTest(path=path):
+                main = select(self.packages, [path], windows=True)
+                self.assertTrue(main["windows"])
+                self.assertFalse(main["checks"])
+                self.assertEqual(main["packages"] + main["vendored"], [])
+                # A PR leaves them to main, as it does every Windows check.
+                self.assertFalse(select(self.packages, [path])["code"])
+
+    def test_every_script_this_workflow_runs_has_its_own_rule(self):
+        # The scripts/ rule selects nothing, so a script a new check runs
+        # must say what it selects.
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        named = {path.rstrip(".") for path in re.findall(r"scripts/[\w./-]+", workflow)}
+        self.assertIn("scripts/check_raw_presses.py", named)
+        for path in sorted(named):
+            with self.subTest(path=path):
+                self.assertIn(path, {pattern for pattern, _ in RULES})
+
+    def test_other_workflows_select_nothing_here(self):
+        for path in [".github/workflows/release.yml", ".github/workflows/browser-controller.yml",
+                     ".github/workflows/browser-window.yml"]:
+            with self.subTest(path=path):
+                self.assertFalse(select(self.packages, [path], windows=True)["code"])
+        self.assertTrue(select(self.packages, [".github/workflows/browser-window.yml"])["browser"])
+
+    def test_vendored_tests_run_only_for_vendored_code_and_what_builds_it(self):
+        for path in ["vendor/gpui-pre/src/window.rs", "Cargo.toml", "Cargo.lock", ".cargo/config.toml",
+                     ".config/nextest.toml", ".github/workflows/ci.yml", "scripts/ci_scope.py"]:
+            with self.subTest(path=path):
+                self.assertEqual(select(self.packages, [path])["vendored"], self.vendored)
+        for path in ["crates/ferrite-core/src/lib.rs", "scripts/install-app.sh", "scripts/raw-presses.json",
+                     ".github/workflows/browser-window.yml", "skills/ferrite/SKILL.md", "CONTEXT.md"]:
+            with self.subTest(path=path):
+                self.assertEqual(select(self.packages, [path])["vendored"], [])
+
+    def test_a_file_a_member_embeds_selects_it(self):
+        # The `ferrite skill` text, an engine fixture ferrite-core's tests
+        # read, and the README gpui-base's markdown test renders.
+        for path, reader in [("skills/ferrite/SKILL.md", "ferrite-engine"),
+                             ("crates/ferrite-engine/tests/fixtures/claude-report-findings-2.1.318.jsonl", "ferrite-core"),
+                             ("README.md", "gpui-base")]:
+            with self.subTest(path=path):
+                result = select(self.packages, [path])
+                self.assertIn(reader, result["packages"] + result["vendored"])
+        self.assertFalse(select(self.packages, ["skills/verify-ferrite/SKILL.md"])["code"])
+
+    def test_windows_runs_for_what_a_push_to_main_changed(self):
+        crate = select(self.packages, ["crates/ferrite-server/src/calls.rs"], windows=True)
+        self.assertTrue(crate["windows"])
+        self.assertEqual(crate["packages"], ["ferrite", "ferrite-cockpit", "ferrite-server"])
+        self.assertEqual(crate["vendored"], [])
+        self.assertFalse(select(self.packages, ["docs/audit.md"], windows=True)["code"])
+        self.assertFalse(select(self.packages, ["crates/ferrite-server/src/calls.rs"])["windows"])
 
     def test_packaged_browser_runs_for_what_only_it_sees_whole(self):
         paths = ["crates/ferrite-cockpit/src/cockpit/browser/controls.rs", "crates/ferrite-cockpit/src/cockpit/browser_smoke.rs",
@@ -93,21 +173,23 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(select(self.packages, [path])["browser"])
 
     def test_other_changes_leave_the_packaged_browser_to_main(self):
-        # These still select the ferrite package, so ci.yml checks the CEF builds.
+        # These still run the macOS checks, so ci.yml checks the CEF builds.
         paths = ["crates/ferrite-cockpit/src/cockpit.rs", "crates/ferrite-cockpit/src/cockpit/decisions.rs",
                  "crates/ferrite-server/src/lib.rs", "crates/ferrite-ui/src/lib.rs", "scripts/raw-presses.json",
-                 ".github/workflows/ci.yml", ".config/nextest.toml", "skills/verify-ferrite/features/decisions.md"]
+                 ".github/workflows/ci.yml", ".config/nextest.toml"]
         for path in paths:
             with self.subTest(path=path):
                 result = select(self.packages, [path])
-                self.assertIn("ferrite", result["packages"])
+                self.assertTrue(result["checks"])
                 self.assertFalse(result["browser"])
 
     def test_full_ci_selects_windows_and_the_label_selects_the_packaged_browser(self):
         path = ["crates/ferrite-ui/src/lib.rs"]
         full = select(self.packages, path, full=True)
         self.assertEqual(full["packages"], self.ferrite)
+        self.assertTrue(full["windows"])
         self.assertFalse(full["browser"])
+        self.assertFalse(select(self.packages, path)["windows"])
         self.assertTrue(select(self.packages, path, browser=True)["browser"])
 
     def test_vendored_crates_are_members_kept_out_of_package_runs(self):
@@ -129,13 +211,16 @@ class SelectionTests(unittest.TestCase):
         self.assertIn("ferrite-ui", result["packages"])
 
     def test_documentation_only_explicitly_skips_checks(self):
-        result = select(self.packages, ["README.md", "AGENTS.md", "docs/audit.md", "docs/image.png"])
+        result = select(self.packages, ["CONTEXT.md", "AGENTS.md", "docs/audit.md", "docs/image.png", "skills/verify-ferrite/SKILL.md"],
+                        windows=True)
         self.assertFalse(result["code"])
         self.assertFalse(result["browser"])
+        self.assertFalse(result["checks"])
+        self.assertFalse(result["windows"])
         self.assertEqual(result["packages"], [])
         self.assertEqual(result["vendored"], [])
         self.assertFalse(any(result["decisions"].values()))
-        self.assertEqual(result["reasons"], ["documentation only"])
+        self.assertEqual(result["reasons"], ["nothing this workflow checks changed"])
 
     def test_markdown_inside_packages_and_vendor_is_not_assumed_documentation(self):
         for path in ["crates/ferrite-engine/tests/fixtures/message.md", "vendor/gpui-base/README.md"]:
@@ -299,8 +384,56 @@ renamed = { package = "helper", path = "crates/helper" }
             main()
         result = json.loads(stdout.getvalue())
         self.assertEqual(result["packages"], ["ferrite-cockpit", "ferrite-core", "ferrite-engine", "ferrite-frame"])
-        self.assertEqual(output.read_text(), "code=true\nbrowser=true\nfull=true\npackages=ferrite-cockpit ferrite-core "
-                         "ferrite-engine ferrite-frame\nvendored=\n")
+        self.assertEqual(output.read_text(), "code=true\nbrowser=true\nchecks=true\nwindows=true\npackages=ferrite-cockpit "
+                         "ferrite-core ferrite-engine ferrite-frame\nvendored=\n")
+
+    def test_a_member_in_no_class_fails(self):
+        (self.root / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/*", "tools/helper"]\n')
+        (self.root / "tools/helper").mkdir(parents=True)
+        (self.root / "tools/helper/Cargo.toml").write_text('[package]\nname = "helper"\nversion = "0.1.0"\n')
+        with self.assertRaisesRegex(ValueError, r"in no class: helper \(tools/helper\)"):
+            workspace(self.root)
+
+    def test_a_file_embedded_from_outside_its_folder_selects_the_member(self):
+        source = self.root / "crates/ferrite-core/src/lib.rs"
+        source.parent.mkdir()
+        source.write_text('const SKILL: &str = include_str!("../../../skills/core/SKILL.md");\n'
+                          'const ICON: &[u8] = include_bytes!(concat!("../../ferrite-engine/icons/", "x.svg"));\n'
+                          'const OWN: &str = include_str!("../README.md");\n')
+        packages = workspace(self.root)
+        self.assertEqual(packages["ferrite-core"].embeds, ("crates/ferrite-engine/icons", "skills/core/SKILL.md"))
+        for path in ["skills/core/SKILL.md", "crates/ferrite-engine/icons/x.svg"]:
+            with self.subTest(path=path):
+                self.assertIn("ferrite-core", select(packages, [path])["packages"])
+        self.assertFalse(select(packages, ["skills/other/SKILL.md"])["code"])
+
+    def scope(self, *args):
+        output = self.root / "outputs"
+        output.unlink(missing_ok=True)
+        with patch.object(sys, "argv", ["ci_scope.py", "--root", str(self.root), *args, "--github-output", str(output)]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            main()
+        return dict(line.split("=", 1) for line in output.read_text().splitlines())
+
+    def test_a_push_to_main_checks_what_it_changed_on_windows_too(self):
+        source = self.root / "crates/ferrite-frame/src/lib.rs"
+        source.parent.mkdir()
+        source.write_text("fn frame() {}\n")
+        before = self.commit("base")
+        source.write_text("fn frame() { draw(); }\n")
+        self.commit("change the frame")
+        outputs = self.scope("--base", before, "--windows")
+        self.assertEqual(outputs["packages"], "ferrite-frame")
+        self.assertEqual(outputs["windows"], "true")
+
+    def test_a_push_with_no_earlier_commit_here_checks_everything(self):
+        self.commit("base")
+        # A first push names all zeros; a forced one can name a commit this clone lacks.
+        for before in ["0" * 40, "1234567890abcdef1234567890abcdef12345678"]:
+            with self.subTest(before=before):
+                outputs = self.scope("--base", before, "--windows")
+                self.assertEqual(outputs["packages"], "ferrite-cockpit ferrite-core ferrite-engine ferrite-frame")
+                self.assertEqual(outputs["windows"], "true")
 
     def test_invalid_boundary_writes_no_skip_outputs(self):
         self.write_package("ferrite-core", '[dependencies]\ngpui = "1"\n')
