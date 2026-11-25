@@ -90,7 +90,9 @@ class SelectionTests(unittest.TestCase):
     def test_scripts_no_check_here_runs_select_nothing(self):
         # The scope job runs its own tests on every event; other workflows
         # and the release run the rest, or only people do.
-        paths = ["scripts/test_ci_scope.py", "scripts/test_check_raw_presses.py", "scripts/install-app.sh",
+        paths = ["scripts/test_ci_scope.py", "scripts/test_check_raw_presses.py", "scripts/test_check_tangle.py",
+                 "scripts/test_check_crate_graph.py", "scripts/test_junit_summary.py", "scripts/test_quarantine.py",
+                 "scripts/install-app.sh",
                  "scripts/package-agent-browser.py", "scripts/package-windows.ps1", "scripts/package-server.sh",
                  "scripts/tests/package-server.sh", "scripts/patches/agent-browser-0.41.2-ferrite.patch",
                  "scripts/probe-native-codex-queue.py", "scripts/warm-main.sh", "scripts/wsl-machine.ps1",
@@ -99,6 +101,25 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 result = select(self.packages, [path], windows=True)
                 self.assertFalse(result["code"])
+                self.assertEqual(result["packages"] + result["vendored"], [])
+
+    def test_what_every_test_run_reads_selects_every_package(self):
+        for path in [".config/quarantine.toml", "scripts/quarantine.py", "scripts/junit_summary.py"]:
+            with self.subTest(path=path):
+                result = select(self.packages, [path], windows=True)
+                self.assertEqual(result["packages"], self.ferrite)
+                self.assertEqual(result["vendored"], self.vendored)
+                self.assertTrue(result["checks"])
+                self.assertTrue(result["windows"])
+
+    def test_the_untangling_guards_select_the_macos_checks_only(self):
+        # No step names the tangle's baseline: check_tangle.py reads it.
+        for path in ["scripts/check_tangle.py", "scripts/tangle.json", "scripts/check_crate_graph.py"]:
+            with self.subTest(path=path):
+                result = select(self.packages, [path], windows=True)
+                self.assertTrue(result["code"])
+                self.assertTrue(result["checks"])
+                self.assertFalse(result["windows"])
                 self.assertEqual(result["packages"] + result["vendored"], [])
 
     def test_the_raw_press_baseline_selects_the_macos_checks_only(self):

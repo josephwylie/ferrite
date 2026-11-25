@@ -13,3 +13,25 @@ not (
   | test(=cockpit::tests::settings_window::connection_pairing_url_paste_fills_host_and_code_after_replacing_text)
 )
 '''
+
+# CI's runs (ci.yml). A test still running at 60 s is reported slow; at 180 s
+# it is stopped. The slowest test of a green run takes 47 s (Windows), and the
+# longest bounded wait, `doorbell::until`, gives up at 120 s with its own
+# report, so a test stopped here has no bound of its own. Unstopped, it would
+# hold the job to its 60-minute timeout, which ends it with no report.
+[profile.ci]
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# Every result, each retry included, in target/nextest/ci/junit.xml, which
+# ci.yml summarizes (scripts/junit_summary.py) and uploads.
+[profile.ci.junit]
+path = "junit.xml"
+report-name = "Tests"
+
+# The quarantined tests (.config/quarantine.toml), which ci.yml runs apart,
+# report in target/nextest/quarantine/junit.xml.
+[profile.quarantine]
+inherits = "ci"
+
+[profile.quarantine.junit]
+report-name = "Quarantined tests"
