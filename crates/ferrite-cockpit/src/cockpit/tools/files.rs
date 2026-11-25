@@ -37,9 +37,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 
-use gpui::WeakEntity;
+use gpui::{FocusHandle, WeakEntity};
 
 use ferrite_core::file_operations::Reply as FileReply;
 use ferrite_tools::remote_files::{self, RemoteFiles};
@@ -60,7 +59,7 @@ use super::*;
 use crate::cockpit::context_menu::Submenu;
 use crate::cockpit::panel::controls::focusable;
 use crate::cockpit::panel::preview::{settle_markdown_found, PreviewFind};
-use crate::cockpit::panel::{PanelControl, PanelFocus, Semantics};
+use crate::cockpit::panel::{PanelControl, Semantics};
 use crate::cockpit::surfaces::SurfaceId;
 use crate::cockpit::tab_scroll::{self, Side, TabScroll};
 
@@ -219,6 +218,18 @@ impl Files {
         })
     }
 
+    /// Each tab as a stop of the Panel's row, in tab order: its file, named
+    /// for its file's name and selected while it shows.
+    fn stops(&self) -> impl Iterator<Item = (&Path, Semantics)> {
+        self.tabs.iter().enumerate().map(|(at, tab)| {
+            let name = tab
+                .path
+                .file_name()
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+            (tab.path.as_path(), Semantics::tab(name, self.active == Some(at)))
+        })
+    }
+
     fn working_set(&self) -> WorkingSet {
         WorkingSet {
             files: self
@@ -257,8 +268,8 @@ pub(crate) struct FilesInputs {
     /// Whether the Panel is wide enough for the tree beside the editor.
     beside: bool,
     doors: Doors,
-    /// The Panel's row, which the file tabs are stops of.
-    focus: Rc<PanelFocus>,
+    /// The handle of each file tab's stop in the Panel's row, by its file.
+    stops: HashMap<PathBuf, FocusHandle>,
     /// The diffs read, for `Show changes` on a file the last read lists.
     changes: Entity<ChangesView>,
 }
@@ -488,9 +499,20 @@ impl CockpitView {
             thread,
             beside: self.files_tree_beside(cx),
             doors: self.doors(),
-            focus: self.panel.focus.clone(),
+            stops: self.panel.focus.handles(|control| match control {
+                PanelControl::FileTab(path) => Some(path.clone()),
+                _ => None,
+            }),
             changes: self.changes.clone(),
         })
+    }
+
+    /// `thread`'s file tabs, as Files declares them, enter the Panel's row
+    /// after the head's stops, before Files draws them.
+    pub(in crate::cockpit) fn register_files_stops(&self, thread: ThreadKey, cx: &mut Context<Self>) {
+        for (path, semantics) in self.files.read(cx).tab_stops(thread) {
+            self.panel.focus.register(PanelControl::FileTab(path), semantics, cx);
+        }
     }
 
     #[cfg(test)]
@@ -921,6 +943,14 @@ impl FilesView {
         cx.notify();
     }
 
+    /// `thread`'s file tabs as stops of the Panel's row, in the order they
+    /// are drawn: each tab's file and what its stop says of itself.
+    pub(in crate::cockpit) fn tab_stops(&self, thread: ThreadKey) -> Vec<(PathBuf, Semantics)> {
+        self.files_ref(thread).map_or_else(Vec::new, |files| {
+            files.stops().map(|(path, semantics)| (path.to_path_buf(), semantics)).collect()
+        })
+    }
+
     pub(in crate::cockpit) fn tab_count(&self, thread: ThreadKey) -> usize {
         self.files_ref(thread).map_or(0, |files| files.tabs.len())
     }
@@ -1295,18 +1325,17 @@ impl FilesView {
         use theme::*;
         let thread = inputs.thread;
         files.tab_scroll.settle(cx);
-        let tabs = files.tabs.iter().enumerate().map(|(at, tab)| {
+        let tabs = files.tabs.iter().zip(files.stops()).enumerate().map(|(at, (tab, (_, semantics)))| {
             let active = files.active == Some(at);
             let dirty = matches!(&tab.body, TabBody::Code(editor) if editor.read(cx).is_dirty());
-            let name = tab
-                .path
-                .file_name()
-                .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
             let id = SharedString::from(format!("files-tab-{at}"));
-            let semantics = Semantics::tab(name.clone(), active);
-            let handle = inputs.focus.register(PanelControl::FileTab(tab.path.clone()), semantics.clone(), cx);
-            focusable(div().id(id.clone()), &handle, &semantics)
-                .debug_selector(move || id.to_string())
+            // A tab the Panel gave no stop is still drawn, off the row.
+            let face = div().id(id.clone());
+            let face = match inputs.stops.get(&tab.path) {
+                Some(handle) => focusable(face, handle, &semantics),
+                None => face,
+            };
+            face.debug_selector(move || id.to_string())
                 .flex()
                 .flex_shrink_0()
                 .items_center()
@@ -1322,7 +1351,7 @@ impl FilesView {
                 .when(tab.preview, |tab| tab.italic())
                 .cursor_pointer()
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| view.select_tab(thread, at, cx)))
-                .child(div().min_w_0().truncate().child(SharedString::from(name)))
+                .child(div().min_w_0().truncate().child(semantics.name.clone()))
                 .child(
                     icon_button(
                         format!("files-tab-close-{at}"),

@@ -4,8 +4,7 @@
 //! through a `Source` (`ferrite_ui::source`) and says what the operator
 //! asks as an event (ADR 0041). Nothing here names the Cockpit, so an edit
 //! to one builds and tests without it. Files itself is still the
-//! Cockpit's: it registers its tab stops in the Panel's focus row as it
-//! draws (ADR 0041's 2026-11-25 amendment).
+//! Cockpit's.
 
 pub mod changes;
 pub mod remote_files;

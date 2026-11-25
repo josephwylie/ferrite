@@ -8,8 +8,8 @@
 //! its trees and editors in views of their own (`TerminalsView`,
 //! `ChangesView`, `FilesView`, ADR 0041). The first two are
 //! `ferrite-tools`', and `changes` and `terminal` here are the window's
-//! side of them; Files is the Cockpit's, as it registers its tab stops in
-//! the Panel's `PanelFocus` while it draws.
+//! side of them; Files is still the Cockpit's. Its file tabs are stops of
+//! the Panel's row, which it declares and the root registers.
 
 use std::collections::HashSet;
 

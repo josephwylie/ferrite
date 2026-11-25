@@ -257,6 +257,58 @@ fn f6_returns_to_the_file_tab_it_left_after_one_before_it_closes(cx: &mut TestAp
     assert_eq!(keyboard(cx).as_deref(), Some("b.rs"), "the file it left, not its place");
 }
 
+/// The file tabs are the Panel row's last stops, after the head's, each
+/// named for its file and selected while it shows; the arrows cross from
+/// the head onto them and back, and another Surface takes them out of the
+/// row.
+#[gpui::test]
+fn the_file_tabs_follow_the_heads_stops_in_the_row(cx: &mut TestAppContext) {
+    use crate::cockpit::panel::{PanelControl, Semantics};
+    let (view, thread, checkout, cx) = files_window("files-stops", cx);
+    let (a, b) = (checkout.join("a.rs"), checkout.join("b.rs"));
+    for file in [&a, &b] {
+        std::fs::write(file, "x\n").unwrap();
+        open(&view, thread, file, true, cx);
+    }
+    let row = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, _| view.panel.focus.drawn());
+    let focused = |cx: &mut gpui::VisualTestContext| super::panel_focus::focused_control(&view, cx);
+    let head = vec![
+        PanelControl::Tab(SurfaceId::Overview),
+        PanelControl::Tab(SurfaceId::Files),
+        PanelControl::Plus,
+        PanelControl::Maximize,
+    ];
+    let controls = |row: &[(PanelControl, Semantics)]| row.iter().map(|(control, _)| control.clone()).collect::<Vec<_>>();
+    let drawn = row(cx);
+    assert_eq!(
+        controls(&drawn),
+        [head.clone(), vec![PanelControl::FileTab(a.clone()), PanelControl::FileTab(b.clone())]].concat(),
+        "the file tabs follow the head's stops, in tab order"
+    );
+    assert_eq!(drawn[4].1, Semantics::tab("a.rs", false));
+    assert_eq!(drawn[5].1, Semantics::tab("b.rs", true), "the shown file is the selected stop");
+
+    super::panel_focus::press("f6", cx);
+    assert_eq!(focused(cx), Some(PanelControl::Tab(SurfaceId::Files)), "F6 arrives at the shown Surface");
+    super::panel_focus::press("end", cx);
+    assert_eq!(focused(cx), Some(PanelControl::FileTab(b.clone())), "the last file is the row's end");
+    super::panel_focus::press("left left", cx);
+    assert_eq!(focused(cx), Some(PanelControl::Maximize), "the arrows cross back onto the head");
+    super::panel_focus::press("right", cx);
+    assert_eq!(focused(cx), Some(PanelControl::FileTab(a.clone())));
+    super::panel_focus::activate("enter", cx);
+    assert_eq!(view.read_with(cx, |view, cx| view.files.read(cx).active_path(thread)), Some(a.clone()));
+    let drawn = row(cx);
+    assert_eq!(drawn[4].1, Semantics::tab("a.rs", true), "⏎ shows a.rs, and its stop says so");
+    assert_eq!(drawn[5].1, Semantics::tab("b.rs", false));
+    assert_eq!(focused(cx), Some(PanelControl::FileTab(a.clone())), "and keeps the keyboard");
+
+    super::panel_focus::press("home", cx);
+    super::panel_focus::activate("enter", cx);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Overview));
+    assert_eq!(controls(&row(cx)), head, "another Surface draws no file tabs");
+}
+
 #[gpui::test]
 fn twenty_tabs_at_a_narrow_width_are_all_reachable(cx: &mut TestAppContext) {
     use crate::cockpit::panel::PanelControl;

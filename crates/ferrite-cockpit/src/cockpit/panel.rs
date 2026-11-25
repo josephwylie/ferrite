@@ -874,7 +874,10 @@ impl CockpitView {
                     .into_any_element()
             }
             Some(SurfaceId::File(_) | SurfaceId::Browser) => padded(self.panel_preview(owner, cx)),
-            Some(SurfaceId::Files) => self.files.clone().into_any_element(),
+            Some(SurfaceId::Files) => {
+                self.register_files_stops(thread, cx);
+                self.files.clone().into_any_element()
+            }
             Some(SurfaceId::Changes) => filled(self.changes_pane(ferrite_tools::changes::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(_)) => filled(self.terminals.clone().into_any_element()),
             Some(SurfaceId::SideChat(_)) => filled(self.side_chat.clone().into_any_element()),

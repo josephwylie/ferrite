@@ -24,6 +24,7 @@ mod scrollbar;
 pub use scrollbar::painted_thumb_in;
 pub mod sheet;
 pub mod source;
+pub mod stop;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod theme;
