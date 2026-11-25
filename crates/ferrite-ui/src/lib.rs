@@ -5,6 +5,7 @@ pub mod controls;
 #[cfg(any(test, feature = "test-support"))]
 pub mod face;
 pub mod field;
+pub mod form;
 pub mod frame;
 pub mod icons;
 pub mod keymap;

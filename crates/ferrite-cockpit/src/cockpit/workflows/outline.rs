@@ -122,7 +122,7 @@ impl WorkflowsView {
                 })),
             )
             .child(
-                crate::project_editor::primary_button(
+                ferrite_ui::form::primary_button(
                     "workflow-save",
                     if unsaved { "Save" } else { "Saved" },
                     save_disabled,

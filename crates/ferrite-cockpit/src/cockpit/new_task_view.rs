@@ -149,7 +149,7 @@ impl NewTaskView {
         let focused = self.instructions.read(cx).focus_handle(cx).is_focused(window);
         let pr_focused = self.pr.read(cx).focus_handle(cx).is_focused(window);
         let process_trigger = Trigger::default();
-        let mut body = crate::project_editor::body()
+        let mut body = ferrite_ui::form::body()
             .child(
                 div()
                     .id("new-task-instructions")
@@ -220,24 +220,24 @@ impl NewTaskView {
                     ),
             );
         if let Some(error) = self.error.clone() {
-            body = body.child(crate::project_editor::error_line(error));
+            body = body.child(ferrite_ui::form::error_line(error));
         }
-        let start = crate::project_editor::primary_button("new-task-start", "Start", false, cx)
+        let start = ferrite_ui::form::primary_button("new-task-start", "Start", false, cx)
             .debug_selector(|| "new-task-start".into())
             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 cx.emit(NewTaskEvent::Start);
             }));
-        let card = crate::project_editor::card(f32::from(window.viewport_size().height))
+        let card = ferrite_ui::form::card(f32::from(window.viewport_size().height))
             .id("new-task-card")
             .debug_selector(|| "new-task-card".into())
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
-            .child(crate::project_editor::head("New task".into(), close))
+            .child(ferrite_ui::form::head("New task".into(), close))
             .child(body)
-            .child(crate::project_editor::footer(
+            .child(ferrite_ui::form::footer(
                 div().child(
                     ferrite_ui::components::text_ui()
                         .text_color(gpui::rgb(ferrite_ui::theme::INK_SUBTLE))

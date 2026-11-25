@@ -930,7 +930,7 @@ impl StartsView {
                             .flex()
                             .gap(px(SPACE_2))
                             .child(
-                                crate::project_editor::primary_button(
+                                ferrite_ui::form::primary_button(
                                     "backlog-new-only",
                                     "New ones only",
                                     false,

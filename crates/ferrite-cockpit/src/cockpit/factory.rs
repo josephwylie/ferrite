@@ -693,7 +693,7 @@ impl FactoryView {
         if task.status.deletable() && !archived {
             let task = id.clone();
             actions = actions.child(
-                crate::project_editor::destructive_button("task-delete", "Delete", false, cx)
+                ferrite_ui::form::destructive_button("task-delete", "Delete", false, cx)
                     .debug_selector(|| "task-delete".into())
                     .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                         cx.emit(FactoryEvent::Command(TaskAction::Delete { task: task.clone() }))

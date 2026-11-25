@@ -426,7 +426,7 @@ impl WorkflowsView {
             )
             .child(
                 div().pt(px(SPACE_2)).child(
-                    crate::project_editor::destructive_button(
+                    ferrite_ui::form::destructive_button(
                         "inspector-delete",
                         "Delete agent",
                         false,

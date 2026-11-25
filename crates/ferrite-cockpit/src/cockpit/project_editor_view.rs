@@ -267,13 +267,13 @@ impl ProjectEditorView {
                 cx.emit(ProjectEditorEvent::Closed);
             },
         ));
-        let mut body = project_editor::body()
+        let mut body = ferrite_ui::form::body()
             .track_scroll(&self.scroll)
             .child(ferrite_ui::field::name_field(
                 self.name.clone(),
                 self.name.read(cx).focus_handle(cx).is_focused(window),
             ))
-            .child(project_editor::section_label(
+            .child(ferrite_ui::form::section_label(
                 "Directories",
                 "The first is the main directory",
             ));
@@ -285,7 +285,7 @@ impl ProjectEditorView {
             // real yet, so any row can go.
             if editing.is_none() || index > 0 {
                 actions = actions.child(
-                    project_editor::destructive_button(
+                    ferrite_ui::form::destructive_button(
                         ("remove-project-directory", index),
                         "Remove",
                         false,
@@ -312,7 +312,7 @@ impl ProjectEditorView {
                 actions,
             ));
         }
-        body = body.child(project_editor::directory_list(rows));
+        body = body.child(ferrite_ui::form::directory_list(rows));
         // On a machine a browser of its folders stands in for the folder
         // dialog, which could only browse this computer (ADR 0026), and the
         // control under it adds the folder it shows.
@@ -354,7 +354,7 @@ impl ProjectEditorView {
             left = left.child(
                 // The verb stays the verb while it cannot run; why it cannot
                 // is the tooltip's to say.
-                project_editor::destructive_button("remove-project", "Remove project", in_use, cx)
+                ferrite_ui::form::destructive_button("remove-project", "Remove project", in_use, cx)
                     .debug_selector(|| "remove-project".into())
                     .when(in_use, |button| {
                         button.tip("Park or move its threads first")
@@ -367,12 +367,13 @@ impl ProjectEditorView {
         }
         let ready = self.ready();
         let right = div().flex().items_center().child(
-            project_editor::primary_button(
+            ferrite_ui::form::primary_button(
                 "confirm-project",
                 if editing.is_some() { "Done" } else { "Create" },
                 !ready,
                 cx,
             )
+            .debug_selector(|| "project-confirm".into())
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 if view.ready() {
@@ -380,17 +381,17 @@ impl ProjectEditorView {
                 }
             })),
         );
-        let footer = project_editor::footer(left, right);
+        let footer = ferrite_ui::form::footer(left, right);
         if let Some(error) = self.error.clone() {
-            body = body.child(project_editor::error_line(error));
+            body = body.child(ferrite_ui::form::error_line(error));
         }
 
         let band_top = self.band.as_ref().and_then(Band::top);
         let viewport_h = f32::from(window.viewport_size().height);
         let card = if self.remote.is_some() {
-            project_editor::steady_card_over(viewport_h, band_top)
+            ferrite_ui::form::steady_card_over(viewport_h, band_top)
         } else {
-            project_editor::card_over(viewport_h, band_top)
+            ferrite_ui::form::card_over(viewport_h, band_top)
         };
         let card = card
             .id("project-editor-card")
@@ -400,7 +401,7 @@ impl ProjectEditorView {
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
-            .child(project_editor::head(title, close))
+            .child(ferrite_ui::form::head(title, close))
             .child(
                 // The body scrolls under an overlay bar, never a gutter.
                 div()

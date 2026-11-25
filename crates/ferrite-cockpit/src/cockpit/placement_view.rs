@@ -769,7 +769,7 @@ impl PlacementView {
         };
         // The body fills the card, the browser's folders taking what the
         // rest leaves.
-        let mut body = project_editor::body()
+        let mut body = ferrite_ui::form::body()
             .flex_grow(1.)
             .debug_selector(|| "placement-body".into())
             .track_scroll(&self.scroll)
@@ -793,9 +793,9 @@ impl PlacementView {
         if let Stage::Done { skipped } = &self.stage {
             if !skipped.is_empty() {
                 body = body
-                    .child(project_editor::section_label("Not copied", "Left as it was"))
+                    .child(ferrite_ui::form::section_label("Not copied", "Left as it was"))
                     .child(
-                        project_editor::directory_list(
+                        ferrite_ui::form::directory_list(
                             skipped.iter().map(|path| note(path.clone())),
                         )
                         .debug_selector(|| "placement-skipped".into()),
@@ -823,7 +823,7 @@ impl PlacementView {
             Stage::Failed { .. } => ("Retry", "placement-retry", unready),
             Stage::Choosing | Stage::Cancelled => ("Copy", "placement-copy", unready),
         };
-        let primary = project_editor::primary_button("placement-confirm", verb, disabled, cx)
+        let primary = ferrite_ui::form::primary_button("placement-confirm", verb, disabled, cx)
             .debug_selector(move || selector.into())
             .on_click(cx.listener(|sheet: &mut Self, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -861,12 +861,12 @@ impl PlacementView {
             })
             .child(primary);
         let band_top = self.band.as_ref().and_then(Band::top);
-        let card = project_editor::steady_card_over(f32::from(window.viewport_size().height), band_top)
+        let card = ferrite_ui::form::steady_card_over(f32::from(window.viewport_size().height), band_top)
             .id("placement-card")
             .debug_selector(|| "placement-card".into())
             .track_focus(&self.focus)
             .occlude()
-            .child(project_editor::head(
+            .child(ferrite_ui::form::head(
                 format!("Copy {} to {machine}", self.placing.title).into(),
                 close,
             ))
@@ -884,7 +884,7 @@ impl PlacementView {
                         &self.scroll,
                     )),
             )
-            .child(project_editor::footer(footer_left, footer_right));
+            .child(ferrite_ui::form::footer(footer_left, footer_right));
         Some(ferrite_ui::sheet::Drawn { card, above: None })
     }
 }

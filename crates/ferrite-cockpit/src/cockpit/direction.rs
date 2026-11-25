@@ -142,7 +142,7 @@ impl DirectionView {
 
         if task.status == Status::NeedsHuman {
             if let Some(question) = &task.oversight.question {
-                let send = crate::project_editor::primary_button(
+                let send = ferrite_ui::form::primary_button(
                     "task-answer-send",
                     "Send answer",
                     false,
@@ -291,7 +291,7 @@ impl DirectionView {
                 ready = ready.child(meta("Evidence")).child(evidence);
             }
             let approve =
-                crate::project_editor::primary_button("task-approve", "Approve", false, cx)
+                ferrite_ui::form::primary_button("task-approve", "Approve", false, cx)
                     .debug_selector(|| "task-approve".into())
                     .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();

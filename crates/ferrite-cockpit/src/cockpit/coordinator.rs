@@ -253,7 +253,7 @@ impl CoordinatorView {
         use ferrite_ui::theme::*;
         let field = self.field.clone();
         let focused = field.read(cx).focus_handle(cx).is_focused(window);
-        let send = crate::project_editor::primary_button("coordinator-send", "Send", false, cx)
+        let send = ferrite_ui::form::primary_button("coordinator-send", "Send", false, cx)
             .debug_selector(|| "coordinator-send".into())
             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -377,7 +377,7 @@ impl CoordinatorView {
                 let dismiss_key = format!("{key}-dismiss");
                 actions = actions
                     .child(
-                        crate::project_editor::primary_button(
+                        ferrite_ui::form::primary_button(
                             SharedString::from(accept_key.clone()),
                             card.action,
                             false,

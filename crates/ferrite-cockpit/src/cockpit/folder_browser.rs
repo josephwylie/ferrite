@@ -537,7 +537,7 @@ impl FolderBrowser {
                 }
             };
         let line = if unread {
-            project_editor::error_line(text.clone())
+            ferrite_ui::form::error_line(text.clone())
         } else {
             ferrite_ui::components::text_ui()
                 .text_color(gpui::rgb(ferrite_ui::theme::INK_SUBTLE))

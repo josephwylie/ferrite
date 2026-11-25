@@ -97,11 +97,11 @@ impl PlacementView {
         let mut section = div().flex().flex_col().flex_shrink_0().gap(px(HALF_ROW));
         if !rows.is_empty() {
             section = section
-                .child(project_editor::section_label(
+                .child(ferrite_ui::form::section_label(
                     "Ignored by git",
                     "Copied only when ticked",
                 ))
-                .child(project_editor::directory_list(rows));
+                .child(ferrite_ui::form::directory_list(rows));
         }
         if !self.worktrees.is_empty() {
             section = section.child(

@@ -284,7 +284,7 @@ impl DirectView {
                 let mut body = div().flex().flex_col().gap(px(SPACE_3)).child(input);
                 if missing {
                     body = body.child(
-                        crate::project_editor::error_line(
+                        ferrite_ui::form::error_line(
                             "Write the feedback the agent works from.".into(),
                         )
                         .debug_selector(|| "rework-missing".into()),
@@ -298,7 +298,7 @@ impl DirectView {
                          task only.",
                         read(&task, &definition.approval.rework_to)
                     )));
-                let send = crate::project_editor::primary_button(
+                let send = ferrite_ui::form::primary_button(
                     "rework-send",
                     "Send for rework",
                     false,
@@ -352,7 +352,7 @@ impl DirectView {
                     ));
                 if tried && target.is_none() {
                     body = body.child(
-                        crate::project_editor::error_line(
+                        ferrite_ui::form::error_line(
                             "Choose the agent that takes the task.".into(),
                         )
                         .debug_selector(|| "redirect-missing".into()),
@@ -426,7 +426,7 @@ impl DirectView {
                         cx,
                     ))
                     .child(input);
-                let apply = crate::project_editor::primary_button(
+                let apply = ferrite_ui::form::primary_button(
                     "redirect-apply",
                     "Apply to this task",
                     false,
@@ -450,16 +450,16 @@ impl DirectView {
             Choice::Rework(_) => "rework-sheet",
             Choice::Redirect(_) => "redirect-sheet",
         };
-        let card = crate::project_editor::card(f32::from(window.viewport_size().height))
+        let card = ferrite_ui::form::card(f32::from(window.viewport_size().height))
             .id(key)
             .debug_selector(move || key.to_string())
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
-            .child(crate::project_editor::head(title.into(), close))
-            .child(crate::project_editor::body().child(meta(intro)).child(body))
-            .child(crate::project_editor::footer(
+            .child(ferrite_ui::form::head(title.into(), close))
+            .child(ferrite_ui::form::body().child(meta(intro)).child(body))
+            .child(ferrite_ui::form::footer(
                 div(),
                 div()
                     .flex()
