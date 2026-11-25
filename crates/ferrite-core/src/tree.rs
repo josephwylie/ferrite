@@ -29,7 +29,7 @@ pub use scan::{scan, scan_watched};
 pub(crate) use links::link as make_link;
 pub(crate) use scan::{millis, mode, setup as scan_setup, Text};
 pub(crate) use serve::{inside, permissions, set_mode, MOST_WRITES};
-pub use serve::Session;
+pub use serve::{Session, HOLD_QUIET, LAPSED};
 
 /// What a tree holds, by path: relative, `/`-separated, never absolute and
 /// never through `..`.
@@ -104,6 +104,14 @@ impl Root {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Request {
+    /// Hold the Setup root's home for this connection's sync (ADR 0050):
+    /// no other sync or install writes it, in any process, until the
+    /// connection goes or asks nothing for [`HOLD_QUIET`]. Replied
+    /// `done`, or `busy` while another holds it. Every other op on the
+    /// Setup root is refused on a connection that does not hold it.
+    Hold {
+        root: Root,
+    },
     /// Replied `scanned`, a page at a time: the entries and problems after
     /// `after`, in path order. A root that is not there yet holds nothing.
     Scan {
@@ -181,6 +189,8 @@ pub enum Reply {
     Done,
     /// It was already so: nothing was done.
     Unchanged,
+    /// Another sync or install holds the root: nothing was done.
+    Busy,
     /// This side did not make the entry, and why: the sender leaves it as
     /// this side has it and goes on.
     Unmade(Refusal),

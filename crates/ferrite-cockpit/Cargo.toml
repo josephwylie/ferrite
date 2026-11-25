@@ -42,6 +42,8 @@ browser-smoke = ["gpui/test-support", "dep:gpui-reference-platform", "ferrite-pa
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
 ferrite-client = { path = "../ferrite-client" }
+# A busy Setup sync's retry, by chance (`cockpit::setup_sync`).
+rand = "0.8"
 # The demo's scripted Sessions and Store, and the worlds the headless
 # frames and the visual reference build: never a released app's.
 ferrite-engine = { path = "../ferrite-engine", optional = true }
