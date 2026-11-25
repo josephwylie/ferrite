@@ -58,6 +58,9 @@ jobs:
         run: |
           python -m unittest discover -s scripts -p test_ci_scope.py
           python -m unittest discover -s scripts -p test_check_raw_presses.py
+      - name: Test the CI guards
+        working-directory: scripts
+        run: python -m unittest test_junit_summary test_quarantine
       - id: scope
         name: Check architecture and select verification
         env:
@@ -111,10 +114,22 @@ jobs:
         run: |
           args=()
           for package in $PACKAGES; do args+=(-p "$package"); done
+          quarantined=$(python3 scripts/quarantine.py)
           # A handful of tests fail about one run in two on a loaded runner.
           # A test that passes on a retry is listed as flaky and does not
           # fail the job; one that fails three times does.
-          cargo nextest run "${args[@]}" --locked --no-fail-fast --retries 2 --status-level all --final-status-level flaky
+          cargo nextest run "${args[@]}" --profile ci -E "not ($quarantined)" --locked --no-fail-fast --retries 2 --status-level all --final-status-level flaky
+      - name: Test the quarantined tests, which never fail the job
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          PACKAGES: ${{ needs.scope.outputs.packages }}
+        run: |
+          quarantined=$(python3 scripts/quarantine.py)
+          if [ "$quarantined" = 'none()' ]; then echo 'No test is quarantined.'; exit 0; fi
+          args=()
+          for package in $PACKAGES; do args+=(-p "$package"); done
+          cargo nextest run "${args[@]}" --profile quarantine -E "$quarantined" --locked --no-fail-fast --no-tests=pass
       # A test program's temporary files live in /tmp/ferrite-tests/<pid>,
       # removed as it exits (crates/ferrite-core/src/test_temp.rs). One here
       # was written outside it: a test program without that file.
@@ -122,6 +137,17 @@ jobs:
         run: |
           left=$(ls -d "$TMPDIR"/ferrite-* /tmp/ferrite-* 2>/dev/null | grep -vx /tmp/ferrite-tests || true)
           if [ -n "$left" ]; then echo "$left"; exit 1; fi
+      # The failed, flaky and slowest tests, in the run's summary. Each run
+      # attempt keeps its own reports, so a rerun does not replace the first.
+      - name: Summarize the test reports
+        if: ${{ !cancelled() }}
+        run: python3 scripts/junit_summary.py target/nextest/*/junit.xml >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-macos-tests-${{ github.run_attempt }}
+          path: target/nextest/*/junit.xml
 
   # Its own run: gpui-pre-macos's tests need its test-support feature named
   # for them. The app's tests get it through the headless platform. Only
@@ -148,7 +174,28 @@ jobs:
         run: |
           args=()
           for package in $VENDORED; do args+=(-p "$package"); done
-          cargo nextest run "${args[@]}" --features gpui-pre-macos/test-support --locked --no-fail-fast --retries 2 --final-status-level flaky
+          quarantined=$(python3 scripts/quarantine.py)
+          cargo nextest run "${args[@]}" --features gpui-pre-macos/test-support --profile ci -E "not ($quarantined)" --locked --no-fail-fast --retries 2 --final-status-level flaky
+      - name: Test the quarantined tests, which never fail the job
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          VENDORED: ${{ needs.scope.outputs.vendored }}
+        run: |
+          quarantined=$(python3 scripts/quarantine.py)
+          if [ "$quarantined" = 'none()' ]; then echo 'No test is quarantined.'; exit 0; fi
+          args=()
+          for package in $VENDORED; do args+=(-p "$package"); done
+          cargo nextest run "${args[@]}" --features gpui-pre-macos/test-support --profile quarantine -E "$quarantined" --locked --no-fail-fast --no-tests=pass
+      - name: Summarize the test reports
+        if: ${{ !cancelled() }}
+        run: python3 scripts/junit_summary.py target/nextest/*/junit.xml >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-macos-vendored-${{ github.run_attempt }}
+          path: target/nextest/*/junit.xml
 
   macos-checks:
     name: macOS checks
@@ -280,9 +327,34 @@ jobs:
         run: |
           args=()
           for package in $PACKAGES; do args+=(-p "$package"); done
+          quarantined=$(python scripts/quarantine.py)
           # Retries as on macOS above: this runner fails a different
           # timing-dependent test on most runs.
-          cargo nextest run "${args[@]}" --locked --no-fail-fast --retries 2 --status-level all --final-status-level flaky
+          cargo nextest run "${args[@]}" --profile ci -E "not ($quarantined)" --locked --no-fail-fast --retries 2 --status-level all --final-status-level flaky
+      - name: Test the quarantined tests, which never fail the job
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        shell: bash
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
+        env:
+          PACKAGES: ${{ needs.scope.outputs.packages }}
+        run: |
+          quarantined=$(python scripts/quarantine.py)
+          if [ "$quarantined" = 'none()' ]; then echo 'No test is quarantined.'; exit 0; fi
+          args=()
+          for package in $PACKAGES; do args+=(-p "$package"); done
+          cargo nextest run "${args[@]}" --profile quarantine -E "$quarantined" --locked --no-fail-fast --no-tests=pass
+      - name: Summarize the test reports
+        if: ${{ !cancelled() }}
+        shell: bash
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
+        run: python scripts/junit_summary.py target/nextest/*/junit.xml >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-windows-${{ github.run_attempt }}
+          path: ${{ env.DEV_DRIVE_WORKSPACE }}/target/nextest/*/junit.xml
       - name: Build app
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: cargo build -p ferrite --locked
