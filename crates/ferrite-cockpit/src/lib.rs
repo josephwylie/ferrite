@@ -12,14 +12,11 @@ pub mod cockpit_window;
 pub mod demo;
 mod facts;
 pub mod ferrite_update;
-mod float;
 #[cfg(any(test, feature = "headless"))]
 mod hands;
 #[cfg(feature = "headless")]
 pub mod headless;
 pub mod machines;
-mod nav;
-mod notifications;
 pub mod palette;
 mod pr;
 pub mod shortcuts;
@@ -55,8 +52,6 @@ mod tests {
                 "cockpit/panel/preview.rs",
                 include_str!("cockpit/panel/preview.rs"),
             ),
-            ("nav.rs", include_str!("nav.rs")),
-            ("notifications.rs", include_str!("notifications.rs")),
         ]);
     }
 }

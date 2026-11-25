@@ -256,7 +256,7 @@ impl<K: Copy + Eq + Hash, G: Clone> ListMotion<K, G> {
     }
 
     /// Where `key` draws from its laid-out top at `now`, while it travels.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn offset(&self, key: K, now: Instant) -> Option<f32> {
         self.moving
             .get(&key)
@@ -265,7 +265,7 @@ impl<K: Copy + Eq + Hash, G: Clone> ListMotion<K, G> {
     }
 
     /// How many rows that left are still fading as ghosts at `now`.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn ghost_count(&self, now: Instant) -> usize {
         self.ghosts.iter().filter(|ghost| ghost.running(now)).count()
     }

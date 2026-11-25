@@ -1,401 +1,235 @@
-//! The nav as a view of its own (ADR 0041). It owns what only the nav
-//! reads: its list's motion and folds, its scroll, its keyboard and
-//! cursor, its search, the cards picked or swept, the undo notice, the
-//! Snooze field, and when each Thread came into its section. It reads
-//! what it draws (`NavInputs`) itself, as the Cockpit notifies or the
-//! client's model says something `Arrived` (`look`), and its render draws only that, so it redraws
-//! only when what it draws moved. What the operator asks of the window it
-//! says as a `NavEvent`, which the Cockpit answers once the nav's own
-//! update has ended.
+//! The nav's side in the window: what the nav lists (`listed_threads`)
+//! and draws from (`nav_inputs`), the model a row's Thread runs
+//! (`row_model`), where its menu buttons hang their menus, what its
+//! presses ask (`on_nav_event`), and the nav's notice, shelves and Snooze
+//! rows. The nav itself, its list, keys, search, picks, undo and Snooze
+//! field, is `ferrite_nav::view`'s (ADR 0041).
 
-use super::nav_chrome::{NavUndo, UndoAct};
-use super::nav_pick::ParkSweep;
-use super::machines::{MachineNotice, RECONNECT_GRACE};
+use super::menu_button::{Door, Edge};
 use super::*;
-use crate::nav::{NavCursor, Shelf};
-use ferrite_core::transcript::RateLimits;
-use ferrite_pane::link_target::Open;
-use ferrite_ui::motion::Reveal;
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
-use gpui::{App, WeakEntity};
+use ferrite_core::provider::Provider;
+use ferrite_core::snooze::Preset;
+use ferrite_nav::view::{
+    MenuAt, NavAsked, NavEvent, NavInputs, NavLook, NavMenu, NavSources, NavView,
+    OpenThread, UndoAct,
+};
+use ferrite_ui::source::Source;
+use gpui::App;
 use std::rc::Rc;
 
-pub(crate) struct NavView {
-    pub(super) cockpit: WeakEntity<CockpitView>,
-    /// The client's model, which the nav reads what it lists from.
-    model: Entity<Cockpit>,
-    /// The list's motion (`nav::flip`), shared with its elements.
-    pub(super) motion: nav_list::NavMotion,
-    /// The next frame's list stands still rather than sliding: a shelf
-    /// folding or the column sliding moves its rows already.
-    pub(super) snap: Cell<bool>,
-    /// Each shelf's body as far open as it is on screen.
-    pub(super) shelf_folds: RefCell<Vec<(Shelf, Reveal)>>,
-    /// The window's size the list was last drawn at: a resize moves rows
-    /// without the list's motion.
-    pub(super) viewport: Cell<gpui::Size<Pixels>>,
-    /// How many of the Parked shelf's rows it draws open (`Show more`).
-    pub(super) parked_shown: usize,
-    /// The list's scroll, shared with the hand-drawn scrollbar beside it:
-    /// gpui 0.2.2 paints none of its own.
-    pub(super) scroll: ScrollHandle,
-    /// The list's keyboard (⌘I, ⌘⇧E, `nav_keys`): Esc gives it back to the
-    /// board.
-    pub(super) focus: FocusHandle,
-    /// Where the list's keyboard stands (`nav_keys`), while it has one.
-    pub(super) cursor: Option<NavCursor>,
-    /// ⌘I or ⌘⇧E handed the list the keys, and it has not let go: only
-    /// then does the Cockpit's focus rule leave them on the list.
-    pub(super) keys_held: bool,
-    /// Clears the cursor when the list lets go of the keys.
-    pub(super) blur: Option<gpui::Subscription>,
-    /// Set by a cursor move until its row has scrolled into view
-    /// (`cursor_reveal`).
-    pub(super) reveal: Rc<Cell<bool>>,
-    /// Where the cursor's row was last drawn: ⇧F10 opens its menu there.
-    pub(super) cursor_bounds: Rc<Cell<Option<gpui::Bounds<Pixels>>>>,
-    /// The Thread whose card last scrolled into view for being shown
-    /// (`shown_reveal`): a focus change scrolls the new one's.
-    pub(super) shown: Rc<Cell<Option<ThreadKey>>>,
-    /// The search field (`nav_chrome`), and the Thread its ↑/↓ stand on: a
-    /// Thread, not a place in the results, which live updates reorder.
-    pub(super) search: Entity<Composer>,
-    pub(super) search_pick: Cell<Option<ThreadKey>>,
-    /// The foot's undo notice: what the last Park or Snooze did, until it
-    /// fades.
-    pub(super) undo: Option<NavUndo>,
-    /// The cards ⌘- and ⇧-click picked (`nav_pick`), in picking order.
-    pub(super) picked: Vec<ThreadKey>,
-    /// A Park press held down and sweeping across cards.
-    pub(super) park_sweep: Option<ParkSweep>,
-    /// The Thread cards in the order the list last drew them: what a
-    /// ⇧-click and a sweep span.
-    pub(super) drawn: RefCell<Vec<ThreadKey>>,
-    /// The pointer is over the nav's column: its scrollbar shows.
-    pub(super) hovered: bool,
-    /// A Thread's Custom… snooze field, over the list (`snooze`).
-    pub(super) snooze: Option<snooze::Editor>,
-    /// What the nav draws, as it last read it (`look`). Its render reads
-    /// nothing else, so only a change here redraws it.
-    inputs: Option<NavInputs>,
-    /// When each listed Thread came into its section, which the list and
-    /// the Working shelf order by. Only `look` writes it.
-    arrivals: nav::Arrivals,
-    /// The Projects the Factory door lists, as `look` last read them: its
-    /// menu's rows (`factory_rows`). The door draws only whether one needs
-    /// the operator, so a change here alone does not redraw the nav.
-    factories: Vec<ProjectKey>,
-    /// Since when each machine has been reached again, for its notice's
-    /// grace (`RECONNECT_GRACE`), and the look due once the first ends.
-    /// Only `look` writes them.
-    reconnecting: HashMap<ferrite_core::MachineId, std::time::Instant>,
-    grace: Option<gpui::Task<()>>,
-    /// The Cockpit's notify and the model's `Arrived`, each of which has
-    /// the nav look again.
-    watching: Vec<gpui::Subscription>,
-}
+/// What the last nav act has to say, drawn in the list as `nav-notice`.
+/// Its text is private: a problem the operator sees also reaches the log.
+#[derive(Default)]
+pub(super) struct Notice(Option<SharedString>);
 
-/// What the nav draws from, as it last read it.
-#[derive(Clone, PartialEq)]
-pub(crate) struct NavInputs {
-    pub state: nav::NavState,
-    /// The notice of each machine the window cannot reach, once it has
-    /// something to say.
-    pub machines: Vec<MachineNotice>,
-    pub inbox: Vec<NoticeRow>,
-    pub open_shelves: Vec<Shelf>,
-    pub width: f32,
-    /// The Thread the board shows, the empty board's too.
-    pub shown: Option<ThreadKey>,
-    pub notice: Option<SharedString>,
-    /// The Project the list is filtered to, by its title.
-    pub filtered: Option<SharedString>,
-    /// The Factory door, and whether one of its boards needs the operator;
-    /// none without a Project to show.
-    pub factory: Option<bool>,
-    /// The context menu standing, by what it is on.
-    pub menu: Option<MenuTarget>,
-    pub doors: menu_button::Doors,
-    pub open: HashMap<ThreadKey, OpenThread>,
-    pub rename: Option<(ThreadKey, Entity<Composer>)>,
-    pub limits: RateLimits,
-    pub free_disk: Option<u64>,
-    /// The update door's tip, while a release waits.
-    pub update: Option<SharedString>,
-}
+impl Notice {
+    /// Something went wrong: shown, and logged in the same words.
+    pub(super) fn problem(&mut self, text: impl Into<SharedString>) {
+        let text = text.into();
+        ferrite_core::log!("{text}");
+        self.0 = Some(text);
+    }
 
-/// An open Thread as its row's doors need it.
-#[derive(Clone, PartialEq)]
-pub(crate) struct OpenThread {
-    pub queued: bool,
-    pub snooze_until: Option<std::time::SystemTime>,
-}
+    /// Guidance on what the operator asked for, not a failure: shown only.
+    pub(super) fn hint(&mut self, text: impl Into<SharedString>) {
+        self.0 = Some(text.into());
+    }
 
-impl NavInputs {
-    pub(crate) fn shelf_open(&self, shelf: Shelf) -> bool {
-        self.open_shelves.contains(&shelf)
+    pub(super) fn clear(&mut self) {
+        self.0 = None;
+    }
+
+    pub(super) fn text(&self) -> Option<&SharedString> {
+        self.0.as_ref()
     }
 }
 
-/// Where a menu the nav asks for stands.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum MenuAt {
-    Point(gpui::Point<Pixels>),
-    /// Under a row, as ⇧F10 opens it.
-    Under(gpui::Bounds<Pixels>),
-}
-
-/// What the nav asks of the window.
-#[derive(Clone, Debug)]
-pub(crate) enum NavEvent {
-    /// A Thread row's press, or ⏎ on it: an open Thread takes the screen,
-    /// a parked one revives.
-    Open(ThreadKey),
-    /// A search result's press or ⏎: it opens, and then the search clears
-    /// and the keys go back to the board.
-    OpenResult(ThreadKey),
-    Notice(Verb),
-    Revive(ThreadKey),
-    Wake(ThreadKey),
-    Park(Vec<ThreadKey>),
-    Unpin(ThreadKey),
-    Rename(ThreadKey),
-    OpenPr(ThreadKey, Open),
-    Menu(MenuTarget, MenuAt),
-    /// A press on a menu button (`menu_button`).
-    Door(menu_button::Door),
-    SetShelfOpen(Shelf, bool),
-    Undo(UndoAct),
-    /// A machine's notice: sign in to it, in a terminal.
-    SignIn(ferrite_core::MachineId),
-    /// A machine's notice: reach it again now.
-    Reconnect(ferrite_core::MachineId),
-    /// The Snooze field's ⏎ on a time it read: snooze the Thread until
-    /// then, and answer the field (`snooze_answered`).
-    Snooze(ThreadKey, std::time::SystemTime),
-    AddProject,
-    Settings,
-    PullRequests,
-    Update,
-}
-
-impl EventEmitter<NavEvent> for NavView {}
-
-impl menu_button::MenuHost for NavView {
-    fn press_door(&mut self, door: menu_button::Door, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(NavEvent::Door(door));
-    }
-
-    fn tip<E: InteractiveElement>(element: E, text: SharedString) -> E {
-        use crate::nav::NavTooltip as _;
-        element.nav_tooltip(text)
+impl From<NavMenu> for MenuTarget {
+    fn from(menu: NavMenu) -> Self {
+        match menu {
+            NavMenu::Thread(thread) => MenuTarget::Thread(thread),
+            NavMenu::Snooze(thread) => MenuTarget::Snooze(thread),
+            NavMenu::Parked => MenuTarget::Parked,
+            NavMenu::PrLink(thread) => MenuTarget::PrLink(thread),
+            NavMenu::Filter => MenuTarget::NavFilter,
+            NavMenu::Factory => MenuTarget::NavFactory,
+        }
     }
 }
 
-impl NavView {
-    pub(super) fn new(
-        cockpit: WeakEntity<CockpitView>,
-        model: Entity<Cockpit>,
+/// The nav's menu, when `target` is on something of the nav's.
+fn nav_menu(target: MenuTarget) -> Option<NavMenu> {
+    Some(match target {
+        MenuTarget::Thread(thread) => NavMenu::Thread(thread),
+        MenuTarget::Snooze(thread) => NavMenu::Snooze(thread),
+        MenuTarget::Parked => NavMenu::Parked,
+        MenuTarget::PrLink(thread) => NavMenu::PrLink(thread),
+        MenuTarget::NavFilter => NavMenu::Filter,
+        MenuTarget::NavFactory => NavMenu::Factory,
+        _ => return None,
+    })
+}
+
+/// The nav's menu button for `menu`: the Filter menu hangs from its
+/// button's right edge, the Factory's and a row's Snooze from their left.
+fn nav_door(menu: NavMenu) -> Door {
+    let edge = match menu {
+        NavMenu::Filter => Edge::Right,
+        _ => Edge::Left,
+    };
+    Door::new(menu.into(), edge)
+}
+
+impl CockpitView {
+    /// The nav, reading the window through `listed_threads` and
+    /// `nav_inputs`, the model through `row_model`, and recording where
+    /// its menu buttons stand in the popup slot's `triggers`. Once the
+    /// Cockpit is made, it looks as the Cockpit notifies and as the model
+    /// says something `Arrived`.
+    pub(super) fn new_nav(
+        model: &Entity<Cockpit>,
+        triggers: popups::Triggers,
         cx: &mut Context<Self>,
-    ) -> Self {
-        // The Cockpit is still being made: the nav first looks once it is.
-        let nav = cx.weak_entity();
-        cx.defer(move |cx| {
-            nav.update(cx, |nav, cx| nav.watch(cx)).ok();
-        });
-        Self {
-            cockpit,
-            model,
-            motion: Default::default(),
-            snap: Cell::new(false),
-            shelf_folds: Default::default(),
-            viewport: Default::default(),
-            parked_shown: ferrite_ui::theme::NAV_PARKED_PAGE_FIRST,
-            scroll: ScrollHandle::new(),
-            focus: cx.focus_handle(),
-            cursor: None,
-            keys_held: false,
-            blur: None,
-            reveal: Default::default(),
-            cursor_bounds: Default::default(),
-            shown: Default::default(),
-            search: nav_chrome::search_line(cx),
-            search_pick: Default::default(),
-            undo: None,
-            picked: Vec::new(),
-            park_sweep: None,
-            drawn: Default::default(),
-            hovered: false,
-            snooze: None,
-            inputs: None,
-            arrivals: nav::Arrivals::default(),
-            factories: Vec::new(),
-            reconnecting: HashMap::new(),
-            grace: None,
-            watching: Vec::new(),
-        }
-    }
-
-    fn watch(&mut self, cx: &mut Context<Self>) {
-        let Some(cockpit) = self.cockpit.upgrade() else {
-            return;
+    ) -> Entity<NavView> {
+        let root = cx.entity();
+        let sources = NavSources {
+            listed: Source::of(&root, |root: &Self, _: &(), cx| {
+                Some(listed_threads(root, root.cockpit.read(cx), cx))
+            }),
+            look: Source::of(&root, |root: &Self, asked: &NavAsked, cx| {
+                let model = root.cockpit.read(cx);
+                let (inputs, factories) = nav_inputs(root, model, &asked.listed, &asked.arrivals, cx);
+                Some(NavLook { inputs, factories })
+            }),
+            model_name: Source::of(model, |model: &Cockpit, &(thread, provider), _| {
+                Some(row_model(model, thread, provider))
+            }),
+            door: Rc::new(move |menu: NavMenu, up| {
+                ferrite_ui::components::MenuDoor::new(up, triggers.record(Door::key(menu.into())))
+            }),
         };
-        self.watching = vec![
-            cx.observe(&cockpit, |nav, _, cx| nav.look(cx)),
-            cx.subscribe(&self.model, |nav, _, _: &Arrived, cx| nav.look(cx)),
-        ];
-        self.look(cx);
-    }
-
-    /// The model a row's Thread runs, named as its Composer names it; the
-    /// Provider's name until the window is told, since a Thread on another
-    /// machine says only once it is opened and the default may not be it.
-    pub(super) fn row_model(
-        &self,
-        row: &nav::ThreadRow,
-        provider: ferrite_core::provider::Provider,
-        cx: &App,
-    ) -> SharedString {
-        let model = self.model.read(cx);
-        let open = model.thread(row.key);
-        // A Thread not mirrored here has no transcript: its digest says.
-        let digest = open.map(|open| open.digest());
-        let known = open
-            .and_then(|open| open.running_model())
-            .or_else(|| digest.as_deref().and_then(|digest| digest.model.as_deref()));
-        match known {
-            Some(known) => ferrite_core::models::footer_name(
-                provider,
-                Some(known),
-                open.map_or(&[][..], |open| open.models()),
-            )
-            .into(),
-            None => ferrite_ui::provider::title(provider).into(),
-        }
-    }
-
-    /// Read what the nav draws from the Cockpit and the model, note which
-    /// Threads came into a section, and redraw when any of it moved. It
-    /// runs as either notifies, never in a draw, so a draw never writes.
-    pub(super) fn look(&mut self, cx: &mut Context<Self>) {
-        let Some(cockpit) = self.cockpit.upgrade() else {
-            return;
-        };
-        let view = cockpit.read(cx);
-        let model = self.model.read(cx);
-        let listed = listed_threads(view, model, cx);
-        self.arrivals
-            .note(&listed, ferrite_core::clock::system_time());
-        let (mut inputs, factories) = nav_inputs(view, model, &listed, &self.arrivals, cx);
-        self.factories = factories;
-        inputs.machines = self.past_grace(view.machine_notices(cx), cx);
-        if self.inputs.as_ref() != Some(&inputs) {
-            self.inputs = Some(inputs);
-            cx.notify();
-        }
-    }
-
-    /// `notices` but those of a machine being reached again for less than
-    /// `RECONNECT_GRACE` (T3 Code's grace), noting since when each has
-    /// been; the nav looks again as the first grace ends.
-    fn past_grace(&mut self, notices: Vec<MachineNotice>, cx: &mut Context<Self>) -> Vec<MachineNotice> {
-        let now = cx.background_executor().now();
-        let since = |machine| self.reconnecting.get(&machine).copied().unwrap_or(now);
-        self.reconnecting = notices
-            .iter()
-            .filter(|notice| notice.reconnecting)
-            .map(|notice| (notice.machine, since(notice.machine)))
-            .collect();
-        let due = self
-            .reconnecting
-            .values()
-            .map(|since| *since + RECONNECT_GRACE)
-            .filter(|due| *due > now)
-            .min();
-        self.grace = due.map(|due| {
-            cx.spawn(async move |nav, cx| {
-                cx.background_executor().timer(due - now).await;
-                nav.update(cx, |nav, cx| nav.look(cx)).ok();
-            })
-        });
-        notices
-            .into_iter()
-            .filter(|notice| {
-                !notice.reconnecting || self.reconnecting[&notice.machine] + RECONNECT_GRACE <= now
-            })
-            .collect()
-    }
-
-    /// `look`, once the update under way has ended: what the Cockpit's
-    /// own code asks (`notify_part(Part::Nav)`) as it changes something
-    /// the nav draws without notifying itself (a PR or a title landed,
-    /// branch labels, the column's width).
-    pub(super) fn look_again(&mut self, cx: &mut Context<Self>) {
-        let nav = cx.weak_entity();
+        let nav = cx.new(|cx| NavView::new(sources, cx));
+        let (weak, model) = (nav.downgrade(), model.clone());
         cx.defer(move |cx| {
-            nav.update(cx, |nav, cx| nav.look(cx)).ok();
+            weak.update(cx, |nav, cx| {
+                let wakes = vec![
+                    cx.observe(&root, |nav, _, cx| nav.look(cx)),
+                    cx.subscribe(&model, |nav, _, _: &Arrived, cx| nav.look(cx)),
+                ];
+                nav.watch(wakes, cx);
+            })
+            .ok();
         });
-    }
-
-    /// The Cockpit measured the nav's column anew as it drew.
-    pub(super) fn set_width(&mut self, width: f32, cx: &mut Context<Self>) {
-        if let Some(inputs) = &mut self.inputs {
-            if inputs.width != width {
-                inputs.width = width;
-                cx.notify();
-            }
-        }
-    }
-
-    /// What the nav draws, as it last read it.
-    pub(super) fn inputs(&self) -> Option<&NavInputs> {
-        self.inputs.as_ref()
-    }
-
-    /// The Projects the Factory door lists, as the nav last read them.
-    pub(super) fn factories(&self) -> &[ProjectKey] {
-        &self.factories
-    }
-
-    /// The list holds the keyboard it was handed.
-    pub(crate) fn holds_keys(&self, window: &Window) -> bool {
-        self.keys_held && self.focus.is_focused(window)
-    }
-
-    /// The pointer came into the nav's column or left it.
-    pub(super) fn set_hovered(&mut self, inside: bool, cx: &mut Context<Self>) {
-        if inside != self.hovered {
-            self.hovered = inside;
-            cx.notify();
-        }
+        nav
     }
 }
 
-impl Render for NavView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        ferrite_ui::loops_overlay::begin(window, cx.entity_id());
-        let Some(mut inputs) = self.inputs.clone() else {
-            return div().into_any_element();
-        };
-        for row in [
-            &mut inputs.state.pinned,
-            &mut inputs.state.active,
-            &mut inputs.state.working,
-            &mut inputs.state.snoozed,
-            &mut inputs.state.parked,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            row.picked = self.card_picked(row.key);
+/// The model `thread` runs, named as its Composer names it; `provider`'s
+/// name until the window is told, since a Thread on another machine says
+/// only once it is opened and the default may not be it.
+fn row_model(model: &Cockpit, thread: ThreadKey, provider: Provider) -> SharedString {
+    let open = model.thread(thread);
+    // A Thread not mirrored here has no transcript: its digest says.
+    let digest = open.map(|open| open.digest());
+    let known = open
+        .and_then(|open| open.running_model())
+        .or_else(|| digest.as_deref().and_then(|digest| digest.model.as_deref()));
+    match known {
+        Some(known) => ferrite_core::models::footer_name(
+            provider,
+            Some(known),
+            open.map_or(&[][..], |open| open.models()),
+        )
+        .into(),
+        None => ferrite_ui::provider::title(provider).into(),
+    }
+}
+
+impl CockpitView {
+    /// The Filter menu's rows: every Project, the scoped one checked. The
+    /// same repository on two machines is two Projects: another machine's
+    /// wears T3 Code's `ProjectEnvironmentBadge`, an icon whose tooltip
+    /// says where it is.
+    pub(super) fn filter_rows(&self, cx: &gpui::App) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        let mut rows = vec![Some((
+            menu::Item::new("All projects").checked(self.nav_filter.is_none()),
+            MenuVerb::FilterProject(None),
+        ))];
+        rows.extend(self.every_project(cx).into_iter().map(|(key, project, _)| {
+            let item = menu::Item::new(project.title.clone()).checked(self.nav_filter == Some(key));
+            let item = match self.machine_label(key.machine(), cx) {
+                Some(machine) => item.mark(ferrite_ui::icons::SERVER, format!("On {machine}")),
+                None => item,
+            };
+            Some((item, MenuVerb::FilterProject(Some(key))))
+        }));
+        rows
+    }
+
+    pub(crate) fn shelf_open(&self, shelf: nav::Shelf) -> bool {
+        self.prefs.settings.open_shelves.contains(&shelf)
+    }
+
+    /// Open or fold `shelf` and remember it. Its body eases open and shut
+    /// (`NavView::shelf_shown`), and the list's motion stands still for it:
+    /// the rows would travel over the headers below, which the body's own
+    /// height already moves.
+    pub(crate) fn set_shelf_open(&mut self, shelf: nav::Shelf, open: bool, cx: &mut Context<Self>) {
+        if self.shelf_open(shelf) == open {
+            return;
         }
-        self.content(&inputs, window, cx).into_any_element()
+        self.nav_view.read(cx).snap.set(true);
+        self.change_settings(
+            |settings| {
+                settings.open_shelves.retain(|other| *other != shelf);
+                if open {
+                    settings.open_shelves.push(shelf);
+                }
+            },
+            cx,
+        );
+        cx.notify();
+    }
+
+    pub(super) fn snooze_rows(&self) -> Vec<(menu::Item, MenuVerb)> {
+        let mut rows: Vec<_> = Preset::available(ferrite_core::clock::system_time())
+            .into_iter()
+            .map(|(preset, _)| (menu::Item::new(preset.label()), MenuVerb::Snooze(preset)))
+            .collect();
+        rows.push((menu::Item::new("Custom…"), MenuVerb::SnoozeCustom));
+        rows
+    }
+
+    pub(super) fn snooze_thread(
+        &mut self,
+        thread: ThreadKey,
+        until: Option<std::time::SystemTime>,
+        cx: &mut Context<Self>,
+    ) {
+        let snoozed = self.cockpit.update(cx, |cockpit, _| cockpit.snooze_thread(thread, until));
+        self.when_answered(
+            snoozed,
+            move |view, snoozed, cx| {
+                match snoozed {
+                    Ok(()) => {
+                        if until.is_some() {
+                            view.nav_view.update(cx, |nav, cx| {
+                                nav.offer_undo(UndoAct::Snoozed(thread), cx)
+                            });
+                        }
+                        view.nav_notice.clear();
+                    }
+                    Err(error) => view.nav_notice.problem(error.to_string()),
+                }
+                cx.notify();
+            },
+            cx,
+        );
     }
 }
 
 /// Everything the nav draws from the Cockpit, as plain values: `listed`
-/// and `arrivals` as `look` noted them. With them, the Projects the
+/// and `arrivals` as the nav noted them. With them, the Projects the
 /// Factory door lists.
 fn nav_inputs(
     view: &CockpitView,
@@ -445,7 +279,7 @@ fn nav_inputs(
         _ => None,
     };
     let inputs = NavInputs {
-        machines: Vec::new(),
+        machines: view.machine_notices(cx),
         inbox,
         open_shelves: view.prefs.settings.open_shelves.clone(),
         width: view.nav_expanded_width(),
@@ -456,8 +290,11 @@ fn nav_inputs(
             .and_then(|project| model.project(project))
             .map(|project| project.title.clone().into()),
         factory,
-        menu: view.context_menu().map(|menu| menu.target),
-        doors: view.doors(),
+        menu: view.context_menu().and_then(|menu| nav_menu(menu.target)),
+        door_up: view
+            .context_menu()
+            .filter(|menu| menu.from_door)
+            .and_then(|menu| nav_menu(menu.target)),
         open,
         rename: match view.rename.shown() {
             Some((RenameTarget::Thread(thread), editor)) => Some((thread, editor.clone())),
@@ -662,11 +499,11 @@ impl CockpitView {
             NavEvent::Unpin(key) => self.set_pinned(key, false, cx),
             NavEvent::Rename(key) => self.start_rename(RenameTarget::Thread(key), cx),
             NavEvent::OpenPr(key, how) => self.open_pr_as(key, how, window, cx),
-            NavEvent::Menu(target, at) => match at {
-                MenuAt::Point(at) => self.open_context_menu(target, at, cx),
-                MenuAt::Under(row) => self.open_context_menu_under(target, row, cx),
+            NavEvent::Menu(menu, at) => match at {
+                MenuAt::Point(at) => self.open_context_menu(menu.into(), at, cx),
+                MenuAt::Under(row) => self.open_context_menu_under(menu.into(), row, cx),
             },
-            NavEvent::Door(door) => self.toggle_door(door, cx),
+            NavEvent::Door(menu) => self.toggle_door(nav_door(menu), cx),
             NavEvent::SetShelfOpen(shelf, open) => self.set_shelf_open(shelf, open, cx),
             NavEvent::Undo(UndoAct::Parked(parked)) => {
                 self.undo_parked(parked, cx);
@@ -698,6 +535,7 @@ impl CockpitView {
                 );
             }
             NavEvent::AddProject => self.add_project(window, cx),
+            NavEvent::NewThread => window.dispatch_action(Box::new(NewThread), cx),
             NavEvent::Settings => self.toggle_settings(cx),
             NavEvent::PullRequests => self.open_prs_from_foot(window, cx),
             NavEvent::Update => self.press_ferrite_update(window, cx),

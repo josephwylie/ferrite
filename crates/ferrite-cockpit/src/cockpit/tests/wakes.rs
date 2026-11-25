@@ -283,7 +283,7 @@ fn the_nav_moves_a_working_thread_on_the_beat_without_the_window(cx: &mut TestAp
         |_, cx| cx.observe(&view, move |_, _| notified.set(notified.get() + 1))
     });
     let rows = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.nav_state(cx));
-    let ids = |rows: &[crate::nav::ThreadRow]| rows.iter().map(|row| row.key).collect::<Vec<_>>();
+    let ids = |rows: &[ferrite_nav::ThreadRow]| rows.iter().map(|row| row.key).collect::<Vec<_>>();
     // Its first event settles what the Session says of itself.
     fake.streams.borrow()[1]
         .send(SessionEvent::TextDelta { text: "working ".into() })
@@ -473,7 +473,7 @@ fn the_factory_door_counts_what_needs_you_as_the_board_arrives(cx: &mut TestAppC
 /// otherwise, and the pump reads no Notices for it.
 #[gpui::test]
 fn a_done_toast_comes_and_goes_on_its_own_clock(cx: &mut TestAppContext) {
-    use crate::notifications::{ALERT_DELAY, DONE_TOAST};
+    use ferrite_nav::notifications::{ALERT_DELAY, DONE_TOAST};
     let _clock = hold_wall_clock();
     let (view, fake, panes, cx) = window("wakes-toast-clock", 2, cx);
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
@@ -538,4 +538,34 @@ fn a_done_toast_comes_and_goes_on_its_own_clock(cx: &mut TestAppContext) {
         went >= came + DONE_TOAST && went <= came + DONE_TOAST + 2 * beat,
         "it goes at its end"
     );
+}
+
+/// The toasts tend on each of their two wakes alone, in a window at rest
+/// with no toast's clock running: the window notifying with nothing from
+/// the model, and the model saying `Arrived` without the window
+/// notifying.
+#[gpui::test]
+fn the_toasts_tend_on_the_windows_notify_and_on_arrived_alone(cx: &mut TestAppContext) {
+    let _clock = hold_wall_clock();
+    let (view, _fake, _panes, cx) = window("wakes-toast-wakes", 1, cx);
+    let at_rest = drawn::hearings();
+    cx.run_until_parked();
+    assert_eq!(drawn::hearings(), at_rest, "at rest, nothing tends");
+
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(drawn::hearings() > at_rest, "the window's notify alone tends");
+
+    let notified = drawn::hearings();
+    let root = crate::cockpit::RENDERS.with(std::cell::Cell::get);
+    view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |_, cx| cx.emit(crate::cockpit::Arrived))
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        crate::cockpit::RENDERS.with(std::cell::Cell::get),
+        root,
+        "the window did not notify"
+    );
+    assert!(drawn::hearings() > notified, "the model's Arrived alone tends");
 }

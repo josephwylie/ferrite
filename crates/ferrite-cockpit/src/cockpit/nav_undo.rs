@@ -40,7 +40,7 @@ impl CockpitView {
                 view.nav_view.update(cx, |nav, cx| {
                     nav.picked.retain(|picked| !parked.contains(picked));
                     if !parked.is_empty() {
-                        nav.offer_undo(nav_chrome::UndoAct::Parked(parked), cx);
+                        nav.offer_undo(ferrite_nav::view::UndoAct::Parked(parked), cx);
                     }
                 });
                 cx.notify();

@@ -182,7 +182,7 @@ pub(super) fn lineage<F: Fn(&ServerId) -> Option<Serving>>(
             .copied()
             .flatten()
             .filter(|_| state != Dot::Failed)
-            .map(|clock| crate::nav::working_for(clock.elapsed()));
+            .map(|clock| ferrite_nav::working_for(clock.elapsed()));
         let row = Relative {
             leads: Leads::Subject(agent.subject()),
             title: agent_name(agent.info()),

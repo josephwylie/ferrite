@@ -190,7 +190,7 @@ fn a_nav_rows_hover_fades_in_and_out(cx: &mut TestAppContext) {
             .map(|(key, _)| key)
             .expect("a row is hovered");
     assert_eq!(
-        crate::nav::testing::drawn_hover(&key),
+        ferrite_nav::testing::drawn_hover(&key),
         Some(1.0),
         "drawn in"
     );
@@ -201,9 +201,9 @@ fn a_nav_rows_hover_fades_in_and_out(cx: &mut TestAppContext) {
     );
     frames(b.cx, 300);
     assert!(
-        crate::nav::testing::drawn_hover(&key).is_none_or(|t| t == 0.0),
+        ferrite_nav::testing::drawn_hover(&key).is_none_or(|t| t == 0.0),
         "drawn out: {:?}",
-        crate::nav::testing::drawn_hover(&key)
+        ferrite_nav::testing::drawn_hover(&key)
     );
 }
 

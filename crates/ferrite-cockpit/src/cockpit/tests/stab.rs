@@ -761,7 +761,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     // The surfaces chrome inherits its face from.
     let ui = |mut div: gpui::Div| div.style().text.font_family.clone();
     for (what, family) in [
-        ("nav", ui(crate::nav::card(gpui::div()))),
+        ("nav", ui(ferrite_nav::card(gpui::div()))),
         (
             "menu row",
             ui(ferrite_ui::components::menu_row_content(

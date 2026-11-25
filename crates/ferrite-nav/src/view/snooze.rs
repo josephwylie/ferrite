@@ -1,59 +1,27 @@
-//! Snooze controls use the Server-owned Thread reminder and the existing menu.
-use super::*;
-use super::nav_view::{NavEvent, NavInputs, NavView};
-use ferrite_core::snooze::{self, Preset};
+//! The Snooze field (Custom… on a Thread's Snooze menu): the time it
+//! reads is asked of the window, which snoozes the Thread through the
+//! Server-owned reminder.
+use ferrite_core::snooze;
+use ferrite_core::ThreadKey;
+use ferrite_pane::composer::Composer;
+use gpui::prelude::*;
+use gpui::{div, px, Context, Div, Entity, Focusable, SharedString, Window};
+
+use super::{NavEvent, NavInputs, NavView};
 
 /// The Custom… field (`NavView`): the Thread it snoozes, its line, and why
 /// the last ⏎ did not take.
-pub(super) struct Editor {
+pub struct Editor {
     pub thread: ThreadKey,
-    pub line: Entity<ferrite_pane::composer::Composer>,
+    pub line: Entity<Composer>,
     pub error: Option<SharedString>,
-}
-
-impl CockpitView {
-    pub(super) fn snooze_rows(&self) -> Vec<(menu::Item, MenuVerb)> {
-        let mut rows: Vec<_> = Preset::available(ferrite_core::clock::system_time())
-            .into_iter()
-            .map(|(preset, _)| (menu::Item::new(preset.label()), MenuVerb::Snooze(preset)))
-            .collect();
-        rows.push((menu::Item::new("Custom…"), MenuVerb::SnoozeCustom));
-        rows
-    }
-
-    pub(super) fn snooze_thread(
-        &mut self,
-        thread: ThreadKey,
-        until: Option<std::time::SystemTime>,
-        cx: &mut Context<Self>,
-    ) {
-        let snoozed = self.cockpit.update(cx, |cockpit, _| cockpit.snooze_thread(thread, until));
-        self.when_answered(
-            snoozed,
-            move |view, snoozed, cx| {
-                match snoozed {
-                    Ok(()) => {
-                        if until.is_some() {
-                            view.nav_view.update(cx, |nav, cx| {
-                                nav.offer_undo(super::nav_chrome::UndoAct::Snoozed(thread), cx)
-                            });
-                        }
-                        view.nav_notice.clear();
-                    }
-                    Err(error) => view.nav_notice.problem(error.to_string()),
-                }
-                cx.notify();
-            },
-            cx,
-        );
-    }
 }
 
 impl NavView {
     /// Custom… on a Thread's Snooze menu: the field over the list, seeded
     /// with an hour, takes the keyboard.
-    pub(super) fn edit_snooze(&mut self, thread: ThreadKey, window: &mut Window, cx: &mut Context<Self>) {
-        let line = cx.new(ferrite_pane::composer::Composer::new);
+    pub fn edit_snooze(&mut self, thread: ThreadKey, window: &mut Window, cx: &mut Context<Self>) {
+        let line = cx.new(Composer::new);
         line.update(cx, |line, cx| {
             line.set_role(ferrite_pane::composer::Role::Field(None), cx);
             line.set("1h".into(), cx);
@@ -68,9 +36,9 @@ impl NavView {
     }
 
     /// ⏎ (`save`) or esc in the field. A time it reads is asked of the
-    /// Cockpit (`NavEvent::Snooze`), and the field stands until the answer
+    /// window (`NavEvent::Snooze`), and the field stands until the answer
     /// (`snooze_answered`); one it cannot read stays, with why.
-    pub(super) fn finish_snooze(&mut self, save: bool, cx: &mut Context<Self>) {
+    pub fn finish_snooze(&mut self, save: bool, cx: &mut Context<Self>) {
         let Some(editor) = self.snooze.as_mut() else {
             return;
         };
@@ -85,9 +53,9 @@ impl NavView {
         cx.notify();
     }
 
-    /// The Cockpit's answer to `NavEvent::Snooze`: done closes the field, a
+    /// The window's answer to `NavEvent::Snooze`: done closes the field, a
     /// refusal stays in it.
-    pub(super) fn snooze_answered(&mut self, refused: Option<SharedString>, cx: &mut Context<Self>) {
+    pub fn snooze_answered(&mut self, refused: Option<SharedString>, cx: &mut Context<Self>) {
         match refused {
             None => self.snooze = None,
             Some(error) => {
@@ -101,7 +69,7 @@ impl NavView {
 
     /// The field goes, unsaved: the nav folding, the keys going to the
     /// list, a row or a notice opened.
-    pub(super) fn close_snooze(&mut self, cx: &mut Context<Self>) {
+    pub fn close_snooze(&mut self, cx: &mut Context<Self>) {
         if self.snooze.take().is_some() {
             cx.notify();
         }
@@ -109,7 +77,7 @@ impl NavView {
 
     /// The field's line, while it is open: the focus pump holds the
     /// keyboard on it.
-    pub(crate) fn snooze_line(&self) -> Option<&Entity<ferrite_pane::composer::Composer>> {
+    pub fn snooze_line(&self) -> Option<&Entity<Composer>> {
         self.snooze.as_ref().map(|editor| &editor.line)
     }
 
@@ -147,5 +115,5 @@ fn field(field: &Editor, title: SharedString) -> Div {
                 .child("Local date/time: YYYY-MM-DD HH:MM, or a duration: 30m, 3h, 2d"),
         )
         .child(ferrite_ui::components::text_meta().child("↵ snooze · esc cancel"))
-        .children(field.error.as_ref().map(|error| nav::notice(error.clone())))
+        .children(field.error.as_ref().map(|error| crate::notice(error.clone())))
 }

@@ -42,10 +42,7 @@ use self::menu_rows::*;
 mod machines;
 mod menu_button;
 mod connections_view;
-mod nav_chrome;
 mod nav_keys;
-mod nav_list;
-mod nav_pick;
 mod nav_undo;
 mod nav_view;
 mod palette;
@@ -68,8 +65,8 @@ mod sheets;
 mod side_chat_view;
 mod rename;
 mod returns;
-use rename::{rename_field, RenameTarget};
-mod snooze;
+use ferrite_ui::components::rename_field;
+use rename::RenameTarget;
 pub(crate) mod starts;
 mod surfaces;
 mod toasts;
@@ -139,8 +136,8 @@ use gpui::{
 };
 
 use crate::facts::Facts;
-use crate::nav;
-use crate::notifications::{Handle, NeedsYou, Row as NoticeRow, RowTarget, Verb};
+use ferrite_nav as nav;
+use ferrite_nav::notifications::{Row as NoticeRow, RowTarget, Verb};
 use ferrite_pane::composer::{Composer, Edited, OpenSource};
 use ferrite_pane::link_target::{LinkTarget, Open};
 use ferrite_pane::decision;
@@ -457,7 +454,7 @@ pub struct CockpitView {
     /// The pull request reader: the Panel's PR Surface and the PRs' detail.
     pull_request: Entity<panel::pull_request::PullRequestView>,
     /// The Inbox's alerts and the toast float that shows them.
-    pub(crate) toasts: Entity<toasts::ToastsView>,
+    pub(crate) toasts: Entity<ferrite_nav::toasts::ToastsView>,
     native_copy: Option<String>,
     nav_collapsed: bool,
     nav_auto_fold: std::cell::Cell<bool>,
@@ -477,7 +474,7 @@ pub struct CockpitView {
     /// The nav, a view of its own (ADR 0041): it owns its list's motion,
     /// scroll, keyboard, search, picks and undo notice, and asks the
     /// Cockpit for the rest through `NavEvent`.
-    nav_view: Entity<nav_view::NavView>,
+    nav_view: Entity<ferrite_nav::view::NavView>,
     /// The Cockpit hearing each view that has an event enum of its own
     /// (ADR 0041), from its first frame.
     view_events: Option<Vec<gpui::Subscription>>,
@@ -596,7 +593,7 @@ pub struct CockpitView {
     leave_asked: bool,
     /// What the last nav act has to say (a failed Park, a refused
     /// rename).
-    nav_notice: nav_list::Notice,
+    nav_notice: nav_view::Notice,
     /// The chimes that would have played (`chime`).
     #[cfg(test)]
     pub(crate) chimed: Vec<Sound>,
@@ -622,7 +619,7 @@ pub struct CockpitView {
     /// The Tasks whose needs-you toast stands, and the state it announced.
     task_toasts: std::collections::HashMap<(MachineId, String), ferrite_core::factory_board::Status>,
     /// The empty board: its selected row and the list's own focus.
-    empty_board: Entity<empty_board::EmptyBoardView>,
+    empty_board: Entity<ferrite_nav::empty_board::EmptyBoardView>,
     /// Each Thread's reader slot (its Review) sliding open or shut
     /// (`beside.rs`).
     reader_slides: beside::ReaderSlides,
@@ -960,8 +957,6 @@ pub(crate) mod drawn {
     thread_local! {
         static PANES: RefCell<HashMap<PaneIdentity, Pane>> = RefCell::new(HashMap::new());
         static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
-        static NAV_RENDERS: Cell<usize> = const { Cell::new(0) };
-        static TOAST_RENDERS: Cell<usize> = const { Cell::new(0) };
         static HEAD_RENDERS: Cell<usize> = const { Cell::new(0) };
         static HEARINGS: Cell<usize> = const { Cell::new(0) };
         static NAV_ROWS: RefCell<HashMap<ThreadKey, String>> = RefCell::new(HashMap::new());
@@ -996,14 +991,6 @@ pub(crate) mod drawn {
         PANES.with(|panes| panes.borrow_mut().insert(identity, pane));
     }
 
-    pub(crate) fn built_nav() {
-        NAV_RENDERS.with(|renders| renders.set(renders.get() + 1));
-    }
-
-    pub(crate) fn built_toasts() {
-        TOAST_RENDERS.with(|renders| renders.set(renders.get() + 1));
-    }
-
     pub(crate) fn built_head() {
         HEAD_RENDERS.with(|renders| renders.set(renders.get() + 1));
     }
@@ -1026,7 +1013,7 @@ pub(crate) mod drawn {
 
     /// How many times the toast float has been built on this thread.
     pub(crate) fn toast_renders() -> usize {
-        TOAST_RENDERS.with(Cell::get)
+        ferrite_nav::testing::toast_renders()
     }
 
     pub(crate) fn record_row(key: ThreadKey, row: String) {
@@ -1045,7 +1032,7 @@ pub(crate) mod drawn {
 
     /// How many times the nav has been built on this thread.
     pub(crate) fn nav_renders() -> usize {
-        NAV_RENDERS.with(Cell::get)
+        ferrite_nav::testing::nav_renders()
     }
 
     /// The nav row for `key` as last drawn: its status, unread, tail and
@@ -1250,7 +1237,7 @@ impl CockpitView {
         let sheets = cx.new(|_| sheets::Sheets::default());
         cx.subscribe(&sheets, Self::on_sheets_event).detach();
         let prs = cx.new(|cx| prs_view::PrsView::new(cockpit_weak.clone(), cx));
-        let empty_board = cx.new(|cx| empty_board::EmptyBoardView::new(cockpit_weak.clone(), cx));
+        let empty_board = Self::new_empty_board(cx);
         cx.subscribe(&prs, Self::on_prs_event).detach();
         let side_chat = cx.new(|_| side_chat_view::SideChatView::new(cockpit_weak.clone()));
         let files = Self::new_files(cx);
@@ -1278,7 +1265,7 @@ impl CockpitView {
         // The root draws its card into its own frame, so each change
         // redraws the window.
         cx.observe(&file_surface, |_, _, cx| cx.notify()).detach();
-        let toasts = cx.new(|cx| toasts::ToastsView::new(cockpit_weak.clone(), cockpit.clone(), cx));
+        let toasts = Self::new_toasts(&cockpit, cx);
         let decisions = cx.new(|_| decisions::DecisionsView::default());
         // A card's pick lives in its Pane's forms, and the root draws the
         // cards into its transcripts, so each change redraws the window.
@@ -1293,6 +1280,8 @@ impl CockpitView {
         let browser_review = cx.new(|_| browser::BrowserReviewView::default());
         // And a retained annotation's review, in the page's place.
         cx.observe(&browser_review, |_, _, cx| cx.notify()).detach();
+        let popups = popups::Popups::default();
+        let nav_view = Self::new_nav(&cockpit, popups.triggers(), cx);
         let mut view = Self {
             cockpit: cockpit.clone(),
             browsers: Default::default(),
@@ -1333,7 +1322,7 @@ impl CockpitView {
             toasts,
             native_copy: None,
             nav_filter: None,
-            nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, cockpit, cx)),
+            nav_view,
             view_events: None,
             activation: None,
             composer_menu,
@@ -1342,7 +1331,7 @@ impl CockpitView {
             environment_lookup: None,
             checkouts: Default::default(),
             rename: Default::default(),
-            popups: Default::default(),
+            popups,
             panel,
             panel_empty_focus: cx.focus_handle(),
             panel_keys: cx.focus_handle(),
@@ -6154,7 +6143,7 @@ impl CockpitView {
         };
         let age = facts
             .and_then(|facts| facts.last_used)
-            .map(|at| crate::facts::since_label(at, now))
+            .map(|at| ferrite_ui::age::since_label(at, now))
             .unwrap_or_default();
         let working = matches!(
             status,
@@ -6827,7 +6816,7 @@ impl CockpitView {
                     .map(|notice| notice.at)
                     .chain(notifications.reading().decisions().map(|request| request.at))
             })
-            .filter_map(|at| crate::facts::since_label_changes_in(at, wall))
+            .filter_map(|at| ferrite_ui::age::since_label_changes_in(at, wall))
             .min();
         let thread_ages = self.facts.next_age_change(wall);
         // The sweep redraws a window nothing else draws when an age turns:
@@ -7096,7 +7085,7 @@ impl CockpitView {
         } else if !self.rename.is_open() && self.prs_shown() {
             self.prs.read(cx).focus.clone()
         } else if !self.rename.is_open() && self.empty_board_shown(cx) {
-            self.empty_board.read(cx).focus.clone()
+            self.empty_board.read(cx).focus().clone()
         } else {
             wanted
         };
@@ -7534,7 +7523,7 @@ impl CockpitView {
             .children(gpui::component::Root::render_dialog_layer(window, cx))
             .children(gpui::component::Root::render_notification_layer(window, cx).map(|layer| {
                 let shifted = div().absolute().inset_0().right(self.toasts_shifted(window, cx)).child(layer);
-                deferred(shifted).with_priority(crate::float::FLOAT_PRIORITY)
+                deferred(shifted).with_priority(ferrite_ui::float::FLOAT_PRIORITY)
             }))
     }
 
@@ -7814,13 +7803,6 @@ impl CockpitView {
         if moved {
             cx.notify();
         }
-    }
-
-    /// A bound action's first keystroke as a shortcut spells it, from this
-    /// platform's key table: `cmd-shift-n` → `cmd-shift-N`, which
-    /// `components::key_combo` draws tight with glyph modifiers, `⌘⇧N`.
-    fn key_label(action: &str) -> Option<SharedString> {
-        ferrite_ui::components::bound_chord(action).map(SharedString::from)
     }
 
     /// A board slot as a drop target for a reader dragged by its head: the
@@ -8383,7 +8365,7 @@ impl CockpitView {
         match verb {
             Verb::OpenThread(thread) => self.land_on_thread(thread, cx),
             Verb::Open(machine, id) => {
-                self.drop_toast(machine, &crate::notifications::RowTarget::Notice(id), cx);
+                self.drop_toast(machine, &ferrite_nav::notifications::RowTarget::Notice(id), cx);
                 if let Some((_, landed)) = self
                     .cockpit
                     .update(cx, |cockpit, _| cockpit.open_notice(machine, id))
@@ -8408,7 +8390,7 @@ impl CockpitView {
             Verb::OpenDecision(machine, id) => {
                 self.drop_toast(
                     machine,
-                    &crate::notifications::RowTarget::Decision(id.clone()),
+                    &ferrite_nav::notifications::RowTarget::Decision(id.clone()),
                     cx,
                 );
                 let notifications = self.cockpit.read(cx).notifications(machine);
@@ -8481,21 +8463,21 @@ impl CockpitView {
         &mut self,
         machine: ferrite_core::MachineId,
         id: ferrite_core::notifications::DecisionNoticeId,
-        answer: crate::notifications::QuickAnswer,
+        answer: ferrite_nav::notifications::QuickAnswer,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let choice = match answer {
-            crate::notifications::QuickAnswer::Allow => {
+            ferrite_nav::notifications::QuickAnswer::Allow => {
                 ferrite_pane::decision::ApprovalChoice::Allow
             }
-            crate::notifications::QuickAnswer::Deny => {
+            ferrite_nav::notifications::QuickAnswer::Deny => {
                 ferrite_pane::decision::ApprovalChoice::DenyAndSteer
             }
         };
         self.drop_toast(
             machine,
-            &crate::notifications::RowTarget::Decision(id.clone()),
+            &ferrite_nav::notifications::RowTarget::Decision(id.clone()),
             cx,
         );
         let thread = self.cockpit.read(cx).notifications(machine).key(id.thread);
@@ -8514,7 +8496,7 @@ impl CockpitView {
         now: std::time::SystemTime,
         cx: &gpui::App,
     ) -> NoticeRow {
-        use crate::notifications::{Detail, State};
+        use ferrite_nav::notifications::{Detail, State};
         let title = self.row_title(key, cx);
         let finish = self
             .cockpit
@@ -8533,10 +8515,10 @@ impl CockpitView {
             ),
             _ => {
                 let room =
-                    crate::notifications::ROW_TEXT_CELLS.saturating_sub(title.chars().count() + 3);
+                    ferrite_nav::notifications::ROW_TEXT_CELLS.saturating_sub(title.chars().count() + 3);
                 (
                     State::Done,
-                    crate::notifications::done_words(
+                    ferrite_nav::notifications::done_words(
                         finish.answer.as_deref(),
                         finish.worked_ms.map(Duration::from_millis),
                         room,
@@ -8545,19 +8527,19 @@ impl CockpitView {
             }
         };
         NoticeRow {
-            target: crate::notifications::RowTarget::Notice(notice.id),
+            target: ferrite_nav::notifications::RowTarget::Notice(notice.id),
             thread: key,
             title,
             state,
             detail,
-            when: crate::facts::since_label(notice.at, now),
+            when: ferrite_ui::age::since_label(notice.at, now),
             read: notice.read,
             elsewhere: self.machine_label(key.machine(), cx).is_some(),
         }
     }
 
     /// The provider an alert's Thread runs on, as far as its machine says.
-    fn alert_provider(&self, alert: &crate::notifications::Alert, cx: &gpui::App) -> Option<Provider> {
+    fn alert_provider(&self, alert: &ferrite_nav::notifications::Alert, cx: &gpui::App) -> Option<Provider> {
         self.cockpit
             .read(cx)
             .thread(alert.thread)
@@ -8569,10 +8551,10 @@ impl CockpitView {
     /// record is there to word it.
     fn system_posting(
         &self,
-        alert: &crate::notifications::Alert,
+        alert: &ferrite_nav::notifications::Alert,
         now: std::time::SystemTime,
         cx: &gpui::App,
-    ) -> Option<crate::system_notifications::Posting> {
+    ) -> Option<ferrite_nav::notifications::Posting> {
         let row = self.alert_row(alert, now, cx)?;
         let cockpit = self.cockpit.read(cx);
         let machine = alert.thread.machine();
@@ -8584,7 +8566,7 @@ impl CockpitView {
             .flatten()
             .and_then(|open| open.workspace())
             .map(|binding| binding.cwd().to_path_buf());
-        Some(crate::system_notifications::Posting {
+        Some(ferrite_nav::notifications::Posting {
             tag: system_tag(&saved_as, alert.thread.thread()),
             needs_you: alert.needs_you(),
             word: row.word(),
@@ -8617,7 +8599,7 @@ impl CockpitView {
         }
         // Its entry stays: read now, the next pump takes it out of the
         // notification centre with the rest.
-        let posted = self.toasts.read(cx).needs_you.posted.get(tag).cloned();
+        let posted = self.toasts.read(cx).needs_you().posted.get(tag).cloned();
         if let Some(alert) = posted {
             self.notice_verb(alert.open_verb(), cx);
         }
@@ -8627,7 +8609,7 @@ impl CockpitView {
     /// its record is there to word it.
     fn alert_row(
         &self,
-        alert: &crate::notifications::Alert,
+        alert: &ferrite_nav::notifications::Alert,
         now: std::time::SystemTime,
         cx: &gpui::App,
     ) -> Option<NoticeRow> {
@@ -8652,7 +8634,7 @@ impl CockpitView {
         now: std::time::SystemTime,
         cx: &gpui::App,
     ) -> NoticeRow {
-        use crate::notifications::{Detail, State};
+        use ferrite_nav::notifications::{Detail, State};
         let open = self.cockpit.read(cx).thread(key);
         let detail = open
             .and_then(|open| {
@@ -8688,16 +8670,16 @@ impl CockpitView {
                 let cwd = open
                     .and_then(|open| open.workspace())
                     .map(|binding| binding.cwd());
-                crate::notifications::request_detail(&decision, notice.kind, cwd, gated_path)
+                ferrite_nav::notifications::request_detail(&decision, notice.kind, cwd, gated_path)
             })
             .unwrap_or(Detail::None);
         NoticeRow {
-            target: crate::notifications::RowTarget::Decision(notice.id.clone()),
+            target: ferrite_nav::notifications::RowTarget::Decision(notice.id.clone()),
             thread: key,
             title: self.row_title(key, cx),
             state: State::NeedsYou(notice.kind),
             detail,
-            when: crate::facts::since_label(notice.at, now),
+            when: ferrite_ui::age::since_label(notice.at, now),
             read: notice.read,
             elsewhere: self.machine_label(key.machine(), cx).is_some(),
         }
@@ -8736,8 +8718,8 @@ impl CockpitView {
                         target: RowTarget::Thread(thread.thread()),
                         thread,
                         title: self.row_title(thread, cx),
-                        state: crate::notifications::State::Idle,
-                        detail: crate::notifications::Detail::None,
+                        state: ferrite_nav::notifications::State::Idle,
+                        detail: ferrite_nav::notifications::Detail::None,
                         when: "".into(),
                         read: true,
                         elsewhere: self.machine_label(thread.machine(), cx).is_some(),

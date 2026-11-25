@@ -27,7 +27,7 @@ pub(crate) struct PrFailure {
 /// Empty under a minute and for a stamp that does not parse: no age is invented.
 pub(crate) fn stamp_age(stamp: &str) -> SharedString {
     ferrite_core::clock::parse_stamp(stamp).map_or_else(SharedString::default, |at| {
-        crate::facts::since_label(at, ferrite_core::clock::system_time())
+        ferrite_ui::age::since_label(at, ferrite_core::clock::system_time())
     })
 }
 

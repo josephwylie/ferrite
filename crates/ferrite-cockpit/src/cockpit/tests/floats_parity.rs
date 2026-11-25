@@ -504,7 +504,7 @@ fn a_toasts_quick_answers_answer_the_request_and_leave(cx: &mut TestAppContext) 
         .borrow()
         .iter()
         .any(|(id, answer)| id == "one" && matches!(answer, DecisionAnswer::Allow { .. })));
-    view.read_with(cx, |view, cx| assert!(view.toasts.read(cx).needs_you.toasts().is_empty()));
+    view.read_with(cx, |view, cx| assert!(view.toasts.read(cx).needs_you().toasts().is_empty()));
 
     fake.streams.borrow()[at]
         .send(bash("two", "rm -rf target"))
@@ -520,7 +520,7 @@ fn a_toasts_quick_answers_answer_the_request_and_leave(cx: &mut TestAppContext) 
         .borrow()
         .iter()
         .any(|(id, answer)| id == "two" && matches!(answer, DecisionAnswer::Deny { .. })));
-    view.read_with(cx, |view, cx| assert!(view.toasts.read(cx).needs_you.toasts().is_empty()));
+    view.read_with(cx, |view, cx| assert!(view.toasts.read(cx).needs_you().toasts().is_empty()));
 }
 
 /// FL-19 / FL-12: an empty Composer line under a Decision resolves the

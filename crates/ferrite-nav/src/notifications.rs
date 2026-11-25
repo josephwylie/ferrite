@@ -10,7 +10,7 @@
 //! Inbox's rows (FL-16), and the toasts (FL-18).
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -22,6 +22,26 @@ use gpui::{div, px, rgb, AnyElement, App, Div, SharedString, Stateful, Window};
 use ferrite_ui::components;
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 use ferrite_ui::theme::*;
+
+/// One alert as a system notification, which the window posts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Posting {
+    /// Its identity: a newer posting with the tag replaces it, and a click
+    /// reports it.
+    pub tag: String,
+    /// A live request (blocked) rather than a finished turn (done).
+    pub needs_you: bool,
+    /// The row's state word (`needs you`, `done`, `failed`).
+    pub word: &'static str,
+    /// The row's title: the Thread, named by its machine when off screen.
+    pub title: String,
+    /// The row's detail: the request, or the turn's answer.
+    pub detail: String,
+    /// The provider the Thread runs on.
+    pub agent: Option<String>,
+    /// The Thread's directory on this computer.
+    pub cwd: Option<std::path::PathBuf>,
+}
 
 /// A toast's quick answer to its request (`1 allow`, `3 deny`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,7 +75,7 @@ pub type Handle = Rc<dyn Fn(Verb, &mut Window, &mut App)>;
 
 /// A NeedsYou row has one actionable target, independent of provider wire
 /// data: an id on the row's machine.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RowTarget {
     Notice(NoticeId),
     Thread(ThreadId),
@@ -135,7 +155,7 @@ pub struct Row {
     pub title: SharedString,
     pub state: State,
     pub detail: Detail,
-    /// Its age (`facts::since_label`: `2m`, `1h`; nothing in its first
+    /// Its age (`ferrite_ui::age::since_label`: `2m`, `1h`; nothing in its first
     /// minute — no surface prints `now`, theme rule 11).
     pub when: SharedString,
     pub read: bool,
@@ -300,7 +320,7 @@ pub const DONE_TOAST: Duration = Duration::from_secs(5);
 /// One event that may want the operator: a Notice or a live request, and
 /// its Thread. Ids are per Store: its Thread's machine is the one they are
 /// of.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Alert {
     pub target: RowTarget,
     pub thread: ThreadKey,
@@ -429,6 +449,38 @@ impl NeedsYou {
         &self.toasts
     }
 
+    /// Each machine's watermark, for every machine heard with one.
+    pub fn watermarks(&self) -> HashMap<MachineId, NoticeId> {
+        self.heard
+            .iter()
+            .filter_map(|(machine, heard)| Some((*machine, heard.presented?)))
+            .collect()
+    }
+
+    /// Every alert a `ring` or a withdrawal may ask about now: the toasts
+    /// standing, the events waiting and the system notifications posted,
+    /// each once. What `hear` adds waits out `ALERT_DELAY`, so a `ring` at
+    /// the same moment asks nothing of it.
+    pub fn standing(&self) -> Vec<Alert> {
+        let mut seen = HashSet::new();
+        let all = self.toasts.iter().map(|toast| &toast.alert);
+        let all = all.chain(self.pending.iter().map(|(alert, _)| alert));
+        all.chain(self.posted.values())
+            .filter(|alert| seen.insert(*alert))
+            .cloned()
+            .collect()
+    }
+
+    /// The events waiting whose delay is up at `now`: what a `ring` then
+    /// may ring.
+    pub fn due(&self, now: Instant) -> Vec<Alert> {
+        self.pending
+            .iter()
+            .filter(|(_, due)| *due <= now)
+            .map(|(alert, _)| alert.clone())
+            .collect()
+    }
+
     /// Whether anything is waiting or standing: what `ring` has to keep up.
     pub fn busy(&self) -> bool {
         !self.pending.is_empty() || !self.toasts.is_empty()
@@ -450,7 +502,6 @@ impl NeedsYou {
     /// Take every toast down and forget what was waiting, keeping what was
     /// heard as heard: a scene's requests that stood before the window
     /// opened.
-    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
     pub fn clear_toasts(&mut self) {
         self.pending.clear();
         self.toasts.clear();
@@ -644,7 +695,7 @@ pub fn toast_face(row: &Row, width: f32) -> Div {
 }
 
 fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
-    let tag = crate::nav::RowTag::of(row.thread, row.elsewhere);
+    let tag = crate::RowTag::of(row.thread, row.elsewhere);
     let machine = row.thread.machine();
     let word = row.word();
     let body: AnyElement = match &row.detail {

@@ -171,7 +171,7 @@ fn a_panel_sliding_out_takes_no_input(cx: &mut TestAppContext) {
 /// move through widths between its own and none, and a flip turns around.
 #[gpui::test]
 fn the_nav_slides_open_and_shut(cx: &mut TestAppContext) {
-    use crate::nav::COLUMN_WIDTH;
+    use ferrite_nav::COLUMN_WIDTH;
     let (view, cx) = window("column-nav-slide", 1600., cx);
     assert_eq!(board_left(cx), COLUMN_WIDTH);
 
@@ -211,7 +211,7 @@ fn the_nav_slides_open_and_shut(cx: &mut TestAppContext) {
 /// columns, with nothing asking for another.
 #[gpui::test]
 fn reduced_motion_lands_both_columns(cx: &mut TestAppContext) {
-    use crate::nav::COLUMN_WIDTH;
+    use ferrite_nav::COLUMN_WIDTH;
     let (view, cx) = window("column-reduced", 1600., cx);
     cx.update(|_, cx| cx.set_reduce_motion(true));
 

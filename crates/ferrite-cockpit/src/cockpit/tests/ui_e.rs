@@ -31,7 +31,7 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
     tick(cx);
     ring(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1, "it rings");
+        assert_eq!(view.toasts.read(cx).needs_you().toasts().len(), 1, "it rings");
     });
     let selector: &'static str = format!("toast-{}", off_focus.thread().get()).leak();
     assert!(
@@ -111,7 +111,7 @@ fn the_rails_one_toast_clears_the_view_head_and_goes_on_landing(cx: &mut TestApp
     tick(cx);
     ring(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1, "one toast, off screen")
+        assert_eq!(view.toasts.read(cx).needs_you().toasts().len(), 1, "one toast, off screen")
     });
     let selector: &'static str = format!("toast-{}", threads[2].thread().get()).leak();
     let toast = cx.debug_bounds(selector).expect("the toast is up");
@@ -131,7 +131,7 @@ fn the_rails_one_toast_clears_the_view_head_and_goes_on_landing(cx: &mut TestApp
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(
-            view.toasts.read(cx).needs_you.toasts().is_empty(),
+            view.toasts.read(cx).needs_you().toasts().is_empty(),
             "a Thread on screen has no toast"
         )
     });

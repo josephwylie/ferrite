@@ -79,7 +79,7 @@ impl NavPrState {
     }
 
     /// The glyph's tint, with its alpha.
-    pub(crate) fn tint(self) -> u32 {
+    pub fn tint(self) -> u32 {
         match self {
             NavPrState::Open => NAV_PR_OPEN,
             NavPrState::Draft => NAV_PR_DRAFT,
@@ -103,9 +103,9 @@ pub fn working_for(elapsed: Duration) -> String {
 }
 
 /// A quiet card's age: `now` in its first minute (T3's), then the nav's
-/// own shorthand (`facts::since_label`: `12m`, `3h`, `2d`, `1w`…).
+/// own shorthand (`ferrite_ui::age::since_label`: `12m`, `3h`, `2d`, `1w`…).
 pub fn card_age(at: SystemTime, now: SystemTime) -> SharedString {
-    let age = crate::facts::since_label(at, now);
+    let age = ferrite_ui::age::since_label(at, now);
     if age.is_empty() {
         "now".into()
     } else {
@@ -300,7 +300,7 @@ impl ThreadRow {
 /// A card's title ink and weight: a receded card's 400 at 75% ink, back
 /// to full under the pointer (`hover`); a failure 500 at 95%; every
 /// other 500 at full ink.
-pub(crate) fn title_face(row: &ThreadRow, hover: f32) -> (Hsla, FontWeight) {
+pub fn title_face(row: &ThreadRow, hover: f32) -> (Hsla, FontWeight) {
     if row.receded() {
         let ink = motion::mix(
             rgba(NAV_CARD_TITLE_RECEDED).into(),
@@ -325,7 +325,7 @@ fn recede_key(key: &str) -> SharedString {
 /// fades up (`motion::RECEDE`). Every other card asks for no frames.
 /// `painter` is the view drawing the card, for a call from outside its
 /// listener (`motion::hover_listener_in`).
-pub(crate) fn card_hover(
+pub fn card_hover(
     key: SharedString,
     dims: bool,
     painter: Option<gpui::EntityId>,
@@ -344,7 +344,7 @@ pub(crate) fn card_hover(
 
 /// The blend key a Thread's row's hover reads, its card's or its slim
 /// row's (`NavCursor::thread` mirrors it), and the row's selector.
-pub(crate) fn card_key(tag: RowTag) -> SharedString {
+pub fn card_key(tag: RowTag) -> SharedString {
     tag.key("nav-thread")
 }
 
@@ -414,7 +414,7 @@ fn card(
     let key = card_key(id);
     let active = row.selected;
     let hover = if live { motion::hover_t(&key) } else { 0.0 };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if live {
         super::testing::DRAWN_HOVER.with(|drawn| drawn.borrow_mut().insert(key.clone(), hover));
     }
@@ -447,7 +447,7 @@ fn card(
     };
     // A machine the window cannot reach keeps its cards, dimmed.
     let opacity = receded * if row.lost() { MACHINE_LOST_OPACITY } else { 1.0 };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if live {
         super::testing::DRAWN_CARDS.with(|drawn| {
         drawn.borrow_mut().insert(
@@ -876,7 +876,7 @@ impl gpui::Render for PrPopover {
 
 /// A pull request's line in the PR popover and the hover card's foot: its
 /// glyph, its number and its title.
-pub(crate) fn pr_line(pr: &NavPr) -> Div {
+pub fn pr_line(pr: &NavPr) -> Div {
     div()
         .flex()
         .flex_1()

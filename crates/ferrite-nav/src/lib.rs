@@ -26,6 +26,14 @@
 //!
 //! Every colour and metric is a `theme` token; this file holds no literal
 //! of its own.
+//!
+//! Out of the Cockpit, in a crate of its own: the nav's elements, the
+//! Inbox's rows and toasts (`notifications`), the nav itself (`view`) and
+//! the views beside it (the empty board, the toasts). Each view owns its
+//! own state, reads what it draws of the window through a `Source`
+//! (`ferrite_ui::source`) and says what the operator asks as an event (ADR
+//! 0041). Nothing here names the Cockpit, so an edit to one builds and
+//! tests without it.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -48,12 +56,16 @@ use ferrite_ui::theme::*;
 
 mod card;
 mod fade;
-pub(crate) mod chrome;
-pub(crate) mod flip;
-pub(crate) mod list;
-pub(crate) use card::{card_hover, card_key};
-#[cfg(test)]
-pub(crate) use card::status_label;
+pub mod chrome;
+pub mod empty_board;
+pub mod flip;
+pub mod list;
+pub mod notifications;
+pub mod toasts;
+pub mod view;
+pub use card::{card_hover, card_key};
+#[cfg(any(test, feature = "test-support"))]
+pub use card::status_label;
 pub use card::{
     card_age, ghost_card, park_button, pin_glyph, pr_chip, snooze_button, strip,
     strip_w, thread_card, working_for,
@@ -85,7 +97,7 @@ gpui::actions!(
 /// The nav's tooltips (T3's `ui/tooltip.tsx`): `menu::nav_tooltip`'s face,
 /// open after `NAV_TOOLTIP_DELAY_MS`, the next within
 /// `NAV_TOOLTIP_HANDOFF_MS` at once.
-pub(crate) trait NavTooltip: gpui::InteractiveElement + Sized {
+pub trait NavTooltip: gpui::InteractiveElement + Sized {
     fn nav_tooltip(mut self, text: impl Into<SharedString>) -> Self {
         self.interactivity().tooltip(ferrite_ui::menu::nav_tooltip(text));
         self.nav_timing()
@@ -111,7 +123,7 @@ impl<E: gpui::InteractiveElement> NavTooltip for E {}
 /// A row the nav's keyboard can stand on (`cockpit/nav_keys.rs`): a
 /// shelf's header, or a Thread's card or slim row, wherever it is listed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NavItem {
+pub enum NavItem {
     Shelf(Shelf),
     Thread(ThreadKey),
 }
@@ -119,7 +131,7 @@ pub(crate) enum NavItem {
 /// The keyboard's place in the nav: its row, and the blend key that row's
 /// hover face reads, so the cursor wears the pointer's face.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NavCursor {
+pub struct NavCursor {
     pub item: NavItem,
     pub key: SharedString,
 }
@@ -141,7 +153,7 @@ impl NavCursor {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 const INNER_W: f32 = WIDTH - 2.0 * NAV_COL_PAD;
 
 /// A shelf at the foot of the list (ADR 0040), in drawing order.
@@ -351,7 +363,7 @@ impl std::fmt::Display for RowTag {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ThreadRow {
     /// A row with nothing known but its Thread, name and state.
     pub fn bare(key: ThreadKey, name: impl Into<SharedString>, status: RowStatus) -> Self {
@@ -398,7 +410,7 @@ const TEXT_W: f32 = INNER_W - 2.0 * NAV_ROW_PAD_X;
 pub enum Measure<'a> {
     Text(&'a App, f32),
     /// A fixed advance per character, for unit tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Cells(f32),
 }
 
@@ -406,7 +418,7 @@ impl Measure<'_> {
     pub fn inner_width(&self) -> f32 {
         match self {
             Self::Text(_, width) => *width - 2.0 * NAV_COL_PAD,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Self::Cells(_) => INNER_W,
         }
     }
@@ -429,7 +441,7 @@ impl Measure<'_> {
                     text.chars()
                         .map(|ch| {
                             *advances.entry((id, size.to_bits(), ch)).or_insert_with(|| {
-                                #[cfg(test)]
+                                #[cfg(any(test, feature = "test-support"))]
                                 testing::SHAPED.with(|shaped| shaped.set(shaped.get() + 1));
                                 f32::from(system.layout_width(id, px(size), ch))
                             })
@@ -437,7 +449,7 @@ impl Measure<'_> {
                         .sum()
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Measure::Cells(advance) => text.chars().count() as f32 * advance,
         }
     }
@@ -687,7 +699,7 @@ pub fn edge_fades(scroll: &ScrollHandle) -> [AnyElement; 2] {
 }
 
 /// The Thread card at root — see `card::thread_card`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
     thread_card(
         row,
@@ -795,6 +807,15 @@ pub fn rename_target_thread(tag: RowTag, title: SharedString) -> Stateful<Div> {
 mod tests {
     use super::*;
     use ferrite_pane::pane::WallState;
+
+    /// Rule 10 over the nav's render code (`ferrite_ui::face`).
+    #[test]
+    fn render_code_draws_only_covered_glyphs() {
+        ferrite_ui::face::assert_render_code_draws_only_covered_glyphs(&[
+            ("lib.rs", include_str!("lib.rs")),
+            ("notifications.rs", include_str!("notifications.rs")),
+        ]);
+    }
 
     fn thread() -> ThreadRow {
         selected_thread(false)
@@ -1026,7 +1047,7 @@ mod tests {
     fn the_nav_never_says_now() {
         let at = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10_000);
         for secs in [0, 1, 30, 59] {
-            let age = crate::facts::since_label(at, at + std::time::Duration::from_secs(secs));
+            let age = ferrite_ui::age::since_label(at, at + std::time::Duration::from_secs(secs));
             let tail = NavTail::of(RowStatus::Idle, None, age);
             assert_eq!(tail.text(), None, "{secs}s says nothing");
         }
@@ -1139,27 +1160,6 @@ mod tests {
         }
     }
 
-    /// The ⌘ digits are bound: each names the action its key is bound to.
-    #[test]
-    fn the_command_digits_are_bound() {
-        for ordinal in 1..=9 {
-            let action = crate::cockpit::focus_thread_action(ordinal).expect("one action per digit");
-            assert_eq!(
-                ferrite_ui::components::bound_chord(action),
-                Some(format!(
-                    "{}-{ordinal}",
-                    if cfg!(target_os = "macos") {
-                        "cmd"
-                    } else {
-                        "ctrl"
-                    }
-                )),
-                "⌘{ordinal}"
-            );
-        }
-        assert_eq!(crate::cockpit::focus_thread_action(10), None);
-    }
-
     /// A title the box cuts ends in the fade alone — clipped on one line,
     /// never ellipsized under it.
     #[test]
@@ -1244,8 +1244,8 @@ mod tests {
 
 /// The hover each row's wash was last drawn at: the stale-chrome tests read
 /// what is on screen, not the blend.
-#[cfg(test)]
-pub(crate) mod testing {
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing {
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
 
@@ -1259,7 +1259,7 @@ pub(crate) mod testing {
     }
 
     /// How many characters `Measure::Text` has laid out on this thread.
-    pub(crate) fn shaped() -> usize {
+    pub fn shaped() -> usize {
         SHAPED.with(Cell::get)
     }
 
@@ -1271,11 +1271,31 @@ pub(crate) mod testing {
         pub(super) static DRAWN_CARDS: RefCell<HashMap<ThreadKey, DrawnCard>> =
             RefCell::new(HashMap::new());
         pub(super) static DRAWN_HOVER_CARD: RefCell<Vec<String>> = RefCell::default();
+        static TOAST_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static NAV_RENDERS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn built_nav() {
+        NAV_RENDERS.with(|renders| renders.set(renders.get() + 1));
+    }
+
+    /// How many times the nav has been built on this thread.
+    pub fn nav_renders() -> usize {
+        NAV_RENDERS.with(Cell::get)
+    }
+
+    pub(crate) fn built_toasts() {
+        TOAST_RENDERS.with(|renders| renders.set(renders.get() + 1));
+    }
+
+    /// How many times the toast float has been built on this thread.
+    pub fn toast_renders() -> usize {
+        TOAST_RENDERS.with(Cell::get)
     }
 
     /// The lines under the title of the hover detail last drawn: what it
     /// says beyond the card, in order.
-    pub(crate) fn drawn_hover_card() -> Vec<String> {
+    pub fn drawn_hover_card() -> Vec<String> {
         DRAWN_HOVER_CARD.with(|drawn| drawn.borrow().clone())
     }
 
@@ -1283,7 +1303,7 @@ pub(crate) mod testing {
     /// painted at, its title's ink and weight, and whether its hover strip
     /// stood in its status slot.
     #[derive(Clone, Copy, Debug, PartialEq)]
-    pub(crate) struct DrawnCard {
+    pub struct DrawnCard {
         pub receded: bool,
         pub opacity: f32,
         pub title: (Hsla, FontWeight),
@@ -1291,12 +1311,12 @@ pub(crate) mod testing {
     }
 
     /// The card for `thread` as last drawn.
-    pub(crate) fn drawn_card(thread: ThreadKey) -> Option<DrawnCard> {
+    pub fn drawn_card(thread: ThreadKey) -> Option<DrawnCard> {
         DRAWN_CARDS.with(|drawn| drawn.borrow().get(&thread).copied())
     }
 
     /// The hover the row behind `key` was last drawn at.
-    pub(crate) fn drawn_hover(key: &str) -> Option<f32> {
+    pub fn drawn_hover(key: &str) -> Option<f32> {
         DRAWN_HOVER.with(|drawn| drawn.borrow().get(key).copied())
     }
 }

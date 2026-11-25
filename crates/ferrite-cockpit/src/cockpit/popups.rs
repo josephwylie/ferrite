@@ -101,7 +101,7 @@ enum Shown {
 /// Where the keyboard goes back to as a popup closes.
 enum Back {
     /// The nav list held the keys, its cursor here.
-    Nav(Option<crate::nav::NavCursor>),
+    Nav(Option<ferrite_nav::NavCursor>),
     Focus(FocusHandle),
 }
 
@@ -466,7 +466,7 @@ impl CockpitView {
         }?;
         Some(
             deferred(element)
-                .with_priority(crate::float::FLOAT_PRIORITY)
+                .with_priority(ferrite_ui::float::FLOAT_PRIORITY)
                 .into_any_element(),
         )
     }
