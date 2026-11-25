@@ -65,6 +65,9 @@ function Up {
     $started = Get-Date
     Invoke-Wsl 'build' @'
 src="$root/src"
+# wsl.exe starts in / when it cannot enter the checkout (a folder a volume is
+# mounted on, such as a Dev Drive): never copy that.
+[ -f scripts/wsl-machine.ps1 ] || { echo "WSL cannot enter the checkout, it is in $(pwd)" >&2; exit 1; }
 mkdir -p "$src"
 rsync -a --delete --exclude=/target --exclude=/.git ./ "$src/"
 cd "$src"
