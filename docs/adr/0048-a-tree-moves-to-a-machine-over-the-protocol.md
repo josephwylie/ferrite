@@ -378,6 +378,9 @@ Windows window.
   counts the files as it goes, and Cancel stops it there too. While a copy
   runs a press outside the card does nothing, and ✕, Esc and Cancel are
   one act: the copy stops, the sheet stays and says it can be resumed.
+  A copy is cancelled or done, never both (`Cancellation::end`): one that
+  has asked all it sends and waits on the last replies stops as any other
+  and stays unfinished, and a cancel once it is done changes nothing.
   Through a first copy its button stays Copy; only a resume's reads
   Resume. Retry from a failure copies again. A failure is said in the
   operator's words: "The connection to E was lost. Resume finishes the

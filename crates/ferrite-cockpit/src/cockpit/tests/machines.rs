@@ -55,11 +55,36 @@ static SENT_TO_BOX: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 /// While set, box's Server is down: its links have ended and no tunnel
 /// reaches it (`box_down`).
 static BOX_DOWN: AtomicBool = AtomicBool::new(false);
-/// While set, what a window sends box's Server crawls, as over a slow
-/// line: a copy there takes long enough to stop part way.
-static BOX_SLOW: AtomicBool = AtomicBool::new(false);
+/// While it names a file, box's Server takes nothing more a window sends
+/// once that file is there, as over a line that stalled, till the test
+/// lets it go (`hold_box_once`).
+static BOX_HELD_ONCE: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+static BOX_LET_GO: std::sync::Condvar = std::sync::Condvar::new();
 /// Box's links as `serving` made them, to end when it goes down.
 static BOX_LINKS: Mutex<Vec<ferrite_core::link::Stream>> = Mutex::new(Vec::new());
+
+/// Box's Server takes nothing more once `landed` is there: a copy that
+/// lands it is held part way, however loaded the machine, till the hold
+/// lets go or drops, so a test that fails while box holds ends.
+fn hold_box_once(landed: std::path::PathBuf) -> BoxHeld {
+    *BOX_HELD_ONCE.lock().unwrap() = Some(landed);
+    BoxHeld
+}
+
+#[must_use = "box is let go when the hold drops"]
+struct BoxHeld;
+
+impl BoxHeld {
+    /// Box takes what it is sent again.
+    fn let_go(self) {}
+}
+
+impl Drop for BoxHeld {
+    fn drop(&mut self) {
+        *BOX_HELD_ONCE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        BOX_LET_GO.notify_all();
+    }
+}
 
 /// Box's Server stops, ending every link to it, or starts again.
 fn box_down(down: bool) {
@@ -81,9 +106,16 @@ fn serving(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
     struct Kept(link::Stream);
     impl std::io::Write for Kept {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            if BOX_SLOW.load(Ordering::SeqCst) {
-                std::thread::sleep(std::time::Duration::from_micros(buf.len() as u64 / 4));
+            let mut held = BOX_HELD_ONCE.lock().unwrap();
+            if held.as_deref().is_some_and(std::path::Path::exists) {
+                // A test waiting for the hold looks again: a held copy
+                // says nothing more.
+                ferrite_core::doorbell::ring();
             }
+            while held.as_deref().is_some_and(std::path::Path::exists) {
+                held = BOX_LET_GO.wait(held).unwrap();
+            }
+            drop(held);
             SENT_TO_BOX.lock().unwrap().extend_from_slice(buf);
             self.0.write(buf)
         }
