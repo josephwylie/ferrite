@@ -577,8 +577,10 @@ fn an_entry_the_far_side_cannot_make_is_left_with_what_it_holds_and_the_rest_is_
 }
 
 /// A source whose every file holds the same bytes.
+#[cfg(windows)]
 struct Same(&'static [u8]);
 
+#[cfg(windows)]
 impl Source for Same {
     fn open(&self, _: &str) -> io::Result<Box<dyn io::Read + '_>> {
         Ok(Box::new(self.0))

@@ -426,27 +426,26 @@ fn a_tree_op_outside_its_root_is_refused() {
     .unwrap_err();
     assert_eq!(unknown.kind(), io::ErrorKind::Unsupported);
 
-    #[cfg(unix)]
-    {
-        let outside = harness.dir.join("outside");
-        std::fs::create_dir_all(&outside).unwrap();
-        std::fs::create_dir_all(&dest).unwrap();
-        std::os::unix::fs::symlink(&outside, dest.join("through")).unwrap();
-        assert!(exchange.call(Request::Begin {
-            write: 1,
-            root: root.clone(),
-            path: "through/x.txt".into(),
-            size: 1,
-            mode: None,
-        })
-        .is_err());
-        assert!(exchange.call(Request::Remove {
-            root,
-            path: "through/x.txt".into()
-        })
-        .is_err());
-        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
-    }
+    // Nothing is written through a link there, a junction on Windows too:
+    // the write is left unmade, and the send goes on without it.
+    let outside = harness.dir.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::create_dir_all(&dest).unwrap();
+    dir_link(&outside, &dest.join("through"));
+    let begun = exchange.call(Request::Begin {
+        write: 2,
+        root: root.clone(),
+        path: "through/x.txt".into(),
+        size: 1,
+        mode: None,
+    });
+    assert!(matches!(begun, Ok(Reply::Unmade(tree::Refusal::Failed { .. }))), "{begun:?}");
+    assert!(exchange.call(Request::Remove {
+        root,
+        path: "through/x.txt".into()
+    })
+    .is_err());
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
 }
 
 /// `link` made a directory link to `target`: a symlink on Unix, a junction
