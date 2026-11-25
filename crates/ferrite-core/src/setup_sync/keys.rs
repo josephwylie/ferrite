@@ -4,16 +4,22 @@
 //! is written back at a time with every other byte of the file as it was: a
 //! JSON file by the span of that one value, a TOML file through
 //! `toml_edit`, which keeps its comments and order. A value that names a
-//! place of this computer outside the home is this computer's alone.
+//! place of this computer outside the home is this computer's alone, and
+//! so is an entry the table's [`Entries`] says does not travel: a plugin
+//! of a marketplace that does not, a marketplace in a folder, an MCP server
+//! that runs what another side may not have. A JSON file that holds a key
+//! the table names twice is read one way by its tool and another by a
+//! writer, so it is neither read nor written.
 
+use std::collections::BTreeSet;
 use std::io;
 use std::ops::Range;
 
 use serde_json::{Map, Value};
 use toml_edit::{DocumentMut, Item, TableLike};
 
-use super::portable::{self, Spelling};
-use super::{Format, Key, Shape, OTHERS};
+use super::portable::{self, Spelling, HOME};
+use super::{Entries, Format, Key, Shape};
 
 /// One key as a side holds it.
 pub(super) struct Listed {
@@ -22,27 +28,46 @@ pub(super) struct Listed {
     pub key: String,
     /// Its value as it is carried.
     pub carried: Vec<u8>,
-    /// It names a place of this computer outside the home: it never moves.
+    /// It is this computer's own: it never moves.
     pub own: bool,
 }
 
 /// Each key of `raw`, a file of `format`, that `keys` names.
 pub(super) fn list(format: Format, keys: &[Key], raw: &[u8], home: &Spelling) -> io::Result<Vec<Listed>> {
+    let document = read(format, keys, raw)?;
     let mut listed = Vec::new();
-    for (name, value) in read(format, raw)? {
-        let (Some(key), Some(spelled)) = (named(keys, &name), encode(&name)) else {
+    for (name, value) in &document {
+        let (Some(key), Some(spelled)) = (named(keys, name), encode(name)) else {
             continue;
         };
         match (key.shape, value) {
-            (Shape::Whole, value) => listed.push(carried(spelled, &value, home)),
-            (Shape::Each, Value::Object(entries)) => {
-                for (entry, value) in entries {
-                    if let Some(entry) = encode(&entry) {
-                        listed.push(carried(format!("{spelled}/{entry}"), &value, home));
-                    }
+            (Shape::Whole, value) => listed.push(carried(spelled, value, home)),
+            (Shape::Each(entries), Value::Object(each)) => {
+                for (entry, value) in each {
+                    let Some(spelled_entry) = encode(entry) else {
+                        continue;
+                    };
+                    let key = format!("{spelled}/{spelled_entry}");
+                    listed.push(match entries {
+                        Entries::Plugins { markets } => {
+                            let mut plugin = carried(key, value, home);
+                            plugin.own |= !plugin_travels(format, &document, markets, entry);
+                            plugin
+                        }
+                        Entries::Markets { carried: fields } => {
+                            let mut market = carried(key, &only(value, fields), home);
+                            market.own |= !remote(format, value);
+                            market
+                        }
+                        Entries::Servers => {
+                            let mut server = carried(key, value, home);
+                            server.own |= runs_outside(&server.carried);
+                            server
+                        }
+                    });
                 }
             }
-            (Shape::Each, _) => {}
+            (Shape::Each(_), _) => {}
         }
     }
     Ok(listed)
@@ -54,12 +79,27 @@ pub(super) fn names(keys: &[Key], key: &str) -> bool {
 }
 
 /// `raw`, or a new file when there is none, with `key` set to `carried`,
-/// its value as a sync carries it; every other byte as it was.
+/// its value as a sync carries it; every other byte as it was. A
+/// marketplace that carries some of its fields keeps the rest as this
+/// side has them.
 pub(super) fn set(format: Format, keys: &[Key], raw: Option<&[u8]>, key: &str, carried: &[u8], home: &Spelling) -> io::Result<Vec<u8>> {
     let at = parse(keys, key)?;
-    let value: Value = serde_json::from_slice(&portable::expand(carried, home)).map_err(not_json)?;
+    let mut value: Value = serde_json::from_slice(&portable::expand(carried, home)).map_err(not_json)?;
+    let shape = named(keys, &at.name).map(|key| key.shape);
+    if let (Some(raw), Some(Shape::Each(Entries::Markets { carried: Some(fields) })), Some(entry)) = (raw, shape, &at.entry) {
+        if let (Some(Value::Object(kept)), Value::Object(sent)) = (read(format, keys, raw)?.get(&at.name).and_then(|key| key.get(entry)), &value) {
+            let mut merged = kept.clone();
+            merged.retain(|field, _| !fields.contains(&field.as_str()));
+            merged.extend(sent.clone());
+            value = Value::Object(merged);
+        }
+    }
     match format {
-        Format::Json => json::set(raw.unwrap_or(b"{}"), &at, value),
+        Format::Json => {
+            let raw = raw.unwrap_or(b"{}");
+            json::once(raw, keys)?;
+            json::set(raw, &at, value)
+        }
         Format::Toml => toml::set(raw.unwrap_or_default(), &at, &value),
     }
 }
@@ -68,7 +108,10 @@ pub(super) fn set(format: Format, keys: &[Key], raw: Option<&[u8]>, key: &str, c
 pub(super) fn remove(format: Format, keys: &[Key], raw: &[u8], key: &str) -> io::Result<Option<Vec<u8>>> {
     let at = parse(keys, key)?;
     match format {
-        Format::Json => json::remove(raw, &at),
+        Format::Json => {
+            json::once(raw, keys)?;
+            json::remove(raw, &at)
+        }
         Format::Toml => toml::remove(raw, &at),
     }
 }
@@ -84,19 +127,17 @@ fn parse(keys: &[Key], key: &str) -> io::Result<At> {
         Some((name, entry)) => (decode(name), Some(decode(entry))),
         None => (decode(key), None),
     };
-    let shape = named(keys, &name).map(|key| key.shape).filter(|_| !name.is_empty());
+    let shape = named(keys, &name).map(|key| key.shape);
     match (shape, entry.filter(|entry| !entry.is_empty())) {
         (Some(Shape::Whole), None) => Ok(At { name, entry: None }),
-        (Some(Shape::Each), Some(entry)) if key.matches('/').count() == 1 => Ok(At { name, entry: Some(entry) }),
+        (Some(Shape::Each(_)), Some(entry)) if key.matches('/').count() == 1 => Ok(At { name, entry: Some(entry) }),
         _ => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("`{key}` is not a key Setup sync keeps"))),
     }
 }
 
 /// The key of `keys` that the file's top-level key `name` is.
 fn named<'a>(keys: &'a [Key], name: &str) -> Option<&'a Key> {
-    keys.iter()
-        .find(|key| key.name == name)
-        .or_else(|| keys.iter().find(|key| key.name == OTHERS))
+    keys.iter().find(|key| key.name == name)
 }
 
 fn carried(key: String, value: &Value, home: &Spelling) -> Listed {
@@ -104,6 +145,101 @@ fn carried(key: String, value: &Value, home: &Spelling) -> Listed {
     let carried = portable::portable(&text, home);
     let own = serde_json::from_slice(&carried).is_ok_and(|value| rooted(&value));
     Listed { key, carried, own }
+}
+
+/// `value` with only `fields` of it, when they are given.
+fn only(value: &Value, fields: Option<&[&str]>) -> Value {
+    match (value, fields) {
+        (Value::Object(map), Some(fields)) => {
+            Value::Object(map.iter().filter(|(field, _)| fields.contains(&field.as_str())).map(|(field, value)| (field.clone(), value.clone())).collect())
+        }
+        (value, _) => value.clone(),
+    }
+}
+
+/// Whether a marketplace, as its file holds it, is fetched from elsewhere
+/// (a GitHub repo, a git URL, a URL), and not a folder, one the settings
+/// hold, or what the tool bundles.
+fn remote(format: Format, market: &Value) -> bool {
+    match format {
+        Format::Json => claude_source(market).is_some(),
+        Format::Toml => codex_source(market).is_some(),
+    }
+}
+
+/// Where Claude fetches a marketplace from, as `extraKnownMarketplaces`
+/// names it, and as `claude plugin marketplace add` takes it: a GitHub
+/// `owner/repo`, or a git URL or a URL.
+pub(super) fn claude_source(market: &Value) -> Option<&str> {
+    let source = &market["source"];
+    match source["source"].as_str()? {
+        "github" => source["repo"].as_str().filter(|repo| github(repo)),
+        "git" | "url" => source["url"].as_str().filter(|url| fetched(url)),
+        _ => None,
+    }
+}
+
+/// Where Codex fetches a marketplace from, as `config.toml`'s
+/// `marketplaces` names it: a git URL, or a GitHub `owner/repo`.
+pub(super) fn codex_source(market: &Value) -> Option<&str> {
+    match market["source_type"].as_str()? {
+        "git" => market["source"].as_str().filter(|at| fetched(at) || github(at)),
+        _ => None,
+    }
+}
+
+/// Whether `repo` is a GitHub `owner/repo`.
+fn github(repo: &str) -> bool {
+    repo.split_once('/').is_some_and(|(owner, name)| plain(owner) && plain(name))
+}
+
+/// Whether `url` is a URL a marketplace is fetched from, and nothing a
+/// tool could read as one of its options.
+fn fetched(url: &str) -> bool {
+    ["https://", "ssh://", "git@"].iter().any(|scheme| url.starts_with(scheme))
+        && url.chars().all(|c| c.is_ascii_graphic() && !"\"'`\\<>|;$".contains(c))
+}
+
+/// Whether `name` is a name a tool's installer is handed: a letter or a
+/// digit, then letters, digits, `.`, `_` and `-`.
+pub(super) fn plain(name: &str) -> bool {
+    name.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()) && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+}
+
+/// Whether the plugin `entry`, `<plugin>@<marketplace>`, travels: its
+/// marketplace is an entry of the file's key `markets` that does.
+fn plugin_travels(format: Format, document: &Map<String, Value>, markets: &str, entry: &str) -> bool {
+    let Some((_, market)) = entry.rsplit_once('@') else {
+        return false;
+    };
+    document.get(markets).and_then(|markets| markets.get(market)).is_some_and(|market| remote(format, market))
+}
+
+/// Whether an MCP server, as it is carried, names a path in the home that
+/// the table does not sync: a tool's own folder, a program installed for
+/// this computer. Another side may have none there.
+fn runs_outside(carried: &[u8]) -> bool {
+    fn strings(value: &Value, into: &mut Vec<String>) {
+        match value {
+            Value::String(text) => into.push(text.clone()),
+            Value::Array(items) => items.iter().for_each(|item| strings(item, into)),
+            Value::Object(map) => map.values().for_each(|item| strings(item, into)),
+            _ => {}
+        }
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(carried) else {
+        return true;
+    };
+    let mut found = Vec::new();
+    strings(&value, &mut found);
+    let homes = [HOME, "~", "$HOME", "${HOME}", "%USERPROFILE%"];
+    found.iter().flat_map(|text| text.split(|c: char| c.is_whitespace() || "\"'=:;,".contains(c))).any(|word| {
+        homes.iter().any(|home| {
+            word.strip_prefix(home).and_then(|rest| rest.strip_prefix(['/', '\\'])).is_some_and(|rest| {
+                !super::store::in_table(&rest.replace('\\', "/"))
+            })
+        })
+    })
 }
 
 /// `value` with each object's keys in order.
@@ -175,8 +311,17 @@ fn decode(spelled: &str) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-/// The file's top-level keys and their values.
-fn read(format: Format, raw: &[u8]) -> io::Result<Map<String, Value>> {
+/// The file's top-level keys and their values, refused when it holds one
+/// of `keys` twice.
+fn read(format: Format, keys: &[Key], raw: &[u8]) -> io::Result<Map<String, Value>> {
+    if format == Format::Json {
+        json::once(raw, keys)?;
+    }
+    document(format, raw)
+}
+
+/// A chosen file's top-level keys and their values, as JSON.
+pub(super) fn document(format: Format, raw: &[u8]) -> io::Result<Map<String, Value>> {
     match format {
         Format::Json => match serde_json::from_slice(raw).map_err(not_json)? {
             Value::Object(document) => Ok(document),
@@ -198,6 +343,28 @@ fn invalid(message: &str) -> io::Error {
 /// its spacing, its order, how each string is escaped.
 mod json {
     use super::*;
+
+    /// Refuses a file that holds a key `keys` names twice, or an entry of
+    /// one twice: its tool reads the last, a reader of spans the first.
+    pub(super) fn once(text: &[u8], keys: &[Key]) -> io::Result<()> {
+        let root = Object::at(text, space(text, 0))?;
+        for key in keys {
+            let held: Vec<&Member> = root.members.iter().filter(|member| member.key == key.name).collect();
+            if held.len() > 1 {
+                return Err(invalid(&format!("it holds `{}` twice", key.name)));
+            }
+            if let (Shape::Each(_), Some(member)) = (key.shape, held.first()) {
+                if text.get(member.value.start) == Some(&b'{') {
+                    let each = Object::at(text, member.value.start)?;
+                    let mut seen = BTreeSet::new();
+                    if let Some(twice) = each.members.iter().find(|entry| !seen.insert(entry.key.as_str())) {
+                        return Err(invalid(&format!("its `{}` holds `{}` twice", key.name, twice.key)));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 
     pub(super) fn set(text: &[u8], at: &At, value: Value) -> io::Result<Vec<u8>> {
         let root = Object::at(text, space(text, 0))?;
@@ -580,10 +747,10 @@ mod tests {
             added,
             file.replace("\"pstack@cursor-plugins\": true\n", "\"pstack@cursor-plugins\": true,\n        \"sentry@cursor-plugins\": true\n")
         );
-        let theme = set(file, "theme", "{\"name\": \"dark\", \"size\": 2}");
-        assert!(theme.starts_with(&file[..file.len() - 3]), "{theme}");
-        assert!(theme.ends_with("},\n    \"theme\": {\n      \"name\": \"dark\",\n      \"size\": 2\n    }\n}\n"), "{theme}");
-        assert!(theme.contains("caf\\u00e9"), "a string is escaped as it was");
+        let skills = set(file, "skillOverrides", "{\"name\": \"dark\", \"size\": 2}");
+        assert!(skills.starts_with(&file[..file.len() - 3]), "{skills}");
+        assert!(skills.ends_with("},\n    \"skillOverrides\": {\n      \"name\": \"dark\",\n      \"size\": 2\n    }\n}\n"), "{skills}");
+        assert!(skills.contains("caf\\u00e9"), "a string is escaped as it was");
 
         let fresh = set("{}", "extraKnownMarketplaces/cursor-plugins", "{\"source\": {\"repo\": \"cursor/plugins\"}}");
         let fresh: Value = serde_json::from_str(&fresh).unwrap();
@@ -623,18 +790,18 @@ mod tests {
     fn a_key_is_carried_alike_however_its_file_orders_or_spells_it() {
         let (format, keys) = keys_of(".claude/settings.json");
         let windows = Spelling::new(r"C:\Users\me", true);
-        let here = br#"{"hooks": {"Stop": [{"command": "node C:\\Users\\me\\h.js", "type": "command"}]}, "model": "opus"}"#;
-        let there = br#"{"model": "opus", "hooks": {"Stop": [{"type": "command", "command": "node /home/me/h.js"}]}}"#;
+        let here = br#"{"permissions": {"additionalDirectories": ["C:\\Users\\me\\code"], "allow": ["Read"]}, "model": "opus"}"#;
+        let there = br#"{"model": "opus", "permissions": {"allow": ["Read"], "additionalDirectories": ["/home/me/code"]}}"#;
         let (here, there) = (list(format, keys, here, &windows).unwrap(), list(format, keys, there, &linux()).unwrap());
-        for key in ["hooks", "model"] {
+        for key in ["permissions", "model"] {
             let carried = |listed: &[Listed]| listed.iter().find(|listed| listed.key == key).map(|listed| listed.carried.clone());
             assert_eq!(carried(&here), carried(&there), "{key}");
         }
         assert!(here.iter().all(|listed| !listed.own));
 
-        let own = br#"{"statusLine": {"command": "/opt/homebrew/bin/node ~/s.js"}, "env": {"PATH": "C:\\tools;D:\\bin"}, "model": "opus"}"#;
+        let own = br#"{"statusLine": {"command": "/opt/homebrew/bin/node ~/s.js"}, "env": {"PATH": "C:\\tools;D:\\bin"}, "model": "opus", "permissions": {"additionalDirectories": ["D:\\work"]}}"#;
         let own: Vec<(String, bool)> = list(format, keys, own, &linux()).unwrap().into_iter().map(|listed| (listed.key, listed.own)).collect();
-        assert_eq!(own, [("statusLine".into(), true), ("env".into(), true), ("model".into(), false)]);
+        assert_eq!(own, [("model".into(), false), ("permissions".into(), true)], "a key the table does not name is never read");
     }
 
     #[test]

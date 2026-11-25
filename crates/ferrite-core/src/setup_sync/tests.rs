@@ -211,7 +211,7 @@ fn the_first_sync_lands_everything_and_nothing_outside_the_table() {
     assert_eq!(read(&far, ".claude/projects/y/session.jsonl").as_deref(), Some("far\n"));
 
     let settings = |home: &Home| serde_json::from_str::<serde_json::Value>(&read(home, ".claude/settings.json").unwrap()).unwrap();
-    assert_eq!(settings(&far), settings(&mine));
+    assert_eq!(settings(&far), serde_json::json!({"model": "opus"}), "the status line is this computer's own");
     let claude: serde_json::Value = serde_json::from_str(&read(&far, ".claude.json").unwrap()).unwrap();
     assert_eq!(claude["mcpServers"]["docs"]["command"], "docs-mcp");
     assert_eq!(claude["userID"], "far", "the rest of it is the Machine's own");
@@ -353,7 +353,8 @@ fn a_sync_cut_short_at_any_request_is_finished_by_the_next() {
         assert!(!here_now.contains_key(".claude/commands/review.md") && !there_now.contains_key(".codex/prompts/fix.md"));
         assert_eq!(read(&mine, ".claude/CLAUDE.md").as_deref(), Some("There's.\n"), "cut after {cut}");
         assert_eq!(read(&far, ".claude/CLAUDE.md").as_deref(), Some("There's.\n"));
-        assert_eq!(read(&mine, ".claude/settings.json").as_deref(), Some(r#"{"model": "sonnet"}"#));
+        let here = r#"{"model": "sonnet", "statusLine": {"command": "~/bin/status"}}"#;
+        assert_eq!(read(&mine, ".claude/settings.json").as_deref(), Some(here), "the status line stays this computer's");
         assert_eq!(sync(&job, &far), Synced::default(), "cut after {cut}");
         if first.is_ok() {
             break;
@@ -1242,12 +1243,14 @@ fn every_folder_a_sync_makes_is_the_owners_alone_whatever_the_umask() {
 fn a_plugin_and_a_server_each_side_added_are_kept_on_both() {
     let world = World::new("each");
     let (mine, far) = (world.home("here"), world.home("machine"));
-    put(&mine, ".claude/settings.json", r#"{"enabledPlugins": {"pstack@cursor-plugins": true}}"#);
-    put(&far, ".claude/settings.json", r#"{"enabledPlugins": {"sentry@cursor-plugins": true}}"#);
+    let market = r#""extraKnownMarketplaces": {"cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}}}"#;
+    put(&mine, ".claude/settings.json", &format!(r#"{{"enabledPlugins": {{"pstack@cursor-plugins": true}}, {market}}}"#));
+    put(&far, ".claude/settings.json", &format!(r#"{{"enabledPlugins": {{"sentry@cursor-plugins": true}}, {market}}}"#));
     put(&mine, ".claude.json", r#"{"mcpServers": {"docs": {"command": "docs-mcp"}}}"#);
     put(&far, ".claude.json", r#"{"userID": "far", "mcpServers": {"search": {"command": "search-mcp"}}}"#);
-    put(&mine, ".codex/config.toml", "[plugins.\"pstack@cursor-plugins\"]\nenabled = true\n");
-    put(&far, ".codex/config.toml", "[plugins.\"sentry@cursor-plugins\"]\nenabled = true\n");
+    let market = "[marketplaces.cursor-plugins]\nsource_type = \"git\"\nsource = \"https://github.com/cursor/plugins.git\"\n";
+    put(&mine, ".codex/config.toml", &format!("[plugins.\"pstack@cursor-plugins\"]\nenabled = true\n\n{market}"));
+    put(&far, ".codex/config.toml", &format!("[plugins.\"sentry@cursor-plugins\"]\nenabled = true\n\n{market}"));
     let job = world.job(&mine, "far");
     let synced = sync(&job, &far);
     assert_eq!((synced.conflicts.len(), synced.replaced.len()), (0, 0), "{synced:?}");
@@ -1282,7 +1285,7 @@ fn a_preference_the_sides_hold_differently_takes_this_computers_at_the_first_syn
     );
     assert!(!job.conflicts.exists());
     assert_eq!(read(&far, ".claude/settings.json").as_deref(), Some("{\n  \"model\": \"opus\",\n  \"theme\": \"dark\"\n}\n"));
-    assert_eq!(read(&mine, ".claude/settings.json").as_deref(), Some("{\n  \"model\": \"opus\",\n  \"theme\": \"dark\"\n}\n"));
+    assert_eq!(read(&mine, ".claude/settings.json").as_deref(), Some("{\n  \"model\": \"opus\"\n}\n"), "the theme is how each computer shows Claude");
     assert_eq!(read(&far, ".codex/config.toml").as_deref(), Some("# Set up by hand\nmodel = \"gpt-a\" # kept\n"));
     assert_eq!(sync(&job, &far), Synced::default());
 
@@ -1760,3 +1763,164 @@ fn the_first_tables_base_and_the_folders_it_made_of_links_lose_nothing() {
     assert_eq!(sync(&job, &far).changed(), 0);
 }
 
+/// `.claude/settings.json` is an allowlist: a key the table does not
+/// name, or one that names a command a computer runs, never travels, and
+/// a marketplace in a folder, with its plugins, stays its side's.
+#[test]
+fn claudes_settings_carry_only_the_keys_the_table_names() {
+    let world = World::new("settings-allowlist");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    let chosen = serde_json::json!({
+        "permissions": {"deny": ["Artifact"], "defaultMode": "acceptEdits"},
+        "model": "opus[1m]",
+        "effortLevel": "xhigh",
+        "outputStyle": "Concise",
+        "skillOverrides": {"loop-me": "off"},
+        "modelSettings": {"claude-opus-5-5": {"effortLevel": "medium"}},
+        "includeCoAuthoredBy": false,
+    });
+    let left = serde_json::json!({
+        "env": {"VITEST_MAX_FORKS": "2"},
+        "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "$HOME/.claude/hooks/use-nextest.sh"}]}]},
+        "statusLine": {"type": "command", "command": "~/.claude/statusline.sh"},
+        "apiKeyHelper": "~/bin/key",
+        "awsAuthRefresh": "aws sso login",
+        "otelHeadersHelper": "~/bin/otel",
+        "tui": "fullscreen",
+        "teammateMode": "in-process",
+        "preferredNotifChannel": "auto",
+        "theme": "dark",
+        "aKeyNoTableNames": 1,
+    });
+    let mut settings = chosen.as_object().unwrap().clone();
+    settings.extend(left.as_object().unwrap().clone());
+    settings.insert(
+        "enabledPlugins".into(),
+        serde_json::json!({"pstack@cursor-plugins": true, "mine@local-tools": true, "team@inline": true}),
+    );
+    let local = mine.root().join("local-tools").to_string_lossy().into_owned();
+    settings.insert(
+        "extraKnownMarketplaces".into(),
+        serde_json::json!({
+            "cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}, "autoUpdate": true},
+            "local-tools": {"source": {"source": "directory", "path": local}},
+            "inline": {"source": {"source": "settings", "name": "inline", "plugins": []}},
+        }),
+    );
+    put(&mine, ".claude/settings.json", &serde_json::to_string_pretty(&settings).unwrap());
+    put(&far, ".claude/settings.json", "{}\n");
+    let job = world.job(&mine, "far");
+    let synced = sync(&job, &far);
+    assert_eq!(synced.problems, [], "held unsaid: {synced:?}");
+    let landed: serde_json::Value = serde_json::from_str(&read(&far, ".claude/settings.json").unwrap()).unwrap();
+    for (key, value) in chosen.as_object().unwrap() {
+        assert_eq!(landed.get(key), Some(value), "{key}");
+    }
+    for key in left.as_object().unwrap().keys() {
+        assert!(landed.get(key).is_none(), "{key} travelled: {landed}");
+    }
+    assert_eq!(landed["enabledPlugins"], serde_json::json!({"pstack@cursor-plugins": true}));
+    let markets: Vec<&String> = landed["extraKnownMarketplaces"].as_object().unwrap().keys().collect();
+    assert_eq!(markets, ["cursor-plugins"]);
+    assert_eq!(sync(&job, &far), Synced::default());
+}
+
+/// Codex's config carries a marketplace by where it is fetched from, and
+/// never one bundled with Codex or kept in a folder, nor their plugins.
+#[test]
+fn codex_carries_a_remote_marketplace_by_its_source_and_never_a_bundled_or_local_one() {
+    let world = World::new("codex-markets");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    let home = mine.root().to_string_lossy().replace('\\', "/");
+    put(
+        &mine,
+        ".codex/config.toml",
+        &format!(
+            "model = \"gpt-5.5\"\n\n[marketplaces.cursor-plugins]\nsource_type = \"git\"\nsource = \"https://github.com/cursor/plugins.git\"\nlast_revision = \"abc\"\nlast_updated = \"2026-11-24T10:00:00Z\"\n\n[marketplaces.openai-bundled]\nsource_type = \"local\"\nsource = \"{home}/.codex/.tmp/bundled-marketplaces/openai-bundled\"\n\n[marketplaces.runtimes]\nsource_type = \"local\"\nsource = \"{home}/.cache/codex-runtimes/marketplace\"\n\n[plugins.\"computer-use@openai-bundled\"]\nenabled = true\n\n[plugins.\"pstack@cursor-plugins\"]\nenabled = true\n"
+        ),
+    );
+    let job = world.job(&mine, "far");
+    let synced = sync(&job, &far);
+    assert_eq!(synced.problems, [], "{synced:?}");
+    let config = read(&far, ".codex/config.toml").unwrap();
+    for gone in ["last_revision", "last_updated", "openai-bundled", "runtimes", "computer-use", ".tmp", ".cache"] {
+        assert!(!config.contains(gone), "{gone} reached the Machine:\n{config}");
+    }
+    assert!(config.contains("[marketplaces.cursor-plugins]") && config.contains("source = \"https://github.com/cursor/plugins.git\""), "{config}");
+    assert!(config.contains("[plugins.\"pstack@cursor-plugins\"]"), "{config}");
+
+    let fetched = config.replace("source = \"https://github.com/cursor/plugins.git\"\n", "source = \"https://github.com/cursor/plugins.git\"\nlast_revision = \"far\"\n");
+    put(&far, ".codex/config.toml", &fetched);
+    assert_eq!(sync(&job, &far), Synced::default(), "what Codex notes of its fetch is each side's");
+    assert!(read(&mine, ".codex/config.toml").unwrap().contains("last_revision = \"abc\""));
+    assert!(read(&far, ".codex/config.toml").unwrap().contains("last_revision = \"far\""));
+}
+
+/// An MCP server travels unless what it runs names a path outside what the
+/// table syncs: a tool's own folder, an app, another computer's place.
+#[test]
+fn an_mcp_server_that_runs_what_another_side_may_not_have_stays_unsaid() {
+    let world = World::new("mcp-servers");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    let home = mine.root().to_string_lossy().replace('\\', "/");
+    let servers = serde_json::json!({"mcpServers": {
+        "docs": {"command": "npx", "args": ["-y", "@acme/docs-mcp"]},
+        "hooked": {"command": "node", "args": [format!("{home}/.claude/hooks/mcp.js")]},
+        "plugin": {"command": format!("{home}/.claude/plugins/cache/m/p/1.0/bin/server")},
+        "bundled": {"command": "node", "args": [format!("{home}/.codex/.tmp/bundled-marketplaces/openai-bundled/cu/index.js")]},
+        "elsewhere": {"command": format!("{home}/code/mcp/run")},
+        "app": {"command": "/Applications/Codex.app/Contents/Resources/computer-use"},
+    }});
+    put(&mine, ".claude.json", &serde_json::to_string(&servers).unwrap());
+    put(
+        &mine,
+        ".codex/config.toml",
+        &format!("[mcp_servers.computer-use]\ncommand = \"{home}/.codex/.tmp/bundled-marketplaces/openai-bundled/plugins/computer-use/cu\"\n\n[mcp_servers.search]\ncommand = \"uvx\"\nargs = [\"search-mcp\"]\n"),
+    );
+    let job = world.job(&mine, "far");
+    let synced = sync(&job, &far);
+    assert_eq!(synced.problems, [], "held unsaid: {synced:?}");
+    let claude: serde_json::Value = serde_json::from_str(&read(&far, ".claude.json").unwrap()).unwrap();
+    let landed: Vec<&String> = claude["mcpServers"].as_object().unwrap().keys().collect();
+    assert_eq!(landed, ["docs", "hooked"], "{claude}");
+    let config = read(&far, ".codex/config.toml").unwrap();
+    assert!(config.contains("[mcp_servers.search]") && !config.contains("computer-use"), "{config}");
+}
+
+#[test]
+fn what_a_file_browser_leaves_in_a_folder_never_travels() {
+    let world = World::new("browser-litter");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    put(&mine, ".agents/skills/x/SKILL.md", "# X\n");
+    put(&mine, ".agents/skills/x/.DS_Store", "finder");
+    put(&mine, ".claude/commands/Thumbs.db", "explorer");
+    put(&mine, ".claude/commands/go.md", "Go.\n");
+    put(&mine, ".claude/skills/y/desktop.ini", "explorer");
+    put(&mine, ".claude/skills/y/SKILL.md", "# Y\n");
+    sync(&world.job(&mine, "far"), &far);
+    let landed: Vec<String> = files(&far).into_keys().filter(|path| !path.starts_with(".ferrite")).collect();
+    assert_eq!(landed, [".agents/skills/x/SKILL.md", ".claude/commands/go.md", ".claude/skills/y/SKILL.md"]);
+    let read = Machine::new(&mine).call(Request::Read { root: tree::Root::SETUP, path: ".agents/skills/x/.DS_Store".into(), offset: 0 });
+    assert!(read.is_err());
+}
+
+/// A JSON file that holds a chosen key twice reads one way to the writer
+/// and another to the reader: it is held, and nothing is written to it.
+#[test]
+fn a_file_holding_a_chosen_key_twice_is_held_and_never_written() {
+    let world = World::new("twice");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    put(
+        &mine,
+        ".claude/settings.json",
+        r#"{"model": "sonnet", "enabledPlugins": {"a@m": true}, "extraKnownMarketplaces": {"m": {"source": {"source": "github", "repo": "o/m"}}}}"#,
+    );
+    let twice = [r#"{"model": "opus", "model": "haiku"}"#, r#"{"enabledPlugins": {"a@m": true, "a@m": false}}"#];
+    for (round, text) in twice.into_iter().enumerate() {
+        put(&far, ".claude/settings.json", text);
+        let synced = sync(&world.job(&mine, &format!("far-{round}")), &far);
+        assert_eq!(read(&far, ".claude/settings.json").as_deref(), Some(text), "round {round}: {synced:?}");
+        let said: Vec<_> = synced.problems.iter().map(|problem| (problem.path.as_str(), problem.side)).collect();
+        assert_eq!(said, [(".claude/settings.json", Side::There)], "round {round}");
+    }
+}

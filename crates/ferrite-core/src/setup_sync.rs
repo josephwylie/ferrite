@@ -69,10 +69,10 @@ pub enum Format {
     Toml,
 }
 
-/// A top-level key of a chosen file.
+/// A top-level key of a chosen file. A key the table does not name is
+/// never read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Key {
-    /// Its name; [`OTHERS`] is every top-level key no other key names.
     pub name: &'static str,
     pub shape: Shape,
 }
@@ -83,19 +83,34 @@ pub enum Shape {
     Whole,
     /// Each entry of the object or table it holds is an entry of its own,
     /// `<name>/<entry>`: two sides that each add a plugin both keep theirs.
-    Each,
+    Each(Entries),
 }
 
-/// The [`Key::name`] of every top-level key no other key of its file names.
-pub const OTHERS: &str = "*";
+/// What each entry of an [`Shape::Each`] key is, and so when it travels.
+/// One that does not is held, unsaid, as a value naming a place of this
+/// computer's own is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Entries {
+    /// A plugin, `<plugin>@<marketplace>`: it travels when its
+    /// marketplace, the entry of that name of the key `markets`, does.
+    Plugins { markets: &'static str },
+    /// A marketplace: it travels when its source is remote (a GitHub repo,
+    /// a git URL, a URL), never one in a folder or bundled with its tool.
+    /// It carries `carried` alone when that is given, so what its tool
+    /// keeps of it for itself stays each side's.
+    Markets { carried: Option<&'static [&'static str]> },
+    /// An MCP server: it travels unless what it runs names a path outside
+    /// what the table syncs, which may not be there on another side.
+    Servers,
+}
 
 impl Key {
     const fn whole(name: &'static str) -> Self {
         Self { name, shape: Shape::Whole }
     }
 
-    const fn each(name: &'static str) -> Self {
-        Self { name, shape: Shape::Each }
+    const fn each(name: &'static str, entries: Entries) -> Self {
+        Self { name, shape: Shape::Each(entries) }
     }
 }
 
@@ -119,16 +134,29 @@ pub const ITEMS: &[Item] = &[
     Item { path: ".claude/CLAUDE.md", source: FILE },
     Item { path: ".claude/keybindings.json", source: FILE },
     Item { path: ".claude/statusline.sh", source: FILE },
+    // An allowlist: a key that names a command a computer runs (`hooks`,
+    // `statusLine`, `apiKeyHelper` and the like), its environment, or
+    // how this computer shows Claude is that computer's own.
     Item {
         path: ".claude/settings.json",
         source: Source::Keys {
             format: Format::Json,
-            keys: &[Key::each("enabledPlugins"), Key::each("extraKnownMarketplaces"), Key::whole(OTHERS)],
+            keys: &[
+                Key::each("enabledPlugins", Entries::Plugins { markets: "extraKnownMarketplaces" }),
+                Key::each("extraKnownMarketplaces", Entries::Markets { carried: None }),
+                Key::whole("permissions"),
+                Key::whole("model"),
+                Key::whole("effortLevel"),
+                Key::whole("outputStyle"),
+                Key::whole("skillOverrides"),
+                Key::whole("modelSettings"),
+                Key::whole("includeCoAuthoredBy"),
+            ],
         },
     },
     Item {
         path: ".claude.json",
-        source: Source::Keys { format: Format::Json, keys: &[Key::each("mcpServers")] },
+        source: Source::Keys { format: Format::Json, keys: &[Key::each("mcpServers", Entries::Servers)] },
     },
     Item { path: ".claude/.credentials.json", source: Source::Credential(Provider::Claude) },
     // Codex writes its own bundled skills under `.system`, each side for
@@ -138,7 +166,8 @@ pub const ITEMS: &[Item] = &[
     Item { path: ".codex/rules", source: tree(&[]) },
     Item { path: ".codex/AGENTS.md", source: FILE },
     // An allowlist: `projects`, `notify` and `skills.config` name this
-    // computer's own places, and are never read.
+    // computer's own places, and are never read. A marketplace carries
+    // where it is fetched from, never what Codex notes of its fetches.
     Item {
         path: ".codex/config.toml",
         source: Source::Keys {
@@ -149,18 +178,27 @@ pub const ITEMS: &[Item] = &[
                 Key::whole("model_reasoning_summary"),
                 Key::whole("model_verbosity"),
                 Key::whole("plan_mode_reasoning_effort"),
-                Key::each("plugins"),
-                Key::each("marketplaces"),
-                Key::each("mcp_servers"),
+                Key::each("plugins", Entries::Plugins { markets: "marketplaces" }),
+                Key::each(
+                    "marketplaces",
+                    Entries::Markets { carried: Some(&["source_type", "source", "ref", "sparse_paths"]) },
+                ),
+                Key::each("mcp_servers", Entries::Servers),
             ],
         },
     },
     Item { path: ".codex/auth.json", source: Source::Credential(Provider::Codex) },
 ];
 
-/// Never synced inside a tree, at any depth: a clone's git state, which
-/// each side keeps itself. Its files are synced.
-pub const LEFT_OUT: &[&str] = &[".git"];
+/// Never synced inside a tree, at any depth, in any case: a clone's git
+/// state, which each side keeps itself (its files are synced), and what a
+/// file browser leaves in a folder it showed.
+pub const LEFT_OUT: &[&str] = &[".git", ".DS_Store", "Thumbs.db", "desktop.ini"];
+
+/// Whether the name `name` is one of [`LEFT_OUT`].
+pub(crate) fn left_out(name: &str) -> bool {
+    LEFT_OUT.iter().any(|left| left.eq_ignore_ascii_case(name))
+}
 
 /// Where macOS keeps Claude's sign-in: its Keychain item's service, with
 /// `-<8 hex of the folder's SHA-256>` after it when `CLAUDE_CONFIG_DIR`

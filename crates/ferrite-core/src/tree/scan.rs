@@ -57,9 +57,9 @@ pub(super) fn sweeping(root: &Path, skip: &[String]) -> io::Result<Manifest> {
 /// target `as_link` names is listed as a link to that, and every other is
 /// followed and listed as what it points to, its path kept in the
 /// manifest's `links`; each file's modification time and text hash are
-/// listed; and every directory called one of `left_out`, at any depth, is
-/// left out with all under it. A link to a directory that holds it is a
-/// problem.
+/// listed; and everything called one of `left_out`, in any case and at any
+/// depth, is left out with all under it. A link to a directory that holds
+/// it is a problem.
 pub(crate) fn setup(
     root: &Path,
     skip: &[String],
@@ -169,7 +169,7 @@ impl Walk<'_> {
                 continue;
             };
             let path = join(prefix, name);
-            if self.skip.contains(&path) || self.listing.left_out.contains(&name) {
+            if self.skip.contains(&path) || self.listing.left_out.iter().any(|left| left.eq_ignore_ascii_case(name)) {
                 continue;
             }
             if let Err(stopped) = (self.watch)(self.manifest.entries.len()) {

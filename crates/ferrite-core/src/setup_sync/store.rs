@@ -31,8 +31,9 @@ use crate::tree::{self, Entry, Manifest};
 /// writing it, and the next sync carries it, unsaid.
 pub(super) const MID_WRITE: &str = "the sign-in is being written; it syncs once it reads whole";
 
-/// Why a side holds a chosen key, unsaid: its value names a place of this
-/// computer outside the home, which no other side has.
+/// Why a side holds a chosen key, unsaid: it is this computer's own, a
+/// value that names a place no other side has, or an entry the table says
+/// does not travel.
 pub(super) const OWN: &str = "it names a place of this computer's own";
 
 /// How long a scan waits for the plugins a sync turned on to install, so
@@ -799,7 +800,7 @@ fn item(path: &str) -> io::Result<At<'_>> {
         .max_by_key(|(item, _)| item.path.len())
         .ok_or_else(|| not_setup(path))?;
     let left_out = match item.source {
-        Source::Tree { except } => excepted(except, rest) || rest.split('/').any(|name| LEFT_OUT.contains(&name)),
+        Source::Tree { except } => excepted(except, rest) || rest.split('/').any(super::left_out),
         _ => false,
     };
     if left_out {
