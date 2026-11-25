@@ -1,5 +1,5 @@
 //! Window realization of the Server's Thread-owned browser tabs.
-//! Native pages belong here, independently of whichever Preview is visible.
+//! Native pages belong here, independently of whichever Preview is shown.
 mod annotations;
 mod chrome;
 pub(super) use chrome::BrowserChromeView;
