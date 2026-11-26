@@ -97,29 +97,34 @@ impl BrowserChromeView {
             .is_some_and(|chrome| chrome.entry == Entry::NewTab)
     }
 
-    /// The Server took an action: the field acts on the page again, and
-    /// with no page left it empties.
-    pub(super) fn landed(&mut self, thread: ThreadKey, page: bool, cx: &mut Context<Self>) {
-        let Some(chrome) = self.threads.get_mut(&thread) else {
-            return;
-        };
-        chrome.entry = Entry::Page;
-        if !page {
-            chrome.address_shown = None;
-            chrome
-                .address
-                .update(cx, |field, cx| field.set(String::new(), cx));
+    /// The Server took an action: the field acts on the page again
+    /// (`follow`).
+    pub(super) fn landed(&mut self, thread: ThreadKey) {
+        if let Some(chrome) = self.threads.get_mut(&thread) {
+            chrome.entry = Entry::Page;
         }
     }
 
-    /// The active tab shows `url`: the field takes it, unless it holds an
-    /// edit of this tab's address or a new tab is being entered.
-    pub(super) fn follow(&mut self, thread: ThreadKey, tab: TabId, url: &str, cx: &mut Context<Self>) {
+    /// The active tab, `page`, shows its URL: the field takes it, unless it
+    /// holds an edit of this tab's address or a new tab is being entered.
+    /// With no page left, the field lets go of the last one's address.
+    pub(super) fn follow(&mut self, thread: ThreadKey, page: Option<(TabId, &str)>, cx: &mut Context<Self>) {
         let Some(chrome) = self.threads.get_mut(&thread) else {
             return;
         };
+        if chrome.entry != Entry::Page {
+            return;
+        }
+        let Some((tab, url)) = page else {
+            if chrome.address_shown.take().is_some() {
+                chrome
+                    .address
+                    .update(cx, |field, cx| field.set(String::new(), cx));
+            }
+            return;
+        };
         let shown = (tab, url.to_owned());
-        if chrome.entry != Entry::Page || chrome.address_shown.as_ref() == Some(&shown) {
+        if chrome.address_shown.as_ref() == Some(&shown) {
             return;
         }
         let edited = chrome
@@ -213,8 +218,13 @@ impl BrowserChromeView {
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         // Choosing a page leaves a new tab being entered at
-                        // once; the Server's selection follows.
+                        // once, and what was typed for it: the field takes
+                        // the page's address again. The Server's selection
+                        // follows.
                         if let Some(chrome) = this.threads.get_mut(&thread) {
+                            if chrome.entry == Entry::NewTab {
+                                chrome.address_shown = None;
+                            }
                             chrome.entry = Entry::Page;
                             cx.notify();
                         }
@@ -547,8 +557,8 @@ mod tests {
         chrome.update(cx, |chrome, cx| {
             chrome.make(here, cx);
             chrome.make(there, cx);
-            chrome.follow(here, TabId(1), "http://here.test/", cx);
-            chrome.follow(there, TabId(1), "http://there.test/", cx);
+            chrome.follow(here, Some((TabId(1), "http://here.test/")), cx);
+            chrome.follow(there, Some((TabId(1), "http://there.test/")), cx);
             // As its New tab press does.
             chrome.threads.get_mut(&there).unwrap().entry = Entry::NewTab;
         });

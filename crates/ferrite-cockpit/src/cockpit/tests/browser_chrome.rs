@@ -159,14 +159,12 @@ fn a_pending_new_tab_can_be_left_by_its_page_tab_or_escape(cx: &mut TestAppConte
     tick(cx);
     assert!(cx.debug_bounds("browser-notice").is_some());
     stalled.let_go();
-    until(cx, |cx| {
-        view.read_with(cx, |view, _| view.browsers.unanswered_for_test(thread) == 0)
-    });
-    tick(cx);
+    answered(&view, thread, cx);
     assert!(
         cx.debug_bounds("browser-notice").is_some(),
         "the page tab's answer, landing after New tab, leaves the new tab"
     );
+    assert_eq!(address_text(&view, thread, cx), "");
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert!(
@@ -174,6 +172,86 @@ fn a_pending_new_tab_can_be_left_by_its_page_tab_or_escape(cx: &mut TestAppConte
         "Escape in the address leaves the new tab"
     );
     assert!(cx.debug_bounds("browser-tabs").is_none());
+    assert_eq!(address_text(&view, thread, cx), START, "and puts back the page's address");
+}
+
+/// The page `browser_core` opens.
+const START: &str = "http://localhost:5173/start";
+
+/// Every ask the window made of `thread`'s Browser answered, and the
+/// window drawn with what the answers said.
+fn answered(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) {
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.browsers.unanswered_for_test(thread) == 0)
+    });
+    tick(cx);
+}
+
+/// The only page closed, and New tab left with Escape before the Server
+/// answered the close: once it does, the field holds no address of the
+/// page that is gone.
+#[gpui::test]
+fn a_late_close_of_the_only_page_empties_the_address_a_new_tab_left(cx: &mut TestAppContext) {
+    let (_engine, view, thread, cx) = browser_window(cx, "bnt-late-close");
+    let stalled = super::machines::stall_browser_line();
+    let close = cx.debug_bounds("browser-close-page").unwrap();
+    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    tick(cx);
+    let new_tab = cx.debug_bounds("browser-new-tab").unwrap();
+    cx.simulate_click(new_tab.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    stalled.let_go();
+    answered(&view, thread, cx);
+    assert_eq!(tab_count(&view, thread, cx), 0, "the premise: the page closed");
+    tick(cx);
+    assert_eq!(address_text(&view, thread, cx), "");
+}
+
+/// The Browser opened again on its Thread, and New tab pressed before the
+/// Server answered the attach: the page the attach selects leaves what
+/// is being typed for the new tab.
+#[gpui::test]
+fn a_late_attach_leaves_a_new_tab_being_typed(cx: &mut TestAppContext) {
+    let (_engine, view, thread, cx) = browser_window(cx, "bnt-late-attach");
+    let stalled = super::machines::stall_browser_line();
+    view.update(cx, |view, cx| view.open_browser(thread, cx));
+    tick(cx);
+    let new_tab = cx.debug_bounds("browser-new-tab").unwrap();
+    cx.simulate_click(new_tab.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input("http://localhost:5173/typed");
+    stalled.let_go();
+    answered(&view, thread, cx);
+    assert!(cx.debug_bounds("browser-notice").is_some(), "the new tab is still pending");
+    assert_eq!(address_text(&view, thread, cx), "http://localhost:5173/typed");
+}
+
+/// What was typed for a new tab goes when the page's own tab is chosen,
+/// whatever the Server answers after: the field shows the page's address.
+#[gpui::test]
+fn choosing_the_page_tab_puts_back_its_address_over_a_new_tabs_draft(cx: &mut TestAppContext) {
+    let (_engine, view, thread, cx) = browser_window(cx, "bnt-page-tab-address");
+    let page = view.read_with(cx, |view, _| {
+        view.browsers.shown_for_test(thread).unwrap().0.tabs[0].id
+    });
+    let page_tab: &'static str = Box::leak(format!("browser-tab-{}", page.0).into_boxed_str());
+    let stalled = super::machines::stall_browser_line();
+    let reload = cx.debug_bounds("browser-reload").unwrap();
+    cx.simulate_click(reload.center(), gpui::Modifiers::none());
+    tick(cx);
+    let new_tab = cx.debug_bounds("browser-new-tab").unwrap();
+    cx.simulate_click(new_tab.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input("http://localhost:5173/other");
+    let tab = cx.debug_bounds(page_tab).unwrap();
+    cx.simulate_click(tab.center(), gpui::Modifiers::none());
+    tick(cx);
+    stalled.let_go();
+    answered(&view, thread, cx);
+    assert!(cx.debug_bounds("browser-notice").is_none(), "the page is back");
+    assert_eq!(address_text(&view, thread, cx), START);
 }
 
 pub(super) type Window<'a> = (

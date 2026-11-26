@@ -192,12 +192,13 @@ impl Browsers {
         Some((browser.state.clone(), browser.error.clone()))
     }
 
-    /// How many of `thread`'s actions the Server has yet to answer.
+    /// How many of `thread`'s attach and actions the Server has yet to
+    /// answer.
     #[cfg(test)]
     pub(super) fn unanswered_for_test(&self, thread: ThreadKey) -> usize {
         self.threads.get(&thread).map_or(0, |browser| {
             let action = |waiting: &&Waiting| matches!(waiting, Waiting::Action { .. });
-            browser.waiting.iter().filter(action).count()
+            usize::from(browser.attaching.is_some()) + browser.waiting.iter().filter(action).count()
         })
     }
 
@@ -451,9 +452,11 @@ impl CockpitView {
                     let browser = &self.browsers.threads[&thread];
                     match then {
                         // Never one with no owner: it would attach again.
+                        // Not the operator's press: its answer leaves a new
+                        // tab begun meanwhile as it is.
                         Then::SelectActive => {
                             if let (Some(tab), Some(_)) = (browser.state.active, browser.owner) {
-                                self.browser_action(thread, Action::Select { tab }, cx);
+                                self.act_in_browser(thread, Action::Select { tab }, false, cx);
                             }
                         }
                         Then::Act(action, seen, lands) => {
@@ -497,10 +500,9 @@ impl CockpitView {
                     Ok(_) => {
                         browser.error = None;
                         browser.sync_documents(cx, false);
-                        let page = browser.state.active.is_some();
                         if lands {
                             self.browser_chrome
-                                .update(cx, |chrome, cx| chrome.landed(thread, page, cx));
+                                .update(cx, |chrome, _| chrome.landed(thread));
                         }
                     }
                     Err(error) => {
@@ -1045,16 +1047,17 @@ impl CockpitView {
             else {
                 continue;
             };
-            let Some(tab) = browser
+            let tab = browser
                 .state
                 .tabs
                 .iter()
-                .find(|tab| Some(tab.id) == browser.state.active)
-            else {
+                .find(|tab| Some(tab.id) == browser.state.active);
+            self.browser_chrome.update(cx, |chrome, cx| {
+                chrome.follow(*thread, tab.map(|tab| (tab.id, tab.url.as_str())), cx)
+            });
+            let Some(tab) = tab else {
                 continue;
             };
-            self.browser_chrome
-                .update(cx, |chrome, cx| chrome.follow(*thread, tab.id, &tab.url, cx));
             if !tab.live
                 || browser.pages.contains_key(&tab.id)
                 || browser.failed.get(&tab.id) == Some(&tab.document())
