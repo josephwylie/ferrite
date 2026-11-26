@@ -9,8 +9,6 @@
 
 use super::details::content::Content;
 use super::parts::PartView;
-use super::subagents::Cards;
-use super::surfaces::SurfaceId;
 use super::*;
 use ferrite_core::activity::Subject;
 use ferrite_core::delegate::DelegateId;
@@ -80,8 +78,8 @@ pub(crate) enum PaneAsk {
     /// A press outside the details card standing over the transcript,
     /// neither on its opener nor in its menu: the card shuts.
     CloseDetails,
-    /// A details row: its Surface in the Panel.
-    Surface(SurfaceId),
+    /// A details row: what it opens in the Panel.
+    Surface(DetailsOpen),
     /// The details card's Create PR.
     CreatePr,
     /// The watched PR's eye: stop watching `url`.
@@ -102,6 +100,15 @@ pub(crate) enum PaneAsk {
     },
     /// An open Delegate's stop.
     CancelDelegate(DelegateId),
+}
+
+/// What a details row opens in the Panel: the pull request, the Changes,
+/// or a side chat by its tab's id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DetailsOpen {
+    PullRequest(u64),
+    Changes,
+    SideChat(u64),
 }
 
 /// A queued prompt's three acts.
@@ -178,7 +185,7 @@ pub(crate) struct CellInputs {
     /// Native files hover this Pane, while their drag is live.
     pub(crate) drop_target: bool,
     /// The Composer's `/` or `@` menu, while it is up over this Pane.
-    pub(crate) composer_menu: Option<Entity<composer_menu::ComposerMenuView>>,
+    pub(crate) composer_menu: Option<gpui::AnyView>,
     pub(crate) doors: Doors,
     /// What a Main Composer's controls read; none on a Subagent's tab.
     pub(crate) controls: Option<ControlsInputs>,
@@ -249,17 +256,18 @@ pub(crate) struct ThreadInputs {
     pub(crate) plane: bool,
     /// Its Project's and branch's words, once its facts are known.
     pub(crate) facts: Option<(Option<SharedString>, Option<SharedString>)>,
-    /// The Decision cards on its plane.
-    pub(crate) decisions: Option<Cards>,
+    /// The Decision cards on its plane, as the window draws them.
+    pub(crate) decisions: Option<DecisionsDraw>,
     /// Its details card stands beside the transcript when there is room
     /// (`ThreadSurfaces::details_inline_open`).
     pub(crate) details_inline_open: bool,
     /// The details card's menu is up, choosing what the card shows.
     pub(crate) details_menu_up: bool,
-    /// The slot's width as the board laid it out, for a test to read.
-    #[cfg(test)]
-    pub(crate) cell_width: f32,
 }
+
+/// The window's draw of a Thread's Decision cards, run where the cell
+/// stacks them.
+pub(crate) type DecisionsDraw = Box<dyn FnOnce(&mut Window, &mut App) -> Option<AnyElement>>;
 
 /// What the details card's sections read of the window, asked only while
 /// the card stands: the Thread, the Subject its Pane shows, and how many
@@ -413,7 +421,7 @@ fn content(
     let cell = cell.debug_selector(move || format!("view-thread-{}", thread.thread().get()));
     // Over a link, the roster can list a Thread a frame before its facts
     // land: the cell stays an empty shell until they do.
-    let Some(inputs) = thread_inputs else {
+    let Some(mut inputs) = thread_inputs else {
         return cell;
     };
     let retained_transcript = pane.read(cx).transcript().map(|transcript| {
@@ -434,10 +442,7 @@ fn content(
     // The docked Decision merges into the Composer when that Composer is a
     // live block with nothing floating between them (rule 2.8.1).
     let joins = pane.read(cx).is_main() && attachments.is_none();
-    let activity_decisions = inputs
-        .decisions
-        .as_ref()
-        .and_then(|cards| cards.render(window, cx));
+    let activity_decisions = inputs.decisions.take().and_then(|draw| draw(window, cx));
     let details_card = details::card(
         thread,
         pane,
@@ -483,13 +488,12 @@ fn content(
     #[cfg(test)]
     drawn::record_pane(
         identity,
-        drawn::Pane {
+        drawn::Drawn {
             focused,
             unread: facts.unread,
             drop_target: facts.drop_target,
             editing: facts.editing,
             reduce_motion: facts.reduce_motion,
-            cell_width: inputs.cell_width,
             clock: open.turn().elapsed().map(ferrite_core::progress::live_seconds),
         },
     );

@@ -363,7 +363,7 @@ impl CockpitView {
                 self.open_context_menu(MenuTarget::Details(thread), at, cx);
             }
             PaneAsk::CloseDetails => self.close_details(thread, window, cx),
-            PaneAsk::Surface(surface) => self.upsert_surface(thread, surface, cx),
+            PaneAsk::Surface(open) => self.upsert_surface(thread, open.into(), cx),
             PaneAsk::CreatePr => self.create_pr(thread, cx),
             PaneAsk::StopWatching { url } => self.watch_pr(thread, url, false, cx),
             PaneAsk::PreviousAgents => {
@@ -458,7 +458,10 @@ impl CockpitView {
             lost,
             sheet_up: self.sheet_up(cx),
             drop_target: self.drop_target(index, cx),
-            composer_menu: drawn.then(|| self.composer_menu_over(index, cx)).flatten(),
+            composer_menu: drawn
+                .then(|| self.composer_menu_over(index, cx))
+                .flatten()
+                .map(AnyView::from),
             doors: self.cell_doors(identity, &kind, controls.is_some()),
             controls,
             kind,
@@ -562,8 +565,22 @@ impl CockpitView {
             if let Some(rect) = rect {
                 cards.inset = theme::tx_inset_at(rect.w, true);
             }
-            cards
+            Box::new(move |window: &mut Window, cx: &mut gpui::App| cards.render(window, cx))
+                as super::pane_cell::DecisionsDraw
         });
+        // The slot's width as the board laid it out this frame (a dragged
+        // seam included), else the Pane's rect's: what the meter says the
+        // cell was drawn at.
+        #[cfg(test)]
+        super::drawn::laid_out(
+            self.panes[index].identity,
+            self.slot_sizes
+                .borrow()
+                .get(&super::pane_leaf(self.panes[index].identity))
+                .map(|(w, _)| *w)
+                .or_else(|| rect.map(|rect| rect.w))
+                .unwrap_or(board.w),
+        );
         ThreadInputs {
             plane: self.on_plane(thread, cx),
             facts: self
@@ -575,16 +592,6 @@ impl CockpitView {
             details_menu_up: self
                 .context_menu()
                 .is_some_and(|menu| menu.target == super::MenuTarget::Details(thread)),
-            // The slot's width as the board laid it out this frame (a
-            // dragged seam included), else the Pane's rect's.
-            #[cfg(test)]
-            cell_width: self
-                .slot_sizes
-                .borrow()
-                .get(&super::pane_leaf(self.panes[index].identity))
-                .map(|(w, _)| *w)
-                .or_else(|| rect.map(|rect| rect.w))
-                .unwrap_or(board.w),
         }
     }
 

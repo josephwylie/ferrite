@@ -856,7 +856,8 @@ pub(crate) mod drawn {
     use ferrite_core::roster::PaneIdentity;
     use ferrite_core::ThreadKey;
 
-    /// One Pane as its last build drew it.
+    /// One Pane as its last build drew it, at the width the board last
+    /// laid its slot out.
     #[derive(Clone, Debug, Default, PartialEq)]
     pub(crate) struct Pane {
         pub focused: bool,
@@ -869,8 +870,20 @@ pub(crate) mod drawn {
         pub clock: Option<String>,
     }
 
+    /// What a Pane's cell drew of itself.
+    #[derive(Clone, Debug, Default, PartialEq)]
+    pub(crate) struct Drawn {
+        pub focused: bool,
+        pub unread: bool,
+        pub drop_target: bool,
+        pub editing: bool,
+        pub reduce_motion: bool,
+        pub clock: Option<String>,
+    }
+
     thread_local! {
-        static PANES: RefCell<HashMap<PaneIdentity, Pane>> = RefCell::new(HashMap::new());
+        static PANES: RefCell<HashMap<PaneIdentity, Drawn>> = RefCell::new(HashMap::new());
+        static WIDTHS: RefCell<HashMap<PaneIdentity, f32>> = RefCell::new(HashMap::new());
         static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
         static HEAD_RENDERS: Cell<usize> = const { Cell::new(0) };
         static HEARINGS: Cell<usize> = const { Cell::new(0) };
@@ -902,8 +915,14 @@ pub(crate) mod drawn {
         PANE_RENDERS.with(|renders| *renders.borrow_mut().entry(identity).or_default() += 1);
     }
 
-    pub(crate) fn record_pane(identity: PaneIdentity, pane: Pane) {
-        PANES.with(|panes| panes.borrow_mut().insert(identity, pane));
+    pub(crate) fn record_pane(identity: PaneIdentity, cell: Drawn) {
+        PANES.with(|panes| panes.borrow_mut().insert(identity, cell));
+    }
+
+    /// The width the board laid Pane `identity`'s slot out at, read as its
+    /// cell draws.
+    pub(crate) fn laid_out(identity: PaneIdentity, width: f32) {
+        WIDTHS.with(|widths| widths.borrow_mut().insert(identity, width));
     }
 
     pub(crate) fn built_head() {
@@ -937,7 +956,18 @@ pub(crate) mod drawn {
 
     /// The Pane as last drawn.
     pub(crate) fn pane(identity: PaneIdentity) -> Pane {
-        PANES.with(|panes| panes.borrow().get(&identity).cloned().unwrap_or_default())
+        let Some(cell) = PANES.with(|panes| panes.borrow().get(&identity).cloned()) else {
+            return Pane::default();
+        };
+        Pane {
+            focused: cell.focused,
+            unread: cell.unread,
+            drop_target: cell.drop_target,
+            editing: cell.editing,
+            reduce_motion: cell.reduce_motion,
+            cell_width: WIDTHS.with(|widths| widths.borrow().get(&identity).copied().unwrap_or_default()),
+            clock: cell.clock,
+        }
     }
 
     /// How many times this Pane has been built on this thread.

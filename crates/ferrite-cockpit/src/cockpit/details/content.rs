@@ -1,5 +1,5 @@
 use super::lineage::Lineage;
-use super::super::pane_cell::{PaneAsk, PaneAsks};
+use super::super::pane_cell::{DetailsOpen, PaneAsk, PaneAsks};
 use super::*;
 use ferrite_core::settings::ContextCardItem;
 use ferrite_pane::details::Density;
@@ -8,7 +8,7 @@ use ferrite_ui::icons::{self, icon};
 #[derive(Clone, Debug)]
 enum Action {
     Reveal(std::path::PathBuf),
-    Surface(super::super::surfaces::SurfaceId),
+    Surface(DetailsOpen),
     CreatePr,
 }
 
@@ -119,9 +119,7 @@ impl Content {
                     && (row.item == ContextCardItem::SideChats
                         || matches!(
                             row.action,
-                            Some(Action::Surface(
-                                super::super::surfaces::SurfaceId::PullRequest(_)
-                            ))
+                            Some(Action::Surface(DetailsOpen::PullRequest(_)))
                         ))
             })
             .map(Row::height)
@@ -400,7 +398,7 @@ impl CockpitView {
             let block = pr_block(pr, self.facts.watched_pr(thread));
             let mut row = Row::new(Item::Branch, block.title.clone(), block.glyph);
             row.tooltip = Some(block.tooltip.clone());
-            row.action = Some(Action::Surface(SurfaceId::PullRequest(pr.number)));
+            row.action = Some(Action::Surface(DetailsOpen::PullRequest(pr.number)));
             row.pr = Some(block);
             rows.push(row);
         }
@@ -428,7 +426,7 @@ impl CockpitView {
                     .opener_unavailable(thread, panel::Opener::Changes, cx)
                     .is_none()
                 {
-                    row.action = Some(Action::Surface(SurfaceId::Changes));
+                    row.action = Some(Action::Surface(DetailsOpen::Changes));
                 }
                 rows.push(row);
             }
@@ -469,7 +467,7 @@ impl CockpitView {
                         if self.side_chat_running(thread, *tab, cx) {
                             row.meta = Some("Running".to_string());
                         }
-                        row.action = Some(Action::Surface(surface.clone()));
+                        row.action = Some(Action::Surface(DetailsOpen::SideChat(*tab)));
                         rows.push(row);
                     }
                 }
