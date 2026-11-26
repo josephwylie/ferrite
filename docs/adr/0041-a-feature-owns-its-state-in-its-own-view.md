@@ -690,8 +690,9 @@ would add an event for a popup the root opens anyway.
 The provider's control of the Browser's pages is the fourth. `Controls`
 (`cockpit/browser/controls.rs`) keeps the controls the Server asked for and
 the one running, the live annotation's captures waiting and the one
-running, and the engine's control worker the two share. The root holds it
-beside `Browsers`. Only the pump writes it: the root hands it each Server
+running, and the engine's control worker the two share. `Browsers` holds
+it, as it holds the chrome's, the dialog's and the review's views (step 10
+of the untangling). Only the pump writes it: the root hands it each Server
 request (`push`), the live annotation asks it for a capture (`capture`),
 and each frame the pump has it start and finish them (`pump`), handing in
 the pages, the Server and the App it reaches the engine through. No root

@@ -4,8 +4,8 @@
 //! for a control (`push`), the live annotation for a capture (`capture`),
 //! and each frame the root's pump has them start and finish (`pump`)
 //! against the pages as they stand, with the Server and the engine handed
-//! in. Only the pump writes any of it, so it is a plain struct beside the
-//! root's `Browsers`, not a view.
+//! in. Only the pump writes any of it, so it is a plain struct the root's
+//! `Browsers` holds, not a view.
 use super::*;
 
 #[derive(Default)]
@@ -78,8 +78,8 @@ enum Phase {
 
 #[cfg(feature = "cef")]
 impl ActiveControl {
-    fn unchanged(&self, browsers: &Browsers) -> bool {
-        browsers.control_page(&self.request).is_some_and(|page| {
+    fn unchanged(&self, threads: &Threads) -> bool {
+        control_page(threads, &self.request).is_some_and(|page| {
             page.native.state().document_generation == self.native_generation
                 && page.native.control_epoch() == self.epoch
         })
@@ -135,21 +135,21 @@ impl Controls {
     }
 
     /// This frame's turn: the capture under way, or the next, then the
-    /// control under way, or the next, each checked against `browsers`'
+    /// control under way, or the next, each checked against the `threads`'
     /// pages as they stand. A control's outcome goes back to the Server.
     pub(super) fn pump(
         &mut self,
-        browsers: &Browsers,
+        threads: &Threads,
         cockpit: &mut Cockpit,
         cx: &mut gpui::App,
     ) {
         #[cfg(feature = "cef")]
-        self.pump_captures(browsers, cx);
-        self.pump_controls(browsers, cockpit, cx);
+        self.pump_captures(threads, cx);
+        self.pump_controls(threads, cockpit, cx);
     }
 
     #[cfg(feature = "cef")]
-    fn pump_captures(&mut self, browsers: &Browsers, cx: &mut gpui::App) {
+    fn pump_captures(&mut self, threads: &Threads, cx: &mut gpui::App) {
         use ferrite_core::browser::{Control, Outcome};
         use ferrite_pane::visual::browser_control::{
             native::{screenshot_bytes, Event as NativeEvent, Worker},
@@ -157,8 +157,7 @@ impl Controls {
         };
         if let Some(running) = self.running_capture.take() {
             let unchanged = || {
-                browsers
-                    .threads
+                threads
                     .get(&running.request.thread)
                     .filter(|browser| {
                         browser.owner == Some(running.request.owner)
@@ -242,8 +241,7 @@ impl Controls {
         let Some(request) = self.capture_queue.pop_front() else {
             return;
         };
-        let page = browsers
-            .threads
+        let page = threads
             .get(&request.thread)
             .filter(|browser| {
                 browser.owner == Some(request.owner)
@@ -317,7 +315,7 @@ impl Controls {
 
     fn pump_controls(
         &mut self,
-        browsers: &Browsers,
+        threads: &Threads,
         cockpit: &mut Cockpit,
         cx: &mut gpui::App,
     ) {
@@ -336,7 +334,7 @@ impl Controls {
                 } = &running.phase
                 {
                     use ferrite_pane::visual::browser_control::native::Permission;
-                    if !running.unchanged(browsers) {
+                    if !running.unchanged(threads) {
                         let _ = permission.send(Permission::Deny);
                         break Some(running.interrupted("The page or operator state changed while dispatch authorization was pending"));
                     }
@@ -376,7 +374,7 @@ impl Controls {
                     Ok(ferrite_pane::visual::browser_control::native::Event::Ready(authorize)) => {
                         use ferrite_pane::visual::browser_control::native::Permission;
                         if !matches!(running.phase, Phase::Attaching)
-                            || !running.unchanged(browsers)
+                            || !running.unchanged(threads)
                         {
                             let _ = authorize.send(Permission::Deny);
                             break Some(running.interrupted("The owned browser document or operator revision changed before dispatch"));
@@ -412,8 +410,7 @@ impl Controls {
                 }
             };
             if let Some(mut outcome) = result {
-                let current = browsers
-                    .threads
+                let current = threads
                     .get(&running.request.thread)
                     .filter(|browser| browser.owner == Some(running.request.owner))
                     .and_then(|browser| browser.pages.get(&running.request.document.tab));
@@ -447,7 +444,7 @@ impl Controls {
                 });
                 continue;
             }
-            let valid = browsers.control_page(&request).is_some();
+            let valid = control_page(threads, &request).is_some();
             if !valid {
                 reply_browser_control(cockpit, request, Outcome::Failed { error: "The owned browser document or operator revision changed before dispatch; obtain fresh State and Observe".into() });
                 continue;
@@ -476,8 +473,7 @@ impl Controls {
                         continue;
                     }
                 };
-                let page = browsers
-                    .threads
+                let page = threads
                     .get(&request.thread)
                     .and_then(|browser| browser.pages.get(&request.document.tab))
                     .expect("control eligibility checked above");

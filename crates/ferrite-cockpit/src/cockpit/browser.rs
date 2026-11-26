@@ -41,9 +41,11 @@ gpui::actions!(
     [Go, CancelAnnotation, CancelAddress, AcceptDialog, DismissDialog]
 );
 
-#[derive(Default)]
+/// Every Thread's Browser as the window keeps it: its pages and the
+/// engine's lifetime, the provider's control of them, and the views that
+/// keep its chrome, its page's dialog and an annotation's review.
 pub(super) struct Browsers {
-    pub(super) threads: BTreeMap<ThreadKey, Browser>,
+    pub(super) threads: Threads,
     events: Rc<RefCell<Vec<Event>>>,
     /// Threads whose browser asked to be shown, with their Panel's
     /// operator revision when it asked: an agent's page may reveal the
@@ -54,7 +56,18 @@ pub(super) struct Browsers {
     /// with the stamp of its action, not of the frame it is read in, or it
     /// would outrank a tab the operator chose in between.
     sent: BTreeMap<ThreadKey, std::collections::VecDeque<u64>>,
+    /// The provider's control of the pages and the live annotation's
+    /// capture queue, which the pump runs.
+    pub(super) controls: Controls,
+    /// Each Thread's chrome: its address field and whether a new tab is
+    /// being entered.
+    pub(super) chrome: Entity<BrowserChromeView>,
+    pub(super) dialog: Entity<BrowserDialogView>,
+    pub(super) review: Entity<BrowserReviewView>,
 }
+
+/// Every Thread's Browser, by Thread.
+pub(super) type Threads = BTreeMap<ThreadKey, Browser>;
 
 pub(super) struct Browser {
     state: State,
@@ -158,6 +171,20 @@ struct Page {
     manual: Rc<RefCell<manual::Manual>>,
 }
 impl Browsers {
+    /// No Browser yet, with its views made.
+    pub(super) fn new(cx: &mut gpui::App) -> Self {
+        Self {
+            threads: BTreeMap::new(),
+            events: Default::default(),
+            reveal: BTreeMap::new(),
+            sent: BTreeMap::new(),
+            controls: Controls::default(),
+            chrome: cx.new(|_| BrowserChromeView::default()),
+            dialog: cx.new(|_| BrowserDialogView::default()),
+            review: cx.new(|_| BrowserReviewView::default()),
+        }
+    }
+
     /// Whether any Browser has a live tab or a page open: the pump keeps
     /// its beat for it, since a page's events, the engine's start and a
     /// control's answer do not ring (ADR 0041).
@@ -170,18 +197,24 @@ impl Browsers {
     /// Every Thread `keep` refuses takes its browser with it: its pages
     /// close here, as when the Server detaches; the Server deleted its side
     /// with the Thread.
-    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadKey) -> bool) {
+    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadKey) -> bool + Copy, cx: &mut gpui::App) {
         self.threads.retain(|key, _| keep(*key));
         self.reveal.retain(|key, _| keep(*key));
         self.sent.retain(|key, _| keep(*key));
+        self.chrome.update(cx, |chrome, _| chrome.retain_threads(keep));
+        self.dialog.update(cx, |dialog, _| dialog.retain_threads(keep));
+        self.review.update(cx, |review, _| review.retain_threads(keep));
     }
 
     #[cfg(test)]
-    pub(super) fn held_for_test(&self, thread: ThreadKey) -> usize {
+    pub(super) fn held_for_test(&self, thread: ThreadKey, cx: &gpui::App) -> usize {
         let this = |key: &&ThreadKey| **key == thread;
         self.threads.keys().filter(this).count()
             + self.reveal.keys().filter(this).count()
             + self.sent.keys().filter(this).count()
+            + self.chrome.read(cx).held_for_test(thread)
+            + self.dialog.read(cx).held_for_test(thread)
+            + self.review.read(cx).held_for_test(thread)
     }
 
     /// `thread`'s tabs as the window last had them from the Server, and
@@ -201,33 +234,35 @@ impl Browsers {
             usize::from(browser.attaching.is_some()) + browser.waiting.iter().filter(action).count()
         })
     }
+}
 
-    /// Rechecked at queue dispatch and after native attachment becomes Ready.
-    /// The latter additionally checks the exact native document and epoch.
-    fn control_page(&self, request: &ControlRequest) -> Option<&Page> {
-        if !request.control.supported() {
-            return None;
-        }
-        let browser = self.threads.get(&request.thread)?;
-        if browser.owner != Some(request.owner)
-            || !browser.pages.values().all(|page| {
-                let manual = page.manual.borrow();
-                manual.revision <= request.revision
-                    && (request.control.observation() || !manual.active)
-            })
-        {
-            return None;
-        }
-        browser.pages.get(&request.document.tab).filter(|page| {
+/// The page `request` controls in `threads`, while the control may still
+/// run there. Rechecked at queue dispatch and after native attachment
+/// becomes Ready; the latter additionally checks the exact native document
+/// and epoch.
+fn control_page<'a>(threads: &'a Threads, request: &ControlRequest) -> Option<&'a Page> {
+    if !request.control.supported() {
+        return None;
+    }
+    let browser = threads.get(&request.thread)?;
+    if browser.owner != Some(request.owner)
+        || !browser.pages.values().all(|page| {
             let manual = page.manual.borrow();
-            page.document.get() == request.document
-                && page.pending_navigation.borrow().is_none()
-                && (!matches!(request.control, ferrite_core::browser::Control::Screenshot)
-                    || !page.native.state().loading)
-                && manual.revision <= request.revision
+            manual.revision <= request.revision
                 && (request.control.observation() || !manual.active)
         })
+    {
+        return None;
     }
+    browser.pages.get(&request.document.tab).filter(|page| {
+        let manual = page.manual.borrow();
+        page.document.get() == request.document
+            && page.pending_navigation.borrow().is_none()
+            && (!matches!(request.control, ferrite_core::browser::Control::Screenshot)
+                || !page.native.state().loading)
+            && manual.revision <= request.revision
+            && (request.control.observation() || !manual.active)
+    })
 }
 
 impl Drop for Page {
@@ -273,9 +308,9 @@ enum Event {
 
 impl CockpitView {
     pub(super) fn ensure_browser(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
-        self.browser_chrome
+        self.browsers.chrome
             .update(cx, |chrome, cx| chrome.make(thread, cx));
-        self.browser_dialog
+        self.browsers.dialog
             .update(cx, |dialog, cx| dialog.make(thread, cx));
         self.browsers
             .threads
@@ -501,7 +536,7 @@ impl CockpitView {
                         browser.error = None;
                         browser.sync_documents(cx, false);
                         if lands {
-                            self.browser_chrome
+                            self.browsers.chrome
                                 .update(cx, |chrome, _| chrome.landed(thread));
                         }
                     }
@@ -754,7 +789,7 @@ impl CockpitView {
         self.realize_browser_pages(cx);
         self.tend_browser_pages(cx);
         self.cockpit.update(cx, |cockpit, cx| {
-            self.browser_controls.pump(&self.browsers, cockpit, cx)
+            self.browsers.controls.pump(&self.browsers.threads, cockpit, cx)
         });
     }
 
@@ -773,7 +808,7 @@ impl CockpitView {
                     control,
                     dispatch,
                 } => {
-                    self.browser_controls.push(ControlRequest {
+                    self.browsers.controls.push(ControlRequest {
                         request,
                         thread,
                         owner,
@@ -1052,7 +1087,7 @@ impl CockpitView {
                 .tabs
                 .iter()
                 .find(|tab| Some(tab.id) == browser.state.active);
-            self.browser_chrome.update(cx, |chrome, cx| {
+            self.browsers.chrome.update(cx, |chrome, cx| {
                 chrome.follow(*thread, tab.map(|tab| (tab.id, tab.url.as_str())), cx)
             });
             let Some(tab) = tab else {
@@ -1214,7 +1249,7 @@ impl CockpitView {
         let mut windows = Vec::new();
         let mut menus = Vec::new();
         for (thread, browser) in &mut self.browsers.threads {
-            let new_tab = self.browser_chrome.read(cx).new_tab(*thread);
+            let new_tab = self.browsers.chrome.read(cx).new_tab(*thread);
             let shown = browser.shown_tab(new_tab).map(|tab| tab.id);
             for (id, page) in &browser.pages {
                 windows.extend(
@@ -1236,12 +1271,12 @@ impl CockpitView {
         let threads: Vec<_> = self.browsers.threads.keys().copied().collect();
         for thread in threads {
             let asked = self.browser_dialog_inputs(thread, cx);
-            self.browser_dialog
+            self.browsers.dialog
                 .update(cx, |dialog, cx| dialog.sync(thread, asked, cx));
         }
         for (thread, url) in windows {
             // The field stays the new tab's being entered, if one is.
-            let new_tab = self.browser_chrome.read(cx).new_tab(thread);
+            let new_tab = self.browsers.chrome.read(cx).new_tab(thread);
             self.act_in_browser(thread, Action::Open { url }, !new_tab, cx);
         }
         for (thread, at) in menus {
@@ -1418,9 +1453,9 @@ impl CockpitView {
                 .push(Event::Restore(thread, tab.id));
         }
         let chrome = self
-            .browser_chrome
+            .browsers.chrome
             .update(cx, |chrome, cx| chrome.bar(thread, inputs, cx));
-        let active = browser.shown_tab(self.browser_chrome.read(cx).new_tab(thread));
+        let active = browser.shown_tab(self.browsers.chrome.read(cx).new_tab(thread));
         let failure = browser
             .error
             .as_ref()
@@ -1430,14 +1465,14 @@ impl CockpitView {
             .map(|page| page.web.clone());
         let retry = failure.is_some().then(|| active.map(|tab| tab.document())).flatten();
         let notice = match failure {
-            _ if browser.annotation.is_some() || self.browser_review.read(cx).open(thread) => None,
+            _ if browser.annotation.is_some() || self.browsers.review.read(cx).open(thread) => None,
             Some(error) if retry.is_some() => Some(format!("{error}\nEdit the address or retry.")),
             Some(error) => Some(format!("{error}\nEdit the address.")),
             None if body.is_none() => Some("Enter a website address above to browse.".to_owned()),
             None => None,
         };
         let dialog = self
-            .browser_dialog
+            .browsers.dialog
             .update(cx, |dialog, cx| dialog.card(thread, active.is_some(), cx));
         browser.dialog_drawn.set(dialog.is_some());
         let pointer = browser.pointer.clone();
