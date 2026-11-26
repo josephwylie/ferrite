@@ -245,7 +245,7 @@ impl CockpitView {
     /// the Server gone).
     pub(super) fn browser_dialog_inputs(&self, thread: ThreadKey, cx: &gpui::App) -> Option<DialogRequest> {
         let browser = self.browsers.threads.get(&thread)?;
-        let shown = browser.shown_tab(self.browser_chrome.read(cx).new_tab(thread))?;
+        let shown = browser.shown_tab(self.browsers.chrome.read(cx).new_tab(thread))?;
         browser.pages.get(&shown.id)?.native.state().dialog
     }
 
@@ -258,7 +258,7 @@ impl CockpitView {
             browser.dialog_on_screen = drawn;
             if drawn
                 && self
-                    .browser_dialog
+                    .browsers.dialog
                     .update(cx, |dialog, cx| dialog.take_keyboard(*thread, window, cx))
             {
                 took = true;
@@ -268,7 +268,7 @@ impl CockpitView {
     }
 
     pub(in crate::cockpit) fn dialog_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
-        let dialogs = self.browser_dialog.read(cx);
+        let dialogs = self.browsers.dialog.read(cx);
         self.browsers
             .threads
             .iter()
@@ -284,7 +284,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         let BrowserDialogEvent::Answer(thread, answer) = event;
-        let new_tab = self.browser_chrome.read(cx).new_tab(*thread);
+        let new_tab = self.browsers.chrome.read(cx).new_tab(*thread);
         let Some(browser) = self.browsers.threads.get(thread) else {
             return;
         };

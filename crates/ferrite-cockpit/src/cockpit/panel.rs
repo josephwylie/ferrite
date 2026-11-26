@@ -447,10 +447,7 @@ impl CockpitView {
         self.panel.forget(keep, cx);
         self.pull_request.update(cx, |reader, _| reader.retain_threads(keep));
         self.background.update(cx, |background, _| background.retain_threads(keep));
-        self.browsers.retain_threads(keep);
-        self.browser_chrome.update(cx, |chrome, _| chrome.retain_threads(keep));
-        self.browser_dialog.update(cx, |dialog, _| dialog.retain_threads(keep));
-        self.browser_review.update(cx, |review, _| review.retain_threads(keep));
+        self.browsers.retain_threads(keep, cx);
         self.facts.retain_threads(keep);
         self.decisions.update(cx, |decisions, _| decisions.retain_threads(keep));
         if let Some(archive) = self.factory().map(|view| view.read(cx).archive().clone()) {
@@ -466,10 +463,7 @@ impl CockpitView {
             + self.panel.held_for_test(thread, cx)
             + self.pull_request.read(cx).held_for_test(thread)
             + self.background.read(cx).held_for_test(thread)
-            + self.browsers.held_for_test(thread)
-            + self.browser_chrome.read(cx).held_for_test(thread)
-            + self.browser_dialog.read(cx).held_for_test(thread)
-            + self.browser_review.read(cx).held_for_test(thread)
+            + self.browsers.held_for_test(thread, cx)
             + usize::from(self.facts.get(thread).is_some())
             + self.decisions.read(cx).rules().iter().filter(|rule| rule.thread == thread).count()
             + self

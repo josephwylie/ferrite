@@ -584,7 +584,7 @@ fn a_dialog_is_modal_to_its_page_and_two_dialogs_each_wait_for_their_thread(
 
 fn address_text(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) -> String {
     view.read_with(cx, |view, cx| {
-        view.browser_chrome.read(cx).address_for_test(thread, cx)
+        view.browsers.chrome.read(cx).address_for_test(thread, cx)
     })
 }
 

@@ -512,7 +512,7 @@ impl CockpitView {
                 .state
                 .active
                 .is_some_and(|tab| browser.pages.contains_key(&tab)),
-            annotating: browser.annotation.is_some() || self.browser_review.read(cx).open(thread),
+            annotating: browser.annotation.is_some() || self.browsers.review.read(cx).open(thread),
         })
     }
 

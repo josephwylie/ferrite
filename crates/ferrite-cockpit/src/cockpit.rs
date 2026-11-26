@@ -303,15 +303,10 @@ pub struct CockpitView {
     /// it say `Arrived`, which the views that build from it hear (the
     /// nav). Nothing notifies it.
     pub(crate) cockpit: Entity<Cockpit>,
+    /// Every Thread's Browser: its pages, the provider's control of them,
+    /// and the views of its chrome, its page's dialog and an annotation's
+    /// review.
     browsers: browser::Browsers,
-    /// The provider's control of the Browsers' pages and the live
-    /// annotation's capture queue, which the pump runs.
-    browser_controls: browser::Controls,
-    /// Each Thread's Browser chrome: its address field and whether a new
-    /// tab is being entered.
-    browser_chrome: Entity<browser::BrowserChromeView>,
-    browser_dialog: Entity<browser::BrowserDialogView>,
-    browser_review: Entity<browser::BrowserReviewView>,
     /// One view per Pane of the Cockpit's roster, in its order — the
     /// keyboard, the scrollback and the caches the window owns for each.
     /// `sync_panes` is the one door: after every act on the roster the
@@ -1021,7 +1016,7 @@ impl CockpitView {
             view.flush_panel_persistence(cx);
             view.cockpit.update(cx, |cockpit, _| cockpit.halt_sessions());
             #[cfg(feature = "cef")]
-            let browser = view.browser_controls.controller.clone();
+            let browser = view.browsers.controls.controller.clone();
             let executor = cx.background_executor().clone();
             async move {
                 #[cfg(feature = "cef")]
@@ -1104,25 +1099,19 @@ impl CockpitView {
         // A card's pick lives in its Pane's forms, and the root draws the
         // cards into its transcripts, so each change redraws the window.
         cx.observe(&decisions, |_, _, cx| cx.notify()).detach();
-        let browser_chrome = cx.new(|_| browser::BrowserChromeView::default());
+        let browsers = browser::Browsers::new(cx);
         // The root draws the chrome into the Browser's body, so each change
         // redraws the window.
-        cx.observe(&browser_chrome, |_, _, cx| cx.notify()).detach();
-        let browser_dialog = cx.new(|_| browser::BrowserDialogView::default());
+        cx.observe(&browsers.chrome, |_, _, cx| cx.notify()).detach();
         // So is a page's dialog, over the page.
-        cx.observe(&browser_dialog, |_, _, cx| cx.notify()).detach();
-        let browser_review = cx.new(|_| browser::BrowserReviewView::default());
+        cx.observe(&browsers.dialog, |_, _, cx| cx.notify()).detach();
         // And a retained annotation's review, in the page's place.
-        cx.observe(&browser_review, |_, _, cx| cx.notify()).detach();
+        cx.observe(&browsers.review, |_, _, cx| cx.notify()).detach();
         let popups = popups::Popups::default();
         let nav_view = Self::new_nav(&cockpit, popups.triggers(), cx);
         let mut view = Self {
             cockpit: cockpit.clone(),
-            browsers: Default::default(),
-            browser_controls: Default::default(),
-            browser_chrome,
-            browser_dialog,
-            browser_review,
+            browsers,
             columns: columns::Columns::new(prefs.settings.nav_collapsed),
             panes: Vec::new(),
             focus: cx.focus_handle(),
@@ -6045,9 +6034,9 @@ impl CockpitView {
             cx.subscribe_in(&self.toasts, window, Self::on_toast_event),
             cx.subscribe_in(&self.panel.file_surface, window, Self::on_file_surface_event),
             cx.subscribe_in(&self.decisions, window, Self::on_decision_event),
-            cx.subscribe_in(&self.browser_chrome, window, Self::on_browser_chrome_event),
-            cx.subscribe_in(&self.browser_dialog, window, Self::on_browser_dialog_event),
-            cx.subscribe_in(&self.browser_review, window, Self::on_browser_review_event),
+            cx.subscribe_in(&self.browsers.chrome, window, Self::on_browser_chrome_event),
+            cx.subscribe_in(&self.browsers.dialog, window, Self::on_browser_dialog_event),
+            cx.subscribe_in(&self.browsers.review, window, Self::on_browser_review_event),
             cx.subscribe_in(&self.empty_board, window, Self::on_empty_board_event),
             cx.subscribe_in(&self.composer_menu, window, Self::on_composer_menu_event),
         ]);

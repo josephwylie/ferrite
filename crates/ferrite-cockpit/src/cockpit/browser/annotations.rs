@@ -15,7 +15,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.ensure_browser(thread, cx);
-        self.browser_review
+        self.browsers.review
             .update(cx, |review, cx| review.edit(thread, annotation, image, cx));
         self.upsert_surface(thread, super::super::surfaces::SurfaceId::Browser, cx);
     }
@@ -61,7 +61,7 @@ impl CockpitView {
         thread: ThreadKey,
         cx: &gpui::App,
     ) -> Option<gpui::FocusHandle> {
-        self.browser_review.read(cx).focus(thread, cx).or_else(|| {
+        self.browsers.review.read(cx).focus(thread, cx).or_else(|| {
             let annotation = self.browsers.threads.get(&thread)?.annotation.as_ref()?;
             Some(annotation.focus().clone())
         })
@@ -73,8 +73,8 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let new_tab = self.browser_chrome.read(cx).new_tab(thread);
-        let reviewing = self.browser_review.read(cx).open(thread);
+        let new_tab = self.browsers.chrome.read(cx).new_tab(thread);
+        let reviewing = self.browsers.review.read(cx).open(thread);
         let target = self.browsers.threads.get(&thread).and_then(|browser| {
             if browser.annotation.is_some() || reviewing || new_tab {
                 return None;
@@ -175,7 +175,7 @@ impl CockpitView {
     }
 
     pub(super) fn close_browser_annotation(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
-        self.browser_review
+        self.browsers.review
             .update(cx, |review, cx| review.close(thread, cx));
         let Some(browser) = self.browsers.threads.get_mut(&thread) else {
             return;
@@ -202,7 +202,7 @@ impl CockpitView {
         for (thread, retained) in edits {
             self.ensure_browser(thread, cx);
             if self.browsers.threads[&thread].annotation.is_some()
-                || self.browser_review.read(cx).open(thread)
+                || self.browsers.review.read(cx).open(thread)
             {
                 self.browsers.threads.get_mut(&thread).unwrap().error =
                     Some("Finish or cancel the current annotation before opening another.".into());
@@ -215,11 +215,11 @@ impl CockpitView {
             let image = self
                 .cockpit
                 .update(cx, |cockpit, _| cockpit.browser_annotation_image(thread, retained.clone()));
-            self.browser_review
+            self.browsers.review
                 .update(cx, |review, cx| review.load(thread, retained, image, cx));
             cx.notify();
         }
-        let failed = self.browser_review.update(cx, |review, cx| review.tend(cx));
+        let failed = self.browsers.review.update(cx, |review, cx| review.tend(cx));
         for (thread, error) in failed {
             if let Some(browser) = self.browsers.threads.get_mut(&thread) {
                 browser.error = Some(error);
@@ -243,7 +243,7 @@ impl CockpitView {
                     thread,
                     &self.browsers.threads[&thread],
                     cockpit,
-                    &mut self.browser_controls,
+                    &mut self.browsers.controls,
                     send_enabled,
                     composer,
                 )
@@ -280,7 +280,7 @@ impl CockpitView {
         web: Option<Entity<WebView>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if let Some(editor) = self.browser_review.read(cx).editor(thread) {
+        if let Some(editor) = self.browsers.review.read(cx).editor(thread) {
             div()
                 .flex_1()
                 .min_h_0()
