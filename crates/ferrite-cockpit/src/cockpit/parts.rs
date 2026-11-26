@@ -53,16 +53,33 @@ pub(crate) enum Part {
     Pane(PaneIdentity),
 }
 
-/// The parts' views and what each was last mounted with.
-#[derive(Default)]
+/// The parts' views and what each was last mounted with, and what
+/// notifies the frame around them alone.
 pub(crate) struct Parts {
     /// Whether the nav and the Panes are cached parts: with the loops
     /// overlay, over a cached Cockpit.
     pub on: bool,
     views: HashMap<PaneIdentity, Entity<CellView>>,
+    /// What `notify_frame` notifies with parts on: the Cockpit reads it
+    /// every render (`render_cockpit`), the parts never do.
+    frame_tick: Entity<FrameTick>,
 }
 
 impl Parts {
+    /// No parts yet, drawn inline.
+    pub(crate) fn new(cx: &mut gpui::App) -> Self {
+        Self {
+            on: false,
+            views: HashMap::new(),
+            frame_tick: cx.new(|_| FrameTick),
+        }
+    }
+
+    /// The entity whose notify redraws only the frame.
+    pub(crate) fn frame_tick(&self) -> &Entity<FrameTick> {
+        &self.frame_tick
+    }
+
     /// The view drawing `pane`'s cell, once it has been mounted.
     pub(crate) fn view_id(&self, pane: PaneIdentity) -> Option<gpui::EntityId> {
         self.views.get(&pane).map(Entity::entity_id)
@@ -575,17 +592,20 @@ impl CockpitView {
     /// Redraw only the frame around the parts (the titlebar, the bottom
     /// bar, the floats). Without parts, the whole Cockpit.
     pub(super) fn notify_frame(&self, cx: &mut Context<Self>) {
-        if self.parts.borrow().on {
-            self.frame_tick.update(cx, |_, cx| cx.notify());
-        } else {
-            cx.notify();
+        let tick = {
+            let parts = self.parts.borrow();
+            parts.on.then(|| parts.frame_tick.clone())
+        };
+        match tick {
+            Some(tick) => tick.update(cx, |_, cx| cx.notify()),
+            None => cx.notify(),
         }
     }
 
     /// The entity whose notify redraws only the frame: the Cockpit reads it
     /// every render (`render_cockpit`), the parts never do.
     pub(super) fn frame_tick_id(&self) -> gpui::EntityId {
-        self.frame_tick.entity_id()
+        self.parts.borrow().frame_tick.entity_id()
     }
 }
 

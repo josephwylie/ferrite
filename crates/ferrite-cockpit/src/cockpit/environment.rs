@@ -18,7 +18,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 type Answer<T> = Receiver<std::io::Result<T>>;
 
 /// The machine Settings edits, what the window has asked of it and not yet
-/// heard, and the defaults it last heard.
+/// heard, and the defaults and CLI versions it last heard.
 #[derive(Default)]
 pub(crate) struct Environment {
     /// The machine Settings' defaults and CLIs are about, as Connections
@@ -40,6 +40,41 @@ pub(crate) struct Environment {
     sign_ins: Vec<Answer<Done>>,
     /// The CLIs the machine last said are not signed in.
     signed_out: Vec<Provider>,
+    /// The CLIs' versions as the machine last said (`--version`), for
+    /// Settings › About and the empty board: (claude, codex).
+    pub(super) cli_versions: Option<(SharedString, SharedString)>,
+    /// Whether the empty board has asked for the versions: it asks once a
+    /// window, whichever machine Settings edits.
+    board_asked: bool,
+}
+
+impl Environment {
+    /// Settings edits `machine` from now: what was asked of the one before
+    /// and heard from it is forgotten. The empty board's one ask stays
+    /// asked.
+    fn edit(&mut self, machine: MachineId) {
+        *self = Self {
+            machine: Some(machine),
+            board_asked: self.board_asked,
+            ..Self::default()
+        };
+    }
+
+    /// Whether the empty board asks for the CLIs' versions now: once, while
+    /// none are known.
+    pub(super) fn board_asks(&mut self) -> bool {
+        if self.cli_versions.is_some() || self.board_asked {
+            return false;
+        }
+        self.board_asked = true;
+        true
+    }
+
+    /// The empty board never asks: a scene's versions are its own.
+    #[cfg(feature = "visual-reference")]
+    pub(super) fn hold_board_ask(&mut self) {
+        self.board_asked = true;
+    }
 }
 
 /// What went wrong with the machine's defaults: a read that never
@@ -82,11 +117,7 @@ impl CockpitView {
         if self.settings_machine(cx) == Some(machine) {
             return;
         }
-        self.environment = Environment {
-            machine: Some(machine),
-            ..Environment::default()
-        };
-        self.cli_versions = None;
+        self.environment.edit(machine);
         self.ask_server_defaults(cx);
         self.probe_cli_versions(cx);
         cx.notify();
@@ -232,7 +263,7 @@ impl CockpitView {
             Ok(answer) => self.environment.versions = Some(answer),
             Err(error) => {
                 ferrite_core::log!("could not ask the CLIs' versions: {error}");
-                self.cli_versions = None;
+                self.environment.cli_versions = None;
             }
         }
         if let Some(machine) = self.settings_machine(cx).filter(|machine| self.elsewhere(*machine, cx)) {
@@ -392,7 +423,7 @@ impl CockpitView {
         }
         if let Some(answer) = take_answer(&mut self.environment.versions) {
             heard = true;
-            self.cli_versions = Some(match answer {
+            self.environment.cli_versions = Some(match answer {
                 Ok(Done::Clis { clis }) => {
                     let line = |provider| {
                         cli_line(

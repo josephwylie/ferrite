@@ -430,7 +430,7 @@ impl CockpitView {
     /// an editor in the panel hears nothing typed during the slide.
     pub(super) fn closing_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         let panel_closing =
-            self.panel_pane(cx).is_none() && self.panel_closing_focus.contains_focused(window, cx);
+            self.panel_pane(cx).is_none() && self.panel.closing_focus.contains_focused(window, cx);
         let nav_closing = self.columns.nav_folded() && self.nav_view.read(cx).focus.contains_focused(window, cx);
         panel_closing || nav_closing
     }
