@@ -5,6 +5,9 @@
 //! a Project of this computer is copied there (`Copies`, chosen on the
 //! setup sheet, `PlacementView`), and a machine's Project gets the Project
 //! card there.
+//!
+//! The band's other menus are here too: the Project and Workspace chips'
+//! (`Band`), their rows, the repo and checkout reads they show, and a pick.
 
 use super::copies::{self, words, CopyEvent, CopyKey};
 use super::menu_rows::Environment;
@@ -14,7 +17,7 @@ use ferrite_client::cockpit::ServerState;
 use ferrite_core::machine::Failure;
 use ferrite_core::placement::{self, Across, Placement};
 use ferrite_core::protocol::Repositories;
-use ferrite_pane::band::Band;
+use ferrite_pane::band::Band as PaneBand;
 use gpui::App;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -276,9 +279,9 @@ impl CockpitView {
     }
 
     /// The band of the draft in Pane `draft`, while it is one.
-    pub(super) fn band_of(&self, draft: PaneIdentity, cx: &gpui::App) -> Option<Band> {
+    pub(super) fn band_of(&self, draft: PaneIdentity, cx: &gpui::App) -> Option<PaneBand> {
         let pane = &self.panes[self.index_of(draft)?];
-        pane.read(cx).draft().map(|_| Band::new(pane.read(cx).geometry.clone()))
+        pane.read(cx).draft().map(|_| PaneBand::new(pane.read(cx).geometry.clone()))
     }
 
     /// Where `machine`'s own files are kept here; none for this computer.
@@ -727,5 +730,489 @@ impl CockpitView {
             (None, true) => (pane::ChipMark::Ring(0.), name),
             (_, false) => (pane::ChipMark::Icon(ferrite_ui::icons::SERVER), name),
         })
+    }
+}
+
+/// #29: a draft's Project or Workspace menu, a popup (`Popup::Band`): one
+/// band chip's choices — registry reads, never a filesystem scan — except
+/// the Project chip's type-a-path row, which re-derives from the Composer
+/// line per edit.
+pub(super) struct Band {
+    pub(super) chip: pane::BandChip,
+    /// Opened from the start hero's project word (`draft_hero`): it drops
+    /// below the word rather than standing over the strip's chip.
+    pub(super) from_hero: bool,
+}
+
+impl Band {
+    /// The key the control this menu hangs from records its bounds under.
+    pub(super) fn trigger(&self) -> SharedString {
+        if self.from_hero {
+            HERO_TRIGGER.into()
+        } else {
+            band_trigger(self.chip)
+        }
+    }
+}
+
+impl CockpitView {
+    pub(super) fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .project_card(cx)
+            .is_some_and(|card| card.update(cx, |card, cx| card.tab_remote_path(window, cx)))
+            || self
+                .placement_sheet(cx)
+                .is_some_and(|sheet| sheet.update(cx, |sheet, cx| sheet.tab(window, cx)))
+        {
+            return;
+        }
+        if let Some(at) = self.composer_menu.read(cx).command_selected() {
+            self.composer_menu.update(cx, |menu, cx| menu.pick(at, cx));
+            return;
+        }
+        if self.accept_suggestion(window, cx) {
+            return;
+        }
+        if self.sheet_up(cx)
+            || self
+                .focused_thread(cx)
+                .and_then(|thread| self.cockpit.read(cx).thread(thread))
+                .is_some_and(|thread| {
+                    thread
+                        .pending_decisions()
+                        .iter()
+                        .any(|request| asks_in_fields(&request.decision))
+                })
+        {
+            window.focus_next(cx);
+            return;
+        }
+        // A draft's files come first; once the band has the ring, tab walks
+        // the band alone, so a file and a chip never hold it at once.
+        let pane = self.panes.get(self.focused(cx));
+        let on_band = pane
+            .and_then(|pane| pane.read(cx).draft())
+            .is_some_and(|draft| draft.band_focus.is_some());
+        let composer = pane.map(|pane| pane.read(cx).composer.clone()).filter(|_| !on_band);
+        if composer.is_some_and(|composer| {
+            composer.update(cx, |composer, cx| composer.cycle_files(false, window, cx))
+        }) {
+            return;
+        }
+        let environment = self.environment_chip_shown(self.focused(cx), cx);
+        let tabbed = self.update_focused_draft(cx, |draft| {
+            draft.band_focus = pane::BandChip::next(draft.band_focus, environment);
+        });
+        if tabbed.is_none() {
+            self.cycle_tools(false, window, cx);
+            return;
+        }
+        // The menu belongs to the chip it opened from; tab moves on.
+        if self.band_menu().is_some() {
+            self.close_popup(cx);
+        }
+        cx.notify();
+    }
+
+    /// Open one chip's menu on the focused draft — the shared tail of a
+    /// chip click, the hero's project word (`from_hero`) and ↵ on a
+    /// tab-focused chip. Toggles shut when the same chip's menu is already
+    /// up. Rows are registry reads, discovered at open — never per frame,
+    /// never a filesystem scan. Git is asked, off the UI thread, what the
+    /// checkout is on now and — for the workspace chip — what the repo
+    /// holds; the rows take each answer as it lands.
+    pub(super) fn open_band_menu(
+        &mut self,
+        chip: pane::BandChip,
+        from_hero: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pane) = self.panes.get(self.focused(cx)) else {
+            return;
+        };
+        let Some(draft) = pane.read(cx).draft() else {
+            return;
+        };
+        let identity = pane.identity;
+        if self
+            .band_menu()
+            .is_some_and(|open| open.kind.chip == chip && open.pane == identity)
+        {
+            self.close_popup(cx);
+            return;
+        }
+        let rows = match chip {
+            pane::BandChip::Provider => {
+                if self.model_picker_open(identity) {
+                    self.close_popup(cx);
+                } else {
+                    self.open_model_picker(identity, Column::List, cx);
+                }
+                return;
+            }
+            pane::BandChip::Environment => self.environment_menu_rows(identity, draft, cx),
+            pane::BandChip::Project => self.project_menu_rows(draft, cx),
+            pane::BandChip::Workspace => self.workspace_menu_rows(draft, cx),
+        };
+        let project = draft.binding.project();
+        // The menu answers about the checkout as it stands now; until git
+        // says, it names the last answer.
+        self.look_up_checkouts([project], cx);
+        // The arrows start on the standing choice — bare ↵ re-picks it.
+        let selected = rows.iter().position(|row| row.active).unwrap_or(0);
+        let menu = Popover {
+            scroll: ScrollHandle::new(),
+            revealed: Default::default(),
+            pane: identity,
+            kind: Band { chip, from_hero },
+            rows,
+            selected,
+        };
+        self.show_popup(Popup::Band(menu), cx);
+        if chip == pane::BandChip::Workspace {
+            self.refresh_repo_listing(project, cx);
+        }
+    }
+
+    /// Ask git, off the UI thread, what `project`'s repo holds for the
+    /// workspace popover — its worktrees and its local branches — and fill
+    /// the open popover's rows in when the answer lands. One listing per
+    /// open, never per frame. On another machine, its Server asks git there.
+    pub(super) fn refresh_repo_listing(&mut self, project: ProjectKey, cx: &mut Context<Self>) {
+        if self.elsewhere(project.machine(), cx) {
+            self.ask_machine_repo(project, cx);
+            return;
+        }
+        let Some(root) = self
+            .cockpit
+            .read(cx)
+            .project(project)
+            .map(|project| project.root.clone())
+        else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let listing = cx
+                .background_executor()
+                .spawn(async move { ferrite_core::git_read::repo_listing(&root) })
+                .await;
+            this.update(cx, |view, cx| {
+                view.checkouts.set_listing(project, listing);
+                view.sync_workspace_rows(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The repo listing landed while the workspace popover is up: rebuild
+    /// its rows and keep the highlighted choice by value, as a finished
+    /// model discovery does for the provider picker.
+    pub(super) fn sync_workspace_rows(&mut self, cx: &mut Context<Self>) {
+        let Some(open) = self.band_menu() else {
+            return;
+        };
+        if open.kind.chip != pane::BandChip::Workspace {
+            return;
+        }
+        let Some(draft) = self
+            .panes
+            .iter()
+            .find(|pane| pane.identity == open.pane)
+            .and_then(|pane| pane.read(cx).draft())
+        else {
+            return;
+        };
+        let rows = self.workspace_menu_rows(draft, cx);
+        let Some(open) = self.band_menu_mut() else {
+            return;
+        };
+        let highlighted = open.rows.get(open.selected);
+        open.selected = highlighted
+            .and_then(|chosen| {
+                rows.iter()
+                    .position(|row| row.consequence == chosen.consequence)
+            })
+            .unwrap_or(0);
+        open.rows = rows;
+        cx.notify();
+    }
+
+    /// What `project`'s checkout is on, as git last answered, for the
+    /// Workspace menu's first row. A Project not named yet is asked about
+    /// off the UI thread and reads `main` until the answer lands — the
+    /// name a Project git cannot answer for keeps, the branch a fresh
+    /// clone would be sitting on.
+    pub(super) fn checked_out_branch(&self, project: ProjectKey, cx: &Context<Self>) -> SharedString {
+        if let Some(branch) = self.checkouts.branch(project) {
+            return branch;
+        }
+        self.look_up_checkouts([project], cx);
+        SharedString::from(MAIN_BRANCH)
+    }
+
+    /// Ask, off the UI thread, what each of `projects`' checkouts is on:
+    /// git only for one whose `HEAD` moved since it last named the branch
+    /// (`git_read::head_of`). It only starts the lookup, once per Project
+    /// at a time, and `checkouts_read` takes the answers. Never of another
+    /// machine, whose checkouts no git here can read.
+    pub(super) fn look_up_checkouts(&self, projects: impl IntoIterator<Item = ProjectKey>, cx: &Context<Self>) {
+        let mut roots: Vec<(ProjectKey, std::path::PathBuf, Option<Option<String>>)> = Vec::new();
+        for project in projects {
+            if self.elsewhere(project.machine(), cx)
+                || self.checkouts.asking(project)
+                || roots.iter().any(|(asked, ..)| *asked == project)
+            {
+                continue;
+            }
+            if let Some(found) = self.cockpit.read(cx).project(project) {
+                roots.push((project, found.root.clone(), self.checkouts.head(project)));
+            }
+        }
+        if roots.is_empty() {
+            return;
+        }
+        self.checkouts.listen(roots.iter().map(|(project, ..)| *project));
+        cx.spawn(async move |this, cx| {
+            let answers = cx
+                .background_executor()
+                .spawn(async move {
+                    roots
+                        .into_iter()
+                        .map(|(project, root, known)| {
+                            let head = ferrite_core::git_read::head_of(&root);
+                            let branch = (known.as_ref() != Some(&head))
+                                .then(|| ferrite_core::git_read::checkout_branch(&root));
+                            checkouts::Looked { project, head, branch }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |view, cx| view.checkouts_read(answers, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Checkout answers, back from off the UI thread. Only a changed
+    /// answer repaints — the chip, and an open workspace menu's rows.
+    pub(super) fn checkouts_read(&mut self, answers: Vec<checkouts::Looked>, cx: &mut Context<Self>) {
+        if self.checkouts.listed(answers) {
+            self.sync_workspace_rows(cx);
+            cx.notify();
+        }
+    }
+
+    /// The project chip's rows for `draft` (`menu_rows::project_rows`):
+    /// every machine's Projects, with the focused Composer's line for the
+    /// type-a-path row.
+    pub(super) fn project_menu_rows(&self, draft: &pane::DraftBinding, cx: &Context<Self>) -> Vec<Row> {
+        let typed = self
+            .panes
+            .get(self.focused(cx))
+            .map(|pane| pane.read(cx).composer.read(cx).text().trim().to_string())
+            .unwrap_or_default();
+        let cockpit = self.cockpit.read(cx);
+        let projects: Vec<_> = cockpit
+            .machines()
+            .flat_map(|machine| {
+                let registry = cockpit.registry(machine);
+                let label = self.machine_label(machine, cx);
+                registry.reading().projects().iter().map(move |project| {
+                    (registry.project_key(project.id), project, label.clone())
+                })
+            })
+            .collect();
+        menu_rows::project_rows(&projects, draft, &typed)
+    }
+
+    /// The workspace chip's rows for `draft` (`menu_rows::workspace_rows`),
+    /// from what git last said of its Project's checkout.
+    pub(super) fn workspace_menu_rows(&self, draft: &pane::DraftBinding, cx: &Context<Self>) -> Vec<Row> {
+        let project = draft.binding.project();
+        menu_rows::workspace_rows(
+            draft,
+            self.checked_out_branch(project, cx),
+            self.checkouts.listing(project),
+        )
+    }
+
+    /// Re-derive the open project popover's rows from the Composer line —
+    /// the type-a-path row follows the typing, exactly as the `/` menu's
+    /// rows follow theirs.
+    pub(super) fn sync_band_rows(&mut self, cx: &mut Context<Self>) {
+        let open = self
+            .band_menu()
+            .is_some_and(|open| open.kind.chip == pane::BandChip::Project);
+        if !open {
+            return;
+        }
+        let Some(draft) = self.panes.get(self.focused(cx)).and_then(|pane| pane.read(cx).draft()) else {
+            return;
+        };
+        let rows = self.project_menu_rows(draft, cx);
+        if let Some(open) = self.band_menu_mut() {
+            open.selected = open.selected.min(rows.len().saturating_sub(1));
+            open.rows = rows;
+        }
+    }
+
+    /// A band row's pick, applied to the focused draft. Changing the
+    /// project resets the workspace chip to `main` — the old choice named
+    /// another repo's rows.
+    pub(super) fn pick_band(
+        &mut self,
+        choice: &BandChoice,
+        composer: &Entity<Composer>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.cancel_focused_draft_start(cx) {
+            return;
+        }
+        match choice {
+            BandChoice::Provider(provider) => {
+                let announced = self
+                    .pane_machine(self.focused(cx), cx)
+                    .map(|machine| self.cockpit.read(cx).announced_models(machine, provider.provider))
+                    .unwrap_or_default();
+                self.update_focused_draft(cx, |draft| {
+                    draft.binding.choose_provider(provider.clone(), &announced);
+                    draft.error = None;
+                });
+            }
+            BandChoice::Effort(effort) => {
+                self.update_focused_draft(cx, |draft| {
+                    draft.binding.choose_effort(effort.clone());
+                    draft.error = None;
+                });
+            }
+            BandChoice::Project(project) => {
+                if let Some(draft) = self.panes.get(self.focused(cx)).map(|pane| pane.identity) {
+                    self.rebind_draft(draft, *project, cx);
+                }
+            }
+            BandChoice::RegisterPath(path) => {
+                let focused = self.focused(cx);
+                if let (Some(machine), Some(pane)) = (
+                    self.pane_machine(focused, cx),
+                    self.panes.get(focused).map(|pane| pane.identity),
+                ) {
+                    let registered = self
+                        .cockpit
+                        .update(cx, |cockpit, _| cockpit.register_project(machine, path));
+                    let (path, composer) = (path.clone(), composer.clone());
+                    self.when_answered(
+                        registered,
+                        move |view, registered, cx| {
+                            // The new Pane that asked, if it still stands.
+                            let Some(index) = view
+                                .index_of(pane)
+                                .filter(|index| view.panes[*index].read(cx).draft().is_some())
+                            else {
+                                return;
+                            };
+                            match registered {
+                                Ok(project) => {
+                                    view.panes[index].update_draft(cx, |draft| {
+                                        draft.binding.choose_checkout(project);
+                                        draft.error = None;
+                                    });
+                                    // The typed path was the pick's input,
+                                    // not a prompt: the line clears for one.
+                                    composer.update(cx, |composer, cx| {
+                                        let whole = 0..composer.text().len();
+                                        composer.splice(whole, "", cx);
+                                    });
+                                }
+                                Err(e) => {
+                                    let error = SharedString::from(format!(
+                                        "cannot register {}: {e}",
+                                        path.display()
+                                    ));
+                                    view.panes[index].update_draft(cx, |draft| draft.error = Some(error));
+                                }
+                            }
+                            cx.notify();
+                        },
+                        cx,
+                    );
+                }
+            }
+            BandChoice::Target(target) => {
+                self.update_focused_draft(cx, |draft| {
+                    draft.binding.choose_target(target.clone());
+                    draft.error = None;
+                });
+            }
+            BandChoice::AddProject => {
+                let focused = self.panes.get(self.focused(cx));
+                let draft = focused.filter(|pane| pane.read(cx).draft().is_some()).map(|pane| pane.identity);
+                match (draft, self.pane_machine(self.focused(cx), cx)) {
+                    (Some(draft), Some(machine)) => self.open_project_creator_for(machine, draft, cx),
+                    _ => self.open_project_creator(cx),
+                }
+            }
+            BandChoice::Environment(machine) => self.pick_environment(*machine, cx),
+            BandChoice::Copy(key) => self.show_copy(key, cx),
+            BandChoice::Connections => self.open_connections(cx),
+        }
+        cx.notify();
+    }
+
+    /// A draft's Project or Workspace menu, hung off its chip on the strip
+    /// over the box (ADR 0014): its left edge at the chip's, its foot
+    /// `FLOAT_OFFSET` over the chip — or, opened from the hero's project
+    /// word, `FLOAT_OFFSET` under it — kept inside the window's margin. The chip has been
+    /// drawn before it can be pressed, so its bounds are always recorded.
+    pub(super) fn band_menu_element(
+        &self,
+        open: &Popover<Band>,
+        face: popups::Face,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        use ferrite_ui::theme::{
+            FLOAT_OFFSET, GRID_PAD, MENU_WINDOW_MARGIN, SLASH_MENU_W, WORKSPACE_MENU_W,
+        };
+        let Band { chip, from_hero: hero } = open.kind;
+        let trigger = self.trigger(&open.kind.trigger())?;
+        // Above its chip on the strip over the box; or below the hero's
+        // project word, as Codex's switcher drops.
+        let (anchor, at, opens) = if hero {
+            (
+                gpui::Anchor::TopLeft,
+                gpui::point(trigger.left(), trigger.bottom() + px(FLOAT_OFFSET)),
+                ferrite_ui::motion::Opens::Down,
+            )
+        } else {
+            (
+                gpui::Anchor::BottomLeft,
+                gpui::point(trigger.left(), trigger.top() - px(FLOAT_OFFSET)),
+                ferrite_ui::motion::Opens::Up,
+            )
+        };
+        // T3 widens the Workspace menu to 336 once it offers a previous
+        // worktree, whose branch rides in the row's name.
+        let previous = chip == pane::BandChip::Workspace
+            && open.rows.iter().any(|row| {
+                matches!(
+                    row.consequence,
+                    Consequence::Band(BandChoice::Target(DraftTarget::Existing { .. }))
+                )
+            });
+        let width = if previous { WORKSPACE_MENU_W } else { SLASH_MENU_W }
+            .min(f32::from(window.viewport_size().width) - 2. * MENU_WINDOW_MARGIN);
+        let surface = div()
+            .debug_selector(|| "composer-menu".into())
+            .w(px(width))
+            .child(menu_surface(open, None, |_, _, _| {}, Self::pick, cx));
+        Some(
+            anchored()
+                .anchor(anchor)
+                .position(at)
+                .snap_to_window_with_margin(px(GRID_PAD))
+                .child(self.popup_face(face, "band-menu-in", surface, opens, cx))
+                .into_any_element(),
+        )
     }
 }

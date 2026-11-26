@@ -1,6 +1,9 @@
 //! What is unsent outlives its Pane and the window: a Thread's draft and a
 //! new Pane's, kept as they are written (`ferrite_core::drafts`) and put
 //! back when the Pane opens.
+//!
+//! A draft Pane opens here too (⌘T, ⌘⇧N, the palette's new thread in a
+//! Project), and its first send starts its Thread (`bootstrap_draft`).
 
 use super::*;
 use ferrite_core::draft_content::DraftContent;
@@ -319,6 +322,313 @@ impl CockpitView {
         if let Err(error) = self.unsent.drafts.save(&self.prefs.dir) {
             ferrite_core::log!("drafts were not saved: {error}");
         }
+    }
+}
+
+impl CockpitView {
+    /// The focused Pane's draft, to change — None on a Thread.
+    /// Change the focused Pane's draft choices, while it is a draft.
+    pub(super) fn update_focused_draft<R>(
+        &self,
+        cx: &mut gpui::App,
+        change: impl FnOnce(&mut pane::DraftBinding) -> R,
+    ) -> Option<R> {
+        let focused = self.focused(cx);
+        self.panes.get(focused)?.update_draft(cx, change)
+    }
+
+    /// cmd-t's answer (#29): a draft Pane — a Composer, the pre-prompt
+    /// band, and nothing durable until the first send bootstraps a Thread.
+    /// The provider and the project follow the Pane the operator is on;
+    /// `target` is the caller's (cmd-shift-n drafts
+    /// straight onto "new worktree").
+    pub(super) fn open_draft(&mut self, target: DraftTarget, cx: &mut Context<Self>) {
+        let provider = self
+            .panes
+            .get(self.focused(cx))
+            .map(|pane| match pane.read(cx).draft() {
+                Some(draft) => draft.binding.provider().clone(),
+                None => {
+                    let open = pane.thread().and_then(|thread| self.cockpit.read(cx).thread(thread));
+                    ProviderChoice {
+                        provider: open
+                            .map_or(self.prefs.settings.default_provider, |open| open.provider()),
+                        model: open.and_then(|open| open.model()).map(str::to_string),
+                    }
+                }
+            })
+            .unwrap_or_else(|| self.default_choice());
+        self.open_draft_with_choice(target, provider, None, cx);
+    }
+
+    /// What a new Thread starts on when nothing on screen says otherwise:
+    /// the settings' provider and its chosen model.
+    pub(super) fn default_choice(&self) -> ProviderChoice {
+        let provider = self.prefs.settings.default_provider;
+        ProviderChoice {
+            provider,
+            model: self.prefs.settings.model_for(provider).map(str::to_string),
+        }
+    }
+
+    pub(super) fn open_draft_with_provider(
+        &mut self,
+        target: DraftTarget,
+        provider: Provider,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_draft_with_choice(
+            target,
+            ProviderChoice {
+                provider,
+                model: None,
+            },
+            None,
+            cx,
+        );
+    }
+
+    /// A new Thread in a named Project — the ⌘K palette's "new thread in
+    /// <project>". It is a loose draft like every pointer-made one, and it
+    /// moves the fallback Project, so the draft after it starts here too.
+    pub(crate) fn open_draft_in_project(&mut self, project: ProjectKey, cx: &mut Context<Self>) {
+        self.launch_project = Some(project);
+        let provider = self.default_choice();
+        self.open_draft_with_choice(
+            DraftTarget::Main,
+            provider,
+            Some(project),
+            cx,
+        );
+    }
+
+    /// `chosen` is a Project the caller is naming outright, which outranks
+    /// every guess below — the filter, the fallback.
+    pub(super) fn open_draft_with_choice(
+        &mut self,
+        target: DraftTarget,
+        provider: ProviderChoice,
+        chosen: Option<ProjectKey>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.cockpit.read(cx).environment_available() {
+            return;
+        }
+        // The draft starts in the Project of the Thread the operator is in:
+        // the focused one, else the one focus last left.
+        let current = self
+            .cockpit
+            .read(cx)
+            .roster()
+            .current_thread()
+            .and_then(|thread| self.cockpit.read(cx).project_of(thread));
+        // A second press with a draft already up must not stack another:
+        // focus the standing draft and re-aim it at the caller's target.
+        // A draft mid-bootstrap is on its way out and does not count.
+        if let Some(index) = self.panes.iter().position(|pane| {
+            pane.identity
+                .draft()
+                .is_some_and(|draft| !self.cockpit.read(cx).draft_starting(draft))
+        }) {
+            // The standing draft is re-aimed at the Project as well: the
+            // chip must not sit there naming the Project of an earlier
+            // press while the operator is in another.
+            let aim = chosen.or(current);
+            let identity = self.panes[index].identity;
+            self.panes[index].update_draft(cx, |draft| {
+                draft.binding.choose_target(target);
+                if let Some(aim) = aim {
+                    draft.binding.choose_project(aim);
+                    draft.error = None;
+                }
+            });
+            self.cockpit.update(cx, |cockpit, _| cockpit.focus(identity));
+            // The draft may be the Pane focused as the Factory or the PRs
+            // opened, so focus never moves to leave them: give the board
+            // back here.
+            self.leave_destination();
+            self.sync_panes(cx);
+            cx.notify();
+            return;
+        }
+        // A Project the caller named outright wins, then the current
+        // Thread's. With no Thread to go by, a chosen nav filter names the
+        // Project the operator is looking at, and only then does the draft
+        // start where the last one ran.
+        let project = chosen
+            .or(current)
+            .or(self.nav_filter)
+            .or(self.launch_project);
+        let Some(project) = project else {
+            self.open_project_creator(cx);
+            return;
+        };
+        let binding = ferrite_core::draft::DraftBinding::new(provider, project, target);
+        self.spawn_draft_pane(binding, cx);
+        cx.notify();
+    }
+
+    /// A draft Pane aimed at `binding`, focused. The one place a draft Pane
+    /// is built, for a press of cmd-t and for a draft kept across a restart.
+    pub(super) fn spawn_draft_pane(
+        &mut self,
+        binding: ferrite_core::draft::DraftBinding,
+        cx: &mut Context<Self>,
+    ) -> ferrite_core::roster::DraftId {
+        let binding = pane::DraftBinding {
+            binding,
+            band_focus: None,
+            error: None,
+        };
+        let machine = binding.binding.project().machine();
+        let draft = self.cockpit.update(cx, |cockpit, _| cockpit.open_draft());
+        let pane = CockpitPane::new(PaneView::new_draft(draft, binding, cx), cx);
+        self.decisions
+            .update(cx, |decisions, _| decisions.open_pane(pane.identity));
+        pane.read(cx).preview.set_remote_files(self.elsewhere(machine, cx));
+        self.aim_attachments(&pane.composer(cx), machine, cx);
+        cx.subscribe(&pane.composer(cx), Self::composer_edited).detach();
+        cx.subscribe(&pane.composer(cx), Self::composer_opens_source).detach();
+            cx.subscribe(&pane.composer(cx), Self::composer_comment_opened).detach();
+        self.panes.push(pane);
+        self.sync_panes(cx);
+        draft
+    }
+
+    /// Stop the submitted startup before Escape or a choice changes its draft.
+    pub(super) fn cancel_focused_draft_start(&mut self, cx: &mut gpui::App) -> bool {
+        let Some(id) = self
+            .panes
+            .get(self.focused(cx))
+            .and_then(|pane| pane.identity.draft())
+        else {
+            return true;
+        };
+        match self.cockpit.update(cx, |cockpit, _| cockpit.cancel_draft_start(id)) {
+            Ok(_) => true,
+            Err(error) => {
+                self.update_focused_draft(cx, |draft| draft.error = Some(error.to_string().into()));
+                false
+            }
+        }
+    }
+
+    /// The first send (#29): resolve the draft's ids through the registry,
+    /// then the core act — create, worktree, spawn, the prompt, and the
+    /// Thread taking the draft's own slot; the band is gone for the life of
+    /// the Thread. On any failure nothing is half-born: no Thread, the Pane
+    /// stays draft, the error shows where the band is, and the prompt stays
+    /// in the Composer.
+    pub(super) fn bootstrap_draft(&mut self, cx: &mut Context<Self>) {
+        let Some(pane) = self.panes.get(self.focused(cx)) else {
+            return;
+        };
+        let (Some(draft), Some(id)) = (pane.read(cx).draft(), pane.identity.draft()) else {
+            return;
+        };
+        let binding = draft.binding.clone();
+        let composer = pane.read(cx).composer.clone();
+        // A draft waiting on its copy runs where the copy goes, once it is in.
+        if self.waited_on(self.focused(cx), cx).is_some() || !self.admit_files(self.focused(cx), cx) {
+            return;
+        }
+        let text = composer.read(cx).prompt().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let provider = binding.provider().clone();
+        let effort = binding.effort().map(str::to_owned);
+        let machine = binding.project().machine();
+        self.sync_setup_before_start(machine, cx);
+        let resolved = binding
+            .resolve(
+                self.cockpit.read(cx).project(binding.project()),
+                !self.elsewhere(machine, cx),
+            )
+            .map_err(|e| e.to_string());
+        let opened = resolved.and_then(|choice| {
+            self.cockpit
+                .update(cx, |cockpit, _| {
+                    cockpit.bootstrap_draft(machine, id, provider, choice, &text, effort.clone())
+                })
+                .map_err(|e| e.to_string())
+        });
+        self.finish_draft_start(id, &text, opened, cx);
+        cx.notify();
+    }
+
+    pub(super) fn finish_draft_start(
+        &mut self,
+        id: ferrite_core::roster::DraftId,
+        text: &str,
+        opened: Result<Option<ferrite_client::cockpit::Bootstrapped>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self
+            .panes
+            .iter()
+            .position(|pane| pane.identity.draft() == Some(id))
+        else {
+            return;
+        };
+        match opened {
+            Ok(Some(done)) => {
+                let composer = self.panes[index].read(cx).composer.clone();
+                composer.update(cx, |composer, cx| {
+                    // Edits made while startup ran belong to the operator.
+                    if composer.prompt().trim() == text {
+                        composer.take(cx);
+                    }
+                });
+                self.adopt_thread(index, done.thread, cx);
+                self.promote_draft(id, done.thread, cx);
+                self.sync_panes(cx);
+                self.thread_opened(done.thread, cx);
+                self.refresh_names(cx);
+                self.scroll_transcript_to_bottom(index, cx);
+            }
+            Ok(None) => {
+                self.panes[index].update_draft(cx, |draft| draft.error = None);
+            }
+            Err(message) => {
+                self.panes[index].update_draft(cx, |draft| draft.error = Some(SharedString::from(message)));
+            }
+        }
+    }
+
+    /// Test-only: aim the launch project at a scratch repo — production
+    /// registers `here()` once at construction, which tests cannot sit in.
+    #[cfg(test)]
+    pub(super) fn aim_launch(&mut self, root: &std::path::Path, cx: &mut gpui::App) {
+        self.launch_project = Some(
+            self.cockpit
+                .update(cx, |cockpit, _| {
+                    let machine = cockpit.this_computer().expect("this computer is held");
+                    cockpit.register_project(machine, root).now()
+                })
+                .expect("the scratch repo registers"),
+        );
+        let project = self.launch_project.expect("the test aimed it");
+        for pane in &self.panes {
+            pane.update_draft(cx, |draft| draft.binding.choose_project(project));
+        }
+    }
+
+    /// cmd-shift-n: the same draft, aimed straight at "new worktree" —
+    /// isolation from the operator's checkout is one chip already chosen.
+    pub(super) fn new_worktree_thread(
+        &mut self,
+        _: &NewWorktreeThread,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_draft(DraftTarget::New, cx);
+    }
+
+    /// cmd-t / cmd-n (#29): a draft Pane, not a Thread. The band chooses;
+    /// the first send bootstraps.
+    pub(super) fn new_thread(&mut self, _: &NewThread, _window: &mut Window, cx: &mut Context<Self>) {
+        self.open_draft(DraftTarget::Main, cx);
     }
 }
 
