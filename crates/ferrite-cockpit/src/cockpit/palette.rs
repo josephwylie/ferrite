@@ -1446,3 +1446,90 @@ pub(super) fn this_computer_row(host: Option<String>) -> (String, String) {
 /// history to search, few enough that the listing reads a bounded slice
 /// of each file rather than every session ever run.
 pub(super) const IMPORT_ROWS_MAX: usize = 200;
+
+impl CockpitView {
+    /// The machine an import for `into` lists and adopts on: the blank
+    /// Pane's, else where a new Thread starts (`start_machine`).
+    pub(super) fn import_machine(
+        &self,
+        into: Option<PaneIdentity>,
+        cx: &gpui::App,
+    ) -> Option<ferrite_core::MachineId> {
+        into.and_then(|pane| self.index_of(pane))
+            .and_then(|index| self.pane_machine(index, cx))
+            .or_else(|| self.start_machine(cx))
+    }
+
+    /// An import pick (#11): adopt the picked file through the core door —
+    /// in place of `into`, the blank Pane the picker was opened for (a
+    /// draft becomes the imported Thread and its line clears; a blank
+    /// Thread yields its slot), else alongside the Panes shown. A refusal
+    /// is the core's readable words, surfaced in that Pane (a toast with
+    /// none) — and the door stays open for the next try.
+    pub(super) fn adopt_file(
+        &mut self,
+        into: Option<PaneIdentity>,
+        path: &std::path::Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The Pane may have gone while the picker was up.
+        let into = into.filter(|pane| self.index_of(*pane).is_some());
+        let Some(machine) = self.import_machine(into, cx) else {
+            return;
+        };
+        match self
+            .cockpit
+            .update(cx, |cockpit, _| cockpit.adopt_into(machine, into, path))
+        {
+            Ok(adopted) => {
+                let draft = into.filter(|pane| pane.draft().is_some());
+                if let Some(error) = &adopted.not_opened {
+                    // Durable but not on screen: the Thread sits in the
+                    // nav's parked rows, exactly like a launch-time import
+                    // that would not open.
+                    ferrite_core::log!(
+                        "imported thread {} would not open: {error:?}",
+                        adopted.thread.thread()
+                    );
+                } else if let Some(index) = draft.and_then(|draft| self.index_of(draft)) {
+                    self.panes[index].composer(cx).update(cx, |composer, cx| {
+                        composer.take(cx);
+                    });
+                    self.adopt_thread(index, adopted.thread, cx);
+                }
+                if let Some(error) = &adopted.blank_kept {
+                    ferrite_core::log!("the blank thread stayed open: {error}");
+                }
+                self.sync_panes(cx);
+                // A draft that became the import keeps its Pane, so the
+                // mirror saw nothing open; a Thread that would not open is
+                // a fresh parked row.
+                if adopted.not_opened.is_some() {
+                    self.parked_changed(cx);
+                } else if draft.is_some() {
+                    self.thread_opened(adopted.thread, cx);
+                }
+            }
+            Err(e) => {
+                let message = format!("cannot import {}: {e}", path.display());
+                match into {
+                    Some(pane) => self.say_to(pane, message, cx),
+                    None => {
+                        use gpui::component::notification::{Notification, NotificationType};
+                        use gpui::component::WindowExt as _;
+                        window.push_notification(
+                            Notification::new()
+                                .title("Session not imported")
+                                .message(message)
+                                .with_type(NotificationType::Error)
+                                .autohide(false),
+                            cx,
+                        );
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+}

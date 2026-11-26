@@ -895,3 +895,147 @@ impl CockpitView {
         self.run_pick(*pane, consequence, window, cx);
     }
 }
+
+impl CockpitView {
+    /// Re-derive the text-derived popover from the focused line's own text.
+    /// Nothing else opens or closes a menu: `/filter` at the caret opens commands,
+    /// an `@token` under the caret opens files, anything else closes. A
+    /// picker or a band chip holds the slot while it is up and is left
+    /// alone here.
+    /// The menu keys serve whichever rows menu rides the Composer: the
+    /// `/`/`@` menu or a band menu — one key context, no second table.
+    pub(super) fn menu_next(&mut self, _: &MenuNext, _window: &mut Window, cx: &mut Context<Self>) {
+        self.step_popover(1, cx);
+    }
+
+    pub(super) fn menu_previous(&mut self, _: &MenuPrevious, _window: &mut Window, cx: &mut Context<Self>) {
+        self.step_popover(-1, cx);
+    }
+
+    /// Clamp-step the selection of the rows menu riding the Composer.
+    pub(super) fn step_popover(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if self.composer_menu.read(cx).is_open() {
+            self.composer_menu.update(cx, |menu, cx| menu.step(delta, cx));
+        } else if self.band_menu_mut().is_some_and(|open| open.step(delta)) {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn menu_pick(&mut self, _: &MenuPick, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(at) = self.composer_menu.read(cx).popover().map(|open| open.selected) {
+            self.composer_menu.update(cx, |menu, cx| menu.pick(at, cx));
+        } else if let Some(at) = self.band_menu().map(|open| open.selected) {
+            self.pick(at, window, cx);
+        }
+    }
+
+    /// Escape while a rows menu rides the Composer closes it and nothing
+    /// else — the text stays, and escape's Interrupt meaning waits for the
+    /// next press. A text-derived menu mutes until the text moves; a
+    /// picker takes no mute, since nothing reopens it; a band menu also
+    /// returns the chip's tab focus to the prompt line.
+    pub(super) fn menu_dismiss(&mut self, _: &MenuDismiss, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.composer_menu.update(cx, |menu, cx| menu.dismiss(cx)) && self.band_menu().is_some() {
+            self.close_popup(cx);
+            self.update_focused_draft(cx, |draft| draft.band_focus = None);
+        }
+        cx.notify();
+    }
+
+    /// ↵ or a press on row `at` of a band menu: its choice, made. The
+    /// menu closes first.
+    pub(super) fn pick(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(open) = self.band_menu() else {
+            return;
+        };
+        let Some(row) = open.rows.get(at) else {
+            return;
+        };
+        let (pane, consequence) = (open.pane, row.consequence.clone());
+        self.close_popup(cx);
+        self.run_pick(pane, &consequence, window, cx);
+    }
+
+    /// What a pick of the band menu or the Composer menu leaves to the
+    /// root: a picker opened in the menu's place, a Provider, an effort or
+    /// a band choice. A command, a skill or a file the Composer menu put
+    /// in the line itself.
+    pub(super) fn run_pick(
+        &mut self,
+        pane: PaneIdentity,
+        consequence: &Consequence,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(composer) = self
+            .index_of(pane)
+            .map(|index| self.panes[index].read(cx).composer.clone())
+        else {
+            return;
+        };
+        // Local command actions consume a standalone command line.
+        let splice_line = |cx: &mut Context<Self>, text: &str| {
+            composer.update(cx, |composer, cx| {
+                let whole = 0..composer.text().len();
+                composer.splice(whole, text, cx);
+            });
+        };
+        match consequence {
+            Consequence::Command(_)
+            | Consequence::Skill(_)
+            | Consequence::Mention(_)
+            | Consequence::Inert => {}
+            Consequence::OpenProviderPicker => {
+                if let Some(thread) = pane.thread() {
+                    splice_line(cx, "");
+                    self.open_provider_picker(thread, cx);
+                }
+            }
+            Consequence::OpenImportPicker => {
+                // A draft's one line is the `/import` its pick replaces; a
+                // Thread is replaced only while it is blank.
+                let into = match pane {
+                    PaneIdentity::Draft(_) => Some(pane),
+                    PaneIdentity::Thread(_) => {
+                        splice_line(cx, "");
+                        self.import_target(cx)
+                    }
+                };
+                self.open_import_palette(into, window, cx);
+            }
+            Consequence::Provision(choice) => {
+                if let Some(thread) = pane.thread() {
+                    self.pick_provider(thread, choice.clone(), cx);
+                }
+            }
+            Consequence::OpenEffortPicker => {
+                if let Some(thread) = pane.thread() {
+                    splice_line(cx, "");
+                    // The model picker's Reasoning column, as the
+                    // palette's `effort` opens it.
+                    self.open_effort_picker(thread, cx);
+                }
+            }
+            Consequence::Effort(effort) => {
+                if let Some(thread) = pane.thread() {
+                    self.pick_effort(thread, effort.clone(), cx);
+                }
+            }
+            Consequence::Band(choice) => self.pick_band(choice, &composer, cx),
+        }
+        cx.notify();
+    }
+
+    pub(super) fn poll_navigation(&mut self, cx: &mut Context<Self>) {
+        self.poll_composer_menu(cx);
+        self.poll_session_discovery(cx);
+    }
+
+    /// The Composer's open popover, while it is this Pane's: the focused
+    /// Pane's cell hangs it above the line.
+    pub(super) fn composer_menu_over(&self, index: usize, cx: &gpui::App) -> Option<Entity<composer_menu::ComposerMenuView>> {
+        (index == self.focused(cx)
+            && self.composer_menu.read(cx).pane() == Some(self.panes[index].identity))
+            .then(|| self.composer_menu.clone())
+    }
+}
