@@ -6,7 +6,8 @@ pub(super) mod content;
 mod lineage;
 
 use super::*;
-use super::pane_cell::{DetailsRead, PaneAsk, PaneAsks};
+use super::pane_cell::{DetailsRead, PaneAsks};
+use ferrite_pane::cell::PaneAsk;
 use ferrite_pane::details::{DetailsCard, Density, Standing};
 use ferrite_ui::motion;
 use ferrite_ui::theme::*;

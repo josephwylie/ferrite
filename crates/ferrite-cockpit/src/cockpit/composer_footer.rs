@@ -7,7 +7,8 @@
 //! (`pane_cell::ControlsInputs`). Here they are drawn from what was read;
 //! each press asks the root by a `PaneEvent` (`pane_cell::PaneAsk`).
 
-use super::pane_cell::{ControlsInputs, Doors, DraftInputs, PaneAsk, PaneAsks, QueuedAct, ThreadInputs};
+use super::pane_cell::PaneAsks;
+use ferrite_pane::cell::{ControlsInputs, Doors, DraftInputs, PaneAsk, QueuedAct, ThreadInputs};
 use super::*;
 use ferrite_ui::components::MenuDoor;
 use gpui::App;
@@ -266,7 +267,7 @@ fn draft_model_chip(
             )
         })
         .flatten();
-    let group = model_picker::chip_trigger(identity);
+    let group = ferrite_pane::cell::model_chip_trigger(identity);
     let picker_up = door.up();
     let face = pane::model_effort_chip(pane::ModelChip {
         mark: ferrite_ui::provider::mark(provider),
@@ -319,7 +320,7 @@ fn model_chip(
         effort: effort.map(|effort| pane::sentence_case(&effort).into()),
         loading: open.starting(),
         open: picker_up,
-        group: model_picker::chip_trigger(identity),
+        group: ferrite_pane::cell::model_chip_trigger(identity),
     });
     let control = pane::toolbar_chip(("model-picker", key), cx)
         .debug_selector(move || format!("model-picker-{key}"))

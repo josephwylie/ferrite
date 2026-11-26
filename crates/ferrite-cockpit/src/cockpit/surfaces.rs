@@ -48,9 +48,9 @@ pub(crate) enum SurfaceId {
     PullRequest(u64),
 }
 
-impl From<super::pane_cell::DetailsOpen> for SurfaceId {
-    fn from(open: super::pane_cell::DetailsOpen) -> Self {
-        use super::pane_cell::DetailsOpen;
+impl From<ferrite_pane::cell::DetailsOpen> for SurfaceId {
+    fn from(open: ferrite_pane::cell::DetailsOpen) -> Self {
+        use ferrite_pane::cell::DetailsOpen;
         match open {
             DetailsOpen::PullRequest(number) => Self::PullRequest(number),
             DetailsOpen::Changes => Self::Changes,

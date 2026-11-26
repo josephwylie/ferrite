@@ -162,7 +162,7 @@ pub(super) fn draft_hero(
     // opens.
     let word = pane::hero_project(project.clone(), true).on_mouse_down(
         MouseButton::Left,
-        asks.press(super::pane_cell::PaneAsk::BandMenu {
+        asks.press(ferrite_pane::cell::PaneAsk::BandMenu {
             chip: pane::BandChip::Project,
             from_hero: true,
         }),

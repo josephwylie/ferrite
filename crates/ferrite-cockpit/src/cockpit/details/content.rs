@@ -1,5 +1,6 @@
 use super::lineage::Lineage;
-use super::super::pane_cell::{DetailsOpen, PaneAsk, PaneAsks};
+use super::super::pane_cell::PaneAsks;
+use ferrite_pane::cell::{DetailsOpen, PaneAsk};
 use super::*;
 use ferrite_core::settings::ContextCardItem;
 use ferrite_pane::details::Density;

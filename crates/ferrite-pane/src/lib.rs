@@ -6,6 +6,7 @@ mod test_temp;
 
 pub mod annotation_editor;
 pub mod band;
+pub mod cell;
 mod attachments;
 pub mod composer;
 pub mod decision;

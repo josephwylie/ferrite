@@ -33,14 +33,15 @@ use gpui::{
 };
 
 use super::details::content::Content;
-use super::pane_cell::{
-    CellAsk, CellInputs, ControlsInputs, Doors, DraftInputs, KindInputs, PaneAsk, PaneAsks,
-    PaneEvent, QueuedAct, ThreadInputs,
-};
+use super::pane_cell::PaneAsks;
 use super::popups::Popup;
 use super::surfaces::SurfaceAction;
 use super::{CockpitView, MenuTarget, Submit};
 use ferrite_client::cockpit::Cockpit;
+use ferrite_pane::cell::{
+    band_trigger, CellAsk, CellInputs, ControlsInputs, Doors, DraftInputs, KindInputs, PaneAsk,
+    PaneEvent, QueuedAct, ThreadInputs, HERO_TRIGGER,
+};
 use ferrite_core::activity::Subject;
 use ferrite_core::ThreadKey;
 use ferrite_ui::components::MenuDoor;
@@ -485,18 +486,18 @@ impl CockpitView {
             bands: match draft {
                 true => [BandChip::Project, BandChip::Workspace, BandChip::Environment]
                     .into_iter()
-                    .map(|chip| (chip, door(band == Some((chip, false)), super::band_trigger(chip))))
+                    .map(|chip| (chip, door(band == Some((chip, false)), band_trigger(chip))))
                     .collect(),
                 false => Vec::new(),
             },
-            hero: draft.then(|| door(band == Some((BandChip::Project, true)), super::HERO_TRIGGER.into())),
+            hero: draft.then(|| door(band == Some((BandChip::Project, true)), HERO_TRIGGER.into())),
             model: controls.then(|| {
-                door(self.model_picker_open(identity), super::model_picker::chip_trigger(identity))
+                door(self.model_picker_open(identity), ferrite_pane::cell::model_chip_trigger(identity))
             }),
             mode: identity.thread().filter(|_| thread).map(|thread| {
                 door(
                     self.mode_menu().is_some_and(|menu| menu.thread == thread),
-                    super::mode_menu::chip_trigger(thread),
+                    ferrite_pane::cell::mode_chip_trigger(thread),
                 )
             }),
         }
@@ -566,7 +567,7 @@ impl CockpitView {
                 cards.inset = theme::tx_inset_at(rect.w, true);
             }
             Box::new(move |window: &mut Window, cx: &mut gpui::App| cards.render(window, cx))
-                as super::pane_cell::DecisionsDraw
+                as ferrite_pane::cell::DecisionsDraw
         });
         // The slot's width as the board laid it out this frame (a dragged
         // seam included), else the Pane's rect's: what the meter says the

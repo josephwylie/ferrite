@@ -235,11 +235,6 @@ fn pill_top(tab: Tab) -> f32 {
     top + button / 2. - MODEL_PICKER_PILL_H / 2.
 }
 
-/// The key a model chip records its bounds under, where the picker hangs.
-pub(super) fn chip_trigger(pane: PaneIdentity) -> SharedString {
-    format!("model-chip-{pane:?}").into()
-}
-
 /// A model chip as a control: a press asks for its Pane's picker, or its
 /// shutting (`PaneAsk::ModelPicker`), and the chip records where it stands
 /// for the picker to hang from. The press stops there, so the root's
@@ -251,8 +246,8 @@ pub(super) fn chip_control(
     asks: &super::pane_cell::PaneAsks,
 ) -> AnyElement {
     let chip = chip
-        .group(chip_trigger(identity))
-        .on_mouse_down(MouseButton::Left, asks.press(super::pane_cell::PaneAsk::ModelPicker));
+        .group(ferrite_pane::cell::model_chip_trigger(identity))
+        .on_mouse_down(MouseButton::Left, asks.press(ferrite_pane::cell::PaneAsk::ModelPicker));
     door.hung(div().flex().min_w_0().child(chip)).into_any_element()
 }
 
@@ -1319,7 +1314,7 @@ impl CockpitView {
             return None;
         };
         let left = self
-            .trigger(&chip_trigger(open.pane))
+            .trigger(&ferrite_pane::cell::model_chip_trigger(open.pane))
             .map_or(field.left(), |chip| chip.left());
         let viewport = f32::from(window.viewport_size().width);
         let width = (MODEL_PICKER_LIST_W + REASONING_W).min(viewport - 2. * GRID_PAD);
