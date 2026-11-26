@@ -42,6 +42,9 @@ impl std::error::Error for GitError {}
 /// there. Callers cache the answer on a stated cadence; nothing renders
 /// through this per frame.
 pub fn checkout_branch(cwd: &Path) -> Option<String> {
+    if stamp::outside_any_repository(cwd) {
+        return None;
+    }
     let branch = git(cwd, &["branch", "--show-current"]).ok()?;
     let branch = branch.trim();
     if !branch.is_empty() {
@@ -57,8 +60,12 @@ pub fn checkout_branch(cwd: &Path) -> Option<String> {
 /// The branch a repo calls its default: what `origin/HEAD` points at, else
 /// `main` when that branch exists, else `master` when it does, else `main`.
 /// Each probe is a `git` call, so the UI reads it once per Project into its
-/// facts cache and never from a frame.
+/// facts cache and never from a frame. Outside any repository it is `main`,
+/// and asks git nothing.
 pub fn default_branch(cwd: &Path) -> String {
+    if stamp::outside_any_repository(cwd) {
+        return pick_default_branch(None, |_| false);
+    }
     let origin = git(
         cwd,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
@@ -135,6 +142,9 @@ pub fn branch_diff(cwd: &Path, detached: bool) -> Option<BranchDiff> {
 /// together; `branch_diff` then counts the work against its base. `None`
 /// where `cwd` is not a checkout at all.
 pub fn branch_status(cwd: &Path) -> Option<BranchStatus> {
+    if stamp::outside_any_repository(cwd) {
+        return None;
+    }
     let listed = git(cwd, &["status", "--porcelain=v2", "--branch"]).ok()?;
     let mut status = BranchStatus::default();
     let mut detached = false;
@@ -314,6 +324,27 @@ pub fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// In a folder no repository holds, a checkout's branch, default
+    /// branch and status answer as git's failure there does, and no git
+    /// starts. A bare repository is one git finds, so its reads still ask.
+    #[test]
+    fn a_folder_in_no_repository_is_read_without_git() {
+        let plain = std::env::temp_dir().join(format!("ferrite-git-read-{}-plain", std::process::id()));
+        let _ = std::fs::remove_dir_all(&plain);
+        std::fs::create_dir_all(plain.join("deeper")).unwrap();
+        let before = git_spawns_on_this_thread();
+        assert_eq!(checkout_branch(&plain.join("deeper")), None);
+        assert_eq!(default_branch(&plain), "main");
+        assert!(branch_status(&plain).is_none());
+        assert_eq!(git_spawns_on_this_thread(), before, "no git ran");
+
+        git(&plain, &["init", "-q", "--bare", "-b", "trunk", "bare.git"]).unwrap();
+        let before = git_spawns_on_this_thread();
+        assert_eq!(checkout_branch(&plain.join("bare.git")).as_deref(), Some("trunk"));
+        assert!(git_spawns_on_this_thread() > before, "git read the bare repository");
+        let _ = std::fs::remove_dir_all(&plain);
+    }
 
     /// The porcelain listing read stanza by stanza: the path from the
     /// `worktree` line, the branch from `branch refs/heads/…`, none on a

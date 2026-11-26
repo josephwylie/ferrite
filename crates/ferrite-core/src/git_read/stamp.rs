@@ -27,6 +27,45 @@ pub(super) fn checkout_dirs(cwd: &Path) -> Option<(&Path, PathBuf)> {
     Some((root, root.join(pointer.trim().strip_prefix("gitdir:")?.trim())))
 }
 
+/// The variables that move git's search for a repository or change what
+/// it counts as one. With any of them set, only git can say.
+const DISCOVERY_OVERRIDES: [&str; 6] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+];
+
+/// Whether git certainly finds no repository at `cwd`, so every read of a
+/// checkout there fails and its caller can answer as that failure would
+/// without starting git. Only ever `true` when git would agree: no folder
+/// from `cwd` up, as written or with its links resolved as git resolves
+/// them, holds a `.git` or a `HEAD` (every git dir has one, a bare
+/// repository's too), and no variable moves git's search. In any doubt,
+/// as for a folder that does not resolve, it is `false` and git is asked.
+pub(super) fn outside_any_repository(cwd: &Path) -> bool {
+    outside_any_repository_given(cwd, |name| std::env::var_os(name))
+}
+
+fn outside_any_repository_given(
+    cwd: &Path,
+    var: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> bool {
+    if DISCOVERY_OVERRIDES.iter().any(|name| var(name).is_some()) {
+        return false;
+    }
+    let (Ok(written), Ok(resolved)) = (std::path::absolute(cwd), dunce::canonicalize(cwd)) else {
+        return false;
+    };
+    let present = |path: PathBuf| fs::symlink_metadata(path).is_ok();
+    ![written, resolved].iter().any(|from| {
+        from.ancestors()
+            .any(|dir| present(dir.join(".git")) || present(dir.join("HEAD")))
+    })
+}
+
 /// What the `HEAD` in git dir `admin` says.
 fn head_said(admin: &Path) -> Option<String> {
     let mut said = fs::read_to_string(admin.join("HEAD")).ok()?.trim().to_string();
@@ -168,6 +207,81 @@ mod tests {
         fs::write(root.join("src").join("lib.rs"), "fn a() {}\n").unwrap();
         fs::write(root.join(".gitignore"), "target/\n").unwrap();
         root
+    }
+
+    /// A folder of its own in no repository.
+    fn plain(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ferrite-stamp-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn unset(_: &str) -> Option<std::ffi::OsString> {
+        None
+    }
+
+    /// A folder no repository holds is outside one; under a `.git`, or in
+    /// a git dir (any folder with a `HEAD`, as a bare repository whose
+    /// objects live elsewhere), or where it cannot be resolved, git is asked.
+    #[test]
+    fn only_a_folder_git_would_find_nothing_at_is_outside_a_repository() {
+        let away = plain("outside");
+        assert!(outside_any_repository_given(&away, unset));
+        let root = checkout("outside-checkout");
+        assert!(!outside_any_repository_given(&root.join("src"), unset));
+        fs::create_dir_all(away.join("bare")).unwrap();
+        fs::write(away.join("bare").join("HEAD"), "ref: refs/heads/main
+").unwrap();
+        assert!(!outside_any_repository_given(&away.join("bare"), unset), "a git dir");
+        assert!(!outside_any_repository_given(&away.join("gone"), unset), "unresolved");
+        let _ = fs::remove_dir_all(&away);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Each variable that moves git's search leaves the answer to git.
+    #[test]
+    fn a_variable_that_moves_gits_search_leaves_it_to_git() {
+        let away = plain("overrides");
+        for name in DISCOVERY_OVERRIDES {
+            let set = |asked: &str| (asked == name).then(|| std::ffi::OsString::from("/elsewhere"));
+            assert!(!outside_any_repository_given(&away, set), "{name}");
+        }
+        assert!(outside_any_repository_given(&away, unset));
+        let _ = fs::remove_dir_all(&away);
+    }
+
+    /// A link from outside into a checkout is in it, as git resolves the
+    /// link before it searches.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_into_a_checkout_is_in_it() {
+        let root = checkout("symlinked");
+        let away = plain("symlink");
+        std::os::unix::fs::symlink(root.join("src"), away.join("src")).unwrap();
+        assert!(!outside_any_repository_given(&away.join("src"), unset));
+        let _ = fs::remove_dir_all(&away);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A junction from outside into a checkout is in it.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_into_a_checkout_is_in_it() {
+        let root = checkout("junctioned");
+        let away = plain("junction");
+        let made = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(away.join("src"))
+            .arg(root.join("src"))
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "mklink /J: {made:?}");
+        assert!(!outside_any_repository_given(&away.join("src"), unset));
+        let _ = fs::remove_dir_all(&away);
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// Long after every write here, so no stamp is racy unless a test says so.

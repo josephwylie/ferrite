@@ -89,8 +89,10 @@ fn the_caret_blinks_in_the_overlay_and_keeps_its_look(cx: &mut TestAppContext) {
     assert!(overlay_renders() > overlay, "the overlay drew the blink");
     let (from, draws) = composer.read_with(cx, |composer, _| composer.caret_log());
     let from = from.expect("focus restarted the blink");
+    // Two steps a turn. The six steps of three turns draw a frame late, so
+    // the last may fall after them.
     assert!(
-        draws.len() >= 3 * 2 && draws.len() <= 3 * 4 + 2,
+        draws.len() >= 3 * 2 - 1 && draws.len() <= 3 * 4 + 2,
         "{} caret draws in three turns: the steps' instants, not the halves'",
         draws.len()
     );
