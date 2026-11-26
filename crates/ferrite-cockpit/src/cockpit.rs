@@ -66,6 +66,7 @@ mod settings_view;
 mod setup_sync;
 mod sheets;
 mod side_chat_view;
+mod slot_drag;
 mod rename;
 mod returns;
 use ferrite_ui::components::rename_field;
@@ -438,22 +439,13 @@ pub struct CockpitView {
     /// The board's bounds as the last frame laid it out: what an act (a
     /// seam press, a drop) measures in when it has no window to measure.
     board: std::cell::Cell<layout::Rect>,
-    /// A reader being dragged over a board slot: the
-    /// target leaf and what a release there would do, for the preview wash.
-    drop_preview: Option<(Leaf, Zone)>,
-    /// The Pane native files were last dragged over. Read only while a drag
-    /// is live (`drop_target`), so a drag that leaves the window leaves no
-    /// sheet behind.
-    file_drop_over: Option<PaneIdentity>,
+    /// A board slot or native files being dragged: the lifted slot, the
+    /// wash a release would fill, the slots' sizes for its ghost, the Pane
+    /// the files hover (`slot_drag`).
+    slot_drag: slot_drag::SlotDrag,
     /// Each board's arrangement as the operator left it, and the seam
     /// being dragged (`board_layouts`).
     board_layouts: board_layouts::BoardLayouts,
-    /// Every board slot's size as this frame laid it out, for the ghost a
-    /// drag of it shows. Written while the board draws.
-    slot_sizes: std::cell::RefCell<std::collections::HashMap<Leaf, (f32, f32)>>,
-    /// The board slot being dragged: it dims in place while its ghost
-    /// moves, until the release.
-    dragging: Option<Leaf>,
     /// The operator's settings and where they save; every change saves.
     prefs: Preferences,
     /// What each Thread's Composer holds unsent.
@@ -1231,11 +1223,8 @@ impl CockpitView {
             head_parent_room: Default::default(),
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             board: std::cell::Cell::new(layout::Rect::default()),
-            drop_preview: None,
-            file_drop_over: None,
+            slot_drag: Default::default(),
             board_layouts: Default::default(),
-            slot_sizes: Default::default(),
-            dragging: None,
             unsent: drafts::Unsent::load(&prefs.dir),
             cited_sources,
             prefs,
@@ -2989,10 +2978,8 @@ impl CockpitView {
             .into_iter()
             .filter(|(_, rect)| rect.w > 0.0 && rect.h > 0.0)
             .collect();
-        *self.slot_sizes.borrow_mut() = rects
-            .iter()
-            .map(|(leaf, rect)| (*leaf, (rect.w, rect.h)))
-            .collect();
+        self.slot_drag
+            .laid_out(rects.iter().map(|(leaf, rect)| (*leaf, (rect.w, rect.h))));
         for (leaf, rect) in rects {
             let Some(slot) = Self::leaf_slot(on, leaf) else {
                 continue;
@@ -3023,7 +3010,7 @@ impl CockpitView {
             // The grabbed slot stays put, dimmed as lifted out of its slot,
             // while its ghost travels: the board keeps its shape until the
             // drop changes it.
-            let cell = if self.dragging == Some(leaf) {
+            let cell = if self.slot_drag.lifted() == Some(leaf) {
                 cell.opacity(ferrite_ui::theme::DRAG_SOURCE_OPACITY)
                     .debug_selector(move || format!("pane-drag-source-{}", leaf.get()))
             } else {
@@ -3159,7 +3146,7 @@ impl CockpitView {
                 );
             }
         }
-        if let Some((target, zone)) = self.drop_preview {
+        if let Some((target, zone)) = self.slot_drag.preview() {
             if let Some((_, rect)) = tree
                 .rects(bounds, ferrite_ui::theme::BOARD_SEAM)
                 .into_iter()
@@ -3265,12 +3252,7 @@ impl CockpitView {
             let (pointer, rect) = drop_geometry(position, bounds);
             (target, layout::zone(pointer, rect))
         });
-        self.set_drop_preview(preview, cx);
-    }
-
-    fn set_drop_preview(&mut self, preview: Option<(Leaf, Zone)>, cx: &mut Context<Self>) {
-        if self.drop_preview != preview {
-            self.drop_preview = preview;
+        if self.slot_drag.set_preview(preview) {
             cx.notify();
         }
     }
@@ -3280,13 +3262,11 @@ impl CockpitView {
     /// leaves, an edge moves the source beside the target — the tree is
     /// kept either way. Reads the preview the last move computed.
     fn drop_pane(&mut self, source: Leaf, target: Leaf, cx: &mut Context<Self>) {
-        self.dragging = None;
-        let preview = self.drop_preview.take();
-        let Some((previewed, zone)) = preview.filter(|(previewed, _)| *previewed == target) else {
+        let Some(zone) = self.slot_drag.drop_on(target) else {
             cx.notify();
             return;
         };
-        self.apply_pane_drop(source, previewed, zone, cx);
+        self.apply_pane_drop(source, target, zone, cx);
     }
 
     /// The tree change a drop makes, persisted through the core door.
@@ -6620,7 +6600,7 @@ impl CockpitView {
         } else {
             // The shown Pane, the whole board. No tree lays out slots
             // here, so none of its sizes stands.
-            self.slot_sizes.borrow_mut().clear();
+            self.slot_drag.laid_out([]);
             frame()
                 .flex()
                 .flex_col()
@@ -6804,7 +6784,7 @@ impl CockpitView {
                     view.end_seam_drag(cx);
                     view.finish_nav_resize(cx);
                     view.panel_pointer_released(event.position, cx);
-                    if view.drop_preview.take().is_some() | view.dragging.take().is_some() {
+                    if view.slot_drag.release() {
                         cx.notify();
                     }
                 }),
@@ -6928,12 +6908,6 @@ impl CockpitView {
 }
 
 impl CockpitView {
-    /// Whether native files hover this Pane right now: the last Pane their
-    /// drag moved over, while that drag is still live.
-    fn drop_target(&self, index: usize, cx: &gpui::App) -> bool {
-        cx.has_active_drag() && self.file_drop_over == Some(self.panes[index].identity)
-    }
-
     /// Read free disk for the nav's foot off the UI thread: the least free of the
     /// volumes holding the Threads' checkouts (SPEC §8), or a fixture
     /// world's figure. Never another machine's, whose checkouts are its
@@ -7008,25 +6982,14 @@ impl CockpitView {
         bounds: gpui::Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        if self.dragging != Some(source) {
-            self.dragging = Some(source);
+        if self.slot_drag.lift(source) {
             cx.notify();
         }
         if bounds.contains(&at) {
             self.preview_pane_drop(source, target, at, bounds, cx);
-        } else if self.drop_preview.is_some_and(|(previewed, _)| previewed == target) {
-            self.drop_preview = None;
+        } else if self.slot_drag.left(target) {
             cx.notify();
         }
-    }
-
-    /// The size a slot was laid out at this frame, for its ghost.
-    fn slot_size(&self, leaf: Leaf) -> (f32, f32) {
-        self.slot_sizes
-            .borrow()
-            .get(&leaf)
-            .copied()
-            .unwrap_or((GHOST_MAX_W, GHOST_MAX_H))
     }
 
     fn toggle_tool(

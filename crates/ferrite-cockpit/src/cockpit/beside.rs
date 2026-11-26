@@ -634,7 +634,7 @@ impl CockpitView {
             title: shown.title.clone().into(),
             detail: Some("DIFF".into()),
             reader: true,
-            size: self.slot_size(leaf),
+            size: self.slot_drag.size(leaf).unwrap_or((super::GHOST_MAX_W, super::GHOST_MAX_H)),
         };
         // `Review · main`: the surface's name in the head's ink, what it
         // reads dim after it, as the preview's head names its file.
