@@ -301,6 +301,7 @@ def select(packages: dict[str, Package], paths: list[str], full: bool = False, b
         if selects in (None, NOTHING) and any(packages[name].run == "vendored" for name in owners):
             selects = VENDORED
         selected.update(owners)
+        reasons.update(f"changed member: {name}" for name in owners)
         if selects not in (None, NOTHING):
             inputs.add(selects)
             reasons.add(f"{selects}: {path}")
@@ -327,7 +328,7 @@ def select(packages: dict[str, Package], paths: list[str], full: bool = False, b
         "windows": windows,
         **runs,
         "decisions": {name: name in selected for name in sorted(packages)},
-        "reasons": sorted(reasons) or ["workspace dependency closure" if selected else "nothing this workflow checks changed"],
+        "reasons": sorted(reasons) or ["nothing this workflow checks changed"],
     }
 
 
