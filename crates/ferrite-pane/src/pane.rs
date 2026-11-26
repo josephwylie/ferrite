@@ -1360,9 +1360,10 @@ pub fn resume_offer(key: u64, line: SharedString, action: gpui::component::butto
 /// a failed turn's failure line:
 /// `FAILURE_STRIP_H` at `R_CARD` on `FAILURE_WASH`, an `x-circle` in
 /// `BLOCKED`, why it failed (`API Error: 529 overloaded`) in `INK_STRONG`, cut to
-/// one line, and at the right the wired `Retry` (`retry_button`), which a
-/// closed Session goes without.
-pub fn failure_strip(key: u64, words: SharedString, retry: Option<AnyElement>) -> Div {
+/// one line, and at the right its wired presses (`strip_button`): `Retry`,
+/// which a closed Session goes without, and the sign-in of a CLI that is
+/// not signed in on another Machine.
+pub fn failure_strip(key: u64, words: SharedString, presses: Option<AnyElement>) -> Div {
     div()
         .debug_selector(move || format!("failure-strip-{key}"))
         .flex()
@@ -1389,22 +1390,28 @@ pub fn failure_strip(key: u64, words: SharedString, retry: Option<AnyElement>) -
                 .child(words),
         )
         .child(div().flex_1())
-        .children(retry)
+        .children(presses)
 }
 
-/// The strip's `Retry`: `RETRY_H` at `R_CONTROL` on `SELECTED`, padded
-/// `RETRY_PAD_X`, its label at `W_LABEL` in `INK_STRONG`. The caller wires
+/// A press on the strip, `Retry` among them: `RETRY_H` at `R_CONTROL` on
+/// `SELECTED`, padded `RETRY_PAD_X`, `label` at `W_LABEL` in `INK_STRONG`.
+/// `name` and `key` make its selector (`failure-retry-7`). The caller wires
 /// the press.
-pub fn retry_button(key: u64, cx: &gpui::App) -> gpui::component::button::Button {
+pub fn strip_button(
+    name: &'static str,
+    key: u64,
+    label: impl Into<SharedString>,
+    cx: &gpui::App,
+) -> gpui::component::button::Button {
     components::faded_button(
-        ("failure-retry", key as usize),
+        (name, key as usize),
         theme::paint::SELECTED.into(),
         theme::paint::SELECTION_HOVER.into(),
         theme::paint::PRESS.into(),
         rgb(INK_STRONG).into(),
         cx,
     )
-    .debug_selector(move || format!("failure-retry-{key}"))
+    .debug_selector(move || format!("{name}-{key}"))
     .flex_shrink_0()
     .h(px(theme::RETRY_H))
     .px(px(theme::RETRY_PAD_X))
@@ -1414,7 +1421,7 @@ pub fn retry_button(key: u64, cx: &gpui::App) -> gpui::component::button::Button
             .text_size(px(theme::FS_LABEL))
             .font_weight(theme::W_LABEL)
             .text_color(rgb(INK_STRONG))
-            .child("Retry"),
+            .child(label.into()),
     )
 }
 

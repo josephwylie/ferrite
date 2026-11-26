@@ -490,6 +490,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("down".into(), "folder_browser::Down", Some("FolderBrowser")),
         ("enter".into(), "folder_browser::Open", Some("FolderBrowser")),
         ("escape".into(), "folder_browser::Cancel", Some("FolderBrowser")),
+        // A sign-in's code line, after the Composer's: ⏎ hands the code over.
+        ("enter".into(), "sign_in::Submit", Some("SignIn")),
         ("up".into(), "nav::SelectPrevious", Some("NavTree")),
         ("down".into(), "nav::SelectNext", Some("NavTree")),
         ("enter".into(), "nav::Open", Some("NavTree")),

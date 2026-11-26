@@ -234,6 +234,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "folder_browser::Down"
         | "folder_browser::Open"
         | "folder_browser::Cancel"
+        | "sign_in::Submit"
         | "nav::CloseView"
         | "nav::SelectNext"
         | "nav::SelectPrevious"

@@ -243,7 +243,9 @@ impl CockpitView {
     /// The failure strip (SPEC §5.9 item 4) under Main's transcript when the
     /// Thread's last turn failed: why (`failure_words`), and `Retry`, which
     /// re-sends the failed turn's prompt (`retry_failed_turn`) — none for a
-    /// closed Session, which has nothing to send to.
+    /// closed Session, which has nothing to send to. A turn that failed for
+    /// its CLI not being signed in on another Machine offers that sign-in
+    /// beside it (`sign_in_cli`).
     fn failure_tail(&self, index: usize, owner: gpui::WeakEntity<Self>, cx: &App) -> Option<TranscriptTail> {
         use ferrite_core::transcript::Status;
         let pane = self.panes.get(index)?;
@@ -251,7 +253,8 @@ impl CockpitView {
             return None;
         }
         let thread = pane.thread()?;
-        let turn = self.cockpit.read(cx).thread(thread)?.turn();
+        let open = self.cockpit.read(cx).thread(thread)?;
+        let turn = open.turn();
         let Some(ferrite_core::TurnOutcome::Error(message)) = &turn.outcome else {
             return None;
         };
@@ -260,10 +263,14 @@ impl CockpitView {
         }
         let closed = turn.status == Status::Closed;
         let words = failure_words(message);
+        let machine = thread.machine();
+        let provider = open.provider();
+        let sign_in = (self.elsewhere(machine, cx) && ferrite_core::sign_in::signed_out(provider, message))
+            .then(|| SharedString::from(format!("Sign in to {provider} on {}", self.place_of(machine, cx))));
         let key = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            ("failure", thread, words.as_ref(), closed).hash(&mut hasher);
+            ("failure", thread, words.as_ref(), closed, sign_in.as_deref()).hash(&mut hasher);
             hasher.finish()
         };
         let geometry = pane.read(cx).geometry.clone();
@@ -271,22 +278,36 @@ impl CockpitView {
             key,
             render: std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
                 use gpui::prelude::*;
-                let owner = owner.clone();
-                let geometry = geometry.clone();
+                let strip = thread.thread().get();
+                let sign_in = sign_in.clone().map(|label| {
+                    let owner = owner.clone();
+                    ferrite_pane::pane::strip_button("failure-sign-in", strip, label, cx).on_click(move |_, _, cx| {
+                        let _ = owner.update(cx, |view, cx| view.sign_in_cli(machine, provider, cx));
+                    })
+                });
                 let retry = (!closed).then(|| {
-                    let retry = ferrite_pane::pane::retry_button(thread.thread().get(), cx).on_click(move |_, _, cx| {
+                    let owner = owner.clone();
+                    ferrite_pane::pane::strip_button("failure-retry", strip, "Retry", cx).on_click(move |_, _, cx| {
                         let _ = owner.update(cx, |view, cx| view.retry_failed_turn(thread, cx));
-                    });
-                    // The Retry is what the operator answers here.
-                    ferrite_ui::components::on_bounds(gpui::div().flex_shrink_0().child(retry), move |at, _, _| {
+                    })
+                });
+                let presses = (sign_in.is_some() || retry.is_some()).then(|| {
+                    let geometry = geometry.clone();
+                    let presses = gpui::div()
+                        .flex()
+                        .flex_shrink_0()
+                        .gap(gpui::px(ferrite_ui::theme::SPACE_2))
+                        .children(sign_in)
+                        .children(retry);
+                    // The presses are what the operator answers here.
+                    ferrite_ui::components::on_bounds(presses, move |at, _, _| {
                         let kept = geometry.get();
                         let answers = kept.answers.with_cards(at).with_buttons(at);
                         geometry.set(ferrite_pane::pane::PaneGeometry { answers, ..kept })
                     })
                     .into_any_element()
                 });
-                ferrite_pane::pane::failure_strip(thread.thread().get(), words.clone(), retry)
-                    .into_any_element()
+                ferrite_pane::pane::failure_strip(strip, words.clone(), presses).into_any_element()
             }),
         })
     }

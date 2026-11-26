@@ -11,6 +11,7 @@ use ferrite_factory::new_task::NewTaskView;
 use super::placement_view::PlacementView;
 use ferrite_settings::project_editor::ProjectEditorView;
 use ferrite_settings::sheet::SettingsView;
+use ferrite_settings::sign_in::SignInView;
 use super::*;
 use ferrite_ui::motion;
 use ferrite_ui::sheet::Drawn;
@@ -28,6 +29,8 @@ pub(crate) enum Sheet {
     Direct(Entity<DirectView>),
     /// A draft's Project copied to the Machine it picked.
     Placement(Entity<PlacementView>),
+    /// A Machine's CLI signed in from here (ADR 0051).
+    SignIn(Entity<SignInView>),
 }
 
 impl Sheet {
@@ -39,6 +42,7 @@ impl Sheet {
             Sheet::NewTask(view) => view.read(cx).focus(cx),
             Sheet::Direct(view) => view.read(cx).focus(cx),
             Sheet::Placement(view) => view.read(cx).focus(cx),
+            Sheet::SignIn(view) => view.read(cx).focus(cx),
         }
     }
 
@@ -61,6 +65,7 @@ impl Sheet {
             Sheet::NewTask(_) => "new-task-card-in",
             Sheet::Direct(_) => "direct-card-in",
             Sheet::Placement(_) => "placement-card-in",
+            Sheet::SignIn(_) => "sign-in-card-in",
         }
     }
 
@@ -72,6 +77,7 @@ impl Sheet {
             Sheet::NewTask(view) => view.update(cx, |view, cx| view.card(window, cx)),
             Sheet::Direct(view) => view.update(cx, |view, cx| view.card(window, cx)),
             Sheet::Placement(view) => view.update(cx, |view, cx| view.card(window, cx)),
+            Sheet::SignIn(view) => view.update(cx, |view, cx| view.card(window, cx)),
         }
     }
 }
@@ -140,6 +146,13 @@ impl Sheets {
     pub(super) fn placement(&self) -> Option<&Entity<PlacementView>> {
         match self.up() {
             Some(Sheet::Placement(view)) => Some(view),
+            _ => None,
+        }
+    }
+
+    pub(super) fn sign_in(&self) -> Option<&Entity<SignInView>> {
+        match self.up() {
+            Some(Sheet::SignIn(view)) => Some(view),
             _ => None,
         }
     }
@@ -296,6 +309,7 @@ impl CockpitView {
             }
             Sheet::NewTask(sheet) => self.new_task_gone(&sheet, cx),
             Sheet::Direct(sheet) => self.direct_gone(&sheet, cx),
+            Sheet::SignIn(sheet) => sheet.update(cx, |sheet, cx| sheet.gone(cx)),
             // A copy outlives its card: the window keeps it (`Copies`).
             Sheet::Placement(_) | Sheet::ProjectEditor(_) | Sheet::BackgroundDialog(_) => {}
         }
@@ -306,7 +320,7 @@ impl CockpitView {
     /// the Server or another window counts as much as one made here.
     pub(super) fn close_sheet_with_nothing_to_draw(&mut self, cx: &mut Context<Self>) {
         let gone = match self.sheets.read(cx).up() {
-            None | Some(Sheet::Settings(_)) => false,
+            None | Some(Sheet::Settings(_) | Sheet::SignIn(_)) => false,
             Some(Sheet::ProjectEditor(card)) => card
                 .read(cx)
                 .target

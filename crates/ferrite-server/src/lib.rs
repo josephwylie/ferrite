@@ -240,6 +240,20 @@ pub fn fixture_browser_machine(
 ) -> io::Result<ferrite_core::machine::Dial> {
     let (browser, browser_requests) = ferrite_core::browser::channel();
     let spawner = spawner_factory(browser);
+    /// The machine's CLIs: none. A test's machine never runs this
+    /// computer's, which would answer for its real sign-ins.
+    struct NoClis;
+    impl Clis for NoClis {
+        fn binary(&self, _: Provider) -> Option<ferrite_core::protocol::CliBinary> {
+            None
+        }
+        fn check(&self, _: Provider) -> io::Result<ferrite_core::cli_update::Status> {
+            Err(io::Error::other("a test's machine has no CLIs"))
+        }
+        fn update(&self, _: Provider) -> Result<ferrite_core::protocol::CliBinary, String> {
+            Err("a test's machine has no CLIs".into())
+        }
+    }
     /// The window's end: dropped, it hangs up, as ssh does.
     struct Upload(link::Stream);
     impl io::Write for Upload {
@@ -270,6 +284,7 @@ pub fn fixture_browser_machine(
         let settings_dir = store.parent().unwrap_or(&store).to_path_buf();
         let mut server = Server::new(engine, info, id, renders, Arc::default(), settings_dir, heard);
         server.browser_requests = browser_requests;
+        server.clis = Arc::new(NoClis);
         server.serve(hear)
     });
     /// The Server's words, each read held back by `FERRITE_FIXTURE_LINK_DELAY_MS`

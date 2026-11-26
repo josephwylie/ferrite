@@ -82,6 +82,9 @@ pub struct ProviderInputs {
     pub announced: Vec<ModelInfo>,
     /// Its CLI's update line: what the check found, and the button.
     pub update: (SharedString, Option<SharedString>),
+    /// Its CLI on another machine said it is not signed in there: a row
+    /// under it signs it in from here (ADR 0051).
+    pub signed_out: bool,
 }
 
 /// This computer's Server, as Settings › Server has it.
@@ -108,6 +111,8 @@ pub enum SettingsEvent {
     PlaySound(Sound),
     ChooseSound(Sound),
     UpdateCli(Provider),
+    /// Sign the CLI in on the machine Settings is about.
+    SignIn(Provider),
     CopyDiagnostics,
     // Each asks in the window it was pressed in.
     RestartServer(AnyWindowHandle),
@@ -495,21 +500,34 @@ impl SettingsView {
         };
         let mut clis: Vec<settings::Row> = providers
             .into_iter()
-            .map(|ProviderInputs { provider, update, .. }| {
-                let (id, version) = match provider {
-                    Provider::Claude => ("settings-update-claude", claude.clone()),
-                    Provider::Codex => ("settings-update-codex", codex.clone()),
+            .flat_map(|ProviderInputs { provider, update, signed_out, .. }| {
+                let (id, sign_in, version) = match provider {
+                    Provider::Claude => ("settings-update-claude", "settings-sign-in-claude", claude.clone()),
+                    Provider::Codex => ("settings-update-codex", "settings-sign-in-codex", codex.clone()),
                 };
                 let (detail, button) = update;
-                let tell = tell.clone();
-                settings::action(
+                let updater = tell.clone();
+                let cli = settings::action(
                     id,
                     ferrite_ui::provider::cli(provider),
                     detail,
                     version,
                     button,
-                    move |_, cx| tell(SettingsEvent::UpdateCli(provider), cx),
-                )
+                    move |_, cx| updater(SettingsEvent::UpdateCli(provider), cx),
+                );
+                let tell = tell.clone();
+                let sign_in = signed_out.then(|| {
+                    settings::action(
+                        sign_in,
+                        "Not signed in",
+                        format!("Its Threads on {place} fail until it is signed in there"),
+                        SharedString::default(),
+                        Some(format!("Sign in to {provider} on {place}").into()),
+                        move |_, cx| tell(SettingsEvent::SignIn(provider), cx),
+                    )
+                    .nested()
+                });
+                std::iter::once(cli).chain(sign_in)
             })
             .collect();
         clis.push(settings::toggle(
@@ -932,6 +950,7 @@ mod tests {
                     catalog: Vec::new(),
                     announced: Vec::new(),
                     update: update(provider),
+                    signed_out: false,
                 })
                 .collect(),
             cli_versions: Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into())),
@@ -1298,6 +1317,21 @@ mod tests {
         assert!(matches!(heard.take()[..], [SettingsEvent::UpdateCli(Provider::Codex)]));
         seek(&sheet, "Update the CLIs automatically", cx);
         assert!(says(cx).contains("installed on box"), "{}", says(cx));
+    }
+
+    /// A CLI the machine says is not signed in has a row under it, whose
+    /// press signs it in there; one signed in has none.
+    #[gpui::test]
+    fn a_cli_not_signed_in_there_offers_to_sign_it_in(cx: &mut TestAppContext) {
+        let (sheet, kept_by, cx) = open(inputs(), cx);
+        let heard = heard(&sheet, cx);
+        seek(&sheet, "Not signed in", cx);
+        assert!(!shows(cx, "settings-sign-in-claude") && !shows(cx, "settings-sign-in-codex"));
+        kept(&kept_by, cx, |inputs| inputs.providers[1].signed_out = true);
+        assert!(says(cx).contains("Sign in to Codex on box"), "{}", says(cx));
+        assert!(!shows(cx, "settings-sign-in-claude"));
+        click(cx, "settings-sign-in-codex");
+        assert!(matches!(heard.take()[..], [SettingsEvent::SignIn(Provider::Codex)]));
     }
 
     /// Each chime plays and is chosen by the window; one of the operator's
