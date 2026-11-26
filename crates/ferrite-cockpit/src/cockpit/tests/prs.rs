@@ -144,7 +144,8 @@ fn world<'a>(
 }
 
 /// `world`, its one Thread in the Project's repository, whose origin is on
-/// GitHub: a link to one of its PRs is the Thread's own.
+/// GitHub: a link to one of its PRs is the Thread's own, and one to another
+/// repository's is not.
 fn world_in_repo<'a>(
     name: &str,
     rows: Vec<WirePrRow>,
@@ -483,7 +484,7 @@ fn a_bare_pr_reference_uses_the_contextual_panel(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn a_foreign_pr_with_the_same_number_keeps_its_repository(cx: &mut TestAppContext) {
-    let (world, cx) = world("pr-foreign-number", 1, two_rows(), false, cx);
+    let (world, cx) = world_in_repo("pr-foreign-number", two_rows(), cx);
     let thread = world
         .view
         .read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
