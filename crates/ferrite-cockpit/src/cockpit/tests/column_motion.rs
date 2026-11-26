@@ -338,11 +338,11 @@ fn keys_typed_while_the_panel_slides_shut_reach_the_composer(cx: &mut TestAppCon
     settle(cx);
     show(&view, SurfaceId::Files, cx);
     cx.update(|window, cx| {
-        let keys = view.read(cx).panel_keys.clone();
+        let keys = view.read(cx).panel.keys.clone();
         window.focus(&keys, cx);
     });
     settle(cx);
-    assert!(cx.update(|window, cx| view.read(cx).panel_keys.contains_focused(window, cx)));
+    assert!(cx.update(|window, cx| view.read(cx).panel.keys.contains_focused(window, cx)));
 
     toggle_panel(&view, cx);
     at(MOTION_DUR_BASE_MS / 4, cx);
@@ -411,7 +411,7 @@ fn keys_held_by_a_panel_body_return_to_the_composer_when_the_tab_changes(
     settle(cx);
     show(&view, SurfaceId::Files, cx);
     cx.update(|window, cx| {
-        let keys = view.read(cx).panel_keys.clone();
+        let keys = view.read(cx).panel.keys.clone();
         window.focus(&keys, cx);
     });
     settle(cx);

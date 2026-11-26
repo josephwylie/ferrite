@@ -39,7 +39,7 @@ impl CockpitView {
         SettingsInputs {
             settings: self.prefs.settings.clone(),
             providers,
-            cli_versions: self.cli_versions.clone(),
+            cli_versions: self.environment.cli_versions.clone(),
             scope: self.settings_scope(cx),
             dir: self.prefs.dir.clone(),
             defaults: self.shown_defaults(cx).ok_or_else(|| self.defaults_unread(cx)),
@@ -123,7 +123,7 @@ impl CockpitView {
         let connections = view.read(cx).connections().clone();
         cx.subscribe(&connections, Self::on_connections_event).detach();
         self.show_sheet(sheets::Sheet::Settings(view.clone()), cx);
-        if self.cli_versions.is_none() {
+        if self.environment.cli_versions.is_none() {
             self.probe_cli_versions(cx);
         }
         self.ask_server_defaults(cx);

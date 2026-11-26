@@ -32,7 +32,7 @@ use crate::cockpit::CockpitView;
 
 impl CockpitView {
     /// The window's Files, reading it through a `Source` over the root.
-    /// Their events are heard from the first frame (`hear_views`), since
+    /// Their events are heard from the first frame (`hear_window`), since
     /// answering ⌘P needs the window.
     pub(in crate::cockpit) fn new_files(cx: &mut Context<Self>) -> Entity<FilesView> {
         let inputs = Source::of(&cx.entity(), |root: &Self, _: &(), cx| root.files_inputs(cx));

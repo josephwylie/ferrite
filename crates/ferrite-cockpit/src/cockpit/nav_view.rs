@@ -301,7 +301,7 @@ fn nav_inputs(
             _ => None,
         },
         limits,
-        free_disk: view.free_disk,
+        free_disk: view.sweep.free_disk(),
         update,
         state,
     };

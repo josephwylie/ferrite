@@ -112,6 +112,9 @@ pub(super) struct Popups {
     /// it: the keyboard goes back only while it is still there.
     back: Option<(Back, FocusHandle)>,
     triggers: Triggers,
+    /// Frames each open card has waited for its trigger's or Pane's
+    /// geometry, by trigger key (`card_corner`); none once it has some.
+    card_waits: RefCell<HashMap<String, u8>>,
 }
 
 /// Where each control a popup hangs from stood as last laid out, by key,
@@ -168,6 +171,24 @@ impl Popups {
 
     pub(super) fn triggers(&self) -> Triggers {
         self.triggers.clone()
+    }
+
+    /// The card under `key` has its geometry: it waits no more.
+    fn card_placed(&self, key: &str) {
+        self.card_waits.borrow_mut().remove(key);
+    }
+
+    /// The card under `key` has no geometry this frame. Whether it waits
+    /// another frame for it, `CARD_GEOMETRY_FRAMES` at most, rather than
+    /// hang from the board's corner.
+    fn card_waits(&self, key: String) -> bool {
+        let mut waits = self.card_waits.borrow_mut();
+        let waited = waits.entry(key).or_default();
+        if *waited < CARD_GEOMETRY_FRAMES {
+            *waited += 1;
+            return true;
+        }
+        false
     }
 
     /// Drop the popup leaving once its exit has run at `now`.
@@ -559,5 +580,106 @@ impl CockpitView {
         key: SharedString,
     ) -> impl FnOnce(gpui::Bounds<Pixels>, &mut Window, &mut gpui::App) + 'static {
         self.popups.triggers.record(key)
+    }
+}
+
+/// How many frames a card waits for its geometry (`card_corner`).
+/// A Pane laid out for the first time has it by the next frame; a few more
+/// cover a layout that settles over two.
+const CARD_GEOMETRY_FRAMES: u8 = 3;
+
+/// What a card hangs from (`card_corner`): its Pane's Composer (opening
+/// up) or head (opening down).
+#[derive(Clone, Copy)]
+pub(super) enum CardFrom {
+    Composer(PaneIdentity),
+    Head(PaneIdentity),
+}
+
+impl CockpitView {
+    /// Where a card hangs (`FloatPlace::card_corner`). Until its trigger
+    /// or Pane has been laid out once, it waits a frame rather than guess —
+    /// `CARD_GEOMETRY_FRAMES` of them at most, then hangs from the board's
+    /// corner: a Pane with nothing to give (one whose facts have not landed,
+    /// one gone from the roster draws nothing) would have the card ask for
+    /// every frame for as long as it stayed open.
+    pub(super) fn card_corner(
+        &self,
+        key: String,
+        from: CardFrom,
+        window: &mut Window,
+        cx: &gpui::App,
+    ) -> Option<Point<Pixels>> {
+        let up = !matches!(from, CardFrom::Head(_));
+        let (CardFrom::Composer(identity) | CardFrom::Head(identity)) = from;
+        let corner = self.pane_card_corner(identity, up, cx);
+        if corner.is_some() {
+            self.popups.card_placed(&key);
+            return corner;
+        }
+        if self.popups.card_waits(key) {
+            window.request_animation_frame();
+            return None;
+        }
+        Some(self.board_card_corner(up, window, cx))
+    }
+
+    /// A Pane's own card: off its Composer's right edge opening up, its
+    /// head's opening down, inside the Pane. A head card hangs under the
+    /// Thread details card while that is drawn, since it sits in the same
+    /// corner.
+    pub(super) fn pane_card_corner(&self, identity: PaneIdentity, up: bool, cx: &gpui::App) -> Option<Point<Pixels>> {
+        let pane = &self.panes[self.index_of(identity)?];
+        if let Some(details) = pane.read(cx).details.drawn.get().filter(|_| !up) {
+            let limit_right = f32::from(details.right());
+            return Some(ferrite_ui::components::FloatPlace { floor: 0., limit_right }.card_corner(details, false));
+        }
+        let geometry = pane.read(cx).geometry.get();
+        let card = geometry.card?;
+        let limit_right = f32::from(card.right()) - ferrite_ui::theme::PANE_PAD_X;
+        let (floor, trigger) = if up {
+            let composer = geometry.composer?;
+            (f32::from(composer.top()), composer)
+        } else {
+            // A head card hangs from the head's foot, not the card's.
+            let head = gpui::Bounds::new(
+                card.origin,
+                gpui::size(card.size.width, px(ferrite_ui::theme::PANE_HEAD_H)),
+            );
+            (0., head)
+        };
+        Some(ferrite_ui::components::FloatPlace { floor, limit_right }.card_corner(trigger, up))
+    }
+
+    /// The limits a surface summoned from the window's bar rests within
+    /// (ADR 0014): its foot over the bar's top, its right edge inside the
+    /// window's margin.
+    pub(super) fn bar_place(&self, cx: &gpui::App) -> ferrite_ui::components::FloatPlace {
+        use ferrite_ui::theme::GRID_PAD;
+        // The board stops at the bar and `board_right` short of the
+        // window's right edge.
+        let board = self.board.get();
+        ferrite_ui::components::FloatPlace {
+            floor: board.y + board.h,
+            limit_right: board.x + board.w + self.board_right(cx) - GRID_PAD,
+        }
+    }
+
+    /// Where a card hangs with no geometry to hang from: off the board as
+    /// though it were the Pane — from its foot (where a Composer would be)
+    /// for a card opening up, its head for one opening down.
+    pub(super) fn board_card_corner(&self, up: bool, window: &Window, cx: &gpui::App) -> Point<Pixels> {
+        let board = self.board_bounds(window, cx);
+        let right = board.x + board.w;
+        let bottom = board.y + board.h;
+        let place = ferrite_ui::components::FloatPlace {
+            floor: bottom,
+            limit_right: right - ferrite_ui::theme::PANE_PAD_X,
+        };
+        let edge = if up { bottom } else { board.y };
+        place.card_corner(
+            gpui::Bounds::new(gpui::point(px(right), px(edge)), gpui::Size::default()),
+            up,
+        )
     }
 }
