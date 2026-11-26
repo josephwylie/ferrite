@@ -547,5 +547,6 @@ fn a_retry_asked_while_an_attach_runs_is_answered_once_it_fails() {
         assert!(Instant::now() < deadline, "the retry waited out the failed attach's backoff");
         std::thread::sleep(Duration::from_millis(5));
     }
-    let _ = std::fs::remove_dir_all(&store);
+    // The store is left: the Bridge, dropped after this, wakes its listener
+    // through the socket in it, and on unix none is there once it is gone.
 }
