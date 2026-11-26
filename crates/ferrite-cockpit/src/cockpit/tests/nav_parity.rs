@@ -80,7 +80,7 @@ fn the_edge_tab_folds_and_opens_the_nav(cx: &mut TestAppContext) {
 
     cx.simulate_click(tab.center(), gpui::Modifiers::none());
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view.nav_folded()), "the tab folds it");
+    assert!(view.read_with(cx, |view, _| view.columns.nav_folded()), "the tab folds it");
     assert!(cx.debug_bounds("nav-card").is_none(), "folded, the card goes away");
     let tab = cx.debug_bounds("nav-edge-tab").expect("the tab stays");
     assert_eq!(tab.left(), px(0.), "at the window's edge");
@@ -90,7 +90,7 @@ fn the_edge_tab_folds_and_opens_the_nav(cx: &mut TestAppContext) {
 
     cx.simulate_click(tab.center(), gpui::Modifiers::none());
     tick(cx);
-    assert!(!view.read_with(cx, |view, _| view.nav_folded()), "and opens it");
+    assert!(!view.read_with(cx, |view, _| view.columns.nav_folded()), "and opens it");
     assert!(cx.debug_bounds("nav-card").is_some());
 }
 
@@ -163,7 +163,7 @@ fn resizing_the_sidebar_persists_and_resets_without_losing_collapse(cx: &mut Tes
     tick(cx);
     assert_eq!(cx.debug_bounds("nav-card").unwrap().size.width, px(256.0));
     assert_eq!(ferrite_core::settings::Settings::load(&dir).unwrap().nav_width_px, None);
-    assert!(!view.read_with(cx, |view, _| view.nav_folded()));
+    assert!(!view.read_with(cx, |view, _| view.columns.nav_folded()));
 }
 
 #[gpui::test]

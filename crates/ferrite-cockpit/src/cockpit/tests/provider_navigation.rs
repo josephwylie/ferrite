@@ -186,7 +186,7 @@ fn a_folded_nav_leaves_only_its_edge_tab(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("cmd-b");
     tick(cx);
-    assert!(!view.read_with(cx, |view, _| view.nav_folded()));
+    assert!(!view.read_with(cx, |view, _| view.columns.nav_folded()));
     assert!(
         cx.debug_bounds(row).is_some(),
         "open again, the rows are back"

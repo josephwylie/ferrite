@@ -130,18 +130,18 @@ fn the_watchdog_sweeps_on_the_executor_clock(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("sweep-clock", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let before = view.read_with(cx, |view, _| view.swept);
-    std::thread::sleep(SWEEP_INTERVAL + Duration::from_millis(50));
+    let before = view.read_with(cx, |view, _| view.sweep.swept_at());
+    std::thread::sleep(sweep::SWEEP_INTERVAL + Duration::from_millis(50));
     view.update(cx, |view, cx| view.pump(cx));
     assert_eq!(
-        view.read_with(cx, |view, _| view.swept),
+        view.read_with(cx, |view, _| view.sweep.swept_at()),
         before,
         "real time alone never sweeps"
     );
-    cx.executor().advance_clock(SWEEP_INTERVAL);
+    cx.executor().advance_clock(sweep::SWEEP_INTERVAL);
     view.update(cx, |view, cx| view.pump(cx));
     assert!(
-        view.read_with(cx, |view, _| view.swept) > before,
+        view.read_with(cx, |view, _| view.sweep.swept_at()) > before,
         "the executor's time does"
     );
 }

@@ -121,9 +121,7 @@ impl CockpitView {
     /// A card open in a Pane that no longer holds the focus shuts: Escape
     /// only reaches the focused Pane's card.
     pub(super) fn tend_details(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let previous_rest = self.nav_measure_rest.replace(true);
-        let targets = self.pane_rects(window, cx);
-        self.nav_measure_rest.set(previous_rest);
+        let targets = self.columns.measured_at_rest(|| self.pane_rects(window, cx));
         let current_rects = self.pane_rects(window, cx);
         for (index, target) in targets {
             let pane = &self.panes[index];

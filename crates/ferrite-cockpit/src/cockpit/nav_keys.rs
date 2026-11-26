@@ -32,7 +32,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.nav_folded() {
+        if self.columns.nav_folded() {
             self.toggle_nav_now(cx);
         }
         self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));

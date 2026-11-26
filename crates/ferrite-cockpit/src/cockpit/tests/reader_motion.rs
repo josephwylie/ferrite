@@ -224,6 +224,31 @@ fn a_seam_grabbed_mid_slide_lands_it(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.end_seam_drag(cx));
 }
 
+/// A seam dragged draws where the pointer holds it, and let go it stays
+/// there: the board is laid out by the arrangement the release kept, not
+/// by the half the reader opened at.
+#[gpui::test]
+fn a_seam_let_go_keeps_where_it_was_dragged(cx: &mut TestAppContext) {
+    let (view, cx) = solo("reader-seam-kept", cx);
+    read(&view, cx);
+    settle(cx);
+    let half = pane(&view, 0, cx);
+    view.update(cx, |view, cx| {
+        let board = view.board(cx).expect("a reader board");
+        view.begin_seam_drag(board, layout::SeamId(Vec::new()), cx);
+    });
+    view.update_in(cx, |view, window, cx| {
+        let pointer = gpui::point(px(half.x + half.w - 120.), px(half.y + 40.));
+        view.drag_seam(pointer, window, cx);
+    });
+    frame(cx);
+    let held = pane(&view, 0, cx).w;
+    assert!(held < half.w - 60., "mid-drag the Pane follows the seam: {held} against {}", half.w);
+    view.update(cx, |view, cx| view.end_seam_drag(cx));
+    settle(cx);
+    assert!(near(pane(&view, 0, cx).w, held), "the release keeps it");
+}
+
 /// Reduced motion: the reader is in, and gone, on the frame it opens and
 /// closes, and nothing asks for a frame.
 #[gpui::test]

@@ -9,6 +9,8 @@ mod attachments;
 mod background_dialog_view;
 mod background_work;
 pub(crate) mod beside;
+mod board_layouts;
+mod branch_reads;
 mod browser;
 #[cfg(feature = "browser-smoke")]
 mod browser_smoke;
@@ -70,6 +72,7 @@ use ferrite_ui::components::rename_field;
 use rename::RenameTarget;
 pub(crate) mod starts;
 mod surfaces;
+mod sweep;
 mod toasts;
 pub(crate) mod subagents;
 pub(crate) mod tools;
@@ -271,20 +274,6 @@ fn pump_hears(executor: &gpui::BackgroundExecutor) -> ferrite_core::doorbell::He
     ferrite_core::doorbell::Hears::AnyThread
 }
 
-/// What a Thread's checkouts say, read with no git process: its own
-/// checkout whole (`checkout`, its `git_read::checkout_stamp`), and the
-/// `HEAD` of each of its Project's directories, whose branch is all the
-/// Thread shows of them.
-fn checkouts_stamp(checkout: Option<u64>, directories: &[(SharedString, std::path::PathBuf)]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::hash::DefaultHasher::new();
-    checkout.hash(&mut hasher);
-    for (_, directory) in directories {
-        ferrite_core::git_read::head_of(directory).hash(&mut hasher);
-    }
-    hasher.finish()
-}
-
 /// A Thread's system notification tag: a newer one for the same Thread
 /// replaces it in the notification centre. A Thread on another machine is
 /// named by it too, since ids are per Store, whichever machine the window
@@ -390,44 +379,19 @@ pub struct CockpitView {
     focus: FocusHandle,
     field_watch: fields::FieldWatch,
     perf: Option<Perf>,
-    /// When the watchdog last swept, on the executor's clock (the wall
-    /// clock in the app, the fake one under test, so a loaded test machine
-    /// cannot drop a sweep into the middle of a test). Measurements are
-    /// cached from the RSS worker, so a sweep never waits for an
-    /// operating-system query.
-    swept: std::time::Instant,
+    /// When the watchdog's sweep is next due, and what it finds turned
+    /// over (`sweep`).
+    sweep: sweep::Sweep,
     /// The nav and each Pane as cached parts (`parts`), and what notifies
     /// the frame around them alone.
     parts: std::cell::RefCell<parts::Parts>,
     frame_tick: Entity<parts::FrameTick>,
-    /// When the next nav age (`2m`) turns over, as of the last draw: the
-    /// sweep redraws an otherwise quiet window then.
-    ages_turn_at: Option<std::time::SystemTime>,
-    /// When the frame's own clock text (a notice's age) next turns over,
-    /// as of the last draw.
-    frame_turn_at: Option<std::time::SystemTime>,
     /// Free bytes on the volume holding the Threads' checkouts, as last
     /// read (the nav foot's `N GB free`); `None` until read, or when unknown.
     free_disk: Option<u64>,
-    /// When free disk was last asked for, on the executor's clock: at
-    /// launch, then by the sweep once a minute (`read_free_disk`).
-    free_disk_asked: Option<std::time::Instant>,
-    /// The wall-clock minute the transcripts' message times (`52 minutes
-    /// ago`) were last drawn in: the sweep redraws them as it turns over.
-    message_minute: i64,
-    /// One checkout-label refresh at a time, always off the UI thread.
-    branch_refreshing: bool,
-    /// A moment that must not be skipped (a turn ended) asked for a
-    /// refresh while one was under way: another follows it.
-    branch_refresh_queued: bool,
-    /// What each Thread's checkouts said (`checkouts_stamp`) when its
-    /// labels were last read: a refresh runs git for a Thread only once
-    /// they say something else, so an idle window starts no git.
-    checkout_stamps: std::collections::HashMap<ThreadKey, u64>,
-    /// The files git tracks in each Thread's checkout (by its cwd) though
-    /// an ignore rule matches them, as git last listed them
-    /// (`git_read::tracked_ignored`): its stamp reads them by name.
-    tracked_ignored: std::collections::HashMap<std::path::PathBuf, std::sync::Arc<[std::path::PathBuf]>>,
+    /// When the Threads' checkout labels are read from git
+    /// (`refresh_branches`).
+    branch_reads: branch_reads::BranchReads,
     /// The machines whose Threads' branches are being read there.
     /// What a draft's workspace chip and its menu read of its Project's
     /// repo, as git or the machine's Server last answered.
@@ -457,10 +421,6 @@ pub struct CockpitView {
     /// The Inbox's alerts and the toast float that shows them.
     pub(crate) toasts: Entity<ferrite_nav::toasts::ToastsView>,
     native_copy: Option<String>,
-    nav_collapsed: bool,
-    nav_auto_fold: std::cell::Cell<bool>,
-    nav_forced_open: bool,
-    nav_measure_full: std::cell::Cell<bool>,
     /// The breadcrumb parent's room, as the last frame laid it out.
     head_parent_room: std::rc::Rc<std::cell::Cell<view_head::ParentRoom>>,
     /// What the nav and the Pane head say about a Thread beyond an O(1)
@@ -524,9 +484,6 @@ pub struct CockpitView {
     /// Frames each open card has waited for its trigger's or Pane's
     /// geometry, by trigger key (`card_corner`); none once it has some.
     card_waits: std::cell::RefCell<std::collections::HashMap<String, u8>>,
-    /// A seam being dragged: the board, the seam, and the tree as it
-    /// stands mid-drag — persisted on release, never per move.
-    seam_drag: Option<SeamDrag>,
     /// The board's bounds as the last frame laid it out: what an act (a
     /// seam press, a drop) measures in when it has no window to measure.
     board: std::cell::Cell<layout::Rect>,
@@ -537,10 +494,9 @@ pub struct CockpitView {
     /// is live (`drop_target`), so a drag that leaves the window leaves no
     /// sheet behind.
     file_drop_over: Option<PaneIdentity>,
-    /// Boards whose arrangement includes a reader slot, as the operator
-    /// left them. Session-only: a reader's place is remembered here until
-    /// quit.
-    board_layouts: std::collections::HashMap<Board, Tree>,
+    /// Each board's arrangement as the operator left it, and the seam
+    /// being dragged (`board_layouts`).
+    board_layouts: board_layouts::BoardLayouts,
     /// Every board slot's size as this frame laid it out, for the ghost a
     /// drag of it shows. Written while the board draws.
     slot_sizes: std::cell::RefCell<std::collections::HashMap<Leaf, (f32, f32)>>,
@@ -612,9 +568,6 @@ pub struct CockpitView {
     /// press through (`cockpit::decisions`).
     decisions: Entity<decisions::DecisionsView>,
     // ---- the frame's (F-12 … F-15)
-    /// Measuring at every reader's slide's destination, so a threshold
-    /// never flaps mid-slide.
-    nav_measure_rest: std::cell::Cell<bool>,
     /// What stands in the board's place: the Factory or the PRs.
     destination: Option<destination::Destination>,
     /// The PRs destination, kept as it was left while another view shows.
@@ -728,13 +681,6 @@ impl Preferences {
             setup_home: None,
         }
     }
-}
-
-/// A seam mid-drag.
-struct SeamDrag {
-    board: Board,
-    seam: SeamId,
-    tree: Tree,
 }
 
 /// The board laid out by a split tree: the shown Pane's, while it has a
@@ -918,13 +864,6 @@ struct Band {
 /// Allow only pixel rounding at the bottom of a native scroll container.
 #[cfg(test)]
 const TAIL_SLACK: Pixels = px(2.);
-
-/// How often the watchdog sweeps. Leaks grow over seconds, not frames; a
-/// sweep per frame would spawn a `ps`/`tasklist` per Session per tick.
-const SWEEP_INTERVAL: Duration = Duration::from_secs(2);
-
-/// How often the sweep re-reads free disk for the nav's foot.
-const FREE_DISK_EVERY: Duration = Duration::from_secs(60);
 
 #[cfg(test)]
 thread_local! {
@@ -1291,6 +1230,7 @@ impl CockpitView {
             browser_chrome,
             browser_dialog,
             browser_review,
+            columns: columns::Columns::new(prefs.settings.nav_collapsed),
             panes: Vec::new(),
             focus: cx.focus_handle(),
             field_watch: Default::default(),
@@ -1298,18 +1238,11 @@ impl CockpitView {
                 frames: 0,
                 since: std::time::Instant::now(),
             }),
-            swept: cx.background_executor().now(),
+            sweep: sweep::Sweep::new(cx.background_executor().now()),
             parts: Default::default(),
             frame_tick: cx.new(|_| parts::FrameTick),
-            ages_turn_at: None,
-            frame_turn_at: None,
             free_disk: None,
-            free_disk_asked: None,
-            message_minute: ferrite_core::clock::now().timestamp().div_euclid(60),
-            branch_refreshing: false,
-            branch_refresh_queued: false,
-            checkout_stamps: Default::default(),
-            tracked_ignored: Default::default(),
+            branch_reads: Default::default(),
             selection: TranscriptText::default(),
             side_chat,
             held_sends: Default::default(),
@@ -1342,17 +1275,12 @@ impl CockpitView {
             usage_popover_held: false,
             session_control_error: Default::default(),
             card_waits: Default::default(),
-            nav_collapsed: prefs.settings.nav_collapsed,
-            nav_auto_fold: std::cell::Cell::new(false),
-            nav_forced_open: false,
-            nav_measure_full: std::cell::Cell::new(false),
             head_parent_room: Default::default(),
             facts: Facts::with_auto_title(prefs.settings.auto_title),
-            seam_drag: None,
             board: std::cell::Cell::new(layout::Rect::default()),
             drop_preview: None,
             file_drop_over: None,
-            board_layouts: std::collections::HashMap::new(),
+            board_layouts: Default::default(),
             slot_sizes: Default::default(),
             dragging: None,
             unsent: drafts::Unsent::load(&prefs.dir),
@@ -1381,13 +1309,11 @@ impl CockpitView {
             floats: palette::Floats::new(),
             transcript_entities: Default::default(),
             decisions,
-            nav_measure_rest: std::cell::Cell::new(false),
             destination: None,
             prs,
             task_toasts: Default::default(),
             empty_board,
             reader_slides: Default::default(),
-            columns: columns::Columns::new(),
             launch_provider,
             machines,
         };
@@ -1412,8 +1338,9 @@ impl CockpitView {
         view.parked_changed(cx);
         // The bar's free disk from the first frame; the sweep re-reads it
         // each minute.
-        view.free_disk_asked = Some(cx.background_executor().now());
-        view.read_free_disk(cx);
+        if view.sweep.ask_free_disk(cx.background_executor().now()) {
+            view.read_free_disk(cx);
+        }
         // Nothing revived: the cockpit starts as one draft Pane (#29) —
         // nothing spawns before the operator's choice. Only this
         // computer's Projects are there before any Server answers.
@@ -2289,8 +2216,7 @@ impl CockpitView {
         let mut swept_busy: Vec<ThreadKey> = Vec::new();
         let mut swept_frame = false;
         let now = cx.background_executor().now();
-        if now.duration_since(self.swept) >= SWEEP_INTERVAL {
-            self.swept = now;
+        if self.sweep.take(now) {
             // The core logs each restart (`Cockpit::sweep`).
             for restart in self.cockpit.update(cx, |cockpit, _| cockpit.sweep()) {
                 restarted.push(restart.thread);
@@ -2315,24 +2241,18 @@ impl CockpitView {
                 .chain(moved)
                 .collect();
             let wall = ferrite_core::clock::system_time();
-            let aged = self.ages_turn_at.is_some_and(|at| wall >= at);
-            swept_frame = self.frame_turn_at.is_some_and(|at| wall >= at);
+            let aged = self.sweep.ages_turned(wall);
+            swept_frame = self.sweep.frame_turned(wall);
             swept_change = aged;
             self.refresh_branches(cx);
             self.follow_workspace(cx);
             // Free disk rides the sweep, once a minute: no wake of its own.
-            if self
-                .free_disk_asked
-                .is_none_or(|at| now.duration_since(at) >= FREE_DISK_EVERY)
-            {
-                self.free_disk_asked = Some(now);
+            if self.sweep.ask_free_disk(now) {
                 self.read_free_disk(cx);
             }
             // Message times turn over with the minute, on this one timer:
             // each transcript redraws then, and no row arms a wake.
-            let minute = ferrite_core::clock::now().timestamp().div_euclid(60);
-            if minute != self.message_minute {
-                self.message_minute = minute;
+            if self.sweep.minute_turned() {
                 for transcript in self.panes.iter().filter_map(|pane| pane.transcript()) {
                     transcript.update(cx, |_, cx| cx.notify());
                 }
@@ -2478,8 +2398,7 @@ impl CockpitView {
             return pump_interval();
         }
         let now = cx.background_executor().now();
-        let sweep = SWEEP_INTERVAL.saturating_sub(now.duration_since(self.swept));
-        PUMP_FALLBACK.min(sweep)
+        PUMP_FALLBACK.min(self.sweep.due_in(now))
     }
 
     /// What a stream can change that more than its own Pane and nav row
@@ -2515,9 +2434,7 @@ impl CockpitView {
     /// may have read git before the moment that asks, so one more follows
     /// it as soon as it lands.
     fn refresh_branches_soon(&mut self, cx: &mut Context<Self>) {
-        if self.branch_refreshing {
-            self.branch_refresh_queued = true;
-        } else {
+        if !self.branch_reads.queue_behind_read() {
             self.refresh_branches(cx);
         }
     }
@@ -2541,7 +2458,7 @@ impl CockpitView {
             .map(|draft| draft.binding.project())
             .collect();
         self.look_up_checkouts(drafted, cx);
-        if self.branch_refreshing {
+        if self.branch_reads.reading() {
             return;
         }
         // Before anything is read: a creation that finishes from here on
@@ -2588,85 +2505,22 @@ impl CockpitView {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                Some((thread, cwd.to_path_buf(), directories, repo))
+                Some(branch_reads::Target {
+                    thread,
+                    cwd: cwd.to_path_buf(),
+                    directories,
+                    repo,
+                })
             })
             .collect();
-        self.checkout_stamps
-            .retain(|thread, _| targets.iter().any(|(open, ..)| open == thread));
-        self.tracked_ignored
-            .retain(|checkout, _| targets.iter().any(|(_, cwd, ..)| cwd == checkout));
-        if targets.is_empty() {
+        let Some(read) = self.branch_reads.begin(targets, listing_wanted) else {
             return;
-        }
-        let known = self.checkout_stamps.clone();
-        let tracked_ignored = self.tracked_ignored.clone();
-        self.branch_refreshing = true;
+        };
         cx.spawn(async move |this, cx| {
-            let (branches, listings, learned) = cx
-                .background_executor()
-                .spawn(async move {
-                    // One `git worktree list` per repo, and one status
-                    // per checkout, however many Threads share them.
-                    let mut listed: std::collections::HashMap<
-                        std::path::PathBuf,
-                        Option<Vec<std::path::PathBuf>>,
-                    > = std::collections::HashMap::new();
-                    let mut walked = std::collections::HashMap::new();
-                    let mut statuses = std::collections::HashMap::new();
-                    let mut learned = std::collections::HashMap::new();
-                    let mut listings = Vec::new();
-                    let branches = targets
-                        .into_iter()
-                        .filter_map(|(thread, cwd, directories, repo)| {
-                            // Before git reads: a write from here on moves
-                            // the next stamp.
-                            let checkout = *walked.entry(cwd.clone()).or_insert_with(|| {
-                                let listed = tracked_ignored.get(&cwd).map_or(&[][..], |files| files);
-                                ferrite_core::git_read::checkout_stamp(&cwd, listed)
-                            });
-                            let stamp = checkouts_stamp(checkout, &directories);
-                            if !listing_wanted && known.get(&thread) == Some(&stamp) {
-                                return None;
-                            }
-                            if let Some(repo) = repo {
-                                let listing = listed
-                                    .entry(repo.clone())
-                                    .or_insert_with(|| {
-                                        ferrite_core::git_read::worktree_paths(&repo).ok()
-                                    })
-                                    .clone();
-                                if let Some(listing) = listing {
-                                    listings.push((thread, listing));
-                                }
-                            }
-                            // A list that changed moves the next stamp,
-                            // which reads it: git runs once more, then rests.
-                            let status = statuses
-                                .entry(cwd.clone())
-                                .or_insert_with(|| {
-                                    let listed = ferrite_core::git_read::tracked_ignored(&cwd);
-                                    learned.insert(cwd.clone(), listed.into());
-                                    ferrite_core::git_read::branch_status(&cwd)
-                                })
-                                .clone();
-                            let project_branches = directories
-                                .into_iter()
-                                .filter_map(|(label, directory)| {
-                                    ferrite_core::git_read::checkout_branch(&directory)
-                                        .map(|branch| (label, SharedString::from(branch)))
-                                })
-                                .collect();
-                            Some((thread, stamp, status, project_branches))
-                        })
-                        .collect::<Vec<_>>();
-                    (branches, listings, learned)
-                })
-                .await;
+            let mut said = cx.background_executor().spawn(async move { read.run() }).await;
             this.update(cx, |view, cx| {
-                view.branch_refreshing = false;
-                view.checkout_stamps
-                    .extend(branches.iter().map(|(thread, stamp, ..)| (*thread, *stamp)));
-                view.tracked_ignored.extend(learned);
+                view.branch_reads.landed(&mut said);
+                let branch_reads::Said { branches, listings, .. } = said;
                 let labels = view.facts.set_branches(
                     branches
                         .iter()
@@ -2699,7 +2553,7 @@ impl CockpitView {
                     view.notify_part(parts::Part::Nav, cx);
                     view.notify_frame(cx);
                 }
-                if moved || std::mem::take(&mut view.branch_refresh_queued) {
+                if moved || view.branch_reads.take_queued() {
                     // The labels above were read for the old cwd, or
                     // before a turn ended; go straight back for the new.
                     view.refresh_branches(cx);
@@ -2778,13 +2632,9 @@ impl CockpitView {
             || self.sheet_float_open()
     }
 
-    fn nav_folded(&self) -> bool {
-        self.nav_collapsed || (self.nav_auto_fold.get() && !self.nav_forced_open)
-    }
-
     fn update_auto_fold(&mut self, window: &Window, cx: &gpui::App) {
         use ferrite_ui::theme::{NAV_AUTO_FOLD_BOARD_W, NAV_AUTO_FOLD_HYSTERESIS, NAV_AUTO_FOLD_PANE_W};
-        let held = self.nav_auto_fold.get();
+        let held = self.columns.nav_auto_folded();
         let slack = if held { NAV_AUTO_FOLD_HYSTERESIS } else { 0.0 };
         let width = f32::from(window.viewport_size().width);
         let right = self.panel_target_w(cx);
@@ -2795,14 +2645,12 @@ impl CockpitView {
                 .map(|(_, rect)| rect.w)
                 .fold(f32::INFINITY, f32::min)
         };
-        self.nav_measure_full.set(true);
-        let full = narrowest(self);
-        self.nav_measure_full.set(false);
+        let full = self.columns.measured_with_full_nav(|| narrowest(self));
         let gain = (width - right) / board.max(1.0);
         let folded = full * gain;
         let cramped = full < NAV_AUTO_FOLD_PANE_W + slack && folded >= NAV_AUTO_FOLD_PANE_W;
         let fold = board < NAV_AUTO_FOLD_BOARD_W + slack || cramped;
-        self.nav_auto_fold.set(fold);
+        self.columns.set_nav_auto_fold(fold);
         // `board_bounds` cached the full-column board while measuring.
         self.board_bounds(window, cx);
     }
@@ -2834,11 +2682,6 @@ impl CockpitView {
         }
     }
 
-    /// A board's tree as it should draw right now: the one mid-drag, else
-    /// the operator's arrangement fitted to what is open — the Pane, and
-    /// its reader slot while a document is open or sliding shut. A reader
-    /// the tree has not placed yet opens beside its Pane, on the right.
-    /// Every slot is at rest here: `slid_tree` draws a slide.
     /// The slot `leaf` stands for on `board`: its Pane, or the reader slot
     /// its Thread has open. None for a leaf of neither. Only the board can
     /// say: a leaf is a bare id, and two machines' Threads share them.
@@ -2852,51 +2695,16 @@ impl CockpitView {
         (reader_leaf(owner) == leaf).then_some(Slot::Reader(owner))
     }
 
+    /// A board's tree as it should draw right now (`BoardLayouts::tree`),
+    /// its readers the shown Panes' with a document open or sliding shut.
     fn board_tree(&self, board: Board, cx: &gpui::App) -> Option<Tree> {
-        if let Some(drag) = self.seam_drag.as_ref().filter(|drag| drag.board == board) {
-            return Some(drag.tree.clone());
-        }
-        let readers: Vec<ThreadKey> = self
-            .visible_indices(cx)
-            .into_iter()
-            .filter(|index| self.has_reader(*index))
-            .filter_map(|index| self.panes[index].thread())
-            .collect();
-        let base = self.board_layouts.get(&board).cloned().unwrap_or_default();
-        let mut panes = vec![pane_leaf(board.0)];
-        let readers: Vec<(Leaf, Leaf)> = readers
-            .into_iter()
-            .map(|owner| (pane_leaf(PaneIdentity::Thread(owner)), reader_leaf(owner)))
-            .filter(|(owner, _)| panes.contains(owner))
-            .collect();
-        let mut tree = base;
-        let wanted: std::collections::BTreeSet<Leaf> = panes
-            .iter()
-            .copied()
-            .chain(readers.iter().map(|(_, reader)| *reader))
-            .collect();
-        for stale in tree
-            .leaves()
-            .into_iter()
-            .filter(|leaf| !wanted.contains(leaf))
-        {
-            tree.remove(stale);
-        }
-        panes.retain(|leaf| !tree.contains(*leaf));
-        for leaf in panes {
-            tree.insert(leaf);
-        }
-        for (owner, reader) in readers {
-            if !tree.contains(reader) {
-                tree.split_share(owner, Edge::Right, reader, READER_SHARE);
-            }
-        }
-        Some(tree)
-    }
-
-    /// Keep an arrangement the operator made on a board, for the session.
-    fn commit_board(&mut self, board: Board, tree: Tree) {
-        self.board_layouts.insert(board, tree);
+        Some(self.board_layouts.tree(board, || {
+            self.visible_indices(cx)
+                .into_iter()
+                .filter(|index| self.has_reader(*index))
+                .filter_map(|index| self.panes[index].thread())
+                .collect()
+        }))
     }
 
     /// The shown Pane's rect on the board, in window coordinates — from the
@@ -2909,7 +2717,7 @@ impl CockpitView {
             let Some(tree) = self.board_tree(board, cx) else {
                 return Vec::new();
             };
-            let tree = if self.nav_measure_rest.get() || self.nav_measure_full.get() {
+            let tree = if self.columns.measuring_rest() {
                 self.rest_tree(tree)
             } else {
                 self.slid_tree(tree, bounds)
@@ -3292,9 +3100,9 @@ impl CockpitView {
                     .map(|step| if *step { '1' } else { '0' })
                     .collect::<String>()
             ));
-            let dragging = self.seam_drag.as_ref().is_some_and(|drag| {
-                drag.board == on && members.iter().any(|member| member.id == drag.seam)
-            });
+            let dragging = self
+                .board_layouts
+                .holds_seam(on, members.iter().map(|member| &member.id));
             // The line spans the union of the set's bands, along its axis.
             let line_w = ferrite_ui::theme::SEAM_LINE_W;
             let line = match seam.axis {
@@ -3445,7 +3253,7 @@ impl CockpitView {
         let Some(tree) = self.board_tree(board, cx) else {
             return;
         };
-        self.seam_drag = Some(SeamDrag { board, seam, tree });
+        self.board_layouts.begin_seam_drag(board, seam, tree);
         cx.notify();
     }
 
@@ -3463,24 +3271,16 @@ impl CockpitView {
             x: f32::from(position.x),
             y: f32::from(position.y),
         };
-        let Some(drag) = self.seam_drag.as_mut() else {
-            return;
-        };
-        if drag
-            .tree
-            .drag_linked(&drag.seam, bounds, pointer, ferrite_ui::theme::BOARD_SEAM)
-        {
+        if self.board_layouts.drag_seam(bounds, pointer) {
             cx.notify();
         }
     }
 
     /// The release: the dragged tree persists, once.
     fn end_seam_drag(&mut self, cx: &mut Context<Self>) {
-        let Some(drag) = self.seam_drag.take() else {
-            return;
-        };
-        self.commit_board(drag.board, drag.tree);
-        cx.notify();
+        if self.board_layouts.end_seam_drag() {
+            cx.notify();
+        }
     }
 
     /// A slot dragged over another: what a release here would do, for the
@@ -3547,7 +3347,7 @@ impl CockpitView {
             Zone::Split(edge) => tree.split(target, edge, source),
         };
         if changed {
-            self.commit_board(board, tree);
+            self.board_layouts.commit(board, tree);
         }
         cx.notify();
     }
@@ -4542,24 +4342,21 @@ impl CockpitView {
     }
 
     fn toggle_nav_now(&mut self, cx: &mut Context<Self>) {
-        if !self.nav_collapsed && self.nav_auto_fold.get() {
-            self.nav_forced_open = !self.nav_forced_open;
-            if self.nav_folded() {
+        if self.columns.toggle_nav_held_open() {
+            if self.columns.nav_folded() {
                 self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
             }
             cx.notify();
             return;
         }
-        self.set_nav_collapsed(!self.nav_collapsed, cx);
+        self.set_nav_collapsed(!self.columns.nav_collapsed(), cx);
     }
 
     fn set_nav_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
-        if self.nav_collapsed == collapsed {
+        if !self.columns.set_nav_collapsed(collapsed) {
             return;
         }
-        self.nav_collapsed = collapsed;
         if collapsed {
-            self.cancel_nav_resize();
             self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
         }
         cx.notify();
@@ -6824,8 +6621,8 @@ impl CockpitView {
         let thread_ages = self.facts.next_age_change(wall);
         // The sweep redraws a window nothing else draws when an age turns:
         // a Thread's everywhere, a notice's in the frame.
-        self.ages_turn_at = thread_ages.map(|next| wall + next);
-        self.frame_turn_at = notices.map(|next| wall + next);
+        self.sweep
+            .clock_text_turns(thread_ages.map(|next| wall + next), notices.map(|next| wall + next));
         if ferrite_ui::motion::reduced_motion(cx) {
             return;
         }
@@ -6902,7 +6699,7 @@ impl CockpitView {
         self.update_auto_fold(window, cx);
         self.tend_columns(cx);
         self.tend_details(window, cx);
-        if self.nav_folded() {
+        if self.columns.nav_folded() {
             self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
         }
         self.present_cli_updates(window, cx);
@@ -7419,7 +7216,7 @@ impl CockpitView {
                     .update(cx, |nav, cx| nav.set_hovered(inside, cx));
                 view.nav_pointer_moved(event.position, event.dragging(), cx);
                 view.panel_pointer_moved(event.position, event.dragging(), cx);
-                if view.seam_drag.is_some() {
+                if view.board_layouts.seam_held() {
                     if event.dragging() {
                         view.drag_seam(event.position, window, cx);
                     } else {
@@ -7511,7 +7308,7 @@ impl CockpitView {
             .child(crate::frame().titlebar(!self.overlay_open(cx), self.maximized))
             .child(self.view_head(cx))
             .children(self.history_arrows_element(cx))
-            .when(!self.nav_folded(), |root| root.child(self.nav_resize_rail(cx)))
+            .when(!self.columns.nav_folded(), |root| root.child(self.nav_resize_rail(cx)))
             .child(self.nav_edge_tab(cx))
             // The panel over the strip's right end: its tabs take
             // their presses, the gaps between them still drag. Its toggle
@@ -8744,7 +8541,7 @@ impl CockpitView {
                 .w(px(drawn))
                 .overflow_hidden()
                 .child(face)
-                .when(self.nav_folded(), |column| column.child(columns::veil()))
+                .when(self.columns.nav_folded(), |column| column.child(columns::veil()))
                 .into_any_element(),
         )
     }
@@ -8756,7 +8553,7 @@ impl CockpitView {
 
     fn nav_edge_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         use ferrite_ui::theme::NAV_INSET_Y;
-        let open = !self.nav_folded();
+        let open = !self.columns.nav_folded();
         let left = (self.nav_expanded_width() - ferrite_ui::theme::HAIRLINE_W)
             * self.nav_width() / self.nav_expanded_width();
         div()
