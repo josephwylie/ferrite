@@ -344,7 +344,7 @@ fn pr_row(
         "panel-pr",
         glyph,
         format!("#{}", pr.number),
-        Some(crate::pr::state_word(pr).to_string()),
+        Some(ferrite_pane::details::content::pr_state_word(pr).to_string()),
     )
     .mt(px(SPACE_2))
     .cursor_pointer()

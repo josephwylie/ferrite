@@ -16,7 +16,6 @@ mod browser;
 mod browser_smoke;
 mod checkouts;
 mod cockpit_pane;
-mod composer_footer;
 mod columns;
 mod composer_menu;
 mod context_menu;
@@ -51,7 +50,6 @@ mod nav_undo;
 mod nav_view;
 mod palette;
 pub(crate) mod panel;
-mod pane_cell;
 mod parts;
 mod popups;
 mod pr_reads;
@@ -147,11 +145,9 @@ use ferrite_nav::notifications::{Row as NoticeRow, RowTarget, Verb};
 use ferrite_pane::composer::{Composer, Edited, OpenSource};
 use ferrite_pane::link_target::{LinkTarget, Open};
 use ferrite_pane::decision;
-use ferrite_pane::cell::footer::{
-    effort_chip_label, effort_in_force, plugins, thread_effort, tuning_hold, turn_running,
-};
+use ferrite_pane::cell::footer::{effort_chip_label, effort_in_force, tuning_hold, turn_running};
 #[cfg(test)]
-use ferrite_pane::cell::footer::{TUNING_BUSY_HINT, TUNING_PENDING_HINT};
+use ferrite_pane::cell::footer::{plugins, TUNING_BUSY_HINT, TUNING_PENDING_HINT};
 use ferrite_pane::cell::{band_trigger, PaneDrag, HERO_TRIGGER};
 use ferrite_pane::pane::{self, PaneView};
 use ferrite_ui::menu;
@@ -844,21 +840,9 @@ pub(crate) mod drawn {
         pub clock: Option<String>,
     }
 
-    /// What a Pane's cell drew of itself.
-    #[derive(Clone, Debug, Default, PartialEq)]
-    pub(crate) struct Drawn {
-        pub focused: bool,
-        pub unread: bool,
-        pub drop_target: bool,
-        pub editing: bool,
-        pub reduce_motion: bool,
-        pub clock: Option<String>,
-    }
 
     thread_local! {
-        static PANES: RefCell<HashMap<PaneIdentity, Drawn>> = RefCell::new(HashMap::new());
         static WIDTHS: RefCell<HashMap<PaneIdentity, f32>> = RefCell::new(HashMap::new());
-        static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
         static HEAD_RENDERS: Cell<usize> = const { Cell::new(0) };
         static HEARINGS: Cell<usize> = const { Cell::new(0) };
         static NAV_ROWS: RefCell<HashMap<ThreadKey, String>> = RefCell::new(HashMap::new());
@@ -883,14 +867,6 @@ pub(crate) mod drawn {
     /// How many times the pump's body has run on this thread.
     pub(crate) fn pumps() -> usize {
         PUMPS.with(Cell::get)
-    }
-
-    pub(crate) fn built_pane(identity: PaneIdentity) {
-        PANE_RENDERS.with(|renders| *renders.borrow_mut().entry(identity).or_default() += 1);
-    }
-
-    pub(crate) fn record_pane(identity: PaneIdentity, cell: Drawn) {
-        PANES.with(|panes| panes.borrow_mut().insert(identity, cell));
     }
 
     /// The width the board laid Pane `identity`'s slot out at, read as its
@@ -930,7 +906,7 @@ pub(crate) mod drawn {
 
     /// The Pane as last drawn.
     pub(crate) fn pane(identity: PaneIdentity) -> Pane {
-        let Some(cell) = PANES.with(|panes| panes.borrow().get(&identity).cloned()) else {
+        let Some(cell) = ferrite_pane::cell::testing::drawn(identity) else {
             return Pane::default();
         };
         Pane {
@@ -946,7 +922,7 @@ pub(crate) mod drawn {
 
     /// How many times this Pane has been built on this thread.
     pub(crate) fn pane_renders(identity: PaneIdentity) -> usize {
-        PANE_RENDERS.with(|renders| renders.borrow().get(&identity).copied().unwrap_or(0))
+        ferrite_pane::cell::testing::pane_renders(identity)
     }
 
     /// How many times the nav has been built on this thread.

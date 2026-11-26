@@ -22,7 +22,7 @@
 //! frame from O(1) reads plus its project/branch/parked caches —
 //! `Store::load` and `Instruments::of` are banned here, which is what keeps
 //! the 24-Pane wall smooth with the nav open. Click wiring stays in
-//! `cockpit.rs` and `cockpit/nav_list.rs`, the same split `pane_cell` uses.
+//! `cockpit.rs` and `cockpit/nav_list.rs`.
 //!
 //! Every colour and metric is a `theme` token; this file holds no literal
 //! of its own.

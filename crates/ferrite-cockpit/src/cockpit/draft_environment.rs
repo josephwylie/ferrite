@@ -66,26 +66,6 @@ impl Heard {
     }
 }
 
-/// Why a draft waiting on its copy has no Send, beside the copy's chip:
-/// it sends once copied, or its copy stopped short, until the operator
-/// resumes it or picks where the draft runs.
-pub(super) fn copy_waits_note(running: bool) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .min_w_0()
-        .flex_shrink(1.)
-        .h(px(ferrite_ui::theme::FOOTER_CHIP_H))
-        .px(px(ferrite_ui::theme::FOOTER_CHIP_PAD_X))
-        .debug_selector(|| "band-copy-waits".into())
-        .child(
-            ferrite_ui::components::text_ui()
-                .truncate()
-                .text_color(gpui::rgb(ferrite_ui::theme::INK_SUBTLE))
-                .child(if running { "Send once copied" } else { "Copy stopped" }),
-        )
-}
-
 /// Why the window cannot run a draft on a machine now, when it cannot.
 fn unreached(server: Option<ServerState>) -> Option<SharedString> {
     let Some(ServerState::Detached { attention, .. }) = server else {

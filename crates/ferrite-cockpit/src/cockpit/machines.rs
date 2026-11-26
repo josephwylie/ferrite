@@ -20,24 +20,6 @@ pub(super) fn said(error: &std::io::Error, place: &str) -> String {
     }
 }
 
-/// What a lost machine still shows (ADR 0026): `element` dimmed under a
-/// cover, `id`, that takes every press until the machine is back.
-pub(super) fn held(element: Div, id: impl Into<SharedString>) -> Div {
-    let id: SharedString = id.into();
-    let selector = id.clone();
-    element
-        .relative()
-        .opacity(ferrite_ui::theme::MACHINE_LOST_OPACITY)
-        .child(
-            div()
-                .id(gpui::ElementId::Name(id))
-                .debug_selector(move || selector.to_string())
-                .absolute()
-                .inset_0()
-                .occlude(),
-        )
-}
-
 impl CockpitView {
     /// Where an act with no Thread or Project of its own goes
     /// (`Cockpit::start_machine`).

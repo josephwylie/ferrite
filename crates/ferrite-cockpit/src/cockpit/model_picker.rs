@@ -235,22 +235,6 @@ fn pill_top(tab: Tab) -> f32 {
     top + button / 2. - MODEL_PICKER_PILL_H / 2.
 }
 
-/// A model chip as a control: a press asks for its Pane's picker, or its
-/// shutting (`PaneAsk::ModelPicker`), and the chip records where it stands
-/// for the picker to hang from. The press stops there, so the root's
-/// dismissal never undoes it.
-pub(super) fn chip_control(
-    identity: PaneIdentity,
-    chip: gpui::component::button::Button,
-    door: ferrite_ui::components::MenuDoor,
-    asks: &super::pane_cell::PaneAsks,
-) -> AnyElement {
-    let chip = chip
-        .group(ferrite_pane::cell::model_chip_trigger(identity))
-        .on_mouse_down(MouseButton::Left, asks.press(ferrite_pane::cell::PaneAsk::ModelPicker));
-    door.hung(div().flex().min_w_0().child(chip)).into_any_element()
-}
-
 impl ModelPickerView {
     /// The picker on what the root read: on Favourites when any model is
     /// starred, else on the Pane's Provider (T3's); the cursor on the model
