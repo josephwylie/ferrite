@@ -480,3 +480,191 @@ impl CockpitView {
             .note_focus(pane.identity, &request.handle, cx)
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Answer {
+    Allow,
+    Deny,
+    Always,
+}
+
+impl CockpitView {
+    pub(super) fn allow(&mut self, _: &Allow, window: &mut Window, cx: &mut Context<Self>) {
+        self.answer_chorded(Answer::Allow, window, cx);
+    }
+
+    pub(super) fn deny(&mut self, _: &Deny, window: &mut Window, cx: &mut Context<Self>) {
+        self.answer_chorded(Answer::Deny, window, cx);
+    }
+
+    pub(super) fn always(&mut self, _: &Always, window: &mut Window, cx: &mut Context<Self>) {
+        self.answer_chorded(Answer::Always, window, cx);
+    }
+
+    /// ⌘⏎ / ⇧⌘⏎, the approval buttons' chords: they answer whether or not
+    /// text is on the line, a Subagent's approval as Main's.
+    pub(super) fn answer_chorded(&mut self, answer: Answer, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panes.get(self.focused(cx)).is_some_and(|pane| !pane.read(cx).is_main()) {
+            self.answer_subject(answer, cx);
+        } else {
+            self.answer(answer, window, cx);
+        }
+    }
+
+    /// An approval takes option 1, 3 or 2 through the one answer path; a
+    /// question, form or link takes only the deny.
+    pub(super) fn answer(&mut self, answer: Answer, window: &mut Window, cx: &mut Context<Self>) {
+        // The focused Thread if it is the one waiting; otherwise whichever
+        // Thread the wall is flagging. Answering from across the room is the
+        // point of the badge.
+        let thread = match self.focused_thread(cx) {
+            Some(thread)
+                if self
+                    .cockpit
+                    .read(cx)
+                    .thread(thread)
+                    .and_then(|open| open.pending())
+                    .is_some() =>
+            {
+                Some(thread)
+            }
+            _ => self.cockpit.read(cx).answer_target(),
+        };
+        let Some(thread) = thread else {
+            return;
+        };
+        let Some(request) = self.cockpit.read(cx).thread(thread).and_then(|open| {
+            let pending = open.pending()?;
+            open.pending_decisions()
+                .iter()
+                .find(|request| {
+                    &request.decision == pending
+                        && request.subject == Some(ferrite_core::activity::Subject::Main)
+                })
+                .cloned()
+        }) else {
+            return;
+        };
+        if matches!(request.decision.kind, ferrite_core::DecisionKind::Approval) {
+            let choice = match answer {
+                Answer::Allow => decision::ApprovalChoice::Allow,
+                Answer::Always => decision::ApprovalChoice::AllowForThread,
+                Answer::Deny => decision::ApprovalChoice::DenyAndSteer,
+            };
+            // A denial steers from the Pane the operator is in; one sent
+            // across the room leaves the keyboard where it is.
+            let steer = self.focused_thread(cx) == Some(thread);
+            self.answer_approval_request(
+                thread,
+                &request,
+                choice,
+                None,
+                steer.then_some(window),
+                cx,
+            );
+        } else {
+            // A question is answered by its form, never by a bare "allow" —
+            // allowing an unanswered question would send the model nothing.
+            self.answer_request(thread, request, answer, cx);
+        }
+        self.facts.acted(self.cockpit.read(cx), thread);
+        cx.notify();
+    }
+
+    /// Jump to the next Thread waiting on the operator.
+    pub(super) fn next_decision(&mut self, _: &NextDecision, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = self.focused(cx);
+        let mut requests = Vec::new();
+        // The answer order (`Cockpit::needs_you`): ⌘D walks the answer
+        // queue top to bottom, so its first press lands on the answer target.
+        let queue = self.cockpit.read(cx).needs_you();
+        let mut panes: Vec<&CockpitPane> = self.panes.iter().collect();
+        panes.sort_by_key(|pane| {
+            pane.thread()
+                .and_then(|thread| queue.iter().position(|queued| *queued == thread))
+                .unwrap_or(usize::MAX)
+        });
+        for pane in panes {
+            if let Some(thread) = pane.thread() {
+                if let Some(open) = self.cockpit.read(cx).thread(thread) {
+                    for request in open.pending_decisions() {
+                        requests.push((
+                            thread,
+                            request
+                                .subject
+                                .clone()
+                                .unwrap_or(ferrite_core::activity::Subject::Main),
+                        ));
+                    }
+                }
+            }
+        }
+        let current = self
+            .panes
+            .get(focused)
+            .and_then(|pane| pane.thread().map(|thread| (thread, pane.read(cx).selected.clone())));
+        if let Some((thread, subject)) = subagents::next_request(requests, current.as_ref()) {
+            self.select_subject(thread, subject, window, cx);
+        }
+    }
+
+    /// A live request in the list's words (R7, `request_detail`); its age
+    /// from when it was raised.
+    pub(super) fn decision_row(
+        &self,
+        key: ThreadKey,
+        notice: &ferrite_core::notifications::DecisionNotice,
+        now: std::time::SystemTime,
+        cx: &gpui::App,
+    ) -> NoticeRow {
+        use ferrite_nav::notifications::{Detail, State};
+        let open = self.cockpit.read(cx).thread(key);
+        let detail = open
+            .and_then(|open| {
+                open.pending_decisions()
+                    .iter()
+                    .find(|request| request.handle == notice.id.handle)
+                    .map(|request| request.decision.clone())
+            })
+            .map(|decision| {
+                // Codex's patch request names no file; its gated call does.
+                let gated_path =
+                    || {
+                        open?.transcript().blocks().iter().rev().find_map(|block| {
+                            match &block.body {
+                                ferrite_core::transcript::Body::Tool(call)
+                                    if !decision.tool_use_id.is_empty()
+                                        && ferrite_pane::transcript::gated(
+                                            &call.call,
+                                            &decision.tool_use_id,
+                                        ) =>
+                                {
+                                    call.diffs
+                                        .first()
+                                        .map(|diff| diff.path.clone())
+                                        .or_else(|| {
+                                            (!call.summary.is_empty()).then(|| call.summary.clone())
+                                        })
+                                }
+                                _ => None,
+                            }
+                        })
+                    };
+                let cwd = open
+                    .and_then(|open| open.workspace())
+                    .map(|binding| binding.cwd());
+                ferrite_nav::notifications::request_detail(&decision, notice.kind, cwd, gated_path)
+            })
+            .unwrap_or(Detail::None);
+        NoticeRow {
+            target: ferrite_nav::notifications::RowTarget::Decision(notice.id.clone()),
+            thread: key,
+            title: self.row_title(key, cx),
+            state: State::NeedsYou(notice.kind),
+            detail,
+            when: ferrite_ui::age::since_label(notice.at, now),
+            read: notice.read,
+            elsewhere: self.machine_label(key.machine(), cx).is_some(),
+        }
+    }
+}
