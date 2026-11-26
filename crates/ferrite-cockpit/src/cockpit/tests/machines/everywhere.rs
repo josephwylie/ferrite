@@ -442,7 +442,7 @@ fn turning_a_machine_off_and_on_keeps_its_panels_tabs(cx: &mut TestAppContext) {
             "nor a row"
         );
         let SurfaceId::Terminal(number) = before[1] else { unreachable!() };
-        assert_eq!(view.terminals.read(cx).numbers(theirs), [number], "the terminal tab has its shell's place");
+        assert_eq!(view.tools.terminals.read(cx).numbers(theirs), [number], "the terminal tab has its shell's place");
     });
     view.update(cx, |view, cx| {
         view.focus_thread(theirs, cx);

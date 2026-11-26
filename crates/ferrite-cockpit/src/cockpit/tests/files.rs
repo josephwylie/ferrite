@@ -30,7 +30,7 @@ fn open(view: &Entity<CockpitView>, thread: ThreadKey, path: &std::path::Path, k
 }
 
 fn tab_names(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) -> Vec<(String, bool)> {
-    view.read_with(cx, |view, cx| view.files.read(cx).tab_names(thread))
+    view.read_with(cx, |view, cx| view.tools.files.read(cx).tab_names(thread))
 }
 
 #[gpui::test]
@@ -61,7 +61,7 @@ fn an_image_from_the_tree_opens_the_lightbox_and_a_pdf_names_its_kind(cx: &mut T
     tick(cx);
     let row = |name: &str, view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         let at = view
-            .read_with(cx, |view, cx| view.files.read(cx).row_names(thread))
+            .read_with(cx, |view, cx| view.tools.files.read(cx).row_names(thread))
             .iter()
             .position(|row| row == name)
             .unwrap_or_else(|| panic!("{name} in the tree"));
@@ -87,7 +87,7 @@ fn an_image_from_the_tree_opens_the_lightbox_and_a_pdf_names_its_kind(cx: &mut T
     assert!(cx.debug_bounds("files-unshown").is_some());
     assert!(cx.debug_bounds("files-open-original").is_some(), "its own app is offered");
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).unshown_note(thread)).as_deref(),
+        view.read_with(cx, |view, cx| view.tools.files.read(cx).unshown_note(thread)).as_deref(),
         Some("PDF document")
     );
 }
@@ -139,7 +139,7 @@ fn f6_returns_to_the_file_tab_it_left_after_one_before_it_closes(cx: &mut TestAp
     super::panel_focus::press("escape", cx);
     assert_eq!(keyboard(cx), None, "back in the conversation");
 
-    view.update(cx, |view, cx| view.files.update(cx, |files, cx| files.close_tab(thread, 0, cx)));
+    view.update(cx, |view, cx| view.tools.files.update(cx, |files, cx| files.close_tab(thread, 0, cx)));
     tick(cx);
     assert_eq!(tab_names(&view, thread, cx).len(), 2, "a.rs closed");
     super::panel_focus::press("f6", cx);
@@ -186,7 +186,7 @@ fn the_file_tabs_follow_the_heads_stops_in_the_row(cx: &mut TestAppContext) {
     super::panel_focus::press("right", cx);
     assert_eq!(focused(cx), Some(PanelControl::FileTab(a.clone())));
     super::panel_focus::activate("enter", cx);
-    assert_eq!(view.read_with(cx, |view, cx| view.files.read(cx).active_path(thread)), Some(a.clone()));
+    assert_eq!(view.read_with(cx, |view, cx| view.tools.files.read(cx).active_path(thread)), Some(a.clone()));
     let drawn = row(cx);
     assert_eq!(drawn[4].1, Semantics::tab("a.rs", true), "⏎ shows a.rs, and its stop says so");
     assert_eq!(drawn[5].1, Semantics::tab("b.rs", false));
@@ -217,7 +217,7 @@ fn twenty_tabs_at_a_narrow_width_are_all_reachable(cx: &mut TestAppContext) {
     let first = cx.debug_bounds("files-tab-0").unwrap();
     cx.simulate_click(first.center(), gpui::Modifiers::none());
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, cx| view.files.read(cx).active_path(thread)), Some(checkout.join("file-number-0.rs")));
+    assert_eq!(view.read_with(cx, |view, cx| view.tools.files.read(cx).active_path(thread)), Some(checkout.join("file-number-0.rs")));
 
     let first = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         let handle = view.read_with(cx, |view, _| view.panel.focus.handle(&PanelControl::FileTab(checkout.join("file-number-0.rs"))).unwrap());
@@ -234,7 +234,7 @@ fn twenty_tabs_at_a_narrow_width_are_all_reachable(cx: &mut TestAppContext) {
     first(&view, cx);
     super::panel_focus::press("right right", cx);
     super::panel_focus::activate("enter", cx);
-    assert_eq!(view.read_with(cx, |view, cx| view.files.read(cx).active_path(thread)), Some(checkout.join("file-number-2.rs")));
+    assert_eq!(view.read_with(cx, |view, cx| view.tools.files.read(cx).active_path(thread)), Some(checkout.join("file-number-2.rs")));
     super::panel_focus::press("backspace", cx);
     assert_eq!(tab_names(&view, thread, cx).len(), 19, "the key closed it");
     let focused = cx.update(|window, cx| view.read(cx).panel.focus.focused(window));
@@ -320,7 +320,7 @@ fn a_rows_menu_opens_in_the_window_and_attach_reaches_the_composer(cx: &mut Test
     view.update(cx, |view, cx| view.run_opener(thread, Opener::Files, cx));
     tick(cx);
     view.update(cx, |view, cx| {
-        view.files.update(cx, |files, cx| files.set_filter_for_test(thread, "lib", cx));
+        view.tools.files.update(cx, |files, cx| files.set_filter_for_test(thread, "lib", cx));
     });
     tick(cx);
     assert!(cx.debug_bounds("files-row-0").is_some());
@@ -382,7 +382,7 @@ fn a_changed_files_tab_offers_show_changes(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.run_opener(thread, Opener::Changes, cx));
     for _ in 0..400 {
         tick(cx);
-        if view.read_with(cx, |view, cx| view.changes.read(cx).files_read(Diff::Changes(thread)).is_some()) {
+        if view.read_with(cx, |view, cx| view.tools.changes.read(cx).files_read(Diff::Changes(thread)).is_some()) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -407,7 +407,7 @@ fn open_editor<'a>(
     let (view, thread, checkout, cx) = files_window(name, cx);
     let file = checkout.join("src/lib.rs");
     open(&view, thread, &file, true, cx);
-    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread).expect("a code file"));
+    let editor = view.read_with(cx, |view, cx| view.tools.files.read(cx).shown_editor(thread).expect("a code file"));
     (view, thread, file, editor, cx)
 }
 
@@ -445,7 +445,7 @@ fn a_clean_buffer_follows_its_file_when_the_agent_edits_it(cx: &mut TestAppConte
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     let file = checkout.join("src/lib.rs");
     open(&view, thread, &file, true, cx);
-    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread).expect("a code file"));
+    let editor = view.read_with(cx, |view, cx| view.tools.files.read(cx).shown_editor(thread).expect("a code file"));
     std::fs::write(&file, "agent\n").unwrap();
     agent_worked(&view, &fake, 0, cx);
     assert_eq!(editor.read_with(cx, |e, _| e.text().to_string()), "agent\n");
@@ -512,10 +512,10 @@ fn leaving_asks_about_the_text_a_quit_will_not_write(cx: &mut TestAppContext) {
         Some("1 file has unsaved changes. Leaving discards them."),
         "the file changed under the buffer"
     );
-    view.update(cx, |view, cx| view.files.update(cx, |files, cx| files.flush_for_quit(cx)));
+    view.update(cx, |view, cx| view.tools.files.update(cx, |files, cx| files.flush_for_quit(cx)));
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "changed elsewhere\n", "the quit did not overwrite");
 
-    view.update(cx, |view, cx| view.files.update(cx, |files, cx| files.run_verb(thread, FilesVerb::ToggleAutoSave, cx)));
+    view.update(cx, |view, cx| view.tools.files.update(cx, |files, cx| files.run_verb(thread, FilesVerb::ToggleAutoSave, cx)));
     std::fs::write(&file, "l\n").unwrap();
     assert!(
         warning(&view, cx).is_some(),
@@ -591,17 +591,17 @@ fn remote_files_use_remote_tree_text_saves_conflicts_and_reload_when_local_paths
         view.open_in_files(thread, path.clone(), None, true, cx);
     });
     tick(cx);
-    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread).unwrap());
+    let editor = view.read_with(cx, |view, cx| view.tools.files.read(cx).shown_editor(thread).unwrap());
     assert_eq!(
         editor.read_with(cx, |editor, _| editor.text().to_string()),
         "remote original"
     );
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).row_names(thread)),
+        view.read_with(cx, |view, cx| view.tools.files.read(cx).row_names(thread)),
         ["remote-name.rs"]
     );
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).status_for_test(thread, &path)),
+        view.read_with(cx, |view, cx| view.tools.files.read(cx).status_for_test(thread, &path)),
         Some(crate::cockpit::tools::FileStatus::Modified)
     );
     assert!(
@@ -715,10 +715,10 @@ fn remote_files_failure_and_binary_never_fall_back_to_readable_local_text(cx: &m
     });
     tick(cx);
     assert!(view
-        .read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread))
+        .read_with(cx, |view, cx| view.tools.files.read(cx).shown_editor(thread))
         .is_none());
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).unshown_note(thread)),
+        view.read_with(cx, |view, cx| view.tools.files.read(cx).unshown_note(thread)),
         Some("Remote server unavailable".into())
     );
     unavailable.set(false);
@@ -727,7 +727,7 @@ fn remote_files_failure_and_binary_never_fall_back_to_readable_local_text(cx: &m
         .expect("remote read errors can retry");
     cx.simulate_click(retry.center(), gpui::Modifiers::none());
     tick(cx);
-    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread).unwrap());
+    let editor = view.read_with(cx, |view, cx| view.tools.files.read(cx).shown_editor(thread).unwrap());
     assert_eq!(
         editor.read_with(cx, |editor, _| editor.text().to_string()),
         "remote recovered"
@@ -747,10 +747,10 @@ fn remote_files_failure_and_binary_never_fall_back_to_readable_local_text(cx: &m
     });
     tick(cx);
     assert!(view
-        .read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread))
+        .read_with(cx, |view, cx| view.tools.files.read(cx).shown_editor(thread))
         .is_none());
     assert!(view
-        .read_with(cx, |view, cx| view.files.read(cx).unshown_note(thread))
+        .read_with(cx, |view, cx| view.tools.files.read(cx).unshown_note(thread))
         .unwrap()
         .contains("remote terminal"));
     assert!(cx.debug_bounds("files-open-original").is_none());
@@ -786,7 +786,7 @@ fn remote_files_transcript_preview_routes_to_remote_editor_and_keeps_line_target
             view.panes[0].read(cx).preview.document().is_none(),
             "the local preview never reads this path"
         );
-        view.files.read(cx).shown_editor(thread).unwrap()
+        view.tools.files.read(cx).shown_editor(thread).unwrap()
     });
     assert_eq!(
         editor.read_with(cx, |editor, _| editor.text().to_string()),
@@ -848,7 +848,7 @@ fn remote_files_inline_transcript_chip_uses_remote_bytes_despite_local_collision
     tick(cx);
     let editor = view.read_with(cx, |view, cx| {
         assert!(view.panes[0].read(cx).preview.document().is_none());
-        view.files.read(cx).shown_editor(thread).unwrap()
+        view.tools.files.read(cx).shown_editor(thread).unwrap()
     });
     assert_eq!(
         editor.read_with(cx, |editor, _| editor.text().to_string()),
@@ -882,7 +882,7 @@ fn the_files_bars_doors_press_by_the_pointer(cx: &mut TestAppContext) {
     cx.simulate_input("lib");
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).filter_text_for_test(thread, cx)),
+        view.read_with(cx, |view, cx| view.tools.files.read(cx).filter_text_for_test(thread, cx)),
         "lib",
         "the filter has the keyboard"
     );
@@ -928,5 +928,5 @@ fn a_deleted_threads_refused_edit_is_still_named_when_leaving(cx: &mut TestAppCo
     editor.update(cx, |editor, cx| editor.type_text("// lost\n", cx));
     press_nav_verb(&view, thread, MenuVerb::Delete, cx);
     pause_and_settle(cx);
-    assert_eq!(view.read_with(cx, |view, cx| view.files.read(cx).unsaved_at_leaving(view.cockpit.read(cx).first_machine(), cx)), Some(1));
+    assert_eq!(view.read_with(cx, |view, cx| view.tools.files.read(cx).unsaved_at_leaving(view.cockpit.read(cx).first_machine(), cx)), Some(1));
 }

@@ -35,7 +35,7 @@ impl CockpitView {
             return;
         };
         let machine = self.cockpit.read(cx).bridge(thread.machine()).cloned();
-        let number = self.terminals.update(cx, |terminals, cx| {
+        let number = self.tools.terminals.update(cx, |terminals, cx| {
             terminals.open(thread, &directory, machine.as_deref(), cx)
         });
         self.upsert_surface(thread, SurfaceId::Terminal(number), cx);
@@ -70,7 +70,7 @@ impl CockpitView {
                     return;
                 };
                 let machine = self.cockpit.read(cx).bridge(thread.machine()).cloned();
-                self.terminals.update(cx, |terminals, cx| {
+                self.tools.terminals.update(cx, |terminals, cx| {
                     terminals.retry(*thread, *number, &directory, machine.as_deref(), cx)
                 });
             }
@@ -117,7 +117,7 @@ impl CockpitView {
         self.focused_thread(cx).is_some_and(|thread| {
             self.shown_terminal(thread)
                 .is_some_and(|number| {
-                    self.terminals.read(cx).holds_focus(thread, number, window, cx)
+                    self.tools.terminals.read(cx).holds_focus(thread, number, window, cx)
                 })
         })
     }
@@ -125,7 +125,7 @@ impl CockpitView {
     /// A Terminal menu row, on the shell `thread`'s Panel shows.
     pub(in crate::cockpit) fn run_terminal_verb(&mut self, thread: ThreadKey, verb: Verb, cx: &mut Context<Self>) {
         if let Some(number) = self.shown_terminal(thread) {
-            self.terminals
+            self.tools.terminals
                 .update(cx, |terminals, cx| terminals.run_verb(thread, number, verb, cx));
         }
     }
@@ -154,7 +154,7 @@ impl CockpitView {
     ) {
         if let Some(view) = self
             .shown_terminal(thread)
-            .and_then(|number| self.terminals.read(cx).shell(thread, number))
+            .and_then(|number| self.tools.terminals.read(cx).shell(thread, number))
         {
             view.update(cx, |view, _| view.write(command));
             std::thread::sleep(std::time::Duration::from_millis(1500));

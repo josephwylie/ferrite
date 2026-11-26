@@ -203,7 +203,7 @@ fn unfold_file(
     });
     match path {
         Some(path) => {
-            view.overview.update(cx, |overview, cx| overview.toggle_file(thread, path, cx))
+            view.panel.overview.update(cx, |overview, cx| overview.toggle_file(thread, path, cx))
         }
         None => eprintln!("ferrite: refresh scene: no changed file {name} to unfold"),
     }

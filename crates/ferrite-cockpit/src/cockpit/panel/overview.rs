@@ -108,7 +108,7 @@ impl CockpitView {
         self.cockpit.update(cx, |model, cx| {
             match self.overview_inputs(model, thread, folder, background) {
                 Some(inputs) => self
-                    .overview
+                    .panel.overview
                     .update(cx, |overview, cx| overview.sections(inputs, window, cx)),
                 None => div().into_any_element(),
             }
@@ -182,7 +182,7 @@ impl CockpitView {
         stat: (usize, usize),
         cx: &mut Context<Self>,
     ) {
-        if !self.overview.read(cx).wants_read(thread, &path, stat) {
+        if !self.panel.overview.read(cx).wants_read(thread, &path, stat) {
             return;
         }
         let Some(workspace) = self.thread_path(thread, cx) else {
@@ -197,7 +197,7 @@ impl CockpitView {
                     ferrite_reviewr::ferrite::Read::Uncommitted,
                 )
             });
-        self.overview.update(cx, |overview, cx| {
+        self.panel.overview.update(cx, |overview, cx| {
             overview.wait_hunks(thread, path, stat, &workspace, answer, cx)
         });
     }
@@ -239,7 +239,7 @@ impl CockpitView {
         path: &str,
         cx: &gpui::App,
     ) -> Option<ferrite_pane::hunks::Shown> {
-        self.overview.read(cx).hunks_for_test(thread, path).cloned()
+        self.panel.overview.read(cx).hunks_for_test(thread, path).cloned()
     }
 }
 

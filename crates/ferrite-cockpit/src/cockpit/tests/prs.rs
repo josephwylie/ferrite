@@ -234,7 +234,7 @@ fn a_project_pr_reads_published_code_without_a_thread(cx: &mut TestAppContext) {
     until(cx, |cx| {
         world
             .view
-            .read_with(cx, |view, cx| view.changes.read(cx).files_read(Diff::PullRequest(target)))
+            .read_with(cx, |view, cx| view.tools.changes.read(cx).files_read(Diff::PullRequest(target)))
             == Some(1)
     });
     assert!(!shows(cx, "changes-stage-0"));
@@ -259,7 +259,7 @@ fn a_project_pr_opened_on_code_reads_its_diff(cx: &mut TestAppContext) {
     });
     let read = |number: u64, cx: &mut gpui::VisualTestContext| {
         let diff = Diff::PullRequest(PrTarget::project(world.project, number));
-        world.view.read_with(cx, |view, cx| view.changes.read(cx).files_read(diff))
+        world.view.read_with(cx, |view, cx| view.tools.changes.read(cx).files_read(diff))
     };
     click(cx, "nav-pull-requests");
     lands(cx, "prs-row-7");

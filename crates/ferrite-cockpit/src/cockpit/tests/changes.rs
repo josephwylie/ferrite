@@ -54,11 +54,11 @@ fn opened(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTe
 fn changes_follow_the_agents_edits_without_a_refresh(cx: &mut TestAppContext) {
     let (view, fake, repo, thread, cx) = window_with_agent("changes-follow", cx);
     opened(&view, thread, cx);
-    assert_eq!(view.read_with(cx, |view, cx| view.changes.read(cx).files_read(Diff::Changes(thread))), Some(2));
+    assert_eq!(view.read_with(cx, |view, cx| view.tools.changes.read(cx).files_read(Diff::Changes(thread))), Some(2));
     std::fs::remove_file(repo.join("b.rs")).unwrap();
     agent_worked(&view, &fake, 0, cx);
     wait_for_changes(&view, thread, cx, |changes, diff| changes.files_read(diff) == Some(1));
-    assert_eq!(view.read_with(cx, |view, cx| view.changes.read(cx).files_read(Diff::Changes(thread))), Some(1));
+    assert_eq!(view.read_with(cx, |view, cx| view.tools.changes.read(cx).files_read(Diff::Changes(thread))), Some(1));
 }
 
 /// The window's side of the Changes' menus: `⋯` and the scope dropdown
@@ -76,7 +76,7 @@ fn the_menus_hold_what_the_spec_names_and_a_scope_rereads(cx: &mut TestAppContex
     opened(&view, thread, cx);
     let listed = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
-            ["a.rs", "b.rs", "c.rs"].into_iter().filter(|path| view.changes.read(cx).lists(thread, path)).collect::<Vec<_>>()
+            ["a.rs", "b.rs", "c.rs"].into_iter().filter(|path| view.tools.changes.read(cx).lists(thread, path)).collect::<Vec<_>>()
         })
     };
     assert_eq!(listed(&view, cx), ["a.rs", "b.rs"], "uncommitted: the worktree's edits");
@@ -120,7 +120,7 @@ fn the_menus_hold_what_the_spec_names_and_a_scope_rereads(cx: &mut TestAppContex
     assert!(!branches.is_empty(), "the checkout's branches");
     press("context-menu-row-0", cx);
     assert_eq!(
-        view.read_with(cx, |view, cx| view.changes.read(cx).scope_label(Diff::Changes(thread))).as_deref(),
+        view.read_with(cx, |view, cx| view.tools.changes.read(cx).scope_label(Diff::Changes(thread))).as_deref(),
         Some("All changes")
     );
     wait_for_changes(&view, thread, cx, |changes, _| changes.lists(thread, "c.rs"));
@@ -134,7 +134,7 @@ fn the_menus_hold_what_the_spec_names_and_a_scope_rereads(cx: &mut TestAppContex
         .expect("c.rs is listed");
     press(Box::leak(format!("changes-open-{c}").into_boxed_str()), cx);
     assert_eq!(view.read_with(cx, |view, _| view.active_surface(thread)), Some(SurfaceId::Files), "it opens in Files");
-    let shown = view.read_with(cx, |view, cx| view.files.read(cx).active_path(thread));
+    let shown = view.read_with(cx, |view, cx| view.tools.files.read(cx).active_path(thread));
     assert_eq!(shown.as_deref().and_then(|path| path.file_name()), Some(std::ffi::OsStr::new("c.rs")), "{shown:?}");
 }
 
@@ -147,7 +147,7 @@ fn a_press_on_the_filter_keeps_the_keys_typed_there(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_input("b.rs");
     tick(cx);
-    let field = view.read_with(cx, |view, cx| view.changes.read(cx).filter(Diff::Changes(thread)).unwrap());
+    let field = view.read_with(cx, |view, cx| view.tools.changes.read(cx).filter(Diff::Changes(thread)).unwrap());
     let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.clone());
     assert_eq!(composer.read_with(cx, |composer, _| composer.text().to_string()), "");
     assert_eq!(field.read_with(cx, |field, _| field.text().to_string()), "b.rs");
@@ -163,7 +163,7 @@ fn typed_into_the_filter(typed: &str, cx: &mut gpui::VisualTestContext) {
 }
 
 fn filter_text(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) -> String {
-    let field = view.read_with(cx, |view, cx| view.changes.read(cx).filter(Diff::Changes(thread)).unwrap());
+    let field = view.read_with(cx, |view, cx| view.tools.changes.read(cx).filter(Diff::Changes(thread)).unwrap());
     field.read_with(cx, |field, _| field.text().to_string())
 }
 
@@ -335,7 +335,7 @@ fn wait_for_changes(
     let started = std::time::Instant::now();
     loop {
         tick(cx);
-        if view.read_with(cx, |view, cx| ready(view.changes.read(cx), Diff::Changes(thread))) {
+        if view.read_with(cx, |view, cx| ready(view.tools.changes.read(cx), Diff::Changes(thread))) {
             return;
         }
         assert!(started.elapsed() < READ_LOST_AFTER, "the read never landed");
@@ -355,7 +355,7 @@ fn a_refused_stage_names_its_file_and_git_and_a_retry_stages_it(cx: &mut TestApp
     view.update(cx, |view, cx| view.read_diff(Diff::Changes(thread), true, cx));
     wait_for_changes(&view, thread, cx, |changes, diff| changes.stage_failure_for_test(diff).is_some());
     assert!(cx.debug_bounds("changes-stage-failure").is_some(), "the refusal is shown");
-    let said = view.read_with(cx, |view, cx| view.changes.read(cx).stage_failure_for_test(Diff::Changes(thread))).unwrap();
+    let said = view.read_with(cx, |view, cx| view.tools.changes.read(cx).stage_failure_for_test(Diff::Changes(thread))).unwrap();
     assert!(said.contains("a.rs") && said.contains("index.lock"), "{said}");
     std::fs::remove_file(&lock).unwrap();
     let button = cx.debug_bounds("changes-stage-0").unwrap();
@@ -446,7 +446,7 @@ fn a_refresh_keeps_the_place_in_the_list(cx: &mut TestAppContext) {
 fn show_changes_brings_a_file_far_down_the_list_into_view(cx: &mut TestAppContext) {
     let (view, thread, repo, cx) = window_of_files("changes-show", 30, cx);
     opened(&view, thread, cx);
-    view.update(cx, |view, cx| view.changes.update(cx, |changes, cx| changes.toggle_fold_for_test(Diff::Changes(thread), "f025.rs", cx)));
+    view.update(cx, |view, cx| view.tools.changes.update(cx, |changes, cx| changes.toggle_fold_for_test(Diff::Changes(thread), "f025.rs", cx)));
     view.update(cx, |view, cx| view.open_in_files(thread, repo.join("f025.rs"), None, true, cx));
     tick(cx);
     assert!(cx.debug_bounds("changes").is_none(), "Files shows in the Panel");

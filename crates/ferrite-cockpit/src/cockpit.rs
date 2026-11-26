@@ -351,12 +351,9 @@ pub struct CockpitView {
     /// The prompts asked back to a Composer and not yet answered
     /// (`returns`).
     returning: returns::Returning,
+    /// The tools behind the Panel's Files, Terminal and Changes, and the
+    /// Threads whose agent worked since they last looked.
     tools: tools::Tools,
-    /// Every Thread's Files: its tree, editor tabs and their unsaved edits.
-    files: Entity<tools::FilesView>,
-    terminals: Entity<ferrite_tools::terminal::TerminalsView>,
-    /// Every diff read: a Thread's Changes and each pull request's Code.
-    changes: Entity<ferrite_tools::changes::ChangesView>,
     /// The pull request reader: the Panel's PR Surface and the PRs' detail.
     pull_request: Entity<ferrite_prs::pull_request::PullRequestView>,
     /// The Inbox's alerts and the toast float that shows them.
@@ -404,7 +401,8 @@ pub struct CockpitView {
     /// waited for its geometry (ADR 0043).
     popups: popups::Popups,
     /// The Solo view's right panel (`panel`): its tab per Thread, whether
-    /// the window has room for it, and its focus.
+    /// the window has room for it, its focus, and the views of its Overview
+    /// and File Surface.
     panel: panel::Panel,
     /// Back and forward through where the operator has been (`history`).
     history: history::History,
@@ -434,13 +432,6 @@ pub struct CockpitView {
     sheets: Entity<sheets::Sheets>,
     /// Every Thread's background work: the stops sent, the cards turned.
     background: Entity<background_work::BackgroundView>,
-    /// Every Thread's Overview: the Changes section's folds and hunks, the
-    /// sections' scroll.
-    overview: Entity<panel::overview::OverviewView>,
-    /// What the File Surface keeps of every Pane's preview: each File
-    /// tab's document as last read, the scrolls, the find bar, the last
-    /// press.
-    file_surface: Entity<panel::preview::FileSurfaceView>,
     /// Where each provider CLI stands against its newest release.
     cli_updates: crate::cli_updates::CliUpdates,
     /// The machine Settings edits: what its Server has been asked and
@@ -1026,7 +1017,7 @@ impl CockpitView {
         cx.on_release(|view, cx| view.flush_panel_persistence(cx)).detach();
         cx.on_app_quit(|view, cx| {
             view.save_drafts(cx);
-            view.files.update(cx, |files, cx| files.flush_for_quit(cx));
+            view.tools.files.update(cx, |files, cx| files.flush_for_quit(cx));
             view.flush_panel_persistence(cx);
             view.cockpit.update(cx, |cockpit, _| cockpit.halt_sessions());
             #[cfg(feature = "cef")]
@@ -1103,14 +1094,11 @@ impl CockpitView {
         // The root draws it into its own frame (the line, the Overview, the
         // Surface), so each change redraws the window.
         cx.observe(&background, |_, _, cx| cx.notify()).detach();
-        let overview = cx.new(|_| panel::overview::OverviewView::default());
-        // The root draws it into its own frame, so each change redraws the
-        // window.
-        cx.observe(&overview, |_, _, cx| cx.notify()).detach();
-        let file_surface = cx.new(|_| panel::preview::FileSurfaceView::default());
-        // The root draws its card into its own frame, so each change
+        // The root draws the Overview into its own frame, so each change
         // redraws the window.
-        cx.observe(&file_surface, |_, _, cx| cx.notify()).detach();
+        cx.observe(&panel.overview, |_, _, cx| cx.notify()).detach();
+        // So it does the File Surface's card.
+        cx.observe(&panel.file_surface, |_, _, cx| cx.notify()).detach();
         let toasts = Self::new_toasts(&cockpit, cx);
         let decisions = cx.new(|_| decisions::DecisionsView::default());
         // A card's pick lives in its Pane's forms, and the root draws the
@@ -1152,10 +1140,7 @@ impl CockpitView {
             outbox: Default::default(),
             awaited: Default::default(),
             returning: Default::default(),
-            tools: Default::default(),
-            files,
-            terminals,
-            changes,
+            tools: tools::Tools::new(files, terminals, changes),
             pull_request,
             toasts,
             native_copy: None,
@@ -1183,8 +1168,6 @@ impl CockpitView {
             prefs,
             sheets,
             background,
-            overview,
-            file_surface,
             cli_updates: Default::default(),
             environment: Default::default(),
             ferrite_update: Default::default(),
@@ -1289,7 +1272,7 @@ impl CockpitView {
         self.panes.retain(|pane| wanted.contains(&pane.identity));
         // What the File Surface kept of a Pane's preview goes with it, as
         // do its Decision forms.
-        self.file_surface
+        self.panel.file_surface
             .update(cx, |files, _| files.retain_panes(|pane| wanted.contains(&pane)));
         self.decisions
             .update(cx, |decisions, _| decisions.retain_panes(|pane| wanted.contains(&pane)));
@@ -1705,7 +1688,7 @@ impl CockpitView {
         let index = self.focused(cx);
         let pane = self.panes.get(index)?;
         if pane.read(cx).preview.focused(window, cx) && self.preview_shown(index, cx) {
-            if let Some(scroll) = self.file_surface.read(cx).reader_scroll(pane.identity) {
+            if let Some(scroll) = self.panel.file_surface.read(cx).reader_scroll(pane.identity) {
                 return Some(Reader::Document(scroll));
             }
         }
@@ -1714,7 +1697,7 @@ impl CockpitView {
         if !on_panel || self.active_surface(thread) != Some(crate::cockpit::surfaces::SurfaceId::Files) {
             return None;
         }
-        let files = self.files.read(cx);
+        let files = self.tools.files.read(cx);
         files
             .prose_scroll(thread)
             .map(Reader::Document)
@@ -2024,7 +2007,7 @@ impl CockpitView {
         let frame = self.cockpit.update(cx, |cockpit, _| cockpit.pump());
         self.settle_side_forks(cx);
         self.fetch_attachment_previews(cx);
-        self.note_work(&frame);
+        self.tools.note_work(&frame);
         self.prune_background_stops(cx);
         self.close_sheet_with_nothing_to_draw(cx);
         self.pump_browsers(cx);
@@ -2827,7 +2810,7 @@ impl CockpitView {
             MenuTarget::Thread(key)
             | MenuTarget::Pane(key)
             | MenuTarget::Snooze(key) => self.thread_path(key, cx),
-            MenuTarget::File(thread) => self.files.read(cx).pressed(thread),
+            MenuTarget::File(thread) => self.tools.files.read(cx).pressed(thread),
             MenuTarget::FilesMore(_)
             | MenuTarget::ChangesScope(_)
             | MenuTarget::ChangesMore(_)
@@ -4221,11 +4204,11 @@ impl CockpitView {
         };
         let (owner, preview) = (pane.identity, pane.read(cx).preview.clone());
         let reading =
-            self.file_surface.read(cx).pressed() == Some(owner) || preview.focused(window, cx);
+            self.panel.file_surface.read(cx).pressed() == Some(owner) || preview.focused(window, cx);
         if reading
             && self.preview_shown(index, cx)
             && self
-                .file_surface
+                .panel.file_surface
                 .update(cx, |files, cx| files.open_find(owner, &preview, window, cx))
         {
             return;
@@ -6057,10 +6040,10 @@ impl CockpitView {
             activation,
             cx.subscribe_in(&self.nav_view, window, Self::on_nav_event),
             cx.subscribe_in(&self.side_chat, window, Self::on_side_chat_event),
-            cx.subscribe_in(&self.files, window, Self::on_files_event),
-            cx.subscribe_in(&self.overview, window, Self::on_overview_event),
+            cx.subscribe_in(&self.tools.files, window, Self::on_files_event),
+            cx.subscribe_in(&self.panel.overview, window, Self::on_overview_event),
             cx.subscribe_in(&self.toasts, window, Self::on_toast_event),
-            cx.subscribe_in(&self.file_surface, window, Self::on_file_surface_event),
+            cx.subscribe_in(&self.panel.file_surface, window, Self::on_file_surface_event),
             cx.subscribe_in(&self.decisions, window, Self::on_decision_event),
             cx.subscribe_in(&self.browser_chrome, window, Self::on_browser_chrome_event),
             cx.subscribe_in(&self.browser_dialog, window, Self::on_browser_dialog_event),
@@ -6724,7 +6707,7 @@ impl CockpitView {
             // Every press forgets the preview; one in a preview marks it
             // again as it bubbles (`FileSurfaceView::card`).
             .capture_any_mouse_down(cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                view.file_surface.update(cx, |files, _| files.forget_press());
+                view.panel.file_surface.update(cx, |files, _| files.forget_press());
             }))
             // The root covers the window, so a release anywhere ends the
             // drag; the selection it made stays until the next press. Moves

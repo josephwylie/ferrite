@@ -77,6 +77,13 @@ pub(crate) struct Panel {
     pub(crate) empty_highlight: usize,
     /// The Panel's row of stops, shared with each view that draws one.
     pub(crate) focus: std::rc::Rc<PanelFocus>,
+    /// Every Thread's Overview: the Changes section's folds and hunks, the
+    /// sections' scroll.
+    pub(in crate::cockpit) overview: Entity<overview::OverviewView>,
+    /// What the File Surface keeps of every Pane's preview: each File
+    /// tab's document as last read, the scrolls, the find bar, the last
+    /// press.
+    pub(in crate::cockpit) file_surface: Entity<preview::FileSurfaceView>,
     /// "Open a surface": the Panel's default focus while no tab shows.
     pub(in crate::cockpit) empty_focus: FocusHandle,
     /// The Panel bodies that take keys of their own (the launcher, Files):
@@ -137,6 +144,19 @@ impl Panel {
         reheld
     }
 
+    /// Every Thread `keep` refuses takes what the Panel kept of it: its
+    /// Overview and its row's remembered stop.
+    fn forget(&mut self, keep: impl Fn(ThreadKey) -> bool + Copy, cx: &mut gpui::App) {
+        self.overview.update(cx, |overview, _| overview.retain_threads(keep));
+        self.focus.retain_threads(keep);
+    }
+
+    /// How much of `thread`'s state the Panel holds beyond its tabs.
+    #[cfg(test)]
+    fn held_for_test(&self, thread: ThreadKey, cx: &gpui::App) -> usize {
+        self.overview.read(cx).held_for_test(thread) + self.focus.held_for_test(thread)
+    }
+
     fn with_storage(
         surfaces: Surfaces,
         working_sets: super::tools::WorkingSets,
@@ -155,6 +175,8 @@ impl Panel {
             tab_press: None,
             empty_highlight: 0,
             focus: Default::default(),
+            overview: cx.new(|_| overview::OverviewView::default()),
+            file_surface: cx.new(|_| preview::FileSurfaceView::default()),
             empty_focus: cx.focus_handle(),
             keys: cx.focus_handle(),
             closing_focus: cx.focus_handle(),
@@ -289,7 +311,7 @@ impl CockpitView {
         match &id {
             SurfaceId::Files => {
                 if self.active_surface(thread) != Some(SurfaceId::Files) {
-                    self.files.update(cx, |files, cx| files.refresh(thread, cx));
+                    self.tools.files.update(cx, |files, cx| files.refresh(thread, cx));
                 }
                 self.ensure_files(thread, cx);
             }
@@ -319,7 +341,7 @@ impl CockpitView {
     /// A tab pressed: its Surface shows.
     pub(super) fn activate_surface(&mut self, thread: ThreadKey, id: &SurfaceId, cx: &mut Context<Self>) {
         if *id == SurfaceId::Files {
-            self.files.update(cx, |files, cx| files.refresh(thread, cx));
+            self.tools.files.update(cx, |files, cx| files.refresh(thread, cx));
         }
         self.apply_surface(thread, SurfaceAction::Activate(id.clone()));
         cx.notify();
@@ -357,7 +379,7 @@ impl CockpitView {
     fn release_surface(&mut self, thread: ThreadKey, id: &SurfaceId, cx: &mut Context<Self>) {
         match id {
             SurfaceId::Terminal(number) => {
-                self.terminals.update(cx, |terminals, cx| terminals.end(thread, *number, cx))
+                self.tools.terminals.update(cx, |terminals, cx| terminals.end(thread, *number, cx))
             }
             SurfaceId::SideChat(tab) => self.close_side_tab(thread, *tab, cx),
             SurfaceId::File(path) => self.close_preview_of(thread, path, cx),
@@ -421,9 +443,8 @@ impl CockpitView {
                 }
             }
         }
-        self.forget_tools(keep, cx);
-        self.overview.update(cx, |overview, _| overview.retain_threads(keep));
-        self.panel.focus.retain_threads(keep);
+        self.tools.forget(keep, cx);
+        self.panel.forget(keep, cx);
         self.pull_request.update(cx, |reader, _| reader.retain_threads(keep));
         self.background.update(cx, |background, _| background.retain_threads(keep));
         self.browsers.retain_threads(keep);
@@ -441,9 +462,8 @@ impl CockpitView {
     /// How much of `thread`'s state the window holds.
     #[cfg(test)]
     pub(crate) fn held_for_test(&self, thread: ThreadKey, cx: &gpui::App) -> usize {
-        self.tools_held_for_test(thread, cx)
-            + self.overview.read(cx).held_for_test(thread)
-            + self.panel.focus.held_for_test(thread)
+        self.tools.held_for_test(thread, cx)
+            + self.panel.held_for_test(thread, cx)
             + self.pull_request.read(cx).held_for_test(thread)
             + self.background.read(cx).held_for_test(thread)
             + self.browsers.held_for_test(thread)
@@ -527,7 +547,7 @@ impl CockpitView {
     pub(super) fn tend_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tend_previews(window, cx);
         if let Some(thread) = self.panel_thread(cx) {
-            self.files
+            self.tools.files
                 .update(cx, |files, _| files.tend_prose_find(thread, window));
         }
         let shown = self.shown_pr(cx);
@@ -854,7 +874,7 @@ impl CockpitView {
         let body = match active {
             None => self.surface_empty(thread, cx),
             Some(SurfaceId::Overview) => {
-                let scroll = self.overview.update(cx, |overview, _| overview.scroll(thread));
+                let scroll = self.panel.overview.update(cx, |overview, _| overview.scroll(thread));
                 div()
                     .flex()
                     .flex_col()
@@ -867,7 +887,7 @@ impl CockpitView {
                     .into_any_element()
             }
             Some(SurfaceId::Background) => {
-                let scroll = self.overview.update(cx, |overview, _| overview.scroll(thread));
+                let scroll = self.panel.overview.update(cx, |overview, _| overview.scroll(thread));
                 div()
                     .flex()
                     .flex_col()
@@ -888,10 +908,10 @@ impl CockpitView {
             Some(SurfaceId::File(_) | SurfaceId::Browser) => padded(self.panel_preview(owner, cx)),
             Some(SurfaceId::Files) => {
                 self.register_files_stops(thread, cx);
-                self.files.clone().into_any_element()
+                self.tools.files.clone().into_any_element()
             }
             Some(SurfaceId::Changes) => filled(self.changes_pane(ferrite_tools::changes::Diff::Changes(thread), cx).into_any_element()),
-            Some(SurfaceId::Terminal(_)) => filled(self.terminals.clone().into_any_element()),
+            Some(SurfaceId::Terminal(_)) => filled(self.tools.terminals.clone().into_any_element()),
             Some(SurfaceId::SideChat(_)) => filled(self.side_chat.clone().into_any_element()),
             Some(SurfaceId::PullRequest(_)) => {
                 self.register_pr_stops(cx);

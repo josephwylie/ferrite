@@ -21,12 +21,53 @@ mod terminal;
 use super::surfaces::SurfaceId;
 use super::*;
 
-/// What the window notes for its tools.
-#[derive(Default)]
+/// The window's side of its tools: the views that keep them, and what it
+/// notes for them.
 pub(crate) struct Tools {
+    /// Every Thread's Files: its tree, editor tabs and their unsaved edits.
+    pub(super) files: Entity<FilesView>,
+    /// Every Thread's shells.
+    pub(super) terminals: Entity<ferrite_tools::terminal::TerminalsView>,
+    /// Every diff read: a Thread's Changes and each pull request's Code.
+    pub(super) changes: Entity<ferrite_tools::changes::ChangesView>,
     /// Threads whose agent worked since the last sweep, so their checkout
     /// may have changed (`follow_workspace`).
     worked: HashSet<ThreadKey>,
+}
+
+impl Tools {
+    pub(super) fn new(
+        files: Entity<FilesView>,
+        terminals: Entity<ferrite_tools::terminal::TerminalsView>,
+        changes: Entity<ferrite_tools::changes::ChangesView>,
+    ) -> Self {
+        Self {
+            files,
+            terminals,
+            changes,
+            worked: HashSet::new(),
+        }
+    }
+
+    /// Note that the agent of each of these Threads worked this frame.
+    pub(super) fn note_work(&mut self, frame: &[ferrite_client::cockpit::PaneUpdate]) {
+        self.worked.extend(frame.iter().map(|update| update.thread));
+    }
+
+    /// Every Thread `keep` refuses takes its tools with it: its Files and
+    /// each diff read for it.
+    pub(super) fn forget(&mut self, keep: impl Fn(ThreadKey) -> bool, cx: &mut gpui::App) {
+        self.files.update(cx, |files, cx| files.forget(|thread| keep(thread), cx));
+        self.changes.update(cx, |changes, _| changes.forget(&keep));
+        self.worked.retain(|thread| keep(*thread));
+    }
+
+    /// How many of `thread`'s tools are held: its Files, and each diff read
+    /// for it.
+    #[cfg(test)]
+    pub(super) fn held_for_test(&self, thread: ThreadKey, cx: &gpui::App) -> usize {
+        usize::from(self.files.read(cx).holds(thread)) + self.changes.read(cx).held(thread)
+    }
 }
 
 gpui::actions!(cockpit, [ToggleTerminal, ToggleChanges, ToggleFiles, ToggleFileTree, GoToFile]);
@@ -36,23 +77,16 @@ pub(crate) use ferrite_tools::files::{FileSaveState as SaveState, FileStatus, AU
 pub(crate) use ferrite_tools::files::{Editor, FilesView, Sub as FilesSub, Verb as FilesVerb, WorkingSets};
 
 impl CockpitView {
-    /// Note that the agent of each of these Threads worked this frame.
-    pub(super) fn note_work(&mut self, frame: &[ferrite_client::cockpit::PaneUpdate]) {
-        self.tools
-            .worked
-            .extend(frame.iter().map(|update| update.thread));
-    }
-
     /// What the agents of the Threads that worked since the last call may
     /// have changed shows: the open Changes read again, and each Files
     /// buffer that holds no edits of its own takes its file's new text.
     pub(super) fn follow_workspace(&mut self, cx: &mut Context<Self>) {
         for thread in std::mem::take(&mut self.tools.worked) {
             let diff = ferrite_tools::changes::Diff::Changes(thread);
-            if self.changes.read(cx).holds(diff) {
+            if self.tools.changes.read(cx).holds(diff) {
                 self.read_diff(diff, true, cx);
             }
-            self.files.update(cx, |files, cx| files.follow_disk(thread, cx));
+            self.tools.files.update(cx, |files, cx| files.follow_disk(thread, cx));
         }
     }
 
@@ -80,7 +114,7 @@ impl CockpitView {
         match open {
             Some(id) => {
                 self.upsert_surface(thread, id, cx);
-                self.terminals.update(cx, |terminals, _| terminals.want_focus());
+                self.tools.terminals.update(cx, |terminals, _| terminals.want_focus());
             }
             None => self.new_terminal_surface(thread, cx),
         }
@@ -104,7 +138,7 @@ impl CockpitView {
 
     pub(super) fn toggle_file_tree_action(&mut self, _: &ToggleFileTree, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(thread) = self.focused_thread(cx) {
-            self.files
+            self.tools.files
                 .update(cx, |files, cx| files.run_verb(thread, FilesVerb::ToggleTree, cx));
         }
     }
@@ -113,22 +147,5 @@ impl CockpitView {
         if let Some(thread) = self.focused_thread(cx) {
             self.go_to_file(thread, window, cx);
         }
-    }
-
-    /// Every Thread `keep` refuses takes its tools with it: its Files and
-    /// each diff read for it.
-    pub(super) fn forget_tools(&mut self, keep: impl Fn(ThreadKey) -> bool, cx: &mut gpui::App) {
-        self.files.update(cx, |files, cx| files.forget(|thread| keep(thread), cx));
-        self.changes.update(cx, |changes, _| changes.forget(&keep));
-        self.tools.worked.retain(|thread| keep(*thread));
-    }
-}
-
-#[cfg(test)]
-impl CockpitView {
-    /// How many of `thread`'s tools are held: its Files, and each diff read
-    /// for it.
-    pub(super) fn tools_held_for_test(&self, thread: ThreadKey, cx: &gpui::App) -> usize {
-        usize::from(self.files.read(cx).holds(thread)) + self.changes.read(cx).held(thread)
     }
 }

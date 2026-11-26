@@ -389,7 +389,7 @@ fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
     view.update_in(cx, |view, window, cx| view.press_menu_row(open, window, cx));
     tick(cx);
     let path = view
-        .read_with(cx, |view, cx| view.files.read(cx).active_path(view.panes[0].thread().unwrap()))
+        .read_with(cx, |view, cx| view.tools.files.read(cx).active_path(view.panes[0].thread().unwrap()))
         .expect("the file opens in Files");
     assert!(path.ends_with("src/nav.rs"), "{path:?}");
     assert!(

@@ -52,7 +52,7 @@ impl CockpitView {
     ) {
         self.upsert_surface(thread, SurfaceId::Files, cx);
         let beside = self.files_tree_beside(cx);
-        self.files
+        self.tools.files
             .update(cx, |files, cx| files.open(thread, path, line, keep, beside, cx));
     }
 
@@ -60,7 +60,7 @@ impl CockpitView {
     /// in the Thread's checkout, on its machine, with the tabs and
     /// settings it was left with.
     pub(in crate::cockpit) fn ensure_files(&self, thread: ThreadKey, cx: &mut Context<Self>) {
-        if self.files.read(cx).holds(thread) {
+        if self.tools.files.read(cx).holds(thread) {
             return;
         }
         let Some(root) = self.thread_path(thread, cx) else {
@@ -75,7 +75,7 @@ impl CockpitView {
         let stored = cockpit
             .saved(thread)
             .and_then(|saved| self.panel.working_sets.get(&saved).cloned());
-        self.files
+        self.tools.files
             .update(cx, |files, cx| files.make(thread, root, remote, stored, cx));
     }
 
@@ -83,7 +83,7 @@ impl CockpitView {
     /// keyboard.
     pub(in crate::cockpit) fn go_to_file(&mut self, thread: ThreadKey, window: &mut Window, cx: &mut Context<Self>) {
         self.upsert_surface(thread, SurfaceId::Files, cx);
-        self.files.update(cx, |files, cx| files.go_to_file(thread, window, cx));
+        self.tools.files.update(cx, |files, cx| files.go_to_file(thread, window, cx));
         cx.notify();
     }
 
@@ -102,12 +102,12 @@ impl CockpitView {
             return false;
         }
         let held = on_controls || self.panel_keys_held(window, cx);
-        self.files
+        self.tools.files
             .update(cx, |files, cx| files.open_find(thread, held, window, cx))
     }
 
     pub(in crate::cockpit) fn uses_remote_files(&self, thread: ThreadKey, cx: &gpui::App) -> bool {
-        self.elsewhere(thread.machine(), cx) || self.files.read(cx).is_remote(thread)
+        self.elsewhere(thread.machine(), cx) || self.tools.files.read(cx).is_remote(thread)
     }
 
     /// Why the window cannot let `machine` go now: edited files of its
@@ -117,7 +117,7 @@ impl CockpitView {
         machine: ferrite_core::MachineId,
         cx: &gpui::App,
     ) -> Option<&'static str> {
-        self.files
+        self.tools.files
             .read(cx)
             .unsaved_at_leaving(machine, cx)
             .map(|_| "Save or close edited files before turning this environment off.")
@@ -130,7 +130,7 @@ impl CockpitView {
     pub(in crate::cockpit) fn sync_working_sets(&mut self, cx: &gpui::App) {
         let cockpit = self.cockpit.read(cx);
         let live = self
-            .files
+            .tools.files
             .read(cx)
             .working_sets()
             .filter_map(|(thread, set)| Some((cockpit.saved(thread)?, set)));
@@ -240,14 +240,14 @@ impl CockpitView {
                 PanelControl::FileTab(path) => Some(path.clone()),
                 _ => None,
             }),
-            changes: self.changes.clone(),
+            changes: self.tools.changes.clone(),
         })
     }
 
     /// `thread`'s file tabs, as Files declares them, enter the Panel's row
     /// after the head's stops, before Files draws them.
     pub(in crate::cockpit) fn register_files_stops(&self, thread: ThreadKey, cx: &mut Context<Self>) {
-        for (path, semantics) in self.files.read(cx).tab_stops(thread) {
+        for (path, semantics) in self.tools.files.read(cx).tab_stops(thread) {
             self.panel.focus.register(PanelControl::FileTab(path), semantics, cx);
         }
     }
@@ -261,7 +261,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.ensure_files(thread, cx);
-        self.files
+        self.tools.files
             .update(cx, |files, _| files.remote_for_test(thread, answer));
         if let Some(index) = self.pane_for(thread) {
             self.panes[index].read(cx).preview.set_remote_files(true);

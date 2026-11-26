@@ -560,7 +560,7 @@ fn hold_tools(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::Visu
         view.open_in_files(thread, file, None, true, cx);
         view.upsert_surface(thread, SurfaceId::Changes, cx);
         view.ensure_diff(ferrite_tools::changes::Diff::PullRequest(ferrite_core::pull_request::PrTarget::thread(thread, 1)), cx);
-        view.overview.update(cx, |overview, cx| overview.toggle_file(thread, "src/lib.rs".to_string(), cx));
+        view.panel.overview.update(cx, |overview, cx| overview.toggle_file(thread, "src/lib.rs".to_string(), cx));
         view.ensure_browser(thread, cx);
         view.fixture_pr_snapshot(thread, super::pr::snapshot(ferrite_core::protocol::WirePrState::Open), cx);
         view.background.update(cx, |background, cx| background.turn(thread, "call-1".into(), cx));
