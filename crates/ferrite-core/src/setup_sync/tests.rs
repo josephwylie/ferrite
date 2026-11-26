@@ -218,6 +218,13 @@ fn the_first_sync_lands_everything_and_nothing_outside_the_table() {
     seed(&mine);
     put(&far, ".claude.json", r#"{"userID": "far", "projects": {"y": {}}}"#);
     put(&far, ".claude/projects/y/session.jsonl", "far\n");
+    #[cfg(unix)]
+    let bits = |path: &str| {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(far.root().join(path)).unwrap().permissions().mode() & 0o777
+    };
+    #[cfg(unix)]
+    let machines_own = bits(".claude");
 
     let synced = sync(&world.job(&mine, "far"), &far);
     assert_eq!(synced.problems, []);
@@ -260,10 +267,8 @@ fn the_first_sync_lands_everything_and_nothing_outside_the_table() {
     assert!(claude.get("numStartups").is_none() && claude["projects"].get("x").is_none());
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let bits = |path: &str| fs::metadata(far.root().join(path)).unwrap().permissions().mode() & 0o777;
-        assert_eq!(bits(".claude"), 0o700);
-        assert_eq!(bits(".codex"), 0o700);
+        assert_eq!(bits(".claude"), machines_own, "a folder the Machine had keeps its bits");
+        assert_eq!(bits(".codex"), 0o700, "a folder the sync makes is the owner's");
     }
 
     let again = sync(&world.job(&mine, "far"), &far);
