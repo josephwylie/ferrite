@@ -7,7 +7,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Condvar, Mutex, PoisonError};
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 use base64::Engine as _;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -34,6 +34,7 @@ pub fn placements(dir: &Path) -> Vec<Placement> {
 
 /// Keep `placement`, in place of any for the same Project of this computer.
 pub fn place(dir: &Path, placement: Placement) -> io::Result<()> {
+    let _kept = keeping();
     let mut known = placements(dir);
     known.retain(|old| old.local_root != placement.local_root);
     known.push(placement);
@@ -76,9 +77,12 @@ fn unfinished_of_another(dir: &Path, local_root: &Path, remote_root: &Path) -> O
 /// Keep `copy`, in place of any to the same destination of the same
 /// Project, last.
 fn begun(dir: &Path, copy: Unfinished) -> io::Result<()> {
+    let _kept = keeping();
     let mut known: Vec<Unfinished> = read_list(&dir.join(UNFINISHED));
     known.retain(|old| !(old.local_root == copy.local_root && old.remote_root == copy.remote_root));
     known.push(copy);
+    #[cfg(test)]
+    tests::seam::between();
     write_list(&dir.join(UNFINISHED), &known)
 }
 
@@ -92,9 +96,12 @@ pub fn added_there(dir: &Path, local_root: &Path, remote_root: &Path) -> io::Res
 }
 
 fn finished(dir: &Path, local_root: &Path, remote_root: &Path) -> io::Result<()> {
+    let _kept = keeping();
     let mut known: Vec<Unfinished> = read_list(&dir.join(UNFINISHED));
     let before = known.len();
     known.retain(|old| !(old.local_root == local_root && old.remote_root == remote_root));
+    #[cfg(test)]
+    tests::seam::between();
     if known.len() == before {
         return Ok(());
     }
@@ -119,6 +126,7 @@ pub fn follow(from: &Path, to: &Path) -> io::Result<()> {
 /// What this computer keeps of a Machine whose files are in `dir` goes
 /// with it: it was removed.
 pub fn forget(dir: &Path) -> io::Result<()> {
+    let _kept = keeping();
     for name in [PLACEMENTS, UNFINISHED] {
         match fs::remove_file(dir.join(name)) {
             Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
@@ -126,6 +134,19 @@ pub fn forget(dir: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// What this computer keeps of its Machines is written by one writer at a
+/// time in this process. Each reads a Machine's record, changes it and
+/// writes it back whole, so two at once (copies to two destinations on one
+/// Machine, or the window adding one copy as another begins) would write
+/// over what the other kept. Held across the read and the write.
+static KEPT: Mutex<()> = Mutex::new(());
+
+fn keeping() -> MutexGuard<'static, ()> {
+    #[cfg(test)]
+    tests::seam::waits();
+    KEPT.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn read_list<T: DeserializeOwned>(path: &Path) -> Vec<T> {

@@ -5,6 +5,33 @@ use crate::project::ProjectId;
 use crate::protocol::Repositories;
 use crate::tree::{Asked, Reply, Request, Session};
 
+/// Where a test steps in to a writer of what this computer keeps of a
+/// Machine: between its read and its write, and as it waits for the
+/// record.
+pub(super) mod seam {
+    use std::sync::{mpsc, Mutex};
+
+    type Hook = Box<dyn FnOnce() + Send>;
+
+    /// Run once, by the next writer, between its read and its write.
+    pub(in crate::placement) static BETWEEN: Mutex<Option<Hook>> = Mutex::new(None);
+    /// Told each time a writer waits for the record.
+    pub(in crate::placement) static WAITS: Mutex<Option<mpsc::Sender<&'static str>>> = Mutex::new(None);
+
+    pub(in crate::placement) fn between() {
+        let hook = BETWEEN.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    pub(in crate::placement) fn waits() {
+        if let Some(told) = &*WAITS.lock().unwrap() {
+            let _ = told.send("waits");
+        }
+    }
+}
+
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ferrite-placement-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
@@ -938,6 +965,48 @@ fn a_destination_with_another_projects_unfinished_copy_is_that_ones() {
     assert!(matches!(&copied, Copied::AnotherCopy { of } if *of == first), "{copied:?}");
     assert_eq!(holds(&dest), before);
     assert_eq!(unfinished(&kept, &first), [dest.clone()], "the first Project's copy is still unfinished");
+}
+
+/// The window adding one Project's copy as another Project's copy to
+/// another destination on the same Machine begins: one writes the
+/// Machine's record whole only once the other has, so neither writes
+/// over what the other kept.
+#[test]
+fn adding_one_copy_never_erases_another_projects_unfinished_copy() {
+    let dir = scratch("two-writers");
+    let kept = dir.join("machine");
+    let first = Unfinished {
+        local_root: dir.join("here/first"),
+        remote_root: dir.join("there/first"),
+    };
+    let second = Unfinished {
+        local_root: dir.join("here/second"),
+        remote_root: dir.join("there/second"),
+    };
+    begun(&kept, first.clone()).unwrap();
+    let (told, heard) = std::sync::mpsc::channel();
+    let (beginning, at) = (kept.clone(), second.clone());
+    let writer = std::sync::Arc::new(Mutex::new(None));
+    let spawned = writer.clone();
+    *seam::BETWEEN.lock().unwrap() = Some(Box::new(move || {
+        // The first copy's record is read and not yet written: the second
+        // copy begins, and either waits for the record or writes it.
+        *seam::WAITS.lock().unwrap() = Some(told.clone());
+        *spawned.lock().unwrap() = Some(std::thread::spawn(move || {
+            begun(&beginning, at).unwrap();
+            let _ = told.send("wrote");
+        }));
+        heard.recv().unwrap();
+    }));
+    added_there(&kept, &first.local_root, &first.remote_root).unwrap();
+    let writer = writer.lock().unwrap().take().expect("the second copy began meanwhile");
+    writer.join().unwrap();
+    assert_eq!(unfinished(&kept, &first.local_root), Vec::<PathBuf>::new(), "the first is added");
+    assert_eq!(
+        unfinished(&kept, &second.local_root),
+        [second.remote_root.clone()],
+        "the second is still unfinished"
+    );
 }
 
 /// Removed, a Machine takes along what this computer kept of it.
