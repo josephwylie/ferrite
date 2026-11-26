@@ -1,11 +1,14 @@
 //! One Pane as the Cockpit holds it (`CockpitPane`): its view, an entity
 //! of its own, and what the Cockpit keeps beside it.
 
+use std::collections::HashSet;
+
+use ferrite_core::activity::Subject;
 use ferrite_core::roster::PaneIdentity;
 use ferrite_core::ThreadKey;
 use ferrite_pane::composer::Composer;
 use ferrite_pane::pane::{self, PaneView};
-use gpui::{AppContext as _, Entity};
+use gpui::{AppContext as _, Entity, EntityId};
 
 use super::beside;
 
@@ -25,6 +28,10 @@ pub(crate) struct CockpitPane {
     view: Entity<PaneView>,
     /// The Review beside this Pane on the board (`beside.rs`).
     pub(crate) review: beside::ReviewSlot,
+    /// The Pane's transcripts whose events the Cockpit hears. Each is
+    /// subscribed to once, the first time it is drawn, and forgotten when
+    /// the Pane lets it go; they all go with the Pane.
+    heard: HashSet<EntityId>,
 }
 
 impl CockpitPane {
@@ -33,6 +40,7 @@ impl CockpitPane {
             identity: view.identity,
             view: cx.new(|_| view),
             review: beside::ReviewSlot::new(cx),
+            heard: HashSet::new(),
         }
     }
 
@@ -59,6 +67,26 @@ impl CockpitPane {
         change: impl FnOnce(&mut pane::DraftBinding) -> R,
     ) -> Option<R> {
         self.view.update(cx, |view, _| view.draft_mut().map(change))
+    }
+
+    /// Whether `transcript` is new to the Cockpit, to be subscribed to
+    /// now: each is heard once.
+    pub(super) fn hear(&mut self, transcript: EntityId) -> bool {
+        self.heard.insert(transcript)
+    }
+
+    /// Core evicted `subject`'s transcript: the Pane lets it go, and it is
+    /// no longer heard.
+    pub(super) fn release_transcript(&mut self, subject: &Subject, cx: &mut gpui::App) {
+        if let Some(transcript) = self.view.update(cx, |view, _| view.release_transcript(subject)) {
+            self.heard.remove(&transcript.entity_id());
+        }
+    }
+
+    /// Whether the Cockpit hears `transcript`'s events.
+    #[cfg(test)]
+    pub(crate) fn hears(&self, transcript: EntityId) -> bool {
+        self.heard.contains(&transcript)
     }
 
     /// The draft's first send made a Thread of it (`PaneView::adopt_thread`).

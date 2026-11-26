@@ -451,9 +451,6 @@ pub struct CockpitView {
     /// The palette, the shortcuts sheet and the notifications list's focus
     /// (`cockpit::palette`).
     floats: palette::Floats,
-    /// Transcript events are detached subscriptions, registered once per
-    /// retained Subject entity rather than once per render.
-    transcript_entities: std::collections::HashSet<gpui::EntityId>,
     /// WP-F: the thread rules option 2 made, and what the Decision cards
     /// press through (`cockpit::decisions`).
     decisions: Entity<decisions::DecisionsView>,
@@ -875,7 +872,6 @@ impl CockpitView {
             chimed: Vec::new(),
             pr_reads: Default::default(),
             floats: palette::Floats::new(),
-            transcript_entities: Default::default(),
             decisions,
             destination: None,
             prs,
@@ -992,14 +988,6 @@ impl CockpitView {
         }
         self.panes
             .sort_by_key(|pane| wanted.iter().position(|shown| *shown == pane.identity));
-        let retained_transcript_entities: std::collections::HashSet<_> = self
-            .panes
-            .iter()
-            .flat_map(|pane| pane.read(cx).transcripts.values())
-            .map(|transcript| transcript.entity_id())
-            .collect();
-        self.transcript_entities
-            .retain(|id| retained_transcript_entities.contains(id));
         // A Thread that came or went moved between the grid and the nav's
         // parked rows.
         if opened || self.panes.len() != before {

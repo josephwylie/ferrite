@@ -313,7 +313,7 @@ fn core_eviction_releases_a_hidden_retained_transcript_entity(cx: &mut TestAppCo
     view.read_with(cx, |view, cx| {
         assert!(!view.panes[0].read(cx).transcripts.contains_key(&atlas));
         assert!(view.panes[0].read(cx).transcripts.contains_key(&tail));
-        assert!(!view.transcript_entities.contains(&atlas_entity));
+        assert!(!view.panes[0].hears(atlas_entity));
     });
     assert!(
         atlas_weak.upgrade().is_none(),
