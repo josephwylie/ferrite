@@ -722,7 +722,7 @@ impl CockpitView {
                     .h(px(pin.h)),
             ),
         };
-        Some(self.slot_drop_target(reader, leaf, cx))
+        Some(Self::slot_drop_target(reader, leaf, cx))
     }
 }
 

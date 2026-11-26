@@ -51,6 +51,7 @@ mod nav_undo;
 mod nav_view;
 mod palette;
 pub(crate) mod panel;
+mod pane_cell;
 mod parts;
 mod popups;
 mod pr_reads;
@@ -2633,7 +2634,14 @@ impl CockpitView {
     /// (`frame::board_top`) to the window's foot, and `board_right` short
     /// of its right edge (the panel, or the gutter).
     fn board_bounds(&self, window: &Window, cx: &gpui::App) -> layout::Rect {
-        let viewport = window.viewport_size();
+        let bounds = self.board_rect(window.viewport_size(), cx);
+        self.board.set(bounds);
+        bounds
+    }
+
+    /// The board at a window of `viewport`'s size (`board_bounds`), kept
+    /// nowhere: what a read of the root may take.
+    fn board_rect(&self, viewport: gpui::Size<Pixels>, cx: &gpui::App) -> layout::Rect {
         let top = ferrite_ui::frame::board_top();
         let left = self.nav_width();
         let bounds = layout::Rect {
@@ -2642,7 +2650,6 @@ impl CockpitView {
             w: (f32::from(viewport.width) - left - self.board_right(cx)).max(0.0),
             h: (f32::from(viewport.height) - top).max(0.0),
         };
-        self.board.set(bounds);
         bounds
     }
 
@@ -2685,7 +2692,11 @@ impl CockpitView {
     /// the reader's slide ends), or the whole board. The reader slot is no
     /// Pane and is left out.
     fn pane_rects(&self, window: &Window, cx: &gpui::App) -> Vec<(usize, layout::Rect)> {
-        let bounds = self.board_bounds(window, cx);
+        self.pane_rects_in(self.board_bounds(window, cx), cx)
+    }
+
+    /// The shown Panes' rects (`pane_rects`) on a board at `bounds`.
+    fn pane_rects_in(&self, bounds: layout::Rect, cx: &gpui::App) -> Vec<(usize, layout::Rect)> {
         if let Some(board) = self.board(cx) {
             let Some(tree) = self.board_tree(board, cx) else {
                 return Vec::new();
@@ -5465,283 +5476,6 @@ impl CockpitView {
         }
     }
 
-    /// The focused draft's setup chips (#29) — Project and Workspace — for
-    /// the strip over the Composer (`env_strip`), wired to their popovers, which hang above
-    /// them (`band_menu_element`). A chip click shares `open_band_popover`
-    /// with ↵ on a tab-focused chip; the closure re-finds the Pane by its
-    /// Composer, a draft's one stable identity.
-    fn draft_band_chips(&self, index: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let Some(draft) = self.panes[index].read(cx).draft() else {
-            return Vec::new();
-        };
-        let composer = self.panes[index].read(cx).composer.clone();
-        let project_title = self
-            .cockpit
-            .read(cx)
-            .project(draft.binding.project())
-            .map(|project| project.title.clone())
-            .unwrap_or_else(|| "Project".into());
-        let (workspace_mark, workspace_label) = match draft.binding.target() {
-            DraftTarget::Main => (ferrite_ui::icons::FOLDER, SharedString::from("Current checkout")),
-            DraftTarget::Branch { name } => (ferrite_ui::icons::BRANCH, SharedString::from(name.clone())),
-            DraftTarget::NewBranch => (ferrite_ui::icons::BRANCH, SharedString::from("New branch")),
-            DraftTarget::Existing { branch, .. } => (
-                ferrite_ui::icons::FOLDER_GIT_EXISTING,
-                SharedString::from(format!("Previous worktree ({branch})")),
-            ),
-            DraftTarget::New => (ferrite_ui::icons::FOLDER_GIT, SharedString::from("New worktree")),
-        };
-        // Where the draft runs: a chip while there is more than one
-        // environment to choose, or a copy to wait on, else a word for a
-        // machine.
-        let machine = draft.binding.project().machine();
-        let environment = self.environment_chip_shown(index, cx).then(|| {
-            if let Some((mark, label)) = self.copy_chip(index, cx) {
-                return (pane::BandChip::Environment, 2, mark, label);
-            }
-            let mark = if self.elsewhere(machine, cx) {
-                ferrite_ui::icons::SERVER
-            } else {
-                ferrite_ui::icons::LAPTOP
-            };
-            (pane::BandChip::Environment, 2, pane::ChipMark::Icon(mark), self.environment_name(machine, cx))
-        });
-        let word = environment
-            .is_none()
-            .then(|| self.machine_label(machine, cx))
-            .flatten()
-            .map(|name| pane::env_machine(name.into()).into_any_element());
-        let chips = environment.into_iter().chain([
-            (
-                pane::BandChip::Project,
-                0,
-                pane::ChipMark::Icon(ferrite_ui::icons::FOLDER),
-                pane::band_chip_label(&project_title),
-            ),
-            (
-                pane::BandChip::Workspace,
-                1,
-                pane::ChipMark::Icon(workspace_mark),
-                pane::band_chip_label(&workspace_label),
-            ),
-        ]);
-        let chips = chips
-            .map(|(chip, slot, mark, label)| {
-                let focused = draft.band_focus == Some(chip);
-                let chip_composer = composer.clone();
-                let chip_element = pane::band_chip(slot, mark, label, focused).on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                        // The chip is this Pane's: land on it first, then
-                        // toggle — and stop the press so the root's dismissal
-                        // cannot close what this just opened.
-                        cx.stop_propagation();
-                        if let Some(at) = view
-                            .panes
-                            .iter()
-                            .position(|pane| pane.read(cx).composer == chip_composer)
-                        {
-                            view.focus_pane(at, cx);
-                        }
-                        view.open_band_menu(chip, false, cx);
-                    }),
-                );
-                ferrite_ui::components::on_bounds(
-                    chip_element,
-                    self.record_trigger(band_trigger(chip)),
-                )
-                .into_any_element()
-            });
-        self.noting_copy(index, word.into_iter().chain(chips).collect(), cx)
-    }
-
-    /// The focused draft's model chip (#29), where a live Thread's stands
-    /// and as it reads (Claude's new-session `Opus 5.5 Medium`): the
-    /// provider's mark, the model, then the effort in force when the model
-    /// takes one. It opens the model picker on the draft's band choice.
-    fn draft_model_chip(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let draft = self.panes[index].read(cx).draft()?;
-        let provider = draft.binding.provider().provider;
-        let model = draft.binding.provider().model.as_deref();
-        let announced = self
-            .cockpit
-            .read(cx)
-            .announced_models(draft.binding.project().machine(), provider);
-        // The model's name, the provider's default until one is chosen.
-        let model_label = SharedString::from(ferrite_core::models::footer_name(
-            provider, model, &announced,
-        ));
-        let effort = (!ferrite_core::models::efforts_for(provider, model, &announced)
-            .is_empty())
-        .then(|| {
-            effort_in_force(
-                draft.binding.effort(),
-                self.prefs.settings.effort_for(provider),
-                provider,
-                model,
-                &announced,
-            )
-        })
-        .flatten();
-        let identity = self.panes[index].identity;
-        let group = model_picker::chip_trigger(identity);
-        let picker_up = self.model_picker_open(identity);
-        let face = pane::model_effort_chip(pane::ModelChip {
-            mark: ferrite_ui::provider::mark(provider),
-            model: model_label,
-            effort: effort.map(|effort| pane::sentence_case(&effort).into()),
-            loading: false,
-            open: picker_up,
-            group: group.clone(),
-        });
-        let control = pane::draft_picker(
-            "draft-model-picker",
-            draft.band_focus == Some(pane::BandChip::Provider),
-            face,
-            cx,
-        )
-        .tip_unless_open(picker_up, "Model and effort");
-        Some(self.model_chip_control(index, control, cx))
-    }
-
-    /// The Solo Composer's controls (SPEC §5.5, Claude's): the `+` that
-    /// attaches files and the send circle on the box's row; under the box,
-    /// where the work runs at the left (a draft's Project and Workspace
-    /// pickers, an empty Thread's Project and branch), and at the right the
-    /// model and effort and a Thread's permission mode as plain words, then
-    /// the plan-usage ring. A board Pane's compact Composer (SPEC §5.9) has
-    /// only the send circle, on the focused Pane; a Subagent's tab has none
-    /// (its footer stands in). Either carries the queue strip's acts.
-    fn composer_toolbar(
-        &self,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> Option<pane::ComposerControls> {
-        let pane = &self.panes[index];
-        if !pane.read(cx).is_main() {
-            return None;
-        }
-        let (running, line_empty) = self.running_and_empty(index, cx);
-        let queue = pane.thread().map_or_else(Vec::new, |thread| {
-            composer_footer::queue_acts(index, thread, &self.cockpit, running, cx)
-        });
-        let open_thread = pane
-            .thread()
-            .and_then(|thread| Some((thread, self.cockpit.read(cx).thread(thread)?)));
-        let attach = composer_footer::AttachMenu::of(
-            index,
-            pane.identity,
-            self.attach_menu_focus(pane.identity),
-            pane.read(cx).composer.focus_handle(cx),
-            match pane.read(cx).geometry.get().composer {
-                Some(field) => ferrite_ui::components::FloatPlace {
-                    floor: f32::from(field.top()),
-                    limit_right: f32::from(field.right()),
-                },
-                None => self.bar_place(cx),
-            },
-            open_thread.as_ref().map(|(thread, open)| (*thread, open)),
-        );
-        let attach = attach.render(cx);
-        let (env, mut words, mode, ring) = match pane.thread() {
-            None => {
-                // A draft has no Session to ask: its mode is the one a new
-                // Thread starts in (Settings), and its ring the provider's
-                // account limits, as the Thread it becomes will read them.
-                let ring = self.panes[index].read(cx).draft().and_then(|draft| {
-                    pane::plan_usage_ring(
-                        ("draft-usage-ring", index),
-                        self.cockpit.read(cx).account_limits(
-                            draft.binding.project().machine(),
-                            draft.binding.provider().provider,
-                        ),
-                        None,
-                        self.usage_popover_held,
-                        cx,
-                    )
-                });
-                (
-                    Some(self.draft_band_chips(index, cx)),
-                    self.draft_model_chip(index, cx)
-                        .into_iter()
-                        .collect::<Vec<_>>(),
-                    self.panes[index].read(cx).draft().map(|draft| {
-                        composer_footer::draft_mode_word(
-                            index,
-                            self.prefs
-                                .settings
-                                .permission_mode_for(draft.binding.provider().provider),
-                        )
-                    }),
-                    ring.map(IntoElement::into_any_element),
-                )
-            }
-            Some(thread) => {
-                let open = self.cockpit.read(cx).thread(thread);
-                let open = open.as_ref();
-                // An empty Thread says where its work runs, as a draft
-                // does; its Project and checkout are settled, so as words.
-                let empty = open.is_some_and(|open| pane::offers_import(Some(open.transcript())));
-                let env = self.facts.get(thread).filter(|_| empty).map(|facts| {
-                    [
-                        (ferrite_ui::icons::FOLDER, facts.project_label.clone()),
-                        (ferrite_ui::icons::BRANCH, facts.branch.clone()),
-                    ]
-                    .into_iter()
-                    .filter_map(|(mark, word)| {
-                        word.map(|word| pane::env_word(mark, word).into_any_element())
-                    })
-                    .collect()
-                });
-                let ring = open.and_then(|open| {
-                    pane::plan_usage_ring(
-                        ("plan-usage-ring", thread.thread().get() as usize),
-                        self.cockpit.read(cx).account_limits(thread.machine(), open.provider()),
-                        open.transcript().plan().map(SharedString::from),
-                        self.usage_popover_held,
-                        cx,
-                    )
-                });
-                let chip = open.and_then(|open| {
-                    let menu_up = self.mode_menu().is_some_and(|menu| menu.thread == thread);
-                    composer_footer::ModeChip::of(index, thread, open, menu_up)
-                });
-                (
-                    env,
-                    self.model_chip(index, cx).into_iter().collect(),
-                    chip.map(|chip| {
-                        chip.render(self.record_trigger(mode_menu::chip_trigger(thread)), cx)
-                    }),
-                    ring.map(IntoElement::into_any_element),
-                )
-            }
-        };
-        // The model's word gives way first; the effort and the mode hold.
-        let model = (!words.is_empty()).then(|| words.remove(0));
-        words.extend(mode);
-        Some(pane::ComposerControls {
-            attach: Some(attach),
-            stop: composer_footer::stop_button(index, running, line_empty, cx),
-            send: composer_footer::send_button(index, running, line_empty, cx).filter(|_| self.waited_on(index, cx).is_none()),
-            footer: Some(pane::composer_footer(model, words, ring).into_any_element()),
-            env: env
-                .filter(|chips: &Vec<AnyElement>| !chips.is_empty())
-                .map(|chips| pane::env_strip(chips).into_any_element()),
-            queue,
-        })
-    }
-
-    /// Whether this Pane's turn runs, and whether its line is empty: what
-    /// decides its primary actions (`pane::primary_actions`).
-    fn running_and_empty(&self, index: usize, cx: &gpui::App) -> (bool, bool) {
-        let pane = &self.panes[index];
-        let running = pane
-            .thread()
-            .and_then(|thread| self.cockpit.read(cx).thread(thread))
-            .is_some_and(|open| turn_running(&open));
-        (running, pane.read(cx).composer.read(cx).is_empty())
-    }
-
     /// The `+` menu's file or folder picker, its picks staged on this
     /// Pane's Composer as a drop or a paste stages them.
     fn attach_files(&mut self, index: usize, folders: bool, cx: &mut Context<Self>) {
@@ -5779,11 +5513,12 @@ impl CockpitView {
         }
     }
 
-    /// The open popover for this Pane, which hangs it above the line.
-    fn popover_element(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The Composer's open popover, while it is this Pane's: the focused
+    /// Pane's cell hangs it above the line.
+    fn composer_menu_over(&self, index: usize, cx: &gpui::App) -> Option<Entity<composer_menu::ComposerMenuView>> {
         (index == self.focused(cx)
             && self.composer_menu.read(cx).pane() == Some(self.panes[index].identity))
-            .then(|| self.composer_menu.clone().into_any_element())
+            .then(|| self.composer_menu.clone())
     }
 
     /// A draft's Project or Workspace menu, hung off its chip on the strip
@@ -6437,6 +6172,17 @@ fn effort_in_force(
     effort_value(chosen, saved, provider, model, announced).or_else(|| {
         ferrite_core::models::cli_default_effort(provider, model).map(effort_chip_label)
     })
+}
+
+/// The effort in force on an open Thread (`medium`): its own choice, else
+/// the operator's default (`saved`), else its model's (`effort_in_force`);
+/// `None` for a model that takes none.
+fn thread_effort(open: &ThreadView, saved: Option<&str>) -> Option<SharedString> {
+    let provider = open.provider();
+    let ladder = ferrite_core::models::efforts_for(provider, open.model(), open.models());
+    (!ladder.is_empty())
+        .then(|| effort_in_force(open.effort(), saved, provider, open.model(), open.models()))
+        .flatten()
 }
 
 /// A model's effort ladder: its wire values, the words the chip prints,
@@ -7295,224 +7041,10 @@ impl CockpitView {
 }
 
 impl CockpitView {
-    /// Pane `index`'s cell — the click-to-focus and drag plumbing around
-    /// `render_pane`, for the whole board or a slot of its tree. While its
-    /// machine is lost it is dimmed under a cover that takes every press
-    /// until the machine is back (ADR 0026).
-    fn pane_cell(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let cell = self.live_pane_cell(index, window, cx);
-        match self.pane_machine(index, cx) {
-            Some(machine) if self.machine_lost(machine, cx) => {
-                machines::held(cell, format!("machine-lost-{}", machine.get()))
-            }
-            _ => cell,
-        }
-    }
-
-    fn live_pane_cell(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        #[cfg(test)]
-        drawn::built_pane(self.panes[index].identity);
-        let content = self.pane_content(index, window, cx);
-        if self.sheet_up(cx) {
-            return content;
-        }
-        if !self.panes[index].read(cx).is_main() {
-            return content;
-        }
-        let composer = self.panes[index].read(cx).composer.clone();
-        let identity = self.panes[index].identity;
-        let view = cx.entity().downgrade();
-        let hovered = view.clone();
-        let hover = move |over: bool, _: &mut Window, cx: &mut gpui::App| {
-            let _ = hovered.update(cx, |view, cx| {
-                let next = match (over, view.file_drop_over) {
-                    (true, _) => Some(identity),
-                    (false, Some(current)) if current == identity => None,
-                    (false, current) => current,
-                };
-                if view.file_drop_over != next {
-                    view.file_drop_over = next;
-                    cx.notify();
-                }
-            });
-        };
-        ferrite_pane::prompt_drop::target(
-            content,
-            composer,
-            move |_, cx| {
-                let _ = view.update(cx, |view, cx| {
-                    view.file_drop_over = None;
-                    if let Some(index) = view.index_of(identity) {
-                        view.focus_pane(index, cx);
-                        view.panes[index].update_draft(cx, |draft| draft.band_focus = None);
-                        view.close_composer_menu(cx);
-                        cx.notify();
-                    }
-                });
-            },
-            hover,
-        )
-    }
-
     /// Whether native files hover this Pane right now: the last Pane their
     /// drag moved over, while that drag is still live.
     fn drop_target(&self, index: usize, cx: &gpui::App) -> bool {
         cx.has_active_drag() && self.file_drop_over == Some(self.panes[index].identity)
-    }
-
-    fn pane_content(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let pane = &self.panes[index];
-        let focused = index == self.focused(cx);
-        let cell = div()
-            .relative()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .min_h_0()
-            .track_focus(&pane.read(cx).controls_focus)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, event: &MouseDownEvent, window, cx| {
-                    view.pointer_down(index, event, window, cx)
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |view, event: &MouseDownEvent, window, cx| {
-                    let Some(thread) = view.panes.get(index).and_then(|pane| pane.thread()) else {
-                        return;
-                    };
-                    cx.stop_propagation();
-                    let copied = gpui::base::TextSelection::selected_text(window, cx)
-                        .trim_end_matches('\n')
-                        .to_string();
-                    view.native_copy = (!copied.is_empty()).then_some(copied);
-                    view.focus_pane(index, cx);
-                    view.open_context_menu(MenuTarget::Pane(thread), event.position, cx);
-                }),
-            );
-        let cell = self.slot_drop_target(cell, pane_leaf(pane.identity), cx);
-        // A draft Pane (#29): the Composer and its menu instead of a
-        // transcript — nothing in core exists to read yet.
-        let Some(thread) = pane.thread() else {
-            let start = self.under_sheets(self.draft_hero(index, cx), cx);
-            let menu = self.popover_element(index, cx);
-            let toolbar = self.composer_toolbar(index, cx);
-            // The parts above draw with `cx`; the Pane is read after.
-            let view = pane.read(cx);
-            let draft = view.draft().expect("a Pane is a Thread or a draft");
-            return cell.child(pane::render_draft(
-                view,
-                pane::DraftState {
-                    start,
-                    attachments: Composer::attachments(&view.composer, &view.preview, cx),
-                    menu,
-                    composer_empty: view.composer.read(cx).is_empty(),
-                    focused,
-                    error: draft.error.as_ref(),
-                    reduce_motion: cx.reduce_motion(),
-                    drop_target: self.drop_target(index, cx),
-                    toolbar,
-                },
-            ));
-        };
-        // One Pane is drawn at a time: this names the Thread the window
-        // shows, for a driver to read.
-        let cell = cell.debug_selector(move || format!("view-thread-{}", thread.thread().get()));
-        // Over a link, the roster can list a Thread a frame before its
-        // facts land: the cell stays an empty shell until they do.
-        if self.cockpit.read(cx).thread(thread).is_none() {
-            return cell;
-        }
-        let retained_transcript = pane.read(cx).transcript().map(|transcript| {
-            let document = transcript.read(cx).selection_document();
-            gpui::base::TextSelectionDocumentOwner::new(document)
-                .child(
-                    transcript.cached(
-                        gpui::StyleRefinement::default()
-                            .flex_1()
-                            .min_h_0()
-                            .min_w_0()
-                            .w_full(),
-                    ),
-                )
-                .into_any_element()
-        });
-        let attachments = Composer::attachments(&pane.composer(cx), &pane.read(cx).preview, cx);
-        // The docked Decision merges into the Composer when that Composer
-        // is a live block with nothing floating between them (rule 2.8.1).
-        let joins = pane.read(cx).is_main() && attachments.is_none();
-        let activity_decisions = self.activity_decisions(index, joins, window, cx);
-        let menu = self.popover_element(index, cx);
-        let details = self.details_card(index, window, cx);
-        let toolbar = self.composer_toolbar(index, cx);
-        let resume_offer = self.resume_offer(index, cx);
-        // The parts above draw with `cx`; the facts read the model after.
-        let Some(open) = self.cockpit.read(cx).thread(thread) else {
-            return cell;
-        };
-        let facts = pane::PaneFacts {
-            composer_empty: pane.read(cx).composer.read(cx).is_empty(),
-            focused,
-            unread: self
-                .cockpit
-                .read(cx)
-                .notifications(thread.machine())
-                .attention(thread.thread()),
-            reduce_motion: cx.reduce_motion(),
-            editing: focused
-                && window.is_window_active()
-                && pane.read(cx).composer.read(cx).focus_handle(cx).is_focused(window),
-            drop_target: self.drop_target(index, cx),
-            plane: self.on_plane(thread, cx),
-            decision_joined: joins && activity_decisions.is_some(),
-            thread: open,
-        };
-        #[cfg(test)]
-        drawn::record_pane(
-            pane.identity,
-            drawn::Pane {
-                focused,
-                unread: facts.unread,
-                drop_target: facts.drop_target,
-                editing: facts.editing,
-                reduce_motion: facts.reduce_motion,
-                // The slot's width as the board laid it out this frame (a
-                // dragged seam included), else the Pane's rect's.
-                cell_width: self
-                    .slot_sizes
-                    .borrow()
-                    .get(&pane_leaf(pane.identity))
-                    .map(|(w, _)| *w)
-                    .or_else(|| {
-                        self.pane_rects(window, cx)
-                            .into_iter()
-                            .find(|(at, _)| *at == index)
-                            .map(|(_, rect)| rect.w)
-                    })
-                    .unwrap_or_else(|| self.board_bounds(window, cx).w),
-                clock: open.turn().elapsed().map(ferrite_core::progress::live_seconds),
-            },
-        );
-        let wiring = pane::PaneWiring {
-            transcript: retained_transcript,
-            attachments,
-            menu,
-            activity_decisions,
-            details,
-            details_lane_width: self.details_lane_width(index, cx),
-            toolbar,
-            resume_offer,
-            // An empty Thread wears the draft's start card until its first
-            // prompt.
-            start: if pane.read(cx).is_main() && open.transcript().blocks().is_empty() {
-                self.under_sheets(self.thread_hero(thread), cx)
-            } else {
-                None
-            },
-        };
-        cell.child(pane::render_pane(pane.read(cx), facts, wiring))
     }
 
     /// Read free disk for the nav's foot off the UI thread: the least free of the
@@ -7563,7 +7095,7 @@ impl CockpitView {
 
     /// A board slot as a drop target for a reader dragged by its head: the
     /// moves over it compute the preview, the release applies it.
-    fn slot_drop_target(&self, cell: Div, target: Leaf, cx: &mut Context<Self>) -> Div {
+    fn slot_drop_target(cell: Div, target: Leaf, cx: &mut Context<Self>) -> Div {
         // gpui hands every drag move to every listener, not just the one
         // under the pointer: a slot only previews while the pointer is
         // inside it, and drops its own preview once the pointer has left —
@@ -7726,31 +7258,6 @@ impl CockpitView {
         }
     }
 
-
-    /// The offer to go on in a fresh conversation, while the Thread's
-    /// provider has none to resume. It says what the way on costs.
-    fn resume_offer(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let thread = self.panes.get(index).filter(|pane| pane.read(cx).is_main())?.thread()?;
-        self.cockpit.read(cx).thread(thread).filter(|open| open.resume_lost())?;
-        let key = thread.thread().get();
-        let line = "A fresh conversation starts from the transcript's latest turns, sent as \
-                    context with your next prompt. It will not remember the rest.";
-        let action = ferrite_ui::components::secondary_button(
-            SharedString::from(format!("resume-fresh-{key}")),
-            None,
-            "Start a fresh conversation",
-            cx,
-        )
-        .debug_selector(move || format!("resume-fresh-{key}"))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |view, _: &MouseDownEvent, window, cx| {
-                cx.stop_propagation();
-                view.start_fresh_conversation(index, thread, window, cx);
-            }),
-        );
-        Some(pane::resume_offer(key, line.into(), action))
-    }
 
     /// Take the offer: the Thread goes on in a fresh conversation, and what
     /// the failed send gave back to the Composer goes out through the same
@@ -7997,57 +7504,6 @@ impl CockpitView {
     /// current choice stays visible and availability follows the Thread's
     /// busy state, said in the tooltip. It reads the cached answers, so it
     /// works with no Session.
-    /// The effort in force on an open Thread (`medium`): its own choice,
-    /// else the operator's default, else its model's (`effort_in_force`);
-    /// `None` for a model that takes none.
-    fn thread_effort(&self, open: &ThreadView) -> Option<SharedString> {
-        let provider = open.provider();
-        let ladder =
-            ferrite_core::models::efforts_for(provider, open.model(), open.models());
-        (!ladder.is_empty())
-            .then(|| {
-                effort_in_force(
-                    open.effort(),
-                    self.prefs.settings.effort_for(provider),
-                    provider,
-                    open.model(),
-                    open.models(),
-                )
-            })
-            .flatten()
-    }
-
-    fn model_chip(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let thread = self.panes[index].thread()?;
-        let open = self.cockpit.read(cx).thread(thread)?;
-        let provider = open.provider();
-        let hold = tuning_hold(&open);
-        // The model it runs; until one is known, the provider's default
-        // model — never the provider, and never the id on the wire.
-        let label = SharedString::from(ferrite_core::models::footer_name(
-            provider,
-            open.running_model(),
-            open.models(),
-        ));
-        let effort = self.thread_effort(&open);
-        let key = thread.thread().get() as usize;
-        let identity = PaneIdentity::Thread(thread);
-        let picker_up = self.model_picker_open(identity);
-        let face = pane::model_effort_chip(pane::ModelChip {
-            mark: ferrite_ui::provider::mark(provider),
-            model: label,
-            effort: effort.map(|effort| pane::sentence_case(&effort).into()),
-            loading: open.starting(),
-            open: picker_up,
-            group: model_picker::chip_trigger(identity),
-        });
-        let control = pane::toolbar_chip(("model-picker", key), cx)
-            .debug_selector(move || format!("model-picker-{key}"))
-            .tip_unless_open(picker_up, hold.unwrap_or("Model and effort"))
-            .child(face);
-        Some(self.model_chip_control(index, control, cx))
-    }
-
     /// The model's effort ladder for `thread` (`effort_ladder_of`).
     pub(super) fn effort_ladder(
         &self,

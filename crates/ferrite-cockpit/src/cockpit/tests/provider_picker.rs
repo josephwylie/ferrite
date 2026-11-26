@@ -553,9 +553,8 @@ fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(cx: &mut 
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.update(cx, |view, cx| {
-        assert!(view.model_chip(0, cx).is_some(), "pre-lock the Composer offers the control");
-    });
+    let chip: &'static str = Box::leak(format!("model-picker-{}", thread.thread().get()).into_boxed_str());
+    assert!(cx.debug_bounds(chip).is_some(), "pre-lock the Composer offers the control");
 
     cx.simulate_input("hello");
     cx.simulate_keystrokes("enter");
@@ -574,8 +573,8 @@ fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(cx: &mut 
     view.update(cx, |view, cx| {
         let picker = picker(view, cx);
         assert!(picker.rows.iter().all(|row| !row.inert), "every model stays live");
-        assert!(view.model_chip(0, cx).is_some(), "and the control itself stays");
     });
+    assert!(cx.debug_bounds(chip).is_some(), "and the control itself stays");
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
 

@@ -686,28 +686,6 @@ impl CockpitView {
         })
     }
 
-    pub(super) fn activity_decisions(
-        &self,
-        index: usize,
-        _joined: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        // Below the short-Pane height a question body keeps two option rows
-        // and scrolls, so its head and answer row stay in reach.
-        let rect = self
-            .pane_rects(window, cx)
-            .into_iter()
-            .find(|(at, _)| *at == index)
-            .map(|(_, rect)| rect);
-        let short = rect.is_some_and(|rect| rect.h < theme::DECISION_SHORT_PANE_H);
-        let mut cards = self.decision_cards(index, true, short, cx)?;
-        if let Some(rect) = rect {
-            cards.inset = theme::tx_inset_at(rect.w, true);
-        }
-        cards.render(window, cx)
-    }
-
     pub(super) fn send_form(
         &mut self,
         thread: ThreadKey,

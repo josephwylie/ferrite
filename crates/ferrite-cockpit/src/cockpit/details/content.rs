@@ -65,7 +65,7 @@ const PR_TITLE_LH: f32 = 18.;
 const PR_META_H: f32 = 20.;
 const PR_GAP_BELOW: f32 = 6.;
 
-pub(super) struct Content {
+pub(in crate::cockpit) struct Content {
     rows: Vec<Row>,
     /// The shown Subject's Lineage, drawn in its own section.
     lineage: Lineage,
@@ -330,7 +330,7 @@ impl Content {
 
 impl CockpitView {
     /// The card's content for `thread` while its Pane shows `subject`.
-    pub(super) fn details_content(
+    pub(in crate::cockpit) fn details_content(
         &self,
         thread: ThreadKey,
         subject: &ferrite_core::activity::Subject,

@@ -2,9 +2,10 @@
 //! each drawn by a view of its own and rebuilt only when something it shows
 //! changes.
 //!
-//! A Pane's view (`PartView`) draws by calling back into the Cockpit
-//! (`render_part`), so every element and listener in it is the Cockpit's
-//! own, as before; the nav draws only what it last read of the Cockpit
+//! A Pane's view (`PartView`) reads what its cell draws of the window
+//! through `Source` (`cell_inputs`), then draws the cell by calling back
+//! into the Cockpit (`render_part`), whose listeners are still the
+//! Cockpit's own; the nav draws only what it last read of the Cockpit
 //! (`NavView::look`), which it reads again as the Cockpit notifies or the
 //! client's model says something `Arrived`, so it redraws only when that
 //! moved. Each is mounted
@@ -19,8 +20,8 @@
 //! The frame around the parts (titlebar, bottom bar, floats) is rebuilt
 //! whenever any part is, without rebuilding the others.
 //!
-//! Under `FERRITE_LOOPS_OVERLAY=0` (no cached Cockpit) the Panes are drawn
-//! inline and the nav's view is mounted uncached.
+//! Under `FERRITE_LOOPS_OVERLAY=0` (no cached Cockpit) the Panes' and the
+//! nav's views are mounted uncached.
 
 use std::collections::HashMap;
 
@@ -30,7 +31,11 @@ use gpui::{
     Window,
 };
 
+use super::pane_cell::{
+    CellAsk, CellInputs, ControlsInputs, DraftInputs, KindInputs, ThreadInputs,
+};
 use super::CockpitView;
+use ferrite_ui::source::Source;
 
 /// A part of the Cockpit drawn as a cached view of its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -45,15 +50,23 @@ pub(crate) enum Part {
 pub(crate) struct PartView {
     cockpit: WeakEntity<CockpitView>,
     pane: PaneIdentity,
+    /// What the cell draws of the window (`CockpitView::cell_inputs`).
+    inputs: Source<CellInputs, CellAsk>,
 }
 
 impl Render for PartView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // This part's loops are laid out afresh for the loops overlay.
         ferrite_ui::loops_overlay::begin(window, cx.entity_id());
-        let pane = self.pane;
+        let ask = CellAsk {
+            pane: self.pane,
+            viewport: window.viewport_size(),
+        };
+        let Some(inputs) = self.inputs.read(&ask, cx) else {
+            return div().into_any_element();
+        };
         self.cockpit
-            .update(cx, |view, cx| view.render_part(pane, window, cx))
+            .update(cx, |view, cx| view.render_part(inputs, window, cx))
             .unwrap_or_else(|_| div().into_any_element())
     }
 }
@@ -93,8 +106,10 @@ impl CockpitView {
         if let Some(view) = self.parts.borrow().views.get(&pane) {
             return view.clone();
         }
-        let cockpit = cx.entity().downgrade();
-        let view = cx.new(|_| PartView { cockpit, pane });
+        let root = cx.entity();
+        let inputs = Source::of(&root, |root: &Self, ask: &CellAsk, cx| root.cell_inputs(ask, cx));
+        let cockpit = root.downgrade();
+        let view = cx.new(|_| PartView { cockpit, pane, inputs });
         self.parts.borrow_mut().views.insert(pane, view.clone());
         view
     }
@@ -109,12 +124,8 @@ impl CockpitView {
         )
     }
 
-    /// A Pane's cell on the board: its cached part, or the cell itself
-    /// without parts.
-    pub(super) fn pane_slot(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        if !self.parts.borrow().on {
-            return self.pane_cell(index, window, cx);
-        }
+    /// A Pane's cell on the board: its part, cached with parts on.
+    pub(super) fn pane_slot(&self, index: usize, _window: &mut Window, cx: &mut Context<Self>) -> Div {
         let identity = self.panes[index].identity;
         // The box `pane_content`'s cell has on the board.
         let frame = div()
@@ -125,6 +136,9 @@ impl CockpitView {
             .min_w_0()
             .min_h_0();
         let view = self.part_view(identity, cx);
+        if !self.parts.borrow().on {
+            return frame.child(view);
+        }
         Self::mount_part(frame, view.into())
     }
 
@@ -157,21 +171,170 @@ impl CockpitView {
         parts.views.retain(|identity, _| open.contains(identity));
     }
 
-    /// What a Pane's view draws.
-    fn render_part(
-        &mut self,
-        pane: PaneIdentity,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        match self.index_of(pane) {
-            Some(index) => div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .child(self.pane_cell(index, window, cx))
-                .into_any_element(),
-            None => div().into_any_element(),
+    /// What a Pane's view draws: its cell, from `inputs`.
+    fn render_part(&self, inputs: CellInputs, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(index) = self.index_of(inputs.identity) else {
+            return div().into_any_element();
+        };
+        let pane: Entity<ferrite_pane::pane::PaneView> = (*self.panes[index]).clone();
+        let model = self.cockpit.clone();
+        let details = |thread, subject: &ferrite_core::activity::Subject, pages, cx: &gpui::App| {
+            Some(self.details_content(thread, subject, pages, cx))
+        };
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(super::pane_cell::cell(inputs, &pane, &model, &details, window, cx))
+            .into_any_element()
+    }
+
+    /// What Pane `ask.pane`'s cell draws of the window rather than of its
+    /// Pane: read as the cell draws, under the conditions its draw read
+    /// them, so the part redraws for what it drew and nothing else. None
+    /// once the Pane is gone.
+    pub(super) fn cell_inputs(&self, ask: &CellAsk, cx: &gpui::App) -> Option<CellInputs> {
+        let index = self.index_of(ask.pane)?;
+        let identity = self.panes[index].identity;
+        let lost = self
+            .pane_machine(index, cx)
+            .filter(|machine| self.machine_lost(*machine, cx));
+        let focused = index == self.focused(cx);
+        let kind = match identity.thread() {
+            None => KindInputs::Draft(self.draft_inputs(index, cx)),
+            Some(thread) => KindInputs::Thread(
+                self.cockpit
+                    .read(cx)
+                    .thread(thread)
+                    .is_some()
+                    .then(|| self.thread_inputs(index, thread, ask.viewport, cx)),
+            ),
+        };
+        // A Thread the model has not got yet draws an empty shell.
+        let drawn = !matches!(kind, KindInputs::Thread(None));
+        let view = self.panes[index].read(cx);
+        let controls = (drawn && view.is_main()).then(|| {
+            let provider = match &kind {
+                KindInputs::Draft(_) => view.draft().map(|draft| draft.binding.provider().provider),
+                KindInputs::Thread(_) => identity
+                    .thread()
+                    .and_then(|thread| self.cockpit.read(cx).thread(thread))
+                    .map(|open| open.provider()),
+            };
+            ControlsInputs {
+                attach_focus: self.attach_menu_focus(identity),
+                attach_place: match view.geometry.get().composer {
+                    Some(field) => ferrite_ui::components::FloatPlace {
+                        floor: f32::from(field.top()),
+                        limit_right: f32::from(field.right()),
+                    },
+                    None => self.bar_place(cx),
+                },
+                usage_popover_held: self.usage_popover_held,
+                picker_up: self.model_picker_open(identity),
+                effort_default: provider
+                    .and_then(|provider| self.prefs.settings.effort_for(provider))
+                    .map(|effort| effort.to_string()),
+            }
+        });
+        Some(CellInputs {
+            index,
+            identity,
+            focused,
+            lost,
+            sheet_up: self.sheet_up(cx),
+            drop_target: self.drop_target(index, cx),
+            composer_menu: drawn.then(|| self.composer_menu_over(index, cx)).flatten(),
+            triggers: self.popups.triggers(),
+            controls,
+            kind,
+        })
+    }
+
+    /// What draft Pane `index`'s band and hero read of the window.
+    fn draft_inputs(&self, index: usize, cx: &gpui::App) -> DraftInputs {
+        let draft = self.panes[index]
+            .read(cx)
+            .draft()
+            .expect("a Pane is a Thread or a draft");
+        let project = self
+            .cockpit
+            .read(cx)
+            .project(draft.binding.project())
+            .map(|project| gpui::SharedString::from(project.title.clone()))
+            .unwrap_or_else(|| "Project".into());
+        let machine = draft.binding.project().machine();
+        let environment = self.environment_chip_shown(index, cx).then(|| {
+            if let Some(chip) = self.copy_chip(index, cx) {
+                return chip;
+            }
+            let mark = if self.elsewhere(machine, cx) {
+                ferrite_ui::icons::SERVER
+            } else {
+                ferrite_ui::icons::LAPTOP
+            };
+            (ferrite_pane::pane::ChipMark::Icon(mark), self.environment_name(machine, cx))
+        });
+        DraftInputs {
+            project,
+            machine: environment
+                .is_none()
+                .then(|| self.machine_label(machine, cx))
+                .flatten(),
+            environment,
+            copy_live: self.waited_on(index, cx).map(|(_, copy)| copy.phase.live()),
+            mode: self
+                .prefs
+                .settings
+                .permission_mode_for(draft.binding.provider().provider)
+                .to_string(),
+        }
+    }
+
+    /// What Thread Pane `index`'s cell reads of the window, at a window of
+    /// `viewport`'s size.
+    fn thread_inputs(
+        &self,
+        index: usize,
+        thread: ferrite_core::ThreadKey,
+        viewport: gpui::Size<gpui::Pixels>,
+        cx: &gpui::App,
+    ) -> ThreadInputs {
+        use ferrite_ui::theme;
+        let board = self.board_rect(viewport, cx);
+        let rect = self
+            .pane_rects_in(board, cx)
+            .into_iter()
+            .find(|(at, _)| *at == index)
+            .map(|(_, rect)| rect);
+        // Below the short-Pane height a question body keeps two option
+        // rows and scrolls, so its head and answer row stay in reach.
+        let short = rect.is_some_and(|rect| rect.h < theme::DECISION_SHORT_PANE_H);
+        let decisions = self.decision_cards(index, true, short, cx).map(|mut cards| {
+            if let Some(rect) = rect {
+                cards.inset = theme::tx_inset_at(rect.w, true);
+            }
+            cards
+        });
+        ThreadInputs {
+            plane: self.on_plane(thread, cx),
+            mode_menu_up: self.mode_menu().is_some_and(|menu| menu.thread == thread),
+            facts: self
+                .facts
+                .get(thread)
+                .map(|facts| (facts.project_label.clone(), facts.branch.clone())),
+            decisions,
+            details_inline_open: self.details_inline_open(index),
+            // The slot's width as the board laid it out this frame (a
+            // dragged seam included), else the Pane's rect's.
+            #[cfg(test)]
+            cell_width: self
+                .slot_sizes
+                .borrow()
+                .get(&super::pane_leaf(self.panes[index].identity))
+                .map(|(w, _)| *w)
+                .or_else(|| rect.map(|rect| rect.w))
+                .unwrap_or(board.w),
         }
     }
 
