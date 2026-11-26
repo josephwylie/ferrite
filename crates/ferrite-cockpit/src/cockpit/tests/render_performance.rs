@@ -1957,6 +1957,9 @@ fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
 /// `refresh_windows` rebuilt every Pane on every frame a toast moved).
 #[gpui::test]
 fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
+    // Ferrite's times hold still, so a minute turning while the toast
+    // comes in redraws no transcript; the kit's slide keeps the real clock.
+    let _clock = hold_wall_clock();
     let (_view, _fake, threads, cx) = solo_board("kit-toast", cx);
     cockpit_renders_over(cx, 2_500);
     let panes = pane_builds(&threads);
