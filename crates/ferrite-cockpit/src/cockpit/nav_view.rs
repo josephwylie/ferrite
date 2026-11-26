@@ -947,3 +947,242 @@ impl CockpitView {
         }
     }
 }
+
+impl CockpitView {
+    /// Bring `thread` to the front for an explicit open: its Pane, from
+    /// wherever the nav row's own click would land. A Thread already
+    /// shown stays put.
+    pub(super) fn show_thread(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
+        if self.focused_thread(cx) != Some(thread) || self.destination_shown() {
+            self.open_nav_row(thread, cx);
+        }
+    }
+
+    /// `refresh_branches`, but never skipped: a refresh already under way
+    /// may have read git before the moment that asks, so one more follows
+    /// it as soon as it lands.
+    pub(super) fn refresh_branches_soon(&mut self, cx: &mut Context<Self>) {
+        if !self.branch_reads.queue_behind_read() {
+            self.refresh_branches(cx);
+        }
+    }
+
+    /// Refresh checkout labels and their branch status without ever waiting
+    /// for Git — or `gh` — in GPUI's pump. The same trip asks git which
+    /// worktrees each Thread's repo has, and hands the answer to the core:
+    /// that is how a binding follows the agent into a worktree it made
+    /// (`workspace::follow`), and the labels re-read on the very next pass.
+    /// Git runs only for a Thread whose checkouts' files moved since its
+    /// labels were read (`checkouts_stamp`): an idle window starts none.
+    /// None of it for another machine: no git here can read its checkouts,
+    /// and its Server sends each Thread's branch in its digest.
+    pub(crate) fn refresh_branches(&mut self, cx: &mut Context<Self>) {
+        // A draft has no Thread yet, but its workspace chip names its
+        // Project's checkout, which the operator may switch under it.
+        let drafted: Vec<ProjectKey> = self
+            .panes
+            .iter()
+            .filter_map(|pane| pane.read(cx).draft())
+            .map(|draft| draft.binding.project())
+            .collect();
+        self.look_up_checkouts(drafted, cx);
+        if self.branch_reads.reading() {
+            return;
+        }
+        // Before anything is read: a creation that finishes from here on
+        // is judged by the next pass, not by this one.
+        let taken_at = std::time::Instant::now();
+        // A worktree a Main just made is named only by a listing taken
+        // after it finished, whatever the files said before.
+        let listing_wanted = self.cockpit.read(cx).wants_worktree_listing();
+        let targets: Vec<_> = self
+            .cockpit
+            .read(cx)
+            .threads()
+            .into_iter()
+            .filter(|thread| !self.elsewhere(thread.machine(), cx))
+            .filter_map(|thread| {
+                let open = self.cockpit.read(cx).thread(thread)?;
+                let repo = open.workspace().map(|binding| binding.repo().to_path_buf());
+                let cwd = ferrite_core::checkout::effective_cwd(
+                    open.session_project_root(),
+                    open.workspace(),
+                )?;
+                let project = open
+                    .project_id()
+                    .and_then(|project| {
+                        self.cockpit
+                            .read(cx)
+                            .registry(thread.machine())
+                            .reading()
+                            .project(project)
+                    });
+                let directories = project
+                    .map(|project| {
+                        project
+                            .directories()
+                            .enumerate()
+                            .map(|(index, directory)| {
+                                let checkout = if index == 0 { cwd } else { directory };
+                                let label = directory
+                                    .file_name()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|| directory.display().to_string());
+                                (SharedString::from(label), checkout.to_path_buf())
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Some(branch_reads::Target {
+                    thread,
+                    cwd: cwd.to_path_buf(),
+                    directories,
+                    repo,
+                })
+            })
+            .collect();
+        let Some(read) = self.branch_reads.begin(targets, listing_wanted) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let mut said = cx.background_executor().spawn(async move { read.run() }).await;
+            this.update(cx, |view, cx| {
+                view.branch_reads.landed(&mut said);
+                let branch_reads::Said { branches, listings, .. } = said;
+                let labels = view.facts.set_branches(
+                    branches
+                        .iter()
+                        .map(|(thread, _, status, _)| (*thread, status.clone()))
+                        .collect(),
+                );
+                let roots = view.facts.set_project_branches(
+                    branches
+                        .into_iter()
+                        .map(|(thread, _, _, project_branches)| (thread, project_branches))
+                        .collect(),
+                );
+                let mut moved = false;
+                for (thread, listing) in listings {
+                    if view.cockpit.update(cx, |cockpit, _| cockpit.worktrees_listed(thread, listing, taken_at)) {
+                        moved = true;
+                        // Into a worktree: its branch is another PR's.
+                        view.check_pr(thread, false, cx);
+                    }
+                }
+                // Git said what it said last time: nothing to redraw. A
+                // label that moved is its Thread's: its Pane and its nav
+                // row. A binding that moved, everything.
+                if moved {
+                    cx.notify();
+                } else if !labels.is_empty() || !roots.is_empty() {
+                    for thread in labels.iter().chain(&roots) {
+                        view.notify_thread_pane(*thread, cx);
+                    }
+                    view.notify_part(parts::Part::Nav, cx);
+                    view.notify_frame(cx);
+                }
+                if moved || view.branch_reads.take_queued() {
+                    // The labels above were read for the old cwd, or
+                    // before a turn ended; go straight back for the new.
+                    view.refresh_branches(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn land_on_thread(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
+        if let Some(owner) = self.cockpit.read(cx).owner(thread) {
+            self.land_on_owned(thread, owner, cx);
+            return;
+        }
+        if self.pane_for(thread).is_some() {
+            self.focus_thread(thread, cx);
+        } else {
+            self.revive_thread(thread, cx);
+        }
+    }
+
+    /// A running nav row's click: land on that Thread's Pane, in the view
+    /// that shows it — the core's one door, like every other deliberate
+    /// move.
+    pub(super) fn focus_thread(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
+        self.leave_destination();
+        if self.cockpit.update(cx, |cockpit, _| cockpit.focus_thread(thread)) {
+            if let Some(index) = self.pane_for(thread) {
+                self.focus_pane(index, cx);
+            }
+            self.widen_scope_to(thread, cx);
+            cx.notify();
+        }
+    }
+
+    /// Revive one parked Thread into the view that shows it: the shared
+    /// tail of cmd-o and a parked nav row's click (#21). When it does not
+    /// come back, the nav says so.
+    pub(super) fn revive_thread(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
+        self.reopen_threads(vec![thread], "reopen", cx);
+    }
+
+    /// `revive_thread` for a caller that follows it with the window in
+    /// hand: `then` hears whether the Thread came back.
+    pub(super) fn revive_thread_in(
+        &mut self,
+        thread: ThreadKey,
+        window: &mut Window,
+        then: impl FnOnce(&mut Self, bool, &mut Window, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let asked = self.cockpit.update(cx, |cockpit, _| cockpit.reopen(thread));
+        self.when_answered_in(
+            asked,
+            window,
+            move |view, answer, window, cx| {
+                let back = view.reopened(vec![(thread, answer)], "reopen", cx);
+                then(view, back, window, cx);
+            },
+            cx,
+        );
+    }
+
+    /// Revive each of `threads`, in order, into the view that shows it.
+    /// The nav names each that did not come back, by what `verb` was asked.
+    pub(super) fn reopen_threads(&mut self, threads: Vec<ThreadKey>, verb: &'static str, cx: &mut Context<Self>) {
+        let asked = self.cockpit.update(cx, |cockpit, _| {
+            threads.iter().map(|thread| cockpit.reopen(*thread)).collect()
+        });
+        self.when_all_answered(
+            asked,
+            move |view, answers, cx| {
+                view.reopened(threads.into_iter().zip(answers).collect(), verb, cx);
+            },
+            cx,
+        );
+    }
+
+    /// The Server answered for Threads asked back: the board's own state
+    /// gives way only to a Thread that is back. Whether all came back.
+    pub(super) fn reopened(
+        &mut self,
+        answers: Vec<(ThreadKey, std::io::Result<()>)>,
+        verb: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let outcomes: Vec<nav_undo::Outcome> = answers
+            .into_iter()
+            .map(|(thread, answer)| nav_undo::Outcome {
+                thread,
+                result: answer.map_err(|error| error.to_string()),
+            })
+            .collect();
+        for back in outcomes.iter().filter(|outcome| outcome.result.is_ok()) {
+            self.leave_destination();
+            self.widen_scope_to(back.thread, cx);
+        }
+        self.sync_panes(cx);
+        self.report_failures(verb, &outcomes);
+        cx.notify();
+        outcomes.iter().all(|outcome| outcome.result.is_ok())
+    }
+}

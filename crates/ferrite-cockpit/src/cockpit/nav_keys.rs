@@ -126,3 +126,97 @@ impl CockpitView {
         self.step_thread(-1, window, cx);
     }
 }
+
+impl CockpitView {
+    /// Reopen the Thread parked most recently — the one the operator just
+    /// closed, which is the one they want back (#17); the core walks the
+    /// park order, then creation order.
+    pub(super) fn reopen_thread(&mut self, _: &ReopenThread, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((thread, asked)) = self.cockpit.update(cx, |cockpit, _| cockpit.reopen_last()) else {
+            return;
+        };
+        // What `switch_thread` reads before the switch, read at the press:
+        // the Thread is back only once its Server answers.
+        let shown = self.focused_thread(cx);
+        let on_stop = self.panel_control_focused(window, cx);
+        self.when_answered_in(
+            asked,
+            window,
+            move |view, answer, window, cx| {
+                let outcome = nav_undo::Outcome {
+                    thread,
+                    result: answer.map_err(|e| e.to_string()),
+                };
+                if outcome.result.is_ok() {
+                    view.widen_scope_to(thread, cx);
+                    view.sync_panes(cx);
+                }
+                view.report_failures("reopen", &[outcome]);
+                if on_stop && view.focused_thread(cx) != shown {
+                    window.blur(cx);
+                }
+                cx.notify();
+            },
+            cx,
+        );
+    }
+
+    /// Close the focused Pane — cmd-w. The core decides what that means
+    /// (park, leave, defer onto a draft, discard); the mirror follows.
+    pub(super) fn close_thread(&mut self, _: &CloseThread, window: &mut Window, cx: &mut Context<Self>) {
+        if self.nav_view.read(cx).holds_keys(window) {
+            self.park_nav_cursor(cx);
+            return;
+        }
+        // ⌘W over the lightbox closes it; in the focused Pane's preview or
+        // Review it closes that, not the Pane (F-14).
+        if let Some((index, _)) = self.lightbox(cx) {
+            self.close_lightbox(index, cx);
+            return;
+        }
+        let index = self.focused(cx);
+        if let Some(pane) = self.panes.get(index) {
+            if self.preview_shown(index, cx) && pane.read(cx).preview.focused(window, cx) {
+                self.close_preview(index, cx);
+                return;
+            }
+            if pane.review.focused(window, cx) {
+                self.close_review(index, cx);
+                return;
+            }
+        }
+        if self.close_panel_in_focus(window, cx) {
+            return;
+        }
+        let Some(identity) = self.cockpit.read(cx).roster().focused() else {
+            return;
+        };
+        self.close_pane(identity, cx);
+    }
+
+    /// Close one Pane through the core act (a Thread always parks), its
+    /// refusal landing in the nav's notice — and a park that would not
+    /// flush is logged, the Pane gone either way.
+    pub(super) fn close_pane(&mut self, identity: PaneIdentity, cx: &mut Context<Self>) {
+        let closing = self.cockpit.update(cx, |cockpit, _| cockpit.close(identity));
+        // A menu on the closed Pane goes with it.
+        if self.composer_menu.read(cx).pane() == Some(identity) {
+            self.close_composer_menu(cx);
+        }
+        self.when_answered(
+            closing,
+            move |view, closed, cx| {
+                if let Err(error) = &closed {
+                    ferrite_core::log!("pane {identity:?} did not close cleanly: {error}");
+                }
+                view.sync_panes(cx);
+                if let (true, PaneIdentity::Draft(draft)) = (closed.is_ok(), identity) {
+                    view.discard_draft(draft, cx);
+                }
+                cx.notify();
+            },
+            cx,
+        );
+        cx.notify();
+    }
+}
