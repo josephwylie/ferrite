@@ -353,13 +353,9 @@ fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
     );
     view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
     tick(cx);
-    let empty = cx
-        .debug_bounds("draft-empty")
-        .expect("the draft's body spacer");
+    // Where the hero stands in the draft's body is the cell's own
+    // (`ferrite_pane::cell`'s tests); here, what its word opens.
     let block = cx.debug_bounds("composer-block").unwrap();
-    assert!(empty.bottom() <= block.top(), "{empty:?} / {block:?}");
-    let hero = cx.debug_bounds("start-hero").expect("the start hero");
-    assert!(empty.contains(&hero.center()), "{hero:?} in {empty:?}");
     let word = cx
         .debug_bounds("start-hero-project")
         .expect("the hero's project word");

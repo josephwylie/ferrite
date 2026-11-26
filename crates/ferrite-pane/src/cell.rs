@@ -10,6 +10,8 @@
 
 pub mod footer;
 mod hero;
+#[cfg(test)]
+mod tests;
 
 use ferrite_core::activity::Subject;
 use ferrite_core::delegate::DelegateId;
