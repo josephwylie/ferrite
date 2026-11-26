@@ -466,11 +466,14 @@ impl PaneView {
         self.history_error = None;
     }
 
+    /// The provider said `from` is `to`: the Pane keeps one Subject of
+    /// them. The transcript it let go, when both had one, so the caller can
+    /// stop hearing it.
     pub fn redirect_subject(
         &mut self,
         from: &ferrite_core::activity::AgentKey,
         to: &ferrite_core::activity::AgentKey,
-    ) {
+    ) -> Option<Entity<crate::transcript::TranscriptView>> {
         let thread = self.thread().map_or(0, |key| key.thread().get());
         self.rich.redirect_namespace(
             &format!("{thread}-{}-", from.as_str()),
@@ -484,8 +487,13 @@ impl PaneView {
         if let Some(old) = self.subject_views.remove(&from) {
             self.subject_views.entry(to.clone()).or_insert(old);
         }
-        if let Some(old) = self.transcripts.remove(&from) {
-            self.transcripts.entry(to).or_insert(old);
+        let old = self.transcripts.remove(&from)?;
+        match self.transcripts.entry(to) {
+            std::collections::hash_map::Entry::Occupied(_) => Some(old),
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(old);
+                None
+            }
         }
     }
 

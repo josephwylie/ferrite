@@ -1248,7 +1248,7 @@ impl CockpitView {
         for update in &frame {
             if let Some(index) = self.pane_for(update.thread) {
                 for (from, to) in &update.redirects {
-                    self.panes[index].update(cx, |pane, _| pane.redirect_subject(from, to));
+                    self.panes[index].redirect_subject(from, to, cx);
                 }
                 self.release_evicted_transcripts(index, &update.subjects, cx);
                 let mut selected = self.panes[index].read(cx).selected.clone();

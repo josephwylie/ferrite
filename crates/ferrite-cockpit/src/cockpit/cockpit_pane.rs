@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use ferrite_core::activity::Subject;
+use ferrite_core::activity::{AgentKey, Subject};
 use ferrite_core::roster::PaneIdentity;
 use ferrite_core::ThreadKey;
 use ferrite_pane::composer::Composer;
@@ -80,6 +80,14 @@ impl CockpitPane {
     pub(super) fn release_transcript(&mut self, subject: &Subject, cx: &mut gpui::App) {
         if let Some(transcript) = self.view.update(cx, |view, _| view.release_transcript(subject)) {
             self.heard.remove(&transcript.entity_id());
+        }
+    }
+
+    /// The provider said `from` is `to`: the Pane keeps one Subject of
+    /// them, and a transcript it lets go is no longer heard.
+    pub(super) fn redirect_subject(&mut self, from: &AgentKey, to: &AgentKey, cx: &mut gpui::App) {
+        if let Some(dropped) = self.view.update(cx, |view, _| view.redirect_subject(from, to)) {
+            self.heard.remove(&dropped.entity_id());
         }
     }
 

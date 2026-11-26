@@ -322,6 +322,60 @@ fn core_eviction_releases_a_hidden_retained_transcript_entity(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn an_alias_stops_hearing_the_transcript_it_folds_away(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("subagents-alias-heard", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+
+    child(&fake, "Early", AgentStatus::Idle);
+    child(&fake, "Known", AgentStatus::Idle);
+    tick(cx);
+    tick(cx);
+
+    let early = Subject::Subagent(key("Early"));
+    let known = Subject::Subagent(key("Known"));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let open = |subject: Subject, view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.update(cx, |view, cx| {
+            let generation = view
+                .cockpit
+                .read(cx)
+                .thread(thread)
+                .unwrap()
+                .activity()
+                .subject(&subject)
+                .unwrap()
+                .revision();
+            view.panes[0].update(cx, |pane, cx| pane.select_subject(subject.clone(), generation, cx));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).transcripts[&subject].entity_id())
+    };
+    // Both keys are drawn, and so heard, before the provider says they
+    // are one agent.
+    let early_entity = open(early.clone(), &view, cx);
+    let known_entity = open(known.clone(), &view, cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.panes[0].hears(early_entity));
+        assert!(view.panes[0].hears(known_entity));
+    });
+
+    emit(&fake, ActivityEvent::Alias { from: key("Early"), to: key("Known") });
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let pane = view.panes[0].read(cx);
+        assert!(!pane.transcripts.contains_key(&early), "the alias folded Early away");
+        assert_eq!(pane.transcripts[&known].entity_id(), known_entity);
+        assert!(view.panes[0].hears(known_entity));
+        assert!(
+            !view.panes[0].hears(early_entity),
+            "the transcript the alias let go is no longer heard"
+        );
+    });
+}
+
+#[gpui::test]
 fn hidden_child_requests_jump_and_reply_only_to_their_captured_handle(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("subagents-decisions", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
