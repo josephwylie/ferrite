@@ -46,7 +46,7 @@ fn a_sweep_across_long_disclosed_output_copies_prose_output_and_prose(cx: &mut T
     tick(cx);
     let control = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .tool_bounds(pane::DisclosureId::Tool("sweep".into()), cx)
+            .read(cx).tool_bounds(pane::DisclosureId::Tool("sweep".into()), cx)
             .unwrap()
             .center()
     });
@@ -98,7 +98,7 @@ fn a_leading_heading_starts_on_the_answer_rows_top(cx: &mut TestAppContext) {
         let block = &view.cockpit.read(cx).thread(thread).unwrap().transcript().blocks()[0];
         let id = format!(
             "markdown-{}-{:?}",
-            view.panes[0].text_namespace(),
+            view.panes[0].read(cx).text_namespace(),
             block.markdown_run.unwrap_or(block.id)
         );
         ferrite_pane::rich::testing::bounds(&id, 0, cx).unwrap()

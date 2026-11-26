@@ -654,8 +654,8 @@ fn open_folds(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext
             .map(|block| pane::DisclosureId::Turn(block.id))
             .collect();
         for fold in prompts {
-            if !view.panes[0].tool_expanded(fold.clone()) {
-                view.panes[0].toggle_tool(&fold);
+            if !view.panes[0].read(cx).tool_expanded(fold.clone()) {
+                view.panes[0].update(cx, |pane, _| pane.toggle_tool(&fold));
             }
         }
         cx.notify();
@@ -1053,7 +1053,7 @@ fn caret(
             .thread(thread)
             .unwrap()
             .activity()
-            .subject(&view.panes[0].selected)
+            .subject(&view.panes[0].read(cx).selected)
             .unwrap()
             .transcript()
             .blocks();
@@ -1074,7 +1074,7 @@ fn caret(
             (
                 format!(
                     "markdown-{}-{:?}",
-                    view.panes[0].text_namespace(),
+                    view.panes[0].read(cx).text_namespace(),
                     current.markdown_run.unwrap_or(blocks[start].id)
                 ),
                 block - start,
@@ -1095,7 +1095,7 @@ fn caret(
             (
                 format!(
                     "literal-{}-{:?}-0",
-                    view.panes[0].text_namespace(),
+                    view.panes[0].read(cx).text_namespace(),
                     current.id
                 ),
                 0,
@@ -1195,6 +1195,6 @@ fn bound_cockpit_as(
 
 fn composer_text(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> String {
     view.read_with(cx, |view, cx| {
-        view.panes[0].composer.read(cx).text().to_string()
+        view.panes[0].read(cx).composer.read(cx).text().to_string()
     })
 }

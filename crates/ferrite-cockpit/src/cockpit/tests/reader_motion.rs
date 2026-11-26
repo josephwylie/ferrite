@@ -13,7 +13,7 @@ fn read(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| {
         let index = view.focused(cx);
         let review = view.panes[index].review.review().unwrap_or_else(|| {
-            let composer = view.panes[index].composer.clone();
+            let composer = view.panes[index].read(cx).composer.clone();
             let reading = view.prefs.settings.reading_size;
             cx.new(|cx| {
                 ferrite_review::ReviewView::new(

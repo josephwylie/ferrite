@@ -463,7 +463,7 @@ impl Lineage {
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
                         if let Some(index) = view.pane_for(thread) {
-                            view.panes[index].details.show_more();
+                            view.panes[index].read(cx).details.show_more();
                             cx.notify();
                         }
                     })),

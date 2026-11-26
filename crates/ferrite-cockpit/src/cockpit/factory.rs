@@ -1287,7 +1287,7 @@ impl CockpitView {
         }
         if view.tab == TaskTab::Worker {
             if let Some(index) = self.open_worker_pane(cx) {
-                return Some(self.panes[index].composer.read(cx).focus_target(window, cx));
+                return Some(self.panes[index].read(cx).composer.read(cx).focus_target(window, cx));
             }
         }
         Some(self.focus.clone())

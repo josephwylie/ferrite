@@ -131,7 +131,7 @@ fn thinking_id(
             .thread(thread)
             .unwrap()
             .activity()
-            .subject(&view.panes[0].selected)
+            .subject(&view.panes[0].read(cx).selected)
             .unwrap()
             .transcript()
             .blocks()
@@ -139,7 +139,7 @@ fn thinking_id(
             .filter(|block| matches!(&block.body, Body::Thinking(_)))
             .nth(row)
             .expect("the fixture's thought");
-        format!("thinking-{}-{:?}", view.panes[0].text_namespace(), block.id)
+        format!("thinking-{}-{:?}", view.panes[0].read(cx).text_namespace(), block.id)
     })
 }
 
@@ -172,7 +172,7 @@ fn thinking_details(
             .thread(thread)
             .unwrap()
             .activity()
-            .subject(&view.panes[0].selected)
+            .subject(&view.panes[0].read(cx).selected)
             .unwrap()
             .transcript()
             .blocks()
@@ -212,7 +212,7 @@ fn expand_reasoning_rows(view: &gpui::Entity<CockpitView>, cx: &mut gpui::Visual
             .thread(thread)
             .unwrap()
             .activity()
-            .subject(&view.panes[0].selected)
+            .subject(&view.panes[0].read(cx).selected)
             .unwrap()
             .transcript()
             .blocks()
@@ -224,8 +224,8 @@ fn expand_reasoning_rows(view: &gpui::Entity<CockpitView>, cx: &mut gpui::Visual
     view.update(cx, |view, cx| {
         for row in rows {
             let disclosure = ferrite_pane::pane::DisclosureId::Reasoning(row);
-            if !view.panes[0].tool_expanded(disclosure.clone()) {
-                view.panes[0].toggle_tool(&disclosure);
+            if !view.panes[0].read(cx).tool_expanded(disclosure.clone()) {
+                view.panes[0].update(cx, |pane, _| pane.toggle_tool(&disclosure));
             }
         }
         cx.notify();
@@ -238,7 +238,7 @@ fn streaming_without_drawing_releases_temporary_transcript_elements(cx: &mut Tes
     let (core, fake) = cockpit("stream-without-drawing", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let cache = view.read_with(cx, |view, _| view.panes[0].rich.clone());
+    let cache = view.read_with(cx, |view, cx| view.panes[0].read(cx).rich.clone());
     let before = cache.retained_handles();
     // Provider updates continue while a window is occluded. Do not run a
     // draw between these updates: temporary metadata must not need a frame
@@ -317,7 +317,7 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
         let block = &view.cockpit.read(cx).thread(thread).unwrap().transcript().blocks()[0];
         format!(
             "markdown-{}-{:?}",
-            view.panes[0].text_namespace(),
+            view.panes[0].read(cx).text_namespace(),
             block.markdown_run.unwrap_or(block.id)
         )
     });
@@ -378,14 +378,14 @@ fn native_transcript_rows_stay_bounded_by_a_fixed_viewport_as_history_grows(
     tick(cx);
     expand_reasoning_rows(&view, cx);
 
-    let short_prefix = view.read_with(cx, |view, _| {
-        format!("thinking-{}-", view.panes[0].text_namespace())
+    let short_prefix = view.read_with(cx, |view, cx| {
+        format!("thinking-{}-", view.panes[0].read(cx).text_namespace())
     });
     reset_native_text_renders(cx);
     cx.simulate_resize(gpui::size(px(1001.), px(600.)));
     cx.run_until_parked();
     view.read_with(cx, |view, cx| {
-        let transcript = view.panes[0].transcript().unwrap();
+        let transcript = view.panes[0].read(cx).transcript().unwrap();
         let viewport = transcript.read(cx).scroll().bounds();
         assert!(
             viewport.size.height > px(250.),
@@ -404,7 +404,7 @@ fn native_transcript_rows_stay_bounded_by_a_fixed_viewport_as_history_grows(
             .thread(thread)
             .unwrap()
             .activity()
-            .subject(&view.panes[0].selected)
+            .subject(&view.panes[0].read(cx).selected)
             .unwrap()
             .transcript()
             .blocks()
@@ -417,8 +417,8 @@ fn native_transcript_rows_stay_bounded_by_a_fixed_viewport_as_history_grows(
         "the long-history viewport measurement requires all 200 retained Thinking rows"
     );
     expand_reasoning_rows(&view, cx);
-    let long_prefix = view.read_with(cx, |view, _| {
-        format!("thinking-{}-", view.panes[0].text_namespace())
+    let long_prefix = view.read_with(cx, |view, cx| {
+        format!("thinking-{}-", view.panes[0].read(cx).text_namespace())
     });
     reset_native_text_renders(cx);
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
@@ -468,7 +468,7 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
     reset_native_text_renders(cx);
     view.update(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .update(cx, |transcript, cx| {
                 cx.notify();
@@ -493,7 +493,7 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
     // logical endpoint. Rows 11..=79 are never all native TextViews.
     view.update(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .update(cx, |transcript, cx| {
                 cx.notify();
@@ -528,7 +528,7 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
     // the logical copy remain stable.
     view.update(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .update(cx, |transcript, cx| {
                 cx.notify();
@@ -591,7 +591,7 @@ fn partial_thinking_selection_survives_a_wrapping_resize(cx: &mut TestAppContext
     let before_bounds = cx.update(|_, cx| ferrite_pane::rich::testing::bounds(&id, 0, cx).unwrap());
     view.read_with(cx, |view, cx| {
         let viewport = view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -642,7 +642,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
 
     view.update(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .update(cx, |transcript, cx| {
                 cx.notify();
@@ -673,7 +673,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
     // Leave both the row and its native text wrapper outside the viewport.
     view.update(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .update(cx, |transcript, cx| {
                 cx.notify();
@@ -732,7 +732,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
             .thread(thread)
             .unwrap()
             .activity()
-            .subject(&view.panes[0].selected)
+            .subject(&view.panes[0].read(cx).selected)
             .unwrap()
             .transcript()
             .blocks()[2 * 10];
@@ -771,8 +771,8 @@ fn reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppCont
     }
     tick(cx);
     let index = view.read_with(cx, |view, cx| view.focused(cx));
-    let prefix = view.read_with(cx, |view, _| {
-        format!("markdown-{}-", view.panes[index].text_namespace())
+    let prefix = view.read_with(cx, |view, cx| {
+        format!("markdown-{}-", view.panes[index].read(cx).text_namespace())
     });
     let (identity, selected) = cx.update(|_, cx| {
         assert_eq!(
@@ -846,7 +846,7 @@ fn keyboard_reaches_code_actions_after_disclosures_and_returns_to_the_draft(
     tick(cx);
     cx.simulate_input("unsent draft");
     cx.simulate_keystrokes("tab");
-    view.read_with(cx, |view, _| assert!(view.panes[0].has_tool_target()));
+    view.read_with(cx, |view, cx| assert!(view.panes[0].read(cx).has_tool_target()));
     cx.simulate_keystrokes("tab");
     assert!(cx.update(|window, _| ferrite_pane::rich::controls_focused(window)));
     enter(cx);
@@ -860,8 +860,8 @@ fn keyboard_reaches_code_actions_after_disclosures_and_returns_to_the_draft(
     cx.simulate_keystrokes("tab");
     cx.update(|window, cx| {
         let pane = &view.read(cx).panes[0];
-        assert!(pane.composer.focus_handle(cx).is_focused(window));
-        assert_eq!(pane.composer.read(cx).text(), "unsent draft");
+        assert!(pane.read(cx).composer.focus_handle(cx).is_focused(window));
+        assert_eq!(pane.read(cx).composer.read(cx).text(), "unsent draft");
     });
     cx.simulate_keystrokes("shift-tab");
     enter(cx);
@@ -871,11 +871,11 @@ fn keyboard_reaches_code_actions_after_disclosures_and_returns_to_the_draft(
     enter(cx);
     assert_eq!(clipboard(cx).as_deref(), Some("    first();"));
     cx.simulate_keystrokes("shift-tab");
-    view.read_with(cx, |view, _| assert!(view.panes[0].has_tool_target()));
+    view.read_with(cx, |view, cx| assert!(view.panes[0].read(cx).has_tool_target()));
     cx.simulate_keystrokes("shift-tab");
     cx.update(|window, cx| {
         assert!(view.read(cx).panes[0]
-            .composer
+            .read(cx).composer
             .focus_handle(cx)
             .is_focused(window));
     });
@@ -913,7 +913,7 @@ fn code_copy_traversal_does_not_accept_an_empty_composers_followup(cx: &mut Test
     cx.simulate_keystrokes("tab");
     cx.update(|window, cx| {
         let view = view.read(cx);
-        let composer = &view.panes[0].composer;
+        let composer = &view.panes[0].read(cx).composer;
         assert!(
             composer.focus_handle(cx).is_focused(window),
             "Tab leaves Copy for the input"
@@ -934,7 +934,7 @@ fn code_copy_traversal_does_not_accept_an_empty_composers_followup(cx: &mut Test
     // available to accept through its intended interaction.
     cx.simulate_keystrokes("tab");
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.panes[0].composer.read(cx).text(), "Run the tests");
+        assert_eq!(view.panes[0].read(cx).composer.read(cx).text(), "Run the tests");
     });
     assert_eq!(clipboard(cx).as_deref(), Some("preserved clipboard"));
     assert!(fake.sent.borrow().is_empty(), "accepting is still unsent");
@@ -962,7 +962,7 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
             let block = &view.cockpit.read(cx).thread(thread).unwrap().transcript().blocks()[0];
             let id = format!(
                 "markdown-{}-{:?}",
-                view.panes[0].text_namespace(),
+                view.panes[0].read(cx).text_namespace(),
                 block.markdown_run.unwrap_or(block.id)
             );
             ferrite_pane::rich::testing::bounds(&id, 0, cx).unwrap()
@@ -1146,8 +1146,8 @@ fn a_loop_frame_leaves_the_cached_transcript_untouched(cx: &mut TestAppContext) 
     tick(cx);
     settle(cx);
     assert!(cx.debug_bounds("progress-mark-live").is_some());
-    let prefix = view.read_with(cx, |view, _| {
-        format!("markdown-{}-", view.panes[0].text_namespace())
+    let prefix = view.read_with(cx, |view, cx| {
+        format!("markdown-{}-", view.panes[0].read(cx).text_namespace())
     });
     assert!(
         mounted_native_texts(&prefix, cx) > 0,
@@ -1185,7 +1185,7 @@ fn a_live_appended_row_fades_in_and_then_rests(cx: &mut TestAppContext) {
     let arrivals = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             view.panes[0]
-                .transcript()
+                .read(cx).transcript()
                 .map_or(0, |transcript| transcript.read(cx).arrivals())
         })
     };
@@ -1233,7 +1233,7 @@ fn an_answer_arriving_whole_at_its_turn_end_plays_its_whole_fade(cx: &mut TestAp
     let arriving = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             view.panes[0]
-                .transcript()
+                .read(cx).transcript()
                 .map(|transcript| transcript.read(cx).arriving(cx))
                 .unwrap_or_default()
         })
@@ -1486,7 +1486,7 @@ fn a_preview_opens_a_hidden_panel(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(cx.debug_bounds("panel-sections").is_some(), "on its Overview");
     assert!(
-        view.read_with(cx, |view, _| !view.panes[0].preview.is_open()),
+        view.read_with(cx, |view, cx| !view.panes[0].read(cx).preview.is_open()),
         "and the preview closed"
     );
 }
@@ -1573,8 +1573,8 @@ fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestApp
     tick(cx);
     settle(cx);
     let focused = view.read_with(cx, |view, cx| view.focused(cx));
-    let prefix = view.read_with(cx, |view, _| {
-        format!("markdown-{}-", view.panes[focused].text_namespace())
+    let prefix = view.read_with(cx, |view, cx| {
+        format!("markdown-{}-", view.panes[focused].read(cx).text_namespace())
     });
     assert!(
         mounted_native_texts(&prefix, cx) > 0,
@@ -2237,7 +2237,7 @@ fn nav_rebuilds_starve_no_entrance(cx: &mut TestAppContext) {
 fn nav_rebuilds_starve_no_review_slide(cx: &mut TestAppContext) {
     let (view, _fake, _threads, cx) = solo_board("nav-rebuild-review", cx);
     view.update(cx, |view, cx| {
-        let composer = view.panes[0].composer.clone();
+        let composer = view.panes[0].read(cx).composer.clone();
         let reading = view.prefs.settings.reading_size;
         let review = cx.new(|cx| {
             ferrite_review::ReviewView::new(
@@ -2319,7 +2319,7 @@ fn a_minimap_click_lands_in_one_frame(cx: &mut TestAppContext) {
     let following = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             view.panes[0]
-                .transcript()
+                .read(cx).transcript()
                 .is_some_and(|transcript| transcript.read(cx).is_following_tail())
         })
     };
@@ -2337,7 +2337,7 @@ fn a_minimap_click_lands_in_one_frame(cx: &mut TestAppContext) {
     assert!(!following(cx), "the click landed away from the tail");
     let offset = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
-            view.panes[0].transcript().map(|transcript| {
+            view.panes[0].read(cx).transcript().map(|transcript| {
                 let top = transcript
                     .read(cx)
                     .scroll()

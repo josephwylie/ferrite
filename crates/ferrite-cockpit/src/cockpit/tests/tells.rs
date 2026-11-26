@@ -96,7 +96,7 @@ fn the_composers_sends_go_in_order_and_none_waits(cx: &mut gpui::TestAppContext)
     assert_eq!((second[0].op.as_str(), second[0].waited), ("queue", false), "{second:?}");
     // The fixture Server's Thread has no agent to queue behind, so it
     // refuses: the refusal arrives after the press, and the draft is back.
-    let left = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).text().to_string());
+    let left = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).text().to_string());
     assert_eq!(left, "two", "a draft the Server refused later is back in the Composer");
 }
 

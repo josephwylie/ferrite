@@ -689,7 +689,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
             .iter()
             .map(|block| (block.id, block.body.clone()))
             .collect();
-        (pane.text_namespace(), blocks, pane.composer.entity_id())
+        (pane.read(cx).text_namespace(), blocks, pane.read(cx).composer.entity_id())
     });
     let id_of = |pick: &dyn Fn(&Body) -> bool| {
         blocks
@@ -720,7 +720,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     // A settled edit's diff shows once it is disclosed.
     for disclosure in [pane::DisclosureId::Tool("edit".into())] {
         if let Some(control) = view.read_with(cx, |view, cx| {
-            view.panes[0].tool_bounds(disclosure.clone(), cx)
+            view.panes[0].read(cx).tool_bounds(disclosure.clone(), cx)
         }) {
             cx.simulate_click(control.center(), gpui::Modifiers::none());
             tick(cx);
@@ -878,7 +878,7 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
     // A send scrolls its prompt to the top, so the first answer is above the
     // view and its bounds are as last drawn: bring both turns into view.
     view.update(cx, |view, cx| {
-        let transcript = view.panes[0].transcript().unwrap();
+        let transcript = view.panes[0].read(cx).transcript().unwrap();
         transcript.update(cx, |transcript, cx| {
             transcript.page(ferrite_pane::transcript::Page::Top, cx)
         });
@@ -897,7 +897,7 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
                 .collect()
         };
         (
-            pane.text_namespace(),
+            pane.read(cx).text_namespace(),
             ids(|body| matches!(body, Body::Prompt(_))),
             thread
                 .transcript()

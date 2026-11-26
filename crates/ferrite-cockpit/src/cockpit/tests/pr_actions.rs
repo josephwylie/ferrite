@@ -105,14 +105,14 @@ fn asking_about_a_pr_prepares_its_current_composer_without_sending(cx: &mut Test
     view.update(cx, |view, cx| {
         let index = view.pane_for(thread).unwrap();
         view.panes[index]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("My draft".into(), cx));
         view.run_pr_action(PrTarget::thread(thread, 48), PrAction::Ask, cx);
     });
     view.read_with(cx, |view, cx| {
         assert_eq!(view.panes.len(), before);
         let index = view.pane_for(thread).unwrap();
-        let text = view.panes[index].composer.read(cx).text();
+        let text = view.panes[index].read(cx).composer.read(cx).text();
         assert!(text.starts_with("My draft\n\n"));
         assert!(text.contains("https://github.com/o/r/pull/48"));
     });
@@ -193,7 +193,7 @@ fn a_refused_hand_off_fails_and_keeps_the_typed_words(cx: &mut TestAppContext) {
         said(&view, cx)
     );
     let typed = view.read_with(cx, |view, cx| {
-        view.panes[0].composer.read(cx).text().to_string()
+        view.panes[0].read(cx).composer.read(cx).text().to_string()
     });
     assert_eq!(typed, "half a thought");
 

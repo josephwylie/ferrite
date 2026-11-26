@@ -380,11 +380,11 @@ fn a_new_thread_in_a_project_opens_a_draft_there(cx: &mut TestAppContext) {
     });
     tick(cx);
 
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let draft = view
             .panes
             .iter()
-            .find_map(|pane| pane.draft())
+            .find_map(|pane| pane.read(cx).draft())
             .expect("the command opened a draft");
         assert_eq!(draft.binding.project(), heading);
         assert_eq!(
@@ -725,7 +725,7 @@ fn in_order(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec
 fn composer_has_keys(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
     view.update_in(cx, |view, window, cx| {
         let pane = &view.panes[view.focused(cx)];
-        pane.composer.read(cx).focus_handle(cx).is_focused(window)
+        pane.read(cx).composer.read(cx).focus_handle(cx).is_focused(window)
     })
 }
 
@@ -762,7 +762,7 @@ fn a_press_on_a_row_leaves_the_keys_with_the_composer(cx: &mut TestAppContext) {
     tick(cx);
     assert!(view.read_with(cx, |view, cx| {
         view.panes[view.focused(cx)]
-            .composer
+            .read(cx).composer
             .read(cx)
             .text()
             .ends_with("hi")
@@ -787,7 +787,7 @@ fn the_cursor_clears_when_the_tree_lets_go(cx: &mut TestAppContext) {
     // The keys go to the board without Esc.
     view.update_in(cx, |view, window, cx| {
         let pane = &view.panes[view.focused(cx)];
-        window.focus(&pane.composer.read(cx).focus_handle(cx), cx);
+        window.focus(&pane.read(cx).composer.read(cx).focus_handle(cx), cx);
     });
     tick(cx);
     leap(cx, Duration::from_millis(500));

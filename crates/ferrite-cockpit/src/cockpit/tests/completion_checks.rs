@@ -13,7 +13,7 @@ fn streamed_markdown_keeps_its_native_document_and_selected_prose(cx: &mut TestA
         })
         .unwrap();
     tick(cx);
-    let namespace = view.read_with(cx, |view, _| view.panes[0].text_namespace());
+    let namespace = view.read_with(cx, |view, cx| view.panes[0].read(cx).text_namespace());
     let entity = cx.update(|_, cx| {
         ferrite_pane::rich::testing::first_entity(&format!("markdown-{namespace}-"), cx).unwrap()
     });
@@ -162,13 +162,13 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
     // A Composer that grows keeps the draft; the question stays the
     // transcript's tail (it is not docked to the Composer any more).
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.set("draft  untouched\nsecond line\nthird line".into(), cx)
         })
     });
     tick(cx);
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.set("draft  untouched".into(), cx)
         })
     });
@@ -263,7 +263,7 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
     tick(cx);
     let viewport = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -284,7 +284,7 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
         // The transcript is a cached view: paint it again so its rows'
         // debug bounds are this frame's.
         view.update(cx, |view, cx| {
-            if let Some(transcript) = view.panes[0].transcript() {
+            if let Some(transcript) = view.panes[0].read(cx).transcript() {
                 transcript.update(cx, |_, cx| cx.notify());
             }
         });
@@ -302,7 +302,7 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
     tick(cx);
     let held = cx.debug_bounds("tool-row-anchor-tool").unwrap().top();
     assert!(!view.read_with(cx, |view, cx| view.panes[0]
-        .transcript()
+        .read(cx).transcript()
         .unwrap()
         .read(cx)
         .is_following_tail()));
@@ -315,7 +315,7 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
     assert!((cx.debug_bounds("tool-row-anchor-tool").unwrap().top() - held).abs() < px(1.));
     let group = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .tool_bounds(pane::DisclosureId::Tool("anchor-tool".into()), cx)
+            .read(cx).tool_bounds(pane::DisclosureId::Tool("anchor-tool".into()), cx)
             .unwrap()
             .center()
     });
@@ -329,10 +329,10 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
         (after - held).abs() < px(1.),
         "resize must preserve the visible reading anchor: {held:?} -> {after:?}"
     );
-    assert!(view.read_with(cx, |view, _| view.panes[0]
-        .tool_expanded(pane::DisclosureId::Tool("anchor-tool".into()))));
+    assert!(view.read_with(cx, |view, cx| view.panes[0]
+        .read(cx).tool_expanded(pane::DisclosureId::Tool("anchor-tool".into()))));
     assert!(!view.read_with(cx, |view, cx| view.panes[0]
-        .transcript()
+        .read(cx).transcript()
         .unwrap()
         .read(cx)
         .is_following_tail()));
@@ -374,7 +374,7 @@ fn multiline_composer_keeps_its_lower_edge_and_end_caret_on_resize(cx: &mut Test
             gpui::Modifiers::none(),
         );
         assert_eq!(
-            view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).cursor()),
+            view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).cursor()),
             draft.len()
         );
     }
@@ -442,7 +442,7 @@ fn reading_anchor_survives_expanding_earlier_tool_details(cx: &mut TestAppContex
     tick(cx);
     let viewport = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -460,8 +460,8 @@ fn reading_anchor_survives_expanding_earlier_tool_details(cx: &mut TestAppContex
     tick(cx);
     let held = cx.debug_bounds("tool-row-visible").unwrap().top();
     view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("earlier".into()));
-        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("earlier".into()));
+        view.panes[0].update(cx, |pane, _| pane.toggle_tool(&pane::DisclosureId::Tool("earlier".into())));
+        view.panes[0].update(cx, |pane, _| pane.toggle_tool(&pane::DisclosureId::Tool("earlier".into())));
         cx.notify();
     });
     tick(cx);
@@ -498,7 +498,7 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
     open_live(cx);
     // Open the call: its open body holds what it printed, exactly.
     view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("exact".into()));
+        view.panes[0].update(cx, |pane, _| pane.toggle_tool(&pane::DisclosureId::Tool("exact".into())));
         cx.notify();
     });
     tick(cx);

@@ -67,7 +67,7 @@ fn window_on<'a>(
 
 fn held_files(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<PathBuf> {
     view.read_with(cx, |view, cx| {
-        view.panes[0].composer.read(cx).files().to_vec()
+        view.panes[0].read(cx).composer.read(cx).files().to_vec()
     })
 }
 
@@ -139,7 +139,7 @@ fn a_file_repaired_at_the_same_path_sends_without_a_retry(cx: &mut TestAppContex
     cx.simulate_keystrokes("enter");
     tick(cx);
     assert_eq!(sent_with(&fake, WORDS), 1);
-    assert!(view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).is_empty()));
+    assert!(view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).is_empty()));
 }
 
 #[gpui::test]
@@ -176,7 +176,7 @@ fn a_file_attached_from_the_workspace_is_sent_as_its_own_path(cx: &mut TestAppCo
     let notes = files_dir("attach-workspace-repo").join("notes.txt");
     std::fs::write(&notes, "one").unwrap();
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.add_files(std::slice::from_ref(&notes), cx)
         })
     });
@@ -201,7 +201,7 @@ fn a_dropped_file_inside_the_workspace_is_sent_as_its_own_path(cx: &mut TestAppC
     let notes = root.join("dropped-notes.txt");
     std::fs::write(&notes, "one").unwrap();
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.add_local_files(std::slice::from_ref(&notes), cx)
         })
     });
@@ -225,7 +225,7 @@ fn a_workspace_file_that_goes_missing_stops_the_send(cx: &mut TestAppContext) {
     let notes = files_dir("attach-workspace-gone-repo").join("notes.txt");
     std::fs::write(&notes, "one").unwrap();
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.add_files(std::slice::from_ref(&notes), cx)
         })
     });
@@ -276,7 +276,7 @@ fn a_local_file_bound_for_a_machine_waits_for_upload_and_a_workspace_file_does_n
     let (view, fake, dir, cx) = window_on("attach-remote", cx);
     view.update(cx, |view, cx| {
         let store = dir.clone();
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.aim_files(Destination::Remote, store, cx)
         });
     });
@@ -309,7 +309,7 @@ fn a_local_file_bound_for_a_machine_waits_for_upload_and_a_workspace_file_does_n
     cx.simulate_click(remove.center(), gpui::Modifiers::none());
     tick(cx);
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.add_files(&[dir.join("on-machine.txt")], cx)
         });
     });
@@ -367,7 +367,7 @@ fn upload_admission(name: &str, fresh: bool, cx: &mut TestAppContext) {
     let local = dir.join("desktop-only.txt");
     std::fs::write(&local, "on this computer").unwrap();
     let receipt = PathBuf::from("/server-only/attachments/receipt/desktop-only.txt");
-    let composer = view.read_with(cx, |view, cx| view.panes[view.focused(cx)].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[view.focused(cx)].read(cx).composer.clone());
     let attempt = composer.update(cx, |composer, cx| {
         composer.aim_files(Destination::Remote, dir, cx);
         composer.set(WORDS.into(), cx);

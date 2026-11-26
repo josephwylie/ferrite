@@ -55,7 +55,7 @@ fn the_line_typed_is_written_for_the_next_launch(cx: &mut TestAppContext) {
 
     // Sending empties the line, and the draft goes with it.
     view.update(cx, |view, cx| {
-        let composer = view.panes[0].composer.clone();
+        let composer = view.panes[0].read(cx).composer.clone();
         composer.update(cx, |composer, cx| composer.take(cx));
     });
     cx.run_until_parked();
@@ -78,7 +78,7 @@ fn a_pane_opens_with_the_line_it_was_left_with(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     cx.run_until_parked();
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.panes[0].composer.read(cx).text(), "where I left off");
+        assert_eq!(view.panes[0].read(cx).composer.read(cx).text(), "where I left off");
     });
 }
 
@@ -136,12 +136,10 @@ fn a_new_pane_comes_back_with_its_words_and_binding(cx: &mut TestAppContext) {
     let binding = view.update(cx, |view, cx| {
         let focused = view.focused(cx);
         view.panes[focused]
-            .draft_mut()
-            .unwrap()
-            .binding
-            .choose_effort(Some("high".into()));
+            .update_draft(cx, |draft| draft.binding.choose_effort(Some("high".into())))
+            .unwrap();
         view.save_drafts(cx);
-        view.panes[focused].draft().unwrap().binding.clone()
+        view.panes[focused].read(cx).draft().unwrap().binding.clone()
     });
     drop(view);
 
@@ -149,11 +147,11 @@ fn a_new_pane_comes_back_with_its_words_and_binding(cx: &mut TestAppContext) {
     let (view, cx) = window_with(core, prefs_at(&dir), cx);
     view.read_with(cx, |view, cx| {
         let pane = &view.panes[view.focused(cx)];
-        assert_eq!(pane.composer.read(cx).text(), "> first thoughts");
+        assert_eq!(pane.read(cx).composer.read(cx).text(), "> first thoughts");
         // Each run keys this computer anew: the binding is the one saved,
         // its Project this run's.
         let here = ferrite_core::MachineKey(None);
-        let restored = pane.draft().map(|draft| &draft.binding).unwrap();
+        let restored = pane.read(cx).draft().map(|draft| &draft.binding).unwrap();
         assert_eq!(restored.saved(here.clone()), binding.saved(here));
         assert_eq!(Some(restored.project().machine()), view.cockpit.read(cx).this_computer());
     });
@@ -188,7 +186,7 @@ fn a_new_pane_comes_back_with_its_checkout_named(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let first_row = view.update(cx, |view, cx| {
         let pane = &view.panes[view.focused(cx)];
-        assert_eq!(pane.composer.read(cx).text(), "where it runs", "the draft came back");
+        assert_eq!(pane.read(cx).composer.read(cx).text(), "where it runs", "the draft came back");
         view.open_band_menu(pane::BandChip::Workspace, false, cx);
         let open = view.band_menu().expect("the workspace menu is open");
         (open.rows[0].name.to_string(), open.rows[0].detail.to_string())
@@ -242,9 +240,9 @@ fn a_closed_new_pane_is_not_reopened(
     let thread = core.key(thread.thread());
     assert_eq!(core.threads()[0], thread);
     let (view, _cx) = window_with(core, prefs_at(&dir), cx);
-    view.read_with(_cx, |view, _| {
+    view.read_with(_cx, |view, cx| {
         assert!(
-            view.panes.iter().all(|pane| pane.draft().is_none()),
+            view.panes.iter().all(|pane| pane.read(cx).draft().is_none()),
             "no new Pane comes back"
         );
     });
@@ -273,7 +271,7 @@ fn a_queued_prompt_taken_back_returns_whole(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.reply(Reply::new("a passage", "why"), cx)
         });
     });
@@ -283,7 +281,7 @@ fn a_queued_prompt_taken_back_returns_whole(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let composer = view.panes[0].composer.read(cx);
+        let composer = view.panes[0].read(cx).composer.read(cx);
         assert_eq!(composer.replies(), [Reply::new("a passage", "why")]);
         assert_eq!(composer.text(), "\n> literal");
     });

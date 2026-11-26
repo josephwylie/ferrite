@@ -10,9 +10,9 @@ use std::path::PathBuf;
 impl CockpitView {
     /// The machine pane `index`'s agent works on: its Thread's, or its
     /// draft's Project's.
-    pub(super) fn pane_machine(&self, index: usize) -> Option<MachineId> {
+    pub(super) fn pane_machine(&self, index: usize, cx: &gpui::App) -> Option<MachineId> {
         let pane = self.panes.get(index)?;
-        match (pane.thread(), pane.draft()) {
+        match (pane.thread(), pane.read(cx).draft()) {
             (Some(thread), _) => Some(thread.machine()),
             (None, Some(draft)) => Some(draft.binding.project().machine()),
             _ => None,
@@ -48,8 +48,8 @@ impl CockpitView {
         let Some(pane) = self.panes.get(index) else {
             return false;
         };
-        let composer = pane.composer.clone();
-        if let Some(machine) = self.pane_machine(index) {
+        let composer = pane.read(cx).composer.clone();
+        if let Some(machine) = self.pane_machine(index, cx) {
             self.upload_attachments(&composer, machine, cx);
         }
         if composer.update(cx, |composer, cx| composer.has_blocked_file(cx)) {
@@ -71,7 +71,7 @@ impl CockpitView {
             .panes
             .get(self.focused(cx))
             .ok_or("Open a Thread or draft before attaching files.")?;
-        pane.composer
+        pane.composer(cx)
             .update(cx, |composer, cx| composer.add_local_files(paths, cx));
         Ok(())
     }
@@ -164,9 +164,9 @@ impl CockpitView {
                                         if let Some(pane) = view
                                             .panes
                                             .iter()
-                                            .find(|pane| pane.composer.downgrade() == composer)
+                                            .find(|pane| pane.read(cx).composer.downgrade() == composer)
                                         {
-                                            pane.preview.request_attachment(&remote);
+                                            pane.read(cx).preview.request_attachment(&remote);
                                         }
                                     }
                                     cx.notify();
@@ -202,19 +202,19 @@ impl CockpitView {
     pub(super) fn fetch_attachment_previews(&mut self, cx: &mut Context<Self>) {
         let mut requests = Vec::new();
         for index in 0..self.panes.len() {
-            let Some(machine) = self.pane_machine(index) else {
+            let Some(machine) = self.pane_machine(index, cx) else {
                 continue;
             };
             let Some(bridge) = self.cockpit.read(cx).bridge(machine).cloned() else {
                 continue;
             };
             let pane = &self.panes[index];
-            for path in pane.preview.take_attachment_requests() {
+            for path in pane.read(cx).preview.take_attachment_requests() {
                 requests.push((
                     machine,
                     bridge.clone(),
-                    pane.preview.clone(),
-                    pane.composer.entity_id(),
+                    pane.read(cx).preview.clone(),
+                    pane.read(cx).composer.entity_id(),
                     path,
                 ));
             }
@@ -285,7 +285,7 @@ impl CockpitView {
     /// its draft is bound to.
     pub(super) fn pane_root(&self, index: usize, cx: &gpui::App) -> Option<PathBuf> {
         let pane = self.panes.get(index)?;
-        match (pane.thread(), pane.draft()) {
+        match (pane.thread(), pane.read(cx).draft()) {
             (Some(thread), _) => Some(
                 self.cockpit
                     .read(cx)

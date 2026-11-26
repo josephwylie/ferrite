@@ -366,7 +366,7 @@ fn the_worker_tab_takes_the_keyboard_from_the_overviews_field(cx: &mut TestAppCo
         let view = view.read(cx);
         let index = view.pane_for(worker).expect("the Worker's Pane");
         view.panes[index]
-            .composer
+            .read(cx).composer
             .read(cx)
             .focus_handle(cx)
             .contains_focused(window, cx)

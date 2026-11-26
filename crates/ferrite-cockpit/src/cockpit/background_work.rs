@@ -672,7 +672,7 @@ impl CockpitView {
 
     /// The line under Pane `index`'s transcript, if it is a Main's.
     pub(super) fn background_work_tail(&self, index: usize, cx: &App) -> Option<TranscriptTail> {
-        let pane = self.panes.get(index).filter(|pane| pane.is_main())?;
+        let pane = self.panes.get(index).filter(|pane| pane.read(cx).is_main())?;
         let inputs = self.background_inputs(pane.thread()?, false, cx)?;
         self.background.read(cx).line(self.background.downgrade(), &inputs)
     }
@@ -688,7 +688,7 @@ impl CockpitView {
         let Some(launched) = self
             .panes
             .get(index)
-            .filter(|pane| pane.is_main())
+            .filter(|pane| pane.read(cx).is_main())
             .and_then(|pane| pane.thread())
             .and_then(|thread| self.background_inputs(thread, false, cx))
             .and_then(|inputs| lone_launch(&inputs.line_work()))

@@ -28,9 +28,9 @@ impl CockpitView {
     }
 
     /// The Composer of the Pane that shows `thread`.
-    fn composer_of(&self, thread: ThreadKey) -> Option<Entity<Composer>> {
+    fn composer_of(&self, thread: ThreadKey, cx: &gpui::App) -> Option<Entity<Composer>> {
         let index = self.index_of(PaneIdentity::Thread(thread))?;
-        Some(self.panes[index].composer.clone())
+        Some(self.panes[index].read(cx).composer.clone())
     }
 
     /// Each Thread on screen whose agent handed a prompt back is asked
@@ -57,7 +57,7 @@ impl CockpitView {
                 let Ok(Some((held, prepend))) = taken else {
                     return;
                 };
-                match view.composer_of(thread) {
+                match view.composer_of(thread, cx) {
                     Some(composer) => {
                         let content = view.recovered_content(thread, held);
                         composer.update(cx, |composer, cx| composer.restore_content(content, prepend, cx));
@@ -81,7 +81,7 @@ impl CockpitView {
         self.when_answered(
             asked,
             move |view, held, cx| {
-                let (Ok(Some(held)), Some(composer)) = (held, view.composer_of(thread)) else {
+                let (Ok(Some(held)), Some(composer)) = (held, view.composer_of(thread, cx)) else {
                     return;
                 };
                 let content = view.recovered_content(thread, held);
@@ -106,7 +106,7 @@ impl CockpitView {
     /// holds now.
     fn ask_next_step(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
         let next = self.returning.steps.get(&thread).and_then(|steps| steps.front().copied());
-        let (Some(direction), Some(composer)) = (next, self.composer_of(thread)) else {
+        let (Some(direction), Some(composer)) = (next, self.composer_of(thread, cx)) else {
             self.returning.steps.remove(&thread);
             return;
         };
@@ -120,7 +120,7 @@ impl CockpitView {
                 if let Some(steps) = view.returning.steps.get_mut(&thread) {
                     steps.pop_front();
                 }
-                if let (Ok(Some(text)), Some(composer)) = (stepped, view.composer_of(thread)) {
+                if let (Ok(Some(text)), Some(composer)) = (stepped, view.composer_of(thread, cx)) {
                     view.composer_menu.update(cx, |menu, cx| menu.recalled(cx));
                     let content = view.unsent.stepped_to(text);
                     composer.update(cx, |composer, cx| composer.put(content, cx));

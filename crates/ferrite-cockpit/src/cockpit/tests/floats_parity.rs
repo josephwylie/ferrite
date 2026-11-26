@@ -267,7 +267,7 @@ fn cmd_backspace_deletes_text_without_parking_empty_threads(cx: &mut TestAppCont
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(
-            view.panes[view.focused(cx)].composer.read(cx).is_empty(),
+            view.panes[view.focused(cx)].read(cx).composer.read(cx).is_empty(),
             "text: delete to start"
         );
     });
@@ -349,7 +349,7 @@ fn the_shortcuts_sheet_filters_as_the_operator_types(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |view, _| view.floats.shortcuts.is_some()));
     // ⏎ in the filter sends nothing: not the Pane's draft from under it.
     view.update(cx, |view, cx| {
-        let composer = view.panes[view.focused(cx)].composer.clone();
+        let composer = view.panes[view.focused(cx)].read(cx).composer.clone();
         composer.update(cx, |composer, cx| composer.set("draft".into(), cx));
     });
     assert_eq!(resolves("enter", cx), None);
@@ -357,7 +357,7 @@ fn the_shortcuts_sheet_filters_as_the_operator_types(cx: &mut TestAppContext) {
     tick(cx);
     assert!(fake.sent.borrow().is_empty());
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.panes[view.focused(cx)].composer.read(cx).text(), "draft");
+        assert_eq!(view.panes[view.focused(cx)].read(cx).composer.read(cx).text(), "draft");
         assert!(view.floats.shortcuts.is_some());
     });
     cx.simulate_keystrokes("escape");
@@ -563,7 +563,7 @@ fn decision_keys_resolve_only_on_an_empty_line(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[view.focused(cx)].composer.read(cx).text(),
+            view.panes[view.focused(cx)].read(cx).composer.read(cx).text(),
             "go1",
             "a typed number is a character"
         );

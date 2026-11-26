@@ -115,7 +115,7 @@ fn open_review(view: &Entity<CockpitView>, scope: Scope, cx: &mut gpui::VisualTe
 fn comments(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<(String, String)> {
     view.read_with(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .read(cx).composer
             .read(cx)
             .review_comments()
             .iter()
@@ -174,7 +174,7 @@ fn a_comment_on_the_uncommitted_work_rides_the_next_prompt(cx: &mut TestAppConte
          src/nav.rs:2\n-    let wide = 1;\n+    let wide = 2;\nkeep it 1"
     );
     assert!(
-        view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).is_empty()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).is_empty()),
         "sent, the shelf is clear"
     );
 }
@@ -236,7 +236,7 @@ fn history_recall_leaves_the_comments_on_the_shelf(cx: &mut TestAppContext) {
     tick(cx);
     let draft = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
-            let composer = view.panes[0].composer.read(cx);
+            let composer = view.panes[0].read(cx).composer.read(cx);
             (
                 composer.text().to_string(),
                 composer.review_comments().len(),
@@ -311,7 +311,7 @@ fn shift_click_ranges_and_the_chip_drops_the_comments(cx: &mut TestAppContext) {
     cx.simulate_click(drop.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(
-        view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).is_empty()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).is_empty()),
         "the × drops them all"
     );
     assert!(cx.debug_bounds("review-comment").is_none());

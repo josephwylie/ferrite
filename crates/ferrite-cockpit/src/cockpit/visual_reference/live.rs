@@ -137,7 +137,7 @@ impl Live {
     /// Put `text` on the focused Composer and send it with ⏎.
     fn send(&mut self, text: &str) {
         self.act(|view, window, cx| {
-            let composer = view.panes[view.focused(cx)].composer.clone();
+            let composer = view.panes[view.focused(cx)].read(cx).composer.clone();
             composer.update(cx, |composer, cx| composer.set(text.to_string(), cx));
             let focus = composer.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
@@ -363,7 +363,7 @@ fn aim_draft(
     let effort = effort.map(str::to_string);
     live.act(move |view, _, cx| {
         let announced = view.cockpit.read(cx).announced_models(project.machine(), provider);
-        if let Some(draft) = view.focused_draft_mut(cx) {
+        view.update_focused_draft(cx, |draft| {
             draft.binding.choose_checkout(project);
             draft.binding.choose_provider(
                 ProviderChoice {
@@ -373,7 +373,7 @@ fn aim_draft(
                 &announced,
             );
             draft.binding.choose_effort(effort);
-        }
+        });
         cx.notify();
     });
 }
@@ -439,7 +439,7 @@ fn hover_path(live: &mut Live, thread: ThreadKey, path: &str) -> Option<Point<gp
     let path = PathBuf::from(path);
     let anchor = live.driver.read(|view, cx| {
         let index = view.pane_for(thread)?;
-        let transcript = view.panes[index].transcript()?;
+        let transcript = view.panes[index].read(cx).transcript()?;
         let scope = transcript.read(cx).namespace();
         ferrite_pane::file_links::laid_out(&scope, &path, cx)
     });
@@ -480,7 +480,7 @@ fn focus_thread(live: &mut Live, thread: ThreadKey) {
         if let Some(index) = view.pane_for(thread) {
             view.cockpit.update(cx, |cockpit, _| cockpit.focus_thread(thread));
             view.focus_pane(index, cx);
-            let focus = view.panes[index].composer.read(cx).focus_handle(cx);
+            let focus = view.panes[index].read(cx).composer.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
         }
         cx.notify();

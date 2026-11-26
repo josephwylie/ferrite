@@ -39,9 +39,9 @@ fn launch_provider_seeds_the_first_empty_store_draft(cx: &mut TestAppContext) {
         CockpitView::new_with_provider(core, Provider::Codex, cx)
     });
 
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            *view.panes[0].draft().unwrap().binding.provider(),
+            *view.panes[0].read(cx).draft().unwrap().binding.provider(),
             ProviderChoice {
                 provider: Provider::Codex,
                 model: None,
@@ -71,7 +71,7 @@ fn a_launch_that_opens_nothing_still_lists_the_parked_threads(cx: &mut TestAppCo
 
     view.read_with(cx, |view, cx| {
         assert!(
-            view.panes[0].draft().is_some(),
+            view.panes[0].read(cx).draft().is_some(),
             "nothing revived: the launch is a draft"
         );
         assert_eq!(

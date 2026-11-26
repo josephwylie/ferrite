@@ -49,7 +49,7 @@ fn focused<'a>(
 }
 
 fn composer_of(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Entity<Composer> {
-    view.read_with(cx, |view, _| view.panes[0].composer.clone())
+    view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.clone())
 }
 
 /// The block's alpha on screen at `at`: the last draw at or before it.

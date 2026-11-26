@@ -285,7 +285,7 @@ fn option_three_denies_and_lands_in_the_composer(cx: &mut TestAppContext) {
     );
     let focused = cx.update(|window, cx| {
         view.read(cx).panes[0]
-            .composer
+            .read(cx).composer
             .read(cx)
             .focus_handle(cx)
             .is_focused(window)
@@ -408,7 +408,7 @@ fn esc_closes_the_note_then_denies(cx: &mut TestAppContext) {
     );
     let focused = cx.update(|window, cx| {
         view.read(cx).panes[0]
-            .composer
+            .read(cx).composer
             .read(cx)
             .focus_handle(cx)
             .is_focused(window)

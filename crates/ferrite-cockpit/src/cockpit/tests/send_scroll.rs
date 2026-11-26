@@ -23,7 +23,7 @@ pub(super) fn transcript(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
 ) -> Entity<ferrite_pane::transcript::TranscriptView> {
-    view.read_with(cx, |view, _| view.panes[0].transcript().unwrap().clone())
+    view.read_with(cx, |view, cx| view.panes[0].read(cx).transcript().unwrap().clone())
 }
 
 pub(super) fn scroll(
@@ -577,7 +577,7 @@ fn scroll_to_end_eases_to_the_tail_keeping_the_composers_focus(cx: &mut TestAppC
     let composer_focused = |cx: &mut gpui::VisualTestContext| {
         cx.update(|window, cx| {
             view.read_with(cx, |view, cx| {
-                view.panes[0].composer.focus_handle(cx).is_focused(window)
+                view.panes[0].read(cx).composer.focus_handle(cx).is_focused(window)
             })
         })
     };

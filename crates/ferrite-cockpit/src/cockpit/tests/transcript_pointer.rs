@@ -23,7 +23,7 @@ fn wheel_scroll_detaches_from_the_tail_and_scrolling_back_reattaches(cx: &mut Te
     }
     tick(cx);
     let (offset, max) = view.read_with(cx, |view, cx| {
-        let transcript = view.panes[0].transcript().unwrap();
+        let transcript = view.panes[0].read(cx).transcript().unwrap();
         let scroll = transcript.read(cx).scroll();
         (scroll.offset().y, scroll.max_offset().y)
     });
@@ -45,7 +45,7 @@ fn wheel_scroll_detaches_from_the_tail_and_scrolling_back_reattaches(cx: &mut Te
     wheel(cx, 120.);
     let held = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -61,7 +61,7 @@ fn wheel_scroll_detaches_from_the_tail_and_scrolling_back_reattaches(cx: &mut Te
     view.read_with(cx, |view, cx| {
         assert_eq!(
             view.panes[0]
-                .transcript()
+                .read(cx).transcript()
                 .unwrap()
                 .read(cx)
                 .scroll()
@@ -79,7 +79,7 @@ fn wheel_scroll_detaches_from_the_tail_and_scrolling_back_reattaches(cx: &mut Te
     }
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let transcript = view.panes[0].transcript().unwrap();
+        let transcript = view.panes[0].read(cx).transcript().unwrap();
         let scroll = transcript.read(cx).scroll();
         let gap = scroll.max_offset().y + scroll.offset().y;
         assert!(
@@ -149,7 +149,7 @@ fn a_reopened_thread_opens_at_the_bottom_and_keeps_following_the_tail(cx: &mut T
                 .iter()
                 .find(|pane| pane.thread() == Some(closed))
                 .expect("the reopened Pane");
-            let transcript = pane.transcript().unwrap();
+            let transcript = pane.read(cx).transcript().unwrap();
             let scroll = transcript.read(cx).scroll();
             (
                 scroll.max_offset().y,
@@ -267,7 +267,7 @@ fn a_plain_transcript_click_does_not_move_the_viewport(cx: &mut TestAppContext) 
 
     let clicked = view.update(cx, |view, cx| {
         let pane = &mut view.panes[0];
-        let transcript = pane.transcript().unwrap();
+        let transcript = pane.read(cx).transcript().unwrap();
         transcript.update(cx, |transcript, _| {
             transcript.scroll().pause_following_tail();
             let offset = gpui::point(px(0.), -transcript.scroll().max_offset().y / 2.);
@@ -280,7 +280,7 @@ fn a_plain_transcript_click_does_not_move_the_viewport(cx: &mut TestAppContext) 
     cx.run_until_parked();
     let before = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -297,7 +297,7 @@ fn a_plain_transcript_click_does_not_move_the_viewport(cx: &mut TestAppContext) 
     view.read_with(cx, |view, cx| {
         assert_eq!(
             view.panes[0]
-                .transcript()
+                .read(cx).transcript()
                 .unwrap()
                 .read(cx)
                 .scroll()
@@ -360,7 +360,7 @@ fn presses_on_chrome_select_nothing_and_a_drag_out_the_bottom_clamps(cx: &mut Te
     tick(cx);
     let body = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -447,7 +447,7 @@ fn a_sweep_across_a_tool_row_copies_its_text_and_never_its_chrome(cx: &mut TestA
 /// in the focused transcript.
 pub(super) fn offered(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
     view.read_with(cx, |view, cx| {
-        view.panes[0].transcript().unwrap().read(cx).reply_offered()
+        view.panes[0].read(cx).transcript().unwrap().read(cx).reply_offered()
     })
 }
 
@@ -505,7 +505,7 @@ fn a_selections_cite_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
     tick(cx);
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("Look:".into(), cx));
     });
 
@@ -534,7 +534,7 @@ fn a_selections_cite_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
     assert!(!offered(&view, cx), "the button gives way");
     assert_eq!(fake.sent.borrow().len(), sent_before, "no message is sent");
     view.read_with(cx, |view, cx| {
-        let composer = view.panes[0].composer.read(cx);
+        let composer = view.panes[0].read(cx).composer.read(cx);
         assert_eq!(composer.text(), "Look:", "the draft's words stay as typed");
         assert_eq!(quotes(composer.replies()), [("ph", "")]);
         assert!(composer.replies()[0].source.is_some(), "it names its source");
@@ -554,7 +554,7 @@ fn a_selections_cite_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
     save_comment(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            quotes(view.panes[0].composer.read(cx).replies()),
+            quotes(view.panes[0].read(cx).composer.read(cx).replies()),
             [("ph", ""), ("vo\nchar", "")]
         );
     });
@@ -568,7 +568,7 @@ fn a_selections_cite_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            quotes(view.panes[0].composer.read(cx).replies()),
+            quotes(view.panes[0].read(cx).composer.read(cx).replies()),
             [("vo\nchar", "")]
         );
     });
@@ -582,7 +582,7 @@ fn a_selections_cite_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
         Some("> vo\n> char\n\nLook:")
     );
     view.read_with(cx, |view, cx| {
-        let composer = view.panes[0].composer.read(cx);
+        let composer = view.panes[0].read(cx).composer.read(cx);
         assert!(composer.replies().is_empty() && composer.text().is_empty());
     });
     assert!(
@@ -617,7 +617,7 @@ fn escape_dismisses_the_cite_button(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("selection-reply").is_none());
     assert_eq!(*fake.interrupts.borrow(), 0, "the turn was not interrupted");
     view.read_with(cx, |view, cx| {
-        assert!(view.panes[0].composer.read(cx).replies().is_empty());
+        assert!(view.panes[0].read(cx).composer.read(cx).replies().is_empty());
     });
 }
 
@@ -713,7 +713,7 @@ fn page_keys_scroll_the_transcript_from_an_empty_line(cx: &mut TestAppContext) {
     tick(cx);
     let scroll = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
-            let transcript = view.panes[0].transcript().unwrap().read(cx);
+            let transcript = view.panes[0].read(cx).transcript().unwrap().read(cx);
             (
                 transcript.scroll().offset().y,
                 transcript.scroll().is_following_tail(),
@@ -840,7 +840,7 @@ fn the_cite_button_stays_under_the_pointer_and_its_press_fires(cx: &mut TestAppC
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            quotes(view.panes[0].composer.read(cx).replies()),
+            quotes(view.panes[0].read(cx).composer.read(cx).replies()),
             [("beta", "")],
             "its press quotes the passage"
         );
@@ -910,7 +910,7 @@ fn a_prompt_with_three_replies_draws_each_quote_with_its_words(cx: &mut TestAppC
         Reply::new("third passage", "and third?"),
     ];
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.set(
                 ferrite_core::replies::compose(&replies, "the main message"),
                 cx,
@@ -918,7 +918,7 @@ fn a_prompt_with_three_replies_draws_each_quote_with_its_words(cx: &mut TestAppC
         });
     });
     view.read_with(cx, |view, cx| {
-        let composer = view.panes[0].composer.read(cx);
+        let composer = view.panes[0].read(cx).composer.read(cx);
         assert_eq!(composer.replies(), replies, "recalled whole, in order");
         assert_eq!(composer.text(), "the main message");
     });

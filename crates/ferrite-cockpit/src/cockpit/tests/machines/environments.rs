@@ -84,7 +84,7 @@ fn two_machines_keeping_projects_in(
 pub(super) fn focused_draft(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> PaneIdentity {
     view.read_with(cx, |view, cx| {
         let pane = &view.panes[view.focused(cx)];
-        assert!(pane.draft().is_some(), "a draft is focused");
+        assert!(pane.read(cx).draft().is_some(), "a draft is focused");
         pane.identity
     })
 }
@@ -95,10 +95,10 @@ fn draft_project(
     draft: PaneIdentity,
     cx: &mut gpui::VisualTestContext,
 ) -> ProjectKey {
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let index = view.index_of(draft).expect("the draft's Pane");
         view.panes[index]
-            .draft()
+            .read(cx).draft()
             .expect("still a draft")
             .binding
             .project()
@@ -339,14 +339,17 @@ fn picking_a_machine_moves_the_draft_to_its_projects_counterpart_with_all_it_hol
     };
     view.update(cx, |view, cx| {
         let index = view.index_of(draft).unwrap();
-        let composer = view.panes[index].composer.clone();
+        let composer = view.panes[index].read(cx).composer.clone();
         composer.update(cx, |composer, cx| {
             composer.set("Look at the build".into(), cx);
             composer.add_local_files(std::slice::from_ref(&shot), cx);
         });
-        let binding = &mut view.panes[index].draft_mut().unwrap().binding;
-        binding.choose_provider(codex.clone(), &[]);
-        binding.choose_effort(Some("high".into()));
+        view.panes[index]
+            .update_draft(cx, |draft| {
+                draft.binding.choose_provider(codex.clone(), &[]);
+                draft.binding.choose_effort(Some("high".into()));
+            })
+            .unwrap();
     });
     tick(cx);
     assert!(
@@ -365,9 +368,9 @@ fn picking_a_machine_moves_the_draft_to_its_projects_counterpart_with_all_it_hol
     assert_eq!(text_of(cx, ENVIRONMENT).as_deref(), Some("box"));
     view.read_with(cx, |view, cx| {
         let pane = &view.panes[view.index_of(draft).unwrap()];
-        assert_eq!(pane.composer.read(cx).text(), "Look at the build");
-        assert_eq!(pane.composer.read(cx).files(), std::slice::from_ref(&shot));
-        let binding = &pane.draft().unwrap().binding;
+        assert_eq!(pane.read(cx).composer.read(cx).text(), "Look at the build");
+        assert_eq!(pane.read(cx).composer.read(cx).files(), std::slice::from_ref(&shot));
+        let binding = &pane.read(cx).draft().unwrap().binding;
         assert_eq!(binding.provider(), &codex);
         assert_eq!(binding.effort(), Some("high"));
     });
@@ -585,7 +588,7 @@ fn a_draft_put_away_with_its_environment_comes_back_with_it(cx: &mut TestAppCont
     let draft = focused_draft(&view, cx);
     view.update(cx, |view, cx| {
         view.panes[view.index_of(draft).unwrap()]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("keep these words".into(), cx));
     });
     tick(cx);
@@ -593,8 +596,8 @@ fn a_draft_put_away_with_its_environment_comes_back_with_it(cx: &mut TestAppCont
         view.read_with(cx, |view, cx| {
             view.panes
                 .iter()
-                .filter(|pane| pane.draft().is_some())
-                .filter(|pane| pane.composer.read(cx).text() == "keep these words")
+                .filter(|pane| pane.read(cx).draft().is_some())
+                .filter(|pane| pane.read(cx).composer.read(cx).text() == "keep these words")
                 .count()
         })
     };
@@ -643,7 +646,7 @@ fn a_drafts_file_of_this_computer_goes_either_way_after_its_machine_comes_back(
     let notes = base.join("notes.md");
     std::fs::write(&notes, "notes").unwrap();
     view.update(cx, |view, cx| {
-        view.panes[view.index_of(draft).unwrap()].composer.update(cx, |composer, cx| {
+        view.panes[view.index_of(draft).unwrap()].composer(cx).update(cx, |composer, cx| {
             composer.set("Read the notes".into(), cx);
             composer.add_local_files(std::slice::from_ref(&notes), cx);
         });
@@ -672,7 +675,7 @@ fn a_drafts_file_of_this_computer_goes_either_way_after_its_machine_comes_back(
         view.read_with(cx, |view, cx| {
             view.panes
                 .iter()
-                .position(|pane| pane.draft().is_some() && pane.composer.read(cx).text() == "Read the notes")
+                .position(|pane| pane.read(cx).draft().is_some() && pane.read(cx).composer.read(cx).text() == "Read the notes")
         })
     };
     until(cx, |cx| back(cx).is_some());
@@ -683,7 +686,7 @@ fn a_drafts_file_of_this_computer_goes_either_way_after_its_machine_comes_back(
     });
     tick(cx);
     assert_ne!(draft_project(&view, draft, cx).machine(), here_machine, "back on box");
-    let composer = view.read_with(cx, |view, _| view.panes[view.index_of(draft).unwrap()].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[view.index_of(draft).unwrap()].read(cx).composer.clone());
     assert!(!composer.update(cx, |composer, cx| composer.has_blocked_file(cx)), "box has it");
     assert_eq!(uploads(), 1, "not sent again");
     view.update(cx, |view, cx| view.hide_sheet(cx));
@@ -717,7 +720,7 @@ fn tab_rings_one_control_of_a_draft_at_a_time(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
     tick(cx);
     let draft = focused_draft(&view, cx);
-    let composer = view.read_with(cx, |view, _| view.panes[view.index_of(draft).unwrap()].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[view.index_of(draft).unwrap()].read(cx).composer.clone());
     composer.update(cx, |composer, cx| {
         composer.set("look".into(), cx);
         composer.add_local_files(std::slice::from_ref(&note), cx);
@@ -731,9 +734,9 @@ fn tab_rings_one_control_of_a_draft_at_a_time(cx: &mut TestAppContext) {
         let (on_file, chip) = cx.update(|window, cx| {
             let view = view.read(cx);
             let pane = &view.panes[view.index_of(draft).unwrap()];
-            let composer = pane.composer.read(cx);
+            let composer = pane.read(cx).composer.read(cx);
             let on_file = composer.focus_target(window, cx) != composer.focus_handle(cx);
-            (on_file, pane.draft().unwrap().band_focus)
+            (on_file, pane.read(cx).draft().unwrap().band_focus)
         });
         assert!(!(on_file && chip.is_some()), "a file and {chip:?} ringed at once");
         chips += usize::from(chip.is_some());
@@ -756,11 +759,13 @@ fn a_sheet_coming_up_takes_the_ring_off_the_band(cx: &mut TestAppContext) {
     tick(cx);
     let draft = focused_draft(&view, cx);
     let ring = |cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.panes[view.index_of(draft).unwrap()].draft().unwrap().band_focus)
+        view.read_with(cx, |view, cx| view.panes[view.index_of(draft).unwrap()].read(cx).draft().unwrap().band_focus)
     };
     view.update(cx, |view, cx| {
         let index = view.index_of(draft).unwrap();
-        view.panes[index].draft_mut().unwrap().band_focus = Some(pane::BandChip::Environment);
+        view.panes[index]
+            .update_draft(cx, |draft| draft.band_focus = Some(pane::BandChip::Environment))
+            .unwrap();
         cx.notify();
     });
     pick_on(&view, ENVIRONMENT, "box", cx);
@@ -782,14 +787,14 @@ fn send_sends_while_a_band_chip_holds_the_ring(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
     tick(cx);
     let draft = focused_draft(&view, cx);
-    let composer = view.read_with(cx, |view, _| view.panes[view.index_of(draft).unwrap()].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[view.index_of(draft).unwrap()].read(cx).composer.clone());
     composer.update(cx, |composer, cx| composer.set("hello".into(), cx));
     cx.update(|window, cx| window.focus(&composer.read(cx).focus_handle(cx), cx));
     tick(cx);
     cx.simulate_keystrokes("tab");
     tick(cx);
-    let ringed = view.read_with(cx, |view, _| {
-        view.panes[view.index_of(draft).unwrap()].draft().unwrap().band_focus
+    let ringed = view.read_with(cx, |view, cx| {
+        view.panes[view.index_of(draft).unwrap()].read(cx).draft().unwrap().band_focus
     });
     assert!(ringed.is_some(), "a chip holds the ring");
     press(cx, "composer-send");

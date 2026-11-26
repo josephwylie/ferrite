@@ -510,7 +510,7 @@ fn the_empty_panels_letters_work_from_the_keyboard(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_keystrokes("d");
     tick(cx);
-    let typed = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).text().to_string());
+    let typed = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).text().to_string());
     assert_eq!(typed, "", "the Composer did not take the letter");
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Changes), "d opens Changes");
 }

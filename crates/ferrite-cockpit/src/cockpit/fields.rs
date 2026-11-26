@@ -48,7 +48,7 @@ impl CockpitView {
         let prompt = self
             .panes
             .iter()
-            .any(|pane| pane.composer.read(cx).focus_handle(cx).contains_focused(window, cx));
+            .any(|pane| pane.read(cx).composer.read(cx).focus_handle(cx).contains_focused(window, cx));
         let pumped = handed.is_some_and(|handed| handed.contains_focused(window, cx));
         if prompt || pumped || focus == self.focus {
             return false;
@@ -63,7 +63,7 @@ impl CockpitView {
             .any(|context| context.contains(ferrite_pane::composer::KEY_CONTEXT));
         in_composer
             && !self.panes.iter().enumerate().any(|(index, pane)| {
-                index != focused && pane.controls_focus.contains_focused(window, cx)
+                index != focused && pane.read(cx).controls_focus.contains_focused(window, cx)
             })
     }
 

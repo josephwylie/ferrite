@@ -24,7 +24,7 @@ pub(super) fn composer_focused(
     cx.update(|window, cx| {
         let view = view.read(cx);
         view.panes[0]
-            .composer
+            .read(cx).composer
             .read(cx)
             .focus_target(window, cx)
             .is_focused(window)
@@ -68,7 +68,7 @@ fn with_tabs<'a>(
         view.upsert_surface(thread, SurfaceId::Files, cx);
         view.upsert_surface(thread, SurfaceId::Changes, cx);
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set(SENTINEL.into(), cx));
     });
     tick(cx);
@@ -336,7 +336,7 @@ fn a_thread_switch_by_key_leaves_the_keyboard_to_the_new_composer(cx: &mut TestA
         cx.update(|window, cx| {
             let view = view.read(cx);
             view.panes[view.focused(cx)]
-                .composer
+                .read(cx).composer
                 .read(cx)
                 .focus_target(window, cx)
                 .is_focused(window)
@@ -408,7 +408,7 @@ fn a_focus_the_server_asks_for_leaves_the_keyboard_to_the_new_composer(cx: &mut 
         let pane = &view.panes[view.focused(cx)];
         (
             pane.thread(),
-            pane.composer.read(cx).focus_target(window, cx).is_focused(window),
+            pane.read(cx).composer.read(cx).focus_target(window, cx).is_focused(window),
         )
     });
     assert_eq!(shown, Some(second));
@@ -476,7 +476,7 @@ fn file_find_count(
 }
 
 fn transcript_find_open(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
-    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
+    let transcript = view.read_with(cx, |view, cx| view.panes[0].read(cx).transcript().unwrap());
     transcript.read_with(cx, |transcript, _| transcript.find_state().is_some())
 }
 
@@ -698,7 +698,7 @@ fn find_from_the_controls_over_another_surface_searches_the_transcript(cx: &mut 
     view.update(cx, |view, cx| {
         view.open_in_files(thread, file, None, true, cx);
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set(SENTINEL.into(), cx));
     });
     tick(cx);

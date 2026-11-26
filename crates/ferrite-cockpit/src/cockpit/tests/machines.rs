@@ -1672,8 +1672,8 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
     tick(cx);
     cx.simulate_input("draft");
     tick(cx);
-    let composer = view.read_with(cx, |view, _| {
-        view.panes[view.pane_for(editing).unwrap()].composer.clone()
+    let composer = view.read_with(cx, |view, cx| {
+        view.panes[view.pane_for(editing).unwrap()].read(cx).composer.clone()
     });
 
     let asked = background.park_thread(earlier);
@@ -1714,7 +1714,7 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
         );
         assert_eq!(view.focused_thread(cx), Some(editing));
         assert_eq!(
-            view.panes[view.focused(cx)].composer,
+            view.panes[view.focused(cx)].read(cx).composer,
             composer,
             "the existing editor survives roster changes"
         );
@@ -1802,7 +1802,7 @@ fn a_new_thread_with_no_project_here_stays_on_this_computer(cx: &mut TestAppCont
     view.read_with(cx, |view, cx| {
         let card = view.project_card(cx).expect("the New project card");
         assert_eq!(card.read(cx).machine, this_computer);
-        assert!(view.panes.iter().all(|pane| pane.draft().is_none()), "no draft on box");
+        assert!(view.panes.iter().all(|pane| pane.read(cx).draft().is_none()), "no draft on box");
     });
 
     view.update(cx, |view, cx| {
@@ -1812,8 +1812,8 @@ fn a_new_thread_with_no_project_here_stays_on_this_computer(cx: &mut TestAppCont
     tick(cx);
     cx.simulate_keystrokes("cmd-n");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let draft = view.panes.iter().find_map(|pane| pane.draft()).expect("a draft");
+    view.read_with(cx, |view, cx| {
+        let draft = view.panes.iter().find_map(|pane| pane.read(cx).draft()).expect("a draft");
         assert_eq!(draft.binding.project(), boxes, "in the Thread the operator went to");
     });
 }
@@ -2051,7 +2051,7 @@ fn draft_in(
     cx: &mut gpui::VisualTestContext,
 ) {
     view.update(cx, |view, cx| {
-        let composer = view.panes[view.pane_for(thread).unwrap()].composer.clone();
+        let composer = view.panes[view.pane_for(thread).unwrap()].read(cx).composer.clone();
         let content = ferrite_core::draft_content::DraftContent::from_prompt(text.to_string());
         composer.update(cx, |composer, cx| composer.load(content, cx));
     });
@@ -2060,7 +2060,7 @@ fn draft_in(
 /// What `thread`'s Composer holds.
 fn draft_of(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) -> String {
     view.read_with(cx, |view, cx| {
-        let composer = &view.panes[view.pane_for(thread).unwrap()].composer;
+        let composer = &view.panes[view.pane_for(thread).unwrap()].read(cx).composer;
         composer.read(cx).text().to_string()
     })
 }
@@ -2547,13 +2547,13 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         if view.panes.is_empty() {
             view.open_draft(DraftTarget::Main, cx);
         }
-        let draft = view.panes[view.focused(cx)].draft().unwrap();
+        let draft = view.panes[view.focused(cx)].read(cx).draft().unwrap();
         let offered = view
             .project_menu_rows(draft, cx)
             .into_iter()
             .any(|row| row.consequence == Consequence::Band(BandChoice::Project(project)));
         assert!(offered, "the machine's Project is on the draft's chip");
-        let composer = view.panes[view.focused(cx)].composer.clone();
+        let composer = view.panes[view.focused(cx)].read(cx).composer.clone();
         view.pick_band(&BandChoice::Project(project), &composer, cx);
         composer
     });
@@ -2676,7 +2676,7 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
     };
     let comments = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
-            let composer = view.panes[0].composer.read(cx);
+            let composer = view.panes[0].read(cx).composer.read(cx);
             composer
                 .review_comments()
                 .iter()
@@ -3063,7 +3063,7 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
     engine.annotation_event(Event::Closed);
     wait(cx, "cleaned capture reaches the composer", &mut |cx| cx.debug_bounds("browser-annotation-attachment").is_some());
     assert!(!protected(cx), "durable retention releases the lease");
-    let annotations = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).browser_annotations().to_vec());
+    let annotations = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).browser_annotations().to_vec());
     assert_eq!(annotations.len(), 1);
     assert!(annotations[0].original().is_none(), "an unavailable capture creates no fake image");
     assert_eq!(annotations[0].comment(), "Keep this region even without a screenshot");

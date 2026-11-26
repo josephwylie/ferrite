@@ -179,7 +179,7 @@ fn back_goes_from_a_subagent_to_main(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     let subject = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.panes[0].selected.clone())
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).selected.clone())
     };
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
@@ -274,7 +274,7 @@ fn the_solo_head_is_a_project_then_title_breadcrumb(cx: &mut TestAppContext) {
     cx.simulate_click(project.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let draft = view.panes[view.focused(cx)].draft().expect("a new Thread");
+        let draft = view.panes[view.focused(cx)].read(cx).draft().expect("a new Thread");
         assert_eq!(draft.binding.project(), here, "in the head's project");
     });
 }
@@ -308,7 +308,7 @@ fn deferred_preview_follows_its_pane_after_reflow(cx: &mut TestAppContext) {
             .panes
             .iter()
             .filter(|pane| pane.identity != source)
-            .all(|pane| !pane.preview.is_open()
+            .all(|pane| !pane.read(cx).preview.is_open()
                 && pane
                     .thread()
                     .is_none_or(|thread| view.files.read(cx).active_path(thread).is_none())));
@@ -333,7 +333,7 @@ fn deferred_preview_for_a_closed_pane_is_dropped(cx: &mut TestAppContext) {
 
     view.read_with(cx, |view, cx| {
         assert_eq!(view.cockpit.read(cx).roster().focused(), Some(focused));
-        assert!(view.panes.iter().all(|pane| !pane.preview.is_open()
+        assert!(view.panes.iter().all(|pane| !pane.read(cx).preview.is_open()
             && pane
                 .thread()
                 .is_none_or(|thread| view.files.read(cx).active_path(thread).is_none())));

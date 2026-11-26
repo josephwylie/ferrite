@@ -187,7 +187,7 @@ fn a_file_opens_in_the_panel_and_closes(cx: &mut TestAppContext) {
     let (line, narrowed) = cx.update(|window, cx| {
         let view = view.read(cx);
         (
-            view.panes[0].preview.document().and_then(|doc| doc.line()),
+            view.panes[0].read(cx).preview.document().and_then(|doc| doc.line()),
             view.pane_rects(window, cx)[0].1.w,
         )
     });

@@ -202,9 +202,9 @@ impl CockpitView {
         let tall = toasts_tall(window, cx);
         let over_composer = lower_right(panes).and_then(|(index, pane)| {
             let shown = &self.panes[index];
-            let geometry = shown.geometry.get();
+            let geometry = shown.read(cx).geometry.get();
             let (field, stack) = (geometry.composer?, geometry.stack?);
-            let in_sight = || shown.transcript().is_some_and(|transcript| transcript.read(cx).tail_in_view());
+            let in_sight = || shown.read(cx).transcript().is_some_and(|transcript| transcript.read(cx).tail_in_view());
             let answers = geometry.answers;
             let answers = answers
                 .cards

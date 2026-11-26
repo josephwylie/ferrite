@@ -68,7 +68,7 @@ fn lost<'a>(
 
 fn composer_text(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> String {
     view.read_with(cx, |view, cx| {
-        view.panes[0].composer.read(cx).text().to_string()
+        view.panes[0].read(cx).composer.read(cx).text().to_string()
     })
 }
 

@@ -131,7 +131,7 @@ impl CockpitView {
         }
         let subject_of = |thread: ThreadKey| {
             let index = self.pane_for(thread)?;
-            Some(self.panes[index].selected.clone())
+            Some(self.panes[index].read(cx).selected.clone())
         };
         let thread = self.focused_thread(cx)?;
         Some(Place {
@@ -214,7 +214,7 @@ impl CockpitView {
     ) {
         let shown = self
             .pane_for(thread)
-            .map(|index| self.panes[index].selected == subject);
+            .map(|index| self.panes[index].read(cx).selected == subject);
         if shown == Some(false) {
             self.select_subject(thread, subject, window, cx);
         }

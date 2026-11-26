@@ -45,12 +45,12 @@ fn copied(cx: &mut gpui::VisualTestContext) -> Option<String> {
 
 fn browser_opened(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     assert_eq!(cx.opened_url(), None, "ordinary web links stay in Ferrite");
-    assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_some_and(|document| matches!(document.body, ferrite_pane::preview::Body::Browser))));
+    assert!(view.read_with(cx, |view, cx| view.panes[0].read(cx).preview.document().is_some_and(|document| matches!(document.body, ferrite_pane::preview::Body::Browser))));
 }
 
 fn browser_closed(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     assert_eq!(cx.opened_url(), None);
-    assert!(view.read_with(cx, |view, _| !view.panes[0].preview.is_open()), "selection and context menus do not open a browser");
+    assert!(view.read_with(cx, |view, cx| !view.panes[0].read(cx).preview.is_open()), "selection and context menus do not open a browser");
 }
 
 #[gpui::test]
@@ -337,7 +337,7 @@ fn a_command_click_on_a_link_opens_the_system_browser(cx: &mut TestAppContext) {
     };
     cx.simulate_click(at, secondary);
     assert_eq!(cx.opened_url().as_deref(), Some(URL));
-    assert!(view.read_with(cx, |view, _| !view.panes[0].preview.is_open()));
+    assert!(view.read_with(cx, |view, cx| !view.panes[0].read(cx).preview.is_open()));
 }
 
 /// A link activated by key is a click with no modifier: the primary door.
@@ -457,7 +457,7 @@ fn an_issue_reference_without_an_origin_is_unavailable_not_issue_colon(cx: &mut 
     let at = caret(&view, cx, 0, 11);
     cx.simulate_click(at, gpui::Modifiers::none());
     assert_eq!(cx.opened_url(), None);
-    assert!(view.read_with(cx, |view, _| !view.panes[0].preview.is_open()));
+    assert!(view.read_with(cx, |view, cx| !view.panes[0].read(cx).preview.is_open()));
 
     right_click(at, cx);
     menu_row(1, cx);
@@ -526,7 +526,7 @@ fn tab_reaches_a_link_and_enter_opens_it(cx: &mut TestAppContext) {
     drop(stream);
     tick(cx);
     cx.update(|window, cx| {
-        let composer = view.read(cx).panes[0].composer.focus_handle(cx);
+        let composer = view.read(cx).panes[0].read(cx).composer.focus_handle(cx);
         window.focus(&composer, cx);
     });
 
@@ -552,7 +552,7 @@ fn tab_reaches_a_link_and_enter_opens_it(cx: &mut TestAppContext) {
             }),
             cx,
         );
-        view.read(cx).panes[0].preview.take_browser_urls()
+        view.read(cx).panes[0].read(cx).preview.take_browser_urls()
     });
     assert_eq!(urls, ["https://example.com/docs"]);
     assert_eq!(cx.opened_url(), None, "the link opens inside Ferrite");

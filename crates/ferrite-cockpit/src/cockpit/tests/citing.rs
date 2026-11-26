@@ -59,7 +59,7 @@ fn replies(
     cx: &mut gpui::VisualTestContext,
 ) -> Vec<ferrite_core::replies::Reply> {
     view.read_with(cx, |view, cx| {
-        view.panes[0].composer.read(cx).replies().to_vec()
+        view.panes[0].read(cx).composer.read(cx).replies().to_vec()
     })
 }
 
@@ -182,7 +182,7 @@ fn a_click_on_the_main_line_leaves_the_comment_field(cx: &mut TestAppContext) {
     );
 
     let main = view.read_with(cx, |view, cx| {
-        view.panes[0].composer.read(cx).text().to_string()
+        view.panes[0].read(cx).composer.read(cx).text().to_string()
     });
     assert_eq!(main, " MAINTEXT");
     assert_eq!(quotes(&replies(&view, cx)), [("alph", "note")]);
@@ -281,7 +281,7 @@ fn go_to_source_returns_to_the_message_or_says_it_is_gone(cx: &mut TestAppContex
         .send(SessionEvent::TextDelta { text: filler })
         .unwrap();
     tick(cx);
-    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
+    let transcript = view.read_with(cx, |view, cx| view.panes[0].read(cx).transcript().unwrap());
     transcript.update(cx, |transcript, cx| transcript.scroll_to_bottom(cx));
     tick(cx);
     let away = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
@@ -303,7 +303,7 @@ fn go_to_source_returns_to_the_message_or_says_it_is_gone(cx: &mut TestAppContex
         block: serde_json::from_str("999999").unwrap(),
     };
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.reply(
                 ferrite_core::replies::Reply::new("a lost passage", "").cited_from(gone),
                 cx,
@@ -313,7 +313,7 @@ fn go_to_source_returns_to_the_message_or_says_it_is_gone(cx: &mut TestAppContex
     tick(cx);
     click(cx, "cite-chip-1-source");
     assert!(view.read_with(cx, |view, cx| {
-        view.panes[0].composer.read(cx).is_source_missing(1)
+        view.panes[0].read(cx).composer.read(cx).is_source_missing(1)
     }));
     assert!(
         cx.debug_bounds("cite-chip-1-source").is_some(),
@@ -413,7 +413,7 @@ fn citation_editor_controls_place_cancel_before_save(cx: &mut TestAppContext) {
 #[gpui::test]
 fn only_the_field_holding_the_keyboard_shows_a_caret(cx: &mut TestAppContext) {
     let (view, cx) = conversation("cite-one-caret", cx, PARAGRAPHS);
-    let main = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    let main = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.clone());
     let carets = |cx: &mut gpui::VisualTestContext| {
         main.update(cx, |composer, _| composer.clear_caret_log());
         for _ in 0..40 {
@@ -507,7 +507,7 @@ fn a_sent_quote_offers_go_to_source(cx: &mut TestAppContext) {
     let saved = ferrite_core::SavedThread { machine: ferrite_core::MachineKey(None), thread: thread.thread() };
     assert_eq!(kept.of(&saved).map(|sources| sources.len()), Some(1));
 
-    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
+    let transcript = view.read_with(cx, |view, cx| view.panes[0].read(cx).transcript().unwrap());
     let away = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
     click(cx, "quote-row-0-go");
     let back = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
@@ -524,7 +524,7 @@ fn a_sent_quote_says_when_its_source_is_gone(cx: &mut TestAppContext) {
         block: serde_json::from_str("999999").unwrap(),
     };
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.reply(
                 ferrite_core::replies::Reply::new("a lost passage", "").cited_from(gone),
                 cx,
@@ -581,7 +581,7 @@ fn a_source_that_arrives_later_is_no_longer_unavailable(cx: &mut TestAppContext)
     });
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.reply(reply, cx))
     });
     tick(cx);
@@ -595,7 +595,7 @@ fn a_source_that_arrives_later_is_no_longer_unavailable(cx: &mut TestAppContext)
         cx.debug_bounds("quote-row-1-go").is_none(),
         "it says it is unavailable"
     );
-    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
+    let transcript = view.read_with(cx, |view, cx| view.panes[0].read(cx).transcript().unwrap());
     for round in 0..30 {
         if transcript.read_with(cx, |transcript, _| transcript.holds_block(later)) {
             break;
@@ -664,7 +664,7 @@ fn cited_answer<'a>(
         "save the citation before navigating"
     );
     let block = replies(&view, cx)[0].source.expect("cited").block;
-    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
+    let transcript = view.read_with(cx, |view, cx| view.panes[0].read(cx).transcript().unwrap());
     (transcript, block, cx)
 }
 
@@ -810,7 +810,7 @@ fn go_to_source_clears_the_band_of_the_turn_it_lands_in(cx: &mut TestAppContext)
     stream.send(answer("Second")).unwrap();
     stream.send(ended()).unwrap();
     tick(cx);
-    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
+    let transcript = view.read_with(cx, |view, cx| view.panes[0].read(cx).transcript().unwrap());
     transcript.update(cx, |transcript, cx| {
         transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
     });
@@ -1065,7 +1065,7 @@ fn citation_popup_follows_the_source_after_scrolling(cx: &mut TestAppContext) {
         .map(|n| format!("Paragraph {n:02} with enough words to identify it.\n\n"))
         .collect::<String>();
     let (view, cx) = conversation("cite-moving-source", cx, &text);
-    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
+    let transcript = view.read_with(cx, |view, cx| view.panes[0].read(cx).transcript().unwrap());
     transcript.update(cx, |transcript, cx| {
         transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
     });
@@ -1134,7 +1134,7 @@ fn clicking_an_open_pencil_commits_and_closes_the_comment(cx: &mut TestAppContex
 fn remove_citation_source(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     let document = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .selection_document()
@@ -1158,7 +1158,7 @@ fn disappearing_source_saves_a_valid_comment_and_restores_focus(cx: &mut TestApp
     cx.simulate_input("main prompt");
     assert_eq!(
         view.read_with(cx, |view, cx| view.panes[0]
-            .composer
+            .read(cx).composer
             .read(cx)
             .text()
             .to_owned()),
@@ -1198,7 +1198,7 @@ fn reopened_citation_highlights_the_contextual_repeated_passage(cx: &mut TestApp
             .as_ref()
             .is_some_and(|selector| selector.prefix.contains("second context"))
     );
-    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.clone());
     let mut content = composer.read_with(cx, |composer, _| composer.content());
     content.replies =
         serde_json::from_str(&serde_json::to_string(&content.replies).unwrap()).unwrap();
@@ -1208,7 +1208,7 @@ fn reopened_citation_highlights_the_contextual_repeated_passage(cx: &mut TestApp
     let marked = composer
         .read_with(cx, |composer, _| composer.comment_source_bounds())
         .expect("restored selector highlights its source");
-    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
+    let transcript = view.read_with(cx, |view, cx| view.panes[0].read(cx).transcript().unwrap());
     let source = transcript.read_with(cx, |transcript, _| transcript.scroll().bounds());
     assert!(marked.top() >= source.top());
     let expected = caret(&view, cx, 1, 15);

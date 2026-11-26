@@ -432,11 +432,13 @@ impl CockpitView {
         // Keep native text selections in their retained Subject entities.
         // A subagent's transcript must not edit or focus Main's hidden
         // Composer.
-        if self.panes[index].is_main() {
-            window.focus(&self.panes[index].composer.read(cx).focus_handle(cx), cx);
+        let pane = self.panes[index].read(cx);
+        let focus = if pane.is_main() {
+            pane.composer.read(cx).focus_handle(cx)
         } else {
-            window.focus(&self.panes[index].transcript_focus, cx);
-        }
+            pane.transcript_focus.clone()
+        };
+        window.focus(&focus, cx);
     }
 
     /// A press on an agent call's row in Pane `index`, or ↵ on it: the
@@ -448,7 +450,7 @@ impl CockpitView {
         let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
             return;
         };
-        let selected = &self.panes[index].selected;
+        let selected = &self.panes[index].read(cx).selected;
         if let Some((server, there)) = self.delegate_of_call(thread, selected, &call, cx) {
             return self.open_elsewhere(&server, there, cx);
         }
@@ -490,11 +492,12 @@ impl CockpitView {
         let open = self.cockpit.read(cx).thread(thread)?;
         let subject = open.activity().canonical_subject(&subject);
         let generation = open.activity().subject(&subject)?.revision();
-        self.panes[index].select_subject(subject, generation, cx);
-        self.panes[index].details.reset_pages();
+        self.panes[index].update(cx, |pane, cx| pane.select_subject(subject, generation, cx));
+        self.panes[index].read(cx).details.reset_pages();
         self.retry_subject_history(index, cx);
+        let selected = self.panes[index].read(cx).selected.clone();
         self.cockpit
-            .update(cx, |cockpit, _| cockpit.set_visible_subject(thread, self.panes[index].selected.clone()));
+            .update(cx, |cockpit, _| cockpit.set_visible_subject(thread, selected));
         self.close_composer_menu(cx);
         cx.notify();
         Some(index)
@@ -555,13 +558,15 @@ impl CockpitView {
                         self.decisions
                             .update(cx, |decisions, _| decisions.forget(pane, handle));
                     }
-                    self.panes[index].request_error = None;
+                    let value = None;
+                    self.panes[index].update(cx, |pane, _| pane.request_error = value);
                 }
             }
             Ok(false) => {}
             Err(error) => {
                 if let Some(index) = self.pane_for(thread) {
-                    self.panes[index].request_error = Some((handle.clone(), error.to_string()));
+                    let value = Some((handle.clone(), error.to_string()));
+                    self.panes[index].update(cx, |pane, _| pane.request_error = value);
                 }
             }
         }
@@ -580,7 +585,7 @@ impl CockpitView {
         short: bool,
         cx: &gpui::App,
     ) -> Option<Cards> {
-        let subject = self.panes.get(index)?.selected.clone();
+        let subject = self.panes.get(index)?.read(cx).selected.clone();
         self.decision_inputs(index, &subject, overlay, short, cx)
     }
 
@@ -669,9 +674,9 @@ impl CockpitView {
                 .workspace()
                 .map(|workspace| workspace.cwd().to_path_buf()),
             reading: self.prefs.settings.reading_size,
-            rich: pane.rich.clone(),
+            rich: pane.read(cx).rich.clone(),
             forms: self.decisions.read(cx).forms(pane.identity)?.clone(),
-            request_error: pane.request_error.clone(),
+            request_error: pane.read(cx).request_error.clone(),
             short,
             overlay,
             narrow: false,
@@ -723,21 +728,23 @@ impl CockpitView {
             return;
         };
         if let Err(error) = ferrite_core::validate_form(fields, &values) {
-            self.panes[index].request_error = Some((handle.clone(), error));
+            let value = Some((handle.clone(), error));
+            self.panes[index].update(cx, |pane, _| pane.request_error = value);
             cx.notify();
             return;
         }
         self.respond_exact(thread, handle, DecisionAnswer::Form { values }, cx);
     }
 
-    pub(super) fn clear_request_error(&mut self, thread: ThreadKey, handle: &DecisionHandle) {
+    pub(super) fn clear_request_error(&mut self, thread: ThreadKey, handle: &DecisionHandle, cx: &mut gpui::App) {
         if let Some(index) = self.pane_for(thread) {
             if self.panes[index]
-                .request_error
+                .read(cx).request_error
                 .as_ref()
                 .is_some_and(|(failed, _)| failed == handle)
             {
-                self.panes[index].request_error = None;
+                let value = None;
+                self.panes[index].update(cx, |pane, _| pane.request_error = value);
             }
         }
     }
@@ -766,10 +773,8 @@ impl CockpitView {
         };
         if !answered(&answers) {
             if !quiet {
-                self.panes[index].request_error = Some((
-                    handle.clone(),
-                    "Answer each question before sending.".into(),
-                ));
+                let error = (handle.clone(), "Answer each question before sending.".into());
+                self.panes[index].update(cx, |pane, _| pane.request_error = Some(error));
                 cx.notify();
             }
             return false;
@@ -802,7 +807,7 @@ impl CockpitView {
             .thread(pane.thread()?)?
             .pending_decisions()
             .iter()
-            .find(|request| shown_on(pane, request))
+            .find(|request| shown_on(pane.read(cx), request))
             .cloned()
     }
 
@@ -810,8 +815,9 @@ impl CockpitView {
         let Some(thread) = self.panes[index].thread() else {
             return;
         };
-        let subject = self.panes[index].selected.clone();
-        self.panes[index].history_error = self.load_subject_history(thread, &subject, cx);
+        let subject = self.panes[index].read(cx).selected.clone();
+        let value = self.load_subject_history(thread, &subject, cx);
+        self.panes[index].update(cx, |pane, _| pane.history_error = value);
         cx.notify();
     }
 
@@ -854,7 +860,7 @@ impl CockpitView {
                 .thread(thread)
                 .and_then(|thread| {
                     thread.pending_decisions().iter().find(|request| {
-                        request.subject.as_ref() == Some(&self.panes[index].selected)
+                        request.subject.as_ref() == Some(&self.panes[index].read(cx).selected)
                     })
                 })
                 .cloned()

@@ -10,7 +10,7 @@ const SENTINEL: &str = "an unsent draft";
 
 fn sentinel_draft(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| composer.set(SENTINEL.into(), cx));
+        view.panes[0].composer(cx).update(cx, |composer, cx| composer.set(SENTINEL.into(), cx));
     });
     tick(cx);
 }
@@ -63,7 +63,7 @@ fn approval_words_type_into_the_composer_and_answer_nothing(cx: &mut TestAppCont
     assert!(pending(&view, cx), "the approval is up");
     for word in ["also", "no", "yes"] {
         view.update(cx, |view, cx| {
-            view.panes[0].composer.update(cx, |composer, cx| composer.set(String::new(), cx));
+            view.panes[0].composer(cx).update(cx, |composer, cx| composer.set(String::new(), cx));
         });
         for letter in word.chars() {
             cx.simulate_keystrokes(&letter.to_string());
@@ -74,7 +74,7 @@ fn approval_words_type_into_the_composer_and_answer_nothing(cx: &mut TestAppCont
     }
     assert!(fake.sent.borrow().is_empty());
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| composer.set("with a note".into(), cx));
+        view.panes[0].composer(cx).update(cx, |composer, cx| composer.set("with a note".into(), cx));
     });
     cx.simulate_keystrokes("cmd-enter");
     cx.run_until_parked();
@@ -121,7 +121,7 @@ fn an_open_menu_keeps_its_keys_from_a_pending_approval(cx: &mut TestAppContext) 
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     fake.streams.borrow()[0].send(decision("perm_menu")).unwrap();
     tick(cx);
-    let composer = view.read_with(cx, |view, cx| view.panes[0].composer.focus_handle(cx));
+    let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.focus_handle(cx));
     cx.update(|window, cx| window.focus(&composer, cx));
     tick(cx);
     view.update(cx, |view, cx| {

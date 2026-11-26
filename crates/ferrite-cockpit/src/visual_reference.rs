@@ -766,8 +766,9 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                         .map(|block| block.id)
                 });
                 match prompt {
-                    Some(prompt) => view.panes[0]
-                        .toggle_tool(&ferrite_pane::pane::DisclosureId::Turn(prompt)),
+                    Some(prompt) => view.panes[0].update(cx, |pane, _| {
+                        pane.toggle_tool(&ferrite_pane::pane::DisclosureId::Turn(prompt))
+                    }),
                     None => eprintln!("ferrite: answer-fold-open: no prompt"),
                 }
             });
@@ -777,7 +778,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // claude/hover-assistant.png: Copy, Fork and `⋯` under it.
         "answer-hover" => {
             let setup: Setup = Box::new(|view, window, cx| {
-                let Some(transcript) = view.panes[0].transcript() else {
+                let Some(transcript) = view.panes[0].read(cx).transcript() else {
                     return;
                 };
                 match transcript.read(cx).newest_answer_hover() {
@@ -794,9 +795,9 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let scene = tool_groups(label);
             let setup: Setup = Box::new(|view, _, cx| {
                 use ferrite_pane::pane::DisclosureId;
-                view.panes[0].toggle_tool(&DisclosureId::Group("probe-1".into()));
-                view.panes[0].toggle_tool(&DisclosureId::Tool("probe-3".into()));
-                if let Some(transcript) = view.panes[0].transcript() {
+                view.panes[0].update(cx, |pane, _| pane.toggle_tool(&DisclosureId::Group("probe-1".into())));
+                view.panes[0].update(cx, |pane, _| pane.toggle_tool(&DisclosureId::Tool("probe-3".into())));
+                if let Some(transcript) = view.panes[0].read(cx).transcript() {
                     transcript.update(cx, |transcript, cx| {
                         transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
                     });
@@ -808,8 +809,8 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let scene = tool_group_overflow();
             let setup: Setup = Box::new(|view, _, cx| {
                 use ferrite_pane::pane::DisclosureId;
-                view.panes[0].toggle_tool(&DisclosureId::Group("overflow-0".into()));
-                if let Some(transcript) = view.panes[0].transcript() {
+                view.panes[0].update(cx, |pane, _| pane.toggle_tool(&DisclosureId::Group("overflow-0".into())));
+                if let Some(transcript) = view.panes[0].read(cx).transcript() {
                     transcript.update(cx, |transcript, cx| {
                         transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
                     });
@@ -822,7 +823,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "visuals-top" => {
             let scene = visuals("top");
             let setup: Setup = Box::new(|view, _, cx| {
-                if let Some(transcript) = view.panes[0].transcript() {
+                if let Some(transcript) = view.panes[0].read(cx).transcript() {
                     transcript.update(cx, |transcript, cx| {
                         transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
                     });
@@ -835,12 +836,12 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "menu" => menu(),
         "diff" => {
             let scene = conversation(label);
-            let setup: Setup = Box::new(|view, _, _| {
+            let setup: Setup = Box::new(|view, _, cx| {
                 use ferrite_pane::pane::DisclosureId;
                 // Edits never fold into a group: each Edit shows its hunks
                 // once disclosed.
-                view.panes[0].toggle_tool(&DisclosureId::Tool("edit-1".into()));
-                view.panes[0].toggle_tool(&DisclosureId::Tool("edit-2".into()));
+                view.panes[0].update(cx, |pane, _| pane.toggle_tool(&DisclosureId::Tool("edit-1".into())));
+                view.panes[0].update(cx, |pane, _| pane.toggle_tool(&DisclosureId::Tool("edit-2".into())));
             });
             (scene, setup)
         }
@@ -1110,14 +1111,14 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let (scene, compose) = composer();
             let setup: Setup = Box::new(move |view, window, cx| {
                 compose(view, window, cx);
-                let prompt = view.panes[0].composer.read(cx).prompt();
+                let prompt = view.panes[0].read(cx).composer.read(cx).prompt();
                 let images: Vec<PathBuf> = ferrite_core::prompt_files::paths(&prompt, None)
                     .into_iter()
                     .filter(|path| ferrite_pane::image_viewer::is_image(path))
                     .collect();
                 if let Some(shot) = images.first() {
                     view.panes[0]
-                        .preview
+                        .preview(cx)
                         .open(shot.clone(), None, &images, window, cx);
                 }
             });
@@ -1622,9 +1623,9 @@ fn legacy(state: &str) -> (Scene, Setup) {
         }
     }
     let setup: Setup = if state == "expanded" {
-        Box::new(|view, _, _| {
+        Box::new(|view, _, cx| {
             for id in ["read", "ok"] {
-                view.panes[0].toggle_tool(&ferrite_pane::pane::DisclosureId::Tool(id.into()));
+                view.panes[0].update(cx, |pane, _| pane.toggle_tool(&ferrite_pane::pane::DisclosureId::Tool(id.into())));
             }
         })
     } else {
@@ -2490,7 +2491,7 @@ fn composer() -> (Scene, Setup) {
     std::fs::write(&notes, "# Queue notes\n").expect("write fixture attachment");
     let setup: Setup = Box::new(move |view, _, cx| {
         let files: Vec<PathBuf> = [shot, notes].into_iter().filter(|p| p.exists()).collect();
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.set(
                 "When that lands, compare the stack against the design comp\nand note any row that clips."
                     .into(),
@@ -2538,7 +2539,7 @@ fn menu() -> (Scene, Setup) {
     scene.core.pump();
     let setup: Setup = Box::new(|view, _, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("/".into(), cx));
         view.sync_menu(cx);
     });
@@ -2900,7 +2901,7 @@ fn loops_frames(
                 .position(|pane| pane.thread() == Some(thread))
                 .expect("the working Thread's Pane");
             view.focus_pane(index, cx);
-            let composer = view.panes[index].composer.clone();
+            let composer = view.panes[index].read(cx).composer.clone();
             composer.update(cx, |composer, cx| {
                 composer.insert("blink over this text", cx);
             });

@@ -630,7 +630,7 @@ fn contract_request_notice_opens_its_owning_child(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         assert_eq!(view.focused(cx), 1);
         assert_eq!(
-            view.panes[view.focused(cx)].selected,
+            view.panes[view.focused(cx)].read(cx).selected,
             Subject::Subagent(key.clone())
         );
         assert!(view.cockpit.read(cx).notifications(view.cockpit.read(cx).first_machine()).decision(&id).unwrap().read);

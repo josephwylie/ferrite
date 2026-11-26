@@ -85,7 +85,7 @@ impl CockpitView {
                 view.update(cx, |view, cx| view.answered(error, cx));
             }
             ConnectionsEvent::Toggle(target) => {
-                let away = self.drafts_on(&target);
+                let away = self.drafts_on(&target, cx);
                 let saved = self.save_connections(
                     |saved| {
                         for machine in saved.iter_mut().filter(|machine| machine.target == target) {
@@ -94,7 +94,7 @@ impl CockpitView {
                     },
                     cx,
                 );
-                let put_away = saved.is_ok() && away > 0 && self.drafts_on(&target) == 0;
+                let put_away = saved.is_ok() && away > 0 && self.drafts_on(&target, cx) == 0;
                 view.update(cx, |view, cx| view.answered(saved.err(), cx));
                 if let Some(name) = put_away.then(|| self.saved_name(&target)).flatten() {
                     let drafts = if away == 1 { "Your draft" } else { "Your drafts" };
@@ -139,7 +139,7 @@ impl CockpitView {
     }
 
     /// How many drafts are open on the environment `target` names.
-    fn drafts_on(&self, target: &str) -> usize {
+    fn drafts_on(&self, target: &str, cx: &gpui::App) -> usize {
         let Some(machine) = self
             .machines
             .as_ref()
@@ -149,7 +149,7 @@ impl CockpitView {
         };
         self.panes
             .iter()
-            .filter_map(|pane| pane.draft())
+            .filter_map(|pane| pane.read(cx).draft())
             .filter(|draft| draft.binding.project().machine() == machine)
             .count()
     }

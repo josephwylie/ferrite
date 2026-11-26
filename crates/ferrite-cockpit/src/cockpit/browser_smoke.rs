@@ -191,7 +191,7 @@ impl CockpitView {
                             }
                             if baseline_started.unwrap().elapsed()<Duration::from_secs(3) { return Ok(false); }
                             phase(&output,"first-browser-use");
-                            Ok(view.panes[index].preview.open_url(&url, window))
+                            Ok(view.panes[index].preview(cx).open_url(&url, window))
                         })?;
                         window.draw(cx).clear(cx);
                         return Ok(false);

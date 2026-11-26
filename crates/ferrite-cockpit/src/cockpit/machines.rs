@@ -351,7 +351,7 @@ impl CockpitView {
         let unknown = self
             .panes
             .iter()
-            .filter_map(|pane| pane.draft())
+            .filter_map(|pane| pane.read(cx).draft())
             .map(|draft| draft.binding.project())
             .find(|project| {
                 let machine = project.machine();

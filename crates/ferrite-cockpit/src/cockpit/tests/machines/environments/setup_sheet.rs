@@ -14,7 +14,7 @@ mod off_the_card;
 fn draft_text(view: &Entity<CockpitView>, draft: PaneIdentity, cx: &mut gpui::VisualTestContext) -> String {
     view.read_with(cx, |view, cx| {
         let pane = &view.panes[view.index_of(draft).unwrap()];
-        pane.composer.read(cx).text().to_string()
+        pane.read(cx).composer.read(cx).text().to_string()
     })
 }
 
@@ -144,7 +144,7 @@ fn a_project_with_none_there_is_copied_by_the_sheet_and_known_there_after(cx: &m
     let draft = focused_draft(&view, cx);
     view.update(cx, |view, cx| {
         view.panes[view.index_of(draft).unwrap()]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("hello".into(), cx));
     });
 
@@ -1229,7 +1229,7 @@ fn a_machine_turned_off_mid_copy_stops_it_and_resume_finishes_once_it_is_on(cx: 
     view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
     tick(cx);
     let draft = focused_draft(&view, cx);
-    let composer = view.read_with(cx, |view, _| view.panes[view.index_of(draft).unwrap()].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[view.index_of(draft).unwrap()].read(cx).composer.clone());
     composer.update(cx, |composer, cx| composer.set("hello".into(), cx));
     pick_on(&view, ENVIRONMENT, "box", cx);
     drawn(cx, "placement-ignored:.env");
@@ -1498,7 +1498,7 @@ fn a_draft_waiting_on_its_copy_is_sent_there_once_it_is_in(cx: &mut TestAppConte
     view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
     tick(cx);
     let draft = focused_draft(&view, cx);
-    let composer = view.read_with(cx, |view, _| view.panes[view.index_of(draft).unwrap()].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[view.index_of(draft).unwrap()].read(cx).composer.clone());
     composer.update(cx, |composer, cx| composer.set("hello".into(), cx));
     pick_on(&view, ENVIRONMENT, "box", cx);
     drawn(cx, "placement-ignored:.env");
@@ -1586,7 +1586,7 @@ fn a_draft_waiting_on_its_copy_can_still_be_sent_here(cx: &mut TestAppContext) {
     assert!(debug_bounds(cx, "band-copy-waits".into()).is_none());
     assert!(copy_runs(&view, cx), "the copy carries on");
     view.update(cx, |view, cx| {
-        let composer = view.panes[view.index_of(draft).unwrap()].composer.clone();
+        let composer = view.panes[view.index_of(draft).unwrap()].read(cx).composer.clone();
         composer.update(cx, |composer, cx| composer.set("hello".into(), cx));
     });
     settles(cx);

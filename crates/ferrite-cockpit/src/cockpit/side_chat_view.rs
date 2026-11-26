@@ -433,7 +433,7 @@ impl CockpitView {
         };
         let quote = ferrite_core::replies::compose(&[Reply::new(format!("From a side chat:\n{run}"), "")], "");
         self.panes[index]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.insert(&format!("{quote}\n\n"), cx));
         window.push_notification(
             Notification::new()

@@ -138,7 +138,7 @@ fn an_unreadable_tray_image_says_failed(cx: &mut TestAppContext) {
     let files = [good.clone(), std::path::PathBuf::from("/nonexistent/gone.png")];
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.add_files(&files, cx));
     });
     tick(cx);
@@ -351,7 +351,7 @@ fn the_plus_menu_opens_each_plugins_commands(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         assert!(view.popup().is_none(), "a pick closes the menu");
         assert_eq!(
-            view.panes[0].composer.read(cx).chips(),
+            view.panes[0].read(cx).composer.read(cx).chips(),
             [SharedString::from("/tdd:green")]
         );
     });
@@ -373,7 +373,7 @@ fn a_tray_image_is_a_thumbnail_card(cx: &mut TestAppContext) {
     ];
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.add_files(&files, cx));
     });
     tick(cx);
@@ -416,7 +416,7 @@ fn a_tray_image_is_a_thumbnail_card(cx: &mut TestAppContext) {
     cx.simulate_click(remove.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let prompt = view.panes[0].composer.read(cx).prompt();
+        let prompt = view.panes[0].read(cx).composer.read(cx).prompt();
         assert_eq!(
             ferrite_core::prompt_files::paths(&prompt, None),
             [files[1].clone(), files[2].clone()],
@@ -430,7 +430,7 @@ fn skill_ranges(
     view: &gpui::Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
 ) -> Vec<std::ops::Range<usize>> {
-    view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).skill_ranges())
+    view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).skill_ranges())
 }
 
 /// A typed skill on a Codex Thread is a skill token, and the caret steps
@@ -519,7 +519,7 @@ fn dollar_opens_the_skills_and_the_pick_is_a_skill_token(cx: &mut TestAppContext
     );
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set(String::new(), cx));
     });
     cx.simulate_input("/com");
@@ -591,14 +591,14 @@ fn a_restored_draft_keeps_its_skill_chip_and_sends_plain_text(cx: &mut TestAppCo
     tick(cx);
 
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.set("please /code-review then /commit".into(), cx)
         });
     });
     tick(cx);
     let commands = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .read(cx).composer
             .read(cx)
             .drawn_tokens(ferrite_pane::composer::TokenKind::Command)
     });
@@ -638,7 +638,7 @@ fn a_skill_in_a_sent_bubble_is_blue_with_its_description_on_hover(cx: &mut TestA
         .unwrap();
     tick(cx);
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.set(
                 "/mattpocock-skills:grill-me this is a test /nonesuch".into(),
                 cx,
@@ -691,7 +691,7 @@ fn an_added_attachment_grows_in_and_a_restored_one_stands(cx: &mut TestAppContex
     let (core, _fake) = cockpit("tray-chip-in", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let added = std::path::PathBuf::from("/tmp/notes.md");
-    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.clone());
     composer.update(cx, |composer, cx| {
         composer.add_files(std::slice::from_ref(&added), cx)
     });

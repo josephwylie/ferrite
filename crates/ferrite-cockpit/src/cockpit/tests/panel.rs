@@ -99,9 +99,9 @@ fn the_panel_stays_with_a_reader_open(cx: &mut TestAppContext) {
     });
     tick(cx);
     assert!(
-        view.read_with(cx, |view, _| view
+        view.read_with(cx, |view, cx| view
             .pane_for(threads[0])
-            .is_some_and(|index| view.panes[index].preview.document().is_some())),
+            .is_some_and(|index| view.panes[index].read(cx).preview.document().is_some())),
         "the premise: a preview open"
     );
     assert_eq!(shown(&view, cx), Some(threads[0]), "a preview keeps it");

@@ -218,7 +218,7 @@ impl CockpitView {
             }
             Answered::Sent(admission) => {
                 let admitted = self.settle_send(thread, draft, admission, cx);
-                if let Some(index) = self.pane_sending(thread).filter(|_| admitted) {
+                if let Some(index) = self.pane_sending(thread, cx).filter(|_| admitted) {
                     self.scroll_transcript_to_new_prompt(index, cx);
                 }
                 admitted
@@ -230,7 +230,7 @@ impl CockpitView {
         self.facts.acted(self.cockpit.read(cx), thread);
         // A first prompt names an untitled Thread.
         self.facts.renamed(self.cockpit.read(cx), thread);
-        self.refresh_names();
+        self.refresh_names(cx);
         cx.notify();
     }
 
@@ -245,7 +245,7 @@ impl CockpitView {
             Answered::Queued(true) | Answered::Sent(Admission::Held) => Ok(Handoff::Queued),
             Answered::Queued(false) => Err("The agent's queue did not take it.".into()),
             Answered::Sent(Admission::Delivered) => {
-                if let Some(index) = self.pane_sending(thread) {
+                if let Some(index) = self.pane_sending(thread, cx) {
                     self.scroll_transcript_to_new_prompt(index, cx);
                 }
                 Ok(Handoff::Sent)
@@ -261,16 +261,16 @@ impl CockpitView {
     }
 
     /// The Pane whose Composer sends to `thread`, while one shows it.
-    fn pane_sending(&self, thread: ThreadKey) -> Option<usize> {
+    fn pane_sending(&self, thread: ThreadKey, cx: &gpui::App) -> Option<usize> {
         self.panes
             .iter()
-            .position(|pane| pane.is_main() && pane.thread() == Some(thread))
+            .position(|pane| pane.read(cx).is_main() && pane.thread() == Some(thread))
     }
 
     /// A draft `thread` did not take goes back to its Composer, ahead of
     /// newer typing: now while a Pane shows the Thread, else when one does.
     fn return_send(&mut self, thread: ThreadKey, draft: SentDraft, cx: &mut Context<Self>) {
-        match self.pane_sending(thread) {
+        match self.pane_sending(thread, cx) {
             Some(index) => self.put_back_send(index, draft, true, cx),
             None => self.held_sends.0.entry(thread).or_default().push(Held {
                 draft,
@@ -332,7 +332,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.panes[index]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.restore(draft, prepend, cx));
         cx.notify();
     }

@@ -519,7 +519,7 @@ fn new_thread_leaves_the_factory_for_the_draft_that_stood(cx: &mut TestAppContex
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
     let project = view.read_with(cx, |view, cx| {
-        assert!(view.panes[view.focused(cx)].draft().is_some(), "a draft stands");
+        assert!(view.panes[view.focused(cx)].read(cx).draft().is_some(), "a draft stands");
         view.launch_project.unwrap()
     });
     view.update(cx, |view, cx| view.open_factory(project, cx));
@@ -530,6 +530,6 @@ fn new_thread_leaves_the_factory_for_the_draft_that_stood(cx: &mut TestAppContex
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(!view.destination_shown(), "the board is back");
-        assert!(view.panes[view.focused(cx)].draft().is_some(), "on the draft");
+        assert!(view.panes[view.focused(cx)].read(cx).draft().is_some(), "on the draft");
     });
 }

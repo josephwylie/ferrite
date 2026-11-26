@@ -294,7 +294,7 @@ fn contract_denied_allow_policy_disables_mouse_and_keyboard_approval(cx: &mut Te
         .unwrap();
     tick(cx);
     view.update_in(cx, |v, window, cx| {
-        let focus = v.panes[0].decision_focus.clone();
+        let focus = v.panes[0].read(cx).decision_focus.clone();
         window.focus(&focus, cx);
     });
     cx.simulate_keystrokes("y");
@@ -408,7 +408,7 @@ fn a_typed_form_value_is_sent_exactly_and_the_draft_is_untouched(cx: &mut TestAp
     assert_eq!(values["count"], serde_json::json!(2));
     drop(answered);
     view.read_with(cx, |v, cx| {
-        assert_eq!(v.panes[0].composer.read(cx).text(), "", "typing reached the form, not the draft");
+        assert_eq!(v.panes[0].read(cx).composer.read(cx).text(), "", "typing reached the form, not the draft");
     });
 }
 

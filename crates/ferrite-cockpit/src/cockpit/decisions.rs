@@ -535,7 +535,7 @@ impl CockpitView {
                 fields,
             } => self.send_form(*thread, handle, fields, cx),
             DecisionEvent::Picked { thread, handle } => {
-                self.clear_request_error(*thread, handle);
+                self.clear_request_error(*thread, handle, cx);
                 cx.notify();
             }
             DecisionEvent::SendNote { thread, handle } => {
@@ -594,7 +594,7 @@ impl CockpitView {
         cx: &App,
     ) -> Option<ferrite_pane::transcript::TranscriptTail> {
         let cards = self.decision_cards(index, false, false, cx)?;
-        let kept_in = Some(self.panes[index].geometry.clone());
+        let kept_in = Some(self.panes[index].read(cx).geometry.clone());
         Some(card_tail(subagents::Cards { kept_in, ..cards }))
     }
 
@@ -640,7 +640,7 @@ impl CockpitView {
         pending
             .iter()
             .filter(approval)
-            .find(|request| pane.is_some_and(|pane| shown_on(pane, request)))
+            .find(|request| pane.is_some_and(|pane| shown_on(pane.read(cx), request)))
             .or_else(|| {
                 pending
                     .iter()
@@ -749,12 +749,12 @@ impl CockpitView {
         let Some(index) = self.pane_for(thread) else {
             return;
         };
-        if !self.panes[index].is_main() {
+        if !self.panes[index].read(cx).is_main() {
             self.select_subject(thread, Subject::Main, window, cx);
         }
         self.cockpit.update(cx, |cockpit, _| cockpit.focus_thread(thread));
         self.focus_pane(index, cx);
-        let focus = self.panes[index].composer.read(cx).focus_handle(cx);
+        let focus = self.panes[index].read(cx).composer.read(cx).focus_handle(cx);
         window.focus(&focus, cx);
     }
 
@@ -941,10 +941,10 @@ impl CockpitView {
     /// Where the keyboard goes as Pane `index`'s note closes: its Composer
     /// on Main, else its transcript.
     fn note_back(&self, index: usize, cx: &App) -> FocusHandle {
-        if self.panes[index].is_main() {
-            self.panes[index].composer.read(cx).focus_handle(cx)
+        if self.panes[index].read(cx).is_main() {
+            self.panes[index].read(cx).composer.read(cx).focus_handle(cx)
         } else {
-            self.panes[index].transcript_focus.clone()
+            self.panes[index].read(cx).transcript_focus.clone()
         }
     }
 

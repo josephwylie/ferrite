@@ -86,7 +86,7 @@ impl Scenario {
             12 => {
                 if window.debug_bounds("browser-annotation-review").is_none() { return Ok(false); }
                 window.render_to_image().map_err(|e|e.to_string())?.save(output.join("annotation-review.png")).map_err(|e|e.to_string())?;
-                let focus=view.read(cx).panes[view.read(cx).pane_for(thread).ok_or("missing Composer")?].composer.read(cx).focus_handle(cx);
+                let focus=view.read(cx).panes[view.read(cx).pane_for(thread).ok_or("missing Composer")?].read(cx).composer.read(cx).focus_handle(cx);
                 window.focus(&focus,cx);
                 self.stage=13;
             }
@@ -114,7 +114,7 @@ fn fixture_button(window:&mut Window)->Result<Option<gpui::Bounds<gpui::Pixels>>
 }
 fn collected(view:&Entity<CockpitView>,thread:ferrite_core::ThreadKey,cx:&App)->Result<Vec<Annotation>,String> {
     let view=view.read(cx);let index=view.pane_for(thread).ok_or("missing owning Composer")?;
-    Ok(view.panes[index].composer.read(cx).browser_annotations().to_vec())
+    Ok(view.panes[index].read(cx).composer.read(cx).browser_annotations().to_vec())
 }
 pub(super) fn click(window:&mut Window,cx:&mut App,selector:&str)->bool {
     let Some(bounds)=window.debug_bounds(selector) else{return false;};

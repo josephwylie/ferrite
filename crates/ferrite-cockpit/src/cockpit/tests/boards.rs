@@ -22,7 +22,7 @@ fn an_image_opens_its_canonical_original_without_sending_or_closing(cx: &mut Tes
     let unresolved = directory.join("nested/../résumé #50%.png");
     view.update_in(cx, |view, window, cx| {
         view.panes[0]
-            .preview
+            .preview(cx)
             .open(unresolved, None, &[], window, cx);
     });
     tick(cx);
@@ -46,7 +46,7 @@ fn an_image_opens_its_canonical_original_without_sending_or_closing(cx: &mut Tes
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert!(cx.debug_bounds("image-viewer").is_none());
-    assert!(view.read_with(cx, |view, _| view.panes[0].preview.lightbox().is_none()));
+    assert!(view.read_with(cx, |view, cx| view.panes[0].read(cx).preview.lightbox().is_none()));
     assert_eq!(
         *fake.interrupts.borrow(),
         0,

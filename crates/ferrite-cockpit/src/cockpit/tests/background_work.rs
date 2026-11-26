@@ -426,7 +426,7 @@ fn opening_a_background_agent_shows_its_full_chat(cx: &mut TestAppContext) {
     cx.simulate_click(open.center(), gpui::Modifiers::none());
     tick(cx);
     let selected = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.panes[0].selected.clone())
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).selected.clone())
     };
     assert_eq!(selected(&view, cx), Subject::Subagent(key.clone()), "the tab's Open");
 

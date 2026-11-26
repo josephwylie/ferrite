@@ -46,7 +46,7 @@ fn cmd_t_opens_a_new_thread_and_cmd_n_still_does(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-t");
     view.read_with(cx, |view, cx| {
         assert_eq!(view.panes.len(), 2, "cmd-t opened a draft");
-        assert!(view.panes[view.focused(cx)].draft().is_some());
+        assert!(view.panes[view.focused(cx)].read(cx).draft().is_some());
     });
 
     // cmd-n reaches the same action; with that draft still up it
@@ -54,7 +54,7 @@ fn cmd_t_opens_a_new_thread_and_cmd_n_still_does(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-n");
     view.read_with(cx, |view, cx| {
         assert_eq!(view.panes.len(), 2, "and cmd-n reuses the standing draft");
-        assert!(view.panes[view.focused(cx)].draft().is_some());
+        assert!(view.panes[view.focused(cx)].read(cx).draft().is_some());
     });
 }
 
@@ -76,7 +76,7 @@ fn cmd_t_from_a_thread_starts_in_its_project(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-t");
     view.read_with(cx, |view, cx| {
         let draft = view.panes[view.focused(cx)]
-            .draft()
+            .read(cx).draft()
             .expect("cmd-t opened a draft");
         assert_eq!(draft.binding.project(), here);
     });
@@ -99,7 +99,7 @@ fn cmd_t_from_a_thread_outranks_the_nav_filter(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-t");
     view.read_with(cx, |view, cx| {
         let draft = view.panes[view.focused(cx)]
-            .draft()
+            .read(cx).draft()
             .expect("cmd-t opened a draft");
         assert_eq!(draft.binding.project(), here);
     });
@@ -123,7 +123,7 @@ fn cmd_t_from_a_thread_brings_the_standing_draft_to_its_project(cx: &mut TestApp
     let project = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             view.panes[view.focused(cx)]
-                .draft()
+                .read(cx).draft()
                 .expect("the draft is focused")
                 .binding
                 .project()

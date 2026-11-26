@@ -240,8 +240,8 @@ fn edits_fold_and_an_edits_diff_waits_to_be_opened(cx: &mut TestAppContext) {
         "no diff shows until its call is opened"
     );
     view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Group("edit-1".into()));
-        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("edit-2".into()));
+        view.panes[0].update(cx, |pane, _| pane.toggle_tool(&pane::DisclosureId::Group("edit-1".into())));
+        view.panes[0].update(cx, |pane, _| pane.toggle_tool(&pane::DisclosureId::Tool("edit-2".into())));
         cx.notify();
     });
     tick(cx);
@@ -328,8 +328,8 @@ fn a_long_edit_diff_caps_and_folds(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("diff-box").is_none(), "shut, no diff");
     view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Group("long-1".into()));
-        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("long-1".into()));
+        view.panes[0].update(cx, |pane, _| pane.toggle_tool(&pane::DisclosureId::Group("long-1".into())));
+        view.panes[0].update(cx, |pane, _| pane.toggle_tool(&pane::DisclosureId::Tool("long-1".into())));
         cx.notify();
     });
     tick(cx);

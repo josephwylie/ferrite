@@ -52,8 +52,8 @@ fn keyboard_disclosure_target_is_visible_across_three_targets_and_reverse(cx: &m
         );
     }
     cx.simulate_keystrokes("enter");
-    view.read_with(cx, |view, _| {
-        assert!(!view.panes[0].tool_expanded(pane::DisclosureId::Tool("visible-a".into())))
+    view.read_with(cx, |view, cx| {
+        assert!(!view.panes[0].read(cx).tool_expanded(pane::DisclosureId::Tool("visible-a".into())))
     });
     assert_eq!(fake.sent.borrow().as_slice(), ["Inspect output"]);
 }
@@ -97,19 +97,19 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
     let group = pane::DisclosureId::Group("clicked-a".into());
     let at = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .tool_bounds(group.clone(), cx)
+            .read(cx).tool_bounds(group.clone(), cx)
             .unwrap()
             .center()
     });
     cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            view.panes[0].tool_expanded(group.clone()),
+            view.panes[0].read(cx).tool_expanded(group.clone()),
             "the click opens the group"
         );
         assert!(
-            !view.panes[0].has_tool_target(),
+            !view.panes[0].read(cx).has_tool_target(),
             "a click sets no keyboard target"
         );
     });
@@ -119,21 +119,21 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
     );
     cx.update(|window, cx| {
         let pane = &view.read(cx).panes[0];
-        assert!(pane.composer.focus_handle(cx).is_focused(window));
+        assert!(pane.read(cx).composer.focus_handle(cx).is_focused(window));
     });
     // The transcript sits on its foot (SPEC §5.4): opening the group grew
     // it upward, so the second click finds the row where it now is.
     let at = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .tool_bounds(group.clone(), cx)
+            .read(cx).tool_bounds(group.clone(), cx)
             .unwrap()
             .center()
     });
     cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            !view.panes[0].tool_expanded(group.clone()),
+            !view.panes[0].read(cx).tool_expanded(group.clone()),
             "a second click closes it"
         );
     });
@@ -188,26 +188,26 @@ fn tab_walks_a_group_and_enter_opens_it(cx: &mut TestAppContext) {
     let fold = pane::DisclosureId::Turn(prompt);
     cx.simulate_keystrokes("tab");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.panes[0].targeted_tool(), Some(&fold));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[0].read(cx).targeted_tool(), Some(&fold));
     });
     assert!(cx.debug_bounds("tool-group-keys-a").is_none(), "shut, the work folds away");
     cx.simulate_keystrokes("enter");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert!(view.panes[0].tool_expanded(fold.clone()), "Enter opens the fold");
+    view.read_with(cx, |view, cx| {
+        assert!(view.panes[0].read(cx).tool_expanded(fold.clone()), "Enter opens the fold");
     });
     let group = pane::DisclosureId::Group("keys-a".into());
     cx.simulate_keystrokes("tab");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.panes[0].targeted_tool(), Some(&group));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[0].read(cx).targeted_tool(), Some(&group));
     });
     cx.simulate_keystrokes("tab");
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[0].targeted_tool(),
+            view.panes[0].read(cx).targeted_tool(),
             None,
             "a shut group's calls are no stops"
         );
@@ -218,15 +218,15 @@ fn tab_walks_a_group_and_enter_opens_it(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_keystrokes("enter");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert!(view.panes[0].tool_expanded(group.clone()), "Enter opens it");
+    view.read_with(cx, |view, cx| {
+        assert!(view.panes[0].read(cx).tool_expanded(group.clone()), "Enter opens it");
     });
     assert!(cx.debug_bounds("tool-row-keys-b").is_some());
     cx.simulate_keystrokes("tab");
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[0].targeted_tool(),
+            view.panes[0].read(cx).targeted_tool(),
             Some(&pane::DisclosureId::Tool("keys-a".into())),
             "open, Tab steps into its calls"
         );

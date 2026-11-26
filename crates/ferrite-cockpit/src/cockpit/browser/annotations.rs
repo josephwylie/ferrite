@@ -106,7 +106,7 @@ impl CockpitView {
         self.focused_thread(cx) == Some(thread)
             && self.cockpit.read(cx).thread(thread).is_some()
             && self.pane_for(thread).is_some_and(|index| {
-                self.panes[index].is_main() && self.panes[index].composer.read(cx).comment_valid(cx)
+                self.panes[index].read(cx).is_main() && self.panes[index].read(cx).composer.read(cx).comment_valid(cx)
             })
             && !self.sheet_up(cx)
             && self.nav_view.read(cx).snooze_line().is_none()
@@ -127,7 +127,7 @@ impl CockpitView {
                     if this.annotation_send_enabled(thread, cx)
                         && this.pane_for(thread).is_some_and(|index| {
                             this.panes[index]
-                                .composer
+                                .read(cx).composer
                                 .read(cx)
                                 .browser_annotations()
                                 .iter()
@@ -193,7 +193,7 @@ impl CockpitView {
             .iter()
             .flat_map(|pane| {
                 let thread = pane.thread();
-                pane.preview
+                pane.read(cx).preview
                     .take_annotation_edits()
                     .into_iter()
                     .filter_map(move |annotation| thread.map(|thread| (thread, annotation)))
@@ -257,7 +257,7 @@ impl CockpitView {
                 Next::Attach(annotation, send) => {
                     if let Some(index) = self.pane_for(thread) {
                         let id = annotation.id().to_owned();
-                        self.panes[index].composer.update(cx, |composer, cx| {
+                        self.panes[index].composer(cx).update(cx, |composer, cx| {
                             composer.add_browser_annotation(annotation, cx)
                         });
                         if let Some(window) = send {

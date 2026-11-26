@@ -31,7 +31,7 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
             view.popover(cx).unwrap().rows[0].name.as_ref(),
             "code-review"
         );
-        assert!(view.panes[0].draft().is_some());
+        assert!(view.panes[0].read(cx).draft().is_some());
     });
     assert!(
         fake.spawned.borrow().is_empty(),
@@ -47,13 +47,17 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
     let (next_tx, next_rx) = ferrite_core::doorbell::channel();
     *fake.command_discovery.borrow_mut() = Some(next_rx);
     view.update(cx, |view, cx| {
-        view.panes[0].draft_mut().unwrap().binding.choose_provider(
-            ProviderChoice {
-                provider: Provider::Codex,
-                model: None,
-            },
-            &[],
-        );
+        view.panes[0]
+            .update_draft(cx, |draft| {
+                draft.binding.choose_provider(
+                    ProviderChoice {
+                        provider: Provider::Codex,
+                        model: None,
+                    },
+                    &[],
+                )
+            })
+            .unwrap();
         view.sync_menu(cx);
         assert_eq!(
             view.popover(cx).unwrap().rows[0].name.as_ref(),
@@ -80,7 +84,7 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
     cx.run_until_parked();
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[0].composer.read(cx).text(),
+            view.panes[0].read(cx).composer.read(cx).text(),
             "Please use /code-codex "
         )
     });
@@ -263,7 +267,7 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
     view.read_with(cx, |view, cx| {
         assert_eq!(
             view.panes[0]
-                .draft()
+                .read(cx).draft()
                 .unwrap()
                 .binding
                 .provider()
@@ -515,7 +519,7 @@ fn a_draft_inherits_the_focused_provider_model_and_only_announced_models(cx: &mu
     });
 
     view.update(cx, |view, cx| {
-        let draft = view.panes[view.focused(cx)].draft().unwrap();
+        let draft = view.panes[view.focused(cx)].read(cx).draft().unwrap();
         assert_eq!(draft.binding.provider().model.as_deref(), Some("opus"));
         // Announced once (deduplicated), the standing choice appended
         // where the list did not name it.
@@ -527,7 +531,7 @@ fn a_draft_inherits_the_focused_provider_model_and_only_announced_models(cx: &mu
         view.pick_in_model_picker(Picked::Model(opus), cx);
         assert_eq!(
             view.panes[view.focused(cx)]
-                .draft()
+                .read(cx).draft()
                 .unwrap()
                 .binding
                 .provider()
@@ -1027,7 +1031,7 @@ fn the_draft_model_chip_sets_its_effort_in_the_reasoning_column(cx: &mut TestApp
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.model_picker().is_some(), "the docked picker stays open");
-        let draft = view.panes[view.focused(cx)].draft().expect("still a draft");
+        let draft = view.panes[view.focused(cx)].read(cx).draft().expect("still a draft");
         assert_eq!(draft.binding.effort(), Some("high"));
     });
     cx.simulate_keystrokes("escape");

@@ -56,7 +56,7 @@ fn step_to(
 ) {
     view.update_in(cx, |view, window, cx| {
         view.panes[0]
-            .preview
+            .preview(cx)
             .open(path.to_path_buf(), None, gallery, window, cx)
     });
 }
@@ -69,8 +69,8 @@ fn shown(
     std::path::PathBuf,
     Entity<ferrite_pane::image_viewer::ImageViewer>,
 )> {
-    view.read_with(cx, |view, _| {
-        let lightbox = view.panes[0].preview.lightbox()?;
+    view.read_with(cx, |view, cx| {
+        let lightbox = view.panes[0].read(cx).preview.lightbox()?;
         Some((lightbox.path().to_path_buf(), lightbox.viewer))
     })
 }
@@ -112,9 +112,9 @@ fn a_sent_image_opens_in_the_lightbox(cx: &mut TestAppContext) {
     tick(cx);
     let (path, viewer) = shown(&view, cx).expect("an image opened");
     assert!(path == wide || path == small, "{path:?}");
-    let gallery = view.read_with(cx, |view, _| {
+    let gallery = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .preview
+            .read(cx).preview
             .lightbox()
             .map(|lightbox| lightbox.gallery.len())
     });
@@ -275,9 +275,9 @@ fn esc_closes_the_image_and_the_pane_takes_the_keyboard_back(cx: &mut TestAppCon
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert!(cx.debug_bounds("image-viewer").is_none());
-    assert!(view.read_with(cx, |view, _| view.panes[0].preview.lightbox().is_none()));
+    assert!(view.read_with(cx, |view, cx| view.panes[0].read(cx).preview.lightbox().is_none()));
     assert_eq!(*fake.interrupts.borrow(), 0, "esc closed the image only");
-    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.clone());
     assert!(cx.update(|window, cx| {
         composer
             .read(cx)
@@ -337,7 +337,7 @@ fn an_image_opens_over_a_files_preview_and_leaves_it(cx: &mut TestAppContext) {
         .expect("the file's preview");
     open(&image, cx);
     assert_eq!(shown(&view, cx).map(|(path, _)| path), Some(image.clone()));
-    let document = view.read_with(cx, |view, _| view.panes[0].preview.document().unwrap());
+    let document = view.read_with(cx, |view, cx| view.panes[0].read(cx).preview.document().unwrap());
     assert!(matches!(document.body, Body::Text { .. }), "the file stays");
     cx.simulate_keystrokes("escape");
     tick(cx);
@@ -538,7 +538,7 @@ fn the_lightbox_grows_from_the_pressed_picture(cx: &mut TestAppContext) {
     let sent = cx.debug_bounds("sent-image").expect("a sent image");
     cx.simulate_click(sent.center(), gpui::Modifiers::none());
     tick(cx);
-    let from = view.read_with(cx, |view, _| view.panes[0].preview.lightbox().unwrap().from);
+    let from = view.read_with(cx, |view, cx| view.panes[0].read(cx).preview.lightbox().unwrap().from);
     let window = cx.update(|window, _| window.viewport_size());
     let want = (f32::from(sent.center().x / window.width), f32::from(sent.center().y / window.height));
     assert!((from.0 - want.0).abs() < 0.01 && (from.1 - want.1).abs() < 0.01, "{from:?} vs {want:?}");

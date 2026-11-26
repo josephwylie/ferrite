@@ -145,7 +145,7 @@ impl CockpitView {
             if let Some(index) = pane {
                 // Named as a log in the directory it ran in, so the
                 // preview reads it as plain text; nothing is written there.
-                self.panes[index].preview.open_source(
+                self.panes[index].read(cx).preview.open_source(
                     cwd.join(format!("{}.log", command.name)),
                     command.name.clone(),
                     ran.output.clone(),

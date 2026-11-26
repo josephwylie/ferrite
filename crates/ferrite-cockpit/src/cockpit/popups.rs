@@ -282,10 +282,10 @@ impl CockpitView {
         self.close_composer_menu(cx);
         self.decisions.update(cx, |decisions, cx| decisions.close_menus(cx));
         for pane in &self.panes {
-            if let Some(transcript) = pane.transcript() {
+            if let Some(transcript) = pane.read(cx).transcript() {
                 transcript.update(cx, |transcript, cx| transcript.close_menus(cx));
             }
-            pane.composer.update(cx, |composer, cx| composer.close_comment(cx));
+            pane.composer(cx).update(cx, |composer, cx| composer.close_comment(cx));
         }
     }
 
@@ -312,7 +312,7 @@ impl CockpitView {
             Keys::Field(focus) => Some(focus),
             Keys::Composer(pane) => self
                 .index_of(pane)
-                .map(|index| self.panes[index].composer.focus_handle(cx)),
+                .map(|index| self.panes[index].read(cx).composer.focus_handle(cx)),
         });
         if let Some(wants) = wants.flatten() {
             let back = match self.popups.back.take() {
@@ -429,7 +429,7 @@ impl CockpitView {
                     PaneIdentity::Thread(thread) => self.cockpit.read(cx).thread(thread).is_some(),
                     PaneIdentity::Draft(_) => self
                         .index_of(pane)
-                        .is_some_and(|index| self.panes[index].draft().is_some()),
+                        .is_some_and(|index| self.panes[index].read(cx).draft().is_some()),
                 };
                 self.pane_shown_alone(pane, cx) && lives
             }
@@ -447,7 +447,7 @@ impl CockpitView {
             Some(Popup::Session { thread, generation }) => on(*thread, Some(*generation)),
             Some(Popup::Band(menu)) => {
                 self.pane_shown_alone(menu.pane, cx)
-                    && self.index_of(menu.pane).is_some_and(|index| self.panes[index].draft().is_some())
+                    && self.index_of(menu.pane).is_some_and(|index| self.panes[index].read(cx).draft().is_some())
             }
             Some(Popup::Attach { pane, .. }) => self.pane_shown_alone(*pane, cx),
         };
