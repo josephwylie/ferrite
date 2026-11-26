@@ -1,8 +1,8 @@
 {
   "files holding WeakEntity<CockpitView>": 1,
   "files with impl CockpitView": 83,
-  "CockpitView fields": 64,
-  "cockpit.rs lines": 2367,
+  "CockpitView fields": 63,
+  "cockpit.rs lines": 2363,
   "add_cockpit_window calls": 692,
   "quarantined tests": 0
 }

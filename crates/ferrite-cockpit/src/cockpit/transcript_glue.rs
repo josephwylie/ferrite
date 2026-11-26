@@ -490,7 +490,7 @@ impl CockpitView {
             asked,
             move |view, asked, cx| {
                 match asked {
-                    Ok(()) => view.side_chat.update(cx, |chat, _| chat.forget_fork(thread)),
+                    Ok(()) => view.panel.side_chat.update(cx, |chat, _| chat.forget_fork(thread)),
                     Err(why) => view
                         .cockpit
                         .update(cx, |cockpit, _| cockpit.say(thread, format!("fork refused: {why}"))),

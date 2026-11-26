@@ -473,7 +473,7 @@ impl CockpitView {
         let project_of = |thread: ThreadKey| self.facts.get(thread).and_then(|facts| facts.project);
         let open_threads: Vec<ThreadKey> = {
             let mut open = self.cockpit.read(cx).threads();
-            let side_chat = self.side_chat.read(cx);
+            let side_chat = self.panel.side_chat.read(cx);
             open.retain(|thread| !side_chat.owns(*thread) && self.cockpit.read(cx).operators(*thread));
             open.sort();
             open
@@ -620,7 +620,7 @@ impl CockpitView {
         threads.sort();
         threads
             .into_iter()
-            .filter(|thread| !self.side_chat.read(cx).owns(*thread))
+            .filter(|thread| !self.panel.side_chat.read(cx).owns(*thread))
             .filter(|thread| {
                 self.facts.get(*thread).and_then(|facts| facts.project) == Some(project)
             })

@@ -82,7 +82,7 @@ fn a_side_chat_on_a_machines_thread_shows_its_answer(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| view.open_side_chat(theirs, cx));
     let fork = |cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| view.side_chat.read(cx).shown_fork(theirs))
+        view.read_with(cx, |view, cx| view.panel.side_chat.read(cx).shown_fork(theirs))
     };
     until_said(cx, "the tab never took its fork", |cx| fork(cx).is_some());
     let fork = fork(cx).unwrap();
@@ -393,7 +393,7 @@ fn turning_a_machine_off_and_on_keeps_its_panels_tabs(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.new_terminal_surface(theirs, cx));
     view.update(cx, |view, cx| view.open_side_chat(theirs, cx));
     let fork_of = |owner: ThreadKey, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| view.side_chat.read(cx).shown_fork(owner))
+        view.read_with(cx, |view, cx| view.panel.side_chat.read(cx).shown_fork(owner))
     };
     until_said(cx, "the tab never took its fork", |cx| fork_of(theirs, cx).is_some());
     let fork = fork_of(theirs, cx).unwrap();

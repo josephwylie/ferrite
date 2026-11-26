@@ -63,26 +63,26 @@ pub(super) fn side_tabs(
 /// What the cases read of the side chat, held here so a move of its
 /// state changes these and not the cases.
 pub(super) fn draft(view: &CockpitView, owner: ThreadKey, cx: &gpui::App) -> Option<String> {
-    view.side_chat.read(cx).draft(owner, cx)
+    view.panel.side_chat.read(cx).draft(owner, cx)
 }
 
 fn titles(view: &CockpitView, owner: ThreadKey, cx: &gpui::App) -> (Vec<SharedString>, usize) {
-    view.side_chat.read(cx).titles(owner)
+    view.panel.side_chat.read(cx).titles(owner)
 }
 
 fn forks(view: &CockpitView, owner: ThreadKey, cx: &gpui::App) -> Vec<ThreadKey> {
-    view.side_chat
+    view.panel.side_chat
         .read(cx)
         .threads(owner)
 }
 
 fn owns(view: &CockpitView, thread: ThreadKey, cx: &gpui::App) -> bool {
-    view.side_chat.read(cx).owns(thread)
+    view.panel.side_chat.read(cx).owns(thread)
 }
 
 /// The shown tab's fork, once it has one.
 pub(super) fn shown_fork(view: &CockpitView, owner: ThreadKey, cx: &gpui::App) -> Option<ThreadKey> {
-    view.side_chat
+    view.panel.side_chat
         .read(cx)
         .shown_fork(owner)
 }
@@ -93,12 +93,12 @@ fn field_of(
     index: usize,
     cx: &gpui::App,
 ) -> Option<Entity<ferrite_pane::composer::Composer>> {
-    view.side_chat.read(cx).field_of(owner, index).cloned()
+    view.panel.side_chat.read(cx).field_of(owner, index).cloned()
 }
 
 fn bring_back_blocked(view: &CockpitView, owner: ThreadKey, id: u64, cx: &gpui::App) -> Option<&'static str> {
     let owner = owner;
-    view.bring_back_blocked(owner, view.side_chat.read(cx).fork(owner, id), cx)
+    view.bring_back_blocked(owner, view.panel.side_chat.read(cx).fork(owner, id), cx)
 }
 
 fn shown_pane<R>(
@@ -107,7 +107,7 @@ fn shown_pane<R>(
     cx: &gpui::App,
     read: impl FnOnce(&PaneView, &gpui::App) -> R,
 ) -> Option<R> {
-    Some(read(view.side_chat.read(cx).pane(owner)?, cx))
+    Some(read(view.panel.side_chat.read(cx).pane(owner)?, cx))
 }
 
 /// Opened, a side chat is a Panel tab (ADR 0039) at least its token wide,
@@ -578,7 +578,7 @@ fn a_side_chat_keeps_two_machines_threads_apart(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         let fork = shown_fork(view, owner, cx).expect("the tab took the fork");
         let elsewhere = |thread: ThreadKey| ThreadKey::fixture(u32::MAX, thread.thread().get());
-        let chat = view.side_chat.read(cx);
+        let chat = view.panel.side_chat.read(cx);
         assert_eq!(titles(view, owner, cx).0.len(), 1);
         assert_eq!(chat.titles(elsewhere(owner)), (Vec::new(), 0));
         assert_eq!(chat.shown_fork(elsewhere(owner)), None);
@@ -757,8 +757,8 @@ fn a_failed_fork_leaves_the_next_forks_where_they_belong(cx: &mut TestAppContext
     open_chat(&view, cx);
     let tabs = side_tabs(&view, owner, cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.side_chat.read(cx).fork(owner, tabs[0]), None, "the failed fork's tab waits");
-        assert!(view.side_chat.read(cx).fork(owner, tabs[1]).is_some(), "the next tab takes its fork");
+        assert_eq!(view.panel.side_chat.read(cx).fork(owner, tabs[0]), None, "the failed fork's tab waits");
+        assert!(view.panel.side_chat.read(cx).fork(owner, tabs[1]).is_some(), "the next tab takes its fork");
     });
 
     *fake.fail_fork.borrow_mut() = true;
@@ -806,6 +806,6 @@ fn a_refused_fork_leaves_its_tab_waiting_for_none(cx: &mut TestAppContext) {
     let tabs = side_tabs(&view, owner, cx);
     assert_eq!(tabs.len(), 2);
     assert_eq!(fake.forks.borrow().len(), 1, "the agent was asked for one");
-    let refused = view.read_with(cx, |view, cx| view.side_chat.read(cx).fork(owner, tabs[1]));
+    let refused = view.read_with(cx, |view, cx| view.panel.side_chat.read(cx).fork(owner, tabs[1]));
     assert_eq!(refused, None, "the refused tab took no fork");
 }
