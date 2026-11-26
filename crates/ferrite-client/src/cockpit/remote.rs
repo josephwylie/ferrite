@@ -185,6 +185,9 @@ pub(crate) struct Remote {
     attention: Option<Failure>,
     /// An attach running in the background.
     attaching: Option<Receiver<io::Result<link::Attached>>>,
+    /// A retry was asked for while `attaching` ran. That attach began
+    /// before the ask, so unless it attaches, the next starts once it ends.
+    retry_asked: bool,
     retry_at: Instant,
     backoff: Duration,
     /// The boot the window's mirrors were built from.
@@ -226,6 +229,7 @@ impl Remote {
             detached,
             attention: None,
             attaching: None,
+            retry_asked: false,
             retry_at: Instant::now(),
             backoff: RETRY_FIRST,
             last_boot: None,
@@ -264,11 +268,13 @@ impl Remote {
         }
     }
 
-    /// Attach again now rather than at the next retry.
+    /// Attach again now rather than at the next retry. An attach under way
+    /// began before this ask: its failure does not answer it.
     pub(crate) fn retry(&mut self) {
         self.retry_at = Instant::now();
         self.backoff = RETRY_FIRST;
         self.attention = None;
+        self.retry_asked = self.attaching.is_some();
     }
 
     /// Whether attaching waits for the operator: a machine that needs a
@@ -964,6 +970,14 @@ impl Link for Remote {
                 }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => self.attaching = None,
+            }
+            // Ended without attaching, it leaves a retry asked meanwhile
+            // to the next attach, which starts below.
+            if self.attaching.is_none()
+                && std::mem::take(&mut self.retry_asked)
+                && self.attachment.is_none()
+            {
+                self.retry();
             }
         }
         if self.attachment.is_none()
