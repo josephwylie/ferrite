@@ -88,7 +88,7 @@ impl CockpitView {
             })
             .collect();
         EmptyBoardInputs {
-            cli_versions: self.cli_versions.clone(),
+            cli_versions: self.environment.cli_versions.clone(),
             rows,
             recent,
         }

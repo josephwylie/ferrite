@@ -168,11 +168,11 @@ fn prepare(
     cx: &mut Context<CockpitView>,
 ) {
     // Seeded, so no scene probes the operator's own CLIs.
-    view.cli_versions = Some((
+    view.environment.cli_versions = Some((
         "2.1.289 \u{b7} /usr/local/bin/claude".into(),
         "0.160.0 \u{b7} /usr/local/bin/codex".into(),
     ));
-    view.cli_probing = true;
+    view.environment.hold_board_ask();
     // The nav foot's `Ferrite 0.5`.
     view.facts.set_branches(
         branches

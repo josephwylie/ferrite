@@ -904,7 +904,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             };
             let setup: Setup = Box::new(move |view, _, cx| {
                 // Seeded, so opening never probes the operator's CLIs.
-                view.cli_versions = Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into()));
+                view.environment.cli_versions = Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into()));
                 view.toggle_settings(cx);
                 if let Some(settings) = view.settings_sheet(cx) {
                     settings.update(cx, |settings, cx| settings.show(page, cx));
@@ -915,7 +915,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "settings-search" => {
             let scene = conversation(label);
             let setup: Setup = Box::new(|view, window, cx| {
-                view.cli_versions = Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into()));
+                view.environment.cli_versions = Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into()));
                 view.toggle_settings(cx);
                 if let Some(settings) = view.settings_sheet(cx) {
                     settings.update(cx, |settings, cx| settings.search("codex", window, cx));
