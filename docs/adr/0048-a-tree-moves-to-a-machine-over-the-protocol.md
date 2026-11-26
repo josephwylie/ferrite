@@ -394,7 +394,7 @@ Windows window.
   copies are still its own, each started, resumed and shown on it as the
   window holds it then), a state machine: `Listing { files } → Copying {
   sent, total, file } → Finishing → Done { took, not copied } | Failed {
-  reason, again } | Cancelled { again }`, with `Occupied` after `Listing`
+  reason, again } | Stopping → Cancelled { again }`, with `Occupied` after `Listing`
   when a first copy finds the destination holding something, and `again`
   what its button does: Retry, Resume, or Add for one whose files all
   landed; none once its Machine was removed.
@@ -434,7 +434,17 @@ Windows window.
   slows is never said to end much sooner than it will.
 - **Only Cancel stops a copy.** ✕, Esc, a press outside the card and
   "Continue in background" let the card go and the copy go on. Cancel
-  keeps what was sent for its Resume and says so. A copy is cancelled or
+  keeps what was sent for its Resume and says so once the copy's thread
+  has ended: until it has heard the replies to what it had already asked
+  (64 requests or 4 MiB at most), the copy is **Stopping**, still under
+  way, and the card and its toast say "Cancelling… waiting for E to
+  answer" with neither Cancel nor Resume, since a file asked for may
+  still land and a Resume would follow a run that has not ended. A
+  reply is waited for 30 s at most (`tree::PATIENCE`) and a line that
+  goes ends the wait at once, so a Machine that answers nothing more
+  leaves it stopping until 30 s pass with no reply, or its link drops
+  (ssh gives up on a silent one after a minute), and then cancelled. A
+  copy is cancelled or
   done, never both (`Cancellation::end`): one that has asked all it sends
   and waits on the last replies stops as any other and stays unfinished,
   and a Cancel once all of it landed comes too late and changes nothing,

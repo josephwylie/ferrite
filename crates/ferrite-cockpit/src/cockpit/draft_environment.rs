@@ -158,6 +158,7 @@ impl CockpitView {
             machine: self.cockpit.read(cx).machine_saved_as(&key.machine),
             name: copy.order.placing.machine_name.clone(),
             detail: match copy.phase.done() {
+                _ if matches!(copy.phase, copies::Phase::Stopping { .. }) => "cancelling".into(),
                 Some(done) if copy.phase.live() => format!("copying {}%", (done * 100.).floor()).into(),
                 _ if copy.phase.live() => "copying".into(),
                 _ => "copy stopped".into(),
@@ -171,6 +172,7 @@ impl CockpitView {
                 let (title, machine) = (&copy.order.placing.title, &copy.order.placing.machine_name);
                 let (name, detail) = match (&copy.phase, copy.phase.done()) {
                     (copies::Phase::Done(_), _) => (format!("Copied {title} to {machine}"), "done".into()),
+                    (copies::Phase::Stopping { .. }, _) => (format!("Copy of {title} to {machine}"), "cancelling".into()),
                     (phase, Some(done)) if phase.live() => {
                         (format!("Copying {title} to {machine}"), format!("{}%", (done * 100.).floor()))
                     }

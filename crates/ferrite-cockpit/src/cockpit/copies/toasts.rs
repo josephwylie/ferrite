@@ -312,6 +312,7 @@ fn progress(phase: &Phase, dest: &str, machine: &str) -> NotificationProgress {
     let caption = match phase {
         &Phase::Listing { files: 0 } => "Listing files\u{2026}".to_string(),
         &Phase::Listing { files } => format!("Listing files\u{2026} {}", count(files)),
+        Phase::Stopping { .. } => super::words::stopping(machine),
         Phase::Finishing { .. } => {
             let dest = dest.trim_end_matches(['/', '\\']);
             format!("Adding {} on {machine}", dest.rsplit(['/', '\\']).next().unwrap_or(dest))

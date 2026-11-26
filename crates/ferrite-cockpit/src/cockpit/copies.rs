@@ -108,8 +108,15 @@ pub(crate) enum Phase {
         again: Option<Again>,
         when_back: bool,
     },
-    /// The operator stopped it. What it sent stays, for its Resume.
-    /// `reached`: how far it was then, out of 1, once that could be said.
+    /// The operator cancelled it, and its thread is still hearing the
+    /// replies to what it had already asked: a file asked for may still
+    /// land there. Cancelled once the thread says how it ended. `reached`:
+    /// how far it was when the Cancel came, out of 1, once that could be
+    /// said.
+    Stopping { reached: Option<f32> },
+    /// The operator stopped it, and its thread has ended. What it sent
+    /// stays, for its Resume. `reached`: how far it was then, out of 1,
+    /// once that could be said.
     Cancelled { again: Again, reached: Option<f32> },
 }
 
@@ -144,11 +151,12 @@ impl Again {
 }
 
 impl Phase {
-    /// While it runs: until it is a Project there, or stopped.
+    /// While it runs: until it is a Project there, or stopped and its
+    /// thread ended.
     pub(crate) fn live(&self) -> bool {
         matches!(
             self,
-            Phase::Listing { .. } | Phase::Copying { .. } | Phase::Finishing { .. }
+            Phase::Listing { .. } | Phase::Copying { .. } | Phase::Stopping { .. } | Phase::Finishing { .. }
         )
     }
 
@@ -165,6 +173,7 @@ impl Phase {
     /// How far it is, out of 1, once that can be said.
     pub(crate) fn done(&self) -> Option<f32> {
         match *self {
+            Phase::Stopping { reached } => reached,
             Phase::Copying { sent, total, .. } if total > 0 => Some((sent as f32 / total as f32).min(1.)),
             Phase::Copying { .. } | Phase::Finishing { .. } | Phase::Done(_) => Some(1.),
             _ => None,
@@ -279,6 +288,18 @@ impl Entry {
     /// copying it never goes back: a second pass listing the Project again,
     /// or a reading of less sent, leaves how far it is as it was.
     pub(super) fn hear(&mut self, heard: Heard, now: Instant, attached: bool) -> Option<Landed> {
+        if let Phase::Stopping { reached } = self.phase {
+            // Cancelled once the thread says how the copy ended, which its
+            // Resume follows.
+            if matches!(heard, Heard::Unreached { .. } | Heard::Copied { .. }) {
+                self.phase = Phase::Cancelled {
+                    again: Again::Retry,
+                    reached,
+                };
+            }
+            self.hear_late(heard);
+            return None;
+        }
         if !self.phase.live() {
             self.hear_late(heard);
             return None;
@@ -457,9 +478,10 @@ impl Entry {
     }
 
     /// The operator stops the copy while it lists or sends: what it sent
-    /// stays, for its Resume. What its thread still says counts
-    /// (`hear_late`). False when it was doing neither, or when all of it
-    /// had landed by then: too late, it is added.
+    /// stays, for its Resume. It is stopping until its thread has heard
+    /// the replies to what it already asked and says how it ended, which
+    /// its Resume follows (`hear`). False when it was doing neither, or
+    /// when all of it had landed by then: too late, it is added.
     pub(super) fn cancel(&mut self) -> bool {
         let again = match self.phase {
             Phase::Copying { .. } => Again::Resume,
@@ -473,7 +495,10 @@ impl Entry {
             Phase::Copying { total, .. } if total > 0 => self.phase.done(),
             _ => None,
         };
-        self.phase = Phase::Cancelled { again, reached };
+        self.phase = match self.run {
+            Some(_) => Phase::Stopping { reached },
+            None => Phase::Cancelled { again, reached },
+        };
         true
     }
 
@@ -952,7 +977,10 @@ impl Copies {
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         entry.run = None;
-                        if matches!(entry.phase, Phase::Listing { .. } | Phase::Copying { .. }) {
+                        if matches!(
+                            entry.phase,
+                            Phase::Listing { .. } | Phase::Copying { .. } | Phase::Stopping { .. }
+                        ) {
                             entry.phase = Phase::Failed {
                                 reason: "The copy stopped.".into(),
                                 again: Some(Again::Retry),
