@@ -37,7 +37,8 @@ pub(in crate::cockpit) enum BrowserChromeEvent {
     Act(ThreadKey, Action),
     /// The annotate button: begin an annotation, or close the one open.
     Annotate { thread: ThreadKey, begin: bool },
-    /// New tab: a capture under way stops.
+    /// New tab: a capture under way stops, and what was asked before it
+    /// lands without leaving it.
     NewTab(ThreadKey),
 }
 
@@ -506,7 +507,7 @@ impl CockpitView {
     }
 
     /// What a press in the chrome asked: an action on the pages, an
-    /// annotation begun or closed, a capture stopped for a new tab.
+    /// annotation begun or closed, a new tab begun.
     pub(in crate::cockpit) fn on_browser_chrome_event(
         &mut self,
         _: &Entity<BrowserChromeView>,
@@ -524,7 +525,12 @@ impl CockpitView {
             BrowserChromeEvent::Annotate { thread, begin: false } => {
                 self.close_browser_annotation(*thread, cx)
             }
-            BrowserChromeEvent::NewTab(thread) => self.cancel_browser_capture(*thread, cx),
+            BrowserChromeEvent::NewTab(thread) => {
+                self.cancel_browser_capture(*thread, cx);
+                if let Some(browser) = self.browsers.threads.get_mut(thread) {
+                    browser.begin_new_tab();
+                }
+            }
         }
     }
 }

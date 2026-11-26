@@ -103,7 +103,7 @@ enum Waiting {
     /// An action on the pages; `echoed` is the revision stamped for its
     /// echo (`Browsers::sent`), `recovery` the page it retired, `lands`
     /// whether the chrome's address acts on the page again once it is
-    /// taken (`BrowserChromeView::landed`).
+    /// taken (`BrowserChromeView::landed`): not once a new tab is begun.
     Action {
         ask: Ask<State>,
         echoed: Option<u64>,
@@ -190,6 +190,15 @@ impl Browsers {
     pub(super) fn shown_for_test(&self, thread: ThreadKey) -> Option<(State, Option<String>)> {
         let browser = self.threads.get(&thread)?;
         Some((browser.state.clone(), browser.error.clone()))
+    }
+
+    /// How many of `thread`'s actions the Server has yet to answer.
+    #[cfg(test)]
+    pub(super) fn unanswered_for_test(&self, thread: ThreadKey) -> usize {
+        self.threads.get(&thread).map_or(0, |browser| {
+            let action = |waiting: &&Waiting| matches!(waiting, Waiting::Action { .. });
+            browser.waiting.iter().filter(action).count()
+        })
     }
 
     /// Rechecked at queue dispatch and after native attachment becomes Ready.
@@ -1489,6 +1498,26 @@ impl Browser {
         self.waiting
             .iter()
             .any(|waiting| waiting.tab() == Some(tab) && of(waiting))
+    }
+
+    /// A new tab is being entered: what the window asked before still goes,
+    /// but its answer, however late it lands, leaves the new tab be.
+    fn begin_new_tab(&mut self) {
+        let asked = self.waiting.iter_mut().filter_map(|waiting| match waiting {
+            Waiting::Action { lands, .. } => Some(lands),
+            _ => None,
+        });
+        let pressed = self
+            .attaching
+            .iter_mut()
+            .flat_map(|attaching| &mut attaching.then)
+            .filter_map(|then| match then {
+                Then::Act(_, _, lands) => Some(lands),
+                Then::SelectActive => None,
+            });
+        for lands in asked.chain(pressed) {
+            *lands = false;
+        }
     }
 
     /// The page the controls act on: none while a new tab is being entered

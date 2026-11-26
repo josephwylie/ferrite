@@ -145,6 +145,9 @@ fn a_pending_new_tab_can_be_left_by_its_page_tab_or_escape(cx: &mut TestAppConte
     let tab = cx
         .debug_bounds(page_tab)
         .expect("the page keeps a tab while a new tab is pending");
+    // The Server has the page tab's Select only once New tab is pressed
+    // again, as over a slow line.
+    let stalled = super::machines::stall_browser_line();
     cx.simulate_click(tab.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(
@@ -155,6 +158,15 @@ fn a_pending_new_tab_can_be_left_by_its_page_tab_or_escape(cx: &mut TestAppConte
     cx.simulate_click(new_tab.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds("browser-notice").is_some());
+    stalled.let_go();
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.browsers.unanswered_for_test(thread) == 0)
+    });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("browser-notice").is_some(),
+        "the page tab's answer, landing after New tab, leaves the new tab"
+    );
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert!(

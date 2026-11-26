@@ -2732,13 +2732,60 @@ pub(super) fn browsed(
     cockpit.wait_for(ask).unwrap()
 }
 
+/// While set, `browser_core`'s Server takes nothing more its window sends,
+/// as over a line that stalled, till the test lets it go (`stall_browser_line`).
+static BROWSER_LINE_STALLED: Mutex<bool> = Mutex::new(false);
+static BROWSER_LINE_LET_GO: std::sync::Condvar = std::sync::Condvar::new();
+
+/// `browser_core`'s Server takes nothing its window sends till the stall
+/// drops: whatever the window asks meanwhile is answered after, however
+/// fast the machine.
+pub(super) fn stall_browser_line() -> LineStalled {
+    *BROWSER_LINE_STALLED.lock().unwrap() = true;
+    LineStalled
+}
+
+#[must_use = "the line goes again when the stall drops"]
+pub(super) struct LineStalled;
+
+impl LineStalled {
+    /// The Server takes what the window sent again.
+    pub(super) fn let_go(self) {}
+}
+
+impl Drop for LineStalled {
+    fn drop(&mut self) {
+        *BROWSER_LINE_STALLED.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        BROWSER_LINE_LET_GO.notify_all();
+    }
+}
+
 /// A Cockpit attached to a Server whose browser window has one tab open on
 /// a local page, and the Thread and tab document it belongs to.
 pub(super) fn browser_core(name: &str) -> (Cockpit, ThreadKey, ferrite_core::browser::Document) {
     use ferrite_core::browser::Action;
     use ferrite_client::cockpit::{Attach, Endpoint, ServerState};
+    /// What the window sends, unless the line is stalled.
+    struct Line(Box<dyn std::io::Write + Send>);
+    impl std::io::Write for Line {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let mut stalled = BROWSER_LINE_STALLED.lock().unwrap();
+            while *stalled {
+                stalled = BROWSER_LINE_LET_GO.wait(stalled).unwrap();
+            }
+            drop(stalled);
+            self.0.write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.0.flush()
+        }
+    }
     let dir = scratch(name);
-    let dial = ferrite_server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
+    let served = ferrite_server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
+    let dial: machine::Dial = Box::new(move || {
+        let tunnel = served()?;
+        Ok(Tunnel { to: Box::new(Line(tunnel.to)), ..tunnel })
+    });
     let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
     let mut core = Cockpit::attach(Attach {
         saved_as: ferrite_core::MachineKey(Some("me@box".into())),
