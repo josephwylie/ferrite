@@ -509,8 +509,7 @@ impl CockpitView {
             if let Some(rect) = rect {
                 cards.inset = theme::tx_inset_at(rect.w, true);
             }
-            Box::new(move |window: &mut Window, cx: &mut gpui::App| cards.render(window, cx))
-                as ferrite_pane::cell::DecisionsDraw
+            cards
         });
         // The slot's width as the board laid it out this frame (a dragged
         // seam included), else the Pane's rect's: what the meter says the

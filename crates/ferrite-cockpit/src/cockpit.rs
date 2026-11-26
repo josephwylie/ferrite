@@ -157,13 +157,14 @@ use ferrite_ui::frame::settings;
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 use ferrite_ui::provider::effort_title;
 pub use history::{GoBack, GoForward};
+// A Decision card's note answers these, so they are the Pane's.
+pub use ferrite_pane::composer::{Interrupt, Submit};
+pub use ferrite_pane::decision::{PickOption1, PickOption2, PickOption3, PickOption4};
 pub use tools::{GoToFile, ToggleChanges, ToggleFileTree, ToggleFiles, ToggleTerminal};
 
 actions!(
     cockpit,
     [
-        Submit,
-        Interrupt,
         Allow,
         Deny,
         Always,
@@ -202,10 +203,6 @@ actions!(
         CopySelection,
         CiteSelection,
         Paste,
-        PickOption1,
-        PickOption2,
-        PickOption3,
-        PickOption4,
         OpenSettings,
         ToggleNav,
         TogglePanel,
@@ -995,7 +992,7 @@ impl CockpitView {
         // A new window holds each machine for the first time: none again.
         let _ = panel.hold(&cockpit);
         ferrite_pane::pane::init_components(cx);
-        subagents::init(cx);
+        decision::init(cx);
         cockpit.settings_changed(&prefs.settings);
         // This window says what it draws from its first frame on, so no
         // Thread streams to it before it is drawn (ADR 0032).

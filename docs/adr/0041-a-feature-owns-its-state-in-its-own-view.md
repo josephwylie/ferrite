@@ -346,16 +346,24 @@ that happened to touch it, and nothing in the code said whose a field was.
   and the engine's lifetime. Neither of the first two earned a view, and
   the pages stay the root's (below, What does not get a view).
 - **The Decisions are the twentieth.** `DecisionsView`
-  (`cockpit/decisions.rs`) owns the thread rules option 2 made where the
+  (`ferrite_pane::decision` since the 2026-11-26 amendment, beside the
+  cards that press through it; the root's side is `cockpit/decisions.rs`)
+  owns the thread rules option 2 made where the
   provider offered no standing answer, and each Pane's `RequestForms`, by
   Pane: the cursor, the amend note, the split button's menu, a question's
   or form's answers. One view for the window, by Pane, like the File
   Surface's: the entry is made with its Pane, so a card always has one to
   draw from, goes with it (`sync_panes`), and a draft's first send hands
-  it to the Thread's Pane (`adopt`). It has no render of its own: the root
-  draws the cards into each Pane's transcript from a snapshot it takes in
-  `decision_inputs` (`Cards`), and a card drawn inside a cached transcript
-  presses through the view; no compact transcript draws one. It answers
+  it to the Thread's Pane (`adopt`). It has no render of its own: the
+  cards draw from a snapshot the root takes in `decision_inputs`
+  (`Cards`, a value), which the cell draws on its plane and the
+  transcript as its last rows; a card presses through the view, which it
+  holds weakly, so a card drawn inside a cached transcript reads nothing
+  of the root; no compact transcript draws one. Until that amendment the
+  cards were the Cockpit's and the root handed the cell a draw of its own
+  for its plane's. The verbs a card's note answers (`Submit`,
+  `Interrupt`, `PickOption1`-`4`) are declared beside the Composer and
+  the cards under the `cockpit` names the keymap binds. It answers
   the Decision keys (↑ ↓ ⏎ esc ⇥, `1`–`4`): they stay actions on the
   root's element, since the view has no element in the focus chain, and
   each hands the view the request the Pane shows with what only the root
