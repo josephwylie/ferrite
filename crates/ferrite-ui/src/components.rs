@@ -271,6 +271,19 @@ impl MenuDoor {
     ) -> F {
         face.menu_button(self.up, tip, self.record, press)
     }
+
+    /// Whether its menu is up from it: for a face that draws its own open
+    /// look (`hung`).
+    pub fn up(&self) -> bool {
+        self.up
+    }
+
+    /// `face` as it is, its bounds recorded for the menu to hang from: a
+    /// face that draws its own open look and takes its own press, as the
+    /// Composer's chips do.
+    pub fn hung<E: ParentElement>(self, face: E) -> E {
+        on_bounds(face, self.record)
+    }
 }
 
 /// A rename editor with its keys beside it while it edits: `↵ save · esc

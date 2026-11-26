@@ -579,3 +579,174 @@ fn a_control_whose_popup_is_up_shows_no_tooltip(cx: &mut TestAppContext) {
         press_nowhere(cx);
     }
 }
+
+/// The second of two Panes asks for itself from its cell (`PaneEvent`):
+/// a right press opens its own Thread's menu, files over its box are its
+/// own, its `+` opens its own menu and `/` lands in its own box, its
+/// details card's right press and PR row are its own Thread's, its
+/// Review's head dragged onto the cell swaps the two on its board, and a
+/// new draft's hero word drops that draft's Project menu: none of it the
+/// first Pane's.
+#[gpui::test]
+fn the_second_panes_cell_asks_for_itself(cx: &mut TestAppContext) {
+    use crate::cockpit::surfaces::SurfaceId;
+    use ferrite_core::layout::Zone;
+    let (view, _fake, cx) = window(cx, "popups-second-pane", 2);
+    view.update(cx, |view, cx| {
+        view.focus_pane(1, cx);
+        cx.notify();
+    });
+    tick(cx);
+    let (first, second) = view.read_with(cx, |view, _| (view.panes[0].identity, view.panes[1].identity));
+    let thread = second.thread().unwrap();
+    let key = thread.thread().get();
+    let cell = debug_bounds(cx, format!("view-thread-{key}")).expect("the second Pane is shown");
+
+    let right = |at: gpui::Point<Pixels>, cx: &mut gpui::VisualTestContext| {
+        cx.simulate_event(gpui::MouseDownEvent {
+            button: gpui::MouseButton::Right,
+            position: at,
+            modifiers: gpui::Modifiers::none(),
+            click_count: 1,
+            first_mouse: false,
+        });
+        cx.simulate_event(gpui::MouseUpEvent {
+            button: gpui::MouseButton::Right,
+            position: at,
+            modifiers: gpui::Modifiers::none(),
+            click_count: 1,
+        });
+        tick(cx);
+    };
+    right(cell.center(), cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.context_menu().map(|menu| menu.target)),
+        Some(MenuTarget::Pane(thread)),
+        "its cell's right press opens its own Thread's menu"
+    );
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+
+    let dir = scratch("popups-second-pane-files");
+    std::fs::create_dir_all(&dir).unwrap();
+    let notes = dir.join("notes.txt");
+    std::fs::write(&notes, "notes").unwrap();
+    let editor = cx.debug_bounds("focused-prompt-editor").expect("its Composer").center();
+    cx.simulate_event(gpui::FileDropEvent::Entered {
+        position: editor,
+        paths: gpui::ExternalPaths(vec![notes.clone()].into()),
+    });
+    tick(cx);
+    assert_eq!(view.read_with(cx, |view, _| view.file_drop_over), Some(second), "the files are over its box");
+    cx.simulate_event(gpui::FileDropEvent::Pending { position: editor });
+    cx.simulate_event(gpui::FileDropEvent::Submit { position: editor });
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.file_drop_over, None, "the drop ends the hover");
+        assert_eq!(view.panes[1].read(cx).composer.read(cx).files().len(), 1, "staged in its box");
+        assert!(view.panes[0].read(cx).composer.read(cx).files().is_empty());
+    });
+
+    press(cx, "composer-attach".into());
+    tick(cx);
+    assert!(
+        view.read_with(cx, |view, _| matches!(view.popup(), Some(Popup::Attach { pane, .. }) if *pane == second)),
+        "its + opens its own menu"
+    );
+    press(cx, "choice-row-2".into());
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[1].read(cx).composer.read(cx).text(), "/", "the / lands in its box");
+        assert_eq!(view.panes[0].read(cx).composer.read(cx).text(), "");
+    });
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+
+    cx.simulate_keystrokes("cmd-shift-b");
+    tick(cx);
+    let card = cx.debug_bounds("details-card").expect("its details card");
+    right(card.center(), cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.context_menu().map(|menu| menu.target)),
+        Some(MenuTarget::Details(thread)),
+        "the card's right press opens its own card's menu"
+    );
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    let pr = (0..4)
+        .filter_map(|at| debug_bounds(cx, format!("details-item-branch-{at}")))
+        .last()
+        .expect("its PR's row");
+    cx.simulate_click(pr.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        let number = pr_with_checks().number;
+        assert_eq!(view.active_surface(thread), Some(SurfaceId::PullRequest(number)), "its PR opens in its Panel");
+        assert_ne!(view.active_surface(first.thread().unwrap()), Some(SurfaceId::PullRequest(number)));
+    });
+    cx.simulate_keystrokes("cmd-shift-b");
+    tick(cx);
+
+    view.update(cx, |view, cx| {
+        let composer = view.panes[1].read(cx).composer.clone();
+        let reading = view.prefs.settings.reading_size;
+        let review = cx.new(|cx| {
+            ferrite_review::ReviewView::new(composer, ferrite_reviewr::model::Scope::Uncommitted, reading, cx)
+        });
+        view.panes[1].review.show(review, "main".into());
+        cx.notify();
+    });
+    for _ in 0..64 {
+        let frames = cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+        if frames == 0 {
+            break;
+        }
+        cx.executor().advance_clock(Duration::from_millis(16));
+    }
+    let pane_x = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| {
+            view.read(cx)
+                .pane_rects(window, cx)
+                .into_iter()
+                .find(|(at, _)| *at == 1)
+                .expect("the second Pane is on the board")
+                .1
+                .x
+        })
+    };
+    let before = pane_x(cx);
+    let slot = cx.debug_bounds("review-slot").expect("its Review beside it");
+    let cell = debug_bounds(cx, format!("view-thread-{key}")).expect("the second Pane");
+    let head = gpui::point(slot.center().x, slot.top() + px(12.));
+    cx.simulate_mouse_down(head, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(head + gpui::point(px(-20.), px(0.)), Some(gpui::MouseButton::Left), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_mouse_move(cell.center(), Some(gpui::MouseButton::Left), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.dragging, Some(crate::cockpit::reader_leaf(thread)), "its Review is lifted");
+        assert_eq!(
+            view.drop_preview,
+            Some((crate::cockpit::pane_leaf(second), Zone::Swap)),
+            "over its cell's middle, the drop would swap the two"
+        );
+    });
+    cx.simulate_mouse_up(cell.center(), gpui::MouseButton::Left, gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!((view.dragging, view.drop_preview), (None, None), "the drop ends the drag");
+    });
+    assert!(pane_x(cx) > before, "the Review and the Pane swapped: {before} -> {}", pane_x(cx));
+
+    cx.simulate_keystrokes("cmd-n");
+    tick(cx);
+    let draft = view.read_with(cx, |view, cx| view.panes[view.focused(cx)].identity);
+    assert!(matches!(draft, PaneIdentity::Draft(_)), "a draft, the third Pane");
+    press(cx, "start-hero-project".into());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        let menu = view.band_menu().expect("the hero word drops a menu");
+        assert_eq!((menu.pane, menu.kind.chip), (draft, ferrite_pane::pane::BandChip::Project));
+    });
+}

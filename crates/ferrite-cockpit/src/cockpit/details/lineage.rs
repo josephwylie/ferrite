@@ -10,6 +10,7 @@ use super::super::delegates::{Delegator, Serving};
 use super::super::subagents::{agent_name, parent_of, state_word};
 use super::super::transcript_glue::agent_clock;
 use super::*;
+use super::super::pane_cell::{PaneAsk, PaneAsks};
 use ferrite_core::activity::{ActivityView, AgentStatus, Subject, SubjectView};
 use ferrite_core::delegate::{DelegateId, Delegated, Delegating, Status};
 use ferrite_core::server::ServerId;
@@ -331,13 +332,12 @@ impl Lineage {
     pub(super) fn render(
         &self,
         mut block: Div,
-        thread: ThreadKey,
         provider: Provider,
         previous_open: bool,
         pages: usize,
-        cx: &mut Context<CockpitView>,
+        asks: &PaneAsks,
+        cx: &gpui::App,
     ) -> Div {
-        use super::super::surfaces::SurfaceAction;
         if self.delegated_from.is_some() || self.parent.is_some() || !self.running.is_empty() {
             let running = self.running_count;
             block = block.child(
@@ -363,7 +363,7 @@ impl Lineage {
                 "details-lineage-delegated-from".into(),
                 from,
                 (icons::CORNER_LEFT_UP, INK_SUBTLE),
-                thread,
+                asks,
                 cx,
             ));
         }
@@ -372,11 +372,11 @@ impl Lineage {
                 "details-lineage-parent".into(),
                 parent,
                 (icons::CORNER_LEFT_UP, INK_SUBTLE),
-                thread,
+                asks,
                 cx,
             ));
         }
-        let agent = |agent: &Relative, cx: &mut Context<CockpitView>| {
+        let agent = |agent: &Relative, cx: &gpui::App| {
             let selector = match &agent.leads {
                 Leads::Elsewhere { .. } | Leads::Delegator { .. } => {
                     format!("details-lineage-delegate-{}", agent.title)
@@ -384,7 +384,7 @@ impl Lineage {
                 Leads::Subject(_) => format!("details-lineage-agent-{}", agent.title),
             };
             let mark = ferrite_ui::provider::mark(agent.provider.unwrap_or(provider));
-            relative(selector, agent, mark, thread, cx)
+            relative(selector, agent, mark, asks, cx)
         };
         for running in &self.running {
             block = block.child(agent(running, cx));
@@ -438,13 +438,8 @@ impl Lineage {
                     INK_SUBTLE,
                 ));
         block = block.child(
-            press("details-lineage-previous".into(), previous, cx).on_click(cx.listener(
-                move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.apply_surface(thread, SurfaceAction::TogglePreviousAgents);
-                    cx.notify();
-                },
-            )),
+            press("details-lineage-previous".into(), previous, cx)
+                .on_click(asks.press(PaneAsk::PreviousAgents)),
         );
         if !previous_open {
             return block;
@@ -460,13 +455,7 @@ impl Lineage {
                 .child(format!("Show {more} more"));
             block = block.child(
                 press(format!("details-lineage-show-more-{more}"), show_more, cx)
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        if let Some(index) = view.pane_for(thread) {
-                            view.panes[index].read(cx).details.show_more();
-                            cx.notify();
-                        }
-                    })),
+                    .on_click(asks.press(PaneAsk::MorePreviousAgents)),
             );
         }
         block
@@ -485,8 +474,8 @@ fn relative(
     selector: String,
     relative: &Relative,
     (glyph, ink): (&'static str, u32),
-    thread: ThreadKey,
-    cx: &mut Context<CockpitView>,
+    asks: &PaneAsks,
+    cx: &gpui::App,
 ) -> AnyElement {
     let group = SharedString::from(format!("{selector}-group"));
     let cancel = match &relative.leads {
@@ -500,13 +489,7 @@ fn relative(
         Leads::Subject(subject) => {
             let parent = selector == "details-lineage-parent";
             press(selector.clone(), body, cx)
-                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                    cx.stop_propagation();
-                    match parent {
-                        true => view.select_subject(thread, subject.clone(), window, cx),
-                        false => view.open_subagent(thread, subject.clone(), cx),
-                    }
-                }))
+                .on_click(asks.press(PaneAsk::Subject { subject, parent }))
                 .into_any_element()
         }
         Leads::Elsewhere {
@@ -524,15 +507,11 @@ fn relative(
             .w_full()
             .when_some(tooltip, |row, tip| row.tooltip(ferrite_ui::menu::tooltip(tip)))
             .child(
-                press(selector.clone(), body, cx).on_click(cx.listener(
-                    move |view, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        match delegator {
-                            true => view.open_delegator(&server, there, cx),
-                            false => view.open_elsewhere(&server, there, cx),
-                        }
-                    },
-                )),
+                press(selector.clone(), body, cx).on_click(asks.press(PaneAsk::Elsewhere {
+                    server,
+                    thread: there,
+                    delegator,
+                })),
             )
             .into_any_element(),
         Leads::Elsewhere { reached: false, .. } | Leads::Delegator { reached: false, .. } => {
@@ -574,10 +553,7 @@ fn relative(
                         .justify_center()
                         .size(px(20.))
                         .child(icon(icons::STOP, 12., BLOCKED))
-                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.cancel_delegate(thread, delegate, cx)
-                        })),
+                        .on_click(asks.press(PaneAsk::CancelDelegate(delegate))),
                 ),
         )
         .into_any_element()

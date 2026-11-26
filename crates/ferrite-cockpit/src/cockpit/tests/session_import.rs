@@ -772,7 +772,7 @@ fn draft_import_replaces_the_draft_and_focuses_the_imported_thread(cx: &mut Test
     });
     view.update(cx, |view, cx| {
         assert!(
-            view.popover_element(0, cx).is_some(),
+            view.composer_menu_over(0, cx).is_some(),
             "the derived Draft menu reaches its one rendered popover slot"
         );
     });

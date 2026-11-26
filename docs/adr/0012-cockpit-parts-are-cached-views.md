@@ -16,10 +16,11 @@ hover sweep built each Pane 135 times in 5s.
 
 - Under the loops overlay the nav's rows and each Pane's cell are a cached
   view of their own, `PartView` (`cockpit/parts.rs`), mounted in the box the
-  Cockpit's layout gave the inline part. A part's view draws by calling back
-  into the Cockpit (`render_part`), so every element and listener in it is
-  the Cockpit's as before, and it tracks what it reads (vendored gpui,
-  `tracking_reads`).
+  Cockpit's layout gave the inline part. A Pane's part reads what its cell
+  draws of the window through a `Source` on the Cockpit (`cell_inputs`) and
+  draws the cell in its own context (`pane_cell`); a press in it emits a
+  `PaneEvent` naming the Pane, which the Cockpit hears. It tracks what it
+  reads (vendored gpui, `tracking_reads`), the Cockpit included.
 - Conservative by default: every part reads the Cockpit, so the Cockpit's
   own notify still rebuilds them all. Only the hot paths are precise:
   `notify_part` (a keystroke its Pane, a stream delta its Pane and the nav,

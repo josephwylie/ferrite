@@ -748,13 +748,4 @@ impl CockpitView {
             (_, false) => (pane::ChipMark::Icon(ferrite_ui::icons::SERVER), name),
         })
     }
-
-    /// The draft in Pane `index`'s band, `chips`, with why Send is not
-    /// there beside the copy's chip while it waits on a copy.
-    pub(super) fn noting_copy(&self, index: usize, mut chips: Vec<AnyElement>, cx: &App) -> Vec<AnyElement> {
-        if let Some((_, copy)) = self.waited_on(index, cx) {
-            chips.insert(1, copy_waits_note(copy.phase.live()).into_any_element());
-        }
-        chips
-    }
 }

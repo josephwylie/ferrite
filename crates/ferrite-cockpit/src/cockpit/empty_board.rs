@@ -112,46 +112,6 @@ impl CockpitView {
         }
     }
 
-    /// An empty draft's hero project word (`pane::start_hero`, Codex's
-    /// home): the draft's Project, a switcher that drops the Project menu
-    /// under it (`Band::from_hero`).
-    pub(super) fn draft_hero(&self, index: usize, cx: &mut Context<Self>) -> Option<pane::Hero> {
-        let draft = self.panes[index].read(cx).draft()?;
-        let project = self
-            .cockpit
-            .read(cx)
-            .project(draft.binding.project())
-            .map(|project| SharedString::from(project.title.clone()))
-            .unwrap_or_else(|| "Project".into());
-        let composer = self.panes[index].read(cx).composer.clone();
-        let word = pane::hero_project(project, true).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                // Stop the press so the root's dismissal cannot close what
-                // this opens.
-                cx.stop_propagation();
-                if let Some(at) = view.panes.iter().position(|pane| pane.read(cx).composer == composer) {
-                    view.focus_pane(at, cx);
-                }
-                view.open_band_menu(pane::BandChip::Project, true, cx);
-            }),
-        );
-        Some(pane::Hero::Project(
-            ferrite_ui::components::on_bounds(word, self.record_trigger(HERO_TRIGGER.into()))
-                .into_any_element(),
-        ))
-    }
-
-    /// An empty Thread's hero: its Project's word, settled, so a word and
-    /// not a switcher, or the scratch wording for a Thread with no Project.
-    /// None while the Thread's facts are unknown.
-    pub(super) fn thread_hero(&self, thread: ThreadKey) -> Option<pane::Hero> {
-        Some(match self.facts.get(thread)?.project_label.clone() {
-            Some(project) => pane::Hero::Project(pane::hero_project(project, false).into_any_element()),
-            None => pane::Hero::Scratch,
-        })
-    }
-
     pub(super) fn no_environment(&self, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
         div()
@@ -185,4 +145,39 @@ impl CockpitView {
                     .on_click(cx.listener(|view, _, _, cx| view.open_connections(cx))),
             )
     }
+}
+
+/// An empty draft's hero project word (`pane::start_hero`, Codex's home):
+/// the draft's Project, `project`, a switcher that drops the Project menu
+/// under it (`Band::from_hero`).
+pub(super) fn draft_hero(
+    project: &SharedString,
+    pane: &Entity<PaneView>,
+    door: ferrite_ui::components::MenuDoor,
+    asks: &super::pane_cell::PaneAsks,
+    cx: &gpui::App,
+) -> Option<pane::Hero> {
+    pane.read(cx).draft()?;
+    // The press stops here, so the root's dismissal cannot close what it
+    // opens.
+    let word = pane::hero_project(project.clone(), true).on_mouse_down(
+        MouseButton::Left,
+        asks.press(super::pane_cell::PaneAsk::BandMenu {
+            chip: pane::BandChip::Project,
+            from_hero: true,
+        }),
+    );
+    Some(pane::Hero::Project(door.hung(word).into_any_element()))
+}
+
+/// An empty Thread's hero: its Project's word, settled, so a word and not
+/// a switcher, or the scratch wording for a Thread with no Project. None
+/// while the Thread's facts (its Project's and branch's words) are unknown.
+pub(super) fn thread_hero(
+    facts: Option<&(Option<SharedString>, Option<SharedString>)>,
+) -> Option<pane::Hero> {
+    Some(match facts?.0.clone() {
+        Some(project) => pane::Hero::Project(pane::hero_project(project, false).into_any_element()),
+        None => pane::Hero::Scratch,
+    })
 }

@@ -2,11 +2,12 @@
 //! reserve a conversation lane beside the persistent card; narrow canvases
 //! expose the same card through its title bar control.
 
-mod content;
+pub(super) mod content;
 mod lineage;
 
 use super::*;
-use ferrite_pane::details::{Density, Standing};
+use super::pane_cell::{DetailsRead, PaneAsk, PaneAsks};
+use ferrite_pane::details::{DetailsCard, Density, Standing};
 use ferrite_ui::motion;
 use ferrite_ui::theme::*;
 
@@ -93,30 +94,7 @@ impl CockpitView {
 
     /// Inline context requires a readable conversation lane and 160px of usable height.
     pub(super) fn details_inline(&self, index: usize, cx: &gpui::App) -> bool {
-        self.panes[index].read(cx).details.canvas.get().is_some_and(|card| {
-            let current = f32::from(card.size.width);
-            let fit = self.panes[index].read(cx).details.fit_width.get().unwrap_or(current);
-            fit >= 280. + 12. + 32. + 48. + 640.
-                && card.size.height >= px(160. + 24. + self.panes[index].read(cx).details.top_inset.get())
-        })
-    }
-
-    pub(super) fn details_lane_width(&self, index: usize, cx: &gpui::App) -> f32 {
-        if self.details_inline(index, cx) && self.details_inline_open(index) {
-            let width = self.panes[index]
-                .read(cx).details
-                .canvas
-                .get()
-                .map_or(0., |card| f32::from(card.size.width));
-            let lane_right = width - DETAILS_W - DETAILS_GAP - 32.;
-            let chat_width = TX_COLUMN_MAX_W.min(lane_right - 48.);
-            let left = ((width - chat_width) / 2.)
-                .min(lane_right - chat_width)
-                .max(48.);
-            (width - 2. * left - chat_width).max(0.)
-        } else {
-            0.
-        }
+        inline(&self.panes[index].read(cx).details)
     }
 
     /// A card open in a Pane that no longer holds the focus shuts: Escape
@@ -195,7 +173,7 @@ impl CockpitView {
         toast_inset(cards, board.x + board.w)
     }
 
-    fn details_inline_open(&self, index: usize) -> bool {
+    pub(super) fn details_inline_open(&self, index: usize) -> bool {
         self.panes[index]
             .thread()
             .and_then(|thread| self.panel.surfaces.get(thread))
@@ -206,182 +184,6 @@ impl CockpitView {
         self.panes
             .get(self.focused(cx))
             .is_some_and(|pane| pane.read(cx).details.focus.contains_focused(window, cx))
-    }
-
-    /// Draw the thread's context using the canvas placement and available density.
-    pub(super) fn details_card(
-        &self,
-        index: usize,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let pane = self.panes.get(index)?;
-        let thread = pane.thread()?;
-        let canvas = pane.read(cx).details.canvas.get()?;
-        let find_open = pane
-            .read(cx).transcript()
-            .is_some_and(|transcript| transcript.read(cx).find_open());
-        pane.read(cx).details.top_inset.set(if find_open {
-            2.0 * FLOAT_OFFSET + FLOAT_ROW_H - DETAILS_GAP
-        } else {
-            0.
-        });
-        let inline = self.details_inline(index, cx);
-        if inline {
-            pane.read(cx).details.set_open(false);
-        }
-        let standing = if inline {
-            if self.details_inline_open(index) {
-                Standing::Open
-            } else {
-                Standing::Hidden
-            }
-        } else {
-            pane.read(cx).details.standing(
-                motion::DIALOG_OUT,
-                cx.background_executor().now(),
-                motion::reduced_motion(cx),
-            )
-        };
-        if standing == Standing::Hidden {
-            pane.read(cx).details.drawn.set(None);
-            return None;
-        }
-        let top = if find_open {
-            2.0 * FLOAT_OFFSET + FLOAT_ROW_H
-        } else {
-            DETAILS_GAP
-        };
-        let available = (f32::from(canvas.size.height) - top - DETAILS_GAP).max(0.);
-        let content =
-            self.details_content(thread, &pane.read(cx).selected, pane.read(cx).details.previous_pages(), cx);
-        let width = (f32::from(canvas.size.width) - 2. * DETAILS_GAP).clamp(0., DETAILS_W);
-        let measured = pane.read(cx).details.measurements.clone();
-        measured.borrow_mut().prepare(
-            content.key(thread, width, Density::Full),
-            content.key(thread, width, Density::Compact),
-        );
-        let density = measured.borrow().density(available);
-        let key = content.key(thread, width, density);
-        let scrolling_height = content.scrolling_height(density);
-        let sections = ferrite_ui::components::on_bounds(
-            div()
-                .relative()
-                .debug_selector(move || {
-                    format!(
-                        "details-density-{}",
-                        match density {
-                            Density::Full => "full",
-                            Density::Compact => "compact",
-                            Density::Essential => "essential",
-                        }
-                    )
-                })
-                .child(content.render(thread, density, cx)),
-            move |bounds, _, cx| {
-                let height = (f32::from(bounds.size.height) - scrolling_height + 2.).max(0.);
-                if measured.borrow_mut().record(density, &key, height) {
-                    cx.refresh_windows();
-                }
-            },
-        );
-        let scroll = pane.read(cx).details.scroll.clone();
-        let body = div()
-            .relative()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .child(
-                div()
-                    .id(("details-body", thread.thread().get() as usize))
-                    .debug_selector(|| "details-body".into())
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&scroll)
-                    .text_size(px(13.))
-                    .font_weight(W_LABEL)
-                    .child(sections),
-            )
-            .child(ferrite_ui::components::scrollbar_layer().child(
-                ferrite_ui::components::scrollbar_bar("details-scrollbar", &scroll),
-            ));
-        let card = ferrite_ui::menu::float()
-            .id(("details-card", thread.thread().get() as usize))
-            .debug_selector(|| "details-card".into())
-            .key_context("ThreadDetails")
-            .track_focus(&pane.read(cx).details.focus)
-            .flex()
-            .flex_col()
-            .w(px(DETAILS_W))
-            .rounded(px(16.))
-            .bg(rgb(0x111111))
-            .border_color(rgba(0xffffff1a))
-            .max_w_full()
-            .max_h_full()
-            .min_w_0()
-            .overflow_hidden()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.open_context_menu(MenuTarget::Details(thread), event.position, cx);
-                }),
-            )
-            .on_mouse_down_out(
-                cx.listener(move |view, event: &MouseDownEvent, window, cx| {
-                    let on_toggle = view
-                        .panes
-                        .iter()
-                        .find(|pane| pane.thread() == Some(thread))
-                        .is_some_and(|pane| pane.read(cx).details.on_opener(event.position));
-                    let choosing_items = view
-                        .context_menu()
-                        .is_some_and(|menu| menu.target == MenuTarget::Details(thread));
-                    if !inline && !on_toggle && !choosing_items {
-                        view.close_details(thread, window, cx);
-                    }
-                }),
-            )
-            .child(body);
-        let drawn = pane.read(cx).details.drawn.clone();
-        // The measure is inside the card's 1px edge.
-        let card = ferrite_ui::components::on_bounds(card, move |bounds, _, _| {
-            drawn.set(Some(bounds.dilate(px(1.))))
-        });
-        let card = match standing {
-            Standing::Leaving(left) => {
-                motion::float_out(left, motion::DIALOG_OUT, card, DETAILS_ORIGIN).into_any_element()
-            }
-            _ if inline => card.into_any_element(),
-            _ => motion::dialog_in_casting(
-                ("details-card-in", thread.thread().get() as usize),
-                card,
-                ferrite_ui::components::float_shadow,
-                DETAILS_ORIGIN,
-            )
-            .into_any_element(),
-        };
-        Some(
-            div()
-                .absolute()
-                .top(px(top))
-                .bottom(px(DETAILS_GAP))
-                .left(px(DETAILS_GAP))
-                .right(px(DETAILS_GAP))
-                .flex()
-                .justify_end()
-                .items_start()
-                .child(card)
-                .into_any_element(),
-        )
     }
 
     pub(super) fn details_toggle(&self, cx: &mut Context<Self>) -> gpui::component::button::Button {
@@ -426,6 +228,207 @@ impl CockpitView {
         )));
         rows
     }
+}
+
+
+/// Whether the card stands inline beside the transcript: a readable
+/// conversation lane and 160px of usable height.
+pub(super) fn inline(details: &DetailsCard) -> bool {
+    details.canvas.get().is_some_and(|card| {
+        let current = f32::from(card.size.width);
+        let fit = details.fit_width.get().unwrap_or(current);
+        fit >= 280. + 12. + 32. + 48. + 640. && card.size.height >= px(160. + 24. + details.top_inset.get())
+    })
+}
+
+/// The lane the card keeps beside the transcript, while it stands inline
+/// and open there (`inline_open`).
+pub(super) fn lane_width(details: &DetailsCard, inline_open: bool) -> f32 {
+    if inline(details) && inline_open {
+        let width = details.canvas.get().map_or(0., |card| f32::from(card.size.width));
+        let lane_right = width - DETAILS_W - DETAILS_GAP - 32.;
+        let chat_width = TX_COLUMN_MAX_W.min(lane_right - 48.);
+        let left = ((width - chat_width) / 2.).min(lane_right - chat_width).max(48.);
+        (width - 2. * left - chat_width).max(0.)
+    } else {
+        0.
+    }
+}
+
+/// Draw the thread's context using the canvas placement and available
+/// density: `inline_open` as the window holds it, and `choosing` while
+/// its menu is up.
+pub(super) fn card(
+    thread: ThreadKey,
+    pane: &Entity<PaneView>,
+    (inline_open, choosing): (bool, bool),
+    details: &DetailsRead,
+    asks: &PaneAsks,
+    cx: &mut gpui::App,
+) -> Option<AnyElement> {
+    let canvas = pane.read(cx).details.canvas.get()?;
+    let find_open = pane
+        .read(cx).transcript()
+        .is_some_and(|transcript| transcript.read(cx).find_open());
+    pane.read(cx).details.top_inset.set(if find_open {
+        2.0 * FLOAT_OFFSET + FLOAT_ROW_H - DETAILS_GAP
+    } else {
+        0.
+    });
+    let inline = inline(&pane.read(cx).details);
+    if inline {
+        pane.read(cx).details.set_open(false);
+    }
+    let standing = if inline {
+        if inline_open {
+            Standing::Open
+        } else {
+            Standing::Hidden
+        }
+    } else {
+        pane.read(cx).details.standing(
+            motion::DIALOG_OUT,
+            cx.background_executor().now(),
+            motion::reduced_motion(cx),
+        )
+    };
+    if standing == Standing::Hidden {
+        pane.read(cx).details.drawn.set(None);
+        return None;
+    }
+    let top = if find_open {
+        2.0 * FLOAT_OFFSET + FLOAT_ROW_H
+    } else {
+        DETAILS_GAP
+    };
+    let available = (f32::from(canvas.size.height) - top - DETAILS_GAP).max(0.);
+    let content = {
+        let view = pane.read(cx);
+        details(thread, &view.selected, view.details.previous_pages(), cx)?
+    };
+    let width = (f32::from(canvas.size.width) - 2. * DETAILS_GAP).clamp(0., DETAILS_W);
+    let measured = pane.read(cx).details.measurements.clone();
+    measured.borrow_mut().prepare(
+        content.key(thread, width, Density::Full),
+        content.key(thread, width, Density::Compact),
+    );
+    let density = measured.borrow().density(available);
+    let key = content.key(thread, width, density);
+    let scrolling_height = content.scrolling_height(density);
+    let sections = ferrite_ui::components::on_bounds(
+        div()
+            .relative()
+            .debug_selector(move || {
+                format!(
+                    "details-density-{}",
+                    match density {
+                        Density::Full => "full",
+                        Density::Compact => "compact",
+                        Density::Essential => "essential",
+                    }
+                )
+            })
+            .child(content.render(density, asks, cx)),
+        move |bounds, _, cx| {
+            let height = (f32::from(bounds.size.height) - scrolling_height + 2.).max(0.);
+            if measured.borrow_mut().record(density, &key, height) {
+                cx.refresh_windows();
+            }
+        },
+    );
+    let scroll = pane.read(cx).details.scroll.clone();
+    let body = div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .child(
+            div()
+                .id(("details-body", thread.thread().get() as usize))
+                .debug_selector(|| "details-body".into())
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(&scroll)
+                .text_size(px(13.))
+                .font_weight(W_LABEL)
+                .child(sections),
+        )
+        .child(ferrite_ui::components::scrollbar_layer().child(
+            ferrite_ui::components::scrollbar_bar("details-scrollbar", &scroll),
+        ));
+    let card = ferrite_ui::menu::float()
+        .id(("details-card", thread.thread().get() as usize))
+        .debug_selector(|| "details-card".into())
+        .key_context("ThreadDetails")
+        .track_focus(&pane.read(cx).details.focus)
+        .flex()
+        .flex_col()
+        .w(px(DETAILS_W))
+        .rounded(px(16.))
+        .bg(rgb(0x111111))
+        .border_color(rgba(0xffffff1a))
+        .max_w_full()
+        .max_h_full()
+        .min_w_0()
+        .overflow_hidden()
+        .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx: &mut gpui::App| {
+            cx.stop_propagation()
+        })
+        .on_mouse_down(
+            MouseButton::Right,
+            asks.on(|event: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                Some(PaneAsk::DetailsMenu { at: event.position })
+            }),
+        )
+        .on_mouse_down_out({
+            // A press on the card's opener toggles it, and one in its menu
+            // chooses what it shows: neither shuts it from here. Both are
+            // read as the press lands, before its own listeners act.
+            let opener = pane.downgrade();
+            asks.on(move |event: &MouseDownEvent, _, cx| {
+                let on_toggle = opener
+                    .upgrade()
+                    .is_some_and(|pane| pane.read(cx).details.on_opener(event.position));
+                (!inline && !on_toggle && !choosing).then_some(PaneAsk::CloseDetails)
+            })
+        })
+        .child(body);
+    let drawn = pane.read(cx).details.drawn.clone();
+    // The measure is inside the card's 1px edge.
+    let card = ferrite_ui::components::on_bounds(card, move |bounds, _, _| {
+        drawn.set(Some(bounds.dilate(px(1.))))
+    });
+    let card = match standing {
+        Standing::Leaving(left) => {
+            motion::float_out(left, motion::DIALOG_OUT, card, DETAILS_ORIGIN).into_any_element()
+        }
+        _ if inline => card.into_any_element(),
+        _ => motion::dialog_in_casting(
+            ("details-card-in", thread.thread().get() as usize),
+            card,
+            ferrite_ui::components::float_shadow,
+            DETAILS_ORIGIN,
+        )
+        .into_any_element(),
+    };
+    Some(
+        div()
+            .absolute()
+            .top(px(top))
+            .bottom(px(DETAILS_GAP))
+            .left(px(DETAILS_GAP))
+            .right(px(DETAILS_GAP))
+            .flex()
+            .justify_end()
+            .items_start()
+            .child(card)
+            .into_any_element(),
+    )
 }
 
 #[cfg(test)]
