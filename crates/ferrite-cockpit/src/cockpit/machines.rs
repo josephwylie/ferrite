@@ -244,7 +244,7 @@ impl CockpitView {
         let reheld = self.panel.hold(self.cockpit.read(cx));
         for rehold in &reheld {
             self.tools.terminals.update(cx, |terminals, cx| terminals.held_again(*rehold, cx));
-            self.side_chat.update(cx, |chat, cx| chat.held_again(*rehold, cx));
+            self.panel.side_chat.update(cx, |chat, cx| chat.held_again(*rehold, cx));
         }
         if !reheld.is_empty() {
             self.reopen_put_away_drafts(cx);

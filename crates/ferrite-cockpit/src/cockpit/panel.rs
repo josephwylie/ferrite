@@ -84,6 +84,9 @@ pub(crate) struct Panel {
     /// tab's document as last read, the scrolls, the find bar, the last
     /// press.
     pub(in crate::cockpit) file_surface: Entity<preview::FileSurfaceView>,
+    /// Every Thread's side chat (`side_chat_view`), and which Threads are
+    /// its forks.
+    pub(in crate::cockpit) side_chat: Entity<ferrite_prs::side_chat::SideChatView>,
     /// "Open a surface": the Panel's default focus while no tab shows.
     pub(in crate::cockpit) empty_focus: FocusHandle,
     /// The Panel bodies that take keys of their own (the launcher, Files):
@@ -107,13 +110,17 @@ impl Panel {
     /// `resolves` still finds. A file that cannot be read is no Panels,
     /// written over at the next change: they are conveniences, never worth
     /// refusing to start for.
-    pub(crate) fn load(dir: &std::path::Path, cx: &mut gpui::App) -> Self {
+    pub(crate) fn load(
+        dir: &std::path::Path,
+        side_chat: Entity<ferrite_prs::side_chat::SideChatView>,
+        cx: &mut gpui::App,
+    ) -> Self {
         let surfaces = Surfaces::load(dir, |id| id.lifecycle().restart == Restart::Restore)
             .unwrap_or_else(|error| {
                 ferrite_core::log!("the panel's tabs were not read: {error}");
                 Surfaces::default()
             });
-        Self::with_storage(surfaces, super::tools::WorkingSets::load(dir), Default::default(), cx)
+        Self::with_storage(surfaces, super::tools::WorkingSets::load(dir), Default::default(), side_chat, cx)
     }
 
     /// Hold the Panels of every machine `cockpit` holds, as its saved
@@ -161,6 +168,7 @@ impl Panel {
         surfaces: Surfaces,
         working_sets: super::tools::WorkingSets,
         persistence: persistence::Persistence,
+        side_chat: Entity<ferrite_prs::side_chat::SideChatView>,
         cx: &mut gpui::App,
     ) -> Self {
         Self {
@@ -177,6 +185,7 @@ impl Panel {
             focus: Default::default(),
             overview: cx.new(|_| overview::OverviewView::default()),
             file_surface: cx.new(|_| preview::FileSurfaceView::default()),
+            side_chat,
             empty_focus: cx.focus_handle(),
             keys: cx.focus_handle(),
             closing_focus: cx.focus_handle(),
@@ -906,7 +915,7 @@ impl CockpitView {
             }
             Some(SurfaceId::Changes) => filled(self.changes_pane(ferrite_tools::changes::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(_)) => filled(self.tools.terminals.clone().into_any_element()),
-            Some(SurfaceId::SideChat(_)) => filled(self.side_chat.clone().into_any_element()),
+            Some(SurfaceId::SideChat(_)) => filled(self.panel.side_chat.clone().into_any_element()),
             Some(SurfaceId::PullRequest(_)) => {
                 self.register_pr_stops(cx);
                 filled(self.pull_request.clone().into_any_element())

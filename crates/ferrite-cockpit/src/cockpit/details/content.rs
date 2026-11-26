@@ -135,7 +135,7 @@ impl CockpitView {
                     if let SurfaceId::SideChat(tab) = surface {
                         let mut row = Row::new(
                             Item::SideChats,
-                            self.side_chat.read(cx).title(thread, *tab).to_string(),
+                            self.panel.side_chat.read(cx).title(thread, *tab).to_string(),
                             icons::MESSAGES_SQUARE,
                         );
                         if self.side_chat_running(thread, *tab, cx) {

@@ -329,8 +329,6 @@ pub struct CockpitView {
     checkouts: checkouts::Checkouts,
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
-    /// Every Thread's side chat, a body of the Panel.
-    side_chat: Entity<ferrite_prs::side_chat::SideChatView>,
     /// The Composer's prompts from ↵ until their Thread takes them: on
     /// their way, or held while a Session starts (`sends`).
     sends: sends::Sends,
@@ -389,8 +387,8 @@ pub struct CockpitView {
     /// waited for its geometry (ADR 0043).
     popups: popups::Popups,
     /// The Solo view's right panel (`panel`): its tab per Thread, whether
-    /// the window has room for it, its focus, and the views of its Overview
-    /// and File Surface.
+    /// the window has room for it, its focus, and the views of its Overview,
+    /// File Surface and side chat.
     panel: panel::Panel,
     /// Back and forward through where the operator has been (`history`).
     history: history::History,
@@ -626,7 +624,7 @@ impl CockpitView {
         machines: Option<crate::machines::Machines>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let panel = panel::Panel::load(&prefs.dir, cx);
+        let panel = panel::Panel::load(&prefs.dir, Self::new_side_chat(cx), cx);
         Self::new_with_panel(cockpit, launch_provider, prefs, panel, machines, cx)
     }
 
@@ -772,7 +770,6 @@ impl CockpitView {
         let sheets = cx.new(|_| sheets::Sheets::default());
         cx.subscribe(&sheets, Self::on_sheets_event).detach();
         let empty_board = Self::new_empty_board(cx);
-        let side_chat = Self::new_side_chat(cx);
         let files = Self::new_files(cx);
         let terminals = Self::new_terminals(cx);
         let changes = Self::new_changes(cx);
@@ -826,7 +823,6 @@ impl CockpitView {
             parts: std::cell::RefCell::new(parts::Parts::new(cx)),
             branch_reads: Default::default(),
             selection: TranscriptText::default(),
-            side_chat,
             sends: Default::default(),
             awaited: Default::default(),
             returning: Default::default(),
@@ -951,7 +947,7 @@ impl CockpitView {
             .panes()
             .iter()
             .filter_map(|pane| pane.thread())
-            .filter(|thread| self.side_chat.read(cx).owns(*thread))
+            .filter(|thread| self.panel.side_chat.read(cx).owns(*thread))
             .collect();
         for fork in forks {
             self.cockpit.update(cx, |cockpit, _| cockpit.set_aside(fork));
@@ -1497,7 +1493,7 @@ impl CockpitView {
         self.window_heard = Some(vec![
             activation,
             cx.subscribe_in(&self.nav_view, window, Self::on_nav_event),
-            cx.subscribe_in(&self.side_chat, window, Self::on_side_chat_event),
+            cx.subscribe_in(&self.panel.side_chat, window, Self::on_side_chat_event),
             cx.subscribe_in(&self.tools.files, window, Self::on_files_event),
             cx.subscribe_in(&self.panel.overview, window, Self::on_overview_event),
             cx.subscribe_in(&self.toasts, window, Self::on_toast_event),

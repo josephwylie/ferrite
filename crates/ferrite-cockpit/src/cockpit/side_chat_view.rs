@@ -119,6 +119,7 @@ impl CockpitView {
         let can = self.can_side_fork(owner, cx);
         let asking = can.is_ok();
         let id = self
+            .panel
             .side_chat
             .update(cx, |chat, cx| chat.open(owner, can, cx));
         self.upsert_surface(owner, SurfaceId::SideChat(id), cx);
@@ -128,7 +129,7 @@ impl CockpitView {
                 asked,
                 move |view, asked, cx| {
                     if let Err(why) = asked {
-                        view.side_chat
+                        view.panel.side_chat
                             .update(cx, |chat, cx| chat.refused(owner, id, why.to_string().into(), cx));
                     }
                 },
@@ -157,6 +158,7 @@ impl CockpitView {
     #[cfg(feature = "visual-reference")]
     pub(crate) fn fixture_side_chat(&mut self, owner: ThreadKey, cx: &mut Context<Self>) {
         let id = self
+            .panel
             .side_chat
             .update(cx, |chat, cx| chat.fixture_tab(owner, cx));
         self.upsert_surface(owner, SurfaceId::SideChat(id), cx);
@@ -170,7 +172,7 @@ impl CockpitView {
         if self.cockpit.read(cx).names_fork_owners(thread.machine()) {
             return None;
         }
-        self.side_chat
+        self.panel.side_chat
             .read(cx)
             .only_waiting()
             .filter(|owner| *owner != thread)
@@ -190,7 +192,7 @@ impl CockpitView {
             thread,
             inherited: self.held_history(thread, cx),
         };
-        let Some(taken) = self.side_chat.update(cx, |chat, cx| chat.bind(owner, fork, cx)) else {
+        let Some(taken) = self.panel.side_chat.update(cx, |chat, cx| chat.bind(owner, fork, cx)) else {
             return false;
         };
         // The fork joined the roster as any open Thread does: it leaves it.
@@ -213,10 +215,10 @@ impl CockpitView {
     /// Each fork whose history has landed since its tab took it counts
     /// what it inherited, before its tab shows or asks anything.
     pub(super) fn settle_side_forks(&mut self, cx: &mut Context<Self>) {
-        let unsettled = self.side_chat.read(cx).unsettled();
+        let unsettled = self.panel.side_chat.read(cx).unsettled();
         for fork in unsettled {
             if let Some(inherited) = self.held_history(fork, cx) {
-                self.side_chat.update(cx, |chat, cx| chat.settle(fork, inherited, cx));
+                self.panel.side_chat.update(cx, |chat, cx| chat.settle(fork, inherited, cx));
             }
         }
     }
@@ -252,7 +254,7 @@ impl CockpitView {
 
     /// Its Surface's tab closed: the side chat and its fork go.
     pub(super) fn close_side_tab(&mut self, owner: ThreadKey, id: u64, cx: &mut Context<Self>) {
-        if let Some(fork) = self.side_chat.update(cx, |chat, cx| chat.close(owner, id, cx)) {
+        if let Some(fork) = self.panel.side_chat.update(cx, |chat, cx| chat.close(owner, id, cx)) {
             self.retire(fork, cx);
         }
     }
@@ -261,7 +263,7 @@ impl CockpitView {
     /// closes its tab (`close_panel_in_focus`).
     pub(super) fn side_chat_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         self.focused_thread(cx).is_some_and(|owner| {
-            self.side_chat.read(cx).holds_focus(owner, window, cx)
+            self.panel.side_chat.read(cx).holds_focus(owner, window, cx)
         })
     }
 
@@ -288,7 +290,7 @@ impl CockpitView {
         let draft = draft.clone();
         let settle = move |view: &mut Self, admitted: bool, cx: &mut Context<Self>| {
             if !admitted {
-                view.side_chat
+                view.panel.side_chat
                     .update(cx, |chat, cx| chat.unsent(tab, draft, cx));
             }
             cx.notify();
@@ -323,7 +325,7 @@ impl CockpitView {
     /// Thread whose records the window draws.
     pub(super) fn side_chat_drawn(&self, cx: &gpui::App) -> Option<ThreadKey> {
         let (owner, tab) = self.side_chat_shown(cx)?;
-        Some(self.side_chat.read(cx).fork(owner, tab)?.thread)
+        Some(self.panel.side_chat.read(cx).fork(owner, tab)?.thread)
     }
 
     /// The window's side chat, reading it through a `Source` over the root.
@@ -350,7 +352,7 @@ impl CockpitView {
         let Some((owner, tab)) = self.side_chat_shown(cx) else {
             return;
         };
-        self.side_chat.update(cx, |chat, cx| {
+        self.panel.side_chat.update(cx, |chat, cx| {
             if let Some((Fork { thread, inherited: Some(inherited) }, pane)) =
                 chat.shown_conversation(owner, tab)
             {
@@ -446,7 +448,7 @@ impl CockpitView {
 
     /// Whether side chat `id`'s fork is answering.
     pub(super) fn side_chat_running(&self, owner: ThreadKey, id: u64, cx: &gpui::App) -> bool {
-        self.side_chat
+        self.panel.side_chat
             .read(cx)
             .fork(owner, id)
             .and_then(|fork| self.cockpit.read(cx).thread(fork.thread))

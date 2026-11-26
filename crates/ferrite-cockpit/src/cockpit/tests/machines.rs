@@ -3636,7 +3636,7 @@ fn a_side_chat_question_box_refuses_goes_back_to_the_tab_it_was_asked_from(cx: &
         view.update(cx, |view, cx| view.open_side_chat(theirs, cx));
         until(cx, |cx| {
             view.read_with(cx, |view, cx| {
-                shown_fork(view, theirs, cx).is_some() && view.side_chat.read(cx).unsettled().is_empty()
+                shown_fork(view, theirs, cx).is_some() && view.panel.side_chat.read(cx).unsettled().is_empty()
             })
         });
     }
@@ -3655,12 +3655,12 @@ fn a_side_chat_question_box_refuses_goes_back_to_the_tab_it_was_asked_from(cx: &
     cx.simulate_click(first.center(), gpui::Modifiers::none());
     held.let_go();
     let field = |view: &CockpitView, index, cx: &gpui::App| {
-        let field = view.side_chat.read(cx).field_of(theirs, index).cloned();
+        let field = view.panel.side_chat.read(cx).field_of(theirs, index).cloned();
         field.map(|field| field.read(cx).text().to_string())
     };
     until(cx, |cx| view.read_with(cx, |view, cx| field(view, 1, cx).as_deref() == Some("what is alpha?")));
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.side_chat.read(cx).titles(theirs).1, 0, "the first tab shows");
+        assert_eq!(view.panel.side_chat.read(cx).titles(theirs).1, 0, "the first tab shows");
         assert_eq!(field(view, 0, cx).as_deref(), Some(""), "not in the tab shown");
     });
 }
