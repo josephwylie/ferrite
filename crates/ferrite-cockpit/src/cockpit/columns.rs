@@ -447,6 +447,107 @@ pub(super) fn veil() -> Div {
         .occlude()
 }
 
+impl CockpitView {
+    pub(super) fn update_auto_fold(&mut self, window: &Window, cx: &gpui::App) {
+        use ferrite_ui::theme::{NAV_AUTO_FOLD_BOARD_W, NAV_AUTO_FOLD_HYSTERESIS, NAV_AUTO_FOLD_PANE_W};
+        let held = self.columns.nav_auto_folded();
+        let slack = if held { NAV_AUTO_FOLD_HYSTERESIS } else { 0.0 };
+        let width = f32::from(window.viewport_size().width);
+        let right = self.panel_target_w(cx);
+        let board = width - self.nav_expanded_width() - right;
+        let narrowest = |view: &Self| {
+            view.pane_rects(window, cx)
+                .iter()
+                .map(|(_, rect)| rect.w)
+                .fold(f32::INFINITY, f32::min)
+        };
+        let full = self.columns.measured_with_full_nav(|| narrowest(self));
+        let gain = (width - right) / board.max(1.0);
+        let folded = full * gain;
+        let cramped = full < NAV_AUTO_FOLD_PANE_W + slack && folded >= NAV_AUTO_FOLD_PANE_W;
+        let fold = board < NAV_AUTO_FOLD_BOARD_W + slack || cramped;
+        self.columns.set_nav_auto_fold(fold);
+        // `board_bounds` cached the full-column board while measuring.
+        self.board_bounds(window, cx);
+    }
+
+    /// cmd-b (#21): fold the nav away, or open it back to the full column.
+    pub(super) fn toggle_nav(&mut self, _: &ToggleNav, _window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_nav_now(cx);
+    }
+
+    pub(super) fn toggle_nav_now(&mut self, cx: &mut Context<Self>) {
+        if self.columns.toggle_nav_held_open() {
+            if self.columns.nav_folded() {
+                self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
+            }
+            cx.notify();
+            return;
+        }
+        self.set_nav_collapsed(!self.columns.nav_collapsed(), cx);
+    }
+
+    pub(super) fn set_nav_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        if !self.columns.set_nav_collapsed(collapsed) {
+            return;
+        }
+        if collapsed {
+            self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
+        }
+        cx.notify();
+    }
+
+    /// The nav column as far in as it is this frame, its face pinned to the
+    /// board's edge and clipped as it slides, under a veil that takes the
+    /// pointer while it slides out.
+    pub(super) fn nav(&self, cx: &gpui::App) -> Option<AnyElement> {
+        let drawn = self.nav_width();
+        if drawn <= 0.0 {
+            return None;
+        }
+        let width = self.nav_expanded_width();
+        let face = nav::column(self.board_ground(cx))
+            .w(px(width))
+            .absolute()
+            .top_0()
+            .right_0()
+            .child(nav::card(self.nav_rows()).w(px(width)));
+        Some(
+            div()
+                .relative()
+                .flex_shrink_0()
+                .h_full()
+                .w(px(drawn))
+                .overflow_hidden()
+                .child(face)
+                .when(self.columns.nav_folded(), |column| column.child(columns::veil()))
+                .into_any_element(),
+        )
+    }
+
+    pub(super) fn nav_edge_tab(&self, cx: &mut Context<Self>) -> AnyElement {
+        use ferrite_ui::theme::NAV_INSET_Y;
+        let open = !self.columns.nav_folded();
+        let left = (self.nav_expanded_width() - ferrite_ui::theme::HAIRLINE_W)
+            * self.nav_width() / self.nav_expanded_width();
+        div()
+            .absolute()
+            .top(px(nav::CARD_TOP))
+            .bottom(px(NAV_INSET_Y))
+            .left(px(left))
+            .flex()
+            .items_center()
+            .child(nav::edge_tab(open).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.toggle_nav_now(cx);
+                }),
+            ))
+            .into_any_element()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::clamp_nav_width;
