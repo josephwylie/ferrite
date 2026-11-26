@@ -132,6 +132,39 @@ fn a_press_outside_shuts_the_card(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("files").is_some(), "the tool stays");
 }
 
+/// The card's menu, once dismissed, no longer holds the card open: the
+/// next press outside it shuts it.
+#[gpui::test]
+fn a_press_outside_shuts_the_card_after_its_menu_is_dismissed(cx: &mut TestAppContext) {
+    let (view, thread, cx) = solo("details-menu-escape-out", 1440., cx);
+    view.update(cx, |view, cx| {
+        view.upsert_surface(thread, SurfaceId::Files, cx)
+    });
+    tick(cx);
+    cx.simulate_keystrokes("cmd-shift-b");
+    tick(cx);
+    let card = cx.debug_bounds("details-card").unwrap();
+    cx.simulate_mouse_down(card.center(), MouseButton::Right, gpui::Modifiers::none());
+    cx.simulate_mouse_up(card.center(), MouseButton::Right, gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.context_menu().map(|menu| menu.target)),
+        Some(MenuTarget::Details(thread)),
+        "a right press on the card opens its menu"
+    );
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.context_menu().is_none()));
+    assert!(open(&view, cx), "escape shuts the menu, not the card");
+
+    let board = cx.debug_bounds("board").unwrap();
+    let transcript = gpui::point(board.left() + px(60.), board.center().y);
+    assert!(!card.contains(&transcript));
+    cx.simulate_click(transcript, gpui::Modifiers::none());
+    tick(cx);
+    assert!(!open(&view, cx), "a press in the transcript shuts it");
+}
+
 #[gpui::test]
 fn a_narrow_pane_opens_details_as_a_popover(cx: &mut TestAppContext) {
     let (view, thread, cx) = solo("details-narrow", 760., cx);
