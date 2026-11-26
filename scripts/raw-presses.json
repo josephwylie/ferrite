@@ -1,8 +1,8 @@
 {
-  "crates/ferrite-cockpit/src/cockpit.rs": 3,
+  "crates/ferrite-cockpit/src/cockpit.rs": 2,
   "crates/ferrite-cockpit/src/cockpit/background_dialog_view.rs": 2,
   "crates/ferrite-cockpit/src/cockpit/background_work.rs": 2,
-  "crates/ferrite-cockpit/src/cockpit/beside.rs": 1,
+  "crates/ferrite-cockpit/src/cockpit/beside.rs": 2,
   "crates/ferrite-cockpit/src/cockpit/browser/chrome.rs": 1,
   "crates/ferrite-cockpit/src/cockpit/browser/dialog.rs": 1,
   "crates/ferrite-cockpit/src/cockpit/columns.rs": 3,
