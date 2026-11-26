@@ -504,3 +504,49 @@ fn a_servers_clock_is_kept_after_its_link_goes() {
     assert!(reads_today(&remote), "{:?}", remote.clock());
     let _ = std::fs::remove_dir_all(&store);
 }
+
+/// A retry asked for while an attach is under way is not answered by that
+/// attach failing: it began before the ask, so the poll that reads its
+/// failure attaches again at once, not at its backoff. Nothing polls the
+/// window after that one: the machine is reached all the same.
+#[test]
+fn a_retry_asked_while_an_attach_runs_is_answered_once_it_fails() {
+    let store = scratch("retry-mid-attach");
+    let dials = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&dials);
+    let bridge = Arc::new(Bridge::new(
+        "box",
+        store.join("bridge.sock"),
+        Box::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(io::Error::new(io::ErrorKind::ConnectionRefused, "box is down"))
+        }),
+    ));
+    let mut remote = Remote::new(Attach {
+        store: store.clone(),
+        server: Endpoint::Machine(bridge),
+        saved_as: ferrite_core::MachineKey(Some("box".into())),
+        client: Peer {
+            name: "test".into(),
+            version: "0".into(),
+        },
+        renderer: None,
+        browser: false,
+        driven: false,
+    });
+    let (attempt, attaching) = ferrite_core::doorbell::channel();
+    remote.attaching = Some(attaching);
+
+    remote.retry();
+    let refused = io::Error::new(io::ErrorKind::ConnectionRefused, "box is down");
+    attempt.send(Err(refused)).unwrap();
+    remote.poll();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while dials.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < deadline, "the retry waited out the failed attach's backoff");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // The store is left: the Bridge, dropped after this, wakes its listener
+    // through the socket in it, and on unix none is there once it is gone.
+}
