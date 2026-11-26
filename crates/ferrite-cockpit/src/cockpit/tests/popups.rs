@@ -725,10 +725,10 @@ fn the_second_panes_cell_asks_for_itself(cx: &mut TestAppContext) {
     cx.simulate_mouse_move(cell.center(), Some(gpui::MouseButton::Left), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
-        assert_eq!(view.slot_drag.lifted(), Some(crate::cockpit::reader_leaf(thread)), "its Review is lifted");
+        assert_eq!(view.slot_drag.lifted(), Some(crate::cockpit::beside::reader_leaf(thread)), "its Review is lifted");
         assert_eq!(
             view.slot_drag.preview(),
-            Some((crate::cockpit::pane_leaf(second), Zone::Swap)),
+            Some((crate::cockpit::beside::pane_leaf(second), Zone::Swap)),
             "over its cell's middle, the drop would swap the two"
         );
     });

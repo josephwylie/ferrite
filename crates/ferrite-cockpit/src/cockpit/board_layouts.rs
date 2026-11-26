@@ -9,7 +9,7 @@ use ferrite_core::layout::{self, Edge, SeamId, Tree};
 use ferrite_core::roster::PaneIdentity;
 use ferrite_core::ThreadKey;
 
-use super::{pane_leaf, reader_leaf, Board, Leaf, READER_SHARE};
+use super::beside::{pane_leaf, reader_leaf, Board, Leaf, READER_SHARE};
 
 #[derive(Default)]
 pub(super) struct BoardLayouts {

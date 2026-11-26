@@ -202,10 +202,10 @@ impl CockpitView {
             }
             PaneAsk::FilesDropped => self.slot_drag.files_dropped(),
             PaneAsk::SlotDragged { source, at, bounds } => {
-                return self.slot_dragged(source, super::pane_leaf(identity), at, bounds, cx);
+                return self.slot_dragged(source, super::beside::pane_leaf(identity), at, bounds, cx);
             }
             PaneAsk::SlotDropped { source } => {
-                return self.drop_pane(source, super::pane_leaf(identity), cx);
+                return self.drop_pane(source, super::beside::pane_leaf(identity), cx);
             }
             _ => {}
         }
@@ -537,7 +537,7 @@ impl CockpitView {
         super::drawn::laid_out(
             self.panes[index].identity,
             self.slot_drag
-                .size(super::pane_leaf(self.panes[index].identity))
+                .size(super::beside::pane_leaf(self.panes[index].identity))
                 .map(|(w, _)| w)
                 .or_else(|| rect.map(|rect| rect.w))
                 .unwrap_or(board.w),
