@@ -1306,12 +1306,9 @@ mod tests {
                     sync: Some(ConnectionSync {
                         on: true,
                         toggle: press("connection-sync-0", "Sync my setup"),
-                        status: "Signed in differently on each side: choose which to keep".into(),
-                        failed: false,
-                        actions: vec![
-                            press("connection-sync-here-0", "Use this computer's"),
-                            press("connection-sync-there-0", "Use box's"),
-                        ],
+                        status: "Stopped: syncing would remove 4 of the 4 files in ~/.claude/skills here".into(),
+                        failed: true,
+                        actions: vec![press("connection-sync-anyway-0", "Sync anyway")],
                     }),
                     projects: None,
                 };
@@ -1328,8 +1325,8 @@ mod tests {
         let sync = bounds(cx, "connection-sync-0");
         assert_eq!(sync.right(), environment.right(), "{sync:?} under {environment:?}");
         assert_eq!(sync.size.width, environment.size.width);
-        let there = bounds(cx, "connection-sync-there-0");
-        assert!(there.right() <= sync.left(), "its presses before it");
+        let anyway = bounds(cx, "connection-sync-anyway-0");
+        assert!(anyway.right() <= sync.left(), "its presses before it");
     }
 
     /// A choice from a list shows its current value; its menu lists every

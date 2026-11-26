@@ -414,9 +414,8 @@ off. A file both sides changed goes to the newer, and the other copy is
 kept; a key goes to this computer's at the first sync and to the newer
 after, and the toast says what it was. Text that differs only in line ends
 is the same. A folder on one side where the other has a link stays as each
-has it unless it holds only what the link leads to. Two sign-ins that
-differ with none agreed wait for the operator to pick one, and a sign-in is
-never removed: a side signed out takes the other's. A sync that would
+has it unless it holds only what the link leads to. A sign-in never moves:
+each computer keeps its own Claude and Codex sign-in. A sync that would
 remove most of an item, or all of one, waits for "Sync anyway". What a sync
 removes or writes over on either side is kept in that side's trash for 14
 days. One sync of a home runs at a time, whichever computer drives it: a

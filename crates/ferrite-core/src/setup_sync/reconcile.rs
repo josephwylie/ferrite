@@ -5,18 +5,16 @@
 //! newer wins, the other kept aside. A file is the same as another whose
 //! text differs only in line ends. The first sync, with no base, is the
 //! union of both sides and removes nothing; a chosen key both sides hold
-//! differently takes this computer's, and two different sign-ins wait for
-//! the operator. A sign-in is never removed: a side without one takes the
-//! other's. A folder on one side where the other has a link is never
-//! replaced, base or no base, unless it holds only what the link leads to
-//! on that side.
+//! differently takes this computer's. A folder on one side where the other
+//! has a link is never replaced, base or no base, unless it holds only what
+//! the link leads to on that side.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 
 use serde::Serialize;
 
-use super::{chosen, file_of, links, sign_in};
+use super::{chosen, file_of, links};
 use crate::tree::{executable_differs, Entry, Manifest, Side};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,9 +42,6 @@ pub enum Hold {
     /// A folder on `Side`, and a link on the other side to a folder that,
     /// on `Side`, holds other than it does: either way something would go.
     FolderAndLink(Side),
-    /// Two sign-ins, one each side, with none agreed before: which is kept
-    /// is the operator's to say, since each may be another account.
-    SignIn,
 }
 
 impl Action {
@@ -151,18 +146,9 @@ pub fn agreed(base: &Manifest, here: &Manifest, there: &Manifest) -> Manifest {
     agreed
 }
 
-/// What one path needs, on its own. A sign-in is never removed: a side
-/// that has none takes the other's, base or no base.
+/// What one path needs, on its own.
 fn decide(path: &str, b: Option<&Entry>, h: Option<&Entry>, t: Option<&Entry>, sides: &Sides) -> Option<Action> {
     let path = path.to_string();
-    if sign_in(&path) {
-        match (h, t) {
-            (None, None) => return None,
-            (Some(_), None) => return Some(Action::Push(path)),
-            (None, Some(_)) => return Some(Action::Pull(path)),
-            (Some(_), Some(_)) => {}
-        }
-    }
     let taken = |side: Side, entry: Option<&Entry>| match (side, entry) {
         (Side::Here, Some(_)) => Action::Push(path.clone()),
         (Side::Here, None) => Action::RemoveThere(path.clone()),
@@ -177,7 +163,6 @@ fn decide(path: &str, b: Option<&Entry>, h: Option<&Entry>, t: Option<&Entry>, s
         (true, true) => match (h, t) {
             (None, Some(_)) => Action::Pull(path),
             (Some(_), None) => Action::Push(path),
-            _ if b.is_none() && sign_in(&path) => Action::Hold { path, why: Hold::SignIn },
             (Some(Entry::File { modified: mh, .. }), Some(Entry::File { modified: mt, .. })) => {
                 let winner = match (sides.linked(Side::Here, &path), sides.linked(Side::There, &path)) {
                     (true, false) => Side::Here,
@@ -465,38 +450,6 @@ mod tests {
                 *expected,
                 "here {here_did:?}, there {there_did:?}"
             );
-        }
-    }
-
-    /// Signing out on one side while the other is signed in signs it back
-    /// in: nothing removes a sign-in, base or no base.
-    #[test]
-    fn a_sign_in_is_never_removed_and_a_side_without_one_takes_the_others() {
-        use State::*;
-        const SIGN_IN: &str = ".claude/.credentials.json";
-        let at = |entry: Option<Entry>| manifest(&entry.map(|entry| (SIGN_IN, entry)).into_iter().collect::<Vec<_>>());
-        let push = || vec![Action::Push(SIGN_IN.into())];
-        let pull = || vec![Action::Pull(SIGN_IN.into())];
-        let table: &[(State, State, Vec<Action>)] = &[
-            (Deleted, Unchanged, pull()),
-            (Unchanged, Deleted, push()),
-            (Deleted, Changed, pull()),
-            (Changed, Deleted, push()),
-            (Created, Absent, push()),
-            (Absent, Created, pull()),
-            (Deleted, Deleted, vec![]),
-            (Unchanged, Unchanged, vec![]),
-            (Changed, Unchanged, push()),
-            (Changed, Changed, vec![Action::Conflict { path: SIGN_IN.into(), winner: Here }]),
-            (Created, Created, vec![Action::Hold { path: SIGN_IN.into(), why: Hold::SignIn }]),
-        ];
-        for (here_did, there_did, expected) in table {
-            let (base, here) = entry(*here_did, Here);
-            let (other_base, there) = entry(*there_did, There);
-            let base = base.or(other_base);
-            let actions = reconcile(&at(base), &at(here), &at(there));
-            assert_eq!(actions, *expected, "here {here_did:?}, there {there_did:?}");
-            assert!(!actions.iter().any(Action::removes), "here {here_did:?}, there {there_did:?}");
         }
     }
 

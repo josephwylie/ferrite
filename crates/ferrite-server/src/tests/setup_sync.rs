@@ -60,16 +60,15 @@ fn a_setup_sync_lands_in_the_machines_home_and_comes_back_from_it() {
 
     let mut exchange = cockpit.tree(cockpit.first_machine()).unwrap()().unwrap();
     let first = sync(&job, &mut *exchange);
-    assert_eq!((first.pushed, first.pulled), (4, 0), "{first:?}");
+    assert_eq!((first.pushed, first.pulled), (3, 0), "{first:?}");
     assert_eq!(std::fs::read_to_string(far.join(".claude/skills/deploy/SKILL.md")).unwrap(), "# Deploy\n");
     assert!(!far.join(".claude/history.jsonl").exists());
     assert!(!far.join(".claude/plugins").exists(), "Claude's own record of its plugins is each side's");
+    assert!(!far.join(".claude/.credentials.json").exists(), "a sign-in is each computer's own");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let bits = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(bits(&far.join(".claude/.credentials.json")), 0o600);
-        assert_eq!(bits(&far.join(".claude")), 0o700);
+        assert_eq!(std::fs::metadata(far.join(".claude")).unwrap().permissions().mode() & 0o777, 0o700);
     }
 
     write(&far.join(".claude/commands/made-there.md"), "From the Machine.\n");

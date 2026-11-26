@@ -9,7 +9,7 @@ use super::*;
 use crate::chunked::Cancellation;
 use crate::tree::{self, Asked, Exchange, Reply, Request, Session, Side};
 
-/// A sign-in no output of a sync may hold.
+/// What a sign-in in a test's home holds.
 const SECRET: &str = "sk-ant-oat01-NEVER-SHOWN-7f3a";
 
 /// A Machine reached in this process: its Server's tree session over a
@@ -218,6 +218,13 @@ fn the_first_sync_lands_everything_and_nothing_outside_the_table() {
     seed(&mine);
     put(&far, ".claude.json", r#"{"userID": "far", "projects": {"y": {}}}"#);
     put(&far, ".claude/projects/y/session.jsonl", "far\n");
+    #[cfg(unix)]
+    let bits = |path: &str| {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(far.root().join(path)).unwrap().permissions().mode() & 0o777
+    };
+    #[cfg(unix)]
+    let machines_own = bits(".claude");
 
     let synced = sync(&world.job(&mine, "far"), &far);
     assert_eq!(synced.problems, []);
@@ -245,6 +252,8 @@ fn the_first_sync_lands_everything_and_nothing_outside_the_table() {
         ".claude/plugins/marketplaces/market/.git/HEAD",
         ".codex/skills/.system/bundled/SKILL.md",
         ".codex/sessions/one.jsonl",
+        ".claude/.credentials.json",
+        ".codex/auth.json",
     ] {
         assert!(!landed.contains_key(path), "{path} is not the setup");
     }
@@ -256,16 +265,10 @@ fn the_first_sync_lands_everything_and_nothing_outside_the_table() {
     assert_eq!(claude["mcpServers"]["docs"]["command"], "docs-mcp");
     assert_eq!(claude["userID"], "far", "the rest of it is the Machine's own");
     assert!(claude.get("numStartups").is_none() && claude["projects"].get("x").is_none());
-    assert!(read(&far, ".claude/.credentials.json").unwrap().contains(SECRET));
-    assert!(read(&far, ".codex/auth.json").unwrap().contains(SECRET));
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let bits = |path: &str| fs::metadata(far.root().join(path)).unwrap().permissions().mode() & 0o777;
-        assert_eq!(bits(".claude/.credentials.json"), 0o600);
-        assert_eq!(bits(".claude"), 0o700);
-        assert_eq!(bits(".codex/auth.json"), 0o600);
-        assert_eq!(bits(".codex"), 0o700);
+        assert_eq!(bits(".claude"), machines_own, "a folder the Machine had keeps its bits");
+        assert_eq!(bits(".codex"), 0o700, "a folder the sync makes is the owner's");
     }
 
     let again = sync(&world.job(&mine, "far"), &far);
@@ -332,6 +335,7 @@ fn a_sync_that_would_remove_most_of_a_side_stops_until_told_to_go_on() {
     let mut job = world.job(&mine, "far");
     sync(&job, &far);
     put(&far, ".claude/projects/y/session.jsonl", "the Machine's own\n");
+    put(&far, ".codex/auth.json", "the Machine's own\n");
     let before = files(&far);
 
     gone(&mine, ".claude");
@@ -348,8 +352,7 @@ fn a_sync_that_would_remove_most_of_a_side_stops_until_told_to_go_on() {
     job.allow_removals = true;
     sync(&job, &far);
     assert_eq!(read(&far, ".claude/CLAUDE.md"), None);
-    assert!(read(&far, ".codex/auth.json").is_some(), "a sign-in is never removed");
-    assert_eq!(read(&mine, ".codex/auth.json"), read(&far, ".codex/auth.json"), "and comes back here");
+    assert_eq!(read(&far, ".codex/auth.json").as_deref(), Some("the Machine's own\n"), "a sign-in is not the setup");
     assert_eq!(read(&far, ".claude/projects/y/session.jsonl").as_deref(), Some("the Machine's own\n"), "not the setup");
     let claude: serde_json::Value = serde_json::from_str(&read(&far, ".claude.json").expect("the file stays")).unwrap();
     assert!(claude["mcpServers"].get("docs").is_none(), "the key goes: {claude}");
@@ -426,81 +429,74 @@ fn the_hub_carries_one_machines_change_to_another() {
     assert_eq!(sync(&to_other, &other), Synced::default());
 }
 
-/// macOS's Keychain, as a map.
-#[derive(Default)]
-struct Fake(Mutex<BTreeMap<String, String>>, std::sync::atomic::AtomicUsize);
+/// Claude's and Codex's sign-ins, by their paths from the home folder.
+const SIGN_INS: [&str; 2] = [".claude/.credentials.json", ".codex/auth.json"];
 
-impl Fake {
-    /// How many times a sync read it.
-    fn reads(&self) -> usize {
-        self.1.load(std::sync::atomic::Ordering::Relaxed)
-    }
-}
-
-impl Keychain for Fake {
-    fn get(&self, service: &str) -> io::Result<Option<String>> {
-        self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(self.0.lock().unwrap().get(service).cloned())
-    }
-
-    fn set(&self, service: &str, secret: &str) -> io::Result<()> {
-        self.0.lock().unwrap().insert(service.into(), secret.into());
-        Ok(())
-    }
-}
-
+/// Each computer keeps its own sign-in: two homes signed in to different
+/// accounts sync, and each still has its own Claude and Codex sign-in byte
+/// for byte, a side with none is given none, nothing asks whose to keep,
+/// and the rest of the setup syncs.
 #[test]
-fn a_keychain_sign_in_goes_to_a_file_and_comes_back_to_the_keychain() {
-    let world = World::new("keychain");
-    let keychain = Arc::new(Fake::default());
-    let mine = world.home("here").with_keychain(keychain.clone());
-    let far = world.home("machine");
-    let signed_in = format!(r#"{{"claudeAiOauth": {{"accessToken": "{SECRET}"}}}}"#);
-    keychain.set(CLAUDE_KEYCHAIN, &signed_in).unwrap();
-    let job = world.job(&mine, "far");
-    sync(&job, &far);
-    assert_eq!(read(&far, ".claude/.credentials.json"), Some(signed_in));
-    assert_eq!(read(&mine, ".claude/.credentials.json"), None, "this computer keeps it in its Keychain");
-
-    put(&far, ".claude/.credentials.json", r#"{"claudeAiOauth": {"accessToken": "refreshed"}}"#);
-    sync(&job, &far);
-    assert_eq!(keychain.get(CLAUDE_KEYCHAIN).unwrap().as_deref(), Some(r#"{"claudeAiOauth": {"accessToken": "refreshed"}}"#));
-    assert_eq!(read(&mine, ".claude/.credentials.json"), None);
-}
-
-#[test]
-fn a_sign_in_is_never_in_an_error_or_an_outcome() {
-    let world = World::new("secret");
+fn each_computer_keeps_its_own_sign_in_and_the_rest_syncs() {
+    let world = World::new("own-sign-ins");
     let (mine, far) = (world.home("here"), world.home("machine"));
-    seed(&mine);
+    put(&mine, ".claude/CLAUDE.md", "Be careful.\n");
+    put(&mine, ".claude/settings.json", r#"{"model": "opus"}"#);
+    put(&far, ".claude/commands/there.md", "Made there.\n");
+    put(&mine, ".claude/.credentials.json", &format!(r#"{{"claudeAiOauth": {{"accessToken": "{SECRET}-here"}}}}"#));
+    put(&far, ".claude/.credentials.json", &format!(r#"{{"claudeAiOauth": {{"accessToken": "{SECRET}-there"}}}}"#));
+    put(&mine, ".codex/auth.json", &format!(r#"{{"tokens": {{"access_token": "{SECRET}-here"}}}}"#));
+    let sign_ins = |home: &Home| SIGN_INS.map(|path| fs::read(at(home, path)).ok());
+    let (here_before, there_before) = (sign_ins(&mine), sign_ins(&far));
     let job = world.job(&mine, "far");
-    sync(&job, &far);
-    let mut said = Vec::new();
 
-    put(&mine, ".claude/.credentials.json", &format!(r#"{{"accessToken": "{SECRET}-2"}}"#));
-    gone(&far, ".claude/.credentials.json");
-    fs::create_dir_all(far.root().join(".claude/.credentials.json/in-the-way")).unwrap();
-    match run(&job, &mut Machine::new(&far), &mut |_| {}, &Cancellation::default()) {
-        Ok(outcome) => said.push(format!("{outcome:?} {}", serde_json::to_string(&outcome).unwrap())),
-        Err(error) => said.push(format!("{error} {error:?}")),
-    }
-    gone(&far, ".claude/.credentials.json");
-
-    put(&mine, ".claude/.credentials.json", &format!(r#"{{"accessToken": "{SECRET}-3"}}"#));
-    put(&far, ".claude/.credentials.json", &format!(r#"{{"accessToken": "{SECRET}-4"}}"#));
-    match run(&job, &mut Machine::cut_after(&far, Some(1)), &mut |_| {}, &Cancellation::default()) {
-        Ok(outcome) => said.push(format!("{outcome:?}")),
-        Err(error) => said.push(format!("{error} {error:?}")),
-    }
     let synced = sync(&job, &far);
-    said.push(format!("{synced:?} {}", serde_json::to_string(&synced).unwrap()));
-    println!("{}", said.join("\n"));
-    for line in &said {
-        assert!(!line.contains("NEVER-SHOWN"), "{line}");
+    assert_eq!(synced.held, BTreeMap::new(), "nothing asks whose sign-in to keep: {synced:?}");
+    assert_eq!(sign_ins(&mine), here_before, "this computer's own, as it was");
+    assert_eq!(sign_ins(&far), there_before, "the Machine's own, and none given it");
+    assert_eq!(read(&far, ".claude/CLAUDE.md").as_deref(), Some("Be careful.\n"));
+    let settings: serde_json::Value = serde_json::from_str(&read(&far, ".claude/settings.json").unwrap()).unwrap();
+    assert_eq!(settings["model"], "opus");
+    assert_eq!(read(&mine, ".claude/commands/there.md").as_deref(), Some("Made there.\n"));
+
+    assert_eq!(sync(&job, &far), Synced::default(), "nothing differs now");
+    assert_eq!((sign_ins(&mine), sign_ins(&far)), (here_before, there_before));
+    assert!(!world.root.join("settings").join(TRASH).exists() && !trash_of(&far).exists() && !job.conflicts.exists());
+}
+
+/// A base written by table 3, which synced sign-ins, names each one as
+/// both sides agreed on it then, and so would one written by this table.
+/// Since, each side signed in again or out: nothing is moved, removed or
+/// put back, on either side.
+#[test]
+fn a_base_that_names_a_sign_in_moves_and_removes_none() {
+    for table in [3, TABLE] {
+        let world = World::new(&format!("sign-in-base-{table}"));
+        let (mine, far) = (world.home("here"), world.home("machine"));
+        let signed_in = |account: &str| format!(r#"{{"accessToken": "{SECRET}-{account}"}}"#);
+        for home in [&mine, &far] {
+            put(home, ".claude/CLAUDE.md", "Be careful.\n");
+        }
+        for path in SIGN_INS {
+            put(&mine, path, &signed_in("agreed"));
+        }
+        let agreed = tree::Manifest {
+            entries: [".claude/CLAUDE.md", SIGN_INS[0], SIGN_INS[1]].map(|path| (path.to_string(), first_table_entry(&mine, path))).into(),
+            ..tree::Manifest::default()
+        };
+        let job = world.job(&mine, "far");
+        fs::create_dir_all(&job.dir).unwrap();
+        fs::write(job.dir.join(BASE), serde_json::to_vec(&serde_json::json!({"table": table, "agreed": agreed})).unwrap()).unwrap();
+        put(&mine, SIGN_INS[0], &signed_in("here-again"));
+        gone(&mine, SIGN_INS[1]);
+        put(&far, SIGN_INS[1], &signed_in("there-again"));
+        let (here, there) = (own_files(&mine), own_files(&far));
+
+        let synced = sync(&job, &far);
+        assert_eq!((synced.changed(), synced.held.len()), (0, 0), "table {table}: {synced:?}");
+        assert_eq!(own_files(&mine), here, "table {table}: this computer as it was");
+        assert_eq!(own_files(&far), there, "table {table}: the Machine as it was");
     }
-    assert_eq!(synced.conflicts, [], "a sign-in's loser is never kept");
-    assert!(!job.conflicts.exists());
-    assert_eq!(read(&mine, ".claude/.credentials.json"), read(&far, ".claude/.credentials.json"), "the newer is on both");
 }
 
 #[test]
@@ -543,14 +539,17 @@ fn a_path_outside_the_table_is_refused_by_the_far_side() {
     let world = World::new("outside");
     let far = world.home("machine");
     put(&far, ".claude/history.jsonl", "private\n");
+    put(&far, ".codex/auth.json", "the Machine's own\n");
     let mut machine = Machine::new(&far);
-    for path in [".claude/history.jsonl", ".claude/skills", ".codex/skills/.system/x", ".claude/plugins/m/.git/HEAD", ".ssh/id_rsa"] {
+    let refused = [".claude/history.jsonl", ".claude/skills", ".codex/skills/.system/x", ".claude/plugins/m/.git/HEAD", ".ssh/id_rsa"];
+    for path in refused.into_iter().chain(SIGN_INS) {
         let read = machine.call(Request::Read { root: tree::Root::SETUP, path: path.into(), offset: 0 });
         assert!(read.is_err(), "{path}");
         let remove = machine.call(Request::Remove { root: tree::Root::SETUP, path: path.into() });
         assert!(remove.is_err(), "{path}");
     }
     assert_eq!(read(&far, ".claude/history.jsonl").as_deref(), Some("private\n"));
+    assert_eq!(read(&far, ".codex/auth.json").as_deref(), Some("the Machine's own\n"));
 }
 
 /// A link at `at` to the folder `target`, there or not: a symlink, or on
@@ -608,7 +607,6 @@ fn a_sync_a_change_here_started_carries_what_changed_there_too() {
     sync(&world.job(&mine, "far"), &far);
     let local = Job {
         only_if_changed_here: true,
-        read_sign_ins: false,
         ..world.job(&mine, "far")
     };
     put(&mine, ".claude/CLAUDE.md", "Edited here.\n");
@@ -717,160 +715,6 @@ fn removing_a_linked_folder_takes_the_link_never_what_it_points_at_both_ways() {
     assert_eq!(read(&mine, "elsewhere/foo/SKILL.md").as_deref(), Some("# Foo\n"), "what the link pointed at stays");
     assert_eq!(read(&far, "elsewhere/bar/SKILL.md").as_deref(), Some("# Bar\n"));
     assert_eq!(sync(&job, &far), Synced::default(), "converged");
-}
-
-#[test]
-fn two_sign_ins_with_none_agreed_wait_for_the_operator() {
-    let world = World::new("sign-ins");
-    let (mine, far) = (world.home("here"), world.home("machine"));
-    seed(&mine);
-    gone(&mine, ".codex/auth.json");
-    let (theirs, codex) = (r#"{"claudeAiOauth": {"account": "far"}}"#, r#"{"tokens": {"account": "far"}}"#);
-    put(&far, ".claude/.credentials.json", theirs);
-    put(&far, ".codex/auth.json", codex);
-    let mine_before = read(&mine, ".claude/.credentials.json");
-    let job = world.job(&mine, "far");
-    for _ in 0..2 {
-        let synced = sync(&job, &far);
-        assert_eq!(synced.held.get(".claude/.credentials.json"), Some(&Hold::SignIn), "{synced:?}");
-        assert_eq!(read(&mine, ".claude/.credentials.json"), mine_before);
-        assert_eq!(read(&far, ".claude/.credentials.json").as_deref(), Some(theirs));
-    }
-    assert_eq!(read(&mine, ".codex/auth.json").as_deref(), Some(codex), "a side with none takes the other's");
-
-    let chosen = Job {
-        sign_ins: Some(Side::There),
-        ..world.job(&mine, "far")
-    };
-    sync(&chosen, &far);
-    assert_eq!(read(&mine, ".claude/.credentials.json").as_deref(), Some(theirs));
-    assert_eq!(sync(&job, &far), Synced::default());
-}
-
-#[test]
-fn a_sign_in_read_mid_write_waits_for_the_next_sync_unsaid() {
-    let world = World::new("torn-sign-in");
-    let (mine, far) = (world.home("here"), world.home("machine"));
-    seed(&mine);
-    let job = world.job(&mine, "far");
-    sync(&job, &far);
-    let before = read(&far, ".claude/.credentials.json");
-    put(&mine, ".claude/.credentials.json", &format!(r#"{{"claudeAiOauth": {{"accessToken": "{SECRET}-torn"#));
-    let synced = sync(&job, &far);
-    assert_eq!(read(&far, ".claude/.credentials.json"), before);
-    assert_eq!(synced, Synced::default(), "held, and not named");
-}
-
-/// Each file under `dir` that holds a sign-in's secret.
-fn secrets(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut found = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            found.extend(secrets(&path));
-        } else if fs::read_to_string(&path).is_ok_and(|text| text.contains("NEVER-SHOWN")) {
-            found.push(path);
-        }
-    }
-    found
-}
-
-/// Signing out on one side while the other is signed in signs it back in
-/// at the next sync: no stop, no trash, either side, either agent.
-#[test]
-fn signing_out_on_either_side_signs_it_back_in_and_nothing_stops() {
-    let world = World::new("sign-out");
-    let keychain = Arc::new(Fake::default());
-    let (mine, far) = (world.home("here").with_keychain(keychain.clone()), world.home("machine"));
-    seed(&mine);
-    gone(&mine, ".claude/.credentials.json");
-    let claude = format!(r#"{{"claudeAiOauth": {{"accessToken": "{SECRET}"}}}}"#);
-    keychain.set(CLAUDE_KEYCHAIN, &claude).unwrap();
-    let job = world.job(&mine, "far");
-    sync(&job, &far);
-    let codex = read(&mine, ".codex/auth.json");
-
-    gone(&far, ".claude/.credentials.json");
-    gone(&far, ".codex/auth.json");
-    let synced = sync(&job, &far);
-    assert_eq!((synced.pushed, synced.removed_here), (2, 0), "{synced:?}");
-    assert_eq!(read(&far, ".claude/.credentials.json"), Some(claude.clone()), "signed back in there");
-    assert_eq!(read(&far, ".codex/auth.json"), codex);
-
-    keychain.0.lock().unwrap().clear();
-    gone(&mine, ".codex/auth.json");
-    let synced = sync(&job, &far);
-    assert_eq!((synced.pulled, synced.removed_there), (2, 0), "{synced:?}");
-    assert_eq!(keychain.get(CLAUDE_KEYCHAIN).unwrap(), Some(claude), "signed back in here");
-    assert_eq!(read(&mine, ".codex/auth.json"), codex);
-    assert_eq!(sync(&job, &far), Synced::default());
-
-    keychain.0.lock().unwrap().clear();
-    for path in [".claude/.credentials.json", ".codex/auth.json"] {
-        gone(&far, path);
-    }
-    gone(&mine, ".codex/auth.json");
-    assert_eq!(sync(&job, &far), Synced::default(), "signed out on both sides is nothing");
-    assert_eq!(sync(&job, &far), Synced::default());
-    assert!(!world.root.join("settings").join(TRASH).exists() && !trash_of(&far).exists() && !job.conflicts.exists());
-}
-
-/// No code path writes a sign-in to the trash or to a conflict copy: the
-/// store refuses to trash or remove one, here or asked by the hub, and the
-/// syncs that remove most and keep losers aside leave none there.
-#[test]
-fn no_sign_in_is_ever_put_in_the_trash_or_kept_as_a_conflict() {
-    let world = World::new("sign-in-kept-nowhere");
-    let keychain = Arc::new(Fake::default());
-    let (mine, far) = (world.home("here"), world.home("machine"));
-    let keyed = world.home("keyed").with_keychain(keychain.clone());
-    keychain.set(CLAUDE_KEYCHAIN, &format!(r#"{{"accessToken": "{SECRET}"}}"#)).unwrap();
-    seed(&mine);
-    put(&keyed, ".codex/auth.json", &format!(r#"{{"tokens": "{SECRET}"}}"#));
-    for home in [&mine, &keyed] {
-        for path in [".claude/.credentials.json", ".codex/auth.json"] {
-            assert!(home.remove(path).is_err(), "{path}");
-        }
-        assert!(!trash_of(home).exists());
-    }
-    assert!(keychain.get(CLAUDE_KEYCHAIN).unwrap().is_some() && read(&mine, ".claude/.credentials.json").is_some());
-
-    let job = Job {
-        allow_removals: true,
-        ..world.job(&mine, "far")
-    };
-    sync(&job, &far);
-    let mut held = Machine::new(&far);
-    assert_eq!(held.call(Request::Hold { root: tree::Root::SETUP }).unwrap(), Reply::Done);
-    for path in [".claude/.credentials.json", ".codex/auth.json"] {
-        let removed = held.call(Request::Remove { root: tree::Root::SETUP, path: path.into() });
-        assert!(removed.is_err(), "the Machine refuses too: {path}");
-    }
-    drop(held);
-
-    gone(&far, ".claude");
-    gone(&far, ".codex");
-    let synced = sync(&job, &far);
-    assert!(synced.trashed.is_some(), "the rest of this side went to the trash: {synced:?}");
-    gone(&mine, ".claude");
-    gone(&mine, ".codex");
-    sync(&job, &far);
-    for path in [".claude/.credentials.json", ".codex/auth.json"] {
-        assert!(read(&mine, path).is_some_and(|text| text.contains("NEVER-SHOWN")), "{path} came back here");
-    }
-
-    put(&mine, ".claude/.credentials.json", &format!(r#"{{"accessToken": "{SECRET}-here"}}"#));
-    aged(&mine, ".claude/.credentials.json", 60);
-    put(&far, ".claude/.credentials.json", &format!(r#"{{"accessToken": "{SECRET}-there"}}"#));
-    let synced = sync(&job, &far);
-    assert_eq!(synced.conflicts, [], "{synced:?}");
-    assert_eq!(read(&mine, ".claude/.credentials.json"), read(&far, ".claude/.credentials.json"));
-    assert_eq!(secrets(&world.root.join("settings").join(TRASH)), Vec::<PathBuf>::new());
-    assert_eq!(secrets(&trash_of(&far)), Vec::<PathBuf>::new());
-    assert_eq!(secrets(&job.conflicts), Vec::<PathBuf>::new());
 }
 
 #[test]
@@ -1000,36 +844,6 @@ fn a_temporary_file_a_crash_left_beside_the_settings_is_swept() {
     sync(&world.job(&mine, "far"), &far);
     assert!(!stale.exists() && !in_home.exists());
     assert!(fresh.exists(), "a write may still be under way");
-}
-
-#[test]
-fn a_sync_a_change_here_started_never_reads_the_keychain() {
-    let world = World::new("keychain-reads");
-    let keychain = Arc::new(Fake::default());
-    let mine = world.home("here").with_keychain(keychain.clone());
-    let far = world.home("machine");
-    let (first, refreshed) = (r#"{"claudeAiOauth": {"accessToken": "first"}}"#, r#"{"claudeAiOauth": {"accessToken": "refreshed"}}"#);
-    keychain.set(CLAUDE_KEYCHAIN, first).unwrap();
-    put(&mine, ".claude/CLAUDE.md", "Be careful.\n");
-    sync(&world.job(&mine, "far"), &far);
-    assert!(keychain.reads() > 0);
-    assert_eq!(read(&far, ".claude/.credentials.json").as_deref(), Some(first));
-
-    let local = Job {
-        only_if_changed_here: true,
-        read_sign_ins: false,
-        ..world.job(&mine, "far")
-    };
-    let reads = keychain.reads();
-    put(&mine, ".claude/CLAUDE.md", "Edited.\n");
-    put(&far, ".claude/.credentials.json", refreshed);
-    let synced = sync(&local, &far);
-    assert_eq!(keychain.reads(), reads, "{synced:?}");
-    assert_eq!(read(&far, ".claude/CLAUDE.md").as_deref(), Some("Edited.\n"));
-    assert_eq!(keychain.0.lock().unwrap().get(CLAUDE_KEYCHAIN).map(String::as_str), Some(first));
-
-    sync(&world.job(&mine, "far"), &far);
-    assert_eq!(keychain.0.lock().unwrap().get(CLAUDE_KEYCHAIN).map(String::as_str), Some(refreshed));
 }
 
 #[test]

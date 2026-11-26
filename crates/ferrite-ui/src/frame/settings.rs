@@ -112,8 +112,7 @@ pub struct ConnectionSync {
     pub status: SharedString,
     /// The status is a failure, or a sync that stopped.
     pub failed: bool,
-    /// What the operator may say to it: sync though it removes much, or
-    /// whose sign-in to keep.
+    /// What the operator may say to it: sync though it removes much.
     pub actions: Vec<ConnectionAction>,
 }
 

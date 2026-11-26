@@ -116,7 +116,6 @@ impl CockpitView {
                 view.update(cx, |view, cx| view.answered(saved.err(), cx));
             }
             ConnectionsEvent::SyncAnyway(target) => self.sync_setup_anyway(&target, cx),
-            ConnectionsEvent::UseSignIns(target, side) => self.sync_setup_sign_ins(&target, side, cx),
             ConnectionsEvent::Remove { machine, unsaved } => {
                 self.remove_connection(&view, machine, unsaved, cx)
             }
