@@ -1592,6 +1592,17 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
+            "reply_code_refused",
+            Sample::Server(ServerMessage::Reply {
+                id: 242,
+                ok: Some(Done::CodeRefused {
+                    provider: Provider::Claude,
+                    said: "That doesn't look like the full code.".into(),
+                }),
+                error: None,
+            }),
+        ),
+        (
             "command_search_files",
             command(
                 24,

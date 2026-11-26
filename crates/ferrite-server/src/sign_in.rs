@@ -8,7 +8,7 @@ use std::sync::Arc;
 use ferrite_core::protocol::{Done, ErrorCode, SignInStep, WireError};
 use ferrite_core::provider::Provider;
 use ferrite_engine::connection::Heard;
-use ferrite_engine::providers::sign_in::{self, SignIn};
+use ferrite_engine::providers::sign_in::{self, Finished, SignIn};
 
 use super::{failed, ClientId, Server};
 
@@ -63,7 +63,16 @@ impl Server {
                     .find(|running| running.provider == provider && running.client == client);
                 match running {
                     Some(running) => running.sign_in.finish(code.clone(), move |finished| {
-                        answer(finished.map(|()| Some(Done::SignedIn { provider })).map_err(failed))
+                        answer(
+                            finished
+                                .map(|finished| {
+                                    Some(match finished {
+                                        Finished::SignedIn => Done::SignedIn { provider },
+                                        Finished::Refused(said) => Done::CodeRefused { provider, said },
+                                    })
+                                })
+                                .map_err(failed),
+                        )
                     }),
                     None => self.reply(
                         client,

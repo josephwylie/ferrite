@@ -2,7 +2,8 @@
 //! against a script standing in for both CLIs: a file beside it stands for
 //! each one's sign-in, another for the operator's approval on Codex's page,
 //! and while Codex waits for that approval a process the script started
-//! beats a heartbeat file.
+//! beats a heartbeat file. As Claude does, it refuses a code without its
+//! `#` on sight and reads another.
 
 use std::fs;
 use std::path::Path;
@@ -13,7 +14,7 @@ use ferrite_core::cli_update::Status;
 use ferrite_core::protocol::{CliBinary, Done, SignInStep, Withheld};
 use ferrite_engine::providers::clis::Clis;
 
-const CLI_SH: &str = r#"#!/bin/sh
+const CLI_SH: &str = r##"#!/bin/sh
 here=$(dirname "$0")
 beat() { while [ ! -f "$here/approved" ]; do : > "$here/heartbeat"; sleep 0.1; done; }
 case "$1 $2" in
@@ -22,8 +23,11 @@ case "$1 $2" in
   echo '{"loggedIn":false}'; exit 1 ;;
 "auth login")
   printf "Opening browser to sign in\nIf the browser didn't open, visit:\nhttps://claude.ai/oauth/authorize?state=test\nPaste code here if prompted > "
-  read -r code
-  if [ "$code" = "right-code" ]; then : > "$here/claude-signed-in"; exit 0; fi
+  while read -r code; do
+    case "$code" in *"#"*) break ;; esac
+    echo "That doesn't look like the full code."
+  done
+  if [ "$code" = "right-code#state" ]; then : > "$here/claude-signed-in"; exit 0; fi
   echo "Couldn't log in: That code wasn't accepted."
   exit 1 ;;
 "login status")
@@ -36,7 +40,7 @@ case "$1 $2" in
   : > "$here/codex-signed-in"; exit 0 ;;
 esac
 exit 2
-"#;
+"##;
 
 const CLI_CMD: &str = r#"@echo off
 set "here=%~dp0"
@@ -57,9 +61,12 @@ echo Opening browser to sign in
 echo If the browser didn't open, visit:
 echo https://claude.ai/oauth/authorize?state=test
 <nul set /p "=Paste code here if prompted > "
+:claude_read
 set "code="
 set /p code=
-if "%code%"=="right-code" goto claude_right
+if not defined code (ping -n 2 127.0.0.1 >nul& goto claude_read)
+if "%code:#=%"=="%code%" (echo That doesn't look like the full code.& goto claude_read)
+if "%code%"=="right-code#state" goto claude_right
 echo Couldn't log in: That code wasn't accepted.
 exit /b 1
 :claude_right
@@ -205,11 +212,27 @@ fn claude_signs_in_there_with_the_code_its_page_gave() {
             paste: true,
         }
     );
+    let cut_short = step(
+        &mut window,
+        Provider::Claude,
+        SignInStep::Finish {
+            code: Some(Withheld::new("cut-short")),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        cut_short,
+        Done::CodeRefused {
+            provider: Provider::Claude,
+            said: "That doesn't look like the full code.".into(),
+        },
+        "the CLI asks again"
+    );
     let wrong = step(
         &mut window,
         Provider::Claude,
         SignInStep::Finish {
-            code: Some(Withheld::new("wrong-code")),
+            code: Some(Withheld::new("wrong-code#state")),
         },
     )
     .unwrap_err();
@@ -221,7 +244,7 @@ fn claude_signs_in_there_with_the_code_its_page_gave() {
         &mut window,
         Provider::Claude,
         SignInStep::Finish {
-            code: Some(Withheld::new("right-code")),
+            code: Some(Withheld::new("right-code#state")),
         },
     )
     .unwrap();

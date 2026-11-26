@@ -23,6 +23,10 @@ step answered once:
   answers with the page it names (`sign_in_page`).
 - `finish {code?}`: hands Claude the code its page showed, or waits on
   Codex's page being approved, then asks the CLI's status (`signed_in`).
+  Claude refuses a code cut short on sight and reads another, so a CLI
+  that answers the code with a line and then runs on, quiet for 3 s,
+  answers `code_refused` with that line; the sign-in keeps running for
+  the code pasted again.
 - `cancel`: stops the CLI and everything it started (`changed`).
 
 The page opens in this computer's browser. The Machine ends up with a
@@ -74,13 +78,14 @@ as before.
 
 ## What is not proven
 
-The tests run scripts standing in for both CLIs, on Windows. Still to be
-shown:
+The tests run scripts standing in for both CLIs. A live run took the real
+`claude` 2.1.332 and `codex` 0.171.0 on a WSL Machine, from a Windows
+window, as far as their pages: each page read whole, Claude's refusal of a
+code cut short, its refusal of a wrong whole code, and a cancel leaving no
+CLI process there. Still to be shown:
 
-- Real CLIs on a real Machine, through a real browser, for both
-  providers. The page is read by its shape (the first `https://` address
-  the CLI writes, and for Codex a code shaped like `ABCD-EFGHI` under
-  it), so a CLI that changes its words should still read, but nothing has
-  shown it.
+- A real sign-in through a real browser, for either provider: no account
+  was signed in, so the signed-in end ran a stand-in `claude`.
 - That a Session started after a sign-in runs signed in.
-- The Unix path of the process tree, which the tests here do not run.
+- That Claude, once it has the right code, ends within 3 s of the last
+  line it writes, as the refusal rule takes it to.

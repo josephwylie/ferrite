@@ -1870,6 +1870,12 @@ pub enum Done {
     SignedIn {
         provider: Provider,
     },
+    /// A `finish` whose code the CLI refused on sight, as `said`: the
+    /// sign-in still runs, waiting for the code pasted again.
+    CodeRefused {
+        provider: Provider,
+        said: String,
+    },
     /// A `pull_request`'s reading: `gh pr view`'s JSON as `gh` printed it
     /// (`workspace::pr_view`), or none when `gh` had nothing to say — no
     /// `gh`, not logged in, no PR for the branch.

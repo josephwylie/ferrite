@@ -33,6 +33,10 @@ const FINISH: Duration = Duration::from_secs(20 * 60);
 const STATUS: Duration = Duration::from_secs(20);
 /// How often the thread looks at the CLI between what it writes.
 const TICK: Duration = Duration::from_millis(50);
+/// How long a CLI that answered a code with a line, and runs on, is quiet
+/// before it is taken to be asking for the code again: Claude refuses a
+/// code cut short at once, then waits.
+const ASKING: Duration = Duration::from_secs(3);
 /// What a pipe is read in: Claude's prompt ends no line.
 const CHUNK: usize = 4096;
 /// What a step hears when the sign-in ends before answering it.
@@ -157,6 +161,22 @@ fn last_line(text: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The last line `said` holds whole, as a person reads it: a prompt the CLI
+/// asks again on is no line yet.
+fn whole_last_line(said: &[u8]) -> Option<String> {
+    let plain = plain(&String::from_utf8_lossy(said));
+    last_line(plain.rsplit_once('\n')?.0)
+}
+
+/// How a `finish` ended, short of failing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Finished {
+    /// The CLI ended, and says it is signed in.
+    SignedIn,
+    /// The CLI refused the code on sight, as it said, and waits for another.
+    Refused(String),
+}
+
 /// A sign-in running on this machine. Dropped, it stops its CLI and all
 /// the CLI started before it returns.
 pub struct SignIn {
@@ -188,8 +208,8 @@ impl SignIn {
     }
 
     /// Hand the CLI `code`, when its page gave one, and wait for it to end
-    /// signed in: `finished` hears how it ended.
-    pub fn finish(&self, code: Option<Withheld>, finished: impl FnOnce(Result<(), String>) + Send + 'static) {
+    /// signed in, or to refuse the code: `finished` hears which.
+    pub fn finish(&self, code: Option<Withheld>, finished: impl FnOnce(Result<Finished, String>) + Send + 'static) {
         // A thread that already ended answers as the step drops.
         let _ = self.steps.send(Heard::Finish(code, Answer::new(finished)));
     }
@@ -221,7 +241,7 @@ enum Heard {
     Said(Vec<u8>),
     /// One of its streams ended.
     Shut,
-    Finish(Option<Withheld>, Answer<()>),
+    Finish(Option<Withheld>, Answer<Finished>),
 }
 
 /// Who waits on a step: answered once, by the step, or else as it drops.
@@ -282,10 +302,14 @@ impl Run {
             return;
         }
         let by = Instant::now() + FINISH;
-        let Some((code, finished)) = self.until_finish(by) else {
-            return;
-        };
-        finished.give(self.finish(&binary.path, code, by));
+        while let Some((code, finished)) = self.until_finish(by) {
+            let ended = self.finish(&binary.path, code, by);
+            let again = matches!(ended, Ok(Finished::Refused(_)));
+            finished.give(ended);
+            if !again {
+                return;
+            }
+        }
     }
 
     fn missing(&self) -> String {
@@ -343,7 +367,7 @@ impl Run {
     }
 
     /// Wait for the step that finishes the sign-in, until `by`.
-    fn until_finish(&mut self, by: Instant) -> Option<(Option<Withheld>, Answer<()>)> {
+    fn until_finish(&mut self, by: Instant) -> Option<(Option<Withheld>, Answer<Finished>)> {
         loop {
             if let Some(finish) = self.hear(TICK) {
                 return Some(finish);
@@ -358,13 +382,17 @@ impl Run {
         }
     }
 
-    /// Hand the CLI `code`, wait for it to end, and confirm it is signed in.
-    fn finish(&mut self, program: &Path, code: Option<Withheld>, by: Instant) -> Result<(), String> {
+    /// Hand the CLI `code`, wait for it to end, and confirm it is signed in;
+    /// or, when it answers the code with a line and runs on, quiet, take
+    /// that line as its refusal.
+    fn finish(&mut self, program: &Path, code: Option<Withheld>, by: Instant) -> Result<Finished, String> {
         let name = self.provider.cli_name();
         let since = self.said.len();
+        let pasted = code.is_some();
         if let (Some(stdin), Some(code)) = (self.stdin.as_mut(), code) {
             let _ = writeln!(stdin, "{}", code.reveal()).and_then(|()| stdin.flush());
         }
+        let mut heard_at = Instant::now();
         let status = loop {
             match self.now() {
                 Now::Ended(status) => break status,
@@ -373,10 +401,19 @@ impl Run {
                     self.stop();
                     return Err(format!("{name} did not finish signing in in time, so it was stopped"));
                 }
+                Now::Running if pasted && heard_at.elapsed() >= ASKING => {
+                    if let Some(said) = whole_last_line(&self.said[since..]) {
+                        return Ok(Finished::Refused(said));
+                    }
+                }
                 Now::Running => {}
             }
+            let before = self.said.len();
             if let Some((_, again)) = self.hear(TICK) {
                 again.give(Err("The sign-in is already finishing".into()));
+            }
+            if self.said.len() > before {
+                heard_at = Instant::now();
             }
         };
         self.drain();
@@ -384,14 +421,14 @@ impl Run {
             return Err(self.why(since));
         }
         match self::status(self.provider, program) {
-            Some(true) => Ok(()),
+            Some(true) => Ok(Finished::SignedIn),
             _ => Err(format!("{name} ended, but it is not signed in")),
         }
     }
 
     /// Take what reaches the thread within `wait`: what the CLI wrote is
     /// kept, and a finish is handed back.
-    fn hear(&mut self, wait: Duration) -> Option<(Option<Withheld>, Answer<()>)> {
+    fn hear(&mut self, wait: Duration) -> Option<(Option<Withheld>, Answer<Finished>)> {
         match self.heard.recv_timeout(wait) {
             Ok(Heard::Said(bytes)) => self.said.extend_from_slice(&bytes),
             Ok(Heard::Shut) => self.open = self.open.saturating_sub(1),
@@ -503,5 +540,7 @@ mod tests {
         assert_eq!(plain("\x1b[94mhttps://a\x1b[0m"), "https://a");
         assert_eq!(plain("\x1b]8;;https://a\x07link\x1b]8;;\x1b\\"), "link");
         assert_eq!(last_line("Couldn't log in: bad code\n\n"), Some("Couldn't log in: bad code".into()));
+        assert_eq!(whole_last_line(b"Cut short.\nPaste code here > "), Some("Cut short.".into()));
+        assert_eq!(whole_last_line(b"Paste code here > "), None, "a prompt is no line");
     }
 }

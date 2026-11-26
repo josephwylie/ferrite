@@ -46,8 +46,13 @@ pub struct SignInView {
 enum Flow {
     /// `start` is out.
     Starting(Answer),
-    /// The page is open in the browser; `finishing` is the `finish` out.
-    Browser { page: Page, finishing: Option<Answer> },
+    /// The page is open in the browser; `finishing` is the `finish` out,
+    /// and `refused` what the CLI said of the last code, which it refused.
+    Browser {
+        page: Page,
+        finishing: Option<Answer>,
+        refused: Option<SharedString>,
+    },
     SignedIn,
     Failed(SharedString),
 }
@@ -93,13 +98,16 @@ impl SignInView {
             Flow::Browser {
                 page: Page { paste: true, .. },
                 finishing: None,
+                ..
             } => self.code.read(cx).focus_handle(cx),
             _ => self.focus.clone(),
         }
     }
 
-    /// Ask the Machine to start the sign-in, anew.
+    /// Ask the Machine to start the sign-in, anew: a code pasted for the
+    /// last page is no good for the next.
     fn start(&mut self, cx: &mut Context<Self>) {
+        self.code.update(cx, |code, cx| code.set(String::new(), cx));
         self.flow = started(&self.ask, &self.place, cx);
         cx.notify();
     }
@@ -119,7 +127,7 @@ impl SignInView {
 
     /// The pasted code goes to the Machine, once there is one.
     fn submit(&mut self, cx: &mut Context<Self>) {
-        if !matches!(self.flow, Flow::Browser { page: Page { paste: true, .. }, finishing: None }) {
+        if !matches!(self.flow, Flow::Browser { page: Page { paste: true, .. }, finishing: None, .. }) {
             return;
         }
         let code = self.code.read(cx).text().trim().to_string();
@@ -163,10 +171,18 @@ impl SignInView {
                         paste,
                     },
                     finishing: None,
+                    refused: None,
                 };
                 if !paste {
                     self.finish(None, cx);
                 }
+            }
+            Ok(Done::CodeRefused { said, .. }) => {
+                if let Flow::Browser { finishing, refused, .. } = &mut self.flow {
+                    *finishing = None;
+                    *refused = Some(said.into());
+                }
+                self.code.update(cx, |code, cx| code.set(String::new(), cx));
             }
             Ok(Done::SignedIn { .. }) => {
                 self.flow = Flow::SignedIn;
@@ -215,7 +231,11 @@ impl SignInView {
                     self.place
                 )))
             }
-            Flow::Browser { page, finishing } => {
+            Flow::Browser {
+                page,
+                finishing,
+                refused,
+            } => {
                 let url = page.url.clone();
                 left = left.child(
                     ferrite_ui::components::ghost_button("sign-in-open-page", "Open the page again", cx)
@@ -275,6 +295,9 @@ impl SignInView {
                                 focused,
                                 "sign-in-code-focused",
                             ))
+                            .children(refused.clone().map(|said| {
+                                ferrite_ui::form::error_line(said).debug_selector(|| "sign-in-refused".into())
+                            }))
                             .child(address)
                     }
                     (None, Some(_)) => body.debug_selector(|| "sign-in-finishing".into()).child(note("Signing in\u{2026}")),
@@ -479,6 +502,39 @@ mod tests {
     }
 
     #[gpui::test]
+    fn a_code_the_cli_refuses_is_pasted_again(cx: &mut TestAppContext) {
+        let (view, machine, _, cx) = open(Provider::Claude, Machine::default(), cx);
+        machine.borrow_mut().answer(Ok(claude_page()));
+        pump(&view, cx);
+        let code = view.read_with(cx, |view, _| view.code.clone());
+        code.update(cx, |code, cx| code.set("cut-short".into(), cx));
+        view.update(cx, |view, cx| view.submit(cx));
+        machine.borrow_mut().answer(Ok(Done::CodeRefused {
+            provider: Provider::Claude,
+            said: "That doesn't look like the full code.".into(),
+        }));
+        pump(&view, cx);
+        assert!(shows(cx, "sign-in-paste-code") && shows(cx, "sign-in-refused"));
+        assert!(says(cx).contains("That doesn't look like the full code."), "{}", says(cx));
+        assert_eq!(code.read_with(cx, |code, _| code.text().to_string()), "", "the field is cleared");
+
+        code.update(cx, |code, cx| code.set("whole-code#state".into(), cx));
+        view.update(cx, |view, cx| view.submit(cx));
+        assert_eq!(
+            machine.borrow().asked[1..],
+            [
+                SignInStep::Finish {
+                    code: Some(Withheld::new("cut-short")),
+                },
+                SignInStep::Finish {
+                    code: Some(Withheld::new("whole-code#state")),
+                },
+            ],
+            "the same sign-in takes the code again"
+        );
+    }
+
+    #[gpui::test]
     fn codex_shows_the_code_to_enter_and_waits_on_the_page(cx: &mut TestAppContext) {
         let (view, machine, _, cx) = open(Provider::Codex, Machine::default(), cx);
         machine.borrow_mut().answer(Ok(Done::SignInPage {
@@ -501,6 +557,8 @@ mod tests {
     #[gpui::test]
     fn try_again_starts_it_anew(cx: &mut TestAppContext) {
         let (view, machine, _, cx) = open(Provider::Claude, Machine::default(), cx);
+        let code = view.read_with(cx, |view, _| view.code.clone());
+        code.update(cx, |code, cx| code.set("for-the-last-page#state".into(), cx));
         machine
             .borrow_mut()
             .answer(Err(io::Error::other("Claude Code did not say where to sign in")));
@@ -510,6 +568,7 @@ mod tests {
         click(cx, "sign-in-try-again");
         assert_eq!(machine.borrow().asked, [SignInStep::Start, SignInStep::Start]);
         assert!(shows(cx, "sign-in-starting"));
+        assert_eq!(code.read_with(cx, |code, _| code.text().to_string()), "", "no code from the last page");
     }
 
     #[gpui::test]

@@ -2197,7 +2197,8 @@ impl Cockpit {
 
     /// A step of signing `machine`'s `provider` CLI in (ADR 0051): only
     /// another machine's Server signs one in; the answer is
-    /// `Done::SignInStatus`, `Done::SignInPage` or `Done::SignedIn`.
+    /// `Done::SignInStatus`, `Done::SignInPage`, `Done::SignedIn` or
+    /// `Done::CodeRefused`.
     pub fn sign_in(
         &mut self,
         machine: MachineId,
