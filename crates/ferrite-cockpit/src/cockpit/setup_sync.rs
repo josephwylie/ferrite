@@ -76,9 +76,8 @@ struct Track {
     /// Before this, `again` waits: another sync held the Machine.
     retry: Option<Instant>,
     status: Status,
-    /// What its syncs found, each part as the last sync that read it left
-    /// it: neither a sync under way nor one that left a path unread moves
-    /// what it did not look at.
+    /// What its syncs found: a sync under way leaves it as the last one
+    /// left it.
     found: Found,
 }
 
@@ -87,16 +86,15 @@ struct Track {
 struct Found {
     /// Each path left as each side has it, and why.
     held: BTreeMap<String, Why>,
-    /// Where a sync stopped, and what it was asked: "Sync anyway" asks it
-    /// again.
-    stop: Option<(Valve, Ask)>,
+    /// Where a sync stopped: "Sync anyway" goes on past it.
+    stop: Option<Valve>,
 }
 
 impl Found {
     /// The line it makes.
     fn status(&self) -> Status {
         match &self.stop {
-            Some((valve, _)) => Status::Stopped(valve.clone()),
+            Some(valve) => Status::Stopped(valve.clone()),
             None => Status::InSync(self.held.clone()),
         }
     }
@@ -105,50 +103,29 @@ impl Found {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Ask {
     only_if_changed_here: bool,
-    read_sign_ins: bool,
     allow_removals: bool,
-    sign_ins: Option<Side>,
 }
 
 impl Ask {
-    /// As it connects and on the clock: all of it, Claude's sign-in with
-    /// it, which macOS asks the Keychain for.
-    const CHECK: Ask = Ask {
+    /// All of it: as it connects, on the clock, and as a Thread starts
+    /// there.
+    const WHOLE: Ask = Ask {
         only_if_changed_here: false,
-        read_sign_ins: true,
         allow_removals: false,
-        sign_ins: None,
     };
     /// The setup here settled after a change: what changed, if anything
     /// did, and what changed there with it.
     const HERE: Ask = Ask {
         only_if_changed_here: true,
-        read_sign_ins: false,
         allow_removals: false,
-        sign_ins: None,
-    };
-    /// A Thread starts there, or the operator said to go on.
-    const WHOLE: Ask = Ask {
-        only_if_changed_here: false,
-        read_sign_ins: false,
-        allow_removals: false,
-        sign_ins: None,
     };
 
     /// One sync that does what both would.
     fn and(self, other: Ask) -> Ask {
         Ask {
             only_if_changed_here: self.only_if_changed_here && other.only_if_changed_here,
-            read_sign_ins: self.read_sign_ins || other.read_sign_ins,
             allow_removals: self.allow_removals || other.allow_removals,
-            sign_ins: other.sign_ins.or(self.sign_ins),
         }
-    }
-
-    /// Whether a sync of it reads `path`, a path of the setup.
-    fn reads(self, path: &str) -> bool {
-        let under = |unread: &&str| path.strip_prefix(*unread).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
-        self.read_sign_ins || !setup_sync::UNREAD_WITHOUT_SIGN_INS.iter().any(under)
     }
 }
 
@@ -182,8 +159,7 @@ pub(crate) enum Status {
 /// Why a sync left a path as each side has it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Why {
-    /// The sync held it: two sign-ins for the operator to choose between,
-    /// a link, or a file against a folder.
+    /// The sync held it: a link, or a file against a folder.
     Held(Hold),
     /// A side could not read or write it.
     Problem(Side, String),
@@ -253,7 +229,6 @@ impl Status {
             Status::Waiting => "Not synced yet".into(),
             Status::Syncing(None) => "Syncing…".into(),
             Status::Syncing(Some(count)) => format!("Syncing {}", files(*count)),
-            Status::InSync(_) if self.sign_ins() => "Signed in differently on each side: choose which to keep".into(),
             Status::InSync(held) => match held.iter().next() {
                 None => "In sync".into(),
                 Some((path, why)) if held.len() == 1 => format!("In sync except {}", why.said(path, name)),
@@ -281,17 +256,11 @@ impl Status {
         matches!(self, Status::Failed(_) | Status::Stopped(_) | Status::Older)
     }
 
-    /// Two sign-ins wait for the operator to say whose to keep.
-    pub(crate) fn sign_ins(&self) -> bool {
-        matches!(self, Status::InSync(held) if held.values().any(|why| *why == Why::Held(Hold::SignIn)))
-    }
-
     /// The status as Connections' row of the Machine `name` says it.
     pub(crate) fn row(&self, name: &str) -> ferrite_settings::connections::Sync {
         ferrite_settings::connections::Sync {
             refused: matches!(self, Status::Refused(_)),
             stopped: matches!(self, Status::Stopped(_)),
-            sign_ins: self.sign_ins(),
             failed: self.failed(),
             line: self.line(name),
         }
@@ -316,7 +285,6 @@ impl Why {
                 Side::Here => format!("{named} is a folder here and a link on {name}: left as each has it"),
                 Side::There => format!("{named} is a folder on {name} and a link here: left as each has it"),
             },
-            Why::Held(Hold::SignIn) => format!("{named}: it is signed in differently on each side"),
         }
     }
 }
@@ -694,16 +662,6 @@ impl SetupSync {
         }
     }
 
-    /// Sync the Machine `target` names, each sign-in that differs with
-    /// none agreed taken from `side`.
-    pub(crate) fn use_sign_ins(&mut self, target: &str, side: Side, cx: &mut Context<Self>) {
-        let ask = Ask {
-            sign_ins: Some(side),
-            ..Ask::CHECK
-        };
-        self.ask(|named, _| named == target, ask, cx);
-    }
-
     fn ask(&mut self, which: impl Fn(&str, &Track) -> bool, ask: Ask, cx: &mut Context<Self>) {
         let Some(Ok(home)) = self.home.clone() else {
             return;
@@ -735,15 +693,12 @@ impl Track {
         }
     }
 
-    /// What "Sync anyway" asks: what the sync that stopped asked, so it
-    /// reads all that one read, whole, and removing what it would remove.
+    /// What "Sync anyway" asks: all of it, removing what it would remove.
     /// Nothing when no sync stopped.
     fn anyway(&self) -> Option<Ask> {
-        let (_, ask) = self.found.stop.as_ref()?;
-        Some(Ask {
-            only_if_changed_here: false,
+        self.found.stop.as_ref().map(|_| Ask {
             allow_removals: true,
-            ..*ask
+            ..Ask::WHOLE
         })
     }
 
@@ -753,7 +708,7 @@ impl Track {
     fn due(&mut self, now: Instant, connected: bool, settled: bool) -> Option<Ask> {
         if connected || self.check.is_some_and(|check| now >= check) {
             self.check = Some(now + CHECK);
-            return Some(Ask::CHECK);
+            return Some(Ask::WHOLE);
         }
         if settled {
             return Some(Ask::HERE);
@@ -788,9 +743,7 @@ impl Track {
     /// says of it. Whether the news moved. A sync of what changed here
     /// that found nothing changed learned nothing of the Machine, so the
     /// line and the news stand; one that found another under way looks at
-    /// all of it next, since the other may have moved anything. What a
-    /// sync did not read, a hold or a stop, stands as the last sync that
-    /// read it left it.
+    /// all of it next, since the other may have moved anything.
     fn finished(&mut self, done: std::io::Result<Outcome>, ask: Ask, now: Instant, news: &mut News) -> bool {
         if matches!(&done, Ok(Outcome::Synced(synced)) if ask.only_if_changed_here && *synced == Synced::default()) {
             return false;
@@ -798,10 +751,8 @@ impl Track {
         let before = news.clone();
         self.status = match done {
             Ok(Outcome::Synced(synced)) => {
-                self.found.held.retain(|path, _| !ask.reads(path));
-                self.found.held.extend(held(&synced));
-                if self.found.stop.as_ref().is_some_and(|(valve, _)| ask.reads(&valve.item)) {
-                    self.found.stop = None;
+                self.found.held = held(&synced).collect();
+                if self.found.stop.take().is_some() {
                     news.stopped = None;
                 }
                 news.failed = None;
@@ -811,10 +762,10 @@ impl Track {
             }
             Ok(Outcome::Stopped(valve)) => {
                 news.failed = None;
-                if self.found.stop.as_ref().is_none_or(|(stopped, _)| *stopped != valve) {
+                if self.found.stop.as_ref().is_none_or(|stopped| *stopped != valve) {
                     news.stopped = Some(valve.clone());
                 }
-                self.found.stop = Some((valve, ask));
+                self.found.stop = Some(valve);
                 self.found.status()
             }
             Ok(Outcome::Busy) => {
@@ -857,8 +808,6 @@ impl Track {
         let job = Job {
             allow_removals: ask.allow_removals,
             only_if_changed_here: ask.only_if_changed_here,
-            read_sign_ins: ask.read_sign_ins,
-            sign_ins: ask.sign_ins,
             ..Job::for_machine(home.clone(), settings_dir, target)
         };
         let (said, heard) = ferrite_core::doorbell::channel();
@@ -963,11 +912,6 @@ impl CockpitView {
         self.setup_sync_moved(cx);
     }
 
-    pub(super) fn sync_setup_sign_ins(&mut self, target: &str, side: Side, cx: &mut Context<Self>) {
-        self.setup_sync.update(cx, |sync, cx| sync.use_sign_ins(target, side, cx));
-        self.setup_sync_moved(cx);
-    }
-
     pub(super) fn sync_setup_before_start(&mut self, machine: MachineId, cx: &mut Context<Self>) {
         self.setup_sync.update(cx, |sync, cx| sync.before_start(machine, cx));
         self.setup_sync_moved(cx);
@@ -1031,22 +975,19 @@ mod tests {
     fn the_clock_comes_round_every_minute_whatever_else_syncs() {
         let mut track = track();
         let start = Instant::now();
-        assert_eq!(track.due(start, true, false), Some(Ask::CHECK), "as it connects");
+        assert_eq!(track.due(start, true, false), Some(Ask::WHOLE), "as it connects");
         for second in [3, 23, 43] {
             assert_eq!(track.due(start + Duration::from_secs(second), false, true), Some(Ask::HERE), "a change here at {second}s");
         }
         assert_eq!(track.due(start + Duration::from_secs(59), false, false), None);
-        assert_eq!(track.due(start + CHECK, false, false), Some(Ask::CHECK), "not moved by the syncs a change here started");
+        assert_eq!(track.due(start + CHECK, false, false), Some(Ask::WHOLE), "not moved by the syncs a change here started");
         assert_eq!(track.due(start + CHECK + Duration::from_secs(1), false, false), None);
-        assert_eq!(track.due(start + 2 * CHECK, false, true), Some(Ask::CHECK), "the clock's sync carries a change here too");
+        assert_eq!(track.due(start + 2 * CHECK, false, true), Some(Ask::WHOLE), "the clock's sync carries a change here too");
     }
 
     #[test]
-    fn only_the_connection_and_the_clock_read_the_sign_ins() {
-        assert!(Ask::CHECK.read_sign_ins);
-        assert!(!Ask::HERE.read_sign_ins && !Ask::WHOLE.read_sign_ins);
-        assert!(Ask::HERE.and(Ask::CHECK).read_sign_ins);
-        assert!(!Ask::HERE.and(Ask::CHECK).only_if_changed_here);
+    fn one_sync_for_two_reads_all_that_either_would() {
+        assert_eq!(Ask::HERE.and(Ask::WHOLE), Ask::WHOLE);
     }
 
     #[test]
@@ -1094,8 +1035,6 @@ mod tests {
         assert_eq!(track.status.line("box"), "box stopped waiting for this computer; the next sync starts over");
     }
 
-    const SIGN_IN: &str = ".claude/.credentials.json";
-
     fn valve(item: &str) -> Valve {
         Valve {
             side: Side::Here,
@@ -1114,36 +1053,32 @@ mod tests {
     }
 
     /// Connections' row says each status as what it offers: a refusal
-    /// draws the switch off, a stop offers to go on, two sign-ins offer
-    /// each side's, and the line is the one the Machine's status says.
+    /// draws the switch off, a stop offers to go on, and the line is the
+    /// one the Machine's status says.
     #[test]
     fn a_status_is_said_on_its_connections_row() {
         use ferrite_settings::connections::Sync;
         let refused = Status::Refused("This window syncs no setup".into());
         assert_eq!(refused.row("box"), Sync { refused: true, line: "This window syncs no setup".into(), ..Sync::default() });
-        let stopped = Status::Stopped(valve(SIGN_IN));
+        let stopped = Status::Stopped(valve(".claude/skills"));
         assert_eq!(stopped.row("box"), Sync { stopped: true, failed: true, line: stopped.line("box"), ..Sync::default() });
-        let held = Status::InSync(BTreeMap::from([(SIGN_IN.to_string(), Why::Held(Hold::SignIn))]));
-        assert_eq!(held.row("box"), Sync { sign_ins: true, line: held.line("box"), ..Sync::default() });
         assert_eq!(Status::InSync(BTreeMap::new()).row("box"), Sync { line: "In sync".into(), ..Sync::default() });
         assert_eq!(Status::Older.row("box"), Sync { failed: true, line: "Update Ferrite on box to sync your setup".into(), ..Sync::default() });
     }
 
-    /// "Sync anyway" asks what the sync that stopped asked, whole and
-    /// removing what it removes, so whatever stop the line shows, from
-    /// whichever sync, it clears.
+    /// "Sync anyway" asks for all of it, removing what it removes, so
+    /// whatever stop the line shows, from whichever sync, it clears.
     #[test]
     fn sync_anyway_asks_what_stopped_and_clears_any_stop() {
         let now = Instant::now();
-        for ask in [Ask::CHECK, Ask::HERE, Ask::WHOLE] {
-            for item in setup_sync::ITEMS.iter().map(|item| item.path).filter(|item| ask.reads(item)) {
+        for ask in [Ask::HERE, Ask::WHOLE] {
+            for item in setup_sync::ITEMS.iter().map(|item| item.path) {
                 let mut track = track();
                 let mut news = News::default();
                 assert_eq!(track.anyway(), None, "nothing stopped");
                 track.finished(Ok(Outcome::Stopped(valve(item))), ask, now, &mut news);
                 let again = track.anyway().expect("a stop");
                 assert!(again.allow_removals && !again.only_if_changed_here, "{ask:?}");
-                assert!(again.reads(item), "{ask:?} stopped at {item}: Sync anyway reads it too");
                 track.status = Status::Syncing(Some(4));
                 track.finished(Ok(Outcome::Synced(Synced::default())), again, now, &mut news);
                 assert_eq!(track.status, Status::InSync(BTreeMap::new()), "{ask:?} stopped at {item}");
@@ -1152,44 +1087,8 @@ mod tests {
         }
     }
 
-    /// A sync that leaves a path unread, as one a change here starts
-    /// leaves Claude's sign-in, never clears a hold or a stop about it,
-    /// whatever the line showed while it ran.
-    #[test]
-    fn a_narrower_sync_never_clears_what_it_did_not_read() {
-        let now = Instant::now();
-        let mut track = track();
-        let mut news = News::default();
-        let signed_in = |path: &str| {
-            Outcome::Synced(Synced {
-                held: BTreeMap::from([(path.to_string(), Hold::SignIn)]),
-                ..Synced::default()
-            })
-        };
-        track.finished(Ok(signed_in(SIGN_IN)), Ask::CHECK, now, &mut news);
-        for narrower in [Ask::HERE, Ask::WHOLE] {
-            track.status = Status::Syncing(Some(1));
-            track.finished(Ok(moved_one()), narrower, now, &mut news);
-            assert!(track.status.sign_ins(), "{narrower:?}: {:?}", track.status);
-        }
-        track.finished(Ok(Outcome::Synced(Synced::default())), Ask::CHECK, now, &mut news);
-        assert_eq!(track.status, Status::InSync(BTreeMap::new()), "the clock read it again");
-        track.finished(Ok(signed_in(".codex/auth.json")), Ask::CHECK, now, &mut news);
-        track.finished(Ok(moved_one()), Ask::HERE, now, &mut news);
-        assert_eq!(track.status, Status::InSync(BTreeMap::new()), "Codex's sign-in is read by every sync");
-
-        track.finished(Ok(Outcome::Stopped(valve(SIGN_IN))), Ask::CHECK, now, &mut news);
-        for narrower in [Ask::HERE, Ask::WHOLE] {
-            track.status = Status::Syncing(Some(1));
-            track.finished(Ok(moved_one()), narrower, now, &mut news);
-            assert_eq!(track.status, Status::Stopped(valve(SIGN_IN)), "{narrower:?}");
-            assert_eq!(news.stopped, Some(valve(SIGN_IN)));
-        }
-        track.finished(Ok(Outcome::Stopped(valve(".claude/skills"))), Ask::CHECK, now, &mut news);
-        track.finished(Ok(moved_one()), Ask::HERE, now, &mut news);
-        assert_eq!(track.status, Status::InSync(BTreeMap::new()), "it read the skills");
-    }
-
+    /// A sync of a change here that found nothing changed leaves a stop
+    /// standing; one that moved something clears it.
     #[test]
     fn a_change_here_that_changed_nothing_leaves_a_stop_standing() {
         let mut track = track();
@@ -1202,10 +1101,12 @@ mod tests {
             holding: 410,
             vanished: true,
         };
-        assert!(track.finished(Ok(Outcome::Stopped(valve.clone())), Ask::CHECK, now, &mut news));
+        assert!(track.finished(Ok(Outcome::Stopped(valve.clone())), Ask::WHOLE, now, &mut news));
         assert!(!track.finished(Ok(Outcome::Synced(Synced::default())), Ask::HERE, now, &mut news));
         assert_eq!(track.status, Status::Stopped(valve.clone()));
         assert_eq!(news.stopped, Some(valve));
+        track.finished(Ok(moved_one()), Ask::HERE, now, &mut news);
+        assert_eq!((track.status.clone(), news.stopped), (Status::InSync(BTreeMap::new()), None));
     }
 
     #[test]
@@ -1217,7 +1118,7 @@ mod tests {
             conflicts: vec![kept(".claude/CLAUDE.md", "1"), kept(".claude/agents/a.md", "1"), kept(".codex/AGENTS.md", "1")],
             ..Synced::default()
         };
-        assert!(track.finished(Ok(Outcome::Synced(synced)), Ask::CHECK, now, &mut news));
+        assert!(track.finished(Ok(Outcome::Synced(synced)), Ask::WHOLE, now, &mut news));
         let all = BTreeMap::from([("box".to_string(), news.clone())]);
         let Toast { title, message, folder, warning } = toast(&all).unwrap();
         assert!(warning);
@@ -1237,9 +1138,9 @@ mod tests {
             };
             Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, stuck))
         };
-        assert!(track.finished(failed(), Ask::CHECK, now, &mut news));
+        assert!(track.finished(failed(), Ask::WHOLE, now, &mut news));
         assert_eq!(track.status.line("box"), "~/.claude/skills/a.md on box: Permission denied");
-        assert!(!track.finished(failed(), Ask::CHECK, now, &mut news), "still failing: no second toast");
+        assert!(!track.finished(failed(), Ask::WHOLE, now, &mut news), "still failing: no second toast");
         let all = BTreeMap::from([("box".to_string(), news.clone())]);
         let Toast { title, message, .. } = toast(&all).unwrap();
         assert_eq!(title, "Setup sync: 2 things to look at", "one toast, the first not hidden");
@@ -1256,7 +1157,7 @@ mod tests {
         let unplaced = std::io::Error::other("connection reset (os error 104)");
         assert_eq!(Status::Failed(Failure::of(&unplaced)).line("box"), "connection reset");
 
-        assert!(track.finished(Ok(Outcome::Synced(Synced::default())), Ask::CHECK, now, &mut news));
+        assert!(track.finished(Ok(Outcome::Synced(Synced::default())), Ask::WHOLE, now, &mut news));
         assert_eq!(news.failed, None, "it synced again");
         assert_eq!(news.conflicts.len(), 3);
     }
@@ -1271,7 +1172,7 @@ mod tests {
             was: "\"sonnet\"".into(),
         };
         let synced = Synced { pushed: 1, replaced: vec![replaced], ..Synced::default() };
-        assert!(track.finished(Ok(Outcome::Synced(synced)), Ask::CHECK, Instant::now(), &mut news));
+        assert!(track.finished(Ok(Outcome::Synced(synced)), Ask::WHOLE, Instant::now(), &mut news));
         assert_eq!(track.status.line("box"), "In sync");
         let all = BTreeMap::from([("box".to_string(), news)]);
         let shown = toast(&all).unwrap();
@@ -1332,7 +1233,7 @@ mod tests {
     fn a_machine_by_another_table_says_to_update_it_and_a_plugin_that_did_not_install_says_why() {
         let mut track = track();
         let older = std::io::Error::new(std::io::ErrorKind::Unsupported, "This server does not know that kind of root");
-        track.finished(Err(older), Ask::CHECK, Instant::now(), &mut News::default());
+        track.finished(Err(older), Ask::WHOLE, Instant::now(), &mut News::default());
         assert_eq!(track.status.line("box"), "Update Ferrite on box to sync your setup");
         assert!(track.status.failed());
 
@@ -1409,16 +1310,10 @@ mod tests {
             }],
             ..Synced::default()
         };
-        let line = |synced: &Synced| Status::InSync(held(synced).collect());
         assert_eq!(
-            line(&synced).line("box"),
+            Status::InSync(held(&synced).collect()).line("box"),
             "In sync except ~/.claude/skills on box: it is a link to something not there"
         );
-        let signed_in = Synced {
-            held: BTreeMap::from([(SIGN_IN.to_string(), Hold::SignIn)]),
-            ..Synced::default()
-        };
-        assert!(line(&signed_in).sign_ins());
         let gone = Valve {
             side: Side::Here,
             item: ".claude/skills".into(),

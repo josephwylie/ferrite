@@ -5,13 +5,12 @@
 //! file their tool keeps other things in (chosen). What a tool builds for
 //! itself (plugin downloads, caches, install records, its own account
 //! sync) is derived, has no entry, and never moves: each side's tool builds
-//! its own. Nothing outside the table is written, and nothing outside it is
-//! read but what a link inside it points at. Each side resolves the table
-//! against its own home directory as the tree root `Root::Setup`, so a sync
+//! its own. A sign-in is each computer's own, and has no entry either.
+//! Nothing outside the table is written, and nothing outside it is read but
+//! what a link inside it points at. Each side resolves the table against
+//! its own home directory as the tree root `Root::Setup`, so a sync
 //! is tree ops over the protocol: [`run`] scans both sides, [`reconcile`]s
 //! them with the state they last agreed on, and moves what changed.
-
-use crate::provider::Provider;
 
 mod installs;
 mod keys;
@@ -29,7 +28,7 @@ pub(crate) use lock::Held;
 pub use portable::Spelling;
 pub use reconcile::{agreed, reconcile, Action, Hold};
 pub use run::{run, Job, Kept, Names, Outcome, Replaced, Synced, Valve, BASE, CONFLICTS};
-pub use store::{Home, Keychain, TRASH};
+pub use store::{Home, TRASH};
 pub(crate) use store::Place;
 
 /// Which table this Ferrite syncs by. Both sides of a sync must name the
@@ -37,8 +36,10 @@ pub(crate) use store::Place;
 /// whose tables differ move nothing, and a base is read only by the table
 /// that wrote it. The first table, 0.4.0's, synced plugin downloads and
 /// whole tool files. The second, never released, carried every key of
-/// Claude's settings and removed on a Machine with no trash.
-pub const TABLE: u32 = 3;
+/// Claude's settings and removed on a Machine with no trash. The third
+/// carried each side's Claude and Codex sign-in, which renew themselves
+/// and retire every other copy.
+pub const TABLE: u32 = 4;
 
 /// One part of the operator's setup, by its path from the home directory;
 /// `.claude/…` is from `$CLAUDE_CONFIG_DIR` and `.codex/…` from
@@ -60,9 +61,6 @@ pub enum Source {
     /// entry of its own, `<path>#<key>`, and the rest of the file is never
     /// read into a manifest and never written.
     Keys { format: Format, keys: &'static [Key] },
-    /// A sign-in: owner-only, never logged, and on macOS Claude's is the
-    /// Keychain's item, not a file.
-    Credential(Provider),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,7 +158,6 @@ pub const ITEMS: &[Item] = &[
         path: ".claude.json",
         source: Source::Keys { format: Format::Json, keys: &[Key::each("mcpServers", Entries::Servers)] },
     },
-    Item { path: ".claude/.credentials.json", source: Source::Credential(Provider::Claude) },
     // Codex writes its own bundled skills under `.system`, each side for
     // its own version.
     Item { path: ".codex/skills", source: tree(&[".system"]) },
@@ -189,7 +186,6 @@ pub const ITEMS: &[Item] = &[
             ],
         },
     },
-    Item { path: ".codex/auth.json", source: Source::Credential(Provider::Codex) },
 ];
 
 /// Never synced inside a tree, at any depth, in any case: a clone's git
@@ -200,28 +196,6 @@ pub const LEFT_OUT: &[&str] = &[".git", ".DS_Store", "Thumbs.db", "desktop.ini"]
 /// Whether the name `name` is one of [`LEFT_OUT`].
 pub(crate) fn left_out(name: &str) -> bool {
     LEFT_OUT.iter().any(|left| left.eq_ignore_ascii_case(name))
-}
-
-/// Where macOS keeps Claude's sign-in: its Keychain item's service, with
-/// `-<8 hex of the folder's SHA-256>` after it when `CLAUDE_CONFIG_DIR`
-/// moves Claude's folder.
-pub const CLAUDE_KEYCHAIN: &str = "Claude Code-credentials";
-
-/// Claude's sign-in, the one sign-in a Keychain may keep.
-pub(crate) const CLAUDE_SIGN_IN: &str = ".claude/.credentials.json";
-
-/// The table's paths a sync that reads no sign-ins leaves unread: Claude's,
-/// which macOS keeps in a Keychain whose every read may ask the operator.
-pub const UNREAD_WITHOUT_SIGN_INS: &[&str] = &[CLAUDE_SIGN_IN];
-
-/// The table's item at `path`, when `path` is one, not a path in one.
-pub(crate) fn item_at(path: &str) -> Option<&'static Item> {
-    ITEMS.iter().find(|item| item.path == path)
-}
-
-/// Whether `path` is a sign-in.
-pub(crate) fn sign_in(path: &str) -> bool {
-    item_at(path).is_some_and(|item| matches!(item.source, Source::Credential(_)))
 }
 
 /// The chosen file `path` is a key of, and the key: `<file>#<key>`.

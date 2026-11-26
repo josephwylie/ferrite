@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use ferrite_core::machine::{self, auth, remote, setup, Machine};
-use ferrite_core::tree::Side;
 use ferrite_ui::frame::settings::{self, ConnectionMode};
 use ferrite_ui::source::Source;
 use gpui::component::input::{InputEvent, InputState};
@@ -54,9 +53,6 @@ pub enum ConnectionsEvent {
     ToggleSync(String),
     /// Sync the environment with this target though it removes much.
     SyncAnyway(String),
-    /// Sync the environment with this target, each sign-in that differs
-    /// taken from this side.
-    UseSignIns(String, Side),
     /// Remove a saved environment, as confirmed.
     Remove { machine: Machine, unsaved: bool },
     /// Copy Projects into this folder on the saved environment `target`.
@@ -134,8 +130,6 @@ pub struct Sync {
     pub refused: bool,
     /// It stopped short of removing much: it can be made to go on.
     pub stopped: bool,
-    /// Two sign-ins wait for the operator to say whose to keep.
-    pub sign_ins: bool,
     pub failed: bool,
     /// What the row says of it.
     pub line: String,
@@ -1329,10 +1323,6 @@ impl ConnectionsView {
                 };
                 let actions = match &status {
                     Sync { stopped: true, .. } => vec![press("anyway", "Sync anyway", ConnectionsEvent::SyncAnyway(target.clone()))],
-                    Sync { sign_ins: true, .. } => vec![
-                        press("here", "Use this computer's", ConnectionsEvent::UseSignIns(target.clone(), Side::Here)),
-                        press("there", &format!("Use {}'s", machine.name), ConnectionsEvent::UseSignIns(target.clone(), Side::There)),
-                    ],
                     _ => Vec::new(),
                 };
                 // A window that syncs no setup draws the switch off, and
@@ -2105,7 +2095,7 @@ mod tests {
     }
 
     /// Sync my setup says where the sync stands; its switch is asked of the
-    /// window, and so are going on past a stop and whose sign-ins to keep.
+    /// window, and so is going on past a stop.
     /// A window that syncs no setup draws the switch off, taking no press.
     #[gpui::test]
     fn sync_my_setup_says_where_it_stands(cx: &mut TestAppContext) {
@@ -2132,14 +2122,6 @@ mod tests {
         assert_eq!(anyway.iter().map(|(id, label, _)| (id.as_str(), label.as_str())).collect::<Vec<_>>(), [("connection-sync-anyway-1", "Sync anyway")]);
         cx.update(|window, cx| (anyway[0].2)(window, cx));
         assert_eq!(heard.take(), [ConnectionsEvent::SyncAnyway("me@box".into())]);
-
-        set(Sync { sign_ins: true, line: "Signed in differently".into(), ..Sync::default() }, cx);
-        let verbs = sync(cx).actions;
-        assert_eq!(verbs.iter().map(|action| action.label.to_string()).collect::<Vec<_>>(), ["Use this computer's", "Use box's"]);
-        for action in verbs {
-            cx.update(|window, cx| (action.act)(window, cx));
-        }
-        assert_eq!(heard.take(), [ConnectionsEvent::UseSignIns("me@box".into(), Side::Here), ConnectionsEvent::UseSignIns("me@box".into(), Side::There)]);
 
         set(Sync { refused: true, line: "This window syncs no setup".into(), ..Sync::default() }, cx);
         let shown = sync(cx);

@@ -6,9 +6,10 @@ date: 2026-11-25
 # Setup sync moves what the operator chose, and nothing a tool derives
 
 This supersedes the table of ADR 0048 section 3, with its seeded
-marketplaces, its portable JSON files and its whole `config.toml`. The rest
-of that section stands: this computer is the hub, the base is three-way, and
-the valve, sign-ins, timing, row and toast work as it says.
+marketplaces, its portable JSON files and its whole `config.toml`, and all
+it says of sign-ins (see Sign-ins). The rest of that section stands: this
+computer is the hub, the base is three-way, and the valve, timing, row and
+toast work as it says.
 
 ## Why
 
@@ -37,7 +38,7 @@ Three kinds of thing live there.
   side's tool builds its own.
 
 `setup_sync::ITEMS` says which is which, as a `Source`: `Tree { except }`,
-`File { owner_only }`, `Keys { format, keys }` or `Credential`. A key is a
+`File { owner_only }` or `Keys { format, keys }`. A key is a
 `Key { name, shape }`, where `Whole` means its value is one entry and `Each`
 means each entry of the object or table it holds is one. `PortableJson`,
 `JsonKey` and `Seed` are gone.
@@ -56,7 +57,6 @@ means each entry of the object or table it holds is one. `PortableJson`,
 | `.codex/{prompts,rules}` | tree |
 | `.codex/AGENTS.md` | file |
 | `.codex/config.toml` | keys: `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity` and `plan_mode_reasoning_effort` whole; `plugins`, `marketplaces` (its `source_type`, `source`, `ref` and `sparse_paths` alone) and `mcp_servers` each |
-| `.claude/.credentials.json`, `.codex/auth.json` | sign-in, as before |
 
 Both chosen files are allowlists, and a key the table does not name is
 never read. In `settings.json` that leaves out each key that holds a
@@ -69,6 +69,22 @@ rest, which name this computer's own places or state. All of
 cache, lock, log, session and database are derived. Inside a tree,
 `.git`, `.DS_Store`, `Thumbs.db` and `desktop.ini` are never synced, in any
 case, at any depth.
+
+## Sign-ins
+
+A sign-in is each computer's own: no sync reads, writes or removes one.
+Claude's (`.claude/.credentials.json`, on macOS the Keychain item
+`Claude Code-credentials`) and Codex's (`.codex/auth.json`) are OAuth
+sign-ins that renew themselves, and a renewal retires every other copy.
+Table 3 carried them as ADR 0048 had it. Asked whose to keep, the operator
+kept the Mac's, and each of the two Machines it went to failed at once:
+"OAuth session expired and could not be refreshed". OpenAI's Codex docs
+say not to share one `auth.json` between computers.
+
+So neither is in the table, and the row's question, "Signed in
+differently on each side", is gone. A sign-in already on either side stays
+as it is: none is moved, removed or put back, whatever a base says. Setup
+sync no longer reads the Keychain. Each computer is signed in on its own.
 
 ## What of an Each key travels
 
@@ -267,11 +283,14 @@ over": what it asks was planned from a scan the home may no longer match.
 
 ## The table's version
 
-`setup_sync::TABLE` is 3, and the Setup root carries it:
-`{"kind":"setup_table","table":3}`. Table 2 was this ADR's first cut,
+`setup_sync::TABLE` is 4, and the Setup root carries it:
+`{"kind":"setup_table","table":4}`. Table 2 was this ADR's first cut,
 never released: it carried every key of `settings.json` and removed on a
 Machine with no trash, so a Server by it must not take this hub's writes.
-A Server refuses any other table. One by a
+Table 3 carried each side's sign-in: a hub by it pushes its own to a
+Machine that has none, and a Machine by it lists its own for a hub by this
+table to pull, or to remove where a base names it, so the two must not
+sync. A Server refuses any other table. One by a
 newer table is refused as `unsupported`, which the hub's row reads as
 "Update Ferrite on <name> to sync your setup". One by an older table, or
 ADR 0048's `{"kind":"setup"}`, is refused with "Update Ferrite on this
@@ -280,7 +299,7 @@ before this ADR reads `setup_table` as a root it does not know and refuses
 it as `unsupported`, so a new hub never syncs with it. Its row says to
 update it, and nothing moves either way.
 
-The hold is checked by its op, and the table stays 3. A Server from before
+The hold is checked by its op, and the table stayed 3. A Server from before
 the hold reads `hold` as an op it does not know and refuses it as
 `unsupported`, so the row says "Update Ferrite on <name> to sync your
 setup". A hub from before it scans without holding, and is refused with
@@ -298,14 +317,14 @@ differ.
 
 ## Old bases
 
-A base is stamped with the table that wrote it: `{"table": 3, "agreed":
+A base is stamped with the table that wrote it: `{"table": 4, "agreed":
 <manifest>}`. A base with another table's number, or none, as every base
 before this one, is not read at all, and the sync is a first sync: the
 union of both sides, which removes nothing and, by the text hash, moves no
 file that differs only in line ends. An old base is never read in part.
 Its entries were agreed by other rules (the first table hashed bytes, not
 text, and followed links), and a removal planned from one could take what
-this table never synced.
+this table never synced: a base by table 3 names each side's sign-ins.
 
 ## Kept copies and trash
 
@@ -314,8 +333,7 @@ side's Server moves it to that side's own trash first, in its Ferrite
 settings folder: `~/.ferrite/sync-trash/<stamp>/…`, a folder for each
 sync, each kept 14 days. A removed file or folder, or a link, is moved
 there. A file a write replaces is copied there first. A key removed or
-written over is kept there as a file of its value. A sign-in is never put
-there: one is never removed, and a newer one replaces the older.
+written over is kept there as a file of its value.
 
 A conflict's losing copy and the trash are kept under the path with its
 first dot dropped, as `sync-conflicts/<stamp>/claude/CLAUDE.md` and
@@ -325,6 +343,12 @@ Windows refuses spelled `_`.
 
 ## Tradeoffs
 
+- **Each computer is signed in on its own.** A new Machine has no Claude or
+  Codex sign-in until the operator signs in there: no sync gives it one.
+- **Table 4 starts each Machine over.** A base by table 3 is read as none,
+  so the first sync once both sides run table 4 is a first sync: it
+  removes nothing, and a Whole key the two hold differently takes the
+  hub's value, the Machine's kept in its trash and said in the toast.
 - **A key's time is its file's.** The newer of two changed keys is the one
   whose file changed later, which may be for another key.
 - **Own values never move.** An absolute path outside the home is assumed

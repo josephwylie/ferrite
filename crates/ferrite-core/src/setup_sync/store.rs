@@ -7,8 +7,7 @@
 //! through one: a link itself may go. A link to a place the table names
 //! is listed as that link, and made again on the other side. Nothing a
 //! sync removes or writes over is deleted: each side moves it to its own
-//! trash first. A sign-in is only ever owner-only bytes: never logged or
-//! named by its content in an error, and never put in the trash.
+//! trash first.
 
 use std::ffi::OsString;
 use std::fs;
@@ -23,14 +22,9 @@ use super::installs::{Folders, Installs};
 use super::links::{self, Places};
 use super::lock::{Held, Lock, LOCK};
 use super::portable::{self, Spelling};
-use super::{keys, Format, Item, Key, Source, CLAUDE_KEYCHAIN, ITEMS, LEFT_OUT};
+use super::{keys, Format, Item, Key, Source, ITEMS, LEFT_OUT};
 use crate::chunked::{self, CHUNK_SIZE};
-use crate::provider::Provider;
 use crate::tree::{self, Entry, Manifest};
-
-/// Why a side holds a sign-in that does not read whole: its agent is
-/// writing it, and the next sync carries it, unsaid.
-pub(super) const MID_WRITE: &str = "the sign-in is being written; it syncs once it reads whole";
 
 /// Why a side holds a chosen key, unsaid: it is this computer's own, a
 /// value that names a place no other side has, or an entry the table says
@@ -56,9 +50,6 @@ pub struct Home {
     claude_json: PathBuf,
     /// `$CODEX_HOME`, else `.codex` in the home directory.
     codex: PathBuf,
-    /// Where Claude's sign-in is kept in place of its file (macOS's), and
-    /// the service of its item there.
-    keychain: Option<(Arc<dyn Keychain>, String)>,
     /// What installs the plugins a sync turns on here.
     installs: Option<Arc<Installs>>,
     /// Where what a sync removes or writes over here goes.
@@ -118,12 +109,6 @@ fn prune(trash: &Path) {
     }
 }
 
-/// A store of secrets by service, for this computer's user.
-pub trait Keychain: Send + Sync {
-    fn get(&self, service: &str) -> io::Result<Option<String>>;
-    fn set(&self, service: &str, secret: &str) -> io::Result<()>;
-}
-
 impl Home {
     /// This process's: the home directory Claude Code and Codex read, with
     /// `.claude` and `.codex` where `CLAUDE_CONFIG_DIR` and `CODEX_HOME`
@@ -131,9 +116,7 @@ impl Home {
     /// Ferrite on a Store of its own (`FERRITE_STORE`, a test or an
     /// isolated run) is refused unless every folder it would sync is in a
     /// home of its own, not the account's real one, so it never syncs the
-    /// operator's setup. macOS's Keychain is the account's, not the home
-    /// directory's, so Claude's sign-in is the Keychain's only when this is
-    /// the account's own home.
+    /// operator's setup.
     pub fn from_env() -> io::Result<Self> {
         let var = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
         let root = home_dir(var, cfg!(windows))
@@ -145,7 +128,6 @@ impl Home {
         };
         let codex = var("CODEX_HOME").map(under);
         let claude = var("CLAUDE_CONFIG_DIR").map(under);
-        let keychain = cfg!(target_os = "macos") && account.as_ref().is_some_and(|account| *account == root);
         let mut home = Self::at(root, codex).with_settings_in(&crate::server::settings_dir());
         if let Some(claude) = claude {
             home = home.with_claude(claude);
@@ -156,16 +138,10 @@ impl Home {
                 "Off: this Ferrite runs on a Store of its own, and its setup is not in a home of its own",
             ));
         }
-        Ok(if keychain {
-            let service = claude_service(var("CLAUDE_CONFIG_DIR").as_deref());
-            home.with_keychain(Arc::new(SystemKeychain)).serving(service)
-        } else {
-            home
-        })
+        Ok(home)
     }
 
-    /// A home at `root` whose sign-ins are files, with Codex's at `codex`
-    /// or in `root`, nothing to install plugins with, and its trash and
+    /// A home at `root`, with Codex's folder at `codex` or in `root`, nothing to install plugins with, and its trash and
     /// lock in `.ferrite` there, as a Ferrite of that home keeps them.
     pub fn at(root: PathBuf, codex: Option<PathBuf>) -> Self {
         let settings = root.join(".ferrite");
@@ -176,7 +152,6 @@ impl Home {
             trash: Trash::at(settings.join(TRASH)),
             lock: Lock::at(settings.join(LOCK)),
             root,
-            keychain: None,
             installs: None,
         }
     }
@@ -220,22 +195,9 @@ impl Home {
         self
     }
 
-    /// Claude's sign-in kept in `keychain`, as macOS keeps it.
-    pub fn with_keychain(mut self, keychain: Arc<dyn Keychain>) -> Self {
-        self.keychain = Some((keychain, CLAUDE_KEYCHAIN.to_string()));
-        self
-    }
-
     /// Plugins a sync turns on in Claude here installed by `installs`.
     pub fn with_installs(mut self, installs: Arc<Installs>) -> Self {
         self.installs = Some(installs);
-        self
-    }
-
-    fn serving(mut self, service: String) -> Self {
-        if let Some((_, kept)) = &mut self.keychain {
-            *kept = service;
-        }
         self
     }
 
@@ -365,7 +327,7 @@ impl Home {
 
     fn list(&self, item: &'static Item, places: &Places, manifest: &mut Manifest) -> io::Result<()> {
         let at = self.physical(item.path);
-        if !self.in_keychain(item) && !present(&at)? {
+        if !present(&at)? {
             return Ok(());
         }
         match item.source {
@@ -399,14 +361,13 @@ impl Home {
                     manifest.entries.insert(path, file(&listed.carried, None, modified, false));
                 }
             }
-            Source::File { .. } | Source::Credential(_) => {
+            Source::File { .. } => {
                 let Some((bytes, meta)) = self.bytes(At::Whole(item))? else {
                     return Ok(());
                 };
-                let text = matches!(item.source, Source::File { .. });
-                let mode = text.then(|| meta.as_ref().and_then(tree::mode)).flatten();
+                let mode = meta.as_ref().and_then(tree::mode);
                 let modified = meta.as_ref().and_then(tree::millis);
-                manifest.entries.insert(item.path.to_string(), file(&bytes, mode, modified, text));
+                manifest.entries.insert(item.path.to_string(), file(&bytes, mode, modified, true));
             }
         }
         if self.linked(item, None) {
@@ -440,30 +401,8 @@ impl Home {
                     .map(|listed| (listed.carried, meta)),
                 None => None,
             },
-            (Source::Credential(provider), At::Whole(_)) => {
-                let read = match self.secret(provider, item.path) {
-                    Secret::File(at) => read(&at)?,
-                    Secret::Keychain(keychain, service) => keychain.get(service)?.map(|secret| (secret.into_bytes(), None)),
-                };
-                if read.as_ref().is_some_and(|(bytes, _)| serde_json::from_slice::<serde::de::IgnoredAny>(bytes).is_err()) {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, MID_WRITE));
-                }
-                read
-            }
             _ => return Err(not_setup(item.path)),
         })
-    }
-
-    /// Whether `item` is Claude's sign-in, kept in this side's Keychain.
-    fn in_keychain(&self, item: &Item) -> bool {
-        matches!((item.source, &self.keychain), (Source::Credential(Provider::Claude), Some(_)))
-    }
-
-    fn secret(&self, provider: Provider, path: &str) -> Secret<'_> {
-        match (provider, &self.keychain) {
-            (Provider::Claude, Some((keychain, service))) => Secret::Keychain(keychain.as_ref(), service),
-            _ => Secret::File(self.physical(path)),
-        }
     }
 
     /// Up to a chunk of `path` from `offset`, as it is carried, and its
@@ -537,17 +476,6 @@ impl Home {
                 private_dirs(&parent)?;
                 placed(parent, Some(0o600), How::Key { at: file, format, keys, key: key.to_string() })
             }
-            (Source::Credential(provider), At::Whole(_)) => match self.secret(provider, path) {
-                Secret::File(at) => {
-                    private_dir(&parent)?;
-                    placed(parent, Some(0o600), How::Secret(at))
-                }
-                Secret::Keychain(..) => {
-                    let dir = self.claude.clone();
-                    private_dir(&dir)?;
-                    placed(dir, Some(0o600), How::Keychain)
-                }
-            },
             _ => return Err(not_setup(path)),
         })
     }
@@ -576,16 +504,6 @@ impl Home {
                 write_over(at, &written)?;
                 self.installing(at, key);
                 Ok(())
-            }
-            How::Secret(at) => {
-                tree::set_mode(received, 0o600)?;
-                fs::rename(received, at).map_err(|error| tree::at(at, error))
-            }
-            How::Keychain => {
-                let secret = String::from_utf8(fs::read(received)?)
-                    .map_err(|_| invalid("Claude's sign-in is not text".into()))?;
-                let (keychain, service) = self.keychain()?;
-                keychain.set(service, &secret)
             }
         }
     }
@@ -658,12 +576,9 @@ impl Home {
 
     /// Remove `path`, and all under it, by moving it to this side's trash
     /// at its [`visible`] path: whether it was there. A key is kept there
-    /// as a file of its value, owner-only, then taken out of its file. A
-    /// sign-in is refused: no sync removes one, so none is ever in the
-    /// trash.
+    /// as a file of its value, owner-only, then taken out of its file.
     pub(crate) fn remove(&self, path: &str) -> io::Result<bool> {
         match item(path)? {
-            At::Whole(Item { source: Source::Credential(_), .. }) => Err(kept_sign_in(path)),
             At::Key(Item { source: Source::Keys { format, keys }, .. }, key) => {
                 self.writable(path)?;
                 let at = self.physical(path);
@@ -727,13 +642,6 @@ impl Home {
         };
         write_over(&self.aside(path)?, &self.written(path, carried))
     }
-
-    fn keychain(&self) -> io::Result<(&dyn Keychain, &str)> {
-        self.keychain
-            .as_ref()
-            .map(|(keychain, service)| (keychain.as_ref(), service.as_str()))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "this computer keeps no Keychain"))
-    }
 }
 
 /// A [`tree::send`] of setup files reads them as they are carried.
@@ -747,11 +655,6 @@ impl tree::Source for Home {
             }
         })
     }
-}
-
-enum Secret<'a> {
-    File(PathBuf),
-    Keychain(&'a dyn Keychain, &'a str),
 }
 
 /// Where a write is received and how it is put in place.
@@ -773,15 +676,12 @@ enum How {
         keys: &'static [Key],
         key: String,
     },
-    /// A sign-in file: owner-only, in an owner-only folder.
-    Secret(PathBuf),
-    Keychain,
 }
 
 /// What a setup path names.
 #[derive(Clone, Copy)]
 enum At<'a> {
-    /// An item that is one entry: a file, or a sign-in.
+    /// An item that is one entry: a file.
     Whole(&'static Item),
     /// A path in a tree, and the rest of it inside the tree.
     In(&'static Item, &'a str),
@@ -920,7 +820,7 @@ pub(super) fn write_over(at: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 /// What each folder Setup sync makes is given, whatever the umask: the
-/// setup holds keys and sign-ins.
+/// setup holds keys.
 const DIR_MODE: u32 = 0o700;
 
 /// `dir` and each folder holding it, each one that is new made with
@@ -993,12 +893,6 @@ fn sweep(dir: &Path) {
     }
 }
 
-/// `dir`, owner-only whether or not it was there: a sign-in's folder.
-fn private_dir(dir: &Path) -> io::Result<()> {
-    private_dirs(dir)?;
-    tree::set_mode(dir, DIR_MODE)
-}
-
 /// Whether the file begins `#!`: a new one sent from a side that keeps
 /// no permission bits runs as a script here.
 fn script(path: &Path) -> io::Result<bool> {
@@ -1012,10 +906,6 @@ fn script(path: &Path) -> io::Result<bool> {
 
 fn through_link(path: &str) -> io::Error {
     invalid(format!("{path} is reached through a link here, and Setup sync never writes through one"))
-}
-
-fn kept_sign_in(path: &str) -> io::Error {
-    invalid(format!("{path} is a sign-in, and Setup sync never removes one"))
 }
 
 /// Why a link could not be made, in words.
@@ -1044,19 +934,6 @@ fn invalid(message: String) -> io::Error {
 fn home_dir(var: impl Fn(&str) -> Option<OsString>, windows: bool) -> Option<PathBuf> {
     let order = if windows { ["USERPROFILE", "HOME"] } else { ["HOME", "USERPROFILE"] };
     order.into_iter().find_map(|name| var(name)).map(PathBuf::from)
-}
-
-/// The Keychain service Claude Code keeps its sign-in under: with
-/// `CLAUDE_CONFIG_DIR` set, the first 8 hex of that folder's SHA-256 after
-/// it, as Claude Code 2.1.330 names it.
-fn claude_service(config_dir: Option<&std::ffi::OsStr>) -> String {
-    match config_dir {
-        Some(dir) => {
-            let hash = chunked::hex(&Sha256::digest(dir.to_string_lossy().as_bytes()));
-            format!("{CLAUDE_KEYCHAIN}-{}", &hash[..8])
-        }
-        None => CLAUDE_KEYCHAIN.to_string(),
-    }
 }
 
 /// Whether two paths name one folder, as this computer compares names.
@@ -1126,41 +1003,6 @@ fn account_home() -> Option<PathBuf> {
     None
 }
 
-/// macOS's login Keychain, as Claude Code keeps its sign-in there: a
-/// generic password by service, for the account Claude Code 2.1.330 names
-/// every item with.
-struct SystemKeychain;
-
-impl SystemKeychain {
-    fn entry(service: &str) -> io::Result<keyring::Entry> {
-        keyring::Entry::new(service, "claude-code-user").map_err(refused)
-    }
-}
-
-impl Keychain for SystemKeychain {
-    fn get(&self, service: &str) -> io::Result<Option<String>> {
-        match Self::entry(service)?.get_password() {
-            Ok(secret) => Ok(Some(secret)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(refused(error)),
-        }
-    }
-
-    fn set(&self, service: &str, secret: &str) -> io::Result<()> {
-        Self::entry(service)?.set_password(secret).map_err(refused)
-    }
-}
-
-/// What the Keychain said, in words of Ferrite's own: none of its errors
-/// is shown, in case one carries what it holds.
-fn refused(error: keyring::Error) -> io::Error {
-    io::Error::other(match error {
-        keyring::Error::NoStorageAccess(_) => "the Keychain is locked, or did not let Ferrite in",
-        keyring::Error::PlatformFailure(_) => "the Keychain failed",
-        _ => "the Keychain refused the sign-in",
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1215,13 +1057,6 @@ mod tests {
     }
 
     #[test]
-    fn a_moved_claude_folder_has_its_own_keychain_service() {
-        assert_eq!(claude_service(None), "Claude Code-credentials");
-        let moved = claude_service(Some(std::ffi::OsStr::new("/home/me/claude-work")));
-        assert!(moved.starts_with("Claude Code-credentials-") && moved.len() == "Claude Code-credentials-".len() + 8, "{moved}");
-    }
-
-    #[test]
     fn what_a_tool_derives_is_no_path_of_the_table_and_a_chosen_key_is() {
         for derived in [
             ".claude/plugins/installed_plugins.json",
@@ -1235,6 +1070,8 @@ mod tests {
             ".codex/skills/.system/x/SKILL.md",
             ".agents/.skill-lock.json",
             ".agents/skills/x/.git/HEAD",
+            ".claude/.credentials.json",
+            ".codex/auth.json",
         ] {
             assert!(!in_table(derived), "{derived}");
         }

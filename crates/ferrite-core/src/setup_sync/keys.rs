@@ -723,10 +723,10 @@ mod toml {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::setup_sync::{item_at, Source};
+    use crate::setup_sync::{Source, ITEMS};
 
     fn keys_of(path: &str) -> (Format, &'static [Key]) {
-        match item_at(path).map(|item| item.source) {
+        match ITEMS.iter().find(|item| item.path == path).map(|item| item.source) {
             Some(Source::Keys { format, keys }) => (format, keys),
             _ => panic!("{path} is no chosen file"),
         }

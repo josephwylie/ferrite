@@ -8,8 +8,8 @@ date: 2026-11-24
 The operator picks which environment a new chat runs on: this computer or
 one of their Machines. A Machine that lacks the Draft's Project gets a copy
 of the Project folder, put where the operator says. Their agent setup
-(skills, commands, agents, instructions, rules, plugins, settings and
-sign-ins) follows them to every Machine and stays in sync both ways.
+(skills, commands, agents, instructions, rules, plugins and settings)
+follows them to every Machine and stays in sync both ways.
 
 Three pieces do this, in three PRs, all built:
 
@@ -537,8 +537,10 @@ Windows window.
 > marketplaces, its portable JSON files and its whole `config.toml` are
 > replaced. Text compares without its line ends, a link into the table is
 > made again as a link, the side that turns a Claude plugin on installs it,
-> and the Setup root carries the table's version. The rest of this section
-> stands.
+> and the Setup root carries the table's version. No sign-in is synced:
+> each computer keeps its own (ADR 0050, Sign-ins), so what this section
+> says of sign-ins and the Keychain no longer holds. The rest of this
+> section stands.
 
 `ferrite_core::setup_sync`, run by the window (`cockpit/setup_sync.rs`).
 

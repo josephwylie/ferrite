@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use super::lock::Held;
 use super::reconcile::{agreed, reconcile, Action, Hold};
 use super::store::{self, visible, Home, STAMP};
-use super::{file_of, sign_in, Item, ITEMS, TABLE, UNREAD_WITHOUT_SIGN_INS};
+use super::{file_of, Item, ITEMS, TABLE};
 use crate::chunked::{Cancellation, CHUNK_SIZE};
 use crate::tree::{self, Asked, Entry, Exchange, Manifest, Problem, Reply, Request, Root, Session, Side, Step};
 
@@ -46,13 +46,6 @@ pub struct Job {
     /// Leave the Machine be when nothing here changed since the base: a
     /// change this computer saw that turned out to be none.
     pub only_if_changed_here: bool,
-    /// Read Claude's sign-in. macOS keeps it in a Keychain item that is
-    /// Claude Code's, whose every read may ask the operator, so a sync
-    /// that a change here started leaves it as each side has it.
-    pub read_sign_ins: bool,
-    /// Whose sign-in each side keeps where two differ with none agreed
-    /// before; `None` leaves them as they are.
-    pub sign_ins: Option<Side>,
     /// What names this computer's files can have.
     pub names: Names,
 }
@@ -67,17 +60,7 @@ impl Job {
             conflicts: settings_dir.join(CONFLICTS),
             allow_removals: false,
             only_if_changed_here: false,
-            read_sign_ins: true,
-            sign_ins: None,
             names: Names::HERE,
-        }
-    }
-
-    /// The table's paths this sync does not read.
-    fn unread(&self) -> Vec<String> {
-        match self.read_sign_ins {
-            true => Vec::new(),
-            false => UNREAD_WITHOUT_SIGN_INS.iter().map(|path| path.to_string()).collect(),
         }
     }
 }
@@ -189,30 +172,25 @@ pub fn run(
     };
     fs::create_dir_all(&job.dir).map_err(|error| tree::at(&job.dir, error))?;
     let base = base(&job.dir);
-    let unread = job.unread();
     let (mut here, mut far) = if job.only_if_changed_here {
-        let mut here = job.home.scan(&unread);
-        as_base(&mut here, &base, &unread);
+        let here = job.home.scan(&[]);
         if reconcile(&base, &here, &base).is_empty() {
             return Ok(Outcome::Synced(Synced::default()));
         }
         if !hold_there(there)? {
             return Ok(Outcome::Busy);
         }
-        (here, tree::scan_far(there, &Root::SETUP, &unread)?)
+        (here, tree::scan_far(there, &Root::SETUP, &[])?)
     } else {
         if !hold_there(there)? {
             return Ok(Outcome::Busy);
         }
-        let asked = there.ask(tree::scan_request(&Root::SETUP, &unread, None))?;
-        let here = job.home.scan(&unread);
-        (here, tree::pages(there, &Root::SETUP, &unread, asked)?)
+        let asked = there.ask(tree::scan_request(&Root::SETUP, &[], None))?;
+        let here = job.home.scan(&[]);
+        (here, tree::pages(there, &Root::SETUP, &[], asked)?)
     };
-    settle(job, &base, &mut here, &mut far, &unread);
-    let actions: Vec<Action> = reconcile(&base, &here, &far)
-        .into_iter()
-        .map(|action| chosen(action, job.sign_ins))
-        .collect();
+    unholdable(&mut far, &here, job.names);
+    let actions = reconcile(&base, &here, &far);
     if !job.allow_removals && !base.entries.is_empty() {
         if let Some(valve) = valve(&actions, &base, &here, &far) {
             return Ok(Outcome::Stopped(valve));
@@ -234,14 +212,9 @@ pub fn run(
 
     let stamp = crate::clock::now().format(STAMP).to_string();
     for action in &actions {
-        // A sign-in's loser is never kept: the newer wins, as a refreshed
-        // token must, and the older is of no use.
         let Action::Conflict { path, winner } = action else {
             continue;
         };
-        if sign_in(path) {
-            continue;
-        }
         cancel.check()?;
         let loser = match winner {
             Side::Here => fetch(there, path)?,
@@ -286,19 +259,16 @@ pub fn run(
     synced.trashed = job.home.trashed();
 
     if !actions.is_empty() {
-        here = job.home.scan(&unread);
-        far = tree::scan_far(there, &Root::SETUP, &unread)?;
-        settle(job, &base, &mut here, &mut far, &unread);
+        here = job.home.scan(&[]);
+        far = tree::scan_far(there, &Root::SETUP, &[])?;
+        unholdable(&mut far, &here, job.names);
     }
     let agreed = agreed(&base, &here, &far);
     if agreed != base {
         store::write_over(&job.dir.join(BASE), &serde_json::to_vec(&Base { table: TABLE, agreed })?)?;
     }
     for (side, manifest) in [(Side::Here, here), (Side::There, far)] {
-        let said = manifest
-            .problems
-            .into_iter()
-            .filter(|(path, error)| !(sign_in(path) && error == store::MID_WRITE) && error != store::OWN);
+        let said = manifest.problems.into_iter().filter(|(_, error)| error != store::OWN);
         synced.problems.extend(said.map(|(path, error)| Problem { path, side, error }));
     }
     synced.problems.extend(sent.problems.into_iter().chain(pulled));
@@ -335,26 +305,6 @@ pub(super) fn base(dir: &Path) -> Manifest {
         .filter(|base| base.table == TABLE)
         .map(|base| base.agreed)
         .unwrap_or_default()
-}
-
-/// Both sides as reconcile reads them: what this sync did not read is as
-/// the base has it on both, and what this computer cannot name as the
-/// Machine does is held.
-fn settle(job: &Job, base: &Manifest, here: &mut Manifest, far: &mut Manifest, unread: &[String]) {
-    as_base(here, base, unread);
-    as_base(far, base, unread);
-    unholdable(far, here, job.names);
-}
-
-/// `manifest` with each of `paths` as `base` has it.
-fn as_base(manifest: &mut Manifest, base: &Manifest, paths: &[String]) {
-    for path in paths {
-        match base.entries.get(path) {
-            Some(entry) => manifest.entries.insert(path.clone(), entry.clone()),
-            None => manifest.entries.remove(path),
-        };
-        manifest.problems.remove(path);
-    }
 }
 
 /// Hold each path of the Machine's that this computer cannot name as it
@@ -398,15 +348,6 @@ pub(crate) fn unholdable(far: &mut Manifest, here: &Manifest, names: Names) {
         if let Some(why) = held.remove(&path) {
             far.problems.insert(path, why);
         }
-    }
-}
-
-/// `action`, with two sign-ins that differ settled as the operator chose.
-fn chosen(action: Action, sign_ins: Option<Side>) -> Action {
-    match (action, sign_ins) {
-        (Action::Hold { path, why: Hold::SignIn }, Some(Side::Here)) => Action::Push(path),
-        (Action::Hold { path, why: Hold::SignIn }, Some(Side::There)) => Action::Pull(path),
-        (action, _) => action,
     }
 }
 
