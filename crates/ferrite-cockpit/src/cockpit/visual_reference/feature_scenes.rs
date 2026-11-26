@@ -184,7 +184,7 @@ fn review(staged: Staged) -> (Scene, Setup) {
     let scene = conversation("review");
     let setup: Setup = Box::new(move |view, window, cx| {
         let index = view.focused(cx);
-        let composer = view.panes[index].composer.clone();
+        let composer = view.panes[index].read(cx).composer.clone();
         let reading = view.prefs.settings.reading_size;
         let review =
             cx.new(|cx| ReviewView::new(composer.clone(), ReviewScope::Uncommitted, reading, cx));
@@ -534,7 +534,7 @@ fn find() -> (Scene, Setup) {
     let scene = conversation("find");
     let setup: Setup = Box::new(|view, window, cx| {
         view.open_find(&ferrite_pane::find::Open, window, cx);
-        if let Some(transcript) = view.panes[view.focused(cx)].transcript() {
+        if let Some(transcript) = view.panes[view.focused(cx)].read(cx).transcript() {
             transcript.update(cx, |transcript, cx| transcript.type_find("nav", cx));
         }
     });
@@ -556,7 +556,7 @@ fn scroll_to_end() -> (Scene, Setup) {
     let _ = scene.core.queue(thread, "Then push the branch.".into());
     scene.core.pump();
     let setup: Setup = Box::new(|view, _, cx| {
-        if let Some(transcript) = view.panes[view.focused(cx)].transcript() {
+        if let Some(transcript) = view.panes[view.focused(cx)].read(cx).transcript() {
             transcript.update(cx, |transcript, cx| {
                 transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
             });
@@ -590,7 +590,7 @@ fn reply_card() -> (Scene, Setup) {
     let scene = conversation("reply-card");
     let setup: Setup = Box::new(|view, _, cx| {
         let index = view.focused(cx);
-        view.panes[index].composer.update(cx, |composer, cx| {
+        view.panes[index].composer(cx).update(cx, |composer, cx| {
             composer.reply(
                 ferrite_core::replies::Reply::new("Both commands ran.", "testing"),
                 cx,
@@ -1096,9 +1096,9 @@ fn output_cards(label: &str) -> (super::Scene, std::path::PathBuf) {
 /// build, so the body is the "can't show" note.
 fn page_pane() -> (Scene, Setup) {
     let (scene, page) = output_cards("page-pane");
-    let setup: Setup = Box::new(move |view, window, _| {
+    let setup: Setup = Box::new(move |view, window, cx| {
         view.panes[0]
-            .preview
+            .preview(cx)
             .open_page(ferrite_pane::page::PageSource::File(page.clone()), window);
     });
     (scene, setup)
@@ -1121,7 +1121,7 @@ fn lightbox() -> (Scene, Setup) {
         .collect();
     let setup: Setup = Box::new(move |view, window, cx| {
         view.panes[0]
-            .preview
+            .preview(cx)
             .open(gallery[1].clone(), None, &gallery, window, cx);
     });
     (scene, setup)
@@ -1145,7 +1145,7 @@ fn composer_tokens() -> (Scene, Setup) {
     });
     scene.core.pump();
     let setup: Setup = Box::new(|view, _, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.set(
                 "Run $review on @crates/ferrite-pane/src/pane.rs and report".into(),
                 cx,
@@ -1168,7 +1168,7 @@ fn composer_stop() -> (Scene, Setup) {
         .text("Checking how the stack clips when three or more rows are held");
     scene.core.pump();
     let setup: Setup = Box::new(|view, _, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.set("Also keep the take-back key".into(), cx)
         });
     });
@@ -1249,7 +1249,7 @@ fn long_prompt() -> (Scene, Setup) {
 fn cite() -> (Scene, Setup) {
     let scene = conversation("cite");
     let setup: Setup = Box::new(|view, _, cx| {
-        if let Some(transcript) = view.panes[view.focused(cx)].transcript() {
+        if let Some(transcript) = view.panes[view.focused(cx)].read(cx).transcript() {
             transcript.update(cx, |transcript, cx| {
                 transcript.fixture_cite(
                     "The nav rows jump by a line when a Thread starts streaming.",
@@ -1502,7 +1502,7 @@ fn cite_comment() -> (Scene, Setup) {
     let scene = conversation("cite-comment");
     let setup: Setup = Box::new(|view, _, cx| {
         let index = view.focused(cx);
-        view.panes[index].composer.update(cx, |composer, cx| {
+        view.panes[index].composer(cx).update(cx, |composer, cx| {
             composer.cite_with_comment(
                 ferrite_core::replies::Reply::new(
                     "The nav rows jump by a line when a Thread starts streaming.",

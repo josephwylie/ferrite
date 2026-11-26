@@ -50,11 +50,11 @@ fn a_user_command_runs_for_the_focused_thread_into_the_reader(cx: &mut TestAppCo
     assert_eq!(*act, Act::Command(Command::User(0)));
     run(&view, 0, cx);
     until(cx, |cx| {
-        view.read_with(cx, |view, _| view.panes[0].preview.document().is_some())
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).preview.document().is_some())
     });
     let (document, cwd) = view.read_with(cx, |view, cx| {
         (
-            view.panes[0].preview.document().expect("the output opened"),
+            view.panes[0].read(cx).preview.document().expect("the output opened"),
             view.thread_path(thread, cx).unwrap(),
         )
     });

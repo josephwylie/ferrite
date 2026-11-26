@@ -71,7 +71,7 @@ impl CockpitView {
             .panes
             .get(self.focused(cx))
             .ok_or("Open a Thread or draft before attaching files.")?;
-        pane.composer
+        pane.composer(cx)
             .update(cx, |composer, cx| composer.add_local_files(paths, cx));
         Ok(())
     }
