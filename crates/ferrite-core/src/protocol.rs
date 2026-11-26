@@ -1138,7 +1138,8 @@ pub enum SignInStep {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         code: Option<Withheld>,
     },
-    /// Stop the CLI and all it started.
+    /// Stop the CLI and all it started. Replied `changed`: whether one of
+    /// this client's was running.
     Cancel,
     #[serde(other)]
     Unknown,

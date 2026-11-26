@@ -51,6 +51,7 @@ mod pr_watch;
 mod render;
 pub mod remote;
 mod server_id;
+mod sign_in;
 mod signals;
 mod tree;
 mod wake;
@@ -444,6 +445,8 @@ struct Server {
     /// The provider CLIs this machine has, as a window asks after them
     /// (`Op::Cli`): the machine's own, or a test's scripted ones.
     clis: Arc<dyn Clis>,
+    /// The sign-ins of this machine's CLIs running for a window (ADR 0051).
+    sign_ins: Vec<sign_in::Running>,
     /// GitHub reads still out.
     github_reads: Vec<github::Reading>,
     /// Task PR head reads still out (#223).
@@ -524,6 +527,7 @@ impl Server {
             coordinators_tuned: Default::default(),
             github: Arc::new(Gh),
             clis: Arc::new(Host),
+            sign_ins: Vec::new(),
             github_reads: Vec::new(),
             head_reads: Vec::new(),
             skills_seen: Vec::new(),
@@ -629,7 +633,7 @@ impl Server {
             Heard::Gone(id) => self.gone(id),
             Heard::Message(id, message) => self.message(id, message),
             Heard::Api(heard) => self.api_heard(heard),
-            Heard::Answered(id, request, answer) => self.reply(id, request, answer),
+            Heard::Answered(id, request, answer) => self.answered(id, request, answer),
             Heard::Stopped => self.deaf = true,
         }
     }
@@ -894,6 +898,10 @@ impl Server {
             Op::ServerDefaults { set } => self.server_defaults(set.as_ref()).map(Some),
             Op::Cli { action } => {
                 self.cli(id, request, action);
+                return;
+            }
+            Op::SignIn { provider, step } => {
+                self.sign_in(id, request, *provider, step);
                 return;
             }
             Op::SettingsChanged => match Settings::load(&self.settings_dir) {
@@ -1588,6 +1596,7 @@ impl Server {
         self.renders.client_gone(id);
         self.undriven(id);
         self.browser_owner_gone(id);
+        self.sign_ins.retain(|running| running.client != id);
     }
 
     /// Flush every writer and end every Session without parking it: the
@@ -1615,6 +1624,7 @@ impl Server {
     /// last words, before the process takes them.
     fn halt(&mut self) {
         self.engine.halt_sessions();
+        self.sign_ins.clear();
         let deadline = Instant::now() + LAST_WORDS;
         for (_, client) in std::mem::take(&mut self.clients) {
             client.connection.finish(deadline);

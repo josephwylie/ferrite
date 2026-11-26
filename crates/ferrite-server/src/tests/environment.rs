@@ -55,7 +55,7 @@ fn machine_world(name: &str) -> (Harness, Arc<Machine>) {
     (harness, machine)
 }
 
-fn answered<T>(
+pub(super) fn answered<T>(
     window: &mut ferrite_client::cockpit::Cockpit,
     ask: impl FnOnce(
         &mut ferrite_client::cockpit::Cockpit,

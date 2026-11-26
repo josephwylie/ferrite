@@ -525,6 +525,18 @@ impl Link for InProcess {
         }))
     }
 
+    /// This computer's CLI signs in by itself: it opens its own browser.
+    fn sign_in(
+        &mut self,
+        _: Provider,
+        _: ferrite_core::protocol::SignInStep,
+    ) -> io::Result<Receiver<io::Result<Done>>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "a window that runs its own agents signs no CLI in",
+        ))
+    }
+
     fn in_process(&mut self) -> Option<&mut InProcess> {
         Some(self)
     }

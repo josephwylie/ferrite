@@ -1507,6 +1507,16 @@ impl Link for Remote {
         self.ask(Op::Cli { action }, Some)
     }
 
+    /// A step of signing the Server's machine's `provider` CLI in: an
+    /// older Server answers `unsupported`.
+    fn sign_in(
+        &mut self,
+        provider: ferrite_core::provider::Provider,
+        step: ferrite_core::protocol::SignInStep,
+    ) -> io::Result<Receiver<io::Result<Done>>> {
+        self.ask(Op::SignIn { provider, step }, Some)
+    }
+
     fn remote(&mut self) -> Option<&mut Remote> {
         Some(self)
     }

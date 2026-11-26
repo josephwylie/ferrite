@@ -553,6 +553,14 @@ pub(super) trait Link {
     /// What its machine has of the provider CLIs, or the update it ran.
     fn cli(&mut self, action: CliAction) -> io::Result<Receiver<io::Result<Done>>>;
 
+    /// A step of signing its machine's `provider` CLI in (ADR 0051), as
+    /// its Server answers it.
+    fn sign_in(
+        &mut self,
+        provider: Provider,
+        step: ferrite_core::protocol::SignInStep,
+    ) -> io::Result<Receiver<io::Result<Done>>>;
+
     /// Its Server, when it is one.
     fn remote(&mut self) -> Option<&mut remote::Remote> {
         None

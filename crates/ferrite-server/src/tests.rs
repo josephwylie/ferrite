@@ -35,6 +35,7 @@ mod pr_watch;
 mod progress;
 mod publish;
 mod setup_sync;
+mod sign_in;
 mod starts;
 mod stop;
 mod tree;
