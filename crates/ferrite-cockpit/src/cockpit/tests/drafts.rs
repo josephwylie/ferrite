@@ -159,6 +159,46 @@ fn a_new_pane_comes_back_with_its_words_and_binding(cx: &mut TestAppContext) {
     });
 }
 
+/// A new Pane brought back on its Project's current checkout opens its
+/// Workspace menu naming the branch: the launch asks git about it, though
+/// nothing else tells the window before the pump's first beat.
+#[gpui::test]
+fn a_new_pane_comes_back_with_its_checkout_named(cx: &mut TestAppContext) {
+    let base = scratch("drafts-checkout");
+    let repo = repo_in(&base);
+    let switched = std::process::Command::new("git")
+        .args(["switch", "-q", "-c", "feature/restored"])
+        .current_dir(&repo)
+        .output()
+        .expect("git switch");
+    assert!(switched.status.success(), "git switch: {switched:?}");
+    let launch = || Cockpit::new(Store::open(base.join("threads")).unwrap(), Box::new(Fake::default()));
+    let prefs = prefs_in("drafts-checkout-prefs");
+    let dir = prefs.dir.clone();
+    let (view, cx) = window_with(launch(), prefs, cx);
+    view.update(cx, |view, cx| view.aim_launch(&repo, cx));
+    cx.simulate_input("where it runs");
+    view.update(cx, |view, cx| view.save_drafts(cx));
+    drop(view);
+
+    // The next launch, its queued work done and its pump's clock still.
+    let (view, cx) = add_cockpit_window(cx, |_, cx| {
+        CockpitView::new_with_settings(launch(), Provider::Claude, prefs_at(&dir), cx)
+    });
+    cx.run_until_parked();
+    let first_row = view.update(cx, |view, cx| {
+        let pane = &view.panes[view.focused(cx)];
+        assert_eq!(pane.composer.read(cx).text(), "where it runs", "the draft came back");
+        view.open_band_menu(pane::BandChip::Workspace, false, cx);
+        let open = view.band_menu().expect("the workspace menu is open");
+        (open.rows[0].name.to_string(), open.rows[0].detail.to_string())
+    });
+    assert_eq!(
+        first_row,
+        ("Current checkout".to_string(), "feature/restored".to_string())
+    );
+}
+
 /// A new Pane written in and then closed is discarded: the next launch
 /// neither reopens it nor finds it in the file. `close` is the operator's
 /// way of closing, from the production key or the rendered discard control.

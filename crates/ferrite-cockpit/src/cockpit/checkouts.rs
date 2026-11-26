@@ -5,9 +5,9 @@
 //!
 //! Only the root asks, off the UI thread or of the machine's Server, and
 //! only the answers and its pump write them, so they are a plain struct on
-//! the root (ADR 0041). Never read from a frame: the chip asks about a
-//! Project it has not named yet, and the last answer stands until the new
-//! one lands.
+//! the root (ADR 0041). No frame asks: the root asks about a draft's
+//! Project it has not named yet as it hears the draft's binding change,
+//! and the last answer stands until the new one lands.
 
 use super::*;
 

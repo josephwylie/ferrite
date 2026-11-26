@@ -701,17 +701,28 @@ fn git_in(repo: &std::path::Path, args: &[&str]) {
     assert!(out.status.success(), "git {args:?}: {out:?}");
 }
 
-/// The draft's workspace chip names its Project's checkout every frame,
-/// yet no frame asks git: a Project the chip has not named yet is looked
-/// up off the UI thread, and opening the menu re-reads the checkout
-/// there too — the menu names the last answer (never a stand-in `main`)
-/// until the fresh one lands.
+/// No frame asks git about a draft's checkout. The window asks, off the
+/// UI thread and once, as it hears the draft's binding name a Project git
+/// has not named yet, so the Workspace menu opens already answered; and
+/// opening the menu re-reads the checkout there too — the menu names the
+/// last answer (never a stand-in `main`) until the fresh one lands.
 #[gpui::test]
 fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
     let spawned = ferrite_core::git_read::git_spawns_on_this_thread;
     let base = scratch("chip-git-off-ui");
     let repo = repo_in(&base);
     git_in(&repo, &["switch", "-q", "-c", "feature/drafted"]);
+    let second = base.join("second");
+    std::fs::create_dir_all(&second).unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["config", "user.email", "operator@example.invalid"],
+        &["config", "user.name", "operator"],
+        &["commit", "-q", "--allow-empty", "-m", "root"],
+        &["switch", "-q", "-c", "feature/second"],
+    ] {
+        git_in(&second, args);
+    }
     let store = Store::open(base.join("threads")).unwrap();
     let core = Cockpit::new(store, Box::new(Fake::default()));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -763,6 +774,52 @@ fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
         checkout_row(&view, cx),
         ("Current checkout".to_string(), "feature/moved".to_string())
     );
+    toggle_menu(&view, cx);
+
+    // The draft is aimed at a second Project with no word to the window:
+    // what its next frame finds. Its cell is drawn, twice.
+    let (draft, project) = view.update(cx, |view, cx| {
+        let machine = view.cockpit.read(cx).this_computer().unwrap();
+        let project = view
+            .cockpit
+            .update(cx, |cockpit, _| cockpit.register_project(machine, &second).now())
+            .unwrap();
+        let index = view.focused(cx);
+        view.panes[index].draft_mut().unwrap().binding.choose_project(project);
+        (view.panes[index].identity, project)
+    });
+    let asked = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| (view.checkouts.asking(project), view.checkouts.branch(project)))
+    };
+    let (builds, before) = (crate::cockpit::drawn::pane_renders(draft), spawned());
+    for _ in 0..2 {
+        view.update(cx, |view, cx| view.notify_part(super::parts::Part::Pane(draft), cx));
+        cx.run_until_parked();
+    }
+    assert_eq!(asked(&view, cx), (false, None), "a frame asked about the checkout");
+    assert_eq!(spawned() - before, 0, "a frame asked git about the checkout");
+    assert_eq!(
+        crate::cockpit::drawn::pane_renders(draft) - builds,
+        2,
+        "the draft's cell is drawn twice"
+    );
+
+    // The window hears of the change: it asks once, and not again while
+    // it waits or once the answer is in.
+    view.update(cx, |_, cx| cx.notify());
+    assert_eq!(asked(&view, cx), (true, None), "the change asks about the checkout");
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(asked(&view, cx), (false, Some("feature/second".into())));
+    view.update(cx, |view, cx| view.notify_part(super::parts::Part::Pane(draft), cx));
+    view.update(cx, |_, cx| cx.notify());
+    assert_eq!(
+        asked(&view, cx),
+        (false, Some("feature/second".into())),
+        "a named checkout is asked about again"
+    );
+    cx.run_until_parked();
+    assert_eq!(spawned() - before, 1, "the change asked git once");
 }
 
 /// Every file of `dir` dated an hour back, so no stamp of it is racy

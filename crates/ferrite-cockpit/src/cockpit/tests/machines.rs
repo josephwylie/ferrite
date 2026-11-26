@@ -3547,11 +3547,16 @@ fn a_side_chat_question_box_refuses_goes_back_to_the_tab_it_was_asked_from(cx: &
     assert_eq!(tabs.len(), 2);
     agents.refuse.store(true, Ordering::SeqCst);
     cx.simulate_input("what is alpha?");
+    // Box takes the question only once the field is seen empty and the
+    // first tab shows, however loaded the machine: its refusal cannot
+    // cross back before.
+    let held = hold_box_once(settings_dir("side-chat-unsent"));
     cx.simulate_keystrokes("enter");
     let asked = view.read_with(cx, |view, cx| draft(view, theirs, cx));
     assert_eq!(asked.as_deref(), Some(""), "the field gave its question up");
     let first = debug_bounds(cx, format!("panel-tab-SideChat-{}", tabs[0])).unwrap();
     cx.simulate_click(first.center(), gpui::Modifiers::none());
+    held.let_go();
     let field = |view: &CockpitView, index, cx: &gpui::App| {
         let field = view.side_chat.read(cx).field_of(theirs, index).cloned();
         field.map(|field| field.read(cx).text().to_string())

@@ -1400,6 +1400,7 @@ impl CockpitView {
         cx.observe_self(|view, cx| {
             view.sync_visible_transcripts(cx);
             view.sync_composer_floats(cx);
+            view.ask_draft_checkouts(cx);
             ferrite_core::doorbell::ring();
         })
         .detach();
@@ -5365,11 +5366,11 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// What `project`'s checkout is on, as git last answered, so the chip
-    /// can name it every frame without asking. A Project not named yet is
-    /// asked about off the UI thread and reads `main` until the answer
-    /// lands — the name a Project git cannot answer for keeps, the branch
-    /// a fresh clone would be sitting on.
+    /// What `project`'s checkout is on, as git last answered, for the
+    /// Workspace menu's first row. A Project not named yet is asked about
+    /// off the UI thread and reads `main` until the answer lands — the
+    /// name a Project git cannot answer for keeps, the branch a fresh
+    /// clone would be sitting on.
     fn checked_out_branch(&self, project: ProjectKey, cx: &Context<Self>) -> SharedString {
         if let Some(branch) = self.checkouts.branch(project) {
             return branch;
@@ -5380,10 +5381,9 @@ impl CockpitView {
 
     /// Ask, off the UI thread, what each of `projects`' checkouts is on:
     /// git only for one whose `HEAD` moved since it last named the branch
-    /// (`git_read::head_of`). Callable from a frame: it only starts the
-    /// lookup, once per Project at a time, and `checkouts_read` takes the
-    /// answers. Never of another machine, whose checkouts no git here can
-    /// read.
+    /// (`git_read::head_of`). It only starts the lookup, once per Project
+    /// at a time, and `checkouts_read` takes the answers. Never of another
+    /// machine, whose checkouts no git here can read.
     fn look_up_checkouts(&self, projects: impl IntoIterator<Item = ProjectKey>, cx: &Context<Self>) {
         let mut roots: Vec<(ProjectKey, std::path::PathBuf, Option<Option<String>>)> = Vec::new();
         for project in projects {
@@ -5714,12 +5714,7 @@ impl CockpitView {
             .map(|project| project.title.clone())
             .unwrap_or_else(|| "Project".into());
         let (workspace_mark, workspace_label) = match draft.binding.target() {
-            DraftTarget::Main => {
-                // The chip no longer names the branch, but its menu's first
-                // row does: ask git now so the row opens already answered.
-                self.checked_out_branch(draft.binding.project(), cx);
-                (ferrite_ui::icons::FOLDER, SharedString::from("Current checkout"))
-            }
+            DraftTarget::Main => (ferrite_ui::icons::FOLDER, SharedString::from("Current checkout")),
             DraftTarget::Branch { name } => (ferrite_ui::icons::BRANCH, SharedString::from(name.clone())),
             DraftTarget::NewBranch => (ferrite_ui::icons::BRANCH, SharedString::from("New branch")),
             DraftTarget::Existing { branch, .. } => (
