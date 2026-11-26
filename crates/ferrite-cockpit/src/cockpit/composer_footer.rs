@@ -7,7 +7,8 @@
 //! (`pane_cell::ControlsInputs`). Here they are drawn from what was read;
 //! each press asks the root by a `PaneEvent` (`pane_cell::PaneAsk`).
 
-use super::pane_cell::{ControlsInputs, DraftInputs, PaneAsk, PaneAsks, QueuedAct, ThreadInputs};
+use super::pane_cell::{ControlsInputs, Doors, DraftInputs, PaneAsk, PaneAsks, QueuedAct, ThreadInputs};
+use ferrite_ui::components::MenuDoor;
 use gpui::App;
 use super::*;
 use ferrite_core::{ControlKind, McpStatus, SessionControl};
@@ -31,7 +32,7 @@ pub(super) fn toolbar(
     index: usize,
     identity: PaneIdentity,
     controls: &ControlsInputs,
-    triggers: &popups::Triggers,
+    doors: &mut Doors,
     kind: Kind<'_>,
     pane: &Entity<PaneView>,
     model: &Entity<Cockpit>,
@@ -73,8 +74,11 @@ pub(super) fn toolbar(
                 )
             });
             (
-                Some(band_chips(draft, triggers, pane, asks, cx)),
-                draft_model_chip(identity, controls, triggers, pane, model, asks, cx)
+                Some(band_chips(draft, doors, pane, asks, cx)),
+                doors
+                    .model
+                    .take()
+                    .and_then(|door| draft_model_chip(identity, controls, door, pane, model, asks, cx))
                     .into_iter()
                     .collect::<Vec<_>>(),
                 Some(draft_mode_word(index, &draft.mode)),
@@ -108,13 +112,16 @@ pub(super) fn toolbar(
                     cx,
                 )
             });
-            let chip = open.and_then(|open| ModeChip::of(thread, open, inputs.mode_menu_up));
+            let chip = open.and_then(|open| ModeChip::of(thread, open));
             (
                 env,
-                model_chip(identity, thread, controls, triggers, model, asks, cx)
+                doors
+                    .model
+                    .take()
+                    .and_then(|door| model_chip(identity, thread, controls, door, model, asks, cx))
                     .into_iter()
                     .collect(),
-                chip.map(|chip| chip.render(triggers.record(mode_menu::chip_trigger(thread)), asks, cx)),
+                chip.zip(doors.mode.take()).map(|(chip, door)| chip.render(door, asks, cx)),
                 ring.map(IntoElement::into_any_element),
                 false,
             )
@@ -156,7 +163,7 @@ fn running_and_empty(
 /// shares `open_band_popover` with ↵ on a tab-focused chip.
 fn band_chips(
     inputs: &DraftInputs,
-    triggers: &popups::Triggers,
+    doors: &mut Doors,
     pane: &Entity<PaneView>,
     asks: &PaneAsks,
     cx: &App,
@@ -211,8 +218,10 @@ fn band_chips(
                 from_hero: false,
             }),
         );
-        ferrite_ui::components::on_bounds(chip_element, triggers.record(band_trigger(chip)))
-            .into_any_element()
+        match doors.band(chip) {
+            Some(door) => door.hung(chip_element).into_any_element(),
+            None => chip_element.into_any_element(),
+        }
     });
     let mut chips: Vec<AnyElement> = word.into_iter().chain(chips).collect();
     // Why Send is not there, beside the copy's chip, while it waits on a
@@ -230,7 +239,7 @@ fn band_chips(
 fn draft_model_chip(
     identity: PaneIdentity,
     controls: &ControlsInputs,
-    triggers: &popups::Triggers,
+    door: MenuDoor,
     pane: &Entity<PaneView>,
     model: &Entity<Cockpit>,
     asks: &PaneAsks,
@@ -258,7 +267,7 @@ fn draft_model_chip(
         })
         .flatten();
     let group = model_picker::chip_trigger(identity);
-    let picker_up = controls.picker_up;
+    let picker_up = door.up();
     let face = pane::model_effort_chip(pane::ModelChip {
         mark: ferrite_ui::provider::mark(provider),
         model: model_label,
@@ -274,7 +283,7 @@ fn draft_model_chip(
         cx,
     )
     .tip_unless_open(picker_up, "Model and effort");
-    Some(model_picker::chip_control(identity, control, triggers, asks))
+    Some(model_picker::chip_control(identity, control, door, asks))
 }
 
 /// The Thread's model chip: the model it runs and the effort in force,
@@ -286,7 +295,7 @@ fn model_chip(
     identity: PaneIdentity,
     thread: ThreadKey,
     controls: &ControlsInputs,
-    triggers: &popups::Triggers,
+    door: MenuDoor,
     model: &Entity<Cockpit>,
     asks: &PaneAsks,
     cx: &App,
@@ -303,7 +312,7 @@ fn model_chip(
     ));
     let effort = thread_effort(&open, controls.effort_default.as_deref());
     let key = thread.thread().get() as usize;
-    let picker_up = controls.picker_up;
+    let picker_up = door.up();
     let face = pane::model_effort_chip(pane::ModelChip {
         mark: ferrite_ui::provider::mark(provider),
         model: label,
@@ -316,7 +325,7 @@ fn model_chip(
         .debug_selector(move || format!("model-picker-{key}"))
         .tip_unless_open(picker_up, hold.unwrap_or("Model and effort"))
         .child(face);
-    Some(model_picker::chip_control(identity, control, triggers, asks))
+    Some(model_picker::chip_control(identity, control, door, asks))
 }
 
 /// The queue strip's acts on `thread`'s Pane, each row's own, aimed at its
@@ -640,15 +649,13 @@ pub(super) struct ModeChip {
     generation: u64,
     mode: String,
     label: SharedString,
-    /// Whether its menu is up.
-    menu_up: bool,
     /// Whether the Session switches modes, so the chip opens the menu.
     switches: bool,
 }
 
 impl ModeChip {
     /// The chip for `open`, the Pane's Thread.
-    pub(super) fn of(thread: ThreadKey, open: &ThreadView, menu_up: bool) -> Option<Self> {
+    pub(super) fn of(thread: ThreadKey, open: &ThreadView) -> Option<Self> {
         let modes = open.permission_modes();
         if modes.is_empty() && open.permission_mode().is_none() {
             return None;
@@ -659,26 +666,20 @@ impl ModeChip {
             generation: open.generation(),
             label: pane::permission_mode_label(&mode, &modes),
             mode,
-            menu_up,
             switches: !modes.is_empty() && open.supports_control(ControlKind::SetPermissionMode),
         })
     }
 
-    /// The chip, with `bounds` recording where it was laid out, which the
-    /// menu hangs from.
-    pub(super) fn render(
-        self,
-        bounds: impl FnOnce(gpui::Bounds<Pixels>, &mut Window, &mut gpui::App) + 'static,
-        asks: &PaneAsks,
-        cx: &App,
-    ) -> AnyElement {
+    /// The chip, through `door`: the permission menu's, up from it or not,
+    /// which hangs from where the chip was laid out.
+    pub(super) fn render(self, door: MenuDoor, asks: &PaneAsks, cx: &App) -> AnyElement {
         let Self {
             thread, generation, ..
         } = self;
         let key = thread.thread().get() as usize;
         let trigger = pane::toolbar_chip(("mode-picker", key), cx)
             .debug_selector(move || format!("mode-picker-{key}"))
-            .tip_unless_open(self.menu_up, "Permission mode")
+            .tip_unless_open(door.up(), "Permission mode")
             .child(pane::mode_chip(self.label, &self.mode));
         let wrap = |chip: AnyElement| {
             div()
@@ -691,7 +692,7 @@ impl ModeChip {
             return wrap(trigger.into_any_element());
         }
         let trigger = trigger.on_mouse_down(MouseButton::Left, asks.press(PaneAsk::ModeMenu { generation }));
-        wrap(ferrite_ui::components::on_bounds(div().flex().child(trigger), bounds).into_any_element())
+        wrap(door.hung(div().flex().child(trigger)).into_any_element())
     }
 }
 

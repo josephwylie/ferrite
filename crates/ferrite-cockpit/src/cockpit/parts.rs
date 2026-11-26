@@ -33,9 +33,10 @@ use gpui::{
 };
 
 use super::pane_cell::{
-    CellAsk, CellInputs, ControlsInputs, DraftInputs, KindInputs, PaneAsk, PaneAsks, PaneEvent,
-    QueuedAct, ThreadInputs,
+    CellAsk, CellInputs, ControlsInputs, Doors, DraftInputs, KindInputs, PaneAsk, PaneAsks,
+    PaneEvent, QueuedAct, ThreadInputs,
 };
+use ferrite_ui::components::MenuDoor;
 use super::popups::Popup;
 use super::surfaces::SurfaceAction;
 use super::{CockpitView, MenuTarget, Submit};
@@ -443,7 +444,6 @@ impl CockpitView {
                     None => self.bar_place(cx),
                 },
                 usage_popover_held: self.usage_popover_held,
-                picker_up: self.model_picker_open(identity),
                 effort_default: provider
                     .and_then(|provider| self.prefs.settings.effort_for(provider))
                     .map(|effort| effort.to_string()),
@@ -457,10 +457,44 @@ impl CockpitView {
             sheet_up: self.sheet_up(cx),
             drop_target: self.drop_target(index, cx),
             composer_menu: drawn.then(|| self.composer_menu_over(index, cx)).flatten(),
-            triggers: self.popups.triggers(),
+            doors: self.cell_doors(identity, &kind, controls.is_some()),
             controls,
             kind,
         })
+    }
+
+    /// The doors of the menus Pane `identity`'s cell opens, for what it
+    /// draws: a draft's band chips and hero word, the model chip of a Main
+    /// Composer's `controls`, and a Thread's mode chip.
+    fn cell_doors(&self, identity: PaneIdentity, kind: &KindInputs, controls: bool) -> Doors {
+        use ferrite_pane::pane::BandChip;
+        let triggers = self.popups.triggers();
+        let door = |up: bool, key: gpui::SharedString| MenuDoor::new(up, triggers.record(key));
+        let band = self
+            .band_menu()
+            .filter(|menu| menu.pane == identity)
+            .map(|menu| (menu.kind.chip, menu.kind.from_hero));
+        let draft = matches!(kind, KindInputs::Draft(_));
+        let thread = matches!(kind, KindInputs::Thread(Some(_)));
+        Doors {
+            bands: match draft {
+                true => [BandChip::Project, BandChip::Workspace, BandChip::Environment]
+                    .into_iter()
+                    .map(|chip| (chip, door(band == Some((chip, false)), super::band_trigger(chip))))
+                    .collect(),
+                false => Vec::new(),
+            },
+            hero: draft.then(|| door(band == Some((BandChip::Project, true)), super::HERO_TRIGGER.into())),
+            model: controls.then(|| {
+                door(self.model_picker_open(identity), super::model_picker::chip_trigger(identity))
+            }),
+            mode: identity.thread().filter(|_| thread).map(|thread| {
+                door(
+                    self.mode_menu().is_some_and(|menu| menu.thread == thread),
+                    super::mode_menu::chip_trigger(thread),
+                )
+            }),
+        }
     }
 
     /// What draft Pane `index`'s band and hero read of the window.
@@ -530,7 +564,6 @@ impl CockpitView {
         });
         ThreadInputs {
             plane: self.on_plane(thread, cx),
-            mode_menu_up: self.mode_menu().is_some_and(|menu| menu.thread == thread),
             facts: self
                 .facts
                 .get(thread)

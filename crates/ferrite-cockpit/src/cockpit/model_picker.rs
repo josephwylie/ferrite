@@ -247,17 +247,13 @@ pub(super) fn chip_trigger(pane: PaneIdentity) -> SharedString {
 pub(super) fn chip_control(
     identity: PaneIdentity,
     chip: gpui::component::button::Button,
-    triggers: &popups::Triggers,
+    door: ferrite_ui::components::MenuDoor,
     asks: &super::pane_cell::PaneAsks,
 ) -> AnyElement {
     let chip = chip
         .group(chip_trigger(identity))
         .on_mouse_down(MouseButton::Left, asks.press(super::pane_cell::PaneAsk::ModelPicker));
-    ferrite_ui::components::on_bounds(
-        div().flex().min_w_0().child(chip),
-        triggers.record(chip_trigger(identity)),
-    )
-    .into_any_element()
+    door.hung(div().flex().min_w_0().child(chip)).into_any_element()
 }
 
 impl ModelPickerView {

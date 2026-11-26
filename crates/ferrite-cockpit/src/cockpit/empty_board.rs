@@ -153,7 +153,7 @@ impl CockpitView {
 pub(super) fn draft_hero(
     project: &SharedString,
     pane: &Entity<PaneView>,
-    triggers: &popups::Triggers,
+    door: ferrite_ui::components::MenuDoor,
     asks: &super::pane_cell::PaneAsks,
     cx: &gpui::App,
 ) -> Option<pane::Hero> {
@@ -167,10 +167,7 @@ pub(super) fn draft_hero(
             from_hero: true,
         }),
     );
-    Some(pane::Hero::Project(
-        ferrite_ui::components::on_bounds(word, triggers.record(HERO_TRIGGER.into()))
-            .into_any_element(),
-    ))
+    Some(pane::Hero::Project(door.hung(word).into_any_element()))
 }
 
 /// An empty Thread's hero: its Project's word, settled, so a word and not

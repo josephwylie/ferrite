@@ -15,7 +15,7 @@ use ferrite_core::activity::Subject;
 use ferrite_core::delegate::DelegateId;
 use ferrite_core::server::ServerId;
 use ferrite_core::SessionControl;
-use ferrite_ui::components::FloatPlace;
+use ferrite_ui::components::{FloatPlace, MenuDoor};
 use gpui::{App, WeakEntity};
 
 /// What a press in a Pane's cell asks of the window, for the Pane it names.
@@ -176,8 +176,7 @@ pub(crate) struct CellInputs {
     pub(crate) drop_target: bool,
     /// The Composer's `/` or `@` menu, while it is up over this Pane.
     pub(crate) composer_menu: Option<Entity<composer_menu::ComposerMenuView>>,
-    /// Where the controls a popup hangs from record their bounds.
-    pub(crate) triggers: popups::Triggers,
+    pub(crate) doors: Doors,
     /// What a Main Composer's controls read; none on a Subagent's tab.
     pub(crate) controls: Option<ControlsInputs>,
     pub(crate) kind: KindInputs,
@@ -192,10 +191,31 @@ pub(crate) struct ControlsInputs {
     pub(crate) attach_place: FloatPlace,
     /// The plan-usage ring's popover is held open.
     pub(crate) usage_popover_held: bool,
-    /// The model picker is up from this Pane's chip.
-    pub(crate) picker_up: bool,
     /// The operator's effort for the Pane's provider (Settings).
     pub(crate) effort_default: Option<String>,
+}
+
+/// The menus the cell's controls open, each as its door (ADR 0043):
+/// whether it is up from that control, and where the control's bounds go
+/// for it to hang from. Each control drawn takes its own.
+#[derive(Default)]
+pub(crate) struct Doors {
+    /// A draft's band chips': Project, Workspace, where it runs.
+    pub(crate) bands: Vec<(pane::BandChip, MenuDoor)>,
+    /// An empty draft's hero word's: its Project menu.
+    pub(crate) hero: Option<MenuDoor>,
+    /// A Main Composer's model chip's: the model picker.
+    pub(crate) model: Option<MenuDoor>,
+    /// A Thread's mode chip's: the permission menu.
+    pub(crate) mode: Option<MenuDoor>,
+}
+
+impl Doors {
+    /// Band chip `chip`'s door.
+    pub(crate) fn band(&mut self, chip: pane::BandChip) -> Option<MenuDoor> {
+        let at = self.bands.iter().position(|(band, _)| *band == chip)?;
+        Some(self.bands.swap_remove(at).1)
+    }
 }
 
 /// A draft's or a Thread's own reads.
@@ -224,8 +244,6 @@ pub(crate) struct DraftInputs {
 pub(crate) struct ThreadInputs {
     /// The Pane is the window's plane, not drawn by the Factory.
     pub(crate) plane: bool,
-    /// The permission menu is up from its chip.
-    pub(crate) mode_menu_up: bool,
     /// Its Project's and branch's words, once its facts are known.
     pub(crate) facts: Option<(Option<SharedString>, Option<SharedString>)>,
     /// The Decision cards on its plane.
@@ -309,7 +327,7 @@ fn content(
         sheet_up,
         drop_target,
         composer_menu,
-        triggers,
+        mut doors,
         controls,
         kind,
         ..
@@ -348,14 +366,17 @@ fn content(
             // under it, and the hero's words, as wide as the board and
             // centred on it, would read past the edge of any card narrower
             // than them.
-            let start = empty_board::draft_hero(&draft.project, pane, &triggers, asks, cx)
+            let start = doors
+                .hero
+                .take()
+                .and_then(|door| empty_board::draft_hero(&draft.project, pane, door, asks, cx))
                 .filter(|_| !sheet_up);
             let toolbar = controls.as_ref().map(|controls| {
                 composer_footer::toolbar(
                     index,
                     identity,
                     controls,
-                    &triggers,
+                    &mut doors,
                     composer_footer::Kind::Draft(&draft),
                     pane,
                     model,
@@ -427,7 +448,7 @@ fn content(
             index,
             identity,
             controls,
-            &triggers,
+            &mut doors,
             composer_footer::Kind::Thread(thread, &inputs),
             pane,
             model,
