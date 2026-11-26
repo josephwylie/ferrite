@@ -396,6 +396,48 @@ fn the_last_worked_project_is_a_registered_one_or_nothing() {
     assert_eq!(reopened.last_worked_project(reopened.first_machine()), None);
 }
 
+/// A fixture forge answers for a checkout however its path reaches it. A
+/// test installs it for a Project's root, which the registry holds
+/// resolved, and a Thread reads it through its checkout as written: on
+/// macOS the temp folder is behind a symlink (`/var` is `/private/var`).
+#[test]
+fn a_fixture_forge_answers_a_checkout_reached_through_a_link() {
+    let (mut core, _fake) = cockpit("forge-through-a-link");
+    let base = scratch("forge-through-a-link-checkouts");
+    std::fs::create_dir_all(base.join("real/repo")).unwrap();
+    link_folder(&base.join("real"), &base.join("link"));
+    let root = std::fs::canonicalize(base.join("real/repo")).unwrap();
+    let linked = base.join("link/repo");
+    let read = ferrite_core::protocol::ReviewPullRequest {
+        noun: "PR".into(),
+        pr: Err("the fixture's".into()),
+        unread: None,
+    };
+    core.fixture_forge_numbered(root, 7, read.clone());
+
+    assert!(core.has_forge_fixture(&linked));
+    let answer = core.review_pull_request(core.first_machine(), &linked, Some(7)).unwrap();
+    assert_eq!(answer.recv().unwrap().unwrap(), read);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A link at `at` to the folder `target`: a symlink, or on Windows a
+/// junction, which needs no privilege.
+fn link_folder(target: &Path, at: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, at).unwrap();
+    #[cfg(windows)]
+    {
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(at)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "mklink /J: {made:?}");
+    }
+}
+
 /// An initialised repo with one committed file, for binding tests.
 /// Always under a scratch directory — never near a real checkout.
 fn init_repo(root: &Path) -> std::path::PathBuf {

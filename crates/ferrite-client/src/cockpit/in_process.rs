@@ -54,8 +54,8 @@ pub(super) struct InProcess {
     /// The self-hosted forges a review's pull request is read from
     /// (`settings_changed`).
     forge: ferrite_reviewr::config::PluginConfig,
-    /// What its forge says (`fixture_forge`), by checkout: answered in
-    /// place of its CLI.
+    /// What its forge says (`fixture_forge`), by checkout (`checkout_key`):
+    /// answered in place of its CLI.
     forge_fixture: HashMap<PathBuf, PrView>,
     /// Its pull requests read by number, their diffs, and its lists.
     forge_numbered: HashMap<(PathBuf, u64), ReviewPullRequest>,
@@ -102,14 +102,22 @@ impl InProcess {
 
     /// Whether its forge answers for the checkout at `path`.
     fn has_forge_fixture(&self, path: &Path) -> bool {
-        self.forge_fixture.contains_key(path)
+        let path = checkout_key(path);
+        self.forge_fixture.contains_key(&path)
             || self
                 .forge_numbered
                 .keys()
-                .any(|(fixture, _)| fixture == path)
-            || self.forge_lists.keys().any(|(fixture, _)| fixture == path)
-            || self.forge_diffs.keys().any(|(fixture, _)| fixture == path)
+                .any(|(fixture, _)| *fixture == path)
+            || self.forge_lists.keys().any(|(fixture, _)| *fixture == path)
+            || self.forge_diffs.keys().any(|(fixture, _)| *fixture == path)
     }
+}
+
+/// The checkout at `path` as its forge fixtures name it: resolved, as the
+/// registry holds a Project's root, so a path reached through a symlink
+/// (macOS's `/var` is `/private/var`) names the same checkout.
+fn checkout_key(path: &Path) -> PathBuf {
+    ferrite_core::git_read::canonical(path)
 }
 
 impl Link for InProcess {
@@ -395,7 +403,7 @@ impl Link for InProcess {
         path: &Path,
         number: u64,
     ) -> io::Result<Receiver<io::Result<Vec<FileSides>>>> {
-        if let Some(files) = self.forge_diffs.get(&(path.to_path_buf(), number)).cloned() {
+        if let Some(files) = self.forge_diffs.get(&(checkout_key(path), number)).cloned() {
             return Ok(read_here(move || Ok(files)));
         }
         if self.has_forge_fixture(path) {
@@ -412,7 +420,7 @@ impl Link for InProcess {
         path: &Path,
         number: Option<u64>,
     ) -> io::Result<Receiver<io::Result<ReviewPullRequest>>> {
-        if self.forge_held.contains(path) {
+        if self.forge_held.contains(&checkout_key(path)) {
             let (answer, answered) = ferrite_core::doorbell::channel();
             self.held_reads.push(HeldRead {
                 path: path.to_path_buf(),
@@ -421,12 +429,12 @@ impl Link for InProcess {
             return Ok(answered);
         }
         if let Some(read) =
-            number.and_then(|number| self.forge_numbered.get(&(path.to_path_buf(), number)))
+            number.and_then(|number| self.forge_numbered.get(&(checkout_key(path), number)))
         {
             let read = read.clone();
             return Ok(read_here(move || Ok(read)));
         }
-        if let Some(view) = self.forge_fixture.get(path).cloned() {
+        if let Some(view) = self.forge_fixture.get(&checkout_key(path)).cloned() {
             let view = if number.is_none_or(|number| matches!(&view, PrView::Pr(pr) if pr.number == number)) {
                 view
             } else {
@@ -449,7 +457,7 @@ impl Link for InProcess {
         path: &Path,
         filter: WirePrFilter,
     ) -> io::Result<Receiver<io::Result<ReviewPullRequests>>> {
-        if let Some(list) = self.forge_lists.get(&(path.to_path_buf(), filter)).cloned() {
+        if let Some(list) = self.forge_lists.get(&(checkout_key(path), filter)).cloned() {
             return Ok(read_here(move || Ok(list)));
         }
         let (path, forge) = (path.to_path_buf(), self.forge.clone());
@@ -478,7 +486,7 @@ impl Link for InProcess {
         &mut self,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<Option<ferrite_core::pull_request::PullRequest>>>> {
-        if let Some(view) = self.forge_fixture.get(path) {
+        if let Some(view) = self.forge_fixture.get(&checkout_key(path)) {
             let reading = ferrite_core::pull_request::PullRequest::of_view(view);
             return Ok(read_here(move || Ok(reading)));
         }
@@ -837,7 +845,7 @@ impl Cockpit {
     /// (`review_pull_request`) and the nav label's (`pull_request`) — answer
     /// `view`, as its forge's CLI would, without running one.
     pub fn fixture_forge(&mut self, path: PathBuf, view: ferrite_reviewr::forge::PrView) {
-        self.fixture().forge_fixture.insert(path, view);
+        self.fixture().forge_fixture.insert(checkout_key(&path), view);
     }
 
     /// A fixture world's pull request `number` of the repository the
@@ -848,11 +856,11 @@ impl Cockpit {
         number: u64,
         read: ferrite_core::protocol::ReviewPullRequest,
     ) {
-        self.fixture().forge_numbered.insert((path, number), read);
+        self.fixture().forge_numbered.insert((checkout_key(&path), number), read);
     }
 
     pub fn fixture_forge_diff(&mut self, path: PathBuf, number: u64, files: Vec<ferrite_reviewr::ferrite::FileSides>) {
-        self.fixture().forge_diffs.insert((path, number), files);
+        self.fixture().forge_diffs.insert((checkout_key(&path), number), files);
     }
 
     /// A fixture world's list of the repository the checkout at `path`
@@ -863,14 +871,14 @@ impl Cockpit {
         filter: ferrite_core::protocol::WirePrFilter,
         list: ferrite_core::protocol::ReviewPullRequests,
     ) {
-        self.fixture().forge_lists.insert((path, filter), list);
+        self.fixture().forge_lists.insert((checkout_key(&path), filter), list);
     }
 
     /// From now on the whole-PR reads of the checkout at `path` (a
     /// `fixture_forge` one) wait, each, for a test to answer it, in any
     /// order (`take_held_reads`).
     pub fn fixture_hold_pr_reads(&mut self, path: PathBuf) {
-        self.fixture().forge_held.insert(path);
+        self.fixture().forge_held.insert(checkout_key(&path));
     }
 
     /// The whole-PR reads held since the last call, oldest first.
