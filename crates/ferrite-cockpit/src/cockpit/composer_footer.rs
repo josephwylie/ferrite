@@ -8,9 +8,9 @@
 //! each press asks the root by a `PaneEvent` (`pane_cell::PaneAsk`).
 
 use super::pane_cell::{ControlsInputs, Doors, DraftInputs, PaneAsk, PaneAsks, QueuedAct, ThreadInputs};
+use super::*;
 use ferrite_ui::components::MenuDoor;
 use gpui::App;
-use super::*;
 use ferrite_core::{ControlKind, McpStatus, SessionControl};
 
 /// Whose box the controls are: a draft's, with its band, or a Thread's.

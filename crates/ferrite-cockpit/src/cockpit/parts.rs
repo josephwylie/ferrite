@@ -32,20 +32,20 @@ use gpui::{
     div, prelude::*, px, AnyElement, AnyView, Context, Div, Entity, StyleRefinement, Window,
 };
 
+use super::details::content::Content;
 use super::pane_cell::{
     CellAsk, CellInputs, ControlsInputs, Doors, DraftInputs, KindInputs, PaneAsk, PaneAsks,
     PaneEvent, QueuedAct, ThreadInputs,
 };
-use ferrite_ui::components::MenuDoor;
 use super::popups::Popup;
 use super::surfaces::SurfaceAction;
 use super::{CockpitView, MenuTarget, Submit};
-use super::details::content::Content;
 use ferrite_client::cockpit::Cockpit;
 use ferrite_core::activity::Subject;
 use ferrite_core::ThreadKey;
-use gpui::{Focusable, SharedString};
+use ferrite_ui::components::MenuDoor;
 use ferrite_ui::source::Source;
+use gpui::{Focusable, SharedString};
 
 /// A part of the Cockpit drawn as a cached view of its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

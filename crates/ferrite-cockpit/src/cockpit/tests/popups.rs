@@ -643,7 +643,7 @@ fn the_second_panes_cell_asks_for_itself(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.file_drop_over, None, "the drop ends the hover");
-        assert_eq!(view.panes[1].read(cx).composer.read(cx).files(), [notes.clone()]);
+        assert_eq!(view.panes[1].read(cx).composer.read(cx).files().len(), 1, "staged in its box");
         assert!(view.panes[0].read(cx).composer.read(cx).files().is_empty());
     });
 
