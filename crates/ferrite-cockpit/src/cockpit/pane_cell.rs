@@ -1,10 +1,11 @@
-//! A Pane's cell, as its part (`parts::PartView`) draws it: the
-//! click-to-focus, drop and drag plumbing around `pane::render_pane` (or
-//! `render_draft`), and the controls wired into it. It draws from its Pane,
-//! the client's model, and `CellInputs`: what it reads of the window, read
-//! through `Source` on the root (`CockpitView::cell_inputs`). What a press
-//! asks of the window is a `PaneEvent` naming the Pane, which its part
-//! emits and the root hears (`CockpitView::on_pane_event`).
+//! A Pane's cell, as its part (`parts::PartView`) draws it, in the part's
+//! own context: the click-to-focus, drop and drag plumbing around
+//! `pane::render_pane` (or `render_draft`), and the controls wired into it.
+//! It draws from its Pane, the client's model, and `CellInputs`: what it
+//! reads of the window, read through `Source` on the root
+//! (`CockpitView::cell_inputs`). What a press asks of the window is a
+//! `PaneEvent` naming the Pane, which its part emits and the root hears
+//! (`CockpitView::on_pane_event`).
 
 use super::details::content::Content;
 use super::parts::PartView;
@@ -168,6 +169,8 @@ pub(crate) struct CellInputs {
     /// selectors say it. A press names the Pane by `identity`.
     pub(crate) index: usize,
     pub(crate) identity: PaneIdentity,
+    /// The Pane itself, as the window holds it under `identity`.
+    pub(crate) view: Entity<PaneView>,
     pub(crate) focused: bool,
     /// The Pane's machine, while it is lost (ADR 0026).
     pub(crate) lost: Option<MachineId>,
@@ -267,7 +270,6 @@ pub(crate) type DetailsRead<'a> = dyn Fn(ThreadKey, &Subject, usize, &gpui::App)
 /// that takes every press until the machine is back (ADR 0026).
 pub(super) fn cell(
     inputs: CellInputs,
-    pane: &Entity<PaneView>,
     model: &Entity<Cockpit>,
     details: &DetailsRead,
     asks: &PaneAsks,
@@ -275,7 +277,8 @@ pub(super) fn cell(
     cx: &mut App,
 ) -> Div {
     let lost = inputs.lost;
-    let cell = live_cell(inputs, pane, model, details, asks, window, cx);
+    let pane = inputs.view.clone();
+    let cell = live_cell(inputs, &pane, model, details, asks, window, cx);
     match lost {
         Some(machine) => machines::held(cell, format!("machine-lost-{}", machine.get())),
         None => cell,

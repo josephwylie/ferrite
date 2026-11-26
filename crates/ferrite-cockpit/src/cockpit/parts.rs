@@ -3,10 +3,11 @@
 //! changes.
 //!
 //! A Pane's view (`PartView`) reads what its cell draws of the window
-//! through `Source` (`cell_inputs`), then draws the cell by calling back
-//! into the Cockpit (`render_part`). What a press in the cell asks of the
-//! window it emits as a `PaneEvent` naming the Pane, which the Cockpit
-//! hears (`on_pane_event`); the nav draws only what it last read of the Cockpit
+//! through `Source` (`cell_inputs`, and the details card's sections) and
+//! draws the cell in its own context (`pane_cell`), holding no handle to
+//! the Cockpit. What a press in the cell asks of the window it emits as a
+//! `PaneEvent` naming the Pane, which the Cockpit hears
+//! (`on_pane_event`); the nav draws only what it last read of the Cockpit
 //! (`NavView::look`), which it reads again as the Cockpit notifies or the
 //! client's model says something `Arrived`, so it redraws only when that
 //! moved. Each is mounted
@@ -28,8 +29,7 @@ use std::collections::HashMap;
 
 use ferrite_core::roster::PaneIdentity;
 use gpui::{
-    div, prelude::*, px, AnyElement, AnyView, Context, Div, Entity, StyleRefinement, WeakEntity,
-    Window,
+    div, prelude::*, px, AnyElement, AnyView, Context, Div, Entity, StyleRefinement, Window,
 };
 
 use super::pane_cell::{
@@ -40,6 +40,9 @@ use ferrite_ui::components::MenuDoor;
 use super::popups::Popup;
 use super::surfaces::SurfaceAction;
 use super::{CockpitView, MenuTarget, Submit};
+use super::details::content::Content;
+use ferrite_client::cockpit::Cockpit;
+use ferrite_core::activity::Subject;
 use ferrite_core::ThreadKey;
 use gpui::{Focusable, SharedString};
 use ferrite_ui::source::Source;
@@ -53,12 +56,20 @@ pub(crate) enum Part {
     Pane(PaneIdentity),
 }
 
-/// The view that draws one Pane's cell, by asking the Cockpit for it.
+/// What the details card asks of the window: its sections for the Thread,
+/// the Subject its Pane shows, and how many pages of `Previous agents`.
+type DetailsAsk = (ThreadKey, Subject, usize);
+
+/// The view that draws one Pane's cell, from what it reads of the window.
 pub(crate) struct PartView {
-    cockpit: WeakEntity<CockpitView>,
     pane: PaneIdentity,
+    /// The client's model, which the cell reads as it draws.
+    model: Entity<Cockpit>,
     /// What the cell draws of the window (`CockpitView::cell_inputs`).
     inputs: Source<CellInputs, CellAsk>,
+    /// The details card's sections (`CockpitView::details_content`), read
+    /// only while the card stands.
+    details: Source<Content, DetailsAsk>,
 }
 
 impl Render for PartView {
@@ -73,9 +84,15 @@ impl Render for PartView {
             return div().into_any_element();
         };
         let asks = PaneAsks::new(cx.entity().downgrade(), self.pane);
-        self.cockpit
-            .update(cx, |view, cx| view.render_part(inputs, &asks, window, cx))
-            .unwrap_or_else(|_| div().into_any_element())
+        let details = |thread, subject: &Subject, pages, cx: &gpui::App| {
+            self.details.read(&(thread, subject.clone(), pages), cx)
+        };
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(super::pane_cell::cell(inputs, &self.model, &details, &asks, window, cx))
+            .into_any_element()
     }
 }
 
@@ -120,8 +137,16 @@ impl CockpitView {
         }
         let root = cx.entity();
         let inputs = Source::of(&root, |root: &Self, ask: &CellAsk, cx| root.cell_inputs(ask, cx));
-        let cockpit = root.downgrade();
-        let view = cx.new(|_| PartView { cockpit, pane, inputs });
+        let details = Source::of(&root, |root: &Self, (thread, subject, pages): &DetailsAsk, cx| {
+            Some(root.details_content(*thread, subject, *pages, cx))
+        });
+        let model = self.cockpit.clone();
+        let view = cx.new(|_| PartView {
+            pane,
+            model,
+            inputs,
+            details,
+        });
         cx.subscribe_in(&view, window, Self::on_pane_event).detach();
         self.parts.borrow_mut().views.insert(pane, view.clone());
         view
@@ -184,30 +209,6 @@ impl CockpitView {
         parts.views.retain(|identity, _| open.contains(identity));
     }
 
-    /// What a Pane's view draws: its cell, from `inputs`, its presses
-    /// asking through `asks`.
-    fn render_part(
-        &self,
-        inputs: CellInputs,
-        asks: &PaneAsks,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let Some(index) = self.index_of(inputs.identity) else {
-            return div().into_any_element();
-        };
-        let pane: Entity<ferrite_pane::pane::PaneView> = (*self.panes[index]).clone();
-        let model = self.cockpit.clone();
-        let details = |thread, subject: &ferrite_core::activity::Subject, pages, cx: &gpui::App| {
-            Some(self.details_content(thread, subject, pages, cx))
-        };
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .child(super::pane_cell::cell(inputs, &pane, &model, &details, asks, window, cx))
-            .into_any_element()
-    }
 
     /// What Pane `event.pane`'s cell asks (`PaneAsk`): each the act its
     /// press made when the cell drew with the Cockpit's own listeners, run
@@ -452,6 +453,7 @@ impl CockpitView {
         Some(CellInputs {
             index,
             identity,
+            view: (*self.panes[index]).clone(),
             focused,
             lost,
             sheet_up: self.sheet_up(cx),
