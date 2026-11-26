@@ -85,6 +85,12 @@ actions!(
     ]
 );
 
+// The window's send and interrupt, named as the keymap binds them
+// (`ferrite_ui::keymap`). A line that is not the Pane's own answers them
+// in the window's place: a Decision card's note sends on one and closes
+// on the other.
+actions!(cockpit, [Submit, Interrupt]);
+
 /// How the caret was last drawn: the soft bar at an opacity (this line
 /// is lit), or not at all (it is not). `None` while a selection stands in
 /// its place.
@@ -2664,7 +2670,7 @@ mod tests {
     use gpui::{KeyBinding, Modifiers, TestAppContext, VisualTestContext};
 
     // The cockpit's own, which the Host answers in its place.
-    gpui::actions!(cockpit, [Submit, HistoryOlder]);
+    gpui::actions!(cockpit, [HistoryOlder]);
 
     /// A stand-in for the Pane: a fixed-width column holding one focused
     /// Composer, answering Submit and HistoryOlder the way the cockpit

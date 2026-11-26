@@ -226,18 +226,14 @@ pub struct ThreadInputs {
     pub plane: bool,
     /// Its Project's and branch's words, once its facts are known.
     pub facts: Option<(Option<SharedString>, Option<SharedString>)>,
-    /// The Decision cards on its plane, as the window draws them.
-    pub decisions: Option<DecisionsDraw>,
+    /// The Decision cards on its plane, which the cell draws.
+    pub decisions: Option<crate::decision::Cards>,
     /// Its details card stands beside the transcript when there is room
     /// (`ThreadSurfaces::details_inline_open`).
     pub details_inline_open: bool,
     /// The details card's menu is up, choosing what the card shows.
     pub details_menu_up: bool,
 }
-
-/// The window's draw of a Thread's Decision cards, run where the cell
-/// stacks them.
-pub type DecisionsDraw = Box<dyn FnOnce(&mut Window, &mut App) -> Option<AnyElement>>;
 
 /// A board slot on the move: its head is the handle. Dropped on another
 /// slot of the same board it swaps with it (the centre) or splits its
@@ -580,7 +576,7 @@ fn content(
     // The docked Decision merges into the Composer when that Composer is a
     // live block with nothing floating between them (rule 2.8.1).
     let joins = pane.read(cx).is_main() && attachments.is_none();
-    let activity_decisions = inputs.decisions.take().and_then(|draw| draw(window, cx));
+    let activity_decisions = inputs.decisions.take().and_then(|cards| cards.render(window, cx));
     let details_card = crate::details::card(
         thread,
         pane,

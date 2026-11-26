@@ -28,6 +28,13 @@ use ferrite_ui::components;
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 use ferrite_ui::theme;
 
+mod cards;
+mod forms;
+mod view;
+pub use cards::{init, Cards};
+pub use forms::{answered, digit_question, DecisionCursor, Pick, RequestForms};
+pub use view::{DecisionEvent, DecisionKey, DecisionsView, KeyTarget};
+
 actions!(
     decision,
     [
@@ -44,6 +51,10 @@ actions!(
         Amend,
     ]
 );
+
+// A digit on a Decision, named as the keymap binds it
+// (`ferrite_ui::keymap`): it picks that option, or types in a card's note.
+actions!(cockpit, [PickOption1, PickOption2, PickOption3, PickOption4]);
 
 /// The keys `PickOption1..4` bind: rows past the fourth are picked by
 /// pointer or the cursor.
