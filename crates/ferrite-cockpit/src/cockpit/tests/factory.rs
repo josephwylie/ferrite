@@ -415,7 +415,7 @@ fn new_thread_leaves_the_factory_for_the_draft_that_stood(cx: &mut TestAppContex
     tick(cx);
     let project = view.read_with(cx, |view, cx| {
         assert!(view.panes[view.focused(cx)].read(cx).draft().is_some(), "a draft stands");
-        view.launch_project.unwrap()
+        view.launch.project().unwrap()
     });
     view.update(cx, |view, cx| view.open_factory(project, cx));
     tick(cx);

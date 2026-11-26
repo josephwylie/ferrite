@@ -326,7 +326,7 @@ impl CockpitView {
         }) else {
             return;
         };
-        self.launch_project = Some(project);
+        self.launch.worked_in(project);
         let machine = project.machine();
         if machine != before {
             let elsewhere = self.elsewhere(machine, cx);

@@ -70,7 +70,7 @@ fn cmd_t_from_a_thread_starts_in_its_project(cx: &mut TestAppContext) {
     assert_ne!(here, elsewhere);
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.launch_project = Some(elsewhere));
+    view.update(cx, |view, _| view.launch.worked_in(elsewhere));
     tick(cx);
 
     cx.simulate_keystrokes("cmd-t");

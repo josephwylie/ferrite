@@ -281,8 +281,8 @@ impl CockpitView {
         if gone_with(self.nav_filter) {
             self.nav_filter = None;
         }
-        if gone_with(self.launch_project) {
-            self.launch_project = super::startup_project(self.cockpit.read(cx));
+        if gone_with(self.launch.project()) {
+            self.launch.fall_back(self.cockpit.read(cx));
         }
         self.put_away_drafts(gone, cx);
     }
