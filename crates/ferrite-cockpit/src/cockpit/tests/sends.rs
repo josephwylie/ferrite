@@ -94,7 +94,7 @@ pub(super) fn stage(view: &Entity<CockpitView>, name: &str, cx: &mut gpui::Visua
     let annotation = annotation(&format!("{name}-annotation"));
     view.update(cx, |view, cx| {
         let focused = view.focused(cx);
-        view.panes[focused].composer.update(cx, |composer, cx| {
+        view.panes[focused].composer(cx).update(cx, |composer, cx| {
             composer.add_files(&[file], cx);
             composer.reply(Reply::new("a passage", "what about it"), cx);
             composer.add_review_comment(review_comment(), cx);
@@ -134,7 +134,7 @@ pub(super) fn held(
     cx: &mut gpui::VisualTestContext,
 ) -> (String, usize, usize, usize, usize) {
     view.read_with(cx, |view, cx| {
-        let composer = view.panes[0].composer.read(cx);
+        let composer = view.panes[0].read(cx).composer.read(cx);
         (
             composer.text().to_string(),
             composer.files().len(),
@@ -236,7 +236,7 @@ fn a_refused_draft_sends_once_after_the_cause_is_fixed(cx: &mut TestAppContext) 
     cx.simulate_keystrokes("enter");
     tick(cx);
 
-    assert!(view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).is_empty()));
+    assert!(view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).is_empty()));
     assert_eq!(
         fake.sent
             .borrow()
@@ -258,7 +258,7 @@ fn a_held_send_keeps_two_machines_threads_apart(cx: &mut TestAppContext) {
         let here = thread;
         let there = ferrite_core::ThreadKey::fixture(u32::MAX, thread.thread().get());
         let draft = view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.take_draft(cx));
         let (prompt, whole) = (draft.prompt().to_string(), draft.content().clone());
         view.hold_queued(there, draft);
@@ -278,7 +278,7 @@ fn an_unconfirmed_send_returns_the_draft_and_names_the_request(cx: &mut TestAppC
     view.update(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         let draft = view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.take_draft(cx));
         let admission = ferrite_core::prompt_queue::Admission::Unconfirmed("no reply".into());
         assert!(!view.settle_send(thread, draft, admission, cx));
@@ -339,7 +339,7 @@ fn composer_of(
 ) -> (String, usize, usize, usize, usize) {
     let pane = pane_of(view, thread, cx);
     view.read_with(cx, |view, cx| {
-        let composer = view.panes[pane].composer.read(cx);
+        let composer = view.panes[pane].read(cx).composer.read(cx);
         (
             composer.text().to_string(),
             composer.files().len(),
@@ -443,7 +443,7 @@ fn a_held_draft_comes_back_whole_beside_newer_typing(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_input("newer words");
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.reply(Reply::new("a passage", "what about it"), cx)
         });
     });

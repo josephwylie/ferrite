@@ -26,7 +26,7 @@ fn solo<'a>(
 fn composer_focused(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
     cx.update(|window, cx| {
         view.read(cx).panes[0]
-            .composer
+            .read(cx).composer
             .read(cx)
             .focus_handle(cx)
             .is_focused(window)
@@ -34,7 +34,7 @@ fn composer_focused(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext
 }
 
 fn open(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
-    view.read_with(cx, |view, _| view.panes[0].details.is_open())
+    view.read_with(cx, |view, cx| view.panes[0].read(cx).details.is_open())
 }
 
 #[gpui::test]
@@ -237,7 +237,7 @@ fn the_page_keys_leave_the_transcript_alone_while_the_card_has_them(cx: &mut Tes
     let offset = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             view.panes[0]
-                .transcript()
+                .read(cx).transcript()
                 .unwrap()
                 .read(cx)
                 .scroll()
@@ -264,10 +264,10 @@ fn focus_moving_to_another_thread_shuts_the_card_it_left(cx: &mut TestAppContext
     cx.simulate_resize(gpui::size(px(1000.), px(900.)));
     tick(cx);
     let cards = |cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
+        view.read_with(cx, |view, cx| {
             view.panes
                 .iter()
-                .map(|pane| pane.details.is_open())
+                .map(|pane| pane.read(cx).details.is_open())
                 .collect::<Vec<_>>()
         })
     };
@@ -340,7 +340,8 @@ fn inline_visibility_outlives_pane_recreation(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("details-card").is_none());
     view.update(cx, |view, cx| {
         view.flush_panel_persistence(cx);
-        view.panes[0].details = ferrite_pane::details::DetailsCard::new(cx);
+        let value = ferrite_pane::details::DetailsCard::new(cx);
+        view.panes[0].update(cx, |pane, _| pane.details = value);
         assert!(!view.panel.surfaces.get(thread).unwrap().details_inline_open);
         let restored = crate::cockpit::surfaces::Surfaces::saved_in(&view.prefs.dir, thread.thread()).unwrap();
         assert!(!restored.details_inline_open);
@@ -511,7 +512,7 @@ fn lineage_lists_running_agents_and_folds_the_previous_ones(cx: &mut TestAppCont
     cx.simulate_click(parent.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(
-        view.read_with(cx, |view, _| view.panes[0].is_main()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).is_main()),
         "the parent row returns the Pane to Main"
     );
     assert!(cx.debug_bounds("details-lineage-parent").is_none());
@@ -618,8 +619,8 @@ fn a_lineage_row_opens_its_agent_in_the_pane(cx: &mut TestAppContext) {
     let row = cx.debug_bounds("details-lineage-agent-Atlas").expect("the agent's row");
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.panes[0].selected, Subject::Subagent(key.clone()));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[0].read(cx).selected, Subject::Subagent(key.clone()));
     });
     assert_eq!(panel_tabs(&view, thread, cx).0, tabs, "no Panel tab opens for it");
 }

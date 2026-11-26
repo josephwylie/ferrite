@@ -59,7 +59,7 @@ pub(super) fn queue_acts(
                         move |view, _: &ClickEvent, window, cx| {
                             cx.stop_propagation();
                             view.focus_pane(index, cx);
-                            let focus = view.panes[index].composer.read(cx).focus_handle(cx);
+                            let focus = view.panes[index].read(cx).composer.read(cx).focus_handle(cx);
                             window.focus(&focus, cx);
                             view.cockpit.update(cx, |cockpit, _| act(cockpit, thread, &id));
                             view.facts.acted(view.cockpit.read(cx), thread);
@@ -90,10 +90,8 @@ pub(super) fn send_button(
             cx.stop_propagation();
             view.focus_pane(index, cx);
             // A press on the circle sends, wherever tab left the ring.
-            if let Some(draft) = view.panes[index].draft_mut() {
-                draft.band_focus = None;
-            }
-            let focus = view.panes[index].composer.read(cx).focus_handle(cx);
+            view.panes[index].update_draft(cx, |draft| draft.band_focus = None);
+            let focus = view.panes[index].read(cx).composer.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
             view.submit(&Submit, window, cx);
         }))
@@ -116,7 +114,7 @@ pub(super) fn stop_button(
         .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
             cx.stop_propagation();
             view.focus_pane(index, cx);
-            let focus = view.panes[index].composer.read(cx).focus_handle(cx);
+            let focus = view.panes[index].read(cx).composer.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
             if let Some(thread) = view.panes[index].thread() {
                 view.cockpit.update(cx, |cockpit, _| cockpit.interrupt(thread));
@@ -297,7 +295,7 @@ impl AttachMenu {
                         0 => view.attach_files(index, false, cx),
                         1 => view.attach_files(index, true, cx),
                         _ => view.panes[index]
-                            .composer
+                            .read(cx).composer
                             .clone()
                             .update(cx, |composer, cx| composer.insert("/", cx)),
                     }
@@ -392,7 +390,7 @@ fn submenus(
                         };
                         let token = format!("/{name}");
                         let _ = view.update(cx, |view, cx| {
-                            view.panes[index].composer.clone().update(cx, |composer, cx| {
+                            view.panes[index].read(cx).composer.clone().update(cx, |composer, cx| {
                                 composer.insert(&format!("{token} "), cx);
                                 composer.stage_chip(SharedString::from(token), cx);
                             });

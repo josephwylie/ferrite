@@ -141,7 +141,7 @@ impl CockpitView {
     /// short: the draft is sent there once it is in.
     pub(super) fn waited_on<'a>(&self, index: usize, cx: &'a App) -> Option<(&'a CopyKey, &'a copies::Entry)> {
         let pane = self.panes.get(index)?;
-        let project = pane.draft()?.binding.project();
+        let project = pane.read(cx).draft()?.binding.project();
         self.copies.read(cx).waited_on_by(pane.identity, project)
     }
 
@@ -206,7 +206,7 @@ impl CockpitView {
         let Some(pane) = self.panes.get(index) else {
             return;
         };
-        let Some(from) = pane.draft().map(|draft| draft.binding.project()) else {
+        let Some(from) = pane.read(cx).draft().map(|draft| draft.binding.project()) else {
             return;
         };
         if from.machine() == to {
@@ -243,7 +243,7 @@ impl CockpitView {
         };
         let current = self
             .index_of(lookup.draft)
-            .and_then(|index| self.panes[index].draft())
+            .and_then(|index| self.panes[index].read(cx).draft())
             .map(|draft| draft.binding.project());
         if current != Some(lookup.from) {
             return;
@@ -294,9 +294,9 @@ impl CockpitView {
     }
 
     /// The band of the draft in Pane `draft`, while it is one.
-    pub(super) fn band_of(&self, draft: PaneIdentity) -> Option<Band> {
+    pub(super) fn band_of(&self, draft: PaneIdentity, cx: &gpui::App) -> Option<Band> {
         let pane = &self.panes[self.index_of(draft)?];
-        pane.draft().map(|_| Band::new(pane.geometry.clone()))
+        pane.read(cx).draft().map(|_| Band::new(pane.read(cx).geometry.clone()))
     }
 
     /// Where `machine`'s own files are kept here; none for this computer.
@@ -333,18 +333,20 @@ impl CockpitView {
         let Some(index) = self.index_of(draft) else {
             return;
         };
-        let Some(binding) = self.panes[index].draft_mut() else {
+        let Some(before) = self.panes[index].update_draft(cx, |binding| {
+            let before = binding.binding.project().machine();
+            binding.binding.choose_project(project);
+            binding.error = None;
+            before
+        }) else {
             return;
         };
-        let before = binding.binding.project().machine();
-        binding.binding.choose_project(project);
-        binding.error = None;
         self.launch_project = Some(project);
         let machine = project.machine();
         if machine != before {
             let elsewhere = self.elsewhere(machine, cx);
-            self.panes[index].preview.set_remote_files(elsewhere);
-            let composer = self.panes[index].composer.clone();
+            self.panes[index].read(cx).preview.set_remote_files(elsewhere);
+            let composer = self.panes[index].read(cx).composer.clone();
             self.aim_attachments(&composer, machine, cx);
             self.upload_attachments(&composer, machine, cx);
         }
@@ -360,7 +362,7 @@ impl CockpitView {
         let unnamed: Vec<ProjectKey> = self
             .panes
             .iter()
-            .filter_map(|pane| pane.draft())
+            .filter_map(|pane| pane.read(cx).draft())
             .filter(|draft| matches!(draft.binding.target(), DraftTarget::Main))
             .map(|draft| draft.binding.project())
             .filter(|project| self.checkouts.branch(*project).is_none() && !self.checkouts.asking(*project))
@@ -412,7 +414,7 @@ impl CockpitView {
 
     fn open_placing(&mut self, placing: Placing, cx: &mut Context<Self>) {
         let (model, copies) = (self.cockpit.clone(), self.copies.clone());
-        let band = self.band_of(placing.draft);
+        let band = self.band_of(placing.draft, cx);
         let sheet = cx.new(|cx| PlacementView::new(model, copies, placing, band, cx));
         cx.subscribe(&sheet, Self::on_placement_event).detach();
         self.show_sheet(sheets::Sheet::Placement(sheet), cx);
@@ -596,7 +598,7 @@ impl CockpitView {
         let moves = order.waits
             && self
                 .index_of(placing.draft)
-                .and_then(|index| self.panes[index].draft())
+                .and_then(|index| self.panes[index].read(cx).draft())
                 .is_some_and(|draft| draft.binding.project() == key.project);
         if moves {
             self.rebind_draft(placing.draft, project, cx);
@@ -635,7 +637,7 @@ impl CockpitView {
             return;
         };
         let pane = open.pane;
-        let Some(draft) = self.panes.iter().find(|at| at.identity == pane).and_then(|at| at.draft()) else {
+        let Some(draft) = self.panes.iter().find(|at| at.identity == pane).and_then(|at| at.read(cx).draft()) else {
             return;
         };
         let rows = self.environment_menu_rows(pane, draft, cx);

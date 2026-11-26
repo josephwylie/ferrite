@@ -223,7 +223,7 @@ fn cmd_j_back_to_an_open_shell_gives_it_the_keyboard(cx: &mut TestAppContext) {
     opened(&view, cx);
     let shell = shown_shell(&view, thread, cx).unwrap();
     view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
-    let composer = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).focus_handle(cx));
+    let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).focus_handle(cx));
     cx.update(|window, cx| window.focus(&composer, cx));
     tick(cx);
     let shell_focused = |cx: &mut gpui::VisualTestContext| {
@@ -252,7 +252,7 @@ fn a_shell_added_from_the_plus_menu_takes_the_next_key(cx: &mut TestAppContext) 
     cx.simulate_keystrokes("t");
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(2)), "t adds a shell");
     cx.simulate_keystrokes("x");
-    let typed = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).text().to_string());
+    let typed = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).text().to_string());
     assert_eq!(typed, "", "the Composer did not take the letter");
     let shell = shown_shell(&view, thread, cx).unwrap();
     assert!(
@@ -346,7 +346,7 @@ fn a_selection_offers_attach_and_attaches_as_a_reply_tile(cx: &mut TestAppContex
     let pill = cx.debug_bounds("terminal-attach").unwrap();
     cx.simulate_click(pill.center(), gpui::Modifiers::none());
     tick(cx);
-    let replies = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).replies().len());
+    let replies = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).replies().len());
     assert_eq!(replies, 1, "a Reply tile in the tray");
     assert!(shell.read_with(cx, |shell, _| shell.selection().is_none()), "the selection lets go");
 }
@@ -402,7 +402,7 @@ fn keys_typed_after_the_door_opens_reach_the_shell(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("e c h o space o k 1 x x left backspace enter");
     assert!(typed_reaches(&shell, "\nok1x\n", cx), "arrows and Backspace edit the line");
     assert!(
-        view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).is_empty()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).is_empty()),
         "none of it went to the Composer"
     );
 }
@@ -413,7 +413,7 @@ fn a_click_in_the_shell_takes_the_keyboard_back_from_the_composer(cx: &mut TestA
     opened(&view, cx);
     let shell = shown_shell(&view, thread, cx).unwrap();
     // The Composer takes the keyboard.
-    let composer = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).focus_handle(cx));
+    let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).focus_handle(cx));
     cx.update(|window, cx| window.focus(&composer, cx));
     tick(cx);
     let grid = cx.debug_bounds("terminal").unwrap();

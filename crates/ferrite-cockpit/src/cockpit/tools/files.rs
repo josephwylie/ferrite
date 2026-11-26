@@ -161,7 +161,7 @@ impl CockpitView {
             .iter()
             .filter_map(|pane| {
                 let thread = pane.thread()?;
-                let document = pane.preview.document()?;
+                let document = pane.read(cx).preview.document()?;
                 let plain = document.name.is_none()
                     && matches!(document.body, DocBody::Text { .. })
                     && self.thread_path(thread, cx).is_some_and(|root| document.path.starts_with(root));
@@ -170,7 +170,7 @@ impl CockpitView {
             .collect();
         for (thread, path, line) in opened {
             if let Some(index) = self.pane_for(thread) {
-                self.panes[index].preview.close();
+                self.panes[index].read(cx).preview.close();
             }
             self.open_in_files(thread, path, line, false, cx);
         }
@@ -189,7 +189,7 @@ impl CockpitView {
                     if !self.uses_remote_files(*thread, cx)
                         && ferrite_pane::image_viewer::is_image(path) =>
                 {
-                    self.panes[index].preview.open(path.clone(), None, &[], window, cx);
+                    self.panes[index].preview(cx).open(path.clone(), None, &[], window, cx);
                     cx.notify();
                 }
                 _ => self.open_in_files(*thread, path.clone(), None, *keep, cx),
@@ -197,7 +197,7 @@ impl CockpitView {
             FilesEvent::ShowChanges { thread, path } => self.show_changes_of(*thread, path, cx),
             FilesEvent::Attach { thread, path, remote } => {
                 if let Some(index) = self.pane_for(*thread) {
-                    self.panes[index].composer.update(cx, |composer, cx| {
+                    self.panes[index].composer(cx).update(cx, |composer, cx| {
                         if *remote {
                             composer.insert(
                                 &format!("\nPlease use the file at {} on this machine.\n", path.display()),
@@ -264,7 +264,7 @@ impl CockpitView {
         self.files
             .update(cx, |files, _| files.remote_for_test(thread, answer));
         if let Some(index) = self.pane_for(thread) {
-            self.panes[index].preview.set_remote_files(true);
+            self.panes[index].read(cx).preview.set_remote_files(true);
         }
     }
 }

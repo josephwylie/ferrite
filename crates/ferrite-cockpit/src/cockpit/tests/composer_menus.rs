@@ -52,7 +52,7 @@ fn disabled_placeholder_suggestions_are_hidden_and_tab_does_not_accept_them(
             "turning the setting off clears the visible prediction"
         );
         assert!(
-            view.panes[view.focused(cx)].composer.read(cx).is_empty(),
+            view.panes[view.focused(cx)].read(cx).composer.read(cx).is_empty(),
             "Tab must not accept a disabled prediction"
         );
     });
@@ -75,7 +75,7 @@ fn history_arrows_only_replace_the_composer_and_restore_the_exact_draft(cx: &mut
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("  thr…  ".into(), cx));
     });
     tick(cx);
@@ -87,7 +87,7 @@ fn history_arrows_only_replace_the_composer_and_restore_the_exact_draft(cx: &mut
     }
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("one edited".into(), cx));
     });
     for (key, expected) in [
@@ -174,7 +174,7 @@ fn menu_and_decision_states_disarm_history_before_their_arrows_dispatch(cx: &mut
 
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("/".into(), cx));
     });
     tick(cx);
@@ -186,7 +186,7 @@ fn menu_and_decision_states_disarm_history_before_their_arrows_dispatch(cx: &mut
     view.update(cx, |view, cx| {
         view.close_composer_menu(cx);
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("draft".into(), cx));
     });
     fake.streams.borrow()[0]
@@ -432,7 +432,7 @@ fn typing_slash_opens_the_command_menu_and_enter_inserts_the_pick(cx: &mut TestA
     view.read_with(cx, |view, cx| {
         assert!(view.popover(cx).is_none(), "the pick closed the menu");
         assert_eq!(
-            view.panes[0].composer.read(cx).chips(),
+            view.panes[0].read(cx).composer.read(cx).chips(),
             [SharedString::from("/commit")],
             "the pick is a chip, as an `@` mention is"
         );
@@ -641,7 +641,7 @@ fn typing_at_completes_files_from_the_workspace_binding(cx: &mut TestAppContext)
         // The pill is provider-agnostic: a Claude pick paints it too —
         // the wire stays plain `@path` text the CLI itself reads.
         assert_eq!(
-            view.panes[0].composer.read(cx).chips(),
+            view.panes[0].read(cx).composer.read(cx).chips(),
             [SharedString::from("@src/lib.rs")],
             "the picked token is staged as the comp's pill"
         );
@@ -701,17 +701,17 @@ fn draft_mentions_follow_the_selected_workspace(cx: &mut TestAppContext) {
             .unwrap();
         view.cockpit.update(cx, |cockpit, _| cockpit.park(thread).now().unwrap());
         let focused = view.focused(cx);
-        let entry = view.panes[focused].draft().unwrap().binding.project();
+        let entry = view.panes[focused].read(cx).draft().unwrap().binding.project();
         let worktree = view.cockpit.read(cx).registry(entry.machine()).worktrees(entry.project())[0].clone();
         std::fs::write(worktree.path.join("worktree-only.txt"), "tree\n").unwrap();
         view.panes[focused]
-            .draft_mut()
-            .unwrap()
-            .binding
-            .choose_target(DraftTarget::Existing {
-                branch: worktree.branch,
-                path: worktree.path,
-            });
+            .update_draft(cx, |draft| {
+                draft.binding.choose_target(DraftTarget::Existing {
+                    branch: worktree.branch,
+                    path: worktree.path,
+                })
+            })
+            .unwrap();
     });
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
@@ -731,14 +731,12 @@ fn draft_mentions_follow_the_selected_workspace(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| {
         view.panes[view.focused(cx)]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set(String::new(), cx));
         let focused = view.focused(cx);
         view.panes[focused]
-            .draft_mut()
-            .unwrap()
-            .binding
-            .choose_target(DraftTarget::New);
+            .update_draft(cx, |draft| draft.binding.choose_target(DraftTarget::New))
+            .unwrap();
     });
     cx.simulate_input("@");
     cx.run_until_parked();
@@ -759,19 +757,19 @@ fn draft_mentions_follow_the_selected_workspace(cx: &mut TestAppContext) {
     // Project checkout.
     view.update(cx, |view, cx| {
         view.panes[view.focused(cx)]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set(String::new(), cx));
         let focused = view.focused(cx);
-        let project = view.panes[focused].draft().unwrap().binding.project();
+        let project = view.panes[focused].read(cx).draft().unwrap().binding.project();
         let worktree = view.cockpit.read(cx).registry(project.machine()).worktrees(project.project())[0].clone();
         view.panes[focused]
-            .draft_mut()
-            .unwrap()
-            .binding
-            .choose_target(DraftTarget::Existing {
-                branch: worktree.branch,
-                path: worktree.path,
-            });
+            .update_draft(cx, |draft| {
+                draft.binding.choose_target(DraftTarget::Existing {
+                    branch: worktree.branch,
+                    path: worktree.path,
+                })
+            })
+            .unwrap();
     });
     cx.simulate_input("@worktree-only");
     cx.run_until_parked();
@@ -810,13 +808,13 @@ fn a_stale_draft_workspace_neither_completes_nor_sends_from_main(cx: &mut TestAp
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     view.update(cx, |view, cx| {
         view.aim_launch(&repo, cx);
-        view.focused_draft_mut(cx)
-            .unwrap()
-            .binding
-            .choose_target(DraftTarget::Existing {
+        view.update_focused_draft(cx, |draft| {
+            draft.binding.choose_target(DraftTarget::Existing {
                 branch: "removed-worktree".into(),
                 path: base.join("removed-worktree"),
-            });
+            })
+        })
+        .unwrap();
     });
     tick(cx);
     cx.simulate_input("@main-only");
@@ -824,7 +822,7 @@ fn a_stale_draft_workspace_neither_completes_nor_sends_from_main(cx: &mut TestAp
     view.read_with(cx, |view, cx| assert!(view.popover(cx).is_none()));
     cx.simulate_keystrokes("enter");
     view.read_with(cx, |view, cx| {
-        let draft = view.panes[view.focused(cx)].draft().expect("still a draft");
+        let draft = view.panes[view.focused(cx)].read(cx).draft().expect("still a draft");
         assert!(draft.error.as_ref().unwrap().contains("removed-worktree"));
     });
     assert_eq!(composer_text(&view, cx), "@main-only");
@@ -1060,7 +1058,7 @@ fn picking_a_mention_on_a_codex_thread_stages_the_pill(cx: &mut TestAppContext) 
     assert_eq!(composer_text(&view, cx), "@src/lib.rs ");
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[0].composer.read(cx).chips(),
+            view.panes[0].read(cx).composer.read(cx).chips(),
             [SharedString::from("@src/lib.rs")],
             "the pill token is staged for the paint"
         );
@@ -1094,7 +1092,7 @@ fn a_command_line_with_no_match_says_so_in_the_drawer(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set(String::new(), cx));
     });
     cx.simulate_input("read notes/zzzq");

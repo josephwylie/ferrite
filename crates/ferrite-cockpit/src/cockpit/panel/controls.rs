@@ -314,15 +314,15 @@ impl CockpitView {
     pub(in crate::cockpit) fn leave_control(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let index = self.focused(cx);
         let in_transcript = self.panes.get(index).is_some_and(|pane| {
-            pane.tool_focus().contains_focused(window, cx)
-                || (pane.transcript_focus.contains_focused(window, cx)
+            pane.read(cx).tool_focus().contains_focused(window, cx)
+                || (pane.read(cx).transcript_focus.contains_focused(window, cx)
                     && ferrite_pane::rich::controls_focused(window))
         });
         if !in_transcript && !self.panel_control_focused(window, cx) {
             return false;
         }
         if let Some(pane) = self.panes.get_mut(index) {
-            pane.clear_tool_target();
+            pane.update(cx, |pane, _| pane.clear_tool_target());
         }
         self.leave_panel(window, cx);
         true
@@ -350,7 +350,7 @@ impl CockpitView {
         }
         // The Composer is not the focus yet, so the platform would hand
         // this character to the control, which takes none.
-        if let Some(composer) = self.panes.get(self.focused(cx)).map(|pane| pane.composer.clone()) {
+        if let Some(composer) = self.panes.get(self.focused(cx)).map(|pane| pane.read(cx).composer.clone()) {
             composer.update(cx, |composer, cx| composer.insert(text, cx));
         }
         cx.stop_propagation();

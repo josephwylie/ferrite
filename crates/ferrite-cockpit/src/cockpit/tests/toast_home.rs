@@ -119,7 +119,7 @@ fn a_decision_scrolled_away_lets_the_toast_home(cx: &mut TestAppContext) {
     toast("Copying app to box", cx);
     let (risen, field) = toast_and_box(cx);
     assert!(risen.bottom() < field.top() - px(TOAST_TOP), "the premise: the toast at {risen:?} rose");
-    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().expect("its transcript"));
+    let transcript = view.read_with(cx, |view, cx| view.panes[0].read(cx).transcript().expect("its transcript"));
     transcript.update(cx, |transcript, cx| transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx));
     settles(cx);
     assert!(debug_bounds(cx, "question-island".into()).is_none(), "the Decision is out of sight");

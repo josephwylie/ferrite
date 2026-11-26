@@ -122,12 +122,12 @@ fn a_transcript_at_its_retention_cap_keeps_its_text_identity_as_it_streams(
         !first.starts_with("turn 0 "),
         "the cap trimmed the oldest turns"
     );
-    let namespace = view.read_with(cx, |view, _| view.panes[0].text_namespace());
+    let namespace = view.read_with(cx, |view, cx| view.panes[0].read(cx).text_namespace());
     let mut namespaces = std::collections::BTreeSet::new();
     for at in 66..86 {
         turn(&fake, at, 128);
         pump(&view, cx);
-        namespaces.insert(view.read_with(cx, |view, _| view.panes[0].text_namespace()));
+        namespaces.insert(view.read_with(cx, |view, cx| view.panes[0].read(cx).text_namespace()));
     }
     assert_eq!(
         namespaces,
@@ -209,17 +209,17 @@ fn path_scopes_follow_live_transcripts_not_every_history_generation(cx: &mut Tes
         })
         .unwrap();
     tick(cx);
-    let generation = view.read_with(cx, |view, _| view.panes[0].generation);
+    let generation = view.read_with(cx, |view, cx| view.panes[0].read(cx).generation);
     for aside in 0..6 {
         regenerate(&fake, aside);
         tick(cx);
     }
     assert_ne!(
-        view.read_with(cx, |view, _| view.panes[0].generation),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).generation),
         generation,
         "each retraction regenerated Main's history"
     );
-    let main = view.read_with(cx, |view, _| view.panes[0].text_namespace());
+    let main = view.read_with(cx, |view, cx| view.panes[0].read(cx).text_namespace());
     assert_eq!(
         cx.update(|_, cx| ferrite_pane::file_links::scopes(cx)),
         (vec![main.clone()], vec![main.clone()]),
@@ -230,7 +230,7 @@ fn path_scopes_follow_live_transcripts_not_every_history_generation(cx: &mut Tes
     let atlas = child(&fake, "Atlas");
     tick(cx);
     select(&view, atlas, cx);
-    let child = view.read_with(cx, |view, _| view.panes[0].text_namespace());
+    let child = view.read_with(cx, |view, cx| view.panes[0].read(cx).text_namespace());
     let both = {
         let mut both = vec![main.clone(), child];
         both.sort();
@@ -278,10 +278,10 @@ fn the_text_cache_releases_a_subjects_older_history_generations(cx: &mut TestApp
         regenerate(&fake, aside);
         tick(cx);
     }
-    let (namespace, ids) = view.read_with(cx, |view, _| {
+    let (namespace, ids) = view.read_with(cx, |view, cx| {
         (
-            view.panes[0].text_namespace(),
-            view.panes[0].rich.cached_ids(),
+            view.panes[0].read(cx).text_namespace(),
+            view.panes[0].read(cx).rich.cached_ids(),
         )
     });
     let current = format!("-{namespace}-");

@@ -27,7 +27,7 @@ fn a_thread_can_be_opened_in_its_own_worktree(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("cmd-shift-n");
     view.read_with(cx, |view, cx| {
-        let draft = view.panes[view.focused(cx)].draft().expect("a draft Pane");
+        let draft = view.panes[view.focused(cx)].read(cx).draft().expect("a draft Pane");
         assert_eq!(
             *draft.binding.target(),
             DraftTarget::New,
@@ -199,7 +199,7 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(
-            view.panes[view.focused(cx)].draft().is_some(),
+            view.panes[view.focused(cx)].read(cx).draft().is_some(),
             "an empty store launches as a draft Pane"
         );
     });
@@ -223,7 +223,7 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("down");
     cx.simulate_keystrokes("enter");
     let chosen = view.read_with(cx, |view, cx| {
-        let draft = view.panes[view.focused(cx)].draft().expect("still a draft");
+        let draft = view.panes[view.focused(cx)].read(cx).draft().expect("still a draft");
         assert_eq!(
             *draft.binding.target(),
             DraftTarget::Main,
@@ -274,7 +274,7 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         let band = view.band_menu().expect("the workspace popover again");
         assert_eq!(band.kind.chip, pane::BandChip::Workspace);
-        let draft = view.panes[view.focused(cx)].draft().expect("still a draft");
+        let draft = view.panes[view.focused(cx)].read(cx).draft().expect("still a draft");
         assert_ne!(
             draft.binding.project(),
             chosen,
@@ -358,7 +358,7 @@ fn picking_an_existing_worktree_binds_the_thread_to_its_path(cx: &mut TestAppCon
     cx.simulate_keystrokes("enter");
     view.read_with(cx, |view, cx| {
         assert!(view.band_menu().is_none(), "the pick closed the popover");
-        let draft = view.panes[view.focused(cx)].draft().expect("still a draft");
+        let draft = view.panes[view.focused(cx)].read(cx).draft().expect("still a draft");
         match draft.binding.target() {
             DraftTarget::Existing { branch, path } => {
                 assert_eq!(branch, "feature/wt");
@@ -476,7 +476,7 @@ fn the_first_send_bootstraps_the_thread_and_drops_the_band(cx: &mut TestAppConte
             "the first send armed the lock"
         );
         assert!(
-            pane.composer.read(cx).is_empty(),
+            pane.read(cx).composer.read(cx).is_empty(),
             "the sent prompt left the line"
         );
         let blocks = view.cockpit.read(cx).thread(thread).unwrap().transcript().blocks();
@@ -565,12 +565,12 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
         view.aim_launch(&repo, cx);
         let submitted = view.panes[view.focused(cx)].identity.draft().unwrap();
         view.panes[view.focused(cx)]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("first".into(), cx));
         view.bootstrap_draft(cx);
         assert!(view.cockpit.read(cx).draft_starting(submitted));
         view.panes[view.focused(cx)]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| {
                 composer.set("edited while starting".into(), cx)
             });
@@ -600,12 +600,12 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
             .iter()
             .find(|pane| pane.thread().is_some())
             .unwrap();
-        assert_eq!(first.composer.read(cx).text(), "edited while starting");
+        assert_eq!(first.read(cx).composer.read(cx).text(), "edited while starting");
         assert_eq!(sent.lock().unwrap().as_slice(), ["first"]);
         // A changed draft choice cancels the submitted startup before
         // applying the new choice, so the old request can never send.
         view.close_popup(cx);
-        let composer = view.panes[view.focused(cx)].composer.clone();
+        let composer = view.panes[view.focused(cx)].read(cx).composer.clone();
         composer.update(cx, |composer, cx| {
             composer.set("cancel on choice".into(), cx)
         });
@@ -631,7 +631,7 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
     view.read_with(cx, |view, cx| {
         assert!(!view.cockpit.read(cx).draft_starting(other));
         assert_eq!(
-            view.panes[view.focused(cx)].composer.read(cx).text(),
+            view.panes[view.focused(cx)].read(cx).composer.read(cx).text(),
             "cancel on choice"
         );
     });
@@ -660,7 +660,7 @@ fn a_failed_bootstrap_keeps_the_draft_and_the_prompt(cx: &mut TestAppContext) {
 
     view.read_with(cx, |view, cx| {
         let pane = &view.panes[view.focused(cx)];
-        let draft = pane.draft().expect("the Pane stays draft");
+        let draft = pane.read(cx).draft().expect("the Pane stays draft");
         assert!(
             draft
                 .error
@@ -670,7 +670,7 @@ fn a_failed_bootstrap_keeps_the_draft_and_the_prompt(cx: &mut TestAppContext) {
             draft.error
         );
         assert_eq!(
-            pane.composer.read(cx).text(),
+            pane.read(cx).composer.read(cx).text(),
             "precious words",
             "the prompt is preserved for the retry"
         );
@@ -785,7 +785,9 @@ fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
             .update(cx, |cockpit, _| cockpit.register_project(machine, &second).now())
             .unwrap();
         let index = view.focused(cx);
-        view.panes[index].draft_mut().unwrap().binding.choose_project(project);
+        view.panes[index]
+            .update_draft(cx, |draft| draft.binding.choose_project(project))
+            .unwrap();
         (view.panes[index].identity, project)
     });
     let asked = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {

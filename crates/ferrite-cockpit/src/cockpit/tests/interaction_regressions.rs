@@ -28,7 +28,7 @@ fn wheel_over_a_large_pinned_prompt_scrolls_the_transcript(cx: &mut TestAppConte
     tick(cx);
     let scroll = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -87,7 +87,7 @@ fn selection_keeps_position(cx: &mut TestAppContext, name: &str, prompt: &str) {
     tick(cx);
     let scroll = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -151,7 +151,7 @@ fn a_thread_keeps_its_scroll_position_while_another_shows(cx: &mut TestAppContex
     tick(cx);
     let scroll = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -168,7 +168,7 @@ fn a_thread_keeps_its_scroll_position_while_another_shows(cx: &mut TestAppContex
     tick(cx);
     let back = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -208,7 +208,7 @@ fn a_send_scrolls_its_prompt_to_the_top(cx: &mut TestAppContext) {
     tick(cx);
     let scroll = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -239,7 +239,7 @@ fn a_long_transcript_has_a_scrollbar_over_its_list(cx: &mut TestAppContext) {
     tick(cx);
     let scroll = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()

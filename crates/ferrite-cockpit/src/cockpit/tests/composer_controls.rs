@@ -28,7 +28,7 @@ fn composer_survives_background_thread_removal(cx: &mut TestAppContext) {
     tick(cx);
     let scroll = view.read_with(cx, |view, cx| {
         let pane = &view.panes[view.pane_for(threads[2]).unwrap()];
-        pane.transcript().unwrap().read(cx).scroll().clone()
+        pane.read(cx).transcript().unwrap().read(cx).scroll().clone()
     });
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: scroll.bounds().center(),
@@ -43,9 +43,9 @@ fn composer_survives_background_thread_removal(cx: &mut TestAppContext) {
     let pane = |view: &CockpitView, cx: &gpui::App| {
         let at = view.pane_for(threads[2]).unwrap();
         let pane = &view.panes[at];
-        let transcript = pane.transcript().unwrap();
+        let transcript = pane.read(cx).transcript().unwrap();
         let offset = transcript.read(cx).scroll().offset().y;
-        (at, pane.composer.entity_id(), pane.composer.read(cx).cursor(), transcript.entity_id(), offset)
+        (at, pane.read(cx).composer.entity_id(), pane.read(cx).composer.read(cx).cursor(), transcript.entity_id(), offset)
     };
     let before = view.read_with(cx, |view, cx| pane(view, cx));
     assert_eq!(before.2, "keep this draft".len() - 5, "the premise: the caret left the end");
@@ -76,7 +76,7 @@ fn composer_survives_background_thread_removal(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         let pane = &view.panes[view.pane_for(threads[2]).unwrap()];
-        assert_eq!(pane.composer.read(cx).text(), "keep this draft typed");
+        assert_eq!(pane.read(cx).composer.read(cx).text(), "keep this draft typed");
         assert_eq!(view.panes[view.focused(cx)].thread(), Some(threads[2]));
     });
     cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(" pasted".into())));
@@ -84,7 +84,7 @@ fn composer_survives_background_thread_removal(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[view.focused(cx)].composer.read(cx).text(),
+            view.panes[view.focused(cx)].read(cx).composer.read(cx).text(),
             "keep this draft typed pasted"
         );
     });
@@ -131,7 +131,7 @@ fn composer_followup_stays_inside_the_editor_beside_send(cx: &mut TestAppContext
     cx.simulate_keystrokes("tab");
     cx.run_until_parked();
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.panes[0].composer.read(cx).text(), suggestion);
+        assert_eq!(view.panes[0].read(cx).composer.read(cx).text(), suggestion);
     });
     assert!(fake.sent.borrow().is_empty());
     assert!(cx.debug_bounds("prompt-placeholder").is_none());
@@ -166,7 +166,7 @@ fn composer_escape_stops_a_running_turn_with_text_in_the_line(cx: &mut TestAppCo
                 .collect::<Vec<_>>(),
             ["follow up"]
         );
-        assert!(view.panes[0].composer.read(cx).is_empty());
+        assert!(view.panes[0].read(cx).composer.read(cx).is_empty());
     });
 
     // With a new line typed, esc interrupts and keeps it.
@@ -194,7 +194,7 @@ fn composer_escape_stops_a_running_turn_with_text_in_the_line(cx: &mut TestAppCo
             "the interrupt keeps the queue"
         );
         assert_eq!(
-            view.panes[0].composer.read(cx).text(),
+            view.panes[0].read(cx).composer.read(cx).text(),
             "and then this",
             "the line survives the interrupt"
         );
@@ -406,7 +406,7 @@ fn the_send_circle_stays_inside_a_narrow_box(cx: &mut TestAppContext) {
     );
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("Typed".into(), cx));
     });
     for width in [1200., 900., 720.] {
@@ -532,7 +532,7 @@ fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppConte
     // Typed text turns it back into send, which is Enter's act.
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("Typed".into(), cx));
     });
     tick(cx);
@@ -540,7 +540,7 @@ fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppConte
     cx.simulate_click(send.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.panes[0].composer.read(cx).is_empty(), "sent");
+        assert!(view.panes[0].read(cx).composer.read(cx).is_empty(), "sent");
     });
 }
 
@@ -563,7 +563,7 @@ fn the_queue_strip_edits_and_sends_now(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    let namespace = view.read_with(cx, |view, _| view.panes[0].text_namespace());
+    let namespace = view.read_with(cx, |view, cx| view.panes[0].read(cx).text_namespace());
     let strip = cx
         .debug_bounds(format!("composer-queue-{namespace}").leak())
         .expect("the strip");
@@ -591,7 +591,7 @@ fn the_queue_strip_edits_and_sends_now(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.cockpit.read(cx).thread(thread).unwrap().queue().is_empty());
-        assert_eq!(view.panes[0].composer.read(cx).text(), "Held follow-up");
+        assert_eq!(view.panes[0].read(cx).composer.read(cx).text(), "Held follow-up");
     });
 }
 
@@ -627,7 +627,7 @@ fn a_running_turn_with_text_shows_stop_beside_send(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("composer-send").is_none(), "no send when empty");
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("Also this".into(), cx));
     });
     tick(cx);
@@ -640,7 +640,7 @@ fn a_running_turn_with_text_shows_stop_beside_send(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(*fake.interrupts.borrow(), 1, "stop interrupts");
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.panes[0].composer.read(cx).text(), "Also this", "and keeps the text");
+        assert_eq!(view.panes[0].read(cx).composer.read(cx).text(), "Also this", "and keeps the text");
     });
 }
 

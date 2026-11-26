@@ -116,21 +116,21 @@ impl CockpitView {
     /// home): the draft's Project, a switcher that drops the Project menu
     /// under it (`Band::from_hero`).
     pub(super) fn draft_hero(&self, index: usize, cx: &mut Context<Self>) -> Option<pane::Hero> {
-        let draft = self.panes[index].draft()?;
+        let draft = self.panes[index].read(cx).draft()?;
         let project = self
             .cockpit
             .read(cx)
             .project(draft.binding.project())
             .map(|project| SharedString::from(project.title.clone()))
             .unwrap_or_else(|| "Project".into());
-        let composer = self.panes[index].composer.clone();
+        let composer = self.panes[index].read(cx).composer.clone();
         let word = pane::hero_project(project, true).on_mouse_down(
             MouseButton::Left,
             cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                 // Stop the press so the root's dismissal cannot close what
                 // this opens.
                 cx.stop_propagation();
-                if let Some(at) = view.panes.iter().position(|pane| pane.composer == composer) {
+                if let Some(at) = view.panes.iter().position(|pane| pane.read(cx).composer == composer) {
                     view.focus_pane(at, cx);
                 }
                 view.open_band_menu(pane::BandChip::Project, true, cx);

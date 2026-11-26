@@ -363,7 +363,7 @@ fn aim_draft(
     let effort = effort.map(str::to_string);
     live.act(move |view, _, cx| {
         let announced = view.cockpit.read(cx).announced_models(project.machine(), provider);
-        if let Some(draft) = view.focused_draft_mut(cx) {
+        view.update_focused_draft(cx, |draft| {
             draft.binding.choose_checkout(project);
             draft.binding.choose_provider(
                 ProviderChoice {
@@ -373,7 +373,7 @@ fn aim_draft(
                 &announced,
             );
             draft.binding.choose_effort(effort);
-        }
+        });
         cx.notify();
     });
 }

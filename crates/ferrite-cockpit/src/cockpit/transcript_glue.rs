@@ -184,7 +184,7 @@ impl CockpitView {
     /// draw; with no row, nothing is kept.
     pub(super) fn transcript_tail(&self, index: usize, cx: &Context<Self>) -> Option<TranscriptTail> {
         use ferrite_pane::pane::PaneGeometry;
-        let geometry = self.panes.get(index)?.geometry.clone();
+        let geometry = self.panes.get(index)?.read(cx).geometry.clone();
         let Some(tail) = self.tail_row(index, cx) else {
             geometry.set(PaneGeometry { answers: Default::default(), ..geometry.get() });
             return None;
@@ -247,7 +247,7 @@ impl CockpitView {
     fn failure_tail(&self, index: usize, owner: gpui::WeakEntity<Self>, cx: &App) -> Option<TranscriptTail> {
         use ferrite_core::transcript::Status;
         let pane = self.panes.get(index)?;
-        if !pane.is_main() {
+        if !pane.read(cx).is_main() {
             return None;
         }
         let thread = pane.thread()?;
@@ -266,7 +266,7 @@ impl CockpitView {
             ("failure", thread, words.as_ref(), closed).hash(&mut hasher);
             hasher.finish()
         };
-        let geometry = pane.geometry.clone();
+        let geometry = pane.read(cx).geometry.clone();
         Some(TranscriptTail {
             key,
             render: std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
@@ -354,7 +354,7 @@ impl CockpitView {
     fn reading_prompt(&self, index: usize, cx: &App) -> Option<String> {
         self.panes
             .get(index)?
-            .transcript()?
+            .read(cx).transcript()?
             .read(cx)
             .reading_prompt()
     }
@@ -374,7 +374,7 @@ impl CockpitView {
     /// all — queued behind a running turn. Only a Thread's Main Subject
     /// takes prompts. Whether there was one to send.
     pub(crate) fn resend_reading_prompt(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
-        if !self.panes.get(index).is_some_and(|pane| pane.is_main()) {
+        if !self.panes.get(index).is_some_and(|pane| pane.read(cx).is_main()) {
             return false;
         }
         let Some(thread) = self.panes[index].thread() else {
@@ -518,7 +518,7 @@ impl CockpitView {
         target: ScrollTarget,
         cx: &mut Context<Self>,
     ) {
-        if let Some(transcript) = self.panes.get(index).and_then(|pane| pane.transcript()) {
+        if let Some(transcript) = self.panes.get(index).and_then(|pane| pane.read(cx).transcript()) {
             transcript.update(cx, |transcript, cx| transcript.scroll_to(target, cx));
         }
     }

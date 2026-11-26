@@ -21,7 +21,7 @@ fn window<'a>(
 }
 
 fn cite(view: &Entity<CockpitView>, quotes: &[&str], cx: &mut gpui::VisualTestContext) {
-    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.clone());
     for quote in quotes {
         composer.update(cx, |composer, cx| {
             composer.reply(
@@ -106,7 +106,7 @@ fn tray_height(cx: &mut gpui::VisualTestContext) -> f32 {
 #[gpui::test]
 fn the_last_citation_closes_the_tray_and_send_holds_still(cx: &mut TestAppContext) {
     let (view, cx) = window("tray-last-out", cx);
-    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.clone());
     composer.update(cx, |composer, cx| composer.insert("hello", cx));
     cite(&view, &["only quote"], cx);
     let send = cx.debug_bounds("composer-send").expect("Send");
@@ -157,7 +157,7 @@ fn a_citation_that_is_closing_takes_no_press(cx: &mut TestAppContext) {
     );
     cx.run_until_parked();
     let replies = view.read_with(cx, |view, cx| {
-        view.panes[0].composer.read(cx).replies().len()
+        view.panes[0].read(cx).composer.read(cx).replies().len()
     });
     assert_eq!(replies, 1, "nothing more was taken");
     assert_eq!(
@@ -210,7 +210,7 @@ fn a_removed_file_closes_its_place_and_the_next_follows(cx: &mut TestAppContext)
         std::path::PathBuf::from("/nonexistent/first.md"),
         std::path::PathBuf::from("/nonexistent/second.md"),
     ];
-    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.clone());
     composer.update(cx, |composer, cx| composer.add_files(&files, cx));
     tick(cx);
     at(ferrite_ui::theme::MOTION_CHIP_IN_MS, cx);
@@ -256,7 +256,7 @@ fn a_frame_after_the_press_does_not_snap_the_row_shut(cx: &mut TestAppContext) {
     let (view, cx) = window("tray-reply-gap", cx);
     cite(&view, &["first quote", "second quote"], cx);
     let before = left("cite-chip-1", cx);
-    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.clone());
     cx.update(|window, cx| {
         composer.update(cx, |composer, cx| composer.remove_reply(0, window, cx));
         // The first frame to draw the ghost comes a moment after it went.
@@ -292,7 +292,7 @@ fn files_removed_out_of_order_close_in_their_own_places(cx: &mut TestAppContext)
     let (view, cx) = window("tray-file-order", cx);
     let files = ["a.md", "bbbbbbbbbbbbbbbbbbbb.md", "cccccccccc.md"]
         .map(|name| std::path::PathBuf::from(format!("/nonexistent/{name}")));
-    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.clone());
     composer.update(cx, |composer, cx| composer.add_files(&files, cx));
     tick(cx);
     at(ferrite_ui::theme::MOTION_CHIP_IN_MS, cx);

@@ -15,7 +15,7 @@ fn the_project_chip_picks_a_project_or_adds_one(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| {
         view.open_draft(DraftTarget::Main, cx);
-        let draft = view.panes[view.focused(cx)].draft().unwrap();
+        let draft = view.panes[view.focused(cx)].read(cx).draft().unwrap();
         let rows = view.project_menu_rows(draft, cx);
 
         let labels: Vec<_> = rows.iter().map(|row| row.row.name.to_string()).collect();
@@ -51,7 +51,7 @@ fn the_project_chip_picks_a_project_or_adds_one(cx: &mut TestAppContext) {
         assert_ne!(created, other);
         assert_eq!(
             view.panes[view.focused(cx)]
-                .draft()
+                .read(cx).draft()
                 .unwrap()
                 .binding
                 .project(),
@@ -173,7 +173,7 @@ fn a_draft_starts_on_the_filtered_project(cx: &mut TestAppContext) {
         view.open_draft(DraftTarget::Main, cx);
         assert_eq!(
             view.panes[view.focused(cx)]
-                .draft()
+                .read(cx).draft()
                 .unwrap()
                 .binding
                 .project(),
@@ -189,7 +189,7 @@ fn a_draft_starts_on_the_filtered_project(cx: &mut TestAppContext) {
         view.nav_filter = Some(chosen);
         view.open_draft(DraftTarget::Main, cx);
 
-        let draft = view.panes[view.focused(cx)].draft().unwrap();
+        let draft = view.panes[view.focused(cx)].read(cx).draft().unwrap();
         assert_eq!(draft.binding.project(), chosen);
         let project = view.cockpit.read(cx).registry(view.cockpit.read(cx).first_machine()).reading().project(chosen.project()).unwrap();
         assert_eq!(
@@ -215,7 +215,7 @@ fn choosing_a_project_moves_the_standing_draft(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| {
         view.open_draft(DraftTarget::Main, cx);
-        let draft = view.panes[view.focused(cx)].draft().unwrap();
+        let draft = view.panes[view.focused(cx)].read(cx).draft().unwrap();
         assert_eq!(
             draft.binding.project(),
             view.launch_project.expect("a launch Project")
@@ -223,7 +223,7 @@ fn choosing_a_project_moves_the_standing_draft(cx: &mut TestAppContext) {
 
         view.choose_nav_filter(Some(chosen), cx);
 
-        let draft = view.panes[view.focused(cx)].draft().unwrap();
+        let draft = view.panes[view.focused(cx)].read(cx).draft().unwrap();
         assert_eq!(draft.binding.project(), chosen);
         assert_eq!(
             *draft.binding.target(),
@@ -236,7 +236,7 @@ fn choosing_a_project_moves_the_standing_draft(cx: &mut TestAppContext) {
         view.choose_nav_filter(None, cx);
         assert_eq!(
             view.panes[view.focused(cx)]
-                .draft()
+                .read(cx).draft()
                 .unwrap()
                 .binding
                 .project(),

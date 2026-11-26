@@ -316,7 +316,7 @@ impl CockpitView {
         self.ensure_browser(thread, cx);
         self.attach_browser(thread, Then::SelectActive, cx);
         if let Some(index) = self.pane_for(thread) {
-            self.panes[index].preview.show_browser();
+            self.panes[index].read(cx).preview.show_browser();
         }
         self.upsert_surface(thread, super::surfaces::SurfaceId::Browser, cx);
     }
@@ -724,7 +724,7 @@ impl CockpitView {
             .iter()
             .flat_map(|pane| {
                 let thread = pane.thread();
-                pane.preview
+                pane.read(cx).preview
                     .take_browser_urls()
                     .into_iter()
                     .map(move |url| (thread, url))
@@ -742,7 +742,7 @@ impl CockpitView {
             match self.pane_for(thread) {
                 Some(index) => {
                     if self.reveal_surface(thread, super::surfaces::SurfaceId::Browser, seen) {
-                        self.panes[index].preview.show_browser();
+                        self.panes[index].read(cx).preview.show_browser();
                     }
                 }
                 None => {

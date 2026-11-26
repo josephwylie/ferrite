@@ -457,7 +457,7 @@ impl CockpitView {
     pub(super) fn import_target(&self, cx: &gpui::App) -> Option<PaneIdentity> {
         let pane = self.panes.get(self.focused(cx))?;
         let blank = match pane.identity {
-            PaneIdentity::Draft(_) => pane.composer.read(cx).is_empty(),
+            PaneIdentity::Draft(_) => pane.read(cx).composer.read(cx).is_empty(),
             PaneIdentity::Thread(thread) => {
                 pane::offers_import(self.cockpit.read(cx).thread(thread).map(|open| open.transcript()))
             }
@@ -651,7 +651,7 @@ impl CockpitView {
         let draft = self
             .panes
             .get(self.focused(cx))
-            .is_some_and(|pane| pane.draft().is_some());
+            .is_some_and(|pane| pane.read(cx).draft().is_some());
         let parked = !self.parked_threads_all().is_empty();
         let supports =
             |kind: ferrite_core::ControlKind| open.is_some_and(|open| open.supports_control(kind));

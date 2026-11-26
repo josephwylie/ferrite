@@ -327,7 +327,7 @@ fn escape_on_a_composer_popup_leaves_a_waiting_decision_unanswered(cx: &mut Test
     let (view, fake, cx) = window(cx, "popups-escape-composer", 1);
     fake.streams.borrow()[0].send(decision("perm_composer")).unwrap();
     tick(cx);
-    let composer = view.read_with(cx, |view, cx| view.panes[0].composer.focus_handle(cx));
+    let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.focus_handle(cx));
     for kind in [Kind::Picker, Kind::Attach] {
         open(&view, kind, cx);
         cx.simulate_keystrokes("escape");
@@ -432,7 +432,7 @@ fn a_band_menu_takes_the_arrows_and_enter(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(up(&view, cx), [], "the pick closes it");
     let target = view.read_with(cx, |view, cx| {
-        view.panes[view.focused(cx)].draft().unwrap().binding.target().clone()
+        view.panes[view.focused(cx)].read(cx).draft().unwrap().binding.target().clone()
     });
     assert!(!matches!(target, DraftTarget::Main), "the pick moved the draft off the checkout");
 }
@@ -496,7 +496,7 @@ fn a_press_on_a_submenu_row_runs_it(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_card_takes_the_keyboard_and_gives_it_back(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window(cx, "popups-keyboard", 1);
-    let composer = view.read_with(cx, |view, cx| view.panes[0].composer.focus_handle(cx));
+    let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.focus_handle(cx));
     cx.update(|window, cx| window.focus(&composer, cx));
     tick(cx);
     for kind in [Kind::Plan, Kind::Checks, Kind::Session] {

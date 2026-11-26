@@ -96,7 +96,7 @@ impl CockpitView {
     /// What Pane `index`'s divider says of the Thread that delegated its
     /// own (T3's `Subagent of`, over Main's rows alone).
     pub(super) fn delegator_link(&self, index: usize, cx: &App) -> Option<ParentLink> {
-        let pane = self.panes.get(index).filter(|pane| pane.is_main())?;
+        let pane = self.panes.get(index).filter(|pane| pane.read(cx).is_main())?;
         let from = self.facts.get(pane.thread()?)?.delegated_from.as_ref()?;
         let delegator = self.delegator(from, cx);
         Some(ParentLink {
@@ -325,7 +325,7 @@ impl CockpitView {
     /// Delegate's permission is answered on its own Thread, never from its
     /// parent's (ADR 0047). None while Main itself waits on the operator.
     pub(super) fn delegate_waiting_tail(&self, index: usize, cx: &Context<Self>) -> Option<TranscriptTail> {
-        let pane = self.panes.get(index).filter(|pane| pane.is_main())?;
+        let pane = self.panes.get(index).filter(|pane| pane.read(cx).is_main())?;
         let thread = pane.thread()?;
         if self.cockpit.read(cx).thread(thread)?.pending().is_some() {
             return None;

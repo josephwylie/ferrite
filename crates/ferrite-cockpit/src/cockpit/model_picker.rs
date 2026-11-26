@@ -1128,7 +1128,7 @@ impl CockpitView {
             }
             PaneIdentity::Draft(_) => {
                 let index = self.index_of(pane)?;
-                let draft = self.panes[index].draft()?;
+                let draft = self.panes[index].read(cx).draft()?;
                 let choice = draft.binding.provider();
                 let current = choice.provider;
                 let model = choice.model.clone();
@@ -1289,7 +1289,7 @@ impl CockpitView {
                     return;
                 };
                 self.focus_pane(index, cx);
-                let composer = self.panes[index].composer.clone();
+                let composer = self.panes[index].read(cx).composer.clone();
                 self.pick_band(&choice, &composer, cx);
             }
             _ => {}
@@ -1331,7 +1331,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let index = self.index_of(open.pane)?;
-        let Some(field) = self.panes[index].geometry.get().composer else {
+        let Some(field) = self.panes[index].read(cx).geometry.get().composer else {
             ferrite_ui::motion::request_frame(window);
             return None;
         };
@@ -1426,7 +1426,7 @@ impl CockpitView {
             }
             PaneIdentity::Draft(_) => {
                 let index = self.index_of(pane)?;
-                let draft = self.panes[index].draft()?;
+                let draft = self.panes[index].read(cx).draft()?;
                 let mode = self
                     .prefs
                     .settings

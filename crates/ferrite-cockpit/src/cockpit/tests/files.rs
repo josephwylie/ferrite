@@ -70,14 +70,14 @@ fn an_image_from_the_tree_opens_the_lightbox_and_a_pdf_names_its_kind(cx: &mut T
     let at = row("a.png", &view, cx);
     cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view.panes[0].preview.lightbox().is_some()));
+    assert!(view.read_with(cx, |view, cx| view.panes[0].read(cx).preview.lightbox().is_some()));
     assert!(tab_names(&view, thread, cx).is_empty(), "no tab for an image");
     view.update(cx, |view, cx| {
-        view.panes[0].preview.close_lightbox();
+        view.panes[0].read(cx).preview.close_lightbox();
         cx.notify();
     });
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view.panes[0].preview.lightbox().is_none()), "closed");
+    assert!(view.read_with(cx, |view, cx| view.panes[0].read(cx).preview.lightbox().is_none()), "closed");
     let at = row("b.pdf", &view, cx);
     cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);
@@ -303,10 +303,10 @@ fn a_file_the_preview_opens_opens_here_instead(cx: &mut TestAppContext) {
     let (view, thread, checkout, cx) = files_window("files-redirect", cx);
     let file = checkout.join("src/lib.rs");
     view.update_in(cx, |view, window, cx| {
-        view.panes[0].preview.open(file.clone(), Some(1), &[], window, cx)
+        view.panes[0].preview(cx).open(file.clone(), Some(1), &[], window, cx)
     });
     tick(cx);
-    assert!(view.read_with(cx, |view, _| !view.panes[0].preview.is_open()));
+    assert!(view.read_with(cx, |view, cx| !view.panes[0].read(cx).preview.is_open()));
     assert_eq!(tab_names(&view, thread, cx), [("lib.rs".to_string(), true)]);
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Files));
 }
@@ -357,7 +357,7 @@ fn a_rows_menu_opens_in_the_window_and_attach_reaches_the_composer(cx: &mut Test
     cx.simulate_click(attach.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).attachment_count()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).attachment_count()),
         1,
         "Attach as context"
     );
@@ -783,7 +783,7 @@ fn remote_files_transcript_preview_routes_to_remote_editor_and_keeps_line_target
     tick(cx);
     let editor = view.read_with(cx, |view, cx| {
         assert!(
-            view.panes[0].preview.document().is_none(),
+            view.panes[0].read(cx).preview.document().is_none(),
             "the local preview never reads this path"
         );
         view.files.read(cx).shown_editor(thread).unwrap()
@@ -847,7 +847,7 @@ fn remote_files_inline_transcript_chip_uses_remote_bytes_despite_local_collision
     cx.simulate_click(chip.center(), gpui::Modifiers::none());
     tick(cx);
     let editor = view.read_with(cx, |view, cx| {
-        assert!(view.panes[0].preview.document().is_none());
+        assert!(view.panes[0].read(cx).preview.document().is_none());
         view.files.read(cx).shown_editor(thread).unwrap()
     });
     assert_eq!(

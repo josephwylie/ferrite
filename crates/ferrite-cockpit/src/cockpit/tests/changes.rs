@@ -148,7 +148,7 @@ fn a_press_on_the_filter_keeps_the_keys_typed_there(cx: &mut TestAppContext) {
     cx.simulate_input("b.rs");
     tick(cx);
     let field = view.read_with(cx, |view, cx| view.changes.read(cx).filter(Diff::Changes(thread)).unwrap());
-    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.clone());
     assert_eq!(composer.read_with(cx, |composer, _| composer.text().to_string()), "");
     assert_eq!(field.read_with(cx, |field, _| field.text().to_string()), "b.rs");
 }
@@ -288,7 +288,7 @@ fn moving_to_another_thread_takes_the_keys_from_the_filter_with_it(cx: &mut Test
     tick(cx);
     cx.simulate_input("hi");
     tick(cx);
-    let composer = view.read_with(cx, |view, _| view.panes[view.pane_for(other).unwrap()].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[view.pane_for(other).unwrap()].read(cx).composer.clone());
     assert_eq!(composer.read_with(cx, |composer, _| composer.text().to_string()), "hi");
     assert_eq!(filter_text(&view, thread, cx), "b");
 }

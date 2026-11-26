@@ -166,9 +166,9 @@ fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
         .expect("a page card offers Open");
     cx.simulate_click(open.center(), gpui::Modifiers::none());
     tick(cx);
-    let source = view.read_with(cx, |view, _| {
+    let source = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .preview
+            .read(cx).preview
             .document()
             .and_then(|document| document.page().map(|page| page.source().clone()))
     });
@@ -255,8 +255,8 @@ fn a_page_cards_more_hangs_its_menu_under_it(cx: &mut TestAppContext) {
 fn a_local_server_uses_the_thread_browser_preview(cx: &mut TestAppContext) {
     let (view, _, cx) = turn("output-address-card", cx);
     hide_panel(&view, cx);
-    view.update_in(cx, |view, window, _| {
-        view.panes[0].preview.open_page(PageSource::Address("http://localhost:5173/".into()), window)
+    view.update_in(cx, |view, window, cx| {
+        view.panes[0].preview(cx).open_page(PageSource::Address("http://localhost:5173/".into()), window)
     });
     tick(cx);
     assert!(cx.debug_bounds("browser-preview").is_some(), "local addresses use the browser controls");
@@ -296,7 +296,7 @@ fn a_settled_findings_call_draws_its_findings_by_file(cx: &mut TestAppContext) {
     stream.send(SessionEvent::TextDelta { text: "Done.\n\n".into() }).unwrap();
     tick(cx);
     view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("review".into()));
+        view.panes[0].update(cx, |pane, _| pane.toggle_tool(&pane::DisclosureId::Tool("review".into())));
         cx.notify();
     });
     tick(cx);
@@ -326,7 +326,7 @@ fn a_running_command_opens_onto_its_output_so_far(cx: &mut TestAppContext) {
     tick(cx);
     open_live(cx);
     view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("build".into()));
+        view.panes[0].update(cx, |pane, _| pane.toggle_tool(&pane::DisclosureId::Tool("build".into())));
         cx.notify();
     });
     tick(cx);

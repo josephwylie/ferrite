@@ -129,7 +129,7 @@ fn a_question_decision_is_answered_by_its_form(cx: &mut TestAppContext) {
     let choice = cx.debug_bounds("question-choice-0-1").unwrap();
     let island = cx.debug_bounds("question-island").unwrap();
     let (transcript_bounds, first_row_visible) = view.read_with(cx, |view, cx| {
-        let scroll = view.panes[0].transcript().unwrap().read(cx).scroll();
+        let scroll = view.panes[0].read(cx).transcript().unwrap().read(cx).scroll();
         (scroll.bounds(), scroll.item_is_visible(0))
     });
     let composer = cx.debug_bounds("composer-block").unwrap();
@@ -230,7 +230,7 @@ fn clicking_a_keycap_runs_its_own_decide_verb(cx: &mut TestAppContext) {
     tick(cx);
     let serial = view.read_with(cx, |view, cx| {
         assert!(
-            !view.panes[0].composer.read(cx).is_empty(),
+            !view.panes[0].read(cx).composer.read(cx).is_empty(),
             "the premise: half-typed text on the line"
         );
         view.cockpit.read(cx).thread(thread).unwrap().pending_decisions()[0]
@@ -268,7 +268,7 @@ fn the_answer_keys_are_letters_when_nothing_is_blocked(cx: &mut TestAppContext) 
 
     let typed = view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.take(cx))
     });
     assert_eq!(typed, "y");

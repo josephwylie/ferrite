@@ -32,7 +32,7 @@ fn transcript(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
 ) -> Entity<ferrite_pane::transcript::TranscriptView> {
-    view.read_with(cx, |view, _| view.panes[0].transcript().unwrap())
+    view.read_with(cx, |view, cx| view.panes[0].read(cx).transcript().unwrap())
 }
 
 fn state(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<FindState> {
@@ -116,7 +116,7 @@ fn find_scrolls_to_an_occurrence_the_list_has_not_laid_out(cx: &mut TestAppConte
     tick(cx);
     assert_eq!(
         view.read_with(cx, |view, cx| view.panes[0]
-            .composer
+            .read(cx).composer
             .read(cx)
             .text()
             .to_string()),
@@ -205,7 +205,7 @@ fn find_steps_both_ways_and_wraps(cx: &mut TestAppContext) {
         "⌘G steps and opens nothing else"
     );
     assert!(
-        view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).is_empty()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).is_empty()),
         "⏎ sent nothing"
     );
 
@@ -250,7 +250,7 @@ fn find_reaches_into_a_scrolling_output(cx: &mut TestAppContext) {
     say(&fake, "Done.\n\n");
     tick(cx);
     view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("big".into()));
+        view.panes[0].update(cx, |pane, _| pane.toggle_tool(&pane::DisclosureId::Tool("big".into())));
         cx.notify();
     });
     tick(cx);
@@ -324,8 +324,8 @@ fn find_opens_the_folds_that_hide_a_hit(cx: &mut TestAppContext) {
         "the work is folded"
     );
     let shut = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
-            !view.panes[0].tool_expanded(pane::DisclosureId::Tool("build".into()))
+        view.read_with(cx, |view, cx| {
+            !view.panes[0].read(cx).tool_expanded(pane::DisclosureId::Tool("build".into()))
         })
     };
 
@@ -443,7 +443,7 @@ fn scrolling_output_fades_at_its_foot(cx: &mut TestAppContext) {
     say(&fake, "Done.\n\n");
     tick(cx);
     view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("big".into()));
+        view.panes[0].update(cx, |pane, _| pane.toggle_tool(&pane::DisclosureId::Tool("big".into())));
         cx.notify();
     });
     tick(cx);
@@ -558,14 +558,14 @@ fn find_in_a_code_reader_centres_its_line(cx: &mut TestAppContext) {
     tick(cx);
     assert!(reader_state(&view, cx).is_none(), "esc closes the bar");
     assert!(
-        view.read_with(cx, |view, _| view.panes[0].preview.document().is_some()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).preview.document().is_some()),
         "and keeps the reader"
     );
     cx.simulate_input("x");
     tick(cx);
     assert_eq!(
         view.read_with(cx, |view, cx| view.panes[0]
-            .composer
+            .read(cx).composer
             .read(cx)
             .text()
             .to_string()),

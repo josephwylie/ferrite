@@ -89,20 +89,20 @@ fn child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder(cx: &mu
     );
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("keep my draft".into(), cx))
     });
     click_child(&view, cx, "Atlas");
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.panes[0].selected, Subject::Subagent(key("Atlas")));
-        assert_eq!(view.panes[0].composer.read(cx).text(), "keep my draft");
+        assert_eq!(view.panes[0].read(cx).selected, Subject::Subagent(key("Atlas")));
+        assert_eq!(view.panes[0].read(cx).composer.read(cx).text(), "keep my draft");
         let subject = view
             .cockpit
             .read(cx)
             .thread(thread)
             .unwrap()
             .activity()
-            .subject(&view.panes[0].selected)
+            .subject(&view.panes[0].read(cx).selected)
             .unwrap();
         assert!(plain_text(subject.transcript().blocks()).contains("Atlas transcript"));
     });
@@ -126,7 +126,7 @@ fn child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder(cx: &mu
     );
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.panes[0].selected.clone()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).selected.clone()),
         Subject::Subagent(key("Atlas"))
     );
     // The observational view cannot submit or consume the Main draft.
@@ -134,8 +134,8 @@ fn child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder(cx: &mu
     assert!(fake.sent.borrow().is_empty());
     click(cx, "history-back");
     view.read_with(cx, |view, cx| {
-        assert!(view.panes[0].is_main());
-        assert_eq!(view.panes[0].composer.read(cx).text(), "keep my draft");
+        assert!(view.panes[0].read(cx).is_main());
+        assert_eq!(view.panes[0].read(cx).composer.read(cx).text(), "keep my draft");
     });
 }
 
@@ -189,7 +189,7 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
     open_live(cx);
     let viewport = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -197,7 +197,7 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
     });
     let toggle = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .tool_bounds("same-call", cx)
+            .read(cx).tool_bounds("same-call", cx)
             .expect("tool control")
             .center()
     });
@@ -210,7 +210,7 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
     cx.run_until_parked();
     let scroller = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -224,21 +224,21 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
     });
     cx.run_until_parked();
     let offset = view.read_with(cx, |view, cx| {
-        let transcript = view.panes[0].transcript().unwrap();
-        assert!(view.panes[0].tool_expanded("same-call"));
+        let transcript = view.panes[0].read(cx).transcript().unwrap();
+        assert!(view.panes[0].read(cx).tool_expanded("same-call"));
         assert!(!transcript.read(cx).is_following_tail());
         transcript.read(cx).scroll().offset()
     });
-    let namespace = view.read_with(cx, |view, _| view.panes[0].text_namespace());
+    let namespace = view.read_with(cx, |view, cx| view.panes[0].read(cx).text_namespace());
     let entity = cx.update(|_, cx| {
         ferrite_pane::rich::testing::first_entity(&format!("markdown-{namespace}-"), cx).unwrap()
     });
     click_child(&view, cx, "Cedar");
-    assert!(!view.read_with(cx, |view, _| view.panes[0].tool_expanded("same-call")));
+    assert!(!view.read_with(cx, |view, cx| view.panes[0].read(cx).tool_expanded("same-call")));
     click_child(&view, cx, "Atlas");
     view.read_with(cx, |view, cx| {
-        let transcript = view.panes[0].transcript().unwrap();
-        assert!(view.panes[0].tool_expanded("same-call"));
+        let transcript = view.panes[0].read(cx).transcript().unwrap();
+        assert!(view.panes[0].read(cx).tool_expanded("same-call"));
         assert_eq!(transcript.read(cx).scroll().offset(), offset);
         assert!(!transcript.read(cx).is_following_tail());
     });
@@ -281,14 +281,14 @@ fn core_eviction_releases_a_hidden_retained_transcript_entity(cx: &mut TestAppCo
                     .subject(&subject)
                     .unwrap()
                     .revision();
-                view.panes[0].select_subject(subject, generation, cx);
+                view.panes[0].update(cx, |pane, cx| pane.select_subject(subject, generation, cx));
                 cx.notify();
             });
             cx.run_until_parked();
         };
     select(atlas.clone(), &view, cx);
-    let (atlas_entity, atlas_weak) = view.read_with(cx, |view, _| {
-        let transcript = &view.panes[0].transcripts[&atlas];
+    let (atlas_entity, atlas_weak) = view.read_with(cx, |view, cx| {
+        let transcript = &view.panes[0].read(cx).transcripts[&atlas];
         (transcript.entity_id(), transcript.downgrade())
     });
 
@@ -296,8 +296,8 @@ fn core_eviction_releases_a_hidden_retained_transcript_entity(cx: &mut TestAppCo
     // still waiting to restore.
     select(tail.clone(), &view, cx);
     view.update(cx, |view, cx| view.retry_subject_history(0, cx));
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.panes[0].transcripts[&atlas].entity_id(), atlas_entity);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[0].read(cx).transcripts[&atlas].entity_id(), atlas_entity);
     });
 
     // Retaining Tail exceeds core's child budget and evicts the hidden Atlas.
@@ -310,9 +310,9 @@ fn core_eviction_releases_a_hidden_retained_transcript_entity(cx: &mut TestAppCo
         })
     });
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert!(!view.panes[0].transcripts.contains_key(&atlas));
-        assert!(view.panes[0].transcripts.contains_key(&tail));
+    view.read_with(cx, |view, cx| {
+        assert!(!view.panes[0].read(cx).transcripts.contains_key(&atlas));
+        assert!(view.panes[0].read(cx).transcripts.contains_key(&tail));
         assert!(!view.transcript_entities.contains(&atlas_entity));
     });
     assert!(
@@ -346,7 +346,7 @@ fn hidden_child_requests_jump_and_reply_only_to_their_captured_handle(cx: &mut T
     cx.dispatch_action(crate::cockpit::NextDecision);
     cx.run_until_parked();
     assert_eq!(
-        view.read_with(cx, |view, _| view.panes[0].selected.clone()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).selected.clone()),
         Subject::Subagent(key("Atlas"))
     );
     let serial = view.read_with(cx, |view, cx| {
@@ -411,7 +411,7 @@ fn unattributed_question_keeps_native_input_focus_across_repaint_and_sends_exact
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("Main draft".into(), cx))
     });
     let SessionEvent::DecisionRequested { decision } = question("unattributed-question") else {
@@ -493,7 +493,7 @@ fn attention_and_global_navigation_visit_every_distinct_pending_subject_then_wra
         cx.dispatch_action(crate::cockpit::NextDecision);
         cx.run_until_parked();
         assert_eq!(
-            view.read_with(cx, |view, _| view.panes[0].selected.clone()),
+            view.read_with(cx, |view, cx| view.panes[0].read(cx).selected.clone()),
             Subject::Subagent(key(name))
         );
     }
@@ -501,7 +501,7 @@ fn attention_and_global_navigation_visit_every_distinct_pending_subject_then_wra
         cx.simulate_keystrokes("cmd-d");
         cx.run_until_parked();
         assert_eq!(
-            view.read_with(cx, |view, _| view.panes[0].selected.clone()),
+            view.read_with(cx, |view, cx| view.panes[0].read(cx).selected.clone()),
             Subject::Subagent(key(name))
         );
     }
@@ -645,7 +645,7 @@ fn escape_on_a_subagent_stops_only_that_subagent_or_goes_back(cx: &mut TestAppCo
         "nor does it reach Main's turn"
     );
     assert!(
-        view.read_with(cx, |view, _| view.panes[0].is_main()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).is_main()),
         "it goes back to Main"
     );
 
@@ -706,8 +706,8 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
     let row = cx.debug_bounds("agent-open-Atlas").expect("the row opens");
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.panes[0].selected, Subject::Subagent(key("Atlas")));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[0].read(cx).selected, Subject::Subagent(key("Atlas")));
     });
     assert!(cx.debug_bounds("panel-tab-Agent").is_none(), "no Panel tab opens for it");
     emit(
@@ -719,7 +719,7 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
     );
     tick(cx);
     click(cx, "history-back");
-    assert!(view.read_with(cx, |view, _| view.panes[0].is_main()));
+    assert!(view.read_with(cx, |view, cx| view.panes[0].read(cx).is_main()));
     assert!(cx.debug_bounds("agent-running").is_none(), "settled");
     assert!(cx.debug_bounds("agent-elapsed-live").is_none(), "its time holds");
 }
@@ -880,8 +880,8 @@ fn a_background_agents_row_has_no_live_output_link(cx: &mut TestAppContext) {
     let row = cx.debug_bounds("agent-open-Atlas").expect("the row opens");
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.panes[0].selected, Subject::Subagent(key("Atlas")));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[0].read(cx).selected, Subject::Subagent(key("Atlas")));
     });
 }
 
@@ -920,8 +920,8 @@ fn agents_started_together_draw_one_card_that_opens_on_their_rows(cx: &mut TestA
     let open = cx.debug_bounds("agent-open-Birch").expect("the row opens");
     cx.simulate_click(open.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.panes[0].selected, Subject::Subagent(key("Birch")));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[0].read(cx).selected, Subject::Subagent(key("Birch")));
     });
 }
 
@@ -967,7 +967,7 @@ fn the_keyboard_opens_and_stops_an_agents_row(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("tab");
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.panes[0].targeted_tool().cloned()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).targeted_tool().cloned()),
         Some(ferrite_pane::pane::DisclosureId::Tool("Atlas".into())),
         "the agent's row is a stop"
     );
@@ -976,13 +976,13 @@ fn the_keyboard_opens_and_stops_an_agents_row(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(*fake.stopped.borrow(), [key("Atlas")]);
     assert!(
-        view.read_with(cx, |view, _| view.panes[0].is_main()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).is_main()),
         "stopping leaves the Pane on Main"
     );
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert_eq!(
-        view.read_with(cx, |view, _| view.panes[0].selected.clone()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).selected.clone()),
         Subject::Subagent(key("Atlas")),
         "↵ opens it"
     );
@@ -1031,7 +1031,7 @@ fn click(cx: &mut gpui::VisualTestContext, selector: &str) {
 }
 
 fn selected(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Subject {
-    view.read_with(cx, |view, _| view.panes[0].selected.clone())
+    view.read_with(cx, |view, cx| view.panes[0].read(cx).selected.clone())
 }
 
 /// A press on an agent's row takes the whole Pane for that agent, at the
@@ -1064,16 +1064,16 @@ fn an_agent_row_takes_the_pane_and_back_restores_the_parent(cx: &mut TestAppCont
     tick(cx);
     view.update(cx, |view, cx| {
         view.panes[0]
-            .composer
+            .composer(cx)
             .update(cx, |composer, cx| composer.set("keep my draft".into(), cx))
     });
     let tool = view.read_with(cx, |view, cx| {
-        view.panes[0].tool_bounds("main-read", cx).expect("the tool").center()
+        view.panes[0].read(cx).tool_bounds("main-read", cx).expect("the tool").center()
     });
     cx.simulate_click(tool, gpui::Modifiers::none());
     cx.run_until_parked();
     let scroller = view.read_with(cx, |view, cx| {
-        view.panes[0].transcript().unwrap().read(cx).scroll().bounds().center()
+        view.panes[0].read(cx).transcript().unwrap().read(cx).scroll().bounds().center()
     });
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: scroller,
@@ -1082,8 +1082,8 @@ fn an_agent_row_takes_the_pane_and_back_restores_the_parent(cx: &mut TestAppCont
     });
     cx.run_until_parked();
     let (offset, main_entity) = view.read_with(cx, |view, cx| {
-        assert!(view.panes[0].tool_expanded("main-read"));
-        let transcript = view.panes[0].transcript().unwrap();
+        assert!(view.panes[0].read(cx).tool_expanded("main-read"));
+        let transcript = view.panes[0].read(cx).transcript().unwrap();
         (transcript.read(cx).scroll().offset(), transcript.entity_id())
     });
     let main_width = bounds(cx, "board".into()).size.width;
@@ -1094,7 +1094,7 @@ fn an_agent_row_takes_the_pane_and_back_restores_the_parent(cx: &mut TestAppCont
     assert_eq!(selected(&view, cx), Subject::Subagent(key("Atlas")));
     assert!(cx.debug_bounds("panel-tab-Agent").is_none(), "no Panel tab opens for it");
     let width = view.read_with(cx, |view, cx| {
-        view.panes[0].transcript().unwrap().read(cx).scroll().bounds().size.width
+        view.panes[0].read(cx).transcript().unwrap().read(cx).scroll().bounds().size.width
     });
     assert!(
         width > main_width * 0.6,
@@ -1103,18 +1103,18 @@ fn an_agent_row_takes_the_pane_and_back_restores_the_parent(cx: &mut TestAppCont
     assert!(cx.debug_bounds("pane-subagent-1").is_none(), "no strip over its chat");
     assert!(cx.debug_bounds("composer-block").is_none(), "a child takes no prompts");
     assert_eq!(
-        view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).text().to_owned()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).composer.read(cx).text().to_owned()),
         "keep my draft"
     );
 
     click(cx, "history-back");
     assert!(selected(&view, cx) == Subject::Main);
     view.read_with(cx, |view, cx| {
-        let transcript = view.panes[0].transcript().unwrap();
+        let transcript = view.panes[0].read(cx).transcript().unwrap();
         assert_eq!(transcript.entity_id(), main_entity);
         assert_eq!(transcript.read(cx).scroll().offset(), offset);
-        assert!(view.panes[0].tool_expanded("main-read"));
-        assert_eq!(view.panes[0].composer.read(cx).text(), "keep my draft");
+        assert!(view.panes[0].read(cx).tool_expanded("main-read"));
+        assert_eq!(view.panes[0].read(cx).composer.read(cx).text(), "keep my draft");
     });
 }
 

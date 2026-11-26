@@ -25,7 +25,7 @@ fn labels(rows: &[&str]) -> Vec<String> {
 
 fn focus_composer(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     view.update_in(cx, |view, window, cx| {
-        let composer = view.panes[0].composer.focus_handle(cx);
+        let composer = view.panes[0].read(cx).composer.focus_handle(cx);
         window.focus(&composer, cx);
     });
     tick(cx);

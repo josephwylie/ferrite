@@ -35,7 +35,7 @@ impl CockpitView {
                 let Some(index) = self.pane_for(thread) else {
                     return;
                 };
-                self.panes[index].composer.update(cx, |composer, cx| {
+                self.panes[index].composer(cx).update(cx, |composer, cx| {
                     let context = format!(
                         "About pull request #{}: {}\n{}\n\n",
                         pr.number, pr.title, pr.url

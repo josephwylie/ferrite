@@ -299,7 +299,7 @@ fn every_row_and_palette_verb_reaches_its_threads_machine(cx: &mut TestAppContex
     view.update(cx, |view, cx| view.focus_thread(mine, cx));
     run(MenuVerb::NewThread, cx);
     let drafted = view.read_with(cx, |view, cx| {
-        view.panes[view.focused(cx)].draft().map(|draft| draft.binding.project())
+        view.panes[view.focused(cx)].read(cx).draft().map(|draft| draft.binding.project())
     });
     let project = view.read_with(cx, |view, cx| view.cockpit.read(cx).project_of(theirs));
     assert!(project.is_some_and(|project| project.machine() == on_box));
@@ -455,7 +455,7 @@ fn turning_a_machine_off_and_on_keeps_its_panels_tabs(cx: &mut TestAppContext) {
 /// The focused Pane's draft, as its band aims it.
 fn drafted(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<ProjectKey> {
     view.read_with(cx, |view, cx| {
-        view.panes.get(view.focused(cx))?.draft().map(|draft| draft.binding.project())
+        view.panes.get(view.focused(cx))?.read(cx).draft().map(|draft| draft.binding.project())
     })
 }
 
@@ -493,9 +493,9 @@ fn with_a_machine_off_a_new_thread_starts_on_this_computer(cx: &mut TestAppConte
 
     turn(false, cx);
     let here = view.read_with(cx, |view, cx| view.cockpit.read(cx).this_computer()).unwrap();
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            view.panes.iter().all(|pane| pane.draft().is_none_or(|draft| draft.binding.project().machine() != on_box)),
+            view.panes.iter().all(|pane| pane.read(cx).draft().is_none_or(|draft| draft.binding.project().machine() != on_box)),
             "box's draft went with box"
         );
     });
@@ -512,9 +512,9 @@ fn with_a_machine_off_a_new_thread_starts_on_this_computer(cx: &mut TestAppConte
     until_said(cx, "box's draft never came back", |cx| {
         view.read_with(cx, |view, cx| {
             view.panes.iter().any(|pane| {
-                pane.draft().is_some_and(|draft| {
+                pane.read(cx).draft().is_some_and(|draft| {
                     draft.binding.project().machine() != here
-                        && pane.composer.read(cx).text() == "for box"
+                        && pane.read(cx).composer.read(cx).text() == "for box"
                 })
             })
         })

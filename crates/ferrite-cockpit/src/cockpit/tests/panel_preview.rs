@@ -105,7 +105,7 @@ fn a_file_at_a_line_opens_wide_and_closes_back_to_the_sections(cx: &mut TestAppC
     let close = cx.debug_bounds("panel-tab-File-lines.rs-close").expect("its ×");
     cx.simulate_click(close.center(), gpui::Modifiers::none());
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()));
+    assert!(view.read_with(cx, |view, cx| view.panes[0].read(cx).preview.document().is_none()));
     assert!(
         cx.debug_bounds("panel-tab-File-lines.rs").is_none(),
         "its tab goes"
@@ -181,7 +181,7 @@ fn escape_and_cmd_w_in_the_preview_close_it_not_the_turn_or_the_pane(cx: &mut Te
         cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::none());
         tick(cx);
         assert!(
-            cx.update(|window, cx| view.read(cx).panes[0].preview.text_focused(window, cx)),
+            cx.update(|window, cx| view.read(cx).panes[0].read(cx).preview.text_focused(window, cx)),
             "the premise: the preview's text holds the keyboard"
         );
     };
@@ -190,14 +190,14 @@ fn escape_and_cmd_w_in_the_preview_close_it_not_the_turn_or_the_pane(cx: &mut Te
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert!(
-        view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).preview.document().is_none()),
         "esc closed the preview"
     );
     assert_eq!(*fake.interrupts.borrow(), 0, "and interrupted nothing");
     cx.simulate_input("x");
     assert_eq!(
         view.read_with(cx, |view, cx| view.panes[0]
-            .composer
+            .read(cx).composer
             .read(cx)
             .text()
             .to_string()),
@@ -210,7 +210,7 @@ fn escape_and_cmd_w_in_the_preview_close_it_not_the_turn_or_the_pane(cx: &mut Te
     select(cx);
     cx.simulate_keystrokes("cmd-w");
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()));
+    assert!(view.read_with(cx, |view, cx| view.panes[0].read(cx).preview.document().is_none()));
     assert_eq!(
         view.read_with(cx, |view, _| view.panes.len()),
         1,
@@ -239,7 +239,7 @@ fn each_thread_keeps_its_own_preview(cx: &mut TestAppContext) {
     assert_eq!(panel_w(cx), Some(least_w()), "the other Thread's Panel");
     assert!(cx.debug_bounds("panel-tab-Preview").is_none());
     assert!(
-        view.read_with(cx, |view, _| view.panes[0].preview.is_open()),
+        view.read_with(cx, |view, cx| view.panes[0].read(cx).preview.is_open()),
         "kept"
     );
     focus(0, cx);
@@ -261,7 +261,7 @@ fn focus_moving_to_another_pane_takes_the_keyboard_from_an_image(cx: &mut TestAp
     preview(&view, &image, None, cx);
     assert!(
         cx.update(|window, cx| view.read(cx).panes[0]
-            .preview
+            .read(cx).preview
             .held_focus(window, cx)
             .is_some()),
         "the premise: the viewer holds the keyboard"
@@ -271,7 +271,7 @@ fn focus_moving_to_another_pane_takes_the_keyboard_from_an_image(cx: &mut TestAp
     cx.simulate_input("x");
     let typed = |index: usize, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
-            view.panes[index].composer.read(cx).text().to_string()
+            view.panes[index].read(cx).composer.read(cx).text().to_string()
         })
     };
     assert_eq!(typed(1, cx), "x", "the next Thread's Composer has it");

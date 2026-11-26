@@ -98,7 +98,7 @@ fn the_next_digit_arms_the_own_answer_line(cx: &mut TestAppContext) {
     fake.streams.borrow()[0].send(question("armed")).unwrap();
     tick(cx);
     view.update_in(cx, |view, window, cx| {
-        let focus = view.panes[0].composer.read(cx).focus_handle(cx);
+        let focus = view.panes[0].read(cx).composer.read(cx).focus_handle(cx);
         window.focus(&focus, cx);
     });
     tick(cx);

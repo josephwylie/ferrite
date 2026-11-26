@@ -783,9 +783,9 @@ fn draft_import_replaces_the_draft_and_focuses_the_imported_thread(cx: &mut Test
     cx.run_until_parked();
 
     view.read_with(cx, |view, cx| {
-        assert!(view.panes[0].draft().is_none());
+        assert!(view.panes[0].read(cx).draft().is_none());
         assert!(view.panes[0].thread().is_some());
-        assert_eq!(view.panes[0].composer.read(cx).text(), "");
+        assert_eq!(view.panes[0].read(cx).composer.read(cx).text(), "");
         assert_eq!(view.focused(cx), 0);
     });
 }
@@ -815,11 +815,11 @@ fn refused_draft_import_preserves_the_draft_and_command(cx: &mut TestAppContext)
     cx.run_until_parked();
 
     view.read_with(cx, |view, cx| {
-        let draft = view.panes[0].draft().expect("the draft survives");
+        let draft = view.panes[0].read(cx).draft().expect("the draft survives");
         assert!(draft
             .error
             .as_ref()
             .is_some_and(|error| error.contains("cannot import")));
-        assert_eq!(view.panes[0].composer.read(cx).text(), "/im");
+        assert_eq!(view.panes[0].read(cx).composer.read(cx).text(), "/im");
     });
 }

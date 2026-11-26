@@ -130,7 +130,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.open_project_creator_on(machine, cx);
-        let band = self.band_of(draft);
+        let band = self.band_of(draft, cx);
         if let Some(card) = self.project_card(cx) {
             card.update(cx, |card, _| {
                 card.draft = Some(draft);
@@ -258,7 +258,7 @@ impl CockpitView {
                     self.rebind_draft(draft, project, cx);
                 }
                 self.nav_notice.clear();
-                self.refresh_names();
+                self.refresh_names(cx);
             }
             Err(error) => {
                 let error = Some(format!("project unchanged · {error}").into());

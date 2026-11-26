@@ -588,7 +588,7 @@ impl CockpitView {
             return None;
         }
         if let Some(index) = self.coordinator_pane(cx) {
-            return Some(self.panes[index].composer.read(cx).focus_target(window, cx));
+            return Some(self.panes[index].read(cx).composer.read(cx).focus_target(window, cx));
         }
         Some(view.coordinator.read(cx).focus(cx))
     }

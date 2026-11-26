@@ -210,7 +210,7 @@ impl CockpitView {
         let pane = &self.panes[index];
         match pane.thread() {
             Some(thread) => self.panel_open(thread),
-            None => pane.preview.is_open(),
+            None => pane.read(cx).preview.is_open(),
         }
         .then_some(index)
     }
@@ -234,7 +234,7 @@ impl CockpitView {
         }
         let index = self.focused(cx);
         let pane = self.panes.get(index)?;
-        (pane.thread().is_some() || pane.preview.is_open()).then_some(index)
+        (pane.thread().is_some() || pane.read(cx).preview.is_open()).then_some(index)
     }
 
     // ---------------------------------------------------------- surfaces
@@ -598,7 +598,7 @@ impl CockpitView {
             }
             None => {
                 if let Some(index) = self.index_of(owner) {
-                    self.panes[index].preview.close();
+                    self.panes[index].read(cx).preview.close();
                 }
                 false
             }

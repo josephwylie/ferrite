@@ -515,7 +515,7 @@ impl CockpitView {
             }
             MenuTarget::Page(owner) => {
                 let address = self
-                    .page_source(owner)
+                    .page_source(owner, cx)
                     .is_some_and(|page| matches!(page, PageSource::Address(_)));
                 if !address {
                     rows.push(Some((menu::Item::new("Reload"), MenuVerb::Reload)));
@@ -1095,8 +1095,8 @@ impl CockpitView {
                     | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);
-                if let (Some(project), Some(draft)) = (project, self.focused_draft_mut(cx)) {
-                    draft.binding.choose_checkout(project);
+                if let Some(project) = project {
+                    self.update_focused_draft(cx, |draft| draft.binding.choose_checkout(project));
                 }
             }
             (_, MenuVerb::Reveal) => {

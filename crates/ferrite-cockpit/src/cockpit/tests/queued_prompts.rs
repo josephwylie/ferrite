@@ -106,7 +106,7 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     cx.simulate_keystrokes("backspace");
     view.read_with(cx, |view, cx| {
         assert!(
-            !view.panes[0].composer.read(cx).is_empty(),
+            !view.panes[0].read(cx).composer.read(cx).is_empty(),
             "backspace with text is still an editing key"
         );
         assert_eq!(
@@ -121,7 +121,7 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     // Emptied, the next Backspace is the advertised ⌫ unqueue.
     cx.simulate_keystrokes("backspace");
     view.read_with(cx, |view, cx| {
-        assert!(view.panes[0].composer.read(cx).is_empty());
+        assert!(view.panes[0].read(cx).composer.read(cx).is_empty());
         assert_eq!(
             view.cockpit
                 .read(cx)
@@ -146,7 +146,7 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     // Enter waits for cancellation and preserves edits/attachments made
     // while its receipt is in flight.
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.set(
                 ferrite_core::prompt_files::compose("held", std::slice::from_ref(&held_png)),
                 cx,
@@ -160,7 +160,7 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     cx.update(|window, cx| {
         window.dispatch_keystroke(gpui::Keystroke::parse("enter").unwrap(), cx);
         view.update(cx, |view, cx| {
-            view.panes[0].composer.update(cx, |composer, cx| {
+            view.panes[0].composer(cx).update(cx, |composer, cx| {
                 composer.set(
                     ferrite_core::prompt_files::compose("new draft", std::slice::from_ref(&new_png)),
                     cx,
@@ -171,7 +171,7 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     tick(cx);
     view.read_with(cx, |view, cx| {
         let (text, files) =
-            ferrite_core::prompt_files::split(view.panes[0].composer.read(cx).prompt());
+            ferrite_core::prompt_files::split(view.panes[0].read(cx).composer.read(cx).prompt());
         assert_eq!(text, "new draft\n\nheld");
         let names: Vec<_> = files.iter().map(|file| file.file_name().unwrap()).collect();
         assert_eq!(names, ["new.png", "held.png"]);
@@ -182,7 +182,7 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     view.update(cx, |view, cx| {
         view.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, "earlier queued".into()));
         view.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, "edit queued".into()));
-        view.panes[0].composer.update(cx, |composer, cx| {
+        view.panes[0].composer(cx).update(cx, |composer, cx| {
             composer.set("draft\nsecond row".into(), cx)
         });
     });
@@ -200,7 +200,7 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
                 .map(|item| item.text.as_str()),
             Some("edit queued")
         );
-        assert_eq!(view.panes[0].composer.read(cx).text(), "draft\nsecond row");
+        assert_eq!(view.panes[0].read(cx).composer.read(cx).text(), "draft\nsecond row");
     });
     cx.simulate_keystrokes("up");
     tick(cx);
@@ -216,7 +216,7 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
             Some("earlier queued")
         );
         assert_eq!(
-            view.panes[0].composer.read(cx).text(),
+            view.panes[0].read(cx).composer.read(cx).text(),
             "edit queued\n\ndraft\nsecond row"
         );
     });

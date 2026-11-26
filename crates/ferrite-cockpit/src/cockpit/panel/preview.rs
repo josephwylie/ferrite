@@ -718,7 +718,7 @@ impl CockpitView {
             return;
         }
         if self
-            .pane_machine(self.focused(cx))
+            .pane_machine(self.focused(cx), cx)
             .is_some_and(|machine| self.elsewhere(machine, cx))
         {
             self.nav_notice.hint("Start a Thread in this remote workspace before opening its files.");
@@ -726,7 +726,7 @@ impl CockpitView {
             return;
         }
         if let Some(pane) = self.panes.get(self.focused(cx)) {
-            pane.preview.open(path, line, &[], window, cx);
+            pane.preview(cx).open(path, line, &[], window, cx);
         }
         cx.notify();
     }
@@ -738,7 +738,7 @@ impl CockpitView {
         let Some(pane) = self.panes.get(index) else {
             return false;
         };
-        pane.preview.is_open()
+        pane.read(cx).preview.is_open()
             && match pane.thread() {
                 None => true,
                 Some(_) => matches!(
@@ -755,12 +755,12 @@ impl CockpitView {
         let Some(pane) = self.panes.get(index) else {
             return;
         };
-        match (pane.thread(), pane.preview.document()) {
+        match (pane.thread(), pane.read(cx).preview.document()) {
             (Some(thread), Some(document)) => {
                 let id = document_surface(&document);
                 self.close_surface(thread, &id, cx);
             }
-            _ => pane.preview.close(),
+            _ => pane.read(cx).preview.close(),
         }
         self.focus_pane(index, cx);
         cx.notify();
@@ -776,8 +776,8 @@ impl CockpitView {
         let owner = pane.identity;
         self.file_surface
             .update(cx, |files, _| files.forget_document(owner, path));
-        if pane.preview.document().is_some_and(|document| document.path == path) {
-            pane.preview.close();
+        if pane.read(cx).preview.document().is_some_and(|document| document.path == path) {
+            pane.read(cx).preview.close();
         }
     }
 
@@ -806,10 +806,10 @@ impl CockpitView {
     /// preview follows the File tab the Panel shows.
     pub(in crate::cockpit) fn tend_previews(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for pane in &self.panes {
-            pane.preview.settle_attachment_open(window, cx);
+            pane.preview(cx).settle_attachment_open(window, cx);
         }
         let requests: Vec<_> = self.panes.iter().flat_map(|pane| {
-            pane.preview.take_file_requests().into_iter().map(|request| (pane.thread(), request))
+            pane.read(cx).preview.take_file_requests().into_iter().map(|request| (pane.thread(), request))
         }).collect();
         for (thread, request) in requests {
             match thread {
@@ -818,13 +818,13 @@ impl CockpitView {
             }
         }
         for pane in &self.panes {
-            for annotation in pane.preview.take_annotation_requests() {
+            for annotation in pane.read(cx).preview.take_annotation_requests() {
                 if annotation.original().is_none() {
-                    pane.preview.loading_annotation(annotation, window);
+                    pane.read(cx).preview.loading_annotation(annotation, window);
                     continue;
                 }
                 let Some(thread) = pane.thread() else {
-                    pane.preview.annotation_error(
+                    pane.read(cx).preview.annotation_error(
                         &annotation,
                         "Open the owning Thread to review this browser capture".into(),
                         window,
@@ -834,16 +834,17 @@ impl CockpitView {
                 let image = self
                     .cockpit
                     .update(cx, |cockpit, _| cockpit.browser_annotation_image(thread, annotation.clone()));
-                pane.preview.loading_annotation(annotation.clone(), window);
+                let preview = pane.preview(cx);
+                preview.loading_annotation(annotation.clone(), window);
                 self.file_surface.update(cx, |files, _| {
-                    files.wait_annotation(pane.identity, &pane.preview, annotation, image)
+                    files.wait_annotation(pane.identity, &preview, annotation, image)
                 });
             }
         }
         let panes: Vec<_> = self
             .panes
             .iter()
-            .map(|pane| (pane.identity, pane.preview.clone()))
+            .map(|pane| (pane.identity, pane.read(cx).preview.clone()))
             .collect();
         let tended = self
             .file_surface
@@ -882,15 +883,15 @@ impl CockpitView {
                 _ => continue,
             };
             let pane = &self.panes[index];
-            if pane.preview.document().is_some_and(|document| document.path == wanted) {
+            if pane.read(cx).preview.document().is_some_and(|document| document.path == wanted) {
                 continue;
             }
             let kept = self.file_surface.read(cx).document(pane.identity, &wanted).cloned();
             match kept {
-                Some(document) => pane.preview.restore(document),
-                None if wanted == Path::new(BROWSER_PATH) => pane.preview.show_browser(),
+                Some(document) => pane.read(cx).preview.restore(document),
+                None if wanted == Path::new(BROWSER_PATH) => pane.read(cx).preview.show_browser(),
                 None => match self.sent_annotation(thread, &wanted, cx) {
-                    Some(annotation) => pane.preview.review_annotation(annotation, window),
+                    Some(annotation) => pane.read(cx).preview.review_annotation(annotation, window),
                     // An image opens in the lightbox and never becomes the
                     // tab's document, so it would open again every frame.
                     // Only the history can claim it, and that streams in
@@ -900,7 +901,7 @@ impl CockpitView {
                             unfillable.push((thread, SurfaceId::File(wanted)));
                         }
                     }
-                    None => pane.preview.open(wanted, None, &[], window, cx),
+                    None => pane.preview(cx).open(wanted, None, &[], window, cx),
                 },
             }
         }
@@ -953,13 +954,13 @@ impl CockpitView {
     ) -> Option<FileSurfaceInputs> {
         let pane = &self.panes[self.index_of(owner)?];
         let browser = pane
-            .preview
+            .read(cx).preview
             .document()
             .is_some_and(|document| matches!(document.body, Body::Browser))
             .then(|| self.browser_body(pane.thread(), cx));
         Some(FileSurfaceInputs {
             owner,
-            preview: pane.preview.clone(),
+            preview: pane.read(cx).preview.clone(),
             workspace: pane.thread().and_then(|thread| self.thread_path(thread, cx)),
             browser,
         })
@@ -997,9 +998,9 @@ impl CockpitView {
     }
 
     /// The page Pane `owner`'s preview shows, if it shows one.
-    pub(in crate::cockpit) fn page_source(&self, owner: PaneIdentity) -> Option<PageSource> {
+    pub(in crate::cockpit) fn page_source(&self, owner: PaneIdentity, cx: &gpui::App) -> Option<PageSource> {
         let pane = self.panes.get(self.index_of(owner)?)?;
-        Some(pane.preview.document()?.page()?.source().clone())
+        Some(pane.read(cx).preview.document()?.page()?.source().clone())
     }
 
     /// A page's menu verbs (`MenuTarget::Page`).
@@ -1013,7 +1014,7 @@ impl CockpitView {
             return;
         };
         let Some(page) = self.panes[index]
-            .preview
+            .read(cx).preview
             .document()
             .and_then(|document| document.page().cloned())
         else {

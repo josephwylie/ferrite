@@ -41,19 +41,20 @@ impl CockpitView {
         let Some((thread, pane)) = self.focused_details(cx) else {
             return;
         };
-        if self.details_inline(pane) {
-            self.panes[pane].details.reset_pages();
+        if self.details_inline(pane, cx) {
+            self.panes[pane].read(cx).details.reset_pages();
             self.apply_surface(thread, surfaces::SurfaceAction::ToggleDetails);
             cx.notify();
             return;
         }
-        if self.panes[pane].details.is_open() {
+        if self.panes[pane].read(cx).details.is_open() {
             self.close_details(thread, window, cx);
             return;
         }
-        let card = &self.panes[pane].details;
+        let card = &self.panes[pane].read(cx).details;
         card.set_open(true);
-        window.focus(&card.focus, cx);
+        let focus = card.focus.clone();
+        window.focus(&focus, cx);
         self.refresh_context(thread, cx);
         cx.notify();
     }
@@ -80,30 +81,30 @@ impl CockpitView {
         let Some(pane) = self.panes.iter().find(|pane| pane.thread() == Some(thread)) else {
             return;
         };
-        if !pane.details.is_open() {
+        if !pane.read(cx).details.is_open() {
             return;
         }
-        pane.details.set_open(false);
-        if pane.details.focus.contains_focused(window, cx) {
-            window.focus(&pane.composer.read(cx).focus_handle(cx), cx);
+        pane.read(cx).details.set_open(false);
+        if pane.read(cx).details.focus.contains_focused(window, cx) {
+            window.focus(&pane.read(cx).composer.read(cx).focus_handle(cx), cx);
         }
         cx.notify();
     }
 
     /// Inline context requires a readable conversation lane and 160px of usable height.
-    pub(super) fn details_inline(&self, index: usize) -> bool {
-        self.panes[index].details.canvas.get().is_some_and(|card| {
+    pub(super) fn details_inline(&self, index: usize, cx: &gpui::App) -> bool {
+        self.panes[index].read(cx).details.canvas.get().is_some_and(|card| {
             let current = f32::from(card.size.width);
-            let fit = self.panes[index].details.fit_width.get().unwrap_or(current);
+            let fit = self.panes[index].read(cx).details.fit_width.get().unwrap_or(current);
             fit >= 280. + 12. + 32. + 48. + 640.
-                && card.size.height >= px(160. + 24. + self.panes[index].details.top_inset.get())
+                && card.size.height >= px(160. + 24. + self.panes[index].read(cx).details.top_inset.get())
         })
     }
 
-    pub(super) fn details_lane_width(&self, index: usize) -> f32 {
-        if self.details_inline(index) && self.details_inline_open(index) {
+    pub(super) fn details_lane_width(&self, index: usize, cx: &gpui::App) -> f32 {
+        if self.details_inline(index, cx) && self.details_inline_open(index) {
             let width = self.panes[index]
-                .details
+                .read(cx).details
                 .canvas
                 .get()
                 .map_or(0., |card| f32::from(card.size.width));
@@ -131,21 +132,21 @@ impl CockpitView {
                 .map_or(target.w, |(_, rect)| rect.w);
             let width = current.min(target.w);
             let fit = if self.columns.moving() {
-                pane.details
+                pane.read(cx).details
                     .fit_width
                     .get()
                     .map_or(width, |held| held.min(width))
             } else {
                 width
             };
-            pane.details.fit_width.set(Some(fit));
+            pane.read(cx).details.fit_width.set(Some(fit));
         }
         let focused = self.focused(cx);
         let stale: Vec<ThreadKey> = self
             .panes
             .iter()
             .enumerate()
-            .filter(|(index, pane)| *index != focused && pane.details.is_open())
+            .filter(|(index, pane)| *index != focused && pane.read(cx).details.is_open())
             .filter_map(|(_, pane)| pane.thread())
             .collect();
         for thread in stale {
@@ -161,19 +162,19 @@ impl CockpitView {
 
     pub(super) fn details_open(&self, cx: &gpui::App) -> bool {
         self.focused_details(cx)
-            .is_some_and(|(_, index)| self.details_standing(index))
+            .is_some_and(|(_, index)| self.details_standing(index, cx))
     }
 
     /// Whether Pane `index` has a card to draw: only a Pane showing a
     /// Thread does.
-    fn details_standing(&self, index: usize) -> bool {
+    fn details_standing(&self, index: usize, cx: &gpui::App) -> bool {
         if self.panes[index].thread().is_none() {
             return false;
         }
-        if self.details_inline(index) {
+        if self.details_inline(index, cx) {
             self.details_inline_open(index)
         } else {
-            self.panes[index].details.is_open()
+            self.panes[index].read(cx).details.is_open()
         }
     }
 
@@ -183,7 +184,7 @@ impl CockpitView {
         let cards = self
             .pane_rects(window, cx)
             .into_iter()
-            .filter(|(index, _)| self.details_standing(*index))
+            .filter(|(index, _)| self.details_standing(*index, cx))
             .map(|(_, pane)| {
                 let right = pane.x + pane.w - DETAILS_GAP;
                 let width = (pane.w - 2. * DETAILS_GAP).clamp(0., DETAILS_W);
@@ -204,7 +205,7 @@ impl CockpitView {
     pub(super) fn details_hold_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         self.panes
             .get(self.focused(cx))
-            .is_some_and(|pane| pane.details.focus.contains_focused(window, cx))
+            .is_some_and(|pane| pane.read(cx).details.focus.contains_focused(window, cx))
     }
 
     /// Draw the thread's context using the canvas placement and available density.
@@ -216,18 +217,18 @@ impl CockpitView {
     ) -> Option<AnyElement> {
         let pane = self.panes.get(index)?;
         let thread = pane.thread()?;
-        let canvas = pane.details.canvas.get()?;
+        let canvas = pane.read(cx).details.canvas.get()?;
         let find_open = pane
-            .transcript()
+            .read(cx).transcript()
             .is_some_and(|transcript| transcript.read(cx).find_open());
-        pane.details.top_inset.set(if find_open {
+        pane.read(cx).details.top_inset.set(if find_open {
             2.0 * FLOAT_OFFSET + FLOAT_ROW_H - DETAILS_GAP
         } else {
             0.
         });
-        let inline = self.details_inline(index);
+        let inline = self.details_inline(index, cx);
         if inline {
-            pane.details.set_open(false);
+            pane.read(cx).details.set_open(false);
         }
         let standing = if inline {
             if self.details_inline_open(index) {
@@ -236,14 +237,14 @@ impl CockpitView {
                 Standing::Hidden
             }
         } else {
-            pane.details.standing(
+            pane.read(cx).details.standing(
                 motion::DIALOG_OUT,
                 cx.background_executor().now(),
                 motion::reduced_motion(cx),
             )
         };
         if standing == Standing::Hidden {
-            pane.details.drawn.set(None);
+            pane.read(cx).details.drawn.set(None);
             return None;
         }
         let top = if find_open {
@@ -253,9 +254,9 @@ impl CockpitView {
         };
         let available = (f32::from(canvas.size.height) - top - DETAILS_GAP).max(0.);
         let content =
-            self.details_content(thread, &pane.selected, pane.details.previous_pages(), cx);
+            self.details_content(thread, &pane.read(cx).selected, pane.read(cx).details.previous_pages(), cx);
         let width = (f32::from(canvas.size.width) - 2. * DETAILS_GAP).clamp(0., DETAILS_W);
-        let measured = pane.details.measurements.clone();
+        let measured = pane.read(cx).details.measurements.clone();
         measured.borrow_mut().prepare(
             content.key(thread, width, Density::Full),
             content.key(thread, width, Density::Compact),
@@ -284,7 +285,7 @@ impl CockpitView {
                 }
             },
         );
-        let scroll = pane.details.scroll.clone();
+        let scroll = pane.read(cx).details.scroll.clone();
         let body = div()
             .relative()
             .flex()
@@ -312,7 +313,7 @@ impl CockpitView {
             .id(("details-card", thread.thread().get() as usize))
             .debug_selector(|| "details-card".into())
             .key_context("ThreadDetails")
-            .track_focus(&pane.details.focus)
+            .track_focus(&pane.read(cx).details.focus)
             .flex()
             .flex_col()
             .w(px(DETAILS_W))
@@ -340,7 +341,7 @@ impl CockpitView {
                         .panes
                         .iter()
                         .find(|pane| pane.thread() == Some(thread))
-                        .is_some_and(|pane| pane.details.on_opener(event.position));
+                        .is_some_and(|pane| pane.read(cx).details.on_opener(event.position));
                     let choosing_items = view
                         .context_menu()
                         .is_some_and(|menu| menu.target == MenuTarget::Details(thread));
@@ -350,7 +351,7 @@ impl CockpitView {
                 }),
             )
             .child(body);
-        let drawn = pane.details.drawn.clone();
+        let drawn = pane.read(cx).details.drawn.clone();
         // The measure is inside the card's 1px edge.
         let card = ferrite_ui::components::on_bounds(card, move |bounds, _, _| {
             drawn.set(Some(bounds.dilate(px(1.))))
@@ -403,7 +404,7 @@ impl CockpitView {
         let Some(index) = card else {
             return door;
         };
-        let opener = self.panes[index].details.opener();
+        let opener = self.panes[index].read(cx).details.opener();
         ferrite_ui::components::on_bounds(door, move |bounds, _, _| opener.set(Some(bounds)))
     }
 

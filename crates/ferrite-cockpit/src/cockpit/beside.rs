@@ -218,7 +218,7 @@ impl CockpitView {
             return;
         };
         let review = pane.review.review().unwrap_or_else(|| {
-            let composer = pane.composer.clone();
+            let composer = pane.read(cx).composer.clone();
             let reading = self.prefs.settings.reading_size;
             let review = cx.new(|cx| ReviewView::new(composer, scope, reading, cx));
             cx.subscribe(&review, move |view, review, ScopePicked(scope), cx| {

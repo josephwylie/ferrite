@@ -23,7 +23,7 @@ fn short_reasoning_has_no_empty_disclosure(cx: &mut TestAppContext) {
             .transcript()
             .blocks()[0];
         assert!(
-            pane.tool_bounds(pane::DisclosureId::Reasoning(block.id), cx)
+            pane.read(cx).tool_bounds(pane::DisclosureId::Reasoning(block.id), cx)
                 .is_none(),
             "a short summary must not offer an expansion that repeats itself"
         );
@@ -105,7 +105,7 @@ fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContex
         let summary = cx.debug_bounds("reasoning-summary").unwrap();
         let control = view.read_with(cx, |view, cx| {
             view.panes[0]
-                .tool_bounds(pane::DisclosureId::Reasoning(id), cx)
+                .read(cx).tool_bounds(pane::DisclosureId::Reasoning(id), cx)
                 .unwrap()
         });
         assert!(
@@ -186,14 +186,14 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
             .find(|b| matches!(&b.body, Body::Thinking(_)))
             .unwrap()
             .id;
-        pane.tool_bounds(pane::DisclosureId::Reasoning(id), cx)
+        pane.read(cx).tool_bounds(pane::DisclosureId::Reasoning(id), cx)
             .unwrap()
             .center()
     });
     cx.simulate_click(reasoning, gpui::Modifiers::none());
     tick(cx);
     view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("wrap-tool".into()));
+        view.panes[0].update(cx, |pane, _| pane.toggle_tool(&pane::DisclosureId::Tool("wrap-tool".into())));
         cx.notify();
     });
     tick(cx);
@@ -204,7 +204,7 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
         tick(cx);
         view.read_with(cx, |view, cx| {
             let pane = &view.panes[0];
-            let viewport = pane.transcript().unwrap().read(cx).scroll().bounds();
+            let viewport = pane.read(cx).transcript().unwrap().read(cx).scroll().bounds();
             let transcript = view
                 .cockpit
                 .read(cx)
@@ -214,13 +214,13 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
             for block in transcript.blocks() {
                 let ids = match &block.body {
                     Body::Thinking(_) => {
-                        vec![format!("thinking-{}-{:?}", pane.text_namespace(), block.id)]
+                        vec![format!("thinking-{}-{:?}", pane.read(cx).text_namespace(), block.id)]
                     }
                     // Its call line is one Markdown run; its disclosed
                     // input and output the literals after it.
                     Body::Tool(_) => (0..=1)
                         .map(|ordinal| {
-                            format!("literal-{}-{:?}-{ordinal}", pane.text_namespace(), block.id)
+                            format!("literal-{}-{:?}-{ordinal}", pane.read(cx).text_namespace(), block.id)
                         })
                         .collect(),
                     _ => continue,
@@ -293,7 +293,7 @@ fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestA
                 .unwrap()
                 .id;
             ferrite_pane::rich::testing::font_size(
-                &format!("literal-{}-{block:?}", pane.text_namespace()),
+                &format!("literal-{}-{block:?}", pane.read(cx).text_namespace()),
                 cx,
             )
             .unwrap()
@@ -449,7 +449,7 @@ fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAp
             .0;
         let height = |block| {
             ferrite_pane::rich::testing::bounds(
-                &format!("thinking-{}-{block:?}", view.panes[0].text_namespace()),
+                &format!("thinking-{}-{block:?}", view.panes[0].read(cx).text_namespace()),
                 0,
                 cx,
             )
@@ -461,12 +461,12 @@ fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAp
             height(first) < px(30.),
             "a collapsed script must stay one row tall"
         );
-        view.panes[0].tool_bounds("multiline", cx).unwrap().center()
+        view.panes[0].read(cx).tool_bounds("multiline", cx).unwrap().center()
     });
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert!(view.panes[0].tool_expanded("multiline"));
+    view.read_with(cx, |view, cx| {
+        assert!(view.panes[0].read(cx).tool_expanded("multiline"));
         assert!(view
             .selection
             .registered(thread.thread())
@@ -481,17 +481,17 @@ fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAp
         })
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert!(view.panes[0].tool_expanded("multiline"))
+    view.read_with(cx, |view, cx| {
+        assert!(view.panes[0].read(cx).tool_expanded("multiline"))
     });
 
     let chevron = view.read_with(cx, |view, cx| {
-        view.panes[0].tool_bounds("multiline", cx).unwrap().center()
+        view.panes[0].read(cx).tool_bounds("multiline", cx).unwrap().center()
     });
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();
     view.read_with(cx, |view, cx| {
-        assert!(!view.panes[0].tool_expanded("multiline"));
+        assert!(!view.panes[0].read(cx).tool_expanded("multiline"));
         let transcript = view.cockpit.read(cx).thread(thread).unwrap().transcript();
         assert!(transcript
             .blocks()
@@ -564,7 +564,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
         };
         let x = |block| {
             ferrite_pane::rich::testing::bounds(
-                &format!("thinking-{}-{block:?}", view.panes[0].text_namespace()),
+                &format!("thinking-{}-{block:?}", view.panes[0].read(cx).text_namespace()),
                 0,
                 cx,
             )
@@ -594,7 +594,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     let chevron = view.read_with(cx, |view, cx| {
         // The whole call line is the toggle.
         view.panes[0]
-            .tool_bounds("toolu_9", cx)
+            .read(cx).tool_bounds("toolu_9", cx)
             .expect("the actual rendered toggle bounds")
             .center()
     });
@@ -602,7 +602,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     cx.run_until_parked();
 
     view.read_with(cx, |view, cx| {
-        assert!(view.panes[0].tool_expanded("toolu_9"));
+        assert!(view.panes[0].read(cx).tool_expanded("toolu_9"));
         let runs = view.selection.registered(thread.thread());
         // Large output is one native read-only document, retaining exact
         // hard lines and Unicode without per-character Markdown layout.
@@ -649,7 +649,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
         };
         let id = format!(
             "output-{}-{:?}-result",
-            view.panes[0].text_namespace(),
+            view.panes[0].read(cx).text_namespace(),
             block.id
         );
         (
@@ -701,7 +701,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     // following the tail. Bring it back before clicking its disclosure.
     view.update(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .update(cx, |transcript, _| {
                 transcript.scroll().pause_following_tail();
@@ -712,12 +712,12 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     cx.run_until_parked();
 
     let chevron = view.read_with(cx, |view, cx| {
-        view.panes[0].tool_bounds("toolu_9", cx).unwrap().center()
+        view.panes[0].read(cx).tool_bounds("toolu_9", cx).unwrap().center()
     });
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert!(!view.panes[0].tool_expanded("toolu_9"));
+    view.read_with(cx, |view, cx| {
+        assert!(!view.panes[0].read(cx).tool_expanded("toolu_9"));
         assert!(!view
             .selection
             .registered(thread.thread())
@@ -727,7 +727,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
 
     let composer = view.read_with(cx, |view, cx| {
         let body = view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -737,8 +737,8 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     cx.simulate_click(composer, gpui::Modifiers::none());
     cx.update(|window, cx| {
         view.read_with(cx, |view, cx| {
-            assert!(!view.panes[0].tool_targeted("toolu_9"));
-            assert!(view.panes[0].composer.focus_handle(cx).is_focused(window));
+            assert!(!view.panes[0].read(cx).tool_targeted("toolu_9"));
+            assert!(view.panes[0].read(cx).composer.focus_handle(cx).is_focused(window));
         });
     });
 }
@@ -769,7 +769,7 @@ fn streaming_output_preserves_native_selection_scroll_and_command_identity(
     tick(cx);
     open_live(cx);
     let chevron = view.read_with(cx, |view, cx| {
-        view.panes[0].tool_bounds("stream", cx).unwrap().center()
+        view.panes[0].read(cx).tool_bounds("stream", cx).unwrap().center()
     });
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();
@@ -784,7 +784,7 @@ fn streaming_output_preserves_native_selection_scroll_and_command_identity(
             .iter()
             .find(|block| matches!(&block.body, Body::Tool(tool) if tool.call == "stream"))
             .unwrap();
-        let prefix = format!("output-{}-{:?}", view.panes[0].text_namespace(), block.id);
+        let prefix = format!("output-{}-{:?}", view.panes[0].read(cx).text_namespace(), block.id);
         (
             ferrite_pane::rich::testing::output(&format!("{prefix}-command"), cx).unwrap(),
             ferrite_pane::rich::testing::output(&format!("{prefix}-result"), cx).unwrap(),
@@ -906,7 +906,7 @@ fn native_progress_follows_the_tail_and_metadata_refreshes_the_wall(cx: &mut Tes
         .expect("the trailing thought stands over the live row, once");
     view.update(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .update(cx, |transcript, cx| {
                 transcript.scroll().pause_following_tail();
@@ -1121,20 +1121,20 @@ fn keyboard_cycles_tool_controls_and_enter_toggles_without_submitting(cx: &mut T
     // The turn's fold is the first stop; then every call is its own row:
     // one Tab stop per call.
     cx.simulate_keystrokes("tab");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(matches!(
-            view.panes[0].targeted_tool(),
+            view.panes[0].read(cx).targeted_tool(),
             Some(pane::DisclosureId::Turn(_))
         ));
     });
     cx.simulate_keystrokes("tab");
     view.read_with(cx, |view, cx| {
-        assert!(view.panes[0].tool_targeted("toolu_9"));
+        assert!(view.panes[0].read(cx).tool_targeted("toolu_9"));
         assert!(!view.history_available(0, cx));
     });
     cx.simulate_keystrokes("enter");
-    view.read_with(cx, |view, _| {
-        assert!(view.panes[0].tool_expanded("toolu_9"));
+    view.read_with(cx, |view, cx| {
+        assert!(view.panes[0].read(cx).tool_expanded("toolu_9"));
         assert_eq!(
             fake.sent.borrow().as_slice(),
             ["prior prompt"],
@@ -1145,15 +1145,15 @@ fn keyboard_cycles_tool_controls_and_enter_toggles_without_submitting(cx: &mut T
     cx.simulate_keystrokes("tab");
     cx.update(|window, cx| {
         view.read_with(cx, |view, cx| {
-            assert!(!view.panes[0].tool_targeted("toolu_9"));
-            assert!(view.panes[0].composer.focus_handle(cx).is_focused(window));
+            assert!(!view.panes[0].read(cx).tool_targeted("toolu_9"));
+            assert!(view.panes[0].read(cx).composer.focus_handle(cx).is_focused(window));
         });
     });
 
     cx.simulate_keystrokes("shift-tab");
     view.read_with(
         cx,
-        |view, _| assert!(view.panes[0].tool_targeted("toolu_9")),
+        |view, cx| assert!(view.panes[0].read(cx).tool_targeted("toolu_9")),
     );
     for line in 0..200 {
         fake.streams.borrow()[0]
@@ -1165,8 +1165,8 @@ fn keyboard_cycles_tool_controls_and_enter_toggles_without_submitting(cx: &mut T
     tick(cx);
     cx.update(|window, cx| {
         view.read_with(cx, |view, cx| {
-            assert!(!view.panes[0].tool_targeted("toolu_9"));
-            assert!(view.panes[0].composer.focus_handle(cx).is_focused(window));
+            assert!(!view.panes[0].read(cx).tool_targeted("toolu_9"));
+            assert!(view.panes[0].read(cx).composer.focus_handle(cx).is_focused(window));
         });
     });
 }
@@ -1274,7 +1274,7 @@ fn a_drag_in_a_scrolled_back_transcript_selects_the_rows_under_the_pointer(
     // did not actually scroll anything back.
     let viewport = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -1341,7 +1341,7 @@ fn expanded_tool_group_for_wheel(
     }
     tick(cx);
     view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Group("wheel-0".into()));
+        view.panes[0].update(cx, |pane, _| pane.toggle_tool(&pane::DisclosureId::Group("wheel-0".into())));
         cx.notify();
     });
     tick(cx);
@@ -1353,7 +1353,7 @@ fn wheel_inside_a_short_expanded_tool_group_scrolls_the_transcript(cx: &mut Test
     let (view, cx) = expanded_tool_group_for_wheel(cx, 2);
     let scroll = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -1385,7 +1385,7 @@ fn wheel_inside_an_expanded_tool_group_only_scrolls_its_tools(cx: &mut TestAppCo
     let (view, cx) = expanded_tool_group_for_wheel(cx, 40);
     let scroll = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .transcript()
+            .read(cx).transcript()
             .unwrap()
             .read(cx)
             .scroll()
@@ -1526,15 +1526,15 @@ fn the_live_row_opens_the_work_it_stands_for(cx: &mut TestAppContext) {
         .center();
     cx.simulate_click(live, gpui::Modifiers::none());
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert!(view.panes[0].tool_expanded(pane::DisclosureId::Group("wait".into())));
+    view.read_with(cx, |view, cx| {
+        assert!(view.panes[0].read(cx).tool_expanded(pane::DisclosureId::Group("wait".into())));
         assert_eq!(running_rows(view), 1, "opened: the call's own row shows");
     });
     let live = cx.debug_bounds("live-call").unwrap().center();
     cx.simulate_click(live, gpui::Modifiers::none());
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert!(!view.panes[0].tool_expanded(pane::DisclosureId::Group("wait".into())));
+    view.read_with(cx, |view, cx| {
+        assert!(!view.panes[0].read(cx).tool_expanded(pane::DisclosureId::Group("wait".into())));
         assert_eq!(running_rows(view), 0);
     });
 }

@@ -181,7 +181,7 @@ impl CockpitView {
             Ok(annotation) => {
                 let annotation = annotation.clone();
                 self.panes[index]
-                    .composer
+                    .composer(cx)
                     .update(cx, |composer, cx| composer.add_browser_annotation(annotation, cx));
                 self.close_browser_annotation(*thread, cx);
             }

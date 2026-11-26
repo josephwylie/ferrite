@@ -131,7 +131,7 @@ fn box_draft<'a>(
     view.update(cx, |view, cx| view.open_draft_in_project(theirs, cx));
     tick(cx);
     let draft = focused_draft(&view, cx);
-    let composer = view.read_with(cx, |view, _| view.panes[view.index_of(draft).unwrap()].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[view.index_of(draft).unwrap()].read(cx).composer.clone());
     cx.update(|window, cx| window.focus(&composer.read(cx).focus_handle(cx), cx));
     tick(cx);
     (view, cx, on_box, draft)

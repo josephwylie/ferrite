@@ -238,8 +238,8 @@ impl CockpitView {
         if let Some(replaced) = self.sheets.update(cx, |sheets, cx| sheets.show(sheet, cx)) {
             self.sheet_gone(replaced, cx);
         }
-        for draft in self.panes.iter_mut().filter_map(|pane| pane.draft_mut()) {
-            draft.band_focus = None;
+        for pane in &self.panes {
+            pane.update_draft(cx, |draft| draft.band_focus = None);
         }
         self.close_popup(cx);
         self.close_board_menus(cx);
@@ -327,7 +327,7 @@ impl CockpitView {
                 !sheet.shows_a_copy(cx)
                     && self
                         .index_of(sheet.placing.draft)
-                        .and_then(|index| self.panes[index].draft())
+                        .and_then(|index| self.panes[index].read(cx).draft())
                         .is_none()
             }
         };

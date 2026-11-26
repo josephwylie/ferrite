@@ -53,7 +53,7 @@ impl CockpitView {
                     self.focus_pane(index, cx);
                     let reply = Reply::new(text.trim(), "");
                     self.panes[index]
-                        .composer
+                        .composer(cx)
                         .update(cx, |composer, cx| composer.reply(reply, cx));
                     cx.notify();
                 }

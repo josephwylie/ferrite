@@ -90,8 +90,8 @@ impl CockpitView {
         let Some(pane) = self.panes.iter().find(|pane| pane.identity == identity) else {
             return false;
         };
-        let content = pane.composer.read(cx).content();
-        match (identity, pane.draft()) {
+        let content = pane.read(cx).composer.read(cx).content();
+        match (identity, pane.read(cx).draft()) {
             (PaneIdentity::Thread(thread), _) => {
                 let Some(thread) = self.cockpit.read(cx).saved(thread) else {
                     return false;
@@ -216,7 +216,7 @@ impl CockpitView {
             .iter()
             .find(|pane| pane.identity.draft() == Some(id))
         {
-            pane.composer
+            pane.composer(cx)
                 .update(cx, |composer, cx| composer.load(fresh.content, cx));
         }
         // Its binding is new to the window: the notify pass asks about its
@@ -236,7 +236,7 @@ impl CockpitView {
             .panes
             .iter()
             .filter(|pane| {
-                pane.draft()
+                pane.read(cx).draft()
                     .is_some_and(|draft| gone.contains(&draft.binding.project().machine()))
             })
             .filter_map(|pane| pane.identity.draft())
@@ -269,7 +269,7 @@ impl CockpitView {
     /// Surface kept of its preview, and its Decision forms.
     pub(super) fn adopt_thread(&mut self, index: usize, thread: ThreadKey, cx: &mut Context<Self>) {
         let draft = self.panes[index].identity;
-        self.panes[index].adopt_thread(thread);
+        self.panes[index].adopt_thread(thread, cx);
         self.file_surface
             .update(cx, |files, _| files.adopt(draft, PaneIdentity::Thread(thread)));
         self.decisions
@@ -286,7 +286,7 @@ impl CockpitView {
         else {
             return;
         };
-        let content = pane.composer.read(cx).content();
+        let content = pane.read(cx).composer.read(cx).content();
         let Some(thread) = self.cockpit.read(cx).saved(thread) else {
             return;
         };

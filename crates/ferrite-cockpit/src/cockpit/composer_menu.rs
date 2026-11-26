@@ -753,16 +753,16 @@ impl CockpitView {
     fn composer_menu_inputs(&mut self, cx: &mut Context<Self>) -> Option<ComposerMenuInputs> {
         let index = self.focused(cx);
         let pane = self.panes.get(index)?;
-        let wanted = self.composer_menu.read(cx).wanted(pane.composer.read(cx))?;
+        let wanted = self.composer_menu.read(cx).wanted(pane.read(cx).composer.read(cx))?;
         let identity = pane.identity;
-        let line = pane.composer.clone();
+        let line = pane.read(cx).composer.clone();
         let thread = pane.thread();
         let ask = match wanted {
             Wanted::Skills { filter } => {
                 let listed = match thread {
                     Some(thread) => Listed::Session(self.cockpit.read(cx).thread(thread)?.commands().to_vec()),
                     None => {
-                        let draft = pane.draft()?;
+                        let draft = pane.read(cx).draft()?;
                         let provider = draft.binding.provider().provider;
                         let machine = draft.binding.project().machine();
                         let cwd = draft
@@ -783,7 +783,7 @@ impl CockpitView {
                 let listed = match thread {
                     Some(thread) => Listed::Session(self.cockpit.read(cx).thread(thread)?.commands().to_vec()),
                     None => {
-                        let draft = pane.draft()?;
+                        let draft = pane.read(cx).draft()?;
                         let provider = draft.binding.provider().provider;
                         let machine = draft.binding.project().machine();
                         let cwd = draft
@@ -831,7 +831,7 @@ impl CockpitView {
                     root,
                     search,
                     on_machine: self
-                        .pane_machine(index)
+                        .pane_machine(index, cx)
                         .is_some_and(|machine| self.elsewhere(machine, cx)),
                 }
             }

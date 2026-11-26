@@ -32,13 +32,13 @@ impl CockpitView {
     /// coming back.
     pub(super) fn lightbox(&self, cx: &gpui::App) -> Option<(usize, Lightbox)> {
         let index = self.focused(cx);
-        Some((index, self.panes.get(index)?.preview.lightbox()?))
+        Some((index, self.panes.get(index)?.read(cx).preview.lightbox()?))
     }
 
     /// Close Pane `index`'s lightbox: the keyboard is the Pane's again.
     pub(super) fn close_lightbox(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(pane) = self.panes.get(index) {
-            pane.preview.close_lightbox();
+            pane.read(cx).preview.close_lightbox();
             self.focus_pane(index, cx);
             cx.notify();
         }
@@ -50,7 +50,7 @@ impl CockpitView {
         if self
             .panes
             .get(index)
-            .is_some_and(|pane| pane.preview.step_image(by, cx))
+            .is_some_and(|pane| pane.preview(cx).step_image(by, cx))
         {
             cx.notify();
         }
@@ -98,7 +98,7 @@ impl CockpitView {
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     if let Some(pane) = view.panes.get(index) {
-                        pane.preview.set_zoom_menu(!zoom_open);
+                        pane.read(cx).preview.set_zoom_menu(!zoom_open);
                     }
                     cx.notify();
                 })),
@@ -185,7 +185,7 @@ impl CockpitView {
                         cx.stop_propagation();
                         viewer.update(cx, |viewer, cx| viewer.zoom_to(to, cx));
                         if let Some(pane) = view.panes.get(index) {
-                            pane.preview.set_zoom_menu(false);
+                            pane.read(cx).preview.set_zoom_menu(false);
                         }
                         cx.notify();
                     }),
