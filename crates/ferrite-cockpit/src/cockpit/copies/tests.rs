@@ -370,6 +370,37 @@ fn what_a_copy_says_after_its_machine_went_counts() {
 /// is added as if it never came (`Cancellation`). A copy cancelled is
 /// stopping, running still and with nothing to resume, until its thread
 /// says how it ended: what it asked may land till then.
+/// A Cancel whose replies its Machine never all answered is not one the
+/// card can say took: a file it had already sent may still land there.
+/// The card says that, never that the copy was cancelled, and its Resume
+/// is the way on. One cancelled before its connection was made had asked
+/// nothing: cancelled, with Retry.
+#[test]
+fn a_cancel_its_machine_never_answered_is_not_said_to_have_stopped_the_copy() {
+    let now = Instant::now();
+    let mut copy = Entry::new(order(false), Some(run()), now);
+    copy.hear(sending(5, 12, "a"), now, true);
+    assert!(copy.cancel());
+    let unanswered = io::Error::new(io::ErrorKind::TimedOut, "The server did not answer in time");
+    assert_eq!(copy.hear(stopped(unanswered), now, true), None);
+    assert!(!copy.phase.live(), "its thread ended");
+    assert_eq!(copy.phase.again(), Some(&Again::Resume), "its Resume is the way on");
+    let (said, failed) = copy.standing(true).expect("it says how it stands");
+    assert!(!said.to_lowercase().contains("cancelled"), "{said}");
+    assert_eq!(said, "box stopped answering, so a file already sent may still land there.");
+    assert!(failed, "said as a failure");
+
+    let mut copy = Entry::new(order(false), Some(run()), now);
+    assert!(copy.cancel());
+    let unwelcomed = Heard::Unreached {
+        error: io::Error::new(io::ErrorKind::TimedOut, "The server did not welcome the connection in time"),
+        unfinished: Vec::new(),
+    };
+    copy.hear(unwelcomed, now, true);
+    assert_eq!(copy.phase.again(), Some(&Again::Retry));
+    assert_eq!(copy.standing(true), Some(("Copy cancelled before anything was sent.".into(), false)));
+}
+
 #[test]
 fn a_copy_is_cancelled_or_added_never_both() {
     let now = Instant::now();

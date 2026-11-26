@@ -340,7 +340,10 @@ Windows window.
   never clears what the next run wrote). A copy whose files all landed
   but that was never added (its Machine went, the registration failed,
   or the window closed first) is still unfinished, so its Resume finds
-  it and adds it. A copy cancelled, cut off, or stopped with the app is resumed by the
+  it and adds it. The Placements and the unfinished copies of a Machine
+  are each read, changed and written back whole by one writer at a time
+  in this process (`placement::keeping`), so a copy beginning while the
+  window adds another to the same Machine never writes over it. A copy cancelled, cut off, or stopped with the app is resumed by the
   next copy of P to that destination, which reads what is done off the
   destination rather than a list: a file there as the copy sends it is
   done, one not there is sent, and one there that differs is someone
@@ -398,7 +401,7 @@ Windows window.
   copies are still its own, each started, resumed and shown on it as the
   window holds it then), a state machine: `Listing { files } → Copying {
   sent, total, file } → Finishing → Done { took, not copied } | Failed {
-  reason, again } | Stopping → Cancelled { again }`, with `Occupied` after `Listing`
+  reason, again } | Stopping → Cancelled { again } | Failed`, with `Occupied` after `Listing`
   when a first copy finds the destination holding something, and `again`
   what its button does: Retry, Resume, or Add for one whose files all
   landed; none once its Machine was removed.
@@ -447,7 +450,14 @@ Windows window.
   reply is waited for 30 s at most (`tree::PATIENCE`) and a line that
   goes ends the wait at once, so a Machine that answers nothing more
   leaves it stopping until 30 s pass with no reply, or its link drops
-  (ssh gives up on a silent one after a minute), and then cancelled. A
+  (ssh gives up on a silent one after a minute). Then the Cancel is not
+  known to have stopped it: a write it had asked for may still land, so
+  the card does not say cancelled but "E stopped answering, so a file
+  already sent may still land there." in a failure's ink, keeps the
+  copy unfinished, and offers Resume. The copy's own connection gives
+  its Server the same 30 s to welcome it (`link::Client::attach_within`),
+  so a Cancel while it connects ends too, cancelled with Retry; the
+  window's own connection waits as long as it takes. A
   copy is cancelled or
   done, never both (`Cancellation::end`): one that has asked all it sends
   and waits on the last replies stops as any other and stays unfinished,

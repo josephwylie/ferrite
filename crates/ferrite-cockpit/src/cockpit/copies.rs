@@ -290,12 +290,23 @@ impl Entry {
     pub(super) fn hear(&mut self, heard: Heard, now: Instant, attached: bool) -> Option<Landed> {
         if let Phase::Stopping { reached } = self.phase {
             // Cancelled once the thread says how the copy ended, which its
-            // Resume follows.
-            if matches!(heard, Heard::Unreached { .. } | Heard::Copied { .. }) {
-                self.phase = Phase::Cancelled {
-                    again: Again::Retry,
-                    reached,
-                };
+            // Resume follows; not when the Machine stopped answering what it
+            // had asked, which may still land there.
+            match &heard {
+                Heard::Copied { copied: Err(stopped), .. } if cut_off(&stopped.error) => {
+                    self.phase = Phase::Failed {
+                        reason: words::unanswered(&self.order.placing.machine_name).into(),
+                        again: Some(Again::Resume),
+                        when_back: false,
+                    };
+                }
+                Heard::Unreached { .. } | Heard::Copied { .. } => {
+                    self.phase = Phase::Cancelled {
+                        again: Again::Retry,
+                        reached,
+                    };
+                }
+                Heard::Copying(_) => {}
             }
             self.hear_late(heard);
             return None;
