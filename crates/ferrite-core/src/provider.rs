@@ -15,6 +15,15 @@ pub enum Provider {
 impl Provider {
     /// Every provider, in the order surfaces list them.
     pub const ALL: [Provider; 2] = [Provider::Claude, Provider::Codex];
+
+    /// Its CLI's own name, as an installer or a sign-in on its machine
+    /// says it.
+    pub fn cli_name(self) -> &'static str {
+        match self {
+            Provider::Claude => "Claude Code",
+            Provider::Codex => "Codex",
+        }
+    }
 }
 
 impl std::fmt::Display for Provider {

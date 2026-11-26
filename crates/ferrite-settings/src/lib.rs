@@ -8,6 +8,7 @@ pub mod connections;
 pub mod folder_browser;
 pub mod project_editor;
 pub mod sheet;
+pub mod sign_in;
 
 #[cfg(test)]
 mod tests {
@@ -19,6 +20,7 @@ mod tests {
             ("folder_browser.rs", include_str!("folder_browser.rs")),
             ("project_editor.rs", include_str!("project_editor.rs")),
             ("sheet.rs", include_str!("sheet.rs")),
+            ("sign_in.rs", include_str!("sign_in.rs")),
         ]);
     }
 }

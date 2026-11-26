@@ -19,7 +19,9 @@ pub mod limits;
 pub(crate) mod model_cache;
 pub(crate) mod oneshot;
 mod plugins;
+mod process_tree;
 mod resume;
+pub mod sign_in;
 pub mod update;
 // The Win32 calls are cfg(windows); the pid-selection logic inside is pure
 // and part of the host suite, like `spawn::cmd_shim`.

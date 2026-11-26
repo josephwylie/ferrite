@@ -272,6 +272,7 @@ impl Engine {
             | Op::SettingsChanged
             | Op::ServerDefaults { .. }
             | Op::Cli { .. }
+            | Op::SignIn { .. }
             | Op::Bootstrap { .. }
             | Op::CancelBootstrap { .. }
             | Op::SearchFiles { .. }

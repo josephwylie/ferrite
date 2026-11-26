@@ -2195,6 +2195,19 @@ impl Cockpit {
         self.held_mut(machine)?.link.cli(action)
     }
 
+    /// A step of signing `machine`'s `provider` CLI in (ADR 0051): only
+    /// another machine's Server signs one in; the answer is
+    /// `Done::SignInStatus`, `Done::SignInPage`, `Done::SignedIn` or
+    /// `Done::CodeRefused`.
+    pub fn sign_in(
+        &mut self,
+        machine: MachineId,
+        provider: Provider,
+        step: ferrite_core::protocol::SignInStep,
+    ) -> io::Result<Receiver<io::Result<Done>>> {
+        self.held_mut(machine)?.link.sign_in(provider, step)
+    }
+
     pub fn live_sessions(&self, machine: MachineId, provider: Provider) -> usize {
         self.shared(machine).live_sessions(provider)
     }

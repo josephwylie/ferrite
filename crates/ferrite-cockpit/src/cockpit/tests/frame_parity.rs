@@ -344,3 +344,26 @@ fn a_short_transcript_reads_from_the_top(cx: &mut TestAppContext) {
         "the empty space is under the rows: {answer:?} / {body:?}"
     );
 }
+
+/// This computer's own CLI is signed in here, in a terminal: its strip
+/// offers no sign-in from the window.
+#[gpui::test]
+fn a_signed_out_cli_here_offers_no_sign_in(cx: &mut TestAppContext) {
+    let (view, fake, cx) = solo_of("frame-signed-out-here", cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| {
+        let _ = view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "build the range sheet".into()));
+        cx.notify();
+    });
+    tick(cx);
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Error("Not logged in · Please run /login".into()),
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    let key = thread.thread().get();
+    assert!(debug_bounds(cx, format!("failure-retry-{key}")).is_some());
+    assert!(debug_bounds(cx, format!("failure-sign-in-{key}")).is_none());
+}

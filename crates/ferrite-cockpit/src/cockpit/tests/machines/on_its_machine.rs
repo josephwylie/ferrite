@@ -1,7 +1,8 @@
 //! What a provider CLI does for a Machine's work is done there: a draft's
 //! `/` menu lists the commands box's Server found, box's import picker
 //! lists the sessions on box, and box's Server titles box's Threads.
-//! This computer's CLI and its session files never answer for box.
+//! A CLI not signed in on box is signed in there, by box's own. This
+//! computer's CLI and its session files never answer for box.
 
 use super::environments::{focused_draft, registered, resolved_dir};
 use super::*;
@@ -308,4 +309,45 @@ fn a_machine_with_titles_off_titles_nothing(cx: &mut TestAppContext) {
     assert_eq!(cli.titles_asked(), 0, "nothing asked");
     assert!(!titling(&view, thread, cx));
     assert_eq!(title_of(&view, thread, cx), None);
+}
+
+/// A turn on box that failed for its CLI not being signed in offers that
+/// sign-in beside Retry, and its sheet asks box's Server, which signs in
+/// with box's own CLI: this box has none, and says so.
+#[gpui::test]
+fn a_machines_signed_out_cli_is_signed_in_there(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (mut core, _fake, machines, agents) = two_machines("sign-in-there", 0);
+    let on_box = machines.held(1).unwrap();
+    let theirs = open_on(&mut core, on_box);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    until(cx, |cx| view.read_with(cx, |view, _| view.pane_for(theirs).is_some()));
+    prompt(&view, theirs, "fix the login page", cx);
+    until(cx, |_| agents.sent("fix the login page"));
+    agents.say(0, SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Error("Not logged in · Please run /login".into()),
+        cost_usd: None,
+    });
+    let key = theirs.thread().get();
+    let sign_in = format!("failure-sign-in-{key}");
+    until(cx, |cx| debug_bounds(cx, sign_in.clone()).is_some());
+    assert!(debug_bounds(cx, format!("failure-retry-{key}")).is_some(), "Retry stays beside it");
+    let said = |cx: &mut gpui::VisualTestContext, selector: &str| {
+        cx.update(|window, _| window.debug_text(selector)).unwrap_or_default().join(" ")
+    };
+    assert_eq!(said(cx, &sign_in), "Sign in to Claude on box");
+
+    let press = bounds(cx, sign_in).center();
+    cx.simulate_click(press, gpui::Modifiers::none());
+    until(cx, |cx| cx.debug_bounds("sign-in-failed").is_some());
+    assert!(said(cx, "sign-in-card").contains("Sign in to Claude on box"));
+    assert!(
+        said(cx, "sign-in-failed").contains("Claude Code is not installed there"),
+        "{}",
+        said(cx, "sign-in-failed")
+    );
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| !view.sheet_up(cx)), "Escape closes it");
 }

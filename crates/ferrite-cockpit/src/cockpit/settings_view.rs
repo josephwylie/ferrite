@@ -33,6 +33,7 @@ impl CockpitView {
                     machine.map_or(0, |machine| cockpit.live_sessions(machine, provider)),
                     &place,
                 ),
+                signed_out: self.cli_signed_out(provider),
             })
             .collect();
         SettingsInputs {
@@ -69,6 +70,11 @@ impl CockpitView {
             SettingsEvent::PlaySound(sound) => self.chime(sound),
             SettingsEvent::ChooseSound(sound) => self.choose_sound_file(sound, cx),
             SettingsEvent::UpdateCli(provider) => self.update_cli(provider, cx),
+            SettingsEvent::SignIn(provider) => {
+                if let Some(machine) = self.settings_machine(cx) {
+                    self.sign_in_cli(machine, provider, cx);
+                }
+            }
             SettingsEvent::CopyDiagnostics => self.copy_diagnostics(cx),
             SettingsEvent::RestartServer(window) => self.in_window(window, Self::restart_server, cx),
             SettingsEvent::StopServer(window) => self.in_window(window, Self::stop_server, cx),

@@ -6,10 +6,12 @@
 //! one machine's at a time, its page's own state (`Environment::machine`):
 //! this computer's from its file, another machine's through its Server
 //! (`Op::ServerDefaults`, `Op::Cli`), showing the file's own answer, never
-//! this computer's.
+//! this computer's. Another machine's CLI that is not signed in is signed
+//! in there, from here (`Op::SignIn`, ADR 0051).
 
 use super::*;
-use ferrite_core::protocol::{CliAction, CliBinary, Done};
+use ferrite_core::protocol::{CliAction, CliBinary, Done, SignInStep};
+use ferrite_settings::sign_in::{SignInEvent, SignInView};
 use ferrite_core::settings::ServerDefaults;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
@@ -34,6 +36,10 @@ pub(crate) struct Environment {
     versions: Option<Answer<Done>>,
     check: Option<Answer<Done>>,
     updates: Vec<(Provider, Answer<Done>)>,
+    /// Whether each CLI is signed in there, asked with its version.
+    sign_ins: Vec<Answer<Done>>,
+    /// The CLIs the machine last said are not signed in.
+    signed_out: Vec<Provider>,
 }
 
 /// What went wrong with the machine's defaults: a read that never
@@ -219,7 +225,8 @@ impl CockpitView {
         self.cockpit.update(cx, |cockpit, _| cockpit.cli(machine, action))
     }
 
-    /// Ask the machine's CLIs their versions.
+    /// Ask the machine's CLIs their versions and, on a machine other than
+    /// this computer, whether each is signed in.
     pub(super) fn probe_cli_versions(&mut self, cx: &mut Context<Self>) {
         match self.ask_clis(CliAction::Versions, cx) {
             Ok(answer) => self.environment.versions = Some(answer),
@@ -228,7 +235,47 @@ impl CockpitView {
                 self.cli_versions = None;
             }
         }
+        if let Some(machine) = self.settings_machine(cx).filter(|machine| self.elsewhere(*machine, cx)) {
+            for provider in Provider::ALL {
+                let asked = self
+                    .cockpit
+                    .update(cx, |cockpit, _| cockpit.sign_in(machine, provider, SignInStep::Status));
+                match asked {
+                    Ok(answer) => self.environment.sign_ins.push(answer),
+                    Err(error) => ferrite_core::log!("could not ask whether {provider} is signed in: {error}"),
+                }
+            }
+        }
         cx.notify();
+    }
+
+    /// Whether the machine Settings is about last said `provider`'s CLI is
+    /// not signed in.
+    pub(super) fn cli_signed_out(&self, provider: Provider) -> bool {
+        self.environment.signed_out.contains(&provider)
+    }
+
+    /// Put up the sheet that signs `provider`'s CLI in on `machine`, with
+    /// that machine's own CLI.
+    pub(super) fn sign_in_cli(&mut self, machine: MachineId, provider: Provider, cx: &mut Context<Self>) {
+        let model = self.cockpit.clone();
+        let ask: ferrite_settings::sign_in::Ask = std::rc::Rc::new(move |step, cx| {
+            model.update(cx, |cockpit, _| cockpit.sign_in(machine, provider, step))
+        });
+        let place = self.place_of(machine, cx);
+        let sheet = cx.new(|cx| SignInView::new(provider, place, ask, cx));
+        cx.subscribe(&sheet, move |root, _, event: &SignInEvent, cx| match event {
+            SignInEvent::SignedIn => {
+                if root.settings_machine(cx) == Some(machine) {
+                    root.environment.signed_out.retain(|out| *out != provider);
+                }
+            }
+            SignInEvent::Close => {
+                root.hide_sheet(cx);
+            }
+        })
+        .detach();
+        self.show_sheet(sheets::Sheet::SignIn(sheet), cx);
     }
 
     /// Ask the machine to check its CLIs against the registry.
@@ -319,6 +366,30 @@ impl CockpitView {
     pub(super) fn poll_environment(&mut self, cx: &mut Context<Self>) {
         let mut heard = false;
         heard |= self.poll_defaults(cx);
+        if let Some(sheet) = self.sheets.read(cx).sign_in().cloned() {
+            sheet.update(cx, |sheet, cx| sheet.poll(cx));
+        }
+        let mut statuses = Vec::new();
+        self.environment.sign_ins.retain(|answer| match try_answer(answer) {
+            None => true,
+            Some(status) => {
+                statuses.push(status);
+                false
+            }
+        });
+        for status in statuses {
+            heard = true;
+            match status {
+                Ok(Done::SignInStatus { provider, signed_in }) => {
+                    self.environment.signed_out.retain(|out| *out != provider);
+                    if signed_in == Some(false) {
+                        self.environment.signed_out.push(provider);
+                    }
+                }
+                Ok(_) => ferrite_core::log!("the machine answered a sign-in's status with something else"),
+                Err(error) => ferrite_core::log!("could not tell whether a CLI is signed in: {error}"),
+            }
+        }
         if let Some(answer) = take_answer(&mut self.environment.versions) {
             heard = true;
             self.cli_versions = Some(match answer {

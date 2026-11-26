@@ -51,6 +51,7 @@ mod pr_watch;
 mod render;
 pub mod remote;
 mod server_id;
+mod sign_in;
 mod signals;
 mod tree;
 mod wake;
@@ -239,6 +240,20 @@ pub fn fixture_browser_machine(
 ) -> io::Result<ferrite_core::machine::Dial> {
     let (browser, browser_requests) = ferrite_core::browser::channel();
     let spawner = spawner_factory(browser);
+    /// The machine's CLIs: none. A test's machine never runs this
+    /// computer's, which would answer for its real sign-ins.
+    struct NoClis;
+    impl Clis for NoClis {
+        fn binary(&self, _: Provider) -> Option<ferrite_core::protocol::CliBinary> {
+            None
+        }
+        fn check(&self, _: Provider) -> io::Result<ferrite_core::cli_update::Status> {
+            Err(io::Error::other("a test's machine has no CLIs"))
+        }
+        fn update(&self, _: Provider) -> Result<ferrite_core::protocol::CliBinary, String> {
+            Err("a test's machine has no CLIs".into())
+        }
+    }
     /// The window's end: dropped, it hangs up, as ssh does.
     struct Upload(link::Stream);
     impl io::Write for Upload {
@@ -269,6 +284,7 @@ pub fn fixture_browser_machine(
         let settings_dir = store.parent().unwrap_or(&store).to_path_buf();
         let mut server = Server::new(engine, info, id, renders, Arc::default(), settings_dir, heard);
         server.browser_requests = browser_requests;
+        server.clis = Arc::new(NoClis);
         server.serve(hear)
     });
     /// The Server's words, each read held back by `FERRITE_FIXTURE_LINK_DELAY_MS`
@@ -444,6 +460,8 @@ struct Server {
     /// The provider CLIs this machine has, as a window asks after them
     /// (`Op::Cli`): the machine's own, or a test's scripted ones.
     clis: Arc<dyn Clis>,
+    /// The sign-ins of this machine's CLIs running for a window (ADR 0051).
+    sign_ins: Vec<sign_in::Running>,
     /// GitHub reads still out.
     github_reads: Vec<github::Reading>,
     /// Task PR head reads still out (#223).
@@ -524,6 +542,7 @@ impl Server {
             coordinators_tuned: Default::default(),
             github: Arc::new(Gh),
             clis: Arc::new(Host),
+            sign_ins: Vec::new(),
             github_reads: Vec::new(),
             head_reads: Vec::new(),
             skills_seen: Vec::new(),
@@ -629,7 +648,7 @@ impl Server {
             Heard::Gone(id) => self.gone(id),
             Heard::Message(id, message) => self.message(id, message),
             Heard::Api(heard) => self.api_heard(heard),
-            Heard::Answered(id, request, answer) => self.reply(id, request, answer),
+            Heard::Answered(id, request, answer) => self.answered(id, request, answer),
             Heard::Stopped => self.deaf = true,
         }
     }
@@ -894,6 +913,10 @@ impl Server {
             Op::ServerDefaults { set } => self.server_defaults(set.as_ref()).map(Some),
             Op::Cli { action } => {
                 self.cli(id, request, action);
+                return;
+            }
+            Op::SignIn { provider, step } => {
+                self.sign_in(id, request, *provider, step);
                 return;
             }
             Op::SettingsChanged => match Settings::load(&self.settings_dir) {
@@ -1588,6 +1611,7 @@ impl Server {
         self.renders.client_gone(id);
         self.undriven(id);
         self.browser_owner_gone(id);
+        self.sign_ins.retain(|running| running.client != id);
     }
 
     /// Flush every writer and end every Session without parking it: the
@@ -1615,6 +1639,7 @@ impl Server {
     /// last words, before the process takes them.
     fn halt(&mut self) {
         self.engine.halt_sessions();
+        self.sign_ins.clear();
         let deadline = Instant::now() + LAST_WORDS;
         for (_, client) in std::mem::take(&mut self.clients) {
             client.connection.finish(deadline);
