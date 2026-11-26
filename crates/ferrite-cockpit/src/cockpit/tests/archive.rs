@@ -158,12 +158,12 @@ fn the_archive_is_searched_and_opens_a_task_read_only(cx: &mut TestAppContext) {
         assert!(!shows(cx, action), "read-only: {action}");
     }
     view.update(cx, |view, cx| {
-        view.task_tab(crate::cockpit::factory::TaskTab::Activity, cx)
+        view.task_tab(ferrite_factory::board::TaskTab::Activity, cx)
     });
     tick(cx);
     assert!(shows(cx, "task-activity-1"), "its activity");
     view.update(cx, |view, cx| {
-        view.task_tab(crate::cockpit::factory::TaskTab::Worker, cx)
+        view.task_tab(ferrite_factory::board::TaskTab::Worker, cx)
     });
     tick(cx);
     assert!(shows(cx, "task-worker-history-0"));

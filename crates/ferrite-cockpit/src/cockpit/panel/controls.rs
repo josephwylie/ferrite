@@ -368,7 +368,7 @@ impl CockpitView {
     }
 
     pub(in crate::cockpit) fn panel_keys_held(&self, window: &Window, cx: &gpui::App) -> bool {
-        self.panel_keys.contains_focused(window, cx)
+        self.panel.keys.contains_focused(window, cx)
     }
 
     /// A step along the row from the stop in focus; the ends stop.

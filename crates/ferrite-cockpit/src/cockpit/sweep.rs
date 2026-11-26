@@ -1,8 +1,8 @@
 //! The watchdog's sweep: the pump's look, every `SWEEP_INTERVAL` on the
 //! executor's clock, at what moves with time and not with any event — the
 //! Sessions' health, the Facts, the clock text drawn, free disk, the
-//! minute the message times are drawn in. This keeps when each is due;
-//! what each does is the pump's.
+//! minute the message times are drawn in. This keeps when each is due,
+//! and free disk as last read; what each does is the pump's.
 
 use std::time::{Duration, Instant, SystemTime};
 
@@ -29,6 +29,10 @@ pub(super) struct Sweep {
     /// When free disk was last asked for, on the executor's clock: at
     /// launch, then by the sweep once a minute (`read_free_disk`).
     free_disk_asked: Option<Instant>,
+    /// Free bytes on the volume holding the Threads' checkouts, as last
+    /// read (the nav foot's `N GB free`); `None` until read, or when
+    /// unknown.
+    free_disk: Option<u64>,
     /// The wall-clock minute the transcripts' message times (`52 minutes
     /// ago`) were last drawn in: the sweep redraws them as it turns over.
     message_minute: i64,
@@ -42,6 +46,7 @@ impl Sweep {
             ages_turn_at: None,
             frame_turn_at: None,
             free_disk_asked: None,
+            free_disk: None,
             message_minute: wall_minute(),
         }
     }
@@ -88,6 +93,20 @@ impl Sweep {
         }
         self.free_disk_asked = Some(now);
         true
+    }
+
+    /// Free disk as last read.
+    pub(super) fn free_disk(&self) -> Option<u64> {
+        self.free_disk
+    }
+
+    /// Free disk was read as `free`. Whether the words the nav's foot says
+    /// of it moved.
+    pub(super) fn free_disk_read(&mut self, free: Option<u64>) -> bool {
+        let words = |free: Option<u64>| free.and_then(ferrite_ui::frame::free_disk_words);
+        let moved = words(free) != words(self.free_disk);
+        self.free_disk = free;
+        moved
     }
 
     /// Whether the wall-clock minute moved since the message times were

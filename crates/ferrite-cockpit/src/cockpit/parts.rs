@@ -36,7 +36,7 @@ use super::popups::Popup;
 use super::surfaces::SurfaceAction;
 use super::{CockpitView, MenuTarget, Submit};
 use ferrite_pane::cell::{
-    band_trigger, CellAsk, CellInputs, CellView, ControlsInputs, DetailsAsk, Doors, DraftInputs, KindInputs,
+    band_trigger, CellAsk, CellInputs, CellSlot, CellView, ControlsInputs, DetailsAsk, Doors, DraftInputs, KindInputs,
     PaneAsk, PaneEvent, QueuedAct, ThreadInputs, HERO_TRIGGER,
 };
 use ferrite_core::ThreadKey;
@@ -53,16 +53,33 @@ pub(crate) enum Part {
     Pane(PaneIdentity),
 }
 
-/// The parts' views and what each was last mounted with.
-#[derive(Default)]
+/// The parts' views and what each was last mounted with, and what
+/// notifies the frame around them alone.
 pub(crate) struct Parts {
     /// Whether the nav and the Panes are cached parts: with the loops
     /// overlay, over a cached Cockpit.
     pub on: bool,
     views: HashMap<PaneIdentity, Entity<CellView>>,
+    /// What `notify_frame` notifies with parts on: the Cockpit reads it
+    /// every render (`render_cockpit`), the parts never do.
+    frame_tick: Entity<FrameTick>,
 }
 
 impl Parts {
+    /// No parts yet, drawn inline.
+    pub(crate) fn new(cx: &mut gpui::App) -> Self {
+        Self {
+            on: false,
+            views: HashMap::new(),
+            frame_tick: cx.new(|_| FrameTick),
+        }
+    }
+
+    /// The entity whose notify redraws only the frame.
+    pub(crate) fn frame_tick(&self) -> &Entity<FrameTick> {
+        &self.frame_tick
+    }
+
     /// The view drawing `pane`'s cell, once it has been mounted.
     pub(crate) fn view_id(&self, pane: PaneIdentity) -> Option<gpui::EntityId> {
         self.views.get(&pane).map(Entity::entity_id)
@@ -114,20 +131,22 @@ impl CockpitView {
 
     /// A Pane's cell on the board: its part, cached with parts on.
     pub(super) fn pane_slot(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let identity = self.panes[index].identity;
-        // The box `pane_content`'s cell has on the board.
-        let frame = div()
-            .relative()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .min_h_0();
-        let view = self.part_view(identity, window, cx);
-        if !self.parts.borrow().on {
-            return frame.child(view);
-        }
-        Self::mount_part(frame, view.into())
+        self.cell_slot(index, window, cx).draw()
+    }
+
+    /// Pane `index`'s cell as a slot lays it out, its view made the first
+    /// time.
+    pub(super) fn cell_slot(&self, index: usize, window: &Window, cx: &mut Context<Self>) -> CellSlot {
+        let view = self.part_view(self.panes[index].identity, window, cx);
+        CellSlot::new(view, self.parts.borrow().on)
+    }
+
+    /// Pane `index`'s cell as a slot lays it out, once its view is made:
+    /// what a read of the root may hand a feature that lays it out.
+    pub(super) fn made_cell_slot(&self, index: usize) -> Option<CellSlot> {
+        let parts = self.parts.borrow();
+        let view = parts.views.get(&self.panes[index].identity)?.clone();
+        Some(CellSlot::new(view, parts.on))
     }
 
     /// The nav's column of rows: its view, cached as a part with parts on.
@@ -572,17 +591,20 @@ impl CockpitView {
     /// Redraw only the frame around the parts (the titlebar, the bottom
     /// bar, the floats). Without parts, the whole Cockpit.
     pub(super) fn notify_frame(&self, cx: &mut Context<Self>) {
-        if self.parts.borrow().on {
-            self.frame_tick.update(cx, |_, cx| cx.notify());
-        } else {
-            cx.notify();
+        let tick = {
+            let parts = self.parts.borrow();
+            parts.on.then(|| parts.frame_tick.clone())
+        };
+        match tick {
+            Some(tick) => tick.update(cx, |_, cx| cx.notify()),
+            None => cx.notify(),
         }
     }
 
     /// The entity whose notify redraws only the frame: the Cockpit reads it
     /// every render (`render_cockpit`), the parts never do.
     pub(super) fn frame_tick_id(&self) -> gpui::EntityId {
-        self.frame_tick.entity_id()
+        self.parts.borrow().frame_tick.entity_id()
     }
 }
 

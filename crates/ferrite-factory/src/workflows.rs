@@ -40,6 +40,8 @@ use crate::starts::StartsView;
 mod inspector;
 mod outline;
 pub mod pickers;
+mod skills;
+pub use skills::Skills;
 
 /// The outline's width beside the inspector.
 const OUTLINE_W: f32 = 440.;

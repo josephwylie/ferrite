@@ -323,6 +323,42 @@ impl Render for CellView {
 
 impl gpui::EventEmitter<PaneEvent> for CellView {}
 
+/// A Pane's cell where a board lays it out: its view, which the window
+/// made and hears, mounted as a cached part while the window caches its
+/// parts (ADR 0012). A feature that lays a Pane out (the Factory's
+/// Coordinator, a Task's Worker) is handed one and draws it as the
+/// window's own board does.
+#[derive(Clone)]
+pub struct CellSlot {
+    view: Entity<CellView>,
+    cached: bool,
+}
+
+impl CellSlot {
+    pub fn new(view: Entity<CellView>, cached: bool) -> Self {
+        Self { view, cached }
+    }
+
+    /// The box the cell fills, holding its view.
+    pub fn draw(self) -> Div {
+        let frame = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h_0();
+        if !self.cached {
+            return frame.child(self.view);
+        }
+        frame.child(
+            AnyView::from(self.view)
+                .cached(gpui::StyleRefinement::default().size_full())
+                .tracking_reads(),
+        )
+    }
+}
+
 /// Where a cell's presses go: its view, which emits each as a `PaneEvent`
 /// naming the Pane.
 #[derive(Clone)]

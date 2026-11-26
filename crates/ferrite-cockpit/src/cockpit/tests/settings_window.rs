@@ -514,7 +514,7 @@ fn the_settings_sheet_reads_and_answers_the_window(cx: &mut TestAppContext) {
         view.prefs.settings.reading_size = ReadingSize::nearest(18);
         view.prefs.settings.factory_tasks_at_once = 5;
         view.prefs.ferrite_updates = true;
-        view.cli_versions = Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into()));
+        view.environment.cli_versions = Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into()));
         view.show_settings(cx);
     });
     tick(cx);

@@ -77,6 +77,14 @@ pub(crate) struct Panel {
     pub(crate) empty_highlight: usize,
     /// The Panel's row of stops, shared with each view that draws one.
     pub(crate) focus: std::rc::Rc<PanelFocus>,
+    /// "Open a surface": the Panel's default focus while no tab shows.
+    pub(in crate::cockpit) empty_focus: FocusHandle,
+    /// The Panel bodies that take keys of their own (the launcher, Files):
+    /// while focus is anywhere inside, the focus pump leaves it be.
+    pub(in crate::cockpit) keys: FocusHandle,
+    /// The column while it slides shut, so the keyboard inside it can be
+    /// found and taken back (`columns::closing_holds_focus`).
+    pub(in crate::cockpit) closing_focus: FocusHandle,
     /// A view a test draws at the foot of the Panel, as a Surface's own
     /// view would be drawn.
     #[cfg(test)]
@@ -92,13 +100,13 @@ impl Panel {
     /// `resolves` still finds. A file that cannot be read is no Panels,
     /// written over at the next change: they are conveniences, never worth
     /// refusing to start for.
-    pub(crate) fn load(dir: &std::path::Path) -> Self {
+    pub(crate) fn load(dir: &std::path::Path, cx: &mut gpui::App) -> Self {
         let surfaces = Surfaces::load(dir, |id| id.lifecycle().restart == Restart::Restore)
             .unwrap_or_else(|error| {
                 ferrite_core::log!("the panel's tabs were not read: {error}");
                 Surfaces::default()
             });
-        Self::with_storage(surfaces, super::tools::WorkingSets::load(dir), Default::default())
+        Self::with_storage(surfaces, super::tools::WorkingSets::load(dir), Default::default(), cx)
     }
 
     /// Hold the Panels of every machine `cockpit` holds, as its saved
@@ -133,6 +141,7 @@ impl Panel {
         surfaces: Surfaces,
         working_sets: super::tools::WorkingSets,
         persistence: persistence::Persistence,
+        cx: &mut gpui::App,
     ) -> Self {
         Self {
             surfaces,
@@ -146,6 +155,9 @@ impl Panel {
             tab_press: None,
             empty_highlight: 0,
             focus: Default::default(),
+            empty_focus: cx.focus_handle(),
+            keys: cx.focus_handle(),
+            closing_focus: cx.focus_handle(),
             #[cfg(test)]
             test_child: None,
             deleted: Vec::new(),
@@ -420,7 +432,7 @@ impl CockpitView {
         self.browser_review.update(cx, |review, _| review.retain_threads(keep));
         self.facts.retain_threads(keep);
         self.decisions.update(cx, |decisions, _| decisions.retain_threads(keep));
-        if let Some(archive) = self.factory().map(|view| view.read(cx).archive.clone()) {
+        if let Some(archive) = self.factory().map(|view| view.read(cx).archive().clone()) {
             archive.update(cx, |archive, _| archive.retain_threads(keep));
         }
         self.pr_reads.retain_threads(keep);
@@ -443,7 +455,7 @@ impl CockpitView {
             + self
                 .factory()
                 .map_or(0, |view| {
-                    let reading = view.read(cx).archive.read(cx).reading;
+                    let reading = view.read(cx).archive().read(cx).reading;
                     usize::from(reading.is_some_and(|(held, _)| held == thread))
                 })
             + usize::from(self.pr_reads.holds(thread))
@@ -787,7 +799,7 @@ impl CockpitView {
                 .children(edge)
                 .when(sliding_out, |panel| {
                     panel
-                        .track_focus(&self.panel_closing_focus)
+                        .track_focus(&self.panel.closing_focus)
                         .child(super::columns::veil())
                 })
                 .into_any_element(),
@@ -834,7 +846,7 @@ impl CockpitView {
                 .flex_1()
                 .min_h_0()
                 .min_w_0()
-                .track_focus(&self.panel_keys)
+                .track_focus(&self.panel.keys)
                 .child(body)
                 .into_any_element()
         };
@@ -895,7 +907,7 @@ impl CockpitView {
     }
 }
 
-/// Whether `tab`'s body takes the Panel's keys (`panel_keys`): the empty
+/// Whether `tab`'s body takes the Panel's keys (`Panel::keys`): the empty
 /// Panel and Files read them, every other tab's body has its own.
 fn reads_panel_keys(tab: Option<&SurfaceId>) -> bool {
     matches!(tab, None | Some(SurfaceId::Files))

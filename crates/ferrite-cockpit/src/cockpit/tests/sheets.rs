@@ -391,7 +391,7 @@ fn a_task_started_closes_the_new_task_sheet_and_spends_its_words(cx: &mut TestAp
     assert_eq!(new_task_error(&view, cx), None);
     assert!(!new_task_up(cx), "Start closes it");
     assert_eq!(
-        view.read_with(cx, |view, cx| view.factory().unwrap().read(cx).open.clone()).as_deref(),
+        view.read_with(cx, |view, cx| view.factory().unwrap().read(cx).open().cloned()).as_deref(),
         Some("started-1"),
         "on the Task's panel"
     );

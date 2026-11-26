@@ -6,6 +6,7 @@
 //! does opening a sheet, which the sheet host shows.
 
 use super::*;
+use ferrite_factory::board::Surface;
 use ferrite_core::factory_board::{Override, Task};
 use ferrite_core::protocol::TaskAction;
 use ferrite_factory::direct::{Choice, DirectSheet, TaskPick};
@@ -41,12 +42,12 @@ impl CockpitView {
             DirectionEvent::SendAnswer => self.send_answer(cx),
             DirectionEvent::Approve => self.approve_task(cx),
             DirectionEvent::Open(sheet) => self.open_direct_sheet(*sheet, cx),
-            DirectionEvent::WorkerTab => self.task_tab(super::factory::TaskTab::Worker, cx),
+            DirectionEvent::WorkerTab => self.task_tab(ferrite_factory::board::TaskTab::Worker, cx),
         }
     }
 
     pub(super) fn direction(&self, cx: &gpui::App) -> Option<Entity<DirectionView>> {
-        self.factory().map(|view| view.read(cx).direction.clone())
+        self.factory().map(|view| view.read(cx).direction().clone())
     }
 
     /// The Task's answer box, made once.
@@ -57,7 +58,7 @@ impl CockpitView {
     }
 
     pub(crate) fn answer_box(&self, task: &str, cx: &gpui::App) -> Option<Entity<Composer>> {
-        self.factory()?.read(cx).direction.read(cx).answer(task).cloned()
+        self.factory()?.read(cx).direction().read(cx).answer(task).cloned()
     }
 
     /// What a Task's answer box holds now.
@@ -71,14 +72,14 @@ impl CockpitView {
     /// Board's Overview. A sheet's field is the sheet host's.
     pub(super) fn direct_focus(&self, cx: &gpui::App) -> Option<FocusHandle> {
         let view = self.factory()?.read(cx);
-        let direction = view.direction.read(cx);
+        let direction = view.direction().read(cx);
         if !direction.answering()
-            || view.surface != super::workflows::Surface::Board
-            || view.tab != super::factory::TaskTab::Overview
+            || view.surface() != Surface::Board
+            || view.tab() != ferrite_factory::board::TaskTab::Overview
         {
             return None;
         }
-        let answer = direction.answer(view.open.as_deref()?)?;
+        let answer = direction.answer(view.open().map(String::as_str)?)?;
         Some(answer.read(cx).focus_handle(cx))
     }
 
@@ -99,7 +100,7 @@ impl CockpitView {
             Ok(_) => (true, None),
             Err(error) => (false, Some(SharedString::from(error.to_string()))),
         };
-        self.update_factory(cx, |view, _| view.note = note);
+        self.update_factory(cx, |view, _| view.set_note(note));
         cx.notify();
         taken
     }
@@ -114,7 +115,7 @@ impl CockpitView {
         };
         let text = self.answer_text(&task.id, cx);
         if text.trim().is_empty() {
-            self.update_factory(cx, |view, _| view.note = Some("Write the answer first.".into()));
+            self.update_factory(cx, |view, _| view.set_note(Some("Write the answer first.".into())));
             cx.notify();
             return;
         }

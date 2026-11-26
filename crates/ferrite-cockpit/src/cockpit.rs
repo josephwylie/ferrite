@@ -85,7 +85,7 @@ mod view_head;
 pub(crate) mod workflows;
 
 use self::context_menu::{MenuTarget, MenuVerb};
-use self::popups::Popup;
+use self::popups::{CardFrom, Popup};
 use self::model_picker::Column;
 use ferrite_ui::components::home_relative;
 use ferrite_ui::components::Tip as _;
@@ -287,10 +287,6 @@ fn system_tag(machine: &ferrite_core::MachineKey, thread: ThreadId) -> String {
     }
 }
 
-/// How many frames a card waits for its geometry (`card_corner`).
-/// A Pane laid out for the first time has it by the next frame; a few more
-/// cover a layout that settles over two.
-const CARD_GEOMETRY_FRAMES: u8 = 3;
 /// The id of the latest queued prompt while it can still be taken back:
 /// what ↑ and ⌫ act on (the strip's rows each act on their own).
 fn queued_to_take_back(open: &ThreadView) -> Option<String> {
@@ -328,16 +324,12 @@ pub struct CockpitView {
     focus: FocusHandle,
     field_watch: fields::FieldWatch,
     perf: Option<Perf>,
-    /// When the watchdog's sweep is next due, and what it finds turned
-    /// over (`sweep`).
+    /// When the watchdog's sweep is next due, what it finds turned over,
+    /// and free disk as it last read it (`sweep`).
     sweep: sweep::Sweep,
     /// The nav and each Pane as cached parts (`parts`), and what notifies
     /// the frame around them alone.
     parts: std::cell::RefCell<parts::Parts>,
-    frame_tick: Entity<parts::FrameTick>,
-    /// Free bytes on the volume holding the Threads' checkouts, as last
-    /// read (the nav foot's `N GB free`); `None` until read, or when unknown.
-    free_disk: Option<u64>,
     /// When the Threads' checkout labels are read from git
     /// (`refresh_branches`).
     branch_reads: branch_reads::BranchReads,
@@ -385,12 +377,10 @@ pub struct CockpitView {
     /// scroll, keyboard, search, picks and undo notice, and asks the
     /// Cockpit for the rest through `NavEvent`.
     nav_view: Entity<ferrite_nav::view::NavView>,
-    /// The Cockpit hearing each view that has an event enum of its own
-    /// (ADR 0041), from its first frame.
-    view_events: Option<Vec<gpui::Subscription>>,
-    /// The window's activation, followed into the Cockpit
-    /// (`Cockpit::set_window_active`) once the first frame has a window.
-    activation: Option<gpui::Subscription>,
+    /// The Cockpit hearing its window, from its first frame: the window's
+    /// activation, and each view that has an event enum of its own (ADR
+    /// 0041) (`hear_window`).
+    window_heard: Option<Vec<gpui::Subscription>>,
     /// The Composer's `/`, `@` and `$` menu (`composer_menu`). Always on
     /// the focused Pane's Composer; render shuts it when the operator
     /// leaves that Pane.
@@ -410,19 +400,12 @@ pub struct CockpitView {
     /// The inline title rename, in a nav row or the view head.
     rename: rename::Rename,
     /// The one popup that is up: the context menu, the mode menu, or the
-    /// plan, checks or session controls card (ADR 0043).
+    /// plan, checks or session controls card, and how long a card has
+    /// waited for its geometry (ADR 0043).
     popups: popups::Popups,
-    /// The Solo view's right panel (`panel`): its tab per Thread and
-    /// whether the window has room for it.
+    /// The Solo view's right panel (`panel`): its tab per Thread, whether
+    /// the window has room for it, and its focus.
     panel: panel::Panel,
-    /// "Open a surface": the Panel's default focus while no tab shows.
-    panel_empty_focus: gpui::FocusHandle,
-    /// The Panel bodies that take keys of their own (the launcher, Files):
-    /// while focus is anywhere inside, the focus pump leaves it be.
-    panel_keys: gpui::FocusHandle,
-    /// The panel's column while it slides shut, so the keyboard inside it
-    /// can be found and taken back (`columns::closing_holds_focus`).
-    panel_closing_focus: gpui::FocusHandle,
     /// Back and forward through where the operator has been (`history`).
     history: history::History,
     /// Holds every footer's plan-usage popover open, its ring's own clicks
@@ -430,9 +413,6 @@ pub struct CockpitView {
     usage_popover_held: bool,
     /// Why the last Session control was refused (`session_control`).
     session_control_error: session_control::SessionControlError,
-    /// Frames each open card has waited for its trigger's or Pane's
-    /// geometry, by trigger key (`card_corner`); none once it has some.
-    card_waits: std::cell::RefCell<std::collections::HashMap<String, u8>>,
     /// The board's bounds as the last frame laid it out: what an act (a
     /// seam press, a drop) measures in when it has no window to measure.
     board: std::cell::Cell<layout::Rect>,
@@ -461,19 +441,10 @@ pub struct CockpitView {
     /// tab's document as last read, the scrolls, the find bar, the last
     /// press.
     file_surface: Entity<panel::preview::FileSurfaceView>,
-    /// Whether the window is maximized, read once per frame in `render`.
-    /// The nav's band is drawn without a `Window` in hand, and the two
-    /// halves of the titlebar have to agree: a maximized window has no top
-    /// resize edge for the drag regions to leave alone (the frame's titlebar).
-    maximized: bool,
-    /// The CLIs' versions as `--version` reports them, probed once when the
-    /// panel first opens: (claude, codex).
-    cli_versions: Option<(SharedString, SharedString)>,
-    /// A CLI version probe is in flight (the empty board asks once).
-    cli_probing: bool,
     /// Where each provider CLI stands against its newest release.
     cli_updates: crate::cli_updates::CliUpdates,
-    /// What the machine's Server has been asked and said.
+    /// The machine Settings edits: what its Server has been asked and
+    /// said, its CLIs' versions among it.
     environment: environment::Environment,
     /// Where Ferrite's own update stands (ADR 0023).
     ferrite_update: crate::ferrite_update::FerriteUpdate,
@@ -537,14 +508,6 @@ pub struct CockpitView {
 pub(crate) struct Arrived;
 
 impl EventEmitter<Arrived> for Cockpit {}
-
-/// What a card hangs from (`card_corner`): its Pane's Composer (opening
-/// up) or head (opening down).
-#[derive(Clone, Copy)]
-enum CardFrom {
-    Composer(PaneIdentity),
-    Head(PaneIdentity),
-}
 
 /// A read-only body the paging keys move: a scrolled document, or the Files
 /// editor's lines.
@@ -975,7 +938,7 @@ impl CockpitView {
         machines: Option<crate::machines::Machines>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let panel = panel::Panel::load(&prefs.dir);
+        let panel = panel::Panel::load(&prefs.dir, cx);
         Self::new_with_panel(cockpit, launch_provider, prefs, panel, machines, cx)
     }
 
@@ -1181,9 +1144,7 @@ impl CockpitView {
                 since: std::time::Instant::now(),
             }),
             sweep: sweep::Sweep::new(cx.background_executor().now()),
-            parts: Default::default(),
-            frame_tick: cx.new(|_| parts::FrameTick),
-            free_disk: None,
+            parts: std::cell::RefCell::new(parts::Parts::new(cx)),
             branch_reads: Default::default(),
             selection: TranscriptText::default(),
             side_chat,
@@ -1200,8 +1161,7 @@ impl CockpitView {
             native_copy: None,
             nav_filter: None,
             nav_view,
-            view_events: None,
-            activation: None,
+            window_heard: None,
             composer_menu,
             draft_commands: Default::default(),
             launch_project,
@@ -1210,13 +1170,9 @@ impl CockpitView {
             rename: Default::default(),
             popups,
             panel,
-            panel_empty_focus: cx.focus_handle(),
-            panel_keys: cx.focus_handle(),
-            panel_closing_focus: cx.focus_handle(),
             history: Default::default(),
             usage_popover_held: false,
             session_control_error: Default::default(),
-            card_waits: Default::default(),
             head_parent_room: Default::default(),
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             board: std::cell::Cell::new(layout::Rect::default()),
@@ -1229,9 +1185,6 @@ impl CockpitView {
             background,
             overview,
             file_surface,
-            maximized: false,
-            cli_versions: None,
-            cli_probing: false,
             cli_updates: Default::default(),
             environment: Default::default(),
             ferrite_update: Default::default(),
@@ -3392,6 +3345,7 @@ impl CockpitView {
     /// up to the whole log, so it is gathered in the background.
     fn copy_diagnostics(&mut self, cx: &mut Context<Self>) {
         let (claude, codex) = self
+            .environment
             .cli_versions
             .clone()
             .unwrap_or_else(|| ("unknown".into(), "unknown".into()));
@@ -6083,26 +6037,37 @@ fn effort_detail(effort: &str) -> &'static str {
 }
 
 impl CockpitView {
-    /// The nav's, the side chat's, Files', the Overview's and the toasts'
-    /// events, heard from the Cockpit's first frame: answering some needs
-    /// the window.
-    fn hear_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.view_events.is_none() {
-            self.view_events = Some(vec![
-                cx.subscribe_in(&self.nav_view, window, Self::on_nav_event),
-                cx.subscribe_in(&self.side_chat, window, Self::on_side_chat_event),
-                cx.subscribe_in(&self.files, window, Self::on_files_event),
-                cx.subscribe_in(&self.overview, window, Self::on_overview_event),
-                cx.subscribe_in(&self.toasts, window, Self::on_toast_event),
-                cx.subscribe_in(&self.file_surface, window, Self::on_file_surface_event),
-                cx.subscribe_in(&self.decisions, window, Self::on_decision_event),
-                cx.subscribe_in(&self.browser_chrome, window, Self::on_browser_chrome_event),
-                cx.subscribe_in(&self.browser_dialog, window, Self::on_browser_dialog_event),
-                cx.subscribe_in(&self.browser_review, window, Self::on_browser_review_event),
-                cx.subscribe_in(&self.empty_board, window, Self::on_empty_board_event),
-                cx.subscribe_in(&self.composer_menu, window, Self::on_composer_menu_event),
-            ]);
+    /// What the Cockpit hears through its window, from its first frame:
+    /// the window's activation, which the Cockpit follows
+    /// (`Cockpit::set_window_active`) — a window that opens unfocused sees
+    /// nothing until it is focused — and each view's events, since
+    /// answering some needs the window.
+    fn hear_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.window_heard.is_some() {
+            return;
         }
+        self.cockpit.update(cx, |cockpit, _| cockpit.set_window_active(window.is_window_active()));
+        let activation = cx.observe_window_activation(window, |view, window, cx| {
+            if view.cockpit.update(cx, |cockpit, _| cockpit.set_window_active(window.is_window_active())) {
+                cx.notify();
+            }
+        });
+        self.watch_lost_focus(window, cx);
+        self.window_heard = Some(vec![
+            activation,
+            cx.subscribe_in(&self.nav_view, window, Self::on_nav_event),
+            cx.subscribe_in(&self.side_chat, window, Self::on_side_chat_event),
+            cx.subscribe_in(&self.files, window, Self::on_files_event),
+            cx.subscribe_in(&self.overview, window, Self::on_overview_event),
+            cx.subscribe_in(&self.toasts, window, Self::on_toast_event),
+            cx.subscribe_in(&self.file_surface, window, Self::on_file_surface_event),
+            cx.subscribe_in(&self.decisions, window, Self::on_decision_event),
+            cx.subscribe_in(&self.browser_chrome, window, Self::on_browser_chrome_event),
+            cx.subscribe_in(&self.browser_dialog, window, Self::on_browser_dialog_event),
+            cx.subscribe_in(&self.browser_review, window, Self::on_browser_review_event),
+            cx.subscribe_in(&self.empty_board, window, Self::on_empty_board_event),
+            cx.subscribe_in(&self.composer_menu, window, Self::on_composer_menu_event),
+        ]);
     }
 }
 
@@ -6116,20 +6081,9 @@ impl Render for CockpitView {
                 window.focus(&line, cx);
             }
         }
-        // Seen is on screen while the window has focus: the Cockpit follows
-        // the window's activation from its first frame — a window that opens
-        // unfocused sees nothing until it is focused — and the window coming
-        // back reads what it shows, which every part then draws.
-        if self.activation.is_none() {
-            self.cockpit.update(cx, |cockpit, _| cockpit.set_window_active(window.is_window_active()));
-            self.activation = Some(cx.observe_window_activation(window, |view, window, cx| {
-                if view.cockpit.update(cx, |cockpit, _| cockpit.set_window_active(window.is_window_active())) {
-                    cx.notify();
-                }
-            }));
-            self.watch_lost_focus(window, cx);
-        }
-        self.hear_views(window, cx);
+        // Seen is on screen while the window has focus, and the window
+        // coming back reads what it shows, which every part then draws.
+        self.hear_window(window, cx);
         self.tend_history(cx);
         self.tend_popup_focus(window, cx);
         self.tend_sheet_focus(window, cx);
@@ -6264,7 +6218,7 @@ impl CockpitView {
         // The loops this render lays out go to the loops overlay afresh.
         ferrite_ui::loops_overlay::begin(window, cx.entity_id());
         // Read, so its notify redraws the frame around the parts alone.
-        let _ = self.frame_tick.read(cx);
+        let _ = self.parts.borrow().frame_tick().read(cx);
         self.prune_parts();
         self.measure();
         #[cfg(test)]
@@ -6292,7 +6246,10 @@ impl CockpitView {
         self.present_asked(window, cx);
         self.retire_task_toasts(window, cx);
         self.place_toasts(window, cx);
-        self.maximized = window.is_maximized();
+        // Read once a frame: the two halves of the titlebar have to agree,
+        // and a maximized window has no top resize edge for the drag
+        // regions to leave alone.
+        let maximized = window.is_maximized();
         self.leave_destination_if_moved(cx);
         let drawn = self.transcripts_drawn(cx);
         self.cockpit.update(cx, |cockpit, _| cockpit.draws_transcripts(drawn));
@@ -6513,7 +6470,7 @@ impl CockpitView {
         // So does a Panel body that reads its own keys: "Open a surface",
         // pressed, or a Files editor or filter being typed in.
         let panel_keys_held =
-            self.panel_keys.contains_focused(window, cx) || self.panel_control_focused(window, cx);
+            self.panel.keys.contains_focused(window, cx) || self.panel_control_focused(window, cx);
         let field_holds_keyboard = self.field_holds_keyboard(&wanted, window, cx);
         let dialog_took_focus = self.focus_shown_dialogs(window, cx);
         // Here, before focus is handed out: a page's dialog is modal and
@@ -6566,11 +6523,9 @@ impl CockpitView {
         // The empty board names the provider CLIs it found: ask once.
         if self.cockpit.read(cx).environment_available()
             && self.empty_board_shown(cx)
-            && self.cli_versions.is_none()
-            && !self.cli_probing
             && !cfg!(test)
+            && self.environment.board_asks()
         {
-            self.cli_probing = true;
             self.probe_cli_versions(cx);
         }
         let grid = if !self.cockpit.read(cx).environment_available() {
@@ -6883,7 +6838,7 @@ impl CockpitView {
             // thing under a menu: an overlay that reached into the band
             // would be answering the frame's hit test, not its own rows, so
             // the drag region stands down while one is open.
-            .child(crate::frame().titlebar(!self.overlay_open(cx), self.maximized))
+            .child(crate::frame().titlebar(!self.overlay_open(cx), maximized))
             .child(self.view_head(cx))
             .children(self.history_arrows_element(cx))
             .when(!self.columns.nav_folded(), |root| root.child(self.nav_resize_rail(cx)))
@@ -6943,10 +6898,7 @@ impl CockpitView {
 
     /// Adopt a free-disk reading; redraw only when the bar's words move.
     fn free_disk_landed(&mut self, free: Option<u64>, cx: &mut Context<Self>) {
-        let words = |free: Option<u64>| free.and_then(ferrite_ui::frame::free_disk_words);
-        let moved = words(free) != words(self.free_disk);
-        self.free_disk = free;
-        if moved {
+        if self.sweep.free_disk_read(free) {
             cx.notify();
         }
     }
@@ -7146,95 +7098,6 @@ impl CockpitView {
             },
             cx,
         );
-    }
-
-    /// Where a card hangs (`FloatPlace::card_corner`). Until its trigger
-    /// or Pane has been laid out once, it waits a frame rather than guess —
-    /// `CARD_GEOMETRY_FRAMES` of them at most, then hangs from the board's
-    /// corner: a Pane with nothing to give (one whose facts have not landed,
-    /// one gone from the roster draws nothing) would have the card ask for
-    /// every frame for as long as it stayed open.
-    fn card_corner(
-        &self,
-        key: String,
-        from: CardFrom,
-        window: &mut Window,
-        cx: &gpui::App,
-    ) -> Option<Point<Pixels>> {
-        let up = !matches!(from, CardFrom::Head(_));
-        let (CardFrom::Composer(identity) | CardFrom::Head(identity)) = from;
-        let corner = self.pane_card_corner(identity, up, cx);
-        let mut waits = self.card_waits.borrow_mut();
-        if corner.is_some() {
-            waits.remove(&key);
-            return corner;
-        }
-        let waited = waits.entry(key).or_default();
-        if *waited < CARD_GEOMETRY_FRAMES {
-            *waited += 1;
-            window.request_animation_frame();
-            return None;
-        }
-        Some(self.board_card_corner(up, window, cx))
-    }
-
-    /// A Pane's own card: off its Composer's right edge opening up, its
-    /// head's opening down, inside the Pane. A head card hangs under the
-    /// Thread details card while that is drawn, since it sits in the same
-    /// corner.
-    fn pane_card_corner(&self, identity: PaneIdentity, up: bool, cx: &gpui::App) -> Option<Point<Pixels>> {
-        let pane = &self.panes[self.index_of(identity)?];
-        if let Some(details) = pane.read(cx).details.drawn.get().filter(|_| !up) {
-            let limit_right = f32::from(details.right());
-            return Some(ferrite_ui::components::FloatPlace { floor: 0., limit_right }.card_corner(details, false));
-        }
-        let geometry = pane.read(cx).geometry.get();
-        let card = geometry.card?;
-        let limit_right = f32::from(card.right()) - ferrite_ui::theme::PANE_PAD_X;
-        let (floor, trigger) = if up {
-            let composer = geometry.composer?;
-            (f32::from(composer.top()), composer)
-        } else {
-            // A head card hangs from the head's foot, not the card's.
-            let head = gpui::Bounds::new(
-                card.origin,
-                gpui::size(card.size.width, px(ferrite_ui::theme::PANE_HEAD_H)),
-            );
-            (0., head)
-        };
-        Some(ferrite_ui::components::FloatPlace { floor, limit_right }.card_corner(trigger, up))
-    }
-
-    /// The limits a surface summoned from the window's bar rests within
-    /// (ADR 0014): its foot over the bar's top, its right edge inside the
-    /// window's margin.
-    fn bar_place(&self, cx: &gpui::App) -> ferrite_ui::components::FloatPlace {
-        use ferrite_ui::theme::GRID_PAD;
-        // The board stops at the bar and `board_right` short of the
-        // window's right edge.
-        let board = self.board.get();
-        ferrite_ui::components::FloatPlace {
-            floor: board.y + board.h,
-            limit_right: board.x + board.w + self.board_right(cx) - GRID_PAD,
-        }
-    }
-
-    /// Where a card hangs with no geometry to hang from: off the board as
-    /// though it were the Pane — from its foot (where a Composer would be)
-    /// for a card opening up, its head for one opening down.
-    fn board_card_corner(&self, up: bool, window: &Window, cx: &gpui::App) -> Point<Pixels> {
-        let board = self.board_bounds(window, cx);
-        let right = board.x + board.w;
-        let bottom = board.y + board.h;
-        let place = ferrite_ui::components::FloatPlace {
-            floor: bottom,
-            limit_right: right - ferrite_ui::theme::PANE_PAD_X,
-        };
-        let edge = if up { bottom } else { board.y };
-        place.card_corner(
-            gpui::Bounds::new(gpui::point(px(right), px(edge)), gpui::Size::default()),
-            up,
-        )
     }
 
     /// A pick of permission mode `mode`. A mode that stops asking

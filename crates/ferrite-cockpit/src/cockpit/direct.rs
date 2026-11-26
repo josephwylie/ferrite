@@ -59,7 +59,7 @@ impl CockpitView {
         let (Some(project), Some(view)) = (self.factory_project(), self.factory()) else {
             return;
         };
-        let direction = view.read(cx).direction.clone();
+        let direction = view.read(cx).direction().clone();
         let inputs = Source::of(&cx.entity(), |root: &Self, (project, task): &DirectQuery, cx| {
             root.direct_inputs(*project, task, cx)
         });
@@ -81,7 +81,7 @@ impl CockpitView {
         let Some(direction) = self
             .factory()
             .filter(|_| self.factory_project() == Some(project))
-            .map(|view| view.read(cx).direction.clone())
+            .map(|view| view.read(cx).direction().clone())
         else {
             return;
         };

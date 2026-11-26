@@ -150,11 +150,11 @@ fn the_answer_box_answers_the_question_and_keeps_what_was_typed(cx: &mut TestApp
     assert_eq!(answer(&view, cx), "Off; opt in only");
 
     view.update(cx, |view, cx| {
-        view.task_tab(crate::cockpit::factory::TaskTab::Activity, cx)
+        view.task_tab(ferrite_factory::board::TaskTab::Activity, cx)
     });
     tick(cx);
     view.update(cx, |view, cx| {
-        view.update_factory(cx, |factory, _| factory.open = None).unwrap();
+        view.update_factory(cx, |factory, _| factory.close_task()).unwrap();
         cx.notify();
     });
     tick(cx);
@@ -201,8 +201,8 @@ fn a_workers_permission_is_answered_from_the_task(cx: &mut TestAppContext) {
     click(cx, "task-permission-open");
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.factory().unwrap().read(cx).tab,
-            crate::cockpit::factory::TaskTab::Worker
+            view.factory().unwrap().read(cx).tab(),
+            ferrite_factory::board::TaskTab::Worker
         );
     });
 }
@@ -442,7 +442,7 @@ fn a_refused_send_stays_on_its_sheet(cx: &mut TestAppContext) {
     assert!(shows(cx, "rework-sheet"), "the sheet stays up");
     assert!(!shows(cx, "rework-missing"));
     assert_eq!(typed(&view, cx), "Fix it");
-    assert!(view.read_with(cx, |view, cx| view.factory().unwrap().read(cx).note.is_some()));
+    assert!(view.read_with(cx, |view, cx| view.factory().unwrap().read(cx).note().is_some()));
 }
 
 /// A sheet stays up as its Task moves on, drawing its own Task as the
