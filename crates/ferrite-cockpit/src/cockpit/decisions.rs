@@ -668,3 +668,34 @@ impl CockpitView {
         }
     }
 }
+
+impl CockpitView {
+    /// A digit key (`PickOption1..4`, bound where a Decision holds the
+    /// keyboard): on an empty line — or wherever no line is being typed —
+    /// it picks row `option` of the request this Pane shows (a single
+    /// single-select question then answers at once); with text on the line,
+    /// or nothing to pick, it is a digit again.
+    pub(super) fn pick_or_type(
+        &mut self,
+        option: usize,
+        digit: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let index = self.focused(cx);
+        let typing = self
+            .panes
+            .get(index)
+            .is_some_and(|pane| pane.read(cx).is_main() && !pane.read(cx).composer.read(cx).is_empty());
+        if !typing
+            && self.decision_key_taken(index, decisions::DecisionKey::Pick(option), window, cx)
+        {
+            return;
+        }
+        if let Some(pane) = self.panes.get(index) {
+            pane.read(cx).composer
+                .clone()
+                .update(cx, |composer, cx| composer.insert(digit, cx));
+        }
+    }
+}

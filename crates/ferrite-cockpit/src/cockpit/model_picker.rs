@@ -1490,6 +1490,309 @@ fn effort_rows(
         .collect()
 }
 
+/// What a typed `/effort` or `/model` line asked for.
+pub(super) enum Tuning {
+    Effort(Option<String>),
+    Model(Option<String>),
+}
+
+/// A model's effort ladder: its wire values, the words the chip prints,
+/// and the step in force (`effort_in_force`). `None` for a model that
+/// takes no effort.
+pub(super) fn effort_ladder_of(
+    chosen: Option<&str>,
+    saved: Option<&str>,
+    provider: Provider,
+    model: Option<&str>,
+    announced: &[ferrite_core::ModelInfo],
+) -> Option<(Vec<String>, Vec<SharedString>, Option<usize>)> {
+    let steps = ferrite_core::models::efforts_for(provider, model, announced);
+    if steps.is_empty() {
+        return None;
+    }
+    let labels: Vec<SharedString> = steps.iter().map(|step| effort_chip_label(step)).collect();
+    let current = effort_in_force(chosen, saved, provider, model, announced);
+    let chosen = current.and_then(|current| labels.iter().position(|label| *label == current));
+    Some((steps, labels, chosen))
+}
+
+pub(super) fn effort_detail(effort: &str) -> &'static str {
+    match effort {
+        "minimal" => "the least reasoning the model allows",
+        "low" => "fast responses, lighter reasoning",
+        "medium" => "balances speed and depth for everyday tasks",
+        "high" => "greater depth for complex problems",
+        "xhigh" => "extra depth for the hardest problems",
+        "max" => "maximum depth, slowest",
+        "ultra" => "maximum reasoning with automatic delegation",
+        _ => "",
+    }
+}
+
+impl CockpitView {
+    /// Keep the current checkmark and catalog inspectable while choices
+    /// cannot be applied: every row disabled, the reason (`Popover::hold`)
+    /// in their tooltips (SPEC §5.5).
+    pub(super) fn hold_tuning_rows(rows: &mut [Row], hold: Option<&'static str>) {
+        if hold.is_some() {
+            for row in rows.iter_mut() {
+                row.row.inert = true;
+            }
+        }
+    }
+
+    /// The sectioned rows every model picker shows — the Composer's and
+    /// the draft band's alike. `chosen` is the standing choice (None = the
+    /// Provider's default), `serving` what the Session's Init named. The
+    /// ✓ lands on the chosen row, else on the row serving; the arrows
+    /// start there, so a bare ↵ keeps everything as it is.
+    pub(super) fn provider_rows(
+        &self,
+        machine: ferrite_core::MachineId,
+        current: Provider,
+        chosen: Option<&str>,
+        serving: Option<&str>,
+        locked: bool,
+        consequence: impl Fn(ProviderChoice) -> Consequence,
+        cx: &gpui::App,
+    ) -> (Vec<Row>, usize) {
+        let mut rows: Vec<Row> = Vec::new();
+        let mut selected = None;
+        for provider in Provider::ALL {
+            // After the first prompt the other Provider is a handover, not
+            // a swap: its rows stay live and its section says what a pick
+            // does — a fresh conversation there, the earlier one carried
+            // over as context.
+            let handover = locked && provider != current;
+            let fixed = false;
+            rows.push(Row {
+                row: pane::MenuRow {
+                    insert: SharedString::default(),
+                    name: SharedString::from(ferrite_ui::provider::title(provider)),
+                    matched: Vec::new(),
+                    detail: SharedString::from(if handover { "handover" } else { "" }),
+                    prose_detail: true,
+                    inert: true,
+                    tag: None,
+                },
+                active: false,
+                consequence: Consequence::Inert,
+            });
+            let mut catalog = ferrite_core::models::menu(
+                self.cockpit.read(cx).model_catalog(machine, provider),
+                chosen.filter(|_| provider == current),
+            );
+            if provider == current {
+                if let Some(chosen) = chosen {
+                    if !catalog.iter().any(|row| row.is(chosen)) {
+                        catalog.push(ferrite_core::ModelInfo::bare(chosen));
+                    }
+                }
+            }
+            for model in catalog {
+                let active = provider == current
+                    && match chosen {
+                        Some(chosen) => model.value == chosen,
+                        None => {
+                            model.value == "default"
+                                || (serving.is_some_and(|serving| model.is(serving))
+                                    && !self
+                                        .cockpit
+                                        .read(cx)
+                                        .model_catalog(machine, provider)
+                                        .iter()
+                                        .any(|row| row.value == "default"))
+                        }
+                    };
+                if active {
+                    selected = Some(rows.len());
+                }
+                // The picker's voice (the prototype's `#picker`): the CLI's
+                // own default reads `Default`; every other model is named
+                // as the footer names it (`Opus 5.5`, no `(1M)`: one name
+                // for one model), the context left to its description;
+                // every description lowercase-first.
+                let name = if model.value == "default" {
+                    "Default".to_string()
+                } else {
+                    ferrite_core::models::footer_name(
+                        provider,
+                        Some(&model.value),
+                        std::slice::from_ref(&model),
+                    )
+                };
+                rows.push(Row {
+                    row: pane::MenuRow {
+                        insert: SharedString::default(),
+                        name: SharedString::from(name),
+                        matched: Vec::new(),
+                        detail: SharedString::from(ferrite_core::models::groom_detail(
+                            &model.detail,
+                        )),
+                        prose_detail: true,
+                        inert: fixed,
+                        tag: None,
+                    },
+                    active,
+                    consequence: if fixed {
+                        Consequence::Inert
+                    } else {
+                        consequence(ProviderChoice {
+                            provider,
+                            // The Provider's own default is the absence of
+                            // a choice, never the word on the wire.
+                            model: Some(model.value.clone()).filter(|value| value != "default"),
+                        })
+                    },
+                });
+            }
+        }
+        let selected =
+            selected.unwrap_or_else(|| rows.iter().position(|row| !row.inert).unwrap_or(0));
+        (rows, selected)
+    }
+
+    /// A model-row pick uses the current Provider's live model control;
+    /// another Provider is `set_provider`'s pre-prompt swap or handover.
+    /// A refusal changed nothing, and the core's own words land in this
+    /// Thread's transcript.
+    pub(super) fn pick_provider(&mut self, thread: ThreadKey, choice: ProviderChoice, cx: &mut Context<Self>) {
+        let same_provider = self
+            .cockpit
+            .read(cx)
+            .thread(thread)
+            .is_some_and(|open| open.provider() == choice.provider);
+        let asked = if same_provider {
+            self.cockpit.update(cx, |cockpit, _| cockpit.set_model(thread, choice.model))
+        } else {
+            self.cockpit.update(cx, |cockpit, _| cockpit.set_provider(thread, choice))
+        };
+        self.when_tuned(thread, asked, "model", cx);
+    }
+
+    /// What follows a model or effort pick's answer: a refusal changed
+    /// nothing, and says so in the Thread.
+    pub(super) fn when_tuned(
+        &mut self,
+        thread: ThreadKey,
+        asked: ferrite_client::cockpit::Ask<()>,
+        what: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        self.when_answered(
+            asked,
+            move |view, answered, cx| {
+                if let Err(error) = answered {
+                    view.cockpit
+                        .update(cx, |cockpit, _| cockpit.say(thread, format!("{what} unchanged: {error}")));
+                }
+                view.facts.acted(view.cockpit.read(cx), thread);
+                cx.notify();
+            },
+            cx,
+        );
+    }
+
+    /// Discovery can finish while a picker is open. Rebuild its rows and
+    /// preserve the highlighted choice by value, even if row order changes.
+    pub(super) fn refresh_model_picker(&mut self, cx: &mut Context<Self>) {
+        self.rebuild_model_picker(cx);
+    }
+
+    /// A typed `/effort <level>` or `/model <name>` the cockpit itself can
+    /// honour: the level is on the model's ladder (or `default`), the name
+    /// matches a catalog row by value or display name. Anything else is
+    /// None and goes to the provider as text.
+    pub(super) fn typed_tuning(&self, thread: ThreadKey, text: &str, cx: &gpui::App) -> Option<Tuning> {
+        let open = self.cockpit.read(cx).thread(thread)?;
+        let mut words = text.split_whitespace();
+        let command = words.next()?;
+        let argument = words.next()?;
+        if words.next().is_some() {
+            return None;
+        }
+        let argument = argument.to_ascii_lowercase();
+        match command {
+            "/effort" => {
+                if argument == "default" {
+                    return Some(Tuning::Effort(None));
+                }
+                let ladder = ferrite_core::models::efforts_for(
+                    open.provider(),
+                    open.model(),
+                    open.models(),
+                );
+                ladder
+                    .into_iter()
+                    .find(|level| level.eq_ignore_ascii_case(&argument))
+                    .map(|level| Tuning::Effort(Some(level)))
+            }
+            "/model" => {
+                if argument == "default" {
+                    return Some(Tuning::Model(None));
+                }
+                self.cockpit
+                    .read(cx)
+                    .model_catalog(thread.machine(), open.provider())
+                    .into_iter()
+                    .find(|row| {
+                        row.value.eq_ignore_ascii_case(&argument)
+                            || row.display.eq_ignore_ascii_case(&argument)
+                            || row.is(&argument)
+                    })
+                    .map(|row| Tuning::Model(Some(row.value).filter(|value| value != "default")))
+            }
+            _ => None,
+        }
+    }
+
+    /// The model's effort ladder for `thread` (`effort_ladder_of`).
+    pub(super) fn effort_ladder(
+        &self,
+        thread: ThreadKey,
+        cx: &gpui::App,
+    ) -> Option<(Vec<String>, Vec<SharedString>, Option<usize>)> {
+        let open = self.cockpit.read(cx).thread(thread)?;
+        let provider = open.provider();
+        effort_ladder_of(
+            open.effort(),
+            self.prefs.settings.effort_for(provider),
+            provider,
+            open.model(),
+            open.models(),
+        )
+    }
+
+    /// The effort ladder of the model the draft in Pane `index` would
+    /// start on (`effort_ladder_of`).
+    pub(super) fn draft_effort_ladder(
+        &self,
+        index: usize,
+        cx: &gpui::App,
+    ) -> Option<(Vec<String>, Vec<SharedString>, Option<usize>)> {
+        let draft = self.panes.get(index)?.read(cx).draft()?;
+        let provider = draft.binding.provider().provider;
+        effort_ladder_of(
+            draft.binding.effort(),
+            self.prefs.settings.effort_for(provider),
+            provider,
+            draft.binding.provider().model.as_deref(),
+            &self
+                .cockpit
+                .read(cx)
+                .announced_models(draft.binding.project().machine(), provider),
+        )
+    }
+
+    /// An effort-row pick: the core re-aims the Thread (eagerly before the
+    /// first prompt, by resuming after it, refused mid-turn — its own
+    /// words land in the transcript either way).
+    pub(super) fn pick_effort(&mut self, thread: ThreadKey, effort: Option<String>, cx: &mut Context<Self>) {
+        let asked = self.cockpit.update(cx, |cockpit, _| cockpit.set_effort(thread, effort));
+        self.when_tuned(thread, asked, "effort", cx);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -309,6 +309,442 @@ fn news(
     (fresh, requests)
 }
 
+impl CockpitView {
+    /// What an agent or a script asked of the windows through the API
+    /// (ADR 0027), one at a time.
+    pub(super) fn present_asked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let asked = self.cockpit.update(cx, |cockpit, _| cockpit.take_asked());
+        if asked.is_empty() {
+            return;
+        }
+        // An act's settle can take an ask before the pump has run: the
+        // Panes follow the roster first, so a Focus on a Thread just opened
+        // lands on its Pane instead of reopening a Thread that is open.
+        self.follow_roster(cx);
+        for asked in asked {
+            self.present(asked, window, cx);
+        }
+    }
+
+    /// One ask: to land on a Thread, as its nav row would; a toast, which
+    /// fades as a finished turn's does unless important, with its chime.
+    pub(super) fn present(
+        &mut self,
+        asked: ferrite_client::cockpit::Asked,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use ferrite_client::cockpit::Asked;
+        use gpui::component::notification::{Notification, NotificationType};
+        use gpui::component::WindowExt as _;
+        match asked {
+            // A fork the side chat asked for goes to its tab, not the board.
+            Asked::Focus { thread, fork_of } => {
+                let fork_of = fork_of
+                    .or_else(|| self.unnamed_fork_owner(thread, cx));
+                self.switch_thread(window, cx, |view, _, cx| {
+                    if !fork_of.is_some_and(|owner| view.bind_side_thread(owner, thread, cx)) {
+                        view.land_on_thread(thread, cx);
+                    }
+                });
+            }
+            Asked::Notification {
+                title,
+                body,
+                sound,
+                important,
+            } => {
+                let mut toast = Notification::new()
+                    .title(title)
+                    .with_type(NotificationType::Info)
+                    .autohide(!important);
+                if let Some(body) = body {
+                    toast = toast.message(body);
+                }
+                window.push_notification(toast, cx);
+                // No provider to ask: only the all-sounds switch applies.
+                if let Some(sound) = sound.filter(|_| self.prefs.settings.sounds) {
+                    self.chime(sound);
+                }
+            }
+            Asked::TaskAlert {
+                project,
+                task,
+                status,
+                title,
+                detail,
+            } => self.present_task_alert(project, task, status, title, detail, window, cx),
+        }
+    }
+
+    /// A provider's 5-hour or weekly window rising past one of the
+    /// operator's thresholds: one toast per crossing, left up — the
+    /// allowance is the account's, and every Thread on it draws it down.
+    pub(super) fn present_allowance_warnings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use ferrite_core::allowance::LimitWindow;
+        use gpui::component::notification::{Notification, NotificationType};
+        use gpui::component::WindowExt as _;
+        for warning in self.cockpit.update(cx, |cockpit, _| cockpit.take_allowance_warnings()) {
+            let span = match warning.window {
+                LimitWindow::FiveHour => "5-hour",
+                LimitWindow::Weekly => "weekly",
+            };
+            let provider = ferrite_ui::provider::title(warning.provider);
+            window.push_notification(
+                Notification::new()
+                    .title(format!(
+                        "{provider} {span} allowance {:.0}% used",
+                        warning.used_fraction * 100.0
+                    ))
+                    .message(format!(
+                        "Past your {}% warning. Every {provider} Thread draws on it.",
+                        warning.threshold
+                    ))
+                    .with_type(NotificationType::Warning)
+                    .autohide(false),
+                cx,
+            );
+        }
+    }
+
+    /// ⌘I (and the Bar's needs-you count): the list takes the keys on its
+    /// first card (ADR 0040); again, they go back to the board.
+    pub(super) fn toggle_notifications(
+        &mut self,
+        _: &ToggleNotifications,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.nav_view.read(cx).holds_keys(window) {
+            self.nav_view.update(cx, |nav, cx| nav.leave(window, cx));
+            return;
+        }
+        self.close_composer_menu(cx);
+        self.close_popup(cx);
+        self.floats.palette = None;
+        self.floats.shortcuts = None;
+        let first = self.first_nav_card(cx);
+        self.focus_nav_on(first, window, cx);
+    }
+
+    /// Every click or key on the Inbox's surfaces — a toast's `⏎ open`, a
+    /// row, ⏎ and ⌫ on the list, `mark all read` — lands here and is
+    /// answered against core. Opening lands the operator on the Notice's
+    /// Pane: the core's one focus door, so a parked Thread revives, and the mirror follows. (A toast's quick
+    /// answer needs the window: `answer_from_toast`.)
+    pub(crate) fn notice_verb(&mut self, verb: Verb, cx: &mut Context<Self>) {
+        match verb {
+            Verb::OpenThread(thread) => self.land_on_thread(thread, cx),
+            Verb::Open(machine, id) => {
+                self.drop_toast(machine, &ferrite_nav::notifications::RowTarget::Notice(id), cx);
+                if let Some((_, landed)) = self
+                    .cockpit
+                    .update(cx, |cockpit, _| cockpit.open_notice(machine, id))
+                {
+                    self.when_answered(
+                        landed,
+                        |view, landed, cx| {
+                            if landed.is_ok() {
+                                view.sync_panes(cx);
+                                cx.notify();
+                            }
+                        },
+                        cx,
+                    );
+                }
+                self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
+            }
+            Verb::Dismiss(machine, id) => {
+                self.cockpit
+                    .update(cx, |cockpit, _| cockpit.dismiss_notice(machine, id));
+            }
+            Verb::OpenDecision(machine, id) => {
+                self.drop_toast(
+                    machine,
+                    &ferrite_nav::notifications::RowTarget::Decision(id.clone()),
+                    cx,
+                );
+                let notifications = self.cockpit.read(cx).notifications(machine);
+                let subject = notifications
+                    .decision(&id)
+                    .and_then(|notice| notice.subject.clone())
+                    .unwrap_or(ferrite_core::activity::Subject::Main);
+                let thread = notifications.key(id.thread);
+                let pending_subject = self
+                    .cockpit
+                    .read(cx)
+                    .thread(thread)
+                    .and_then(|open| {
+                        open.pending_decisions()
+                            .iter()
+                            .find(|pending| pending.handle == id.handle)
+                    })
+                    .map(|pending| {
+                        pending
+                            .subject
+                            .clone()
+                            .unwrap_or(ferrite_core::activity::Subject::Main)
+                    });
+                // A request whose Notice is gone, or whose Thread did not
+                // take the screen, is still landed on while it is pending.
+                let pending = move |view: &mut Self, cx: &mut Context<Self>| {
+                    if let Some(subject) = pending_subject {
+                        view.land_on_thread(thread, cx);
+                        view.select_subject_from_notice(thread, subject, cx);
+                    }
+                };
+                match self
+                    .cockpit
+                    .update(cx, |cockpit, _| cockpit.open_decision_notice(machine, &id))
+                {
+                    Some((thread, landed)) => self.when_answered(
+                        landed,
+                        move |view, landed, cx| {
+                            if landed.is_ok() {
+                                view.sync_panes(cx);
+                                view.select_subject_from_notice(thread, subject, cx);
+                            } else {
+                                pending(view, cx);
+                            }
+                            cx.notify();
+                        },
+                        cx,
+                    ),
+                    None => pending(self, cx),
+                }
+                self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
+            }
+            Verb::DismissDecision(machine, id) => {
+                self.cockpit
+                    .update(cx, |cockpit, _| cockpit.dismiss_decision_notice(machine, &id));
+            }
+            // Every row read on every machine, none removed: titles drop
+            // to plain, the badge clears.
+            Verb::MarkAllRead => {
+                self.cockpit.update(cx, |cockpit, _| cockpit.mark_notices_read());
+            }
+            Verb::Answer(..) => {}
+        }
+        cx.notify();
+    }
+
+    /// A toast's `1 allow` / `3 deny` (FL-18): the decisions package's
+    /// answer to that Thread's waiting approval, and the toast goes.
+    pub(super) fn answer_from_toast(
+        &mut self,
+        machine: ferrite_core::MachineId,
+        id: ferrite_core::notifications::DecisionNoticeId,
+        answer: ferrite_nav::notifications::QuickAnswer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let choice = match answer {
+            ferrite_nav::notifications::QuickAnswer::Allow => {
+                ferrite_pane::decision::ApprovalChoice::Allow
+            }
+            ferrite_nav::notifications::QuickAnswer::Deny => {
+                ferrite_pane::decision::ApprovalChoice::DenyAndSteer
+            }
+        };
+        self.drop_toast(
+            machine,
+            &ferrite_nav::notifications::RowTarget::Decision(id.clone()),
+            cx,
+        );
+        let thread = self.cockpit.read(cx).notifications(machine).key(id.thread);
+        self.answer_approval(thread, choice, None, window, cx);
+        cx.notify();
+    }
+
+    /// One completion Notice in the list's words (R7): `✗ failed` with the
+    /// turn's failing test summary (a turn whose last test run failed is
+    /// failed) or its error; else `✓ done` with the final answer when it is
+    /// one line that fits the row, else `worked for <settled duration>`.
+    pub(super) fn notice_row(
+        &self,
+        key: ThreadKey,
+        notice: &ferrite_core::notifications::Notice,
+        now: std::time::SystemTime,
+        cx: &gpui::App,
+    ) -> NoticeRow {
+        use ferrite_nav::notifications::{Detail, State};
+        let title = self.row_title(key, cx);
+        let finish = self
+            .cockpit
+            .read(cx)
+            .thread(key)
+            .map(|open| open.digest().finish.clone())
+            .unwrap_or_default();
+        let (state, detail) = match (&notice.outcome, finish.failing_tests) {
+            (_, Some(summary)) => (State::Failed, Detail::Words(summary.into())),
+            (ferrite_core::TurnOutcome::Error(error), None) => (
+                State::Failed,
+                Detail::Words(
+                    ferrite_core::progress::one_line(error, ferrite_core::progress::ROW_CHARS)
+                        .into(),
+                ),
+            ),
+            _ => {
+                let room =
+                    ferrite_nav::notifications::ROW_TEXT_CELLS.saturating_sub(title.chars().count() + 3);
+                (
+                    State::Done,
+                    ferrite_nav::notifications::done_words(
+                        finish.answer.as_deref(),
+                        finish.worked_ms.map(Duration::from_millis),
+                        room,
+                    ),
+                )
+            }
+        };
+        NoticeRow {
+            target: ferrite_nav::notifications::RowTarget::Notice(notice.id),
+            thread: key,
+            title,
+            state,
+            detail,
+            when: ferrite_ui::age::since_label(notice.at, now),
+            read: notice.read,
+            elsewhere: self.machine_label(key.machine(), cx).is_some(),
+        }
+    }
+
+    /// The provider an alert's Thread runs on, as far as its machine says.
+    pub(super) fn alert_provider(&self, alert: &ferrite_nav::notifications::Alert, cx: &gpui::App) -> Option<Provider> {
+        self.cockpit
+            .read(cx)
+            .thread(alert.thread)
+            .map(|open| open.provider())
+    }
+
+    /// One alert's system notification, worded as its row and tagged with
+    /// its Thread on its machine, so a newer one replaces it, while its
+    /// record is there to word it.
+    pub(super) fn system_posting(
+        &self,
+        alert: &ferrite_nav::notifications::Alert,
+        now: std::time::SystemTime,
+        cx: &gpui::App,
+    ) -> Option<ferrite_nav::notifications::Posting> {
+        let row = self.alert_row(alert, now, cx)?;
+        let cockpit = self.cockpit.read(cx);
+        let machine = alert.thread.machine();
+        let saved_as = cockpit.saved_as(machine)?.clone();
+        // The directory is this computer's only for a Thread on it.
+        let cwd = cockpit
+            .local(machine)
+            .then(|| cockpit.thread(alert.thread))
+            .flatten()
+            .and_then(|open| open.workspace())
+            .map(|binding| binding.cwd().to_path_buf());
+        Some(ferrite_nav::notifications::Posting {
+            tag: system_tag(&saved_as, alert.thread.thread()),
+            needs_you: alert.needs_you(),
+            word: row.word(),
+            title: row.title.to_string(),
+            detail: row.detail.text(),
+            agent: self
+                .alert_provider(alert, cx)
+                .map(|provider| provider.to_string()),
+            cwd,
+        })
+    }
+
+    /// Play a chime: the operator's own file for it, else the built-in.
+    /// Tests and captures keep quiet; a test reads what would have played.
+    pub(super) fn chime(&mut self, sound: Sound) {
+        if cfg!(any(test, feature = "visual-reference")) {
+            #[cfg(test)]
+            self.chimed.push(sound);
+            return;
+        }
+        ferrite_core::sound::play(sound, self.prefs.settings.sound_file(sound));
+    }
+
+    /// The operator clicked a system notification: the app comes forward
+    /// (the click handler's doing) and lands on what it was about, in
+    /// place, on whichever machine.
+    pub(crate) fn open_system_notification(&mut self, tag: &str, cx: &mut Context<Self>) {
+        if self.open_task_notification(tag, cx) || self.open_copy_notification(tag, cx) {
+            return;
+        }
+        // Its entry stays: read now, the next pump takes it out of the
+        // notification centre with the rest.
+        let posted = self.toasts.read(cx).needs_you().posted.get(tag).cloned();
+        if let Some(alert) = posted {
+            self.notice_verb(alert.open_verb(), cx);
+        }
+    }
+
+    /// The row a toast or a system notification shows for `alert`, while
+    /// its record is there to word it.
+    pub(super) fn alert_row(
+        &self,
+        alert: &ferrite_nav::notifications::Alert,
+        now: std::time::SystemTime,
+        cx: &gpui::App,
+    ) -> Option<NoticeRow> {
+        let notifications = self.cockpit.read(cx).notifications(alert.thread.machine());
+        Some(match &alert.target {
+            RowTarget::Thread(_) => return None,
+            RowTarget::Notice(id) => {
+                self.notice_row(alert.thread, notifications.get(*id)?, now, cx)
+            }
+            RowTarget::Decision(id) => {
+                self.decision_row(alert.thread, notifications.decision(id)?, now, cx)
+            }
+        })
+    }
+
+    /// One row per open Thread awaiting handling, independent of Notices.
+    /// Requests precede other rows, retaining each machine's attention order.
+    #[cfg(test)]
+    pub(super) fn needs_you_rows(&self, cx: &gpui::App) -> Vec<NoticeRow> {
+        self.inbox_rows(&self.nav_state(cx), cx)
+    }
+
+    /// The Active section as the Inbox's rows, every machine's, requests
+    /// first.
+    pub(super) fn inbox_rows(
+        &self,
+        state: &nav::NavState,
+        cx: &gpui::App,
+    ) -> Vec<NoticeRow> {
+        let now = ferrite_core::clock::system_time();
+        let mut rows: Vec<_> = state
+            .active
+            .iter()
+            .map(|entry| entry.key)
+            .map(|thread| {
+                let notifications = self.cockpit.read(cx).notifications(thread.machine());
+                if let Some(decision) = notifications.first_request(thread.thread()) {
+                    self.decision_row(thread, decision, now, cx)
+                } else if let Some(notice) = notifications
+                    .notices()
+                    .find(|notice| notice.thread == thread.thread())
+                {
+                    self.notice_row(thread, notice, now, cx)
+                } else {
+                    NoticeRow {
+                        target: RowTarget::Thread(thread.thread()),
+                        thread,
+                        title: self.row_title(thread, cx),
+                        state: ferrite_nav::notifications::State::Idle,
+                        detail: ferrite_nav::notifications::Detail::None,
+                        when: "".into(),
+                        read: true,
+                        elsewhere: self.machine_label(thread.machine(), cx).is_some(),
+                    }
+                }
+            })
+            .collect();
+        rows.sort_by_key(|row| !row.request());
+        let mut seen = std::collections::BTreeSet::new();
+        rows.retain(|row| seen.insert(row.thread));
+        rows
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

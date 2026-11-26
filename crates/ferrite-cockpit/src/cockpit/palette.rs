@@ -1441,3 +1441,8 @@ pub(super) fn this_computer_row(host: Option<String>) -> (String, String) {
         None => (THIS_COMPUTER.into(), String::new()),
     }
 }
+
+/// How many sessions the import picker lists (#11), newest first: enough
+/// history to search, few enough that the listing reads a bounded slice
+/// of each file rather than every session ever run.
+pub(super) const IMPORT_ROWS_MAX: usize = 200;
