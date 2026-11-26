@@ -19,7 +19,7 @@ use ferrite_pane::pane::{AgentClock, AgentFace, AgentFaces, AgentRun};
 use ferrite_pane::transcript::{PromptAction, ScrollTarget, TranscriptTail};
 use gpui::{App, ClipboardItem, Context, SharedString, Window};
 
-use super::CockpitView;
+use super::*;
 
 /// Where a prompt sent again went.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -542,6 +542,677 @@ impl CockpitView {
         if let Some(transcript) = self.panes.get(index).and_then(|pane| pane.read(cx).transcript()) {
             transcript.update(cx, |transcript, cx| transcript.scroll_to(target, cx));
         }
+    }
+}
+
+/// A read-only body the paging keys move: a scrolled document, or the Files
+/// editor's lines.
+pub(super) enum Reader {
+    Document(ScrollHandle),
+    Code(Entity<tools::Editor>),
+}
+
+impl CockpitView {
+    /// Compare a visible Subject's key every root render, and only then copy
+    /// its bounded blocks and timings into its retained entity — with its
+    /// tail row, the call a pending Decision gates, and the
+    /// checkout its path targets resolve against (`transcript_glue`).
+    pub(super) fn sync_transcript(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some((thread, subject, namespace, focused, selection_scope, disclosure_revision)) =
+            self.panes.get(index).and_then(|pane| {
+                pane.thread().map(|thread| {
+                    (
+                        thread,
+                        pane.read(cx).selected.clone(),
+                        pane.read(cx).text_namespace(),
+                        index == self.focused(cx),
+                        pane.read(cx).selection_scope,
+                        pane.read(cx).disclosure_revision(),
+                    )
+                })
+            })
+        else {
+            return;
+        };
+        let Some(subject_view) = self
+            .cockpit
+            .read(cx)
+            .thread(thread)
+            .and_then(|open| open.activity().subject(&subject))
+        else {
+            return;
+        };
+        // What the root's own reads give, before the model is lent to the
+        // transcript's update below.
+        let earlier = Self::earlier_history(subject_view.transcript(), self.panes[index].read(cx).is_main());
+        let delegates = self.delegate_faces(thread, subject_view.transcript(), cx);
+        let parent = self.delegator_link(index, cx);
+        let tail = self.transcript_tail(index, cx);
+        let solo = self.on_plane(thread, cx);
+        self.wake_for_background_clock(index, cx);
+        let entity = self.panes[index]
+            .update(cx, |pane, cx| pane.ensure_transcript(cx))
+            .expect("thread Pane has a transcript entity");
+        if self.transcript_entities.insert(entity.entity_id()) {
+            cx.subscribe(&entity, Self::transcript_event).detach();
+        }
+        // One reading size for every transcript, on every board.
+        let reading_size = self.prefs.settings.reading_size;
+        let reduce_motion = cx.reduce_motion();
+        let pane = &self.panes[index];
+        // What the transcript's body takes of the Pane, should it build one:
+        // read now, as the transcript's update below holds `cx`.
+        let (disclosure, preview) = {
+            let pane = pane.read(cx);
+            (pane.transcript_disclosure_snapshot(), pane.preview.clone())
+        };
+        let selection = self.selection.clone();
+        self.cockpit.update(cx, |model, cx| {
+            let Some(open) = model.thread(thread) else {
+                return;
+            };
+            let Some(subject_view) = open.activity().subject(&subject) else {
+                return;
+            };
+            let revision = subject_view.presentation_revision();
+            let status = pane::transcript_status(subject_view.status(), subject_view.fresh());
+            // The gated call hides while its Decision waits as the tail row.
+            let pending_call = tail
+                .as_ref()
+                .and_then(|_| open.pending())
+                .map(|decision| decision.tool_use_id.clone())
+                .filter(|call| !call.is_empty());
+            let workspace =
+                ferrite_core::checkout::effective_cwd(open.session_project_root(), open.workspace())
+                    .map(std::path::Path::to_path_buf);
+            // While the turn runs, its header under its prompt and its live
+            // row at the tail (`pane::working_tail`), over a Decision that
+            // waits.
+            let working = pane::working_tail(pane::WorkingFacts {
+                transcript: subject_view.transcript(),
+                thread: thread.thread(),
+                starting: open.starting(),
+                solo,
+                focused,
+                reduce_motion,
+            });
+            let mut agents = transcript_glue::agent_faces(open.activity(), open.provider());
+            for (call, face) in delegates {
+                agents.insert(call, face);
+            }
+            let rewind = transcript_glue::rewind_gate(&open);
+            // A subagent's tab draws no Composer to quote into.
+            let quotes = pane.read(cx).is_main();
+            let queued = open.queue().len();
+            let presentation = ferrite_pane::transcript::TranscriptPresentation {
+                thread: thread.thread(),
+                selection_scope,
+                disclosure_focus: pane.read(cx).tool_focus(),
+                namespace,
+                content_revision: revision,
+                display_revision: disclosure_revision,
+                focused,
+                signal_status: Some(status),
+                reading_size,
+                working,
+                tail,
+                pending_call,
+                workspace,
+                solo,
+                thinking: self.prefs.settings.show_thinking,
+                agents,
+                rewind,
+                quotes,
+                reply_to: open.provider().to_string().into(),
+                skills: open.commands().into(),
+                cited: model
+                    .saved(thread)
+                    .and_then(|saved| self.cited_sources.of(&saved))
+                    .map(std::borrow::Cow::Borrowed)
+                    .unwrap_or_default(),
+                note: None,
+                earlier,
+                parent,
+                queued,
+            };
+            let transcript = subject_view.transcript();
+            entity.update(cx, |view, cx| {
+                view.reconcile(
+                    presentation,
+                    move || {
+                        ferrite_pane::transcript::TranscriptBody {
+                            blocks: pane::rendered_window(transcript.blocks()).to_vec(),
+                            preview,
+                            expanded: disclosure.0,
+                            target: disclosure.1,
+                        }
+                    },
+                    selection,
+                    cx,
+                );
+            });
+        });
+    }
+
+    /// Whether the Thread began before the first row `transcript` draws: its
+    /// Blocks were dropped to the limit, or the pane's window is cut from
+    /// them. Main's whole history can be copied out: its Server replays the
+    /// log (`copy_transcript`).
+    pub(super) fn earlier_history(
+        transcript: &ferrite_core::transcript::Transcript,
+        main: bool,
+    ) -> Option<ferrite_pane::transcript::Earlier> {
+        let dropped = transcript.earlier_dropped();
+        let cut = pane::rendered_window(transcript.blocks()).len()
+            < transcript.blocks().len();
+        (dropped || cut).then_some(ferrite_pane::transcript::Earlier { copyable: main })
+    }
+
+    /// Whether `thread`'s Pane is the window's plane, on its black ground,
+    /// rather than drawn by the Factory, which draws a Worker or a
+    /// Coordinator on its own ground.
+    pub(super) fn on_plane(&self, thread: ThreadKey, cx: &gpui::App) -> bool {
+        self.factory_worker_drawn(cx) != Some(thread)
+    }
+
+    pub(super) fn sync_visible_transcripts(&mut self, cx: &mut Context<Self>) {
+        let mut shown = self.visible_indices(cx);
+        // The Factory draws a Worker or its Coordinator the roster does not
+        // show (its Task's Worker tab, the Coordinator surface).
+        shown.extend(
+            self.factory_worker_drawn(cx)
+                .and_then(|thread| self.pane_for(thread))
+                .filter(|index| !shown.contains(index)),
+        );
+        shown.into_iter().for_each(|index| self.sync_transcript(index, cx));
+        self.sync_side_chat_transcript(cx);
+    }
+
+    /// Core's child-retention budget evicted these Subjects. Release only
+    /// their retained row trees; normal tab switches retain scroll state.
+    pub(super) fn release_evicted_transcripts(
+        &mut self,
+        index: usize,
+        changed: &[ferrite_client::cockpit::SubjectUpdate],
+        cx: &mut gpui::App,
+    ) {
+        let Some(thread) = self.panes[index].thread() else {
+            return;
+        };
+        let Some(activity) = self.cockpit.read(cx).thread(thread).map(|thread| thread.activity()) else {
+            return;
+        };
+        let evicted: Vec<ferrite_core::activity::Subject> = changed
+            .iter()
+            .map(|change| activity.canonical_subject(&change.subject))
+            .filter(|subject| activity.subject(subject).is_some_and(|subject| !subject.retained()))
+            .collect();
+        for subject in evicted {
+            if let Some(transcript) = self.panes[index].update(cx, |pane, _| pane.release_transcript(&subject)) {
+                self.transcript_entities.remove(&transcript.entity_id());
+            }
+        }
+    }
+
+    /// PageUp, PageDown, Home or End on the focused Pane's transcript; the
+    /// details card, holding the keyboard, takes them and leaves it be.
+    pub(super) fn page_transcript(
+        &mut self,
+        page: Page,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.details_hold_focus(window, cx) {
+            return;
+        }
+        if let Some(reader) = self.reader(window, cx) {
+            Self::scroll_reader(&reader, page, cx);
+            cx.notify();
+            return;
+        }
+        if let Some(transcript) = self
+            .panes
+            .get(self.focused(cx))
+            .and_then(|pane| pane.read(cx).transcript())
+        {
+            transcript.update(cx, |transcript, cx| transcript.page(page, cx));
+        }
+    }
+
+    /// Move a read-only body by `page`, the way the transcript's own paging does.
+    pub(super) fn scroll_reader(reader: &Reader, page: Page, cx: &mut Context<Self>) {
+        let scroll = match reader {
+            Reader::Code(editor) => return editor.read(cx).scroll_page(page),
+            Reader::Document(scroll) => scroll,
+        };
+        let max = scroll.max_offset().y;
+        let step = scroll.bounds().size.height;
+        let at = scroll.offset().y;
+        let to = match page {
+            Page::Top => px(0.),
+            Page::Bottom => -max,
+            Page::Up => (at + step).min(px(0.)),
+            Page::Down => (at - step).max(-max),
+        };
+        scroll.set_offset(gpui::point(scroll.offset().x, to));
+    }
+
+    /// The read-only body the paging keys belong to: the open preview's
+    /// document when it holds focus, else the Files tab the panel's keys
+    /// are on. Everything else leaves them to the transcript.
+    pub(super) fn reader(&self, window: &Window, cx: &gpui::App) -> Option<Reader> {
+        let index = self.focused(cx);
+        let pane = self.panes.get(index)?;
+        if pane.read(cx).preview.focused(window, cx) && self.preview_shown(index, cx) {
+            if let Some(scroll) = self.panel.file_surface.read(cx).reader_scroll(pane.identity) {
+                return Some(Reader::Document(scroll));
+            }
+        }
+        let thread = pane.thread()?;
+        let on_panel = self.panel_control_focused(window, cx) || self.panel_keys_held(window, cx);
+        if !on_panel || self.active_surface(thread) != Some(crate::cockpit::surfaces::SurfaceId::Files) {
+            return None;
+        }
+        let files = self.tools.files.read(cx);
+        files
+            .prose_scroll(thread)
+            .map(Reader::Document)
+            .or_else(|| files.shown_editor(thread).map(Reader::Code))
+    }
+
+    /// A send in Pane `index`: its prompt, once it arrives, scrolls to the
+    /// top of the transcript (`TranscriptView::scroll_to_new_prompt`).
+    pub(super) fn scroll_transcript_to_new_prompt(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(transcript) = self.panes[index].read(cx).transcript() {
+            transcript.update(cx, |transcript, cx| transcript.scroll_to_new_prompt(cx));
+        }
+    }
+
+    pub(super) fn scroll_transcript_to_bottom(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(transcript) = self.panes[index].read(cx).transcript() {
+            transcript.update(cx, |transcript, cx| transcript.scroll_to_bottom(cx));
+        }
+    }
+
+    pub(super) fn transcript_event(
+        &mut self,
+        entity: Entity<ferrite_pane::transcript::TranscriptView>,
+        event: &ferrite_pane::transcript::TranscriptEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.panes.iter().position(|pane| {
+            pane.read(cx).transcripts
+                .values()
+                .any(|transcript| transcript == &entity)
+        }) else {
+            return;
+        };
+        match event {
+            ferrite_pane::transcript::TranscriptEvent::ToggleDisclosure(call) => {
+                // A click just opens or closes the row; the keyboard ring is
+                // Tab's alone, so a click never leaves one behind.
+                self.focus_pane(index, cx);
+                self.panes[index].update(cx, |pane, _| pane.clear_tool_target());
+                self.panes[index].update(cx, |pane, _| pane.toggle_tool(call));
+                cx.notify();
+            }
+            ferrite_pane::transcript::TranscriptEvent::OpenReader { path, line } => {
+                // ⌘-click on a path: the Thread's preview, in the Panel.
+                self.focus_pane(index, cx);
+                self.open_preview_from(index, path.clone(), *line, cx);
+            }
+            ferrite_pane::transcript::TranscriptEvent::OpenAgent(call) => {
+                self.open_agent_from(index, call.clone(), cx);
+            }
+            ferrite_pane::transcript::TranscriptEvent::Prompt { block, action, at } => {
+                self.prompt_action(index, *block, *action, *at, cx);
+            }
+            // The reply waits in the Pane's tray as a quote chip, naming its
+            // source; the focus pump hands the Composer the keyboard.
+            ferrite_pane::transcript::TranscriptEvent::Reply(reply, block, anchor) => {
+                let mut reply = reply.clone();
+                if let Some((thread, block)) = self.panes[index].thread().zip(*block) {
+                    reply = reply.cited_from(ferrite_core::replies::Source { thread: thread.thread(), block });
+                }
+                self.focus_pane(index, cx);
+                self.panes[index]
+                    .composer(cx)
+                    .update(cx, |composer, cx| composer.cite_with_comment(reply, anchor.clone(), cx));
+                cx.notify();
+            }
+            ferrite_pane::transcript::TranscriptEvent::Fork { after } => {
+                if let Some(thread) = self.panes[index].thread() {
+                    self.fork_after(thread, *after, cx);
+                }
+            }
+            ferrite_pane::transcript::TranscriptEvent::CopyFullHistory => {
+                if let Some(thread) = self.panes[index].thread() {
+                    self.copy_transcript(thread, cx);
+                }
+            }
+            ferrite_pane::transcript::TranscriptEvent::OpenParent => {
+                if let Some(from) = self.panes[index]
+                    .thread()
+                    .and_then(|thread| self.facts.get(thread)?.delegated_from.clone())
+                {
+                    self.open_elsewhere(&from.server, from.thread, cx);
+                }
+            }
+            // A wrap-up's next step: its words go as the next prompt.
+            ferrite_pane::transcript::TranscriptEvent::Send(words) => {
+                self.focus_pane(index, cx);
+                if let Some(thread) = self.panes[index].thread() {
+                    let _ = self.cockpit.update(cx, |cockpit, _| cockpit.send(thread, words.clone()));
+                }
+                cx.notify();
+            }
+            ferrite_pane::transcript::TranscriptEvent::OpenThread(thread) => {
+                if let Some(here) = self.panes[index].thread() {
+                    self.focus_thread(here.sibling(*thread), cx);
+                }
+            }
+            ferrite_pane::transcript::TranscriptEvent::OpenPullRequest { number, url } => {
+                self.focus_pane(index, cx);
+                if let Some(thread) = self.panes[index].thread() {
+                    self.open_named_pr(thread, *number, url.clone(), cx);
+                }
+            }
+            ferrite_pane::transcript::TranscriptEvent::OpenBackground => {
+                self.focus_pane(index, cx);
+                if let Some(thread) = self.panes[index].thread() {
+                    self.open_background(thread, cx);
+                }
+            }
+            ferrite_pane::transcript::TranscriptEvent::OpenChanges(path) => {
+                self.focus_pane(index, cx);
+                let Some(thread) = self.panes[index].thread() else {
+                    return;
+                };
+                match path {
+                    Some(path) => {
+                        let root = self.thread_path(thread, cx);
+                        let relative = root
+                            .as_deref()
+                            .and_then(|root| std::path::Path::new(path).strip_prefix(root).ok())
+                            .map_or_else(|| path.clone(), |path| path.display().to_string());
+                        self.show_changes_of(thread, &relative, cx);
+                    }
+                    None => {
+                        self.upsert_surface(thread, surfaces::SurfaceId::Changes, cx);
+                        cx.notify();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Transcript membership changes only through the pump. Prune stale
+    /// expanded call ids here once per changed Thread, never per frame.
+    pub(super) fn prune_tool_disclosures(&mut self, thread: ThreadKey, cx: &mut gpui::App) {
+        let Some(index) = self.pane_for(thread) else {
+            return;
+        };
+        let mut valid = std::collections::HashSet::new();
+        if let Some(transcript) = self
+            .cockpit
+            .read(cx)
+            .thread(thread)
+            .and_then(|open| open.activity().subject(&self.panes[index].read(cx).selected))
+            .map(|subject| subject.transcript())
+        {
+            let blocks = transcript.blocks();
+            let mut turn_start = 0;
+            for (at, block) in blocks.iter().enumerate() {
+                match &block.body {
+                    ferrite_core::transcript::Body::Tool(tool) => {
+                        valid.insert(pane::DisclosureId::Tool(tool.call.clone()));
+                        valid.insert(pane::DisclosureId::Group(tool.call.clone()));
+                    }
+                    ferrite_core::transcript::Body::Thinking(_) => {
+                        valid.insert(pane::DisclosureId::Reasoning(block.id));
+                        valid.insert(pane::DisclosureId::Live(block.id));
+                    }
+                    // A turn's fold, or a steer's, by its prompt. A steer
+                    // stays inside its turn, whose card spans all of it.
+                    ferrite_core::transcript::Body::Prompt(_) => {
+                        valid.insert(pane::DisclosureId::Turn(block.id));
+                        valid.insert(pane::DisclosureId::Prompt(block.id));
+                        if !block.steer {
+                            turn_start = at;
+                        }
+                    }
+                    // A changed-files card's Expand all and its folders.
+                    ferrite_core::transcript::Body::TurnEnd(_) => {
+                        valid.insert(pane::DisclosureId::Changes(block.id));
+                        for output in ferrite_core::transcript::outputs::of_turn(&blocks[turn_start..at]) {
+                            if let ferrite_core::transcript::outputs::Output::Changes(changes) = output {
+                                valid.extend(
+                                    ferrite_pane::transcript::changes_folders(&changes, self.thread_path(thread, cx).as_deref())
+                                        .into_iter()
+                                        .map(|folder| pane::DisclosureId::Folder(block.id, folder)),
+                                );
+                            }
+                        }
+                        turn_start = at + 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        self.panes[index].update(cx, |pane, _| pane.prune_tools(&valid));
+    }
+
+    /// The Panes on screen, as indices into the mirror — the roster's
+    /// `visible`, in its order.
+    /// Every Thread whose records this frame draws, which the window
+    /// streams whole while it does; every other reads its digest (ADR
+    /// 0032, F-A2): the shown Pane's Thread, or the Factory's Worker or
+    /// Coordinator in its place, and the fork of the side chat the Panel
+    /// shows. A subagent's transcript, the Panel's other Surfaces and a
+    /// review beside the Pane read the shown Thread's own records.
+    pub(super) fn transcripts_drawn(&self, cx: &gpui::App) -> Vec<ThreadKey> {
+        let board = match self.factory_worker_drawn(cx) {
+            Some(worker) => vec![worker],
+            None => self
+                .visible_indices(cx)
+                .into_iter()
+                .filter_map(|index| self.panes[index].thread())
+                .collect(),
+        };
+        board.into_iter().chain(self.side_chat_drawn(cx)).collect()
+    }
+
+    pub(super) fn visible_indices(&self, cx: &gpui::App) -> Vec<usize> {
+        self.cockpit
+            .read(cx)
+            .visible()
+            .into_iter()
+            .filter_map(|identity| self.index_of(identity))
+            .collect()
+    }
+
+    pub(super) fn tool_cycle_previous(
+        &mut self,
+        _: &ToolCyclePrevious,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.sheet_up(cx)
+            || self
+                .focused_thread(cx)
+                .and_then(|thread| self.cockpit.read(cx).thread(thread))
+                .is_some_and(|thread| {
+                    !thread.activity().children().is_empty()
+                        || thread
+                            .pending_decisions()
+                            .iter()
+                            .any(|request| asks_in_fields(&request.decision))
+                })
+        {
+            window.focus_prev(cx);
+        } else {
+            let composer = self
+                .panes
+                .get(self.focused(cx))
+                .map(|pane| pane.read(cx).composer.clone());
+            if !composer.is_some_and(|composer| {
+                composer.update(cx, |composer, cx| composer.cycle_files(true, window, cx))
+            }) {
+                self.cycle_tools(true, window, cx);
+            }
+        }
+    }
+
+    pub(super) fn cycle_tools(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panes.get(self.focused(cx)).is_none_or(|pane| pane.read(cx).draft().is_some()) {
+            return;
+        }
+        let focused = self.focused(cx);
+        let calls = self.expandable_tools(focused, cx);
+        let transcript = self.panes[focused].read(cx).transcript();
+        let tool_focus = self.panes[focused].read(cx).tool_focus();
+        let in_controls = ferrite_pane::rich::controls_focused(window);
+        let cycle_controls = |from_edge, window: &mut Window, cx: &mut gpui::App| {
+            transcript.as_ref().is_some_and(|transcript| {
+                transcript.update(cx, |transcript, cx| {
+                    transcript.cycle_controls(reverse, from_edge, window, cx)
+                })
+            })
+        };
+        // Preserve the existing disclosure walk, then include native actions
+        // such as fenced-code Copy/Preview before returning to the composer.
+        if in_controls && cycle_controls(false, window, cx) {
+            return;
+        }
+        if reverse
+            && !in_controls
+            && !tool_focus.is_focused(window)
+            && cycle_controls(true, window, cx)
+        {
+            return;
+        }
+        let targeted = if in_controls && !reverse {
+            false
+        } else {
+            self.panes[focused].update(cx, |pane, _| pane.cycle_tools(&calls, reverse).is_some())
+        };
+        if !targeted && !reverse && !in_controls && cycle_controls(true, window, cx) {
+            cx.notify();
+            return;
+        }
+        let focus = if targeted {
+            tool_focus
+        } else {
+            self.panes[focused].read(cx).composer.focus_handle(cx)
+        };
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    /// ↵ on the keyboard's row: a tool call opens or folds; an agent's row,
+    /// which has no details, opens its agent.
+    pub(super) fn toggle_tool_action(&mut self, _: &ToggleTool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(thread) = self.focused_thread(cx) else {
+            return;
+        };
+        let Some(call) = self.panes[self.focused(cx)].read(cx).targeted_tool().cloned() else {
+            return;
+        };
+        if let pane::DisclosureId::Tool(agent) = &call {
+            if self.targeted_agent(thread, &call, cx).is_some() {
+                let index = self.focused(cx);
+                self.open_agent_from(index, agent.clone(), cx);
+                return;
+            }
+        }
+        self.toggle_tool(thread, &call, window, cx);
+    }
+
+    /// The disclosures the Pane's transcript draws, in order: what the
+    /// keyboard walks. The rows decide it — a call folded in a shut group
+    /// is not a stop — so it is read from the transcript as last drawn.
+    pub(super) fn expandable_tools(&self, index: usize, cx: &gpui::App) -> Vec<pane::DisclosureId> {
+        if self.panes[index].thread().is_none() {
+            return Vec::new();
+        }
+        self.panes[index]
+            .read(cx).transcript()
+            .map(|transcript| transcript.read(cx).disclosures())
+            .unwrap_or_default()
+    }
+
+    /// ⌘F: find in the focused Pane's transcript — or in its preview, when
+    /// the preview took the last press or holds the keyboard
+    /// (`ferrite_pane::find`).
+    pub(super) fn open_find(
+        &mut self,
+        _: &ferrite_pane::find::Open,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(thread) = self.panel_thread(cx) {
+            let on_controls = self.panel_control_focused(window, cx);
+            if self.open_files_find(thread, on_controls, window, cx) {
+                return;
+            }
+        }
+        let index = self.focused(cx);
+        let Some(pane) = self.panes.get(index) else {
+            return;
+        };
+        let (owner, preview) = (pane.identity, pane.read(cx).preview.clone());
+        let reading =
+            self.panel.file_surface.read(cx).pressed() == Some(owner) || preview.focused(window, cx);
+        if reading
+            && self.preview_shown(index, cx)
+            && self
+                .panel.file_surface
+                .update(cx, |files, cx| files.open_find(owner, &preview, window, cx))
+        {
+            return;
+        }
+        if let Some(transcript) = self.panes.get(index).and_then(|pane| pane.read(cx).transcript()) {
+            transcript.update(cx, |view, cx| view.open_find(window, cx));
+        }
+    }
+
+    /// Copy the active native selection. Its retained document keeps logical
+    /// transcript fragments available even while their rows are offscreen.
+    pub(super) fn copy_selection(&mut self, _: &CopySelection, window: &mut Window, cx: &mut Context<Self>) {
+        let text = gpui::base::TextSelection::selected_text(window, cx);
+        let text = text.strip_suffix('\n').unwrap_or(&text).to_string();
+        if !text.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    /// Cite the selection from the keyboard, as the button beside it does.
+    pub(super) fn cite_selection(&mut self, _: &CiteSelection, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(transcript) = self.panes.get(self.focused(cx)).and_then(|pane| pane.read(cx).transcript()) {
+            transcript.update(cx, |transcript, cx| transcript.cite_selection(window, cx));
+        }
+    }
+
+    pub(super) fn toggle_tool(
+        &mut self,
+        thread: ThreadKey,
+        call: &pane::DisclosureId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.pane_for(thread) else {
+            return;
+        };
+        self.focus_pane(index, cx);
+        gpui::base::TextSelection::clear(window, cx);
+        let (rich, namespace) = {
+            let pane = self.panes[index].read(cx);
+            (pane.rich.clone(), pane.text_namespace())
+        };
+        rich.clear_output_selection(&namespace, cx);
+        self.panes[index].update(cx, |pane, _| pane.toggle_tool(call));
+        window.focus(&self.panes[index].read(cx).tool_focus(), cx);
+        cx.notify();
     }
 }
 

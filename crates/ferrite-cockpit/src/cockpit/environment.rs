@@ -518,3 +518,104 @@ fn try_answer<T>(answer: &Answer<T>) -> Option<std::io::Result<T>> {
         Err(error) => Some(Err(std::io::Error::other(error))),
     }
 }
+
+impl CockpitView {
+    /// The palette's `install CLI updates` command (F-11): every provider
+    /// CLI with a newer release ready installs. Nothing while one is already installing.
+    pub(crate) fn install_cli_updates(&mut self, cx: &mut Context<Self>) {
+        use crate::cli_updates::Badge;
+        let (ready, what) = match self.cli_updates.badge() {
+            Some(Badge::Ready(what)) => (true, what),
+            Some(Badge::Installing(what)) => (false, what),
+            None => return,
+        };
+        if !ready {
+            ferrite_core::log!("{what}");
+            return;
+        }
+        for provider in self.cli_updates.ready() {
+            self.update_cli(provider, cx);
+        }
+        cx.notify();
+    }
+
+    /// One beat of the updater: ask the registry when due, then install
+    /// whatever automatic updating may install now.
+    pub(super) fn tick_cli_updates(&mut self, cx: &mut Context<Self>) {
+        if !self.cli_updates.begin_check(std::time::Instant::now()) {
+            self.auto_update_clis(cx);
+            return;
+        }
+        self.check_clis(cx);
+    }
+
+    /// Install each ready upgrade whose provider has no Session running,
+    /// when the operator lets Ferrite update on its own.
+    pub(super) fn auto_update_clis(&mut self, cx: &mut Context<Self>) {
+        if !self.prefs.settings.auto_update_clis {
+            return;
+        }
+        let Some(machine) = self.settings_machine(cx) else {
+            return;
+        };
+        for provider in self.cli_updates.ready() {
+            if self.cockpit.read(cx).live_sessions(machine, provider) == 0 {
+                self.update_cli(provider, cx);
+            }
+        }
+    }
+
+    /// Install `provider`'s newest CLI on the machine Settings is about, now.
+    /// Once it lands, the model menus are asked again and every open Thread
+    /// of that provider restarts on its own conversation — at once when
+    /// idle, otherwise when its turn ends — so nothing keeps running the old
+    /// release. Another machine's Threads are not touched.
+    pub(super) fn update_cli(&mut self, provider: Provider, cx: &mut Context<Self>) {
+        if self.cli_updates.begin_update(provider) {
+            self.install_cli(provider, cx);
+        }
+    }
+
+    /// The updater's toasts. Like the Inbox's, they wait for render, the
+    /// one place with a Window in hand.
+    pub(super) fn present_cli_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::cli_updates::{name, Toast};
+        use gpui::component::notification::{Notification, NotificationType};
+        use gpui::component::WindowExt as _;
+        let toasts = self.cli_updates.take_toasts();
+        let place = self.machine_place(cx);
+        if toasts.is_empty() {
+            // Called every render: a notify here with nothing to show would
+            // rebuild the Cockpit on every frame anything else draws.
+            return;
+        }
+        for toast in toasts {
+            let notification = match toast {
+                Toast::Offer { provider, latest } => {
+                    let view = cx.entity().downgrade();
+                    Notification::new()
+                        .title(format!("{} {latest} is available on {place}", name(provider)))
+                        .message("Click to update it there. Newer releases bring newer models.")
+                        .with_type(NotificationType::Info)
+                        .autohide(false)
+                        .on_click(move |_, _, cx| {
+                            view.update(cx, |view, cx| view.update_cli(provider, cx))
+                                .ok();
+                        })
+                }
+                Toast::Updated { provider, version } => Notification::new()
+                    .title(format!("{} updated to {version} on {place}", name(provider)))
+                    .message("Its open Threads restart on it as each finishes its turn.")
+                    .with_type(NotificationType::Success)
+                    .autohide(true),
+                Toast::Failed { provider, detail } => Notification::new()
+                    .title(format!("{} update failed on {place}", name(provider)))
+                    .message(detail)
+                    .with_type(NotificationType::Error)
+                    .autohide(false),
+            };
+            window.push_notification(notification, cx);
+        }
+        cx.notify();
+    }
+}

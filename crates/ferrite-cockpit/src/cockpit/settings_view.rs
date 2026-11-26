@@ -130,3 +130,166 @@ impl CockpitView {
         view
     }
 }
+
+impl CockpitView {
+    /// cmd-, and the gear: the Settings panel, toggled. Opening it probes
+    /// the CLIs' versions once, off the UI thread.
+    pub(super) fn open_settings(&mut self, _: &OpenSettings, _window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_settings(cx);
+    }
+
+    pub(super) fn toggle_settings(&mut self, cx: &mut Context<Self>) {
+        if self.settings_open(cx) {
+            self.hide_sheet(cx);
+            return;
+        }
+        self.show_settings(cx);
+    }
+
+    /// Settings › About's Diagnostics: what a bug report needs, on the
+    /// clipboard (`ferrite_core::diagnostics::report`). The report reads
+    /// up to the whole log, so it is gathered in the background.
+    pub(super) fn copy_diagnostics(&mut self, cx: &mut Context<Self>) {
+        let (claude, codex) = self
+            .environment
+            .cli_versions
+            .clone()
+            .unwrap_or_else(|| ("unknown".into(), "unknown".into()));
+        let facts = [
+            (
+                "Version",
+                version_label(env!("CARGO_PKG_VERSION"), crate::DEV),
+            ),
+            (
+                "Platform",
+                format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+            ),
+            ("Claude CLI", claude.to_string()),
+            ("Codex CLI", codex.to_string()),
+            ("Open Threads", self.cockpit.read(cx).threads().len().to_string()),
+        ];
+        let dir = self.prefs.dir.clone();
+        cx.spawn(async move |this, cx| {
+            let report = cx
+                .background_executor()
+                .spawn(async move { ferrite_core::diagnostics::report(&dir, &facts) })
+                .await;
+            this.update(cx, |view, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(report));
+                if let Some(settings) = view.settings_sheet(cx) {
+                    settings.update(cx, |settings, cx| settings.diagnostics_copied(cx));
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// A `settings.json` that could not be used is said once and kept on
+    /// screen: the window runs on the defaults and saves nothing over the
+    /// file, so a change made now lasts only until Ferrite quits.
+    pub(super) fn present_unreadable_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui::component::notification::{Notification, NotificationType};
+        use gpui::component::WindowExt as _;
+        if self.unreadable_told {
+            return;
+        }
+        let Some(reason) = &self.prefs.unreadable else {
+            return;
+        };
+        self.unreadable_told = true;
+        let path = self.prefs.dir.join(ferrite_core::settings::Settings::FILE);
+        window.push_notification(
+            Notification::new()
+                .title("Settings could not be read")
+                .message(format!(
+                    "{}: {reason}. Ferrite is using the defaults and will not save over \
+                     the file; fix or remove it, then relaunch.",
+                    path.display()
+                ))
+                .with_type(NotificationType::Warning)
+                .autohide(false),
+            cx,
+        );
+    }
+
+    /// Every change to the settings goes through here: saved at once
+    /// (unless the file on disk could not be read, which is kept as it
+    /// is), the Session defaults the spawner reads refreshed, and the facts
+    /// that depend on a setting re-derived.
+    pub(super) fn change_settings(
+        &mut self,
+        change: impl FnOnce(&mut ferrite_core::settings::Settings),
+        cx: &mut Context<Self>,
+    ) {
+        change(&mut self.prefs.settings);
+        if self.prefs.unreadable.is_none() {
+            if let Err(e) = self.prefs.settings.save(&self.prefs.dir) {
+                self.nav_notice.problem(format!("settings not saved: {e}"));
+            }
+        }
+        // Saved first: a Server rereads the file.
+        self.cockpit.update(cx, |cockpit, _| cockpit.settings_changed(&self.prefs.settings));
+        self.machines_changed(cx);
+        if let Ok(mut defaults) = self.prefs.defaults.lock() {
+            *defaults = ferrite_core::settings::SessionDefaults::from_settings(&self.prefs.settings);
+        }
+        ferrite_pane::visual::diagram::set_enabled(
+            self.prefs.settings.visuals != ferrite_core::visual::Level::Off,
+            cx,
+        );
+        if self.facts.set_auto_title(self.prefs.settings.auto_title) {
+            self.parked_changed(cx);
+            for thread in self.cockpit.read(cx).threads() {
+                self.facts.renamed(self.cockpit.read(cx), thread);
+            }
+            self.refresh_names(cx);
+        }
+        let reading = self.prefs.settings.reading_size;
+        for review in self.panes.iter().filter_map(|pane| pane.review.review()) {
+            review.update(cx, |review, cx| review.set_reading(reading, cx));
+        }
+        cx.notify();
+    }
+
+    /// Ask the system for a sound file, and play it from now on.
+    pub(super) fn choose_sound_file(&mut self, sound: Sound, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose sound".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(file) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, |view, cx| {
+                view.change_settings(|s| s.set_sound_file(sound, Some(file)), cx);
+            });
+        })
+        .detach();
+    }
+
+    /// cmd-= / cmd-- step every transcript's text size through
+    /// `ReadingSize::STEPS` (12–24px), stopping at either end, and cmd-0
+    /// returns it to 14: the same saved setting as Settings › Behaviour ›
+    /// Text size. `delta` 0 resets.
+    pub(super) fn step_text_size(&mut self, delta: i32, cx: &mut Context<Self>) {
+        use ferrite_core::settings::ReadingSize;
+        let now = self.prefs.settings.reading_size;
+        let next = if delta == 0 {
+            ReadingSize::STANDARD
+        } else {
+            now.step(delta)
+        };
+        if next != now {
+            self.change_settings(|settings| settings.reading_size = next, cx);
+            cx.notify();
+        }
+    }
+}
