@@ -56,3 +56,43 @@ impl CockpitView {
         );
     }
 }
+
+impl CockpitView {
+    /// The Session controls card (`session_card::SessionCard`), hung over
+    /// the Composer.
+    pub(super) fn session_controls_element(
+        &self,
+        thread: ThreadKey,
+        generation: u64,
+        face: popups::Face,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let at = self.card_corner(
+            format!("session-{}", thread.thread().get()),
+            CardFrom::Composer(PaneIdentity::Thread(thread)),
+            window,
+            cx,
+        )?;
+        let card = session_card::SessionCard::of(
+            thread,
+            generation,
+            &self.cockpit.read(cx).thread(thread)?,
+            self.session_control_error.of(thread, generation),
+        )?;
+        Some(
+            anchored()
+                .anchor(gpui::Anchor::BottomRight)
+                .position(at)
+                .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
+                .child(self.popup_face(
+                    face,
+                    "session-controls-in",
+                    card.render(cx),
+                    ferrite_ui::motion::Opens::Up,
+                    cx,
+                ))
+                .into_any_element(),
+        )
+    }
+}

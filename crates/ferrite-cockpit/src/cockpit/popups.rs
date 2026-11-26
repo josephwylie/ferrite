@@ -683,3 +683,116 @@ impl CockpitView {
         )
     }
 }
+
+impl CockpitView {
+    /// Whether something floats over the cockpit: a menu, a popover or a
+    /// sheet. The titlebar's drag region reads it — a region that
+    /// lies under an open overlay would answer Windows' hit test as the
+    /// window frame, and the row under the pointer would never see the
+    /// press (the frame's titlebar).
+    pub(super) fn overlay_open(&self, cx: &gpui::App) -> bool {
+        self.sheet_up(cx)
+            || self.composer_menu.read(cx).is_open()
+            || self.popup_up()
+            || self.sheet_float_open()
+    }
+
+    /// The palette's `checks` command (F-11): the checks card for the
+    /// focused Thread's PR, hung from its Pane's top edge. Nothing when the
+    /// PR reports no checks.
+    pub(crate) fn open_checks(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(thread) = self.focused_thread(cx) else {
+            return;
+        };
+        let has_checks = self.facts.pr(thread).is_some_and(|pr| pr.checks.is_some());
+        if !has_checks {
+            return;
+        }
+        self.show_popup(Popup::Checks(thread), cx);
+    }
+
+    /// The palette's `plan` command (F-11): the focused Thread's plan as a
+    /// card — its steps in order, the done ones checked, the one being
+    /// worked marked — hung from its Pane's top edge. Nothing without a plan.
+    pub(crate) fn open_plan(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(thread) = self.focused_thread(cx) else {
+            return;
+        };
+        if self
+            .cockpit
+            .read(cx)
+            .thread(thread)
+            .and_then(|open| open.transcript().todos())
+            .is_none()
+        {
+            return;
+        }
+        self.show_popup(Popup::Plan(thread), cx);
+    }
+
+    /// The plan card (`open_plan`), hung under the Pane head
+    /// (`head_cards::PlanCard`).
+    pub(super) fn plan_card_element(
+        &self,
+        thread: ThreadKey,
+        face: popups::Face,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let card = head_cards::PlanCard::of(self.cockpit.read(cx).thread(thread)?.transcript())?;
+        let at = self.card_corner(
+            format!("plan-{}", thread.thread().get()),
+            CardFrom::Head(PaneIdentity::Thread(thread)),
+            window,
+            cx,
+        )?;
+        Some(
+            anchored()
+                .anchor(gpui::Anchor::TopRight)
+                .position(at)
+                .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
+                .child(self.popup_face(
+                    face,
+                    "plan-card-in",
+                    card.render(),
+                    ferrite_ui::motion::Opens::Down,
+                    cx,
+                ))
+                .into_any_element(),
+        )
+    }
+
+    /// The checks card (`head_cards::checks_card`), hung under the Pane
+    /// head.
+    pub(super) fn context_checks_element(
+        &self,
+        thread: ThreadKey,
+        face: popups::Face,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let at = self.card_corner(
+            format!("ci-{}", thread.thread().get()),
+            CardFrom::Head(PaneIdentity::Thread(thread)),
+            window,
+            cx,
+        )?;
+        let card = head_cards::checks_card(thread, self.facts.pr(thread)?, cx);
+        // The mark rides the Pane head's checkout line: the card drops
+        // below it, from its left edge.
+        Some(
+            anchored()
+                .anchor(gpui::Anchor::TopRight)
+                .position(at)
+                .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
+                .child(self.popup_face(
+                    face,
+                    "context-checks-in",
+                    card,
+                    ferrite_ui::motion::Opens::Down,
+                    cx,
+                ))
+                .into_any_element(),
+        )
+    }
+}

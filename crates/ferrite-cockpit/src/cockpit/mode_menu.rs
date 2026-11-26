@@ -233,3 +233,44 @@ impl ModeSegments {
         menu
     }
 }
+
+impl CockpitView {
+    /// A pick of permission mode `mode`. A mode that stops asking
+    /// (`theme::mode_stops_asking`) is confirmed first, as Codex confirms
+    /// Full access; any other goes at once.
+    pub(super) fn request_mode(
+        &mut self,
+        thread: ThreadKey,
+        generation: u64,
+        mode: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let set = ferrite_core::SessionControl::SetPermissionMode { mode: mode.clone() };
+        let standing = self
+            .cockpit
+            .read(cx)
+            .thread(thread)
+            .is_some_and(|open| open.permission_mode() == Some(mode.as_str()));
+        if standing || !ferrite_ui::theme::mode_stops_asking(&mode) {
+            self.run_session_control(thread, generation, set, cx);
+            return;
+        }
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            "Stop asking before changes?",
+            Some("The agent will run commands and edit files without asking you first. Only do this in a folder you trust."),
+            &["Turn on", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |view, cx| {
+            if answer.await == Ok(0) {
+                let _ = view.update(cx, |view, cx| {
+                    view.run_session_control(thread, generation, set, cx);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+}
