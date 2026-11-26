@@ -87,7 +87,7 @@ pub(crate) mod workflows;
 use self::context_menu::{MenuTarget, MenuVerb};
 use self::decisions::Answer;
 use self::popups::{CardFrom, Popup};
-use self::model_picker::{Column, Tuning};
+use self::model_picker::Column;
 use ferrite_ui::components::home_relative;
 use ferrite_ui::components::Tip as _;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -99,7 +99,7 @@ pub mod changes_frames;
 
 use std::time::Duration;
 
-use ferrite_client::cockpit::{Cockpit, HistoryDirection, ProviderChoice, ThreadView};
+use ferrite_client::cockpit::{Cockpit, ProviderChoice, ThreadView};
 use ferrite_core::draft::DraftTarget;
 use ferrite_core::followup;
 use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
@@ -286,15 +286,6 @@ fn system_tag(machine: &ferrite_core::MachineKey, thread: ThreadId) -> String {
         None => format!("ferrite-thread-{thread}"),
         Some(target) => format!("ferrite-thread-{thread}@{target}"),
     }
-}
-
-/// The id of the latest queued prompt while it can still be taken back:
-/// what ↑ and ⌫ act on (the strip's rows each act on their own).
-fn queued_to_take_back(open: &ThreadView) -> Option<String> {
-    open.queue()
-        .first()
-        .filter(|item| pane::queued_takes_back(item))
-        .map(|item| item.id.clone())
 }
 
 pub(crate) use cockpit_pane::CockpitPane;
@@ -2773,287 +2764,6 @@ impl CockpitView {
         self.panes.get(focused)?.update_draft(cx, change)
     }
 
-    fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
-        if self.panes.get(self.focused(cx)).map(|pane| pane.read(cx).composer.clone()).is_some_and(|line| line.update(cx, |line, cx| line.holds_send(window, cx))) {
-            return;
-        }
-        // The card's ↵ is its confirm — but in a machine's folder browser,
-        // once it is moved, it adds the folder it shows.
-        if let Some(card) = self.project_card(cx) {
-            let typed = card.update(cx, |card, cx| card.take_remote_path(window, cx));
-            if let Some(path) = typed {
-                self.adopt_editor_directory(path, cx);
-                return;
-            }
-            if card.read(cx).ready() {
-                self.confirm_project_editor(cx);
-            }
-            return;
-        }
-        if let Some(sheet) = self.placement_sheet(cx) {
-            sheet.update(cx, |sheet, cx| sheet.confirm(cx));
-            return;
-        }
-        if self.nav_view.read(cx).snooze_line().is_some() {
-            self.nav_view.update(cx, |nav, cx| nav.finish_snooze(true, cx));
-            return;
-        }
-        if self.rename.is_open() {
-            self.finish_rename(true, cx);
-            return;
-        }
-        // A draft's ↵ (#29): on a band chip it opens that chip's popover;
-        // on the prompt line it is the first send — the bootstrap — or a
-        // typed-out `/import`.
-        if let Some(band_focus) = self
-            .panes
-            .get(self.focused(cx))
-            .and_then(|pane| pane.read(cx).draft())
-            .map(|draft| draft.band_focus)
-        {
-            match band_focus {
-                Some(chip) => self.open_band_menu(chip, false, cx),
-                None if self.typed_import(window, cx) => {}
-                None => self.bootstrap_draft(cx),
-            }
-            return;
-        }
-        let Some(thread) = self.focused_thread(cx) else {
-            return;
-        };
-        if !self.panes[self.focused(cx)].read(cx).is_main() {
-            return;
-        }
-        // ↵ on an empty line sends a pending question whose every question
-        // is answered (digits toggled a multi-select; ↵ sends it).
-        if self.panes[self.focused(cx)].read(cx).composer.read(cx).is_empty() && self.send_ready_question(cx) {
-            return;
-        }
-        if self.typed_import(window, cx) {
-            return;
-        }
-        let composer = self.panes[self.focused(cx)].read(cx).composer.clone();
-        if !self.admit_files(self.focused(cx), cx) {
-            return;
-        }
-        let draft = composer.update(cx, |composer, cx| composer.take_draft(cx));
-        let text = draft.prompt().trim().to_string();
-        let cited = draft.content().replies.clone();
-        // `/effort max` and `/model sonnet` typed out are Ferrite's own
-        // acts, the same as the pickers: the chip stays truthful, Codex
-        // (which has no such command) gets them too, and a level or model
-        // Ferrite does not know goes to the provider as text.
-        if let Some(handled) = self.typed_tuning(thread, &text, cx) {
-            match handled {
-                Tuning::Effort(effort) => self.pick_effort(thread, effort, cx),
-                Tuning::Model(model) => self.pick_provider(
-                    thread,
-                    ProviderChoice {
-                        provider: self
-                            .cockpit
-                            .read(cx)
-                            .thread(thread)
-                            .map(|open| open.provider())
-                            .unwrap_or(self.prefs.settings.default_provider),
-                        model,
-                    },
-                    cx,
-                ),
-            }
-            return;
-        }
-        if text.is_empty() {
-            // Enter on an empty line takes a held prompt back to edit it.
-            self.take_back_held(thread, cx);
-            return;
-        }
-        // Typing does not wait for the agent; sending does.
-        self.send_draft(thread, draft, text, cited, cx);
-        cx.notify();
-    }
-
-    /// Backspace on an EMPTY Composer line clears the held prompt — the
-    /// `⌫ unqueue` the queued row advertises. With text on the line the
-    /// Composer consumes the key first and this never runs.
-    fn unqueue_from_backspace(
-        &mut self,
-        _: &ferrite_pane::composer::Backspace,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // ⌫ in the palette's line edits the query, never the queue.
-        if self.floats.palette.is_some()
-            || self.panes.get(self.focused(cx)).is_none_or(|pane| !pane.read(cx).is_main())
-        {
-            return;
-        }
-        let Some(thread) = self.focused_thread(cx) else {
-            return;
-        };
-        if !self.panes[self.focused(cx)].read(cx).composer.read(cx).is_empty() {
-            return;
-        }
-        let Some(id) = self
-            .cockpit
-            .read(cx)
-            .thread(thread)
-            .and_then(|open| queued_to_take_back(&open))
-        else {
-            return;
-        };
-        self.cockpit.update(cx, |cockpit, _| cockpit.remove_queued_item(thread, &id, false));
-        cx.notify();
-    }
-
-    fn interrupt(&mut self, _: &Interrupt, window: &mut Window, cx: &mut Context<Self>) {
-        if self.dismiss_popup(cx) {
-            return;
-        }
-        if let Some(transcript) = self.panes.get(self.focused(cx)).and_then(|pane| pane.read(cx).transcript()) {
-            if transcript.update(cx, |transcript, cx| transcript.dismiss_offer(cx)) {
-                return;
-            }
-        }
-        if self.leave_control(window, cx) {
-            return;
-        }
-        if let Some(connections) = self
-            .connections(cx)
-            .filter(|connections| connections.read(cx).editing())
-        {
-            connections.update(cx, |connections, cx| connections.cancel(cx));
-            return;
-        }
-        // The setup sheet's esc closes it; a copy it shows carries on.
-        if let Some(sheet) = self.placement_sheet(cx) {
-            sheet.update(cx, |sheet, cx| sheet.dismiss(cx));
-            return;
-        }
-        if self.hide_sheet(cx) {
-            return;
-        }
-        if self.nav_view.read(cx).snooze_line().is_some() {
-            self.nav_view.update(cx, |nav, cx| nav.finish_snooze(false, cx));
-            return;
-        }
-        if self.rename.is_open() {
-            self.finish_rename(false, cx);
-            return;
-        }
-        if !self.cancel_focused_draft_start(cx) {
-            cx.notify();
-            return;
-        }
-        // On a draft, escape returns to the prompt (#29): the band's tab
-        // focus clears. (An open band menu holds the ComposerMenu keys, so
-        // escape there dismisses through `menu_dismiss` instead.)
-        if self.update_focused_draft(cx, |draft| draft.band_focus = None).is_some() {
-            cx.notify();
-            return;
-        }
-        // Escape stops what the Pane shows: on Main its turn while one runs
-        // (T3's Stop, which ends the Thread's PR watches with it), never the
-        // Subagents and background work it started, and nothing at rest;
-        // on a Subagent that Subagent alone — and once it has nothing to
-        // stop, it goes back to its parent.
-        if let Some(thread) = self
-            .focused_thread(cx)
-            .filter(|thread| !self.machine_lost(thread.machine(), cx))
-        {
-            let selected = self.panes[self.focused(cx)].read(cx).selected.clone();
-            match &selected {
-                ferrite_core::activity::Subject::Main => {
-                    if self.cockpit.read(cx).thread(thread).is_some_and(|open| turn_running(&open)) {
-                        self.cockpit.update(cx, |cockpit, _| cockpit.interrupt(thread));
-                    }
-                }
-                ferrite_core::activity::Subject::Subagent(key) => {
-                    if !self.stop_subagent(thread, key, cx) {
-                        let parent = self
-                            .agent_lineage(thread, &selected, cx)
-                            .pop()
-                            .unwrap_or(ferrite_core::activity::Subject::Main);
-                        self.select_subject(thread, parent, window, cx);
-                    }
-                }
-            }
-            self.facts.acted(self.cockpit.read(cx), thread);
-        }
-        cx.notify();
-    }
-
-    /// Stop the Subagent `key` while it runs; whether it did. A finished
-    /// one has nothing to stop, and its escape must not reach Main's turn.
-    fn stop_subagent(&mut self, thread: ThreadKey, key: &ferrite_core::activity::AgentKey, cx: &mut gpui::App) -> bool {
-        let Some(open) = self.cockpit.read(cx).thread(thread) else {
-            return false;
-        };
-        let running = open
-            .activity()
-            .subject(&ferrite_core::activity::Subject::Subagent(key.clone()))
-            .is_some_and(|view| {
-                matches!(
-                    view.status(),
-                    ferrite_core::activity::AgentStatus::Pending
-                        | ferrite_core::activity::AgentStatus::Working
-                        | ferrite_core::activity::AgentStatus::Waiting
-                )
-            });
-        if running {
-            self.cockpit.update(cx, |cockpit, _| cockpit.stop_subagent(thread, key));
-        }
-        running
-    }
-
-    /// Tab walks a draft's band (#29), or a Thread Pane's rendered tool
-    /// disclosures before returning to the Composer.
-    /// Tab on an empty Composer that is showing a predicted follow-up puts
-    /// that text in the line — editable, unsent. Nothing reaches the provider
-    /// without a second, deliberate ↵: ghost text is a guess, and a guess is
-    /// not consent to start a turn.
-    ///
-    /// The condition is `followup::suggest` itself, the same call the idle
-    /// line renders from, so the key and the ghost text can never disagree
-    /// about whether there is something to accept.
-    fn accept_suggestion(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
-        if self.sheet_up(cx)
-            || self.rename.is_open()
-            || self.nav_view.read(cx).snooze_line().is_some()
-            || self.composer_menu.read(cx).is_open()
-        {
-            return false;
-        }
-        let Some(thread) = self.focused_thread(cx) else {
-            return false;
-        };
-        let Some(open) = self.cockpit.read(cx).thread(thread) else {
-            return false;
-        };
-        let offered = followup::suggest(
-            open.pending().is_some(),
-            Some(open.transcript()),
-            open.suggestion(),
-        );
-        let Some(text) = offered.acceptable().map(str::to_string) else {
-            return false;
-        };
-        let Some(composer) = self
-            .panes
-            .get(self.focused(cx))
-            .map(|pane| pane.read(cx).composer.clone())
-        else {
-            return false;
-        };
-        // Only Tab from the empty input accepts its suggestion. Tab from a
-        // transcript action or attachment continues that control's focus walk.
-        if !composer.focus_handle(cx).is_focused(window) || !composer.read(cx).is_empty() {
-            return false;
-        }
-        composer.update(cx, |composer, cx| composer.set(text, cx));
-        cx.notify();
-        true
-    }
-
     fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
         if self
             .project_card(cx)
@@ -3112,43 +2822,6 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// ⌫ on the keyboard's agent row: its subagent stops, while it runs
-    /// (`stop_subagent`); on any other row, nothing.
-    fn stop_agent_action(&mut self, _: &StopAgent, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self.focused_thread(cx) else {
-            return;
-        };
-        let Some(call) = self.panes[self.focused(cx)].read(cx).targeted_tool().cloned() else {
-            return;
-        };
-        if let Some(ferrite_core::activity::Subject::Subagent(key)) =
-            self.targeted_agent(thread, &call, cx)
-        {
-            if self.stop_subagent(thread, &key, cx) {
-                cx.notify();
-            }
-        }
-    }
-
-    /// The agent the keyboard's row `target` started, when it is an agent's.
-    fn targeted_agent(
-        &self,
-        thread: ThreadKey,
-        target: &pane::DisclosureId,
-        cx: &gpui::App,
-    ) -> Option<ferrite_core::activity::Subject> {
-        let pane::DisclosureId::Tool(call) = target else {
-            return None;
-        };
-        self.cockpit
-            .read(cx)
-            .thread(thread)?
-            .activity()
-            .invocations()
-            .find(|(native, _)| native == call)
-            .map(|(_, agent)| agent.subject())
-    }
-
     fn next_thread(&mut self, _: &NextThread, window: &mut Window, cx: &mut Context<Self>) {
         self.step_thread(1, window, cx);
     }
@@ -3185,192 +2858,6 @@ impl CockpitView {
 
     // --------------------------------------------------- Composer menus (#23)
 
-    /// Re-derive the text-derived popover from the focused line's own text.
-    /// Nothing else opens or closes a menu: `/filter` at the caret opens commands,
-    /// an `@token` under the caret opens files, anything else closes. A
-    /// picker or a band chip holds the slot while it is up and is left
-    /// alone here.
-    /// The menu keys serve whichever rows menu rides the Composer: the
-    /// `/`/`@` menu or a band menu — one key context, no second table.
-    fn menu_next(&mut self, _: &MenuNext, _window: &mut Window, cx: &mut Context<Self>) {
-        self.step_popover(1, cx);
-    }
-
-    fn menu_previous(&mut self, _: &MenuPrevious, _window: &mut Window, cx: &mut Context<Self>) {
-        self.step_popover(-1, cx);
-    }
-
-    fn history_older(&mut self, _: &HistoryOlder, _: &mut Window, cx: &mut Context<Self>) {
-        self.recall_history(HistoryDirection::Older, cx);
-    }
-
-    fn history_newer(&mut self, _: &HistoryNewer, _: &mut Window, cx: &mut Context<Self>) {
-        self.recall_history(HistoryDirection::Newer, cx);
-    }
-
-    fn recall_history(&mut self, direction: HistoryDirection, cx: &mut Context<Self>) {
-        let index = self.focused(cx);
-        if !self.history_available(index, cx) {
-            return;
-        }
-        let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
-            return;
-        };
-        if let Some(id) = self
-            .cockpit
-            .read(cx)
-            .thread(thread)
-            .and_then(|open| queued_to_take_back(&open))
-        {
-            if matches!(direction, HistoryDirection::Older) {
-                self.cockpit.update(cx, |cockpit, _| cockpit.edit_queued_item(thread, &id));
-                cx.notify();
-            }
-            return;
-        }
-        self.step_history_of(thread, direction, cx);
-    }
-
-    fn history_available(&self, index: usize, cx: &gpui::App) -> bool {
-        if index != self.focused(cx) {
-            return false;
-        }
-        let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
-            return false;
-        };
-        let Some(open) = self.cockpit.read(cx).thread(thread) else {
-            return false;
-        };
-        !self.panes[index].read(cx).has_tool_target()
-            && !self.rename.is_open()
-            && self.nav_view.read(cx).snooze_line().is_none()
-            && !self.composer_menu.read(cx).is_open()
-            && ((self.panes[index].read(cx).is_main() && queued_to_take_back(&open).is_some())
-                || (open.has_prompt_history()
-                    && !open.busy()
-                    && open.pending().is_none()
-                    && open.queue().is_empty()))
-    }
-
-    /// Clamp-step the selection of the rows menu riding the Composer.
-    fn step_popover(&mut self, delta: isize, cx: &mut Context<Self>) {
-        if self.composer_menu.read(cx).is_open() {
-            self.composer_menu.update(cx, |menu, cx| menu.step(delta, cx));
-        } else if self.band_menu_mut().is_some_and(|open| open.step(delta)) {
-            cx.notify();
-        }
-    }
-
-    fn menu_pick(&mut self, _: &MenuPick, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(at) = self.composer_menu.read(cx).popover().map(|open| open.selected) {
-            self.composer_menu.update(cx, |menu, cx| menu.pick(at, cx));
-        } else if let Some(at) = self.band_menu().map(|open| open.selected) {
-            self.pick(at, window, cx);
-        }
-    }
-
-    /// Escape while a rows menu rides the Composer closes it and nothing
-    /// else — the text stays, and escape's Interrupt meaning waits for the
-    /// next press. A text-derived menu mutes until the text moves; a
-    /// picker takes no mute, since nothing reopens it; a band menu also
-    /// returns the chip's tab focus to the prompt line.
-    fn menu_dismiss(&mut self, _: &MenuDismiss, _window: &mut Window, cx: &mut Context<Self>) {
-        if !self.composer_menu.update(cx, |menu, cx| menu.dismiss(cx)) && self.band_menu().is_some() {
-            self.close_popup(cx);
-            self.update_focused_draft(cx, |draft| draft.band_focus = None);
-        }
-        cx.notify();
-    }
-
-    /// ↵ or a press on row `at` of a band menu: its choice, made. The
-    /// menu closes first.
-    fn pick(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(open) = self.band_menu() else {
-            return;
-        };
-        let Some(row) = open.rows.get(at) else {
-            return;
-        };
-        let (pane, consequence) = (open.pane, row.consequence.clone());
-        self.close_popup(cx);
-        self.run_pick(pane, &consequence, window, cx);
-    }
-
-    /// What a pick of the band menu or the Composer menu leaves to the
-    /// root: a picker opened in the menu's place, a Provider, an effort or
-    /// a band choice. A command, a skill or a file the Composer menu put
-    /// in the line itself.
-    fn run_pick(
-        &mut self,
-        pane: PaneIdentity,
-        consequence: &Consequence,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(composer) = self
-            .index_of(pane)
-            .map(|index| self.panes[index].read(cx).composer.clone())
-        else {
-            return;
-        };
-        // Local command actions consume a standalone command line.
-        let splice_line = |cx: &mut Context<Self>, text: &str| {
-            composer.update(cx, |composer, cx| {
-                let whole = 0..composer.text().len();
-                composer.splice(whole, text, cx);
-            });
-        };
-        match consequence {
-            Consequence::Command(_)
-            | Consequence::Skill(_)
-            | Consequence::Mention(_)
-            | Consequence::Inert => {}
-            Consequence::OpenProviderPicker => {
-                if let Some(thread) = pane.thread() {
-                    splice_line(cx, "");
-                    self.open_provider_picker(thread, cx);
-                }
-            }
-            Consequence::OpenImportPicker => {
-                // A draft's one line is the `/import` its pick replaces; a
-                // Thread is replaced only while it is blank.
-                let into = match pane {
-                    PaneIdentity::Draft(_) => Some(pane),
-                    PaneIdentity::Thread(_) => {
-                        splice_line(cx, "");
-                        self.import_target(cx)
-                    }
-                };
-                self.open_import_palette(into, window, cx);
-            }
-            Consequence::Provision(choice) => {
-                if let Some(thread) = pane.thread() {
-                    self.pick_provider(thread, choice.clone(), cx);
-                }
-            }
-            Consequence::OpenEffortPicker => {
-                if let Some(thread) = pane.thread() {
-                    splice_line(cx, "");
-                    // The model picker's Reasoning column, as the
-                    // palette's `effort` opens it.
-                    self.open_effort_picker(thread, cx);
-                }
-            }
-            Consequence::Effort(effort) => {
-                if let Some(thread) = pane.thread() {
-                    self.pick_effort(thread, effort.clone(), cx);
-                }
-            }
-            Consequence::Band(choice) => self.pick_band(choice, &composer, cx),
-        }
-        cx.notify();
-    }
-
-    fn poll_navigation(&mut self, cx: &mut Context<Self>) {
-        self.poll_composer_menu(cx);
-        self.poll_session_discovery(cx);
-    }
-
     /// Ferrite's own words to one Pane: a Notice in a Thread's transcript,
     /// or the error line under a draft's band.
     fn say_to(&mut self, pane: PaneIdentity, message: String, cx: &mut gpui::App) {
@@ -3382,91 +2869,6 @@ impl CockpitView {
                 }
             }
         }
-    }
-
-    /// The machine an import for `into` lists and adopts on: the blank
-    /// Pane's, else where a new Thread starts (`start_machine`).
-    pub(super) fn import_machine(
-        &self,
-        into: Option<PaneIdentity>,
-        cx: &gpui::App,
-    ) -> Option<ferrite_core::MachineId> {
-        into.and_then(|pane| self.index_of(pane))
-            .and_then(|index| self.pane_machine(index, cx))
-            .or_else(|| self.start_machine(cx))
-    }
-
-    /// An import pick (#11): adopt the picked file through the core door —
-    /// in place of `into`, the blank Pane the picker was opened for (a
-    /// draft becomes the imported Thread and its line clears; a blank
-    /// Thread yields its slot), else alongside the Panes shown. A refusal
-    /// is the core's readable words, surfaced in that Pane (a toast with
-    /// none) — and the door stays open for the next try.
-    pub(super) fn adopt_file(
-        &mut self,
-        into: Option<PaneIdentity>,
-        path: &std::path::Path,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // The Pane may have gone while the picker was up.
-        let into = into.filter(|pane| self.index_of(*pane).is_some());
-        let Some(machine) = self.import_machine(into, cx) else {
-            return;
-        };
-        match self
-            .cockpit
-            .update(cx, |cockpit, _| cockpit.adopt_into(machine, into, path))
-        {
-            Ok(adopted) => {
-                let draft = into.filter(|pane| pane.draft().is_some());
-                if let Some(error) = &adopted.not_opened {
-                    // Durable but not on screen: the Thread sits in the
-                    // nav's parked rows, exactly like a launch-time import
-                    // that would not open.
-                    ferrite_core::log!(
-                        "imported thread {} would not open: {error:?}",
-                        adopted.thread.thread()
-                    );
-                } else if let Some(index) = draft.and_then(|draft| self.index_of(draft)) {
-                    self.panes[index].composer(cx).update(cx, |composer, cx| {
-                        composer.take(cx);
-                    });
-                    self.adopt_thread(index, adopted.thread, cx);
-                }
-                if let Some(error) = &adopted.blank_kept {
-                    ferrite_core::log!("the blank thread stayed open: {error}");
-                }
-                self.sync_panes(cx);
-                // A draft that became the import keeps its Pane, so the
-                // mirror saw nothing open; a Thread that would not open is
-                // a fresh parked row.
-                if adopted.not_opened.is_some() {
-                    self.parked_changed(cx);
-                } else if draft.is_some() {
-                    self.thread_opened(adopted.thread, cx);
-                }
-            }
-            Err(e) => {
-                let message = format!("cannot import {}: {e}", path.display());
-                match into {
-                    Some(pane) => self.say_to(pane, message, cx),
-                    None => {
-                        use gpui::component::notification::{Notification, NotificationType};
-                        use gpui::component::WindowExt as _;
-                        window.push_notification(
-                            Notification::new()
-                                .title("Session not imported")
-                                .message(message)
-                                .with_type(NotificationType::Error)
-                                .autohide(false),
-                            cx,
-                        );
-                    }
-                }
-            }
-        }
-        cx.notify();
     }
 
     // ------------------------------------------------ draft Pane + band (#29)
@@ -4140,25 +3542,6 @@ impl CockpitView {
         }
     }
 
-    /// The `+` menu's file or folder picker, its picks staged on this
-    /// Pane's Composer as a drop or a paste stages them.
-    fn attach_files(&mut self, index: usize, folders: bool, cx: &mut Context<Self>) {
-        let composer = self.panes[index].read(cx).composer.clone();
-        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: !folders,
-            directories: folders,
-            multiple: true,
-            prompt: Some("Attach".into()),
-        });
-        cx.spawn(async move |_, cx| {
-            let Ok(Ok(Some(paths))) = receiver.await else {
-                return;
-            };
-            composer.update(cx, |composer, cx| composer.add_local_files(&paths, cx));
-        })
-        .detach();
-    }
-
     /// Test-only: aim the launch project at a scratch repo — production
     /// registers `here()` once at construction, which tests cannot sit in.
     #[cfg(test)]
@@ -4175,14 +3558,6 @@ impl CockpitView {
         for pane in &self.panes {
             pane.update_draft(cx, |draft| draft.binding.choose_project(project));
         }
-    }
-
-    /// The Composer's open popover, while it is this Pane's: the focused
-    /// Pane's cell hangs it above the line.
-    fn composer_menu_over(&self, index: usize, cx: &gpui::App) -> Option<Entity<composer_menu::ComposerMenuView>> {
-        (index == self.focused(cx)
-            && self.composer_menu.read(cx).pane() == Some(self.panes[index].identity))
-            .then(|| self.composer_menu.clone())
     }
 
     /// A draft's Project or Workspace menu, hung off its chip on the strip
@@ -4615,44 +3990,6 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// ⌘V anywhere in the window lands in the focused Pane's Composer.
-    /// The Composer's own Paste runs first while it holds the keyboard;
-    /// this is the fallback for when a click in the transcript — a drag
-    /// to select, a tool row — took the keyboard away: pasted text or files
-    /// go where the operator is about to type, and the keyboard follows.
-    fn paste_into_composer(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(line) = self.nav_view.read(cx).snooze_line().cloned() {
-            if let Some(item) = cx.read_from_clipboard() {
-                line.update(cx, |line, cx| line.paste_item(item, cx));
-            }
-            return;
-        }
-        // ⌘V in the palette pastes into its line.
-        if let Some(palette) = self.floats.palette.clone() {
-            if let Some(item) = cx.read_from_clipboard() {
-                let input = palette.read(cx).input.clone();
-                input.update(cx, |line, cx| line.paste_item(item, cx));
-            }
-            return;
-        }
-        if self.panes.get(self.focused(cx)).is_none_or(|pane| !pane.read(cx).is_main()) {
-            return;
-        }
-        let Some(item) = cx.read_from_clipboard() else {
-            return;
-        };
-        let index = self.focused(cx);
-        let Some(pane) = self.panes.get(index) else {
-            return;
-        };
-        if self.rename.is_open() {
-            return;
-        }
-        let composer = pane.read(cx).composer.clone();
-        composer.update(cx, |composer, cx| composer.paste_item(item, cx));
-        window.focus(&composer.focus_handle(cx), cx);
-        cx.notify();
-    }
 }
 
 impl Band {
@@ -5569,28 +4906,6 @@ impl CockpitView {
         } else if self.slot_drag.left(target) {
             cx.notify();
         }
-    }
-
-    /// A typed-out `/import` (the slash menu muted) opens the import
-    /// picker, as its menu row does, rather than going to the provider as
-    /// text.
-    fn typed_import(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(pane) = self.panes.get(self.focused(cx)) else {
-            return false;
-        };
-        let (identity, composer) = (pane.identity, pane.read(cx).composer.clone());
-        if composer.read(cx).prompt().trim() != "/import" {
-            return false;
-        }
-        let into = match identity {
-            PaneIdentity::Draft(_) => Some(identity),
-            PaneIdentity::Thread(_) => {
-                composer.update(cx, |composer, cx| composer.take(cx));
-                self.import_target(cx)
-            }
-        };
-        self.open_import_palette(into, window, cx);
-        true
     }
 
 

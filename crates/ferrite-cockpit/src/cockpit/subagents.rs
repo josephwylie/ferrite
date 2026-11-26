@@ -564,3 +564,65 @@ impl CockpitView {
         );
     }
 }
+
+impl CockpitView {
+    /// Stop the Subagent `key` while it runs; whether it did. A finished
+    /// one has nothing to stop, and its escape must not reach Main's turn.
+    pub(super) fn stop_subagent(&mut self, thread: ThreadKey, key: &ferrite_core::activity::AgentKey, cx: &mut gpui::App) -> bool {
+        let Some(open) = self.cockpit.read(cx).thread(thread) else {
+            return false;
+        };
+        let running = open
+            .activity()
+            .subject(&ferrite_core::activity::Subject::Subagent(key.clone()))
+            .is_some_and(|view| {
+                matches!(
+                    view.status(),
+                    ferrite_core::activity::AgentStatus::Pending
+                        | ferrite_core::activity::AgentStatus::Working
+                        | ferrite_core::activity::AgentStatus::Waiting
+                )
+            });
+        if running {
+            self.cockpit.update(cx, |cockpit, _| cockpit.stop_subagent(thread, key));
+        }
+        running
+    }
+
+    /// ⌫ on the keyboard's agent row: its subagent stops, while it runs
+    /// (`stop_subagent`); on any other row, nothing.
+    pub(super) fn stop_agent_action(&mut self, _: &StopAgent, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(thread) = self.focused_thread(cx) else {
+            return;
+        };
+        let Some(call) = self.panes[self.focused(cx)].read(cx).targeted_tool().cloned() else {
+            return;
+        };
+        if let Some(ferrite_core::activity::Subject::Subagent(key)) =
+            self.targeted_agent(thread, &call, cx)
+        {
+            if self.stop_subagent(thread, &key, cx) {
+                cx.notify();
+            }
+        }
+    }
+
+    /// The agent the keyboard's row `target` started, when it is an agent's.
+    pub(super) fn targeted_agent(
+        &self,
+        thread: ThreadKey,
+        target: &pane::DisclosureId,
+        cx: &gpui::App,
+    ) -> Option<ferrite_core::activity::Subject> {
+        let pane::DisclosureId::Tool(call) = target else {
+            return None;
+        };
+        self.cockpit
+            .read(cx)
+            .thread(thread)?
+            .activity()
+            .invocations()
+            .find(|(native, _)| native == call)
+            .map(|(_, agent)| agent.subject())
+    }
+}

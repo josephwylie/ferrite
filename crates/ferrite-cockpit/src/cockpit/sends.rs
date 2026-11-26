@@ -20,6 +20,8 @@ use ferrite_core::draft_content::DraftContent;
 use ferrite_core::ThreadKey;
 use ferrite_pane::composer::SentDraft;
 use ferrite_core::replies::Reply;
+use super::model_picker::Tuning;
+use super::returns::queued_to_take_back;
 use std::collections::{HashMap, VecDeque};
 
 /// How much of a prompt names it in a notice.
@@ -417,5 +419,287 @@ fn named(prompt: &str) -> String {
     match prompt.char_indices().nth(NAMED_CHARS) {
         Some((end, _)) => format!("{}…", &prompt[..end]),
         None => prompt.to_string(),
+    }
+}
+
+impl CockpitView {
+    pub(super) fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panes.get(self.focused(cx)).map(|pane| pane.read(cx).composer.clone()).is_some_and(|line| line.update(cx, |line, cx| line.holds_send(window, cx))) {
+            return;
+        }
+        // The card's ↵ is its confirm — but in a machine's folder browser,
+        // once it is moved, it adds the folder it shows.
+        if let Some(card) = self.project_card(cx) {
+            let typed = card.update(cx, |card, cx| card.take_remote_path(window, cx));
+            if let Some(path) = typed {
+                self.adopt_editor_directory(path, cx);
+                return;
+            }
+            if card.read(cx).ready() {
+                self.confirm_project_editor(cx);
+            }
+            return;
+        }
+        if let Some(sheet) = self.placement_sheet(cx) {
+            sheet.update(cx, |sheet, cx| sheet.confirm(cx));
+            return;
+        }
+        if self.nav_view.read(cx).snooze_line().is_some() {
+            self.nav_view.update(cx, |nav, cx| nav.finish_snooze(true, cx));
+            return;
+        }
+        if self.rename.is_open() {
+            self.finish_rename(true, cx);
+            return;
+        }
+        // A draft's ↵ (#29): on a band chip it opens that chip's popover;
+        // on the prompt line it is the first send — the bootstrap — or a
+        // typed-out `/import`.
+        if let Some(band_focus) = self
+            .panes
+            .get(self.focused(cx))
+            .and_then(|pane| pane.read(cx).draft())
+            .map(|draft| draft.band_focus)
+        {
+            match band_focus {
+                Some(chip) => self.open_band_menu(chip, false, cx),
+                None if self.typed_import(window, cx) => {}
+                None => self.bootstrap_draft(cx),
+            }
+            return;
+        }
+        let Some(thread) = self.focused_thread(cx) else {
+            return;
+        };
+        if !self.panes[self.focused(cx)].read(cx).is_main() {
+            return;
+        }
+        // ↵ on an empty line sends a pending question whose every question
+        // is answered (digits toggled a multi-select; ↵ sends it).
+        if self.panes[self.focused(cx)].read(cx).composer.read(cx).is_empty() && self.send_ready_question(cx) {
+            return;
+        }
+        if self.typed_import(window, cx) {
+            return;
+        }
+        let composer = self.panes[self.focused(cx)].read(cx).composer.clone();
+        if !self.admit_files(self.focused(cx), cx) {
+            return;
+        }
+        let draft = composer.update(cx, |composer, cx| composer.take_draft(cx));
+        let text = draft.prompt().trim().to_string();
+        let cited = draft.content().replies.clone();
+        // `/effort max` and `/model sonnet` typed out are Ferrite's own
+        // acts, the same as the pickers: the chip stays truthful, Codex
+        // (which has no such command) gets them too, and a level or model
+        // Ferrite does not know goes to the provider as text.
+        if let Some(handled) = self.typed_tuning(thread, &text, cx) {
+            match handled {
+                Tuning::Effort(effort) => self.pick_effort(thread, effort, cx),
+                Tuning::Model(model) => self.pick_provider(
+                    thread,
+                    ProviderChoice {
+                        provider: self
+                            .cockpit
+                            .read(cx)
+                            .thread(thread)
+                            .map(|open| open.provider())
+                            .unwrap_or(self.prefs.settings.default_provider),
+                        model,
+                    },
+                    cx,
+                ),
+            }
+            return;
+        }
+        if text.is_empty() {
+            // Enter on an empty line takes a held prompt back to edit it.
+            self.take_back_held(thread, cx);
+            return;
+        }
+        // Typing does not wait for the agent; sending does.
+        self.send_draft(thread, draft, text, cited, cx);
+        cx.notify();
+    }
+
+    /// Backspace on an EMPTY Composer line clears the held prompt — the
+    /// `⌫ unqueue` the queued row advertises. With text on the line the
+    /// Composer consumes the key first and this never runs.
+    pub(super) fn unqueue_from_backspace(
+        &mut self,
+        _: &ferrite_pane::composer::Backspace,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // ⌫ in the palette's line edits the query, never the queue.
+        if self.floats.palette.is_some()
+            || self.panes.get(self.focused(cx)).is_none_or(|pane| !pane.read(cx).is_main())
+        {
+            return;
+        }
+        let Some(thread) = self.focused_thread(cx) else {
+            return;
+        };
+        if !self.panes[self.focused(cx)].read(cx).composer.read(cx).is_empty() {
+            return;
+        }
+        let Some(id) = self
+            .cockpit
+            .read(cx)
+            .thread(thread)
+            .and_then(|open| queued_to_take_back(&open))
+        else {
+            return;
+        };
+        self.cockpit.update(cx, |cockpit, _| cockpit.remove_queued_item(thread, &id, false));
+        cx.notify();
+    }
+
+    pub(super) fn interrupt(&mut self, _: &Interrupt, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dismiss_popup(cx) {
+            return;
+        }
+        if let Some(transcript) = self.panes.get(self.focused(cx)).and_then(|pane| pane.read(cx).transcript()) {
+            if transcript.update(cx, |transcript, cx| transcript.dismiss_offer(cx)) {
+                return;
+            }
+        }
+        if self.leave_control(window, cx) {
+            return;
+        }
+        if let Some(connections) = self
+            .connections(cx)
+            .filter(|connections| connections.read(cx).editing())
+        {
+            connections.update(cx, |connections, cx| connections.cancel(cx));
+            return;
+        }
+        // The setup sheet's esc closes it; a copy it shows carries on.
+        if let Some(sheet) = self.placement_sheet(cx) {
+            sheet.update(cx, |sheet, cx| sheet.dismiss(cx));
+            return;
+        }
+        if self.hide_sheet(cx) {
+            return;
+        }
+        if self.nav_view.read(cx).snooze_line().is_some() {
+            self.nav_view.update(cx, |nav, cx| nav.finish_snooze(false, cx));
+            return;
+        }
+        if self.rename.is_open() {
+            self.finish_rename(false, cx);
+            return;
+        }
+        if !self.cancel_focused_draft_start(cx) {
+            cx.notify();
+            return;
+        }
+        // On a draft, escape returns to the prompt (#29): the band's tab
+        // focus clears. (An open band menu holds the ComposerMenu keys, so
+        // escape there dismisses through `menu_dismiss` instead.)
+        if self.update_focused_draft(cx, |draft| draft.band_focus = None).is_some() {
+            cx.notify();
+            return;
+        }
+        // Escape stops what the Pane shows: on Main its turn while one runs
+        // (T3's Stop, which ends the Thread's PR watches with it), never the
+        // Subagents and background work it started, and nothing at rest;
+        // on a Subagent that Subagent alone — and once it has nothing to
+        // stop, it goes back to its parent.
+        if let Some(thread) = self
+            .focused_thread(cx)
+            .filter(|thread| !self.machine_lost(thread.machine(), cx))
+        {
+            let selected = self.panes[self.focused(cx)].read(cx).selected.clone();
+            match &selected {
+                ferrite_core::activity::Subject::Main => {
+                    if self.cockpit.read(cx).thread(thread).is_some_and(|open| turn_running(&open)) {
+                        self.cockpit.update(cx, |cockpit, _| cockpit.interrupt(thread));
+                    }
+                }
+                ferrite_core::activity::Subject::Subagent(key) => {
+                    if !self.stop_subagent(thread, key, cx) {
+                        let parent = self
+                            .agent_lineage(thread, &selected, cx)
+                            .pop()
+                            .unwrap_or(ferrite_core::activity::Subject::Main);
+                        self.select_subject(thread, parent, window, cx);
+                    }
+                }
+            }
+            self.facts.acted(self.cockpit.read(cx), thread);
+        }
+        cx.notify();
+    }
+
+    /// Tab walks a draft's band (#29), or a Thread Pane's rendered tool
+    /// disclosures before returning to the Composer.
+    /// Tab on an empty Composer that is showing a predicted follow-up puts
+    /// that text in the line — editable, unsent. Nothing reaches the provider
+    /// without a second, deliberate ↵: ghost text is a guess, and a guess is
+    /// not consent to start a turn.
+    ///
+    /// The condition is `followup::suggest` itself, the same call the idle
+    /// line renders from, so the key and the ghost text can never disagree
+    /// about whether there is something to accept.
+    pub(super) fn accept_suggestion(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+        if self.sheet_up(cx)
+            || self.rename.is_open()
+            || self.nav_view.read(cx).snooze_line().is_some()
+            || self.composer_menu.read(cx).is_open()
+        {
+            return false;
+        }
+        let Some(thread) = self.focused_thread(cx) else {
+            return false;
+        };
+        let Some(open) = self.cockpit.read(cx).thread(thread) else {
+            return false;
+        };
+        let offered = followup::suggest(
+            open.pending().is_some(),
+            Some(open.transcript()),
+            open.suggestion(),
+        );
+        let Some(text) = offered.acceptable().map(str::to_string) else {
+            return false;
+        };
+        let Some(composer) = self
+            .panes
+            .get(self.focused(cx))
+            .map(|pane| pane.read(cx).composer.clone())
+        else {
+            return false;
+        };
+        // Only Tab from the empty input accepts its suggestion. Tab from a
+        // transcript action or attachment continues that control's focus walk.
+        if !composer.focus_handle(cx).is_focused(window) || !composer.read(cx).is_empty() {
+            return false;
+        }
+        composer.update(cx, |composer, cx| composer.set(text, cx));
+        cx.notify();
+        true
+    }
+
+    /// A typed-out `/import` (the slash menu muted) opens the import
+    /// picker, as its menu row does, rather than going to the provider as
+    /// text.
+    pub(super) fn typed_import(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(pane) = self.panes.get(self.focused(cx)) else {
+            return false;
+        };
+        let (identity, composer) = (pane.identity, pane.read(cx).composer.clone());
+        if composer.read(cx).prompt().trim() != "/import" {
+            return false;
+        }
+        let into = match identity {
+            PaneIdentity::Draft(_) => Some(identity),
+            PaneIdentity::Thread(_) => {
+                composer.update(cx, |composer, cx| composer.take(cx));
+                self.import_target(cx)
+            }
+        };
+        self.open_import_palette(into, window, cx);
+        true
     }
 }

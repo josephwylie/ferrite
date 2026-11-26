@@ -320,3 +320,63 @@ impl Drop for CancelUpload {
         self.0.cancel();
     }
 }
+
+impl CockpitView {
+    /// The `+` menu's file or folder picker, its picks staged on this
+    /// Pane's Composer as a drop or a paste stages them.
+    pub(super) fn attach_files(&mut self, index: usize, folders: bool, cx: &mut Context<Self>) {
+        let composer = self.panes[index].read(cx).composer.clone();
+        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: !folders,
+            directories: folders,
+            multiple: true,
+            prompt: Some("Attach".into()),
+        });
+        cx.spawn(async move |_, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            composer.update(cx, |composer, cx| composer.add_local_files(&paths, cx));
+        })
+        .detach();
+    }
+
+    /// ⌘V anywhere in the window lands in the focused Pane's Composer.
+    /// The Composer's own Paste runs first while it holds the keyboard;
+    /// this is the fallback for when a click in the transcript — a drag
+    /// to select, a tool row — took the keyboard away: pasted text or files
+    /// go where the operator is about to type, and the keyboard follows.
+    pub(super) fn paste_into_composer(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(line) = self.nav_view.read(cx).snooze_line().cloned() {
+            if let Some(item) = cx.read_from_clipboard() {
+                line.update(cx, |line, cx| line.paste_item(item, cx));
+            }
+            return;
+        }
+        // ⌘V in the palette pastes into its line.
+        if let Some(palette) = self.floats.palette.clone() {
+            if let Some(item) = cx.read_from_clipboard() {
+                let input = palette.read(cx).input.clone();
+                input.update(cx, |line, cx| line.paste_item(item, cx));
+            }
+            return;
+        }
+        if self.panes.get(self.focused(cx)).is_none_or(|pane| !pane.read(cx).is_main()) {
+            return;
+        }
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        let index = self.focused(cx);
+        let Some(pane) = self.panes.get(index) else {
+            return;
+        };
+        if self.rename.is_open() {
+            return;
+        }
+        let composer = pane.read(cx).composer.clone();
+        composer.update(cx, |composer, cx| composer.paste_item(item, cx));
+        window.focus(&composer.focus_handle(cx), cx);
+        cx.notify();
+    }
+}

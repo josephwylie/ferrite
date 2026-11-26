@@ -132,3 +132,66 @@ impl CockpitView {
         );
     }
 }
+
+/// The id of the latest queued prompt while it can still be taken back:
+/// what ↑ and ⌫ act on (the strip's rows each act on their own).
+pub(super) fn queued_to_take_back(open: &ThreadView) -> Option<String> {
+    open.queue()
+        .first()
+        .filter(|item| pane::queued_takes_back(item))
+        .map(|item| item.id.clone())
+}
+
+impl CockpitView {
+    pub(super) fn history_older(&mut self, _: &HistoryOlder, _: &mut Window, cx: &mut Context<Self>) {
+        self.recall_history(HistoryDirection::Older, cx);
+    }
+
+    pub(super) fn history_newer(&mut self, _: &HistoryNewer, _: &mut Window, cx: &mut Context<Self>) {
+        self.recall_history(HistoryDirection::Newer, cx);
+    }
+
+    pub(super) fn recall_history(&mut self, direction: HistoryDirection, cx: &mut Context<Self>) {
+        let index = self.focused(cx);
+        if !self.history_available(index, cx) {
+            return;
+        }
+        let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
+            return;
+        };
+        if let Some(id) = self
+            .cockpit
+            .read(cx)
+            .thread(thread)
+            .and_then(|open| queued_to_take_back(&open))
+        {
+            if matches!(direction, HistoryDirection::Older) {
+                self.cockpit.update(cx, |cockpit, _| cockpit.edit_queued_item(thread, &id));
+                cx.notify();
+            }
+            return;
+        }
+        self.step_history_of(thread, direction, cx);
+    }
+
+    pub(super) fn history_available(&self, index: usize, cx: &gpui::App) -> bool {
+        if index != self.focused(cx) {
+            return false;
+        }
+        let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
+            return false;
+        };
+        let Some(open) = self.cockpit.read(cx).thread(thread) else {
+            return false;
+        };
+        !self.panes[index].read(cx).has_tool_target()
+            && !self.rename.is_open()
+            && self.nav_view.read(cx).snooze_line().is_none()
+            && !self.composer_menu.read(cx).is_open()
+            && ((self.panes[index].read(cx).is_main() && queued_to_take_back(&open).is_some())
+                || (open.has_prompt_history()
+                    && !open.busy()
+                    && open.pending().is_none()
+                    && open.queue().is_empty()))
+    }
+}
