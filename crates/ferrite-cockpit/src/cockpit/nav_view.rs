@@ -542,3 +542,408 @@ impl CockpitView {
         }
     }
 }
+
+impl CockpitView {
+    /// The parked set changed: rebuild the nav's parked rows now, from the
+    /// rows the Server published, and fetch what only `git` can say on the
+    /// background executor — the rows fill in when it answers.
+    pub(super) fn parked_changed(&mut self, cx: &mut Context<Self>) {
+        let lookups = self.facts.parked_changed(self.cockpit.read(cx));
+        self.look_up(lookups, cx);
+    }
+
+    /// Open the inline editor on a Thread's title. A Thread with no stored
+    /// title shows its generated one, so that is what the editor opens on:
+    /// the operator edits the name they can see.
+    pub(super) fn start_rename(&mut self, target: RenameTarget, cx: &mut Context<Self>) {
+        let (RenameTarget::Thread(thread) | RenameTarget::ViewTitle(thread)) = target;
+        let title = self.facts.name(thread).to_string();
+        self.rename.open(target, title, cx);
+        cx.notify();
+    }
+
+    /// Close the editor; `save` commits the title it holds. A refusal from
+    /// the store lands where every other nav notice does; the editor still
+    /// closes, so a row is never stuck in edit.
+    pub(super) fn finish_rename(&mut self, save: bool, cx: &mut Context<Self>) {
+        if !self.rename.is_open() {
+            return;
+        }
+        let asked = if save {
+            self.rename.take(cx)
+        } else {
+            self.rename.close();
+            None
+        };
+        if let Some((thread, title)) = asked {
+            let renamed = self.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(thread, &title));
+            self.when_answered(
+                renamed,
+                move |view, renamed, cx| {
+                    match renamed {
+                        Err(error) => view.nav_notice.problem(error.to_string()),
+                        Ok(()) => {
+                            view.facts.renamed(view.cockpit.read(cx), thread);
+                            view.refresh_names(cx);
+                            view.nav_notice.clear();
+                        }
+                    }
+                    cx.notify();
+                },
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    /// The Threads the Parked shelf lists and counts: every parked
+    /// Thread the Project filter admits; a parked Thread on screen is still
+    /// a parked Thread.
+    pub(super) fn parked_threads(&self, cx: &gpui::App) -> Vec<ThreadKey> {
+        self.facts
+            .parked()
+            .iter()
+            .copied()
+            .filter(|thread| self.admitted(*thread, cx))
+            .collect()
+    }
+
+    /// Whether any Thread, open or parked, records this Project.
+    pub(super) fn project_in_use(&self, project: ProjectKey, cx: &gpui::App) -> bool {
+        self.cockpit
+            .read(cx)
+            .threads()
+            .into_iter()
+            .chain(self.facts.parked().iter().copied())
+            .any(|thread| {
+                self.cockpit.read(cx).project_of(thread) == Some(project)
+            })
+    }
+
+    /// A Thread's effective cwd.
+    pub(super) fn target_path(&self, target: MenuTarget, cx: &gpui::App) -> Option<std::path::PathBuf> {
+        match target {
+            MenuTarget::Thread(key)
+            | MenuTarget::Pane(key)
+            | MenuTarget::Snooze(key) => self.thread_path(key, cx),
+            MenuTarget::File(thread) => self.tools.files.read(cx).pressed(thread),
+            MenuTarget::FilesMore(_)
+            | MenuTarget::ChangesScope(_)
+            | MenuTarget::ChangesMore(_)
+            | MenuTarget::ChangesBase(_)
+            | MenuTarget::Terminal(_)
+            | MenuTarget::TerminalMore(_)
+            | MenuTarget::SurfaceMenu(_)
+            | MenuTarget::SurfaceTab { .. }
+            | MenuTarget::PrMore(_)
+            | MenuTarget::PrLink(_)
+            | MenuTarget::BrowserPage(_) => None,
+            MenuTarget::Details(_) => None,
+            MenuTarget::Parked
+            | MenuTarget::NavFilter
+            | MenuTarget::NavFactory
+            | MenuTarget::Review { .. }
+            | MenuTarget::Prompt { .. }
+            | MenuTarget::Factory
+            | MenuTarget::Page(_) => None,
+        }
+    }
+
+    pub(super) fn thread_path(&self, thread: ThreadKey, cx: &gpui::App) -> Option<std::path::PathBuf> {
+        if let Some(open) = self.cockpit.read(cx).thread(thread) {
+            return ferrite_core::checkout::effective_cwd(
+                open.session_project_root(),
+                open.workspace(),
+            )
+            .map(std::path::Path::to_path_buf);
+        }
+        let meta = self.cockpit.read(cx).peek(thread).ok()?;
+        ferrite_core::checkout::effective_cwd(
+            meta.session_project_root.as_deref(),
+            meta.workspace.as_ref(),
+        )
+        .map(std::path::Path::to_path_buf)
+    }
+
+    /// Delete every Thread the Parked section lists. Each is its own act
+    /// against the core, so one that refuses (a dirty legacy worktree, an
+    /// unreadable log) does not stop the rest; the refusals are counted
+    /// into the nav's banner, with the last reason, and the survivors stay
+    /// listed where the operator can deal with them one at a time.
+    pub(super) fn delete_parked_threads(&mut self, cx: &mut Context<Self>) {
+        let parked = self.parked_threads(cx);
+        self.delete_threads(
+            parked,
+            |view, deleted, cx| {
+                let refused: Vec<String> = deleted
+                    .into_iter()
+                    .filter_map(|(_, deleted)| deleted.err())
+                    .map(|error| error.to_string())
+                    .collect();
+                match (refused.len(), refused.last()) {
+                    (_, None) => view.nav_notice.clear(),
+                    (1, Some(reason)) => view
+                        .nav_notice
+                        .problem(format!("1 parked thread not deleted: {reason}")),
+                    (count, Some(reason)) => view
+                        .nav_notice
+                        .problem(format!("{count} parked threads not deleted, last: {reason}")),
+                }
+                view.sync_panes(cx);
+                view.parked_changed(cx);
+            },
+            cx,
+        );
+    }
+
+    /// Point navigation at a Project — or back at all of them — and bring
+    /// any standing draft with it. The Composer's chip names the Project a
+    /// send will run in, and it must not sit there disagreeing with the
+    /// Project the operator just chose (the ⌘K palette's filter command,
+    /// or a Project just created). Filtered, the tree is that Project's
+    /// section. A draft already bootstrapping is on its way out and is left
+    /// alone.
+    pub(crate) fn choose_nav_filter(&mut self, project: Option<ProjectKey>, cx: &mut Context<Self>) {
+        self.nav_filter = project;
+        if let Some(project) = project {
+            let standing = self.panes.iter().position(|pane| {
+                pane.identity
+                    .draft()
+                    .is_some_and(|draft| !self.cockpit.read(cx).draft_starting(draft))
+            });
+            if let Some(index) = standing {
+                // The same move the Project chip makes, so the workspace
+                // choice under it cannot outlive the repo it named.
+                self.panes[index].update_draft(cx, |draft| {
+                    draft.binding.choose_project(project);
+                    draft.error = None;
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// Pin or unpin a Thread (the row menu's `Pin` / `Unpin`): a pinned
+    /// Thread is listed under `Pinned`, newest pin last. Saved with the
+    /// settings as its machine's Thread (`SavedThread`).
+    pub(crate) fn set_pinned(&mut self, key: ThreadKey, pinned: bool, cx: &mut Context<Self>) {
+        let Some(pin) = self.cockpit.read(cx).saved(key) else {
+            return;
+        };
+        self.change_settings(
+            |settings| {
+                settings.pinned_threads.retain(|saved| *saved != pin);
+                if pinned {
+                    settings.pinned_threads.push(pin);
+                }
+            },
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// The pinned Threads of the machines the window holds, in pin order.
+    pub(super) fn pins(&self, cx: &gpui::App) -> Vec<ThreadKey> {
+        let cockpit = self.cockpit.read(cx);
+        self.prefs
+            .settings
+            .pinned_threads
+            .iter()
+            .filter_map(|pin| cockpit.resolve(pin))
+            .collect()
+    }
+
+    /// Show the parked Threads (N-18): the nav unfolds if it is folded
+    /// away, the Parked shelf opens, and the list takes the keys on its
+    /// header — the ⌘K palette's "show parked" command.
+    pub(crate) fn show_parked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_shelf_open(nav::Shelf::Parked, true, cx);
+        self.focus_nav_on(Some(nav::NavCursor::shelf(nav::Shelf::Parked)), window, cx);
+    }
+
+    /// The nav's rows as it last read them: what it draws.
+    #[cfg(test)]
+    pub(super) fn nav_state(&self, cx: &gpui::App) -> nav::NavState {
+        self.nav_view
+            .read(cx)
+            .inputs()
+            .map(|inputs| inputs.state.clone())
+            .unwrap_or_default()
+    }
+
+    /// Does the Project filter admit this Thread? `All projects` admits
+    /// everything; a chosen Project admits only Threads whose cached
+    /// Project is it — so a Thread whose Project is unknown appears under
+    /// `All projects` alone, rather than being quietly filed under someone
+    /// else's Project.
+    pub(super) fn admitted(&self, thread: ThreadKey, cx: &gpui::App) -> bool {
+        // An owned Thread (a Worker, a Coordinator) is its owner's to list.
+        if !self.cockpit.read(cx).operators(thread) {
+            return false;
+        }
+        let Some(wanted) = self.nav_filter else {
+            return true;
+        };
+        self.facts.get(thread).and_then(|facts| facts.project) == Some(wanted)
+    }
+
+    /// One Thread's nav row, entirely from caches: the name core has (there
+    /// is no display name), its state, the cached Project and checkout
+    /// facts, and its word. Not selected: `nav_state` decides what carries
+    /// the selection.
+    pub(super) fn thread_row(&self, key: ThreadKey, cx: &gpui::App) -> nav::ThreadRow {
+        let facts = self.facts.get(key);
+        let open = self.cockpit.read(cx).thread(key);
+        let now = ferrite_core::clock::system_time();
+        // A Notice not yet seen makes a quiet Thread done.
+        let unread = self
+            .cockpit
+            .read(cx)
+            .notifications(key.machine())
+            .attention(key.thread());
+        // The tail reads the Pane's own head slot, so the nav and the Pane
+        // never disagree about a Thread (C10).
+        let slot =
+            open.and_then(|open| pane::thread_word(open, facts.map(|facts| &facts.wall), unread));
+        // The mark is squared with that word (`pane::dot_state`): a row whose
+        // tail says `failed` never wears an idle dot.
+        let status = match open {
+            None => nav::RowStatus::Parked,
+            Some(open) => {
+                let failing = facts.is_some_and(|facts| facts.wall.tests_failing);
+                nav::RowStatus::of(
+                    pane::dot_state(
+                        pane::wall_state(
+                            Some(&open.turn()),
+                            open.pending_decisions()
+                                .iter()
+                                .any(|pending| pending.decision.blocks_execution()),
+                            failing,
+                        ),
+                        slot.as_ref(),
+                    ),
+                    unread,
+                    open.background_work(),
+                )
+            }
+        };
+        let age = facts
+            .and_then(|facts| facts.last_used)
+            .map(|at| ferrite_ui::age::since_label(at, now))
+            .unwrap_or_default();
+        let working = matches!(
+            status,
+            nav::RowStatus::Working | nav::RowStatus::Failing
+        );
+        let row = nav::ThreadRow {
+            key,
+            name: self.facts.name(key),
+            status,
+            project: facts.and_then(|facts| facts.project_label.clone()),
+            selected: false,
+            tail: nav::NavTail::of(status, slot.as_ref(), age),
+            branch: facts.and_then(Self::checkout_branch),
+            worktree: facts.and_then(|facts| facts.worktree.clone()),
+            pr: self.facts.pr(key).map(nav::NavPr::of),
+            provider: open
+                .map(|open| open.provider())
+                .or_else(|| facts.and_then(|facts| facts.provider)),
+            activity_at: facts.and_then(|facts| facts.last_used),
+            working_since: open
+                .filter(|_| working)
+                .and_then(|open| open.turn().started),
+            pinned: self.pins(cx).contains(&key),
+            retitling: open.is_some_and(|open| open.titling()),
+            // The nav wears its own picks (`NavView::card_picked`).
+            picked: false,
+            elsewhere: self.elsewhere_row(key, cx),
+        };
+        #[cfg(test)]
+        drawn::record_row(
+            key,
+            format!(
+                "{:?} {:?} branch={:?} pr={:?} provider={:?} receded={} {}",
+                row.status,
+                row.tail,
+                row.branch,
+                row.pr.as_ref().map(|pr| (pr.number, pr.state)),
+                row.provider,
+                row.receded(),
+                row.name,
+            ),
+        );
+        row
+    }
+
+    /// The branch a checkout is on: the live status's, else the cached one.
+    pub(super) fn checkout_branch(facts: &crate::facts::ThreadFacts) -> Option<SharedString> {
+        facts
+            .status
+            .as_ref()
+            .and_then(|status| status.branch.clone())
+            .map(SharedString::from)
+            .or_else(|| facts.branch.clone())
+    }
+
+    /// When a Thread was last used, for `sort: recent`. A Thread with no
+    /// known time sorts to the bottom rather than to the top: an unknown
+    /// time is not a recent one.
+    pub(super) fn last_used(&self, thread: ThreadKey) -> std::time::SystemTime {
+        self.facts
+            .last_used(thread)
+            .unwrap_or(std::time::UNIX_EPOCH)
+    }
+
+    /// The operator went to a Thread the nav's Project scope hides: the
+    /// scope widens to all Projects, so the shown Thread has its row in the
+    /// list (and the Filter button says why). Owned Threads are never
+    /// listed, so nothing here reveals them.
+    pub(super) fn widen_scope_to(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
+        if self.nav_filter.is_some() && self.cockpit.read(cx).operators(thread) && !self.admitted(thread, cx) {
+            self.choose_nav_filter(None, cx);
+        }
+    }
+
+    /// Read free disk for the nav's foot off the UI thread: the least free of the
+    /// volumes holding the Threads' checkouts (SPEC §8), or a fixture
+    /// world's figure. Never another machine's, whose checkouts are its
+    /// own; tests and captures never read the real disk.
+    pub(super) fn read_free_disk(&mut self, cx: &mut Context<Self>) {
+        #[cfg(any(test, feature = "demo"))]
+        if let Some(bytes) = self.cockpit.read(cx).free_disk_fixture() {
+            self.free_disk_landed(Some(bytes), cx);
+            return;
+        }
+        if cfg!(any(test, feature = "visual-reference")) {
+            return;
+        }
+        let mut paths: Vec<std::path::PathBuf> = self
+            .cockpit
+            .read(cx)
+            .threads()
+            .into_iter()
+            .filter(|thread| !self.elsewhere(thread.machine(), cx))
+            .filter_map(|thread| self.thread_path(thread, cx))
+            .collect();
+        paths.sort();
+        paths.dedup();
+        cx.spawn(async move |this, cx| {
+            let free = cx
+                .background_executor()
+                .spawn(async move {
+                    ferrite_core::disk::least_free(paths.iter().map(std::path::PathBuf::as_path))
+                })
+                .await;
+            this.update(cx, |view, cx| view.free_disk_landed(free, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Adopt a free-disk reading; redraw only when the bar's words move.
+    pub(super) fn free_disk_landed(&mut self, free: Option<u64>, cx: &mut Context<Self>) {
+        if self.sweep.free_disk_read(free) {
+            cx.notify();
+        }
+    }
+}

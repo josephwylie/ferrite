@@ -116,3 +116,13 @@ impl CockpitView {
         }
     }
 }
+
+impl CockpitView {
+    pub(super) fn next_thread(&mut self, _: &NextThread, window: &mut Window, cx: &mut Context<Self>) {
+        self.step_thread(1, window, cx);
+    }
+
+    pub(super) fn previous_thread(&mut self, _: &PreviousThread, window: &mut Window, cx: &mut Context<Self>) {
+        self.step_thread(-1, window, cx);
+    }
+}
