@@ -637,12 +637,12 @@ fn the_second_panes_cell_asks_for_itself(cx: &mut TestAppContext) {
         paths: gpui::ExternalPaths(vec![notes.clone()].into()),
     });
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.file_drop_over), Some(second), "the files are over its box");
+    assert_eq!(view.read_with(cx, |view, _| view.slot_drag.files_over()), Some(second), "the files are over its box");
     cx.simulate_event(gpui::FileDropEvent::Pending { position: editor });
     cx.simulate_event(gpui::FileDropEvent::Submit { position: editor });
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.file_drop_over, None, "the drop ends the hover");
+        assert_eq!(view.slot_drag.files_over(), None, "the drop ends the hover");
         assert_eq!(view.panes[1].read(cx).composer.read(cx).files().len(), 1, "staged in its box");
         assert!(view.panes[0].read(cx).composer.read(cx).files().is_empty());
     });
@@ -725,9 +725,9 @@ fn the_second_panes_cell_asks_for_itself(cx: &mut TestAppContext) {
     cx.simulate_mouse_move(cell.center(), Some(gpui::MouseButton::Left), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
-        assert_eq!(view.dragging, Some(crate::cockpit::reader_leaf(thread)), "its Review is lifted");
+        assert_eq!(view.slot_drag.lifted(), Some(crate::cockpit::reader_leaf(thread)), "its Review is lifted");
         assert_eq!(
-            view.drop_preview,
+            view.slot_drag.preview(),
             Some((crate::cockpit::pane_leaf(second), Zone::Swap)),
             "over its cell's middle, the drop would swap the two"
         );
@@ -735,7 +735,7 @@ fn the_second_panes_cell_asks_for_itself(cx: &mut TestAppContext) {
     cx.simulate_mouse_up(cell.center(), gpui::MouseButton::Left, gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
-        assert_eq!((view.dragging, view.drop_preview), (None, None), "the drop ends the drag");
+        assert_eq!((view.slot_drag.lifted(), view.slot_drag.preview()), (None, None), "the drop ends the drag");
     });
     assert!(pane_x(cx) > before, "the Review and the Pane swapped: {before} -> {}", pane_x(cx));
 

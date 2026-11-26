@@ -176,18 +176,12 @@ impl CockpitView {
         // have outlived the Pane under it.
         match event.ask.clone() {
             PaneAsk::FilesOver(over) => {
-                let next = match (over, self.file_drop_over) {
-                    (true, _) => Some(identity),
-                    (false, Some(current)) if current == identity => None,
-                    (false, current) => current,
-                };
-                if self.file_drop_over != next {
-                    self.file_drop_over = next;
+                if self.slot_drag.files_moved(identity, over) {
                     cx.notify();
                 }
                 return;
             }
-            PaneAsk::FilesDropped => self.file_drop_over = None,
+            PaneAsk::FilesDropped => self.slot_drag.files_dropped(),
             PaneAsk::SlotDragged { source, at, bounds } => {
                 return self.slot_dragged(source, super::pane_leaf(identity), at, bounds, cx);
             }
@@ -407,7 +401,7 @@ impl CockpitView {
             focused,
             lost,
             sheet_up: self.sheet_up(cx),
-            drop_target: self.drop_target(index, cx),
+            drop_target: self.slot_drag.hovered_by_files(self.panes[index].identity, cx),
             composer_menu: drawn
                 .then(|| self.composer_menu_over(index, cx))
                 .flatten()
@@ -524,10 +518,9 @@ impl CockpitView {
         #[cfg(test)]
         super::drawn::laid_out(
             self.panes[index].identity,
-            self.slot_sizes
-                .borrow()
-                .get(&super::pane_leaf(self.panes[index].identity))
-                .map(|(w, _)| *w)
+            self.slot_drag
+                .size(super::pane_leaf(self.panes[index].identity))
+                .map(|(w, _)| w)
                 .or_else(|| rect.map(|rect| rect.w))
                 .unwrap_or(board.w),
         );
