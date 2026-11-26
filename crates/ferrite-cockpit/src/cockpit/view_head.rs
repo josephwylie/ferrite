@@ -20,6 +20,7 @@
 //! their region out of the strip's `Drag` hit test the same way).
 
 use super::*;
+use ferrite_factory::board::Surface;
 use super::menu_button::{Door, Doors, Edge};
 use ferrite_ui::components::{bound_chord, icon_button, icon_button_as, IconSize, IconState, Tip};
 use ferrite_ui::{icons, theme};
@@ -194,7 +195,7 @@ impl CockpitView {
         let (Some(project), Some(view)) = (self.factory_project(), self.factory()) else {
             return Vec::new();
         };
-        let surface = view.read(cx).surface;
+        let surface = view.read(cx).surface();
         let project = self
             .cockpit
             .read(cx)
@@ -215,7 +216,7 @@ impl CockpitView {
         };
         let task = self
             .open_task_now(cx)
-            .filter(|_| surface == super::workflows::Surface::Board);
+            .filter(|_| surface == Surface::Board);
         let mut crumbs = vec![
             crumb(project, false).into_any_element(),
             separator(),

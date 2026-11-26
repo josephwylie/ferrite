@@ -5,7 +5,8 @@
 //! Server's would.
 #[allow(unused_imports)]
 use super::*;
-use crate::cockpit::workflows::{Field, Pick, StepDrag, Surface};
+use crate::cockpit::workflows::{Field, Pick, StepDrag};
+use ferrite_factory::board::Surface;
 use ferrite_core::factory_board::{Destination, RouteKind, Template};
 
 fn shows(cx: &mut gpui::VisualTestContext, selector: &str) -> bool {
@@ -271,7 +272,7 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
             "unsaved"
         );
         assert_eq!(
-            view.factory().unwrap().read(cx).note.as_deref(),
+            view.factory().unwrap().read(cx).note().map(|note| note.as_ref()),
             Some("Fix the problems listed before saving.")
         );
     });
@@ -431,7 +432,7 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
         assert_eq!(workflow.versions.len(), 1);
         assert!(!workflow.unsaved());
         assert_eq!(
-            view.factory().unwrap().read(cx).note.as_deref(),
+            view.factory().unwrap().read(cx).note().map(|note| note.as_ref()),
             Some("Saved version 1.")
         );
     });
@@ -474,7 +475,7 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
     click(cx, "inspector-instructions");
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.factory().unwrap().read(cx).editor.read(cx).focused().cloned(),
+            view.factory().unwrap().read(cx).editor().read(cx).focused().cloned(),
             Some(instructions.clone())
         );
     });
@@ -507,7 +508,7 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
     holds(&view, cx, "a field revealed");
 
     view.update(cx, |view, cx| {
-        view.update_factory(cx, |factory, _| factory.note = Some("A notice".into()));
+        view.update_factory(cx, |factory, _| factory.set_note(Some("A notice".into())));
         cx.notify();
     });
     tick(cx);

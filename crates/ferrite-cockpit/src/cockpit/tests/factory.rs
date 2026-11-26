@@ -87,85 +87,11 @@ fn the_factory_button_lists_each_project_and_a_fresh_one_is_empty(cx: &mut TestA
     });
 }
 
-/// The board's six columns, each card in its status's column with its
-/// Worker's Provider and model and its result or stop reason; the entry
-/// button wears a dot while one needs the operator.
+/// Opening a Task's panel starts no second run: its Worker tab, pressed,
+/// draws the Worker's own Pane, which takes the keyboard, and the board
+/// stays. What the panel offers by status is `ferrite_factory::board`'s.
 #[gpui::test]
-fn the_board_lays_cards_in_their_columns(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("factory-columns", 1);
-    let project = core.project_of(core.threads()[0]).unwrap();
-    core.fixture_factory(Board {
-        workflows: Vec::new(),
-        tasks: vec![
-            task("t-1", project.project(), Status::Working, None, None, None),
-            task(
-                "t-2",
-                project.project(),
-                Status::NeedsHuman,
-                None,
-                None,
-                Some("No access to the staging database"),
-            ),
-            task(
-                "t-3",
-                project.project(),
-                Status::Completed,
-                None,
-                Some("Fixed it"),
-                None,
-            ),
-            task(
-                "t-4",
-                project.project(),
-                Status::Stopped,
-                None,
-                None,
-                Some("Stopped by you"),
-            ),
-        ],
-        ..Default::default()
-    });
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
-    tick(cx);
-    assert!(shows(cx, "nav-factory-attention"), "one needs you");
-    view.update(cx, |view, cx| {
-        assert_eq!(view.cockpit.read(cx).factory(view.cockpit.read(cx).first_machine()).needs_you(project.project()), 1);
-        view.open_factory(project, cx);
-    });
-    tick(cx);
-    for column in [
-        "queued",
-        "working",
-        "needs_human",
-        "approval",
-        "stopped",
-        "completed",
-    ] {
-        assert!(shows(cx, &format!("factory-column-{column}")), "{column}");
-    }
-    for (card, column) in [
-        ("t-1", "working"),
-        ("t-2", "needs_human"),
-        ("t-3", "completed"),
-        ("t-4", "stopped"),
-    ] {
-        let card_at = bounds(cx, format!("factory-card-{card}"));
-        let column_at = bounds(cx, format!("factory-column-{column}"));
-        assert_eq!(card_at.origin.x, column_at.origin.x, "{card} in {column}");
-        assert!(shows(cx, &format!("factory-card-{card}-agent")));
-    }
-    assert!(shows(cx, "factory-card-t-2-outcome"), "the reason");
-    assert!(shows(cx, "factory-card-t-3-outcome"), "the result");
-    assert!(shows(cx, "factory-card-t-4-outcome"), "the stop reason");
-    assert!(!shows(cx, "factory-card-t-1-outcome"));
-}
-
-/// Opening a Task's panel starts no second run: its Worker tab draws the
-/// Worker's own Pane. Stop is offered while it works; Delete only once
-/// it is Queued, Stopped or Completed.
-#[gpui::test]
-fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAppContext) {
+fn a_tasks_worker_tab_draws_its_own_pane_and_takes_the_keyboard(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("factory-panel", 1);
     let project = core.project_of(core.threads()[0]).unwrap();
     let worker = core
@@ -191,50 +117,19 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     let streams = fake.streams.borrow().len();
-    view.update(cx, |view, cx| view.open_task(view.cockpit.read(cx).first_machine(), "t-1", cx));
+    view.update(cx, |view, cx| view.open_factory(project, cx));
     tick(cx);
-    assert!(shows(cx, "task-panel"));
-    assert!(shows(cx, "task-status"));
-    assert!(shows(cx, "task-stop"));
-    assert!(!shows(cx, "task-delete"), "not while it works");
-    let tab = bounds(cx, "task-tab-activity".into());
-    cx.simulate_click(tab.center(), gpui::Modifiers::none());
-    tick(cx);
+    click(cx, "factory-card-t-1");
+    assert!(shows(cx, "task-panel"), "the card opened its panel");
+    click(cx, "task-tab-activity");
     assert!(shows(cx, "task-activity-0") && shows(cx, "task-activity-1"));
-    view.update(cx, |view, cx| {
-        view.task_tab(crate::cockpit::factory::TaskTab::Context, cx)
-    });
-    tick(cx);
-    assert!(shows(cx, "task-instructions"));
-    view.update(cx, |view, cx| {
-        view.task_tab(crate::cockpit::factory::TaskTab::Worker, cx)
-    });
-    tick(cx);
+    click(cx, "task-tab-worker");
     assert!(shows(cx, "task-worker"), "the Worker's Pane");
     view.read_with(cx, |view, cx| {
         assert_eq!(view.focused_thread(cx), Some(worker));
         assert!(view.factory().is_some(), "the board stays");
     });
     assert_eq!(fake.streams.borrow().len(), streams, "no second run");
-
-    for (status, delete, resume) in [
-        (Status::Queued, true, false),
-        (Status::NeedsHuman, false, false),
-        (Status::Stopped, true, true),
-        (Status::Completed, true, false),
-    ] {
-        view.update(cx, |view, cx| {
-            view.cockpit.update(cx, |cockpit, _| cockpit.fixture_factory(Board {
-                workflows: Vec::new(),
-                tasks: vec![task("t-1", project.project(), status, Some(worker), None, None)],
-                ..Default::default()
-            }));
-            view.open_task(view.cockpit.read(cx).first_machine(), "t-1", cx);
-        });
-        tick(cx);
-        assert_eq!(shows(cx, "task-delete"), delete, "{status:?}");
-        assert_eq!(shows(cx, "task-resume"), resume, "{status:?}");
-    }
 }
 
 /// A Task that needs the operator toasts, chimes and posts a system
@@ -503,8 +398,8 @@ fn focusing_a_worker_by_id_opens_its_tasks_worker_tab(cx: &mut TestAppContext) {
     assert!(shows(cx, "task-worker"), "the Worker tab");
     view.read_with(cx, |view, cx| {
         let factory = view.factory().expect("the Factory shows").read(cx);
-        assert_eq!(factory.open.as_deref(), Some("t-1"));
-        assert_eq!(factory.tab, crate::cockpit::factory::TaskTab::Worker);
+        assert_eq!(factory.open().map(String::as_str), Some("t-1"));
+        assert_eq!(factory.tab(), ferrite_factory::board::TaskTab::Worker);
     });
 }
 

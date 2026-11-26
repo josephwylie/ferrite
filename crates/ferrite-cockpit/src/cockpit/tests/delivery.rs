@@ -5,7 +5,8 @@
 //! with one route per result on its outline row.
 #[allow(unused_imports)]
 use super::*;
-use crate::cockpit::workflows::{Pick, Surface};
+use crate::cockpit::workflows::Pick;
+use ferrite_factory::board::Surface;
 use ferrite_core::factory_board::{
     Board, Destination, MergeOutcome, RouteKind, Status, Task, Template,
 };
@@ -114,7 +115,7 @@ fn the_panel_shows_the_pr_its_revisions_and_which_was_approved(cx: &mut TestAppC
     });
 
     view.update(cx, |view, cx| {
-        view.task_tab(crate::cockpit::factory::TaskTab::Activity, cx)
+        view.task_tab(ferrite_factory::board::TaskTab::Activity, cx)
     });
     tick(cx);
     assert!(shows(cx, "task-activity-0"));

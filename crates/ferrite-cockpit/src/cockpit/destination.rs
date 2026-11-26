@@ -1,6 +1,7 @@
 //! What stands in the board's place: a Project's Factory, or the PRs.
 
 use super::*;
+use ferrite_factory::board::FactoryView;
 
 /// A destination over the board, and the Pane focused when it opened:
 /// focus moving to another of the operator's own leaves it.
@@ -12,7 +13,7 @@ pub(crate) struct Destination {
 pub(crate) enum Shows {
     /// A Project's Factory board (ADR 0037): which Project's, and its view,
     /// which keeps what the Factory keeps while it shows.
-    Factory(ProjectKey, Entity<factory::FactoryView>),
+    Factory(ProjectKey, Entity<FactoryView>),
     /// The PRs list. What it holds lives on `PrsView`, kept for the next
     /// visit.
     Prs,
@@ -20,7 +21,7 @@ pub(crate) enum Shows {
 
 impl CockpitView {
     /// The Factory's view, when it stands in the board's place.
-    pub(super) fn factory(&self) -> Option<&Entity<factory::FactoryView>> {
+    pub(super) fn factory(&self) -> Option<&Entity<FactoryView>> {
         match &self.destination.as_ref()?.shows {
             Shows::Factory(_, view) => Some(view),
             Shows::Prs => None,
@@ -39,7 +40,7 @@ impl CockpitView {
     pub(super) fn update_factory<R>(
         &self,
         cx: &mut gpui::App,
-        change: impl FnOnce(&mut factory::FactoryView, &mut Context<factory::FactoryView>) -> R,
+        change: impl FnOnce(&mut FactoryView, &mut Context<FactoryView>) -> R,
     ) -> Option<R> {
         self.factory().cloned().map(|view| view.update(cx, change))
     }

@@ -9,10 +9,11 @@
 //! root makes over itself (`archive_inputs`); what a row or Board asks it
 //! says as an `ArchiveEvent`. Whether the Archive shows stays the Factory's
 //! (`archive_shown`), which sets the list beside the Task panel; reopening
-//! an earlier Worker to be read, and drawing it on the panel's Worker tab,
-//! stay the root's.
+//! an earlier Worker to be read stays the root's, and the Factory draws
+//! what it said on the panel's Worker tab.
 
 use super::*;
+use ferrite_factory::board::Surface;
 use super::destination::{Destination, Shows};
 use ferrite_core::factory_board::Task;
 use ferrite_core::protocol::TaskAction;
@@ -49,7 +50,7 @@ impl CockpitView {
         Some(ArchiveInputs {
             found,
             any: board.archive(project, "").next().is_some(),
-            open: view.open.clone(),
+            open: view.open().cloned(),
         })
     }
 
@@ -79,8 +80,7 @@ impl CockpitView {
     pub(crate) fn close_archive(&mut self, cx: &mut Context<Self>) {
         self.read_worker(None, cx);
         self.update_factory(cx, |view, _| {
-            view.archive_shown = false;
-            view.open = None;
+            view.close_archive();
         });
         cx.notify();
     }
@@ -90,7 +90,7 @@ impl CockpitView {
     /// Composer (G4). `None` goes back to the list; a Thread this window
     /// reopened is parked again.
     pub(crate) fn read_worker(&mut self, thread: Option<ThreadKey>, cx: &mut Context<Self>) {
-        let was = self.factory().map(|view| view.read(cx).archive.clone()).and_then(|archive| {
+        let was = self.factory().map(|view| view.read(cx).archive().clone()).and_then(|archive| {
             archive.update(cx, |archive, _| archive.reading.take())
         });
         if let Some((was, true)) = was.filter(|(was, _)| Some(*was) != thread) {
@@ -145,13 +145,13 @@ impl CockpitView {
         {
             *focus_at_open = focused;
             view.update(cx, |view, cx| match reopened {
-                Ok(reopened) => view.archive.update(cx, |archive, _| {
+                Ok(reopened) => view.archive().update(cx, |archive, _| {
                     archive.reading = Some((thread, reopened))
                 }),
                 Err(error) => {
-                    view.note = Some(SharedString::from(format!(
+                    view.set_note(Some(SharedString::from(format!(
                         "That agent's transcript could not be opened: {error}"
-                    )))
+                    ))))
                 }
             });
         }
@@ -160,7 +160,13 @@ impl CockpitView {
 
     /// The earlier Worker being read, if it is one of `task`'s.
     pub(super) fn worker_reading(&self, task: &Task, cx: &gpui::App) -> Option<ThreadKey> {
-        let (thread, _) = self.factory()?.read(cx).archive.read(cx).reading?;
+        let reading = self.factory()?.read(cx).archive().read(cx).reading;
+        self.reading_of(task, reading.map(|(thread, _)| thread), cx)
+    }
+
+    /// `reading`, if it is one of `task`'s Workers.
+    pub(super) fn reading_of(&self, task: &Task, reading: Option<ThreadKey>, cx: &gpui::App) -> Option<ThreadKey> {
+        let thread = reading?;
         let board = self.cockpit.read(cx).factory(self.factory_machine()?);
         task.every_worker()
             .into_iter()
@@ -168,64 +174,13 @@ impl CockpitView {
             .then_some(thread)
     }
 
-    /// The earlier Worker's transcript, to read: no Composer, nothing to
-    /// send.
-    pub(super) fn worker_read(&self, task: &Task, cx: &mut Context<Self>) -> Option<AnyElement> {
-        use ferrite_ui::theme::*;
-        let thread = self.worker_reading(task, cx)?;
-        let text = self
-            .cockpit
-            .read(cx)
-            .thread(thread)
-            .map(|open| ferrite_core::transcript::plain_text(open.transcript().blocks()))
-            .unwrap_or_default();
-        let text = if text.trim().is_empty() {
-            "Nothing was said in this agent's Thread.".to_string()
-        } else {
-            text
-        };
-        Some(
-            div()
-                .debug_selector(|| "task-worker-read".into())
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .gap(px(SPACE_2))
-                .p(px(SPACE_4))
-                .child(
-                    div()
-                        .id("task-worker-read-back")
-                        .debug_selector(|| "task-worker-read-back".into())
-                        .cursor_pointer()
-                        .text_size(px(FS_META))
-                        .text_color(rgb(INK_SUBTLE))
-                        .hover(|style| style.text_color(rgb(INK_STRONG)))
-                        .child("\u{2190} Its agents")
-                        .on_click(
-                            cx.listener(|view, _: &ClickEvent, _, cx| view.read_worker(None, cx)),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("task-worker-read-text")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .whitespace_normal()
-                        .child(SharedString::from(text)),
-                )
-                .into_any_element(),
-        )
-    }
-
     /// The Archive's search field holds the keyboard while it shows.
     pub(super) fn archive_focus(&self, cx: &gpui::App) -> Option<FocusHandle> {
         let view = self.factory()?.read(cx);
-        if !view.archive_shown || view.surface != super::workflows::Surface::Board {
+        if !view.archive_shown() || view.surface() != Surface::Board {
             return None;
         }
-        Some(view.archive.read(cx).focus(cx))
+        Some(view.archive().read(cx).focus(cx))
     }
 
     /// Clear: the Completed Tasks go to the Archive at once.
@@ -239,72 +194,5 @@ impl CockpitView {
             },
             cx,
         );
-    }
-
-    /// The Workers a Task had, each Step's and the last, for a Task with
-    /// no Worker Pane in this window (a completed one, its Workers parked).
-    pub(super) fn worker_history(&self, task: &Task, cx: &mut Context<Self>) -> Option<AnyElement> {
-        use ferrite_ui::theme::*;
-        let board = self.cockpit.read(cx).factory(self.factory_machine()?);
-        let threads: Vec<ThreadKey> = task
-            .every_worker()
-            .into_iter()
-            .map(|worker| board.key(worker))
-            .collect();
-        if threads.is_empty() {
-            return None;
-        }
-        let step_of = |thread: ThreadKey| {
-            let step = task.workers.iter().find(|each| each.thread == thread.thread())?;
-            let run = task.workflow.as_ref()?;
-            run.definition
-                .step(&step.step)
-                .map(|step| step.name.clone())
-        };
-        let mut list = div()
-            .debug_selector(|| "task-worker-history".into())
-            .flex()
-            .flex_col()
-            .gap(px(SPACE_2))
-            .p(px(SPACE_4))
-            .child(
-                div()
-                    .text_size(px(FS_META))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child(if task.archived() || task.keeping.parked {
-                        "Its agents are parked: their Threads are kept until the task is deleted."
-                    } else {
-                        "No agent is working on this task right now."
-                    }),
-            );
-        for (at, thread) in threads.into_iter().enumerate() {
-            let name = step_of(thread).unwrap_or_else(|| "Agent".to_string());
-            list = list.child(
-                div()
-                    .id(SharedString::from(format!("task-worker-history-{at}")))
-                    .debug_selector(move || format!("task-worker-history-{at}"))
-                    .cursor_pointer()
-                    .hover(|style| style.bg(paint::RAISED))
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.read_worker(Some(thread), cx)
-                    }))
-                    .flex()
-                    .gap(px(SPACE_2))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(SharedString::from(name)),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(FS_META))
-                            .text_color(rgb(INK_SUBTLE))
-                            .child(SharedString::from(format!("Thread {}", thread.thread().get()))),
-                    ),
-            );
-        }
-        Some(list.into_any_element())
     }
 }

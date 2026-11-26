@@ -36,7 +36,7 @@ use super::popups::Popup;
 use super::surfaces::SurfaceAction;
 use super::{CockpitView, MenuTarget, Submit};
 use ferrite_pane::cell::{
-    band_trigger, CellAsk, CellInputs, CellView, ControlsInputs, DetailsAsk, Doors, DraftInputs, KindInputs,
+    band_trigger, CellAsk, CellInputs, CellSlot, CellView, ControlsInputs, DetailsAsk, Doors, DraftInputs, KindInputs,
     PaneAsk, PaneEvent, QueuedAct, ThreadInputs, HERO_TRIGGER,
 };
 use ferrite_core::ThreadKey;
@@ -114,20 +114,22 @@ impl CockpitView {
 
     /// A Pane's cell on the board: its part, cached with parts on.
     pub(super) fn pane_slot(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let identity = self.panes[index].identity;
-        // The box `pane_content`'s cell has on the board.
-        let frame = div()
-            .relative()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .min_h_0();
-        let view = self.part_view(identity, window, cx);
-        if !self.parts.borrow().on {
-            return frame.child(view);
-        }
-        Self::mount_part(frame, view.into())
+        self.cell_slot(index, window, cx).draw()
+    }
+
+    /// Pane `index`'s cell as a slot lays it out, its view made the first
+    /// time.
+    pub(super) fn cell_slot(&self, index: usize, window: &Window, cx: &mut Context<Self>) -> CellSlot {
+        let view = self.part_view(self.panes[index].identity, window, cx);
+        CellSlot::new(view, self.parts.borrow().on)
+    }
+
+    /// Pane `index`'s cell as a slot lays it out, once its view is made:
+    /// what a read of the root may hand a feature that lays it out.
+    pub(super) fn made_cell_slot(&self, index: usize) -> Option<CellSlot> {
+        let parts = self.parts.borrow();
+        let view = parts.views.get(&self.panes[index].identity)?.clone();
+        Some(CellSlot::new(view, parts.on))
     }
 
     /// The nav's column of rows: its view, cached as a part with parts on.

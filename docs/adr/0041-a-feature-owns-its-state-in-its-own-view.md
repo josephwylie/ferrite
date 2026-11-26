@@ -495,13 +495,15 @@ that happened to touch it, and nothing in the code said whose a field was.
   do the Factory head's surface tabs, which the shell draws. Left of the
   Factory: the Coordinator surface, then the shell.
 - **The Coordinator surface is the twenty-sixth, the Factory's fifth
-  slice.** `CoordinatorView` (`cockpit/coordinator.rs`) owns the one
+  slice.** `CoordinatorView` (`ferrite_factory::coordinator` since the
+  2026-11-26 amendment; the root's side is `cockpit/coordinator.rs`) owns the one
   thing the window keeps of a Factory's Coordinator (#224): the opening
   field whose Send starts it, made once as the Factory opens. The Factory
   holds it, as it holds the Archive's. The rest is the Server's: the
   Coordinator's Thread, whether it is starting and why it could not, the
   Provider, model and effort chosen for it, and its proposals, all on
-  the board the Server publishes. It has no render of its own:
+  the board the Server publishes. Until that amendment it had no render
+  of its own:
   the Coordinator's conversation, once it runs, is its ordinary Pane,
   which only the root can draw (`pane_slot`, with the parts' cache), so
   the root draws the Pane and has the view draw the surface round it
@@ -525,7 +527,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   Coordinator, the New task sheet as last closed, opening and closing the
   Factory, and the board with its columns and the Task panel.
 - **The Factory's shell is the twenty-seventh, its last slice.**
-  `FactoryView` (`cockpit/factory.rs`) was a struct the root held and
+  `FactoryView` (`ferrite_factory::board` since the 2026-11-26
+  amendment; the root's side is `cockpit/factory.rs`) was a struct the root held and
   drew; now it is a view the root holds in the board's place, made as the
   Factory opens on a Project and heard from its making (`new_factory`),
   so it goes when the Factory leaves the board's place, as before. Which
@@ -536,7 +539,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   open Task and its panel's tab, the last command's `note`, the New task
   sheet as last closed (`kept`), the columns' scroll and the column it
   last brought into view, the skills found, the open picker's rows
-  (`picks`) and the five leaf views. It has no render of its own: the
+  (`picks`) and the five leaf views. Until that amendment it had no
+  render of its own: the
   Coordinator's Pane and a Worker's are drawn only by the root
   (`pane_slot`), so the root has it draw the board (`board`), reading
   through `factory_inputs` the Project's title, each Task on the board as
@@ -1380,14 +1384,41 @@ Cockpit, and each of its tests opened a Cockpit window.
   the Factory's own `Pick`, now `ferrite_factory::picker`'s; a sheet's
   form and the menus' fuzzy filter are `ferrite_ui`'s, since the
   Settings' sheets and the Files' tree draw and filter with them too. The
-  Factory itself (`FactoryView`) stays: the root draws its board, handing
-  it the Coordinator's and a Worker's Pane to lay out, which a read cannot
-  carry, and it holds the Coordinator's view, still the Cockpit's.
+  Factory itself (`FactoryView`) stayed at first: the root drew its board,
+  handing it the Coordinator's and a Worker's Pane to lay out, which a
+  read could not carry, and it held the Coordinator's view, then still the
+  Cockpit's. It follows (below).
   Measured on the start's inspector (Windows, warm build, two other
   workers building): a one-line edit, to its tests green, took 27-39 s
   through the Cockpit and takes 11-18 s in `ferrite-factory`; one of its
   tests takes 0.02-0.1 s in its own window, against 0.3-1.5 s in a
   Cockpit window.
+- **The Factory's board follows, with the Coordinator's surface.**
+  `FactoryView` is `ferrite_factory::board` and `CoordinatorView`
+  `ferrite_factory::coordinator`; the root holds the Factory in the
+  board's place and mounts it as a child view, as it does the PRs. A Pane
+  only the window lays out comes to them as its cell
+  (`ferrite_pane::cell::CellSlot`: the Pane's cell view, cached as a part
+  while the window caches its parts), which the root's own board draws
+  with too (`pane_slot`). A read cannot make a cell's view, so the root
+  makes the cells the Factory lays out as it draws (`make_factory_cells`)
+  and its reads hand back the ones made (`made_cell_slot`): the
+  Coordinator's in `CoordinatorInputs`, the Worker's on the open Task's
+  Worker tab (`WorkerTab::Pane`). The board reads
+  `Source<FactoryInputs, FactoryQuery>`, asking with the window's size,
+  for the board's width, and with the open Task as it keeps it (whether
+  it opened from the Archive, its tab, the earlier Worker being read):
+  the read runs while the Factory draws, so it never reads the Factory.
+  An earlier Worker's words and the Workers a Task had come as values
+  (`WorkerTab::Read`, `WorkerTab::Had`), and a press on one says
+  `FactoryEvent::ReadWorker`, where the root drew them with its own
+  listeners. The skills found (`Skills`) are `ferrite_factory::workflows`'.
+  The root keeps the wiring: making the Factory and its leaves, answering
+  their reads, the Server asks, the focus pump, a Task's toasts and
+  notifications, and the Factory's rows in the nav and the palette.
+  Measured (Windows, warm build, another worker building): a one-line
+  edit to the board, to its tests green and a typecheck, takes 6-7 s in
+  `ferrite-factory`; a board test takes 0.04-0.15 s in its own window.
 - **Measured** on Windows (i9-14900KF, warm build, the machine idle): a
   one-line edit to the Archive, to its tests green and a typecheck, took
   16-17 s through the Cockpit and takes 4 s in `ferrite-factory` (6-8 s

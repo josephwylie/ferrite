@@ -5,6 +5,8 @@
 //! tests without it.
 
 pub mod archive;
+pub mod board;
+pub mod coordinator;
 pub mod delivery;
 pub mod direct;
 pub mod direction;

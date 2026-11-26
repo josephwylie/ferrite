@@ -45,7 +45,7 @@ impl CockpitView {
     /// it is what the inspector shows.
     fn starts_inputs(&self, cx: &gpui::App) -> Option<StartsInputs> {
         let workflow = self.shown_workflow(cx).filter(|_| self.start_shown(cx))?;
-        let fields = self.factory()?.read(cx).editor.read(cx);
+        let fields = self.factory()?.read(cx).editor().read(cx);
         let automation = &workflow.automation;
         Some(StartsInputs {
             workflow: workflow.id.clone(),
@@ -88,12 +88,12 @@ impl CockpitView {
     /// The start's settings are what the inspector shows.
     pub(crate) fn start_shown(&self, cx: &gpui::App) -> bool {
         self.factory()
-            .is_some_and(|view| view.read(cx).editor.read(cx).inspected() == Inspected::Start)
+            .is_some_and(|view| view.read(cx).editor().read(cx).inspected() == Inspected::Start)
     }
 
     /// Show the shown Workflow's start in the inspector.
     pub(crate) fn open_start(&mut self, cx: &mut Context<Self>) {
-        if let Some(editor) = self.factory().map(|view| view.read(cx).editor.clone()) {
+        if let Some(editor) = self.factory().map(|view| view.read(cx).editor().clone()) {
             editor.update(cx, |editor, _| editor.inspect(Inspected::Start));
         }
         self.ensure_fields(cx);
@@ -213,7 +213,7 @@ impl CockpitView {
         if !start.kind.is_github() {
             return;
         }
-        let Some(starts) = self.factory().map(|view| view.read(cx).starts.clone()) else {
+        let Some(starts) = self.factory().map(|view| view.read(cx).starts().clone()) else {
             return;
         };
         let labels = start
@@ -238,7 +238,7 @@ impl CockpitView {
         // The draft a window is told of may name a repository whose labels
         // were never asked for.
         self.ask_github_lists(cx);
-        if let Some(starts) = self.factory().map(|view| view.read(cx).starts.clone()) {
+        if let Some(starts) = self.factory().map(|view| view.read(cx).starts().clone()) {
             starts.update(cx, |starts, cx| starts.listed(cx));
         }
     }

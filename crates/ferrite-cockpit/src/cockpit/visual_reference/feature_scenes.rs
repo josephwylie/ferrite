@@ -979,7 +979,7 @@ fn factory() -> (Scene, Setup) {
     let setup: Setup = Box::new(move |view, _, cx| {
         view.open_factory(key, cx);
         view.open_task(key.machine(), "t-2", cx);
-        view.task_tab(crate::cockpit::factory::TaskTab::Activity, cx);
+        view.task_tab(ferrite_factory::board::TaskTab::Activity, cx);
     });
     (scene, setup)
 }
@@ -1451,7 +1451,7 @@ fn factory_coordinator() -> (Scene, Setup) {
     }
     let setup: Setup = Box::new(move |view, _, cx| {
         view.open_factory(key, cx);
-        view.factory_surface(crate::cockpit::workflows::Surface::Coordinator, cx);
+        view.factory_surface(ferrite_factory::board::Surface::Coordinator, cx);
         view.accept_proposal("p-1", cx);
         view.dismiss_proposal("p-2", cx);
     });

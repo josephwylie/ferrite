@@ -12,7 +12,7 @@ impl CockpitView {
         at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        if self.update_factory(cx, |view, _| view.picks = picks).is_none() {
+        if self.update_factory(cx, |view, _| view.set_picks(picks)).is_none() {
             return;
         }
         let target = context_menu::MenuTarget::Factory;
@@ -31,7 +31,7 @@ impl CockpitView {
     /// The rows of the open Factory picker.
     pub(in crate::cockpit) fn factory_pick_rows(&self, cx: &gpui::App) -> Vec<ferrite_ui::menu::Item> {
         self.factory()
-            .map(|view| view.read(cx).picks.iter().map(|(item, _)| item.clone()).collect())
+            .map(|view| view.read(cx).picks().iter().map(|(item, _)| item.clone()).collect())
             .unwrap_or_default()
     }
 
@@ -39,7 +39,7 @@ impl CockpitView {
     pub(crate) fn factory_pick(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(pick) = self
             .factory()
-            .and_then(|view| view.read(cx).picks.get(index))
+            .and_then(|view| view.read(cx).picks().get(index))
             .map(|(_, pick)| pick.clone())
         else {
             return;

@@ -1,91 +1,8 @@
-//! The skills a Step's Provider has installed in the Project, asked of the
-//! Project's machine once per Provider, for the picker and the check.
-//!
-//! Only the root and its pump write them, so they are a plain struct
-//! beside the editor's view (ADR 0041), shaped like the import picker's
-//! listing: the root asks (`listen`) and its pump takes each answer
-//! (`listed`).
-
-use ferrite_client::cockpit::Ask;
-use ferrite_core::SessionCommand;
+//! The skills a Step's Provider has installed in the Project, as the
+//! window asks for them and takes each answer: what is found lives on the
+//! Factory (`ferrite_factory::workflows::Skills`).
 
 use super::*;
-
-/// What one Provider's discovery says.
-enum Found {
-    /// Asked of the machine `place` names, not yet answered.
-    Looking(Ask<Vec<SessionCommand>>, SharedString),
-    /// The skills among the commands it listed.
-    Listed(Vec<SessionCommand>),
-    Failed(String),
-}
-
-/// The skills each Provider asked has installed in the Project.
-#[derive(Default)]
-pub(crate) struct Skills(Vec<(Provider, Found)>);
-
-impl Skills {
-    /// Whether `provider` was asked already.
-    fn asked(&self, provider: Provider) -> bool {
-        self.0.iter().any(|(each, _)| *each == provider)
-    }
-
-    /// Wait for `provider`'s discovery on the machine `place` names.
-    fn listen(&mut self, provider: Provider, reply: Ask<Vec<SessionCommand>>, place: SharedString) {
-        self.0.push((provider, Found::Looking(reply, place)));
-    }
-
-    /// Take each discovery that answered; whether any did.
-    fn listed(&mut self) -> bool {
-        let mut heard = false;
-        for (_, found) in &mut self.0 {
-            let Found::Looking(reply, place) = found else {
-                continue;
-            };
-            let Some(answer) = reply.answer() else {
-                continue;
-            };
-            let place = place.clone();
-            heard = true;
-            *found = match answer {
-                Ok(commands) => Found::Listed(
-                    commands
-                        .into_iter()
-                        .filter(SessionCommand::is_skill)
-                        .collect(),
-                ),
-                Err(error) => Found::Failed(crate::cockpit::machines::said(&error, &place)),
-            };
-        }
-        heard
-    }
-
-    /// What `provider`'s discovery says, once asked.
-    fn found(&self, provider: Provider) -> Option<&Found> {
-        self.0
-            .iter()
-            .find(|(each, _)| *each == provider)
-            .map(|(_, found)| found)
-    }
-
-    /// What the inspector says of `provider`'s skills.
-    pub(super) fn note(&self, provider: Provider) -> String {
-        match self.found(provider) {
-            Some(Found::Looking(..)) => "Looking for installed skills\u{2026}".into(),
-            Some(Found::Failed(error)) => format!("Could not list skills: {error}"),
-            Some(Found::Listed(skills)) => format!("{} installed for {provider}", skills.len()),
-            None => String::new(),
-        }
-    }
-
-    /// The skills found for `provider`, once its discovery answered.
-    pub(super) fn installed(&self, provider: Provider) -> Option<&[SessionCommand]> {
-        match self.found(provider)? {
-            Found::Listed(skills) => Some(skills),
-            _ => None,
-        }
-    }
-}
 
 impl CockpitView {
     /// Ask the Provider which skills it has installed in the Project, once.
@@ -93,7 +10,7 @@ impl CockpitView {
         let (Some(project), Some(view)) = (self.factory_project(), self.factory()) else {
             return;
         };
-        if view.read(cx).skills.asked(provider) {
+        if view.read(cx).skills().asked(provider) {
             return;
         }
         let Some(cwd) = self
@@ -108,14 +25,14 @@ impl CockpitView {
             cockpit.list_commands(project.machine(), provider, &cwd)
         });
         let place = self.place_of(project.machine(), cx);
-        self.update_factory(cx, |view, _| view.skills.listen(provider, reply, place));
+        self.update_factory(cx, |view, _| view.skills_mut().listen(provider, reply, place));
     }
 
     /// A discovery that answered: its skills, for the picker and the check.
     pub(in crate::cockpit) fn poll_factory_skills(&mut self, cx: &mut Context<Self>) {
         self.poll_start_lists(cx);
         if self
-            .update_factory(cx, |view, _| view.skills.listed())
+            .update_factory(cx, |view, _| view.skills_mut().listed(crate::cockpit::machines::said))
             .unwrap_or(false)
         {
             cx.notify();
@@ -139,7 +56,7 @@ impl CockpitView {
             skills: Provider::ALL
                 .into_iter()
                 .filter_map(|provider| {
-                    let skills = self.factory()?.read(cx).skills.installed(provider)?;
+                    let skills = self.factory()?.read(cx).skills().installed(provider)?;
                     Some((provider, skills.iter().map(|s| s.name.clone()).collect()))
                 })
                 .collect(),
